@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  isDesktop,
   CodexActivationRuntimeError,
   CodexActivationRuntimeDependencies,
   CodexProcessSnapshot,
@@ -121,6 +122,9 @@ function harness(initial: CodexProcessSnapshot[]) {
     events,
     launches,
     current: () => current,
+    inject: (entry: CodexProcessSnapshot) => {
+      current.push({ ...entry, args: [...entry.args], env: { ...entry.env } });
+    },
     failDesktop: () => {
       failDesktop = true;
     },
@@ -141,12 +145,13 @@ describe('Codex activation process lifecycle', () => {
       'SIGTERM:10',
       'retire-socket',
       'install-auth',
+      'retire-socket',
       'native-unlock',
+      'unlock',
       'start-daemon',
       'healthy',
       'start-desktop',
       'native-unlock',
-      'unlock',
     ]);
     expect(fake.launches[0].args).toEqual(daemon.args);
     expect(fake.launches[0].env).toEqual(daemon.env);
@@ -159,6 +164,21 @@ describe('Codex activation process lifecycle', () => {
     expect(app.env.XAUTHORITY).toBe('/fixture/.Xauthority');
     expect(app.env.CODEX_APP_TOOLS_PIPE_PATH).toBeUndefined();
     expect(app.env.BROWSER_USE_ACCESS_VERIFYING_IDENTITY).toBeUndefined();
+  });
+
+  it('retires a daemon an SSH proxy respawned during the swap before starting the new one', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    fake.inject({ ...daemon, pid: 50, startTime: '50' });
+    fake.events.push('install-auth');
+    await runtime.start();
+    const install = fake.events.indexOf('install-auth');
+    expect(fake.events.indexOf('SIGTERM:50')).toBeGreaterThan(install);
+    expect(fake.events.indexOf('SIGTERM:50')).toBeLessThan(fake.events.indexOf('start-daemon'));
+    expect(fake.current().some((entry) => entry.pid === 50)).toBe(false);
+    // The daemon only binds its socket once both startup locks are free.
+    expect(fake.events.indexOf('unlock')).toBeLessThan(fake.events.indexOf('start-daemon'));
   });
 
   it('refuses active CLI work without signalling any writer', async () => {
@@ -201,7 +221,7 @@ describe('Codex activation process lifecycle', () => {
       '/usr/lib/chatgpt/ChatGPT',
       '--user-data-dir=/fixture/.config/Codex',
     ]);
-    expect(fake.events.at(-1)).toBe('unlock');
+    expect(fake.events.lastIndexOf('unlock')).toBeLessThan(fake.events.lastIndexOf('start-daemon'));
   });
 
   it('does not let an unrelated home daemon suppress the shared daemon restart', async () => {
@@ -281,6 +301,42 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0))
     fs.rmSync(directory, { recursive: true, force: true });
 });
+describe('desktop main process detection', () => {
+  it('treats only the Electron main process as the desktop, including rewritten zygote cmdlines', () => {
+    const zygote = processFixture(
+      23,
+      ['/usr/lib/chatgpt/ChatGPT --type=zygote --no-zygote-sandbox --crashpad-handler-pid=19'],
+      { ppid: 20, exe: '/usr/lib/chatgpt/ChatGPT' }
+    );
+    expect(isDesktop(desktop)).toBe(true);
+    expect(isDesktop(renderer)).toBe(false);
+    expect(isDesktop(zygote)).toBe(false);
+    expect(isDesktop(bundled)).toBe(false);
+  });
+
+  it('relaunches a desktop whose own cmdline Electron rewrote, keeping its user data dir', async () => {
+    const rewritten = processFixture(
+      20,
+      ['/usr/lib/chatgpt/ChatGPT --user-data-dir=/fixture/.config/Codex'],
+      { env: {}, exe: '/usr/lib/chatgpt/ChatGPT' }
+    );
+    const zygote = processFixture(
+      22,
+      ['/usr/lib/chatgpt/ChatGPT --type=zygote --user-data-dir=/fixture/.config/Codex'],
+      { ppid: 20, exe: '/usr/lib/chatgpt/ChatGPT' }
+    );
+    expect(isDesktop(rewritten)).toBe(true);
+    const fake = harness([daemon, rewritten, bundled, zygote]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.launches[1].args).toEqual([
+      '/usr/lib/chatgpt/ChatGPT',
+      '--user-data-dir=/fixture/.config/Codex',
+    ]);
+  });
+});
+
 describe('desktop rollout lifecycle guard', () => {
   function rollout(events: string[]): string {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-runtime-rollout-'));

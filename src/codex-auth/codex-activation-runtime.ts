@@ -61,10 +61,19 @@ function isCodex(process: CodexProcessSnapshot): boolean {
   );
 }
 
-function isDesktop(process: CodexProcessSnapshot): boolean {
+/** Electron and its zygotes rewrite argv into one space-joined string. */
+function argWords(process: CodexProcessSnapshot): string[] {
+  return process.args.flatMap((arg) => arg.split(/\s+/)).filter(Boolean);
+}
+
+/**
+ * Chromium zygotes rewrite their cmdline into one space-joined string, so a
+ * `--type=` flag can sit inside a single argv element rather than start one.
+ */
+export function isDesktop(process: CodexProcessSnapshot): boolean {
   return (
     process.exe.replace(/ \(deleted\)$/, '') === '/usr/lib/chatgpt/ChatGPT' &&
-    !process.args.some((arg) => arg.startsWith('--type='))
+    !argWords(process).some((word) => word.startsWith('--type='))
   );
 }
 
@@ -183,7 +192,17 @@ export function createCodexActivationRuntime(
     if (!releaseLock) return;
     stopped = false;
     try {
-      await dependencies.releaseNativeStartupLock();
+      // SSH proxies from the Mac/Windows apps respawn the daemon as soon as it
+      // stops; those copies wait on the startup locks and may predate the swap.
+      const respawned = (await scan()).filter(
+        (entry) => isDaemon(entry) && usesHome(entry, codexHome)
+      );
+      if (respawned.length > 0) await retire(respawned, await scan());
+      if (!(await scan()).some((entry) => isDaemon(entry) && usesHome(entry, codexHome))) {
+        dependencies.removeControlSocket();
+      }
+      // A daemon cannot bind its socket while either startup lock is held.
+      await release();
       for (const launcher of launchers.filter(isDaemon)) {
         if (!(await scan()).some((entry) => isDaemon(entry) && usesHome(entry, codexHome))) {
           await dependencies.launch(launcher, false);
@@ -277,15 +296,22 @@ export function createCodexActivationRuntime(
         mutationStarted = true;
         await retire(desktops, processes);
         await retire(daemons, await scan());
+        // A daemon respawned by an SSH proxy is retired again in start(), after the swap.
         const survivors = (await scan()).filter(
-          (process) => isCodex(process) && usesHome(process, codexHome) && !isProxy(process)
+          (process) =>
+            isCodex(process) &&
+            usesHome(process, codexHome) &&
+            !isProxy(process) &&
+            !isDaemon(process)
         );
         if (survivors.length > 0) {
           throw new CodexActivationRuntimeError(
             'A new Codex auth writer started; no account was changed.'
           );
         }
-        dependencies.removeControlSocket();
+        if (!(await scan()).some((entry) => isDaemon(entry) && usesHome(entry, codexHome))) {
+          dependencies.removeControlSocket();
+        }
         stopped = true;
       } catch (error) {
         if (mutationStarted) {
@@ -310,7 +336,7 @@ export function createCodexActivationRuntime(
 }
 
 function desktopUserData(desktop: CodexProcessSnapshot, processes: CodexProcessSnapshot[]): string {
-  const args = descendants(desktop, processes).flatMap((entry) => entry.args);
+  const args = descendants(desktop, processes).flatMap(argWords);
   const inline = args.find((arg) => arg.startsWith('--user-data-dir='));
   if (inline) return inline.slice('--user-data-dir='.length);
   const index = args.indexOf('--user-data-dir');
@@ -341,11 +367,9 @@ function desktopLauncher(
       'Cannot recover the VM Codex desktop display; no account was changed.'
     );
   }
-  const args = [...desktop.args];
+  const args = argWords(desktop);
   if (!args.some((arg) => arg.startsWith('--user-data-dir'))) {
-    const userData = children
-      .flatMap((process) => process.args)
-      .find((arg) => arg.startsWith('--user-data-dir='));
+    const userData = children.flatMap(argWords).find((arg) => arg.startsWith('--user-data-dir='));
     args.push(userData || `--user-data-dir=${path.join(os.homedir(), '.config', 'Codex')}`);
   }
   return { ...desktop, args, env };
