@@ -1,0 +1,66 @@
+import * as path from 'path';
+import { Worker } from 'worker_threads';
+import { getCcsDir } from '../../config/config-loader-facade';
+import { CCSError } from '../../errors/error-types';
+import type { DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
+
+export type UsageWorkerRequest =
+  | { kind: 'claude'; projectsDir: string }
+  | { kind: 'codex'; codexHome: string; cacheDir: string }
+  | { kind: 'droid'; homeDir: string };
+
+export interface UsageWorkerResult {
+  daily: DailyUsage[];
+  hourly: HourlyUsage[];
+  monthly: MonthlyUsage[];
+  session: SessionUsage[];
+  eventCount: number;
+}
+
+export type UsageWorkerResponse =
+  | { ok: true; data: UsageWorkerResult }
+  | { ok: false; error: string };
+
+function getUsageWorkerPath(): string {
+  // Bun runs source tests directly; installed Node runs the emitted neighbor.
+  return path.join(__dirname, `native-usage-worker${path.extname(__filename)}`);
+}
+
+/** One-shot workers leave refresh coalescing and cache ownership in the caller. */
+export function loadUsageInWorker(
+  request: UsageWorkerRequest,
+  workerPath = getUsageWorkerPath()
+): Promise<UsageWorkerResult> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerPath, {
+      workerData: request,
+      // Scoped config and --config-dir are not inherited by worker threads.
+      // Resolve the effective directory in the HTTP thread for pricing caches.
+      env: { ...process.env, CCS_DIR: getCcsDir() },
+    });
+    let settled = false;
+    const finish = (error?: Error, result?: UsageWorkerResult): void => {
+      if (settled) return;
+      settled = true;
+      worker.removeAllListeners();
+      void worker.terminate().catch(() => {});
+      if (error) reject(error);
+      else if (result) resolve(result);
+      else reject(new CCSError('Usage worker returned no result'));
+    };
+    worker.once('message', (response: UsageWorkerResponse) => {
+      if (response?.ok === true && response.data) finish(undefined, response.data);
+      else {
+        finish(
+          new CCSError(
+            response?.ok === false ? response.error : 'Usage worker returned an invalid result'
+          )
+        );
+      }
+    });
+    worker.once('error', (error) => finish(error));
+    worker.once('exit', (code) =>
+      finish(new CCSError(`Usage worker exited before returning a result (code ${code})`))
+    );
+  });
+}

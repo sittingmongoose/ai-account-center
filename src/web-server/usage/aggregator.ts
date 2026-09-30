@@ -7,13 +7,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  aggregateDailyUsage,
-  aggregateHourlyUsage,
-  aggregateMonthlyUsage,
-  aggregateSessionUsage,
-  loadAllUsageData,
-} from './data-aggregator';
 import type { DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
 import {
   readDiskCache,
@@ -32,8 +25,9 @@ import {
   stopCliproxySync,
   syncCliproxyUsage,
 } from './cliproxy-usage-syncer';
-import { scanCodexNativeUsageEntries } from './codex-native-usage-collector';
-import { scanDroidNativeUsageEntries } from './droid-native-usage-collector';
+import { loadUsageInWorker } from './worker-client';
+import { resolveCodexConfigPaths } from '../services/codex-dashboard-service';
+import { resolveDroidConfigPaths } from '../services/droid-dashboard-service';
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
   coalesceLegacyProviderlessBreakdowns,
@@ -102,7 +96,7 @@ async function loadInstanceData(instancePath: string): Promise<{
 }> {
   try {
     const projectsDir = path.join(instancePath, 'projects');
-    const result = await loadAllUsageData({ projectsDir });
+    const result = await loadUsageInWorker({ kind: 'claude', projectsDir });
     return result;
   } catch (_err) {
     // Instance may have no usage data - that's OK
@@ -417,7 +411,10 @@ async function refreshFromSource(): Promise<{
 
   // Load canonical default data and avoid counting the active instance twice
   const defaultData = annotateUsageProfile(
-    await loadAllUsageData({ projectsDir: getDefaultProjectsDirForAnalytics() }),
+    await loadUsageInWorker({
+      kind: 'claude',
+      projectsDir: getDefaultProjectsDirForAnalytics(),
+    }),
     'default'
   );
 
@@ -461,26 +458,33 @@ async function refreshFromSource(): Promise<{
   }
 
   try {
-    const codexEntries = await scanCodexNativeUsageEntries();
-    if (codexEntries.length > 0) {
-      allDailySources.push(aggregateDailyUsage(codexEntries, 'codex-native'));
-      allHourlySources.push(aggregateHourlyUsage(codexEntries, 'codex-native'));
-      allMonthlySources.push(aggregateMonthlyUsage(codexEntries, 'codex-native'));
-      allSessionSources.push(aggregateSessionUsage(codexEntries, 'codex-native'));
-      console.log(info(`Included native Codex usage data (${codexEntries.length} event(s))`));
+    const codexData = await loadUsageInWorker({
+      kind: 'codex',
+      codexHome: resolveCodexConfigPaths().baseDir,
+      cacheDir: path.join(getCcsDir(), 'cache'),
+    });
+    if (codexData.eventCount > 0) {
+      allDailySources.push(codexData.daily);
+      allHourlySources.push(codexData.hourly);
+      allMonthlySources.push(codexData.monthly);
+      allSessionSources.push(codexData.session);
+      console.log(info(`Included native Codex usage data (${codexData.eventCount} event(s))`));
     }
   } catch (err) {
     process.stderr.write(String(fail(`Failed to load native Codex usage data: ${err}`)) + '\n');
   }
 
   try {
-    const droidEntries = await scanDroidNativeUsageEntries();
-    if (droidEntries.length > 0) {
-      allDailySources.push(aggregateDailyUsage(droidEntries, 'droid-native'));
-      allHourlySources.push(aggregateHourlyUsage(droidEntries, 'droid-native'));
-      allMonthlySources.push(aggregateMonthlyUsage(droidEntries, 'droid-native'));
-      allSessionSources.push(aggregateSessionUsage(droidEntries, 'droid-native'));
-      console.log(info(`Included native Droid usage data (${droidEntries.length} event(s))`));
+    const droidData = await loadUsageInWorker({
+      kind: 'droid',
+      homeDir: path.dirname(path.dirname(resolveDroidConfigPaths().settingsPath)),
+    });
+    if (droidData.eventCount > 0) {
+      allDailySources.push(droidData.daily);
+      allHourlySources.push(droidData.hourly);
+      allMonthlySources.push(droidData.monthly);
+      allSessionSources.push(droidData.session);
+      console.log(info(`Included native Droid usage data (${droidData.eventCount} event(s))`));
     }
   } catch (err) {
     process.stderr.write(String(fail(`Failed to load native Droid usage data: ${err}`)) + '\n');
