@@ -163,6 +163,19 @@ describe('CodexPage', () => {
     mocks.patchConfigAsync.mockReset();
   });
 
+  it('keeps the account switcher link available when Codex diagnostics fail', () => {
+    mocks.useCodex.mockReturnValue(
+      buildUseCodexResult({ diagnostics: null, diagnosticsError: new Error('Diagnostics failed') })
+    );
+
+    render(<CodexPage />);
+
+    expect(screen.getByRole('link', { name: 'Codex accounts' })).toHaveAttribute(
+      'href',
+      '/codex/accounts'
+    );
+  });
+
   it('discards local raw TOML edits when the user refreshes the page snapshot successfully', async () => {
     mocks.useCodex.mockReturnValue(buildUseCodexResult());
 

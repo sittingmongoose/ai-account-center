@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { GripVertical, Loader2 } from 'lucide-react';
+import { GripVertical, Loader2, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { CodexAuthProfilesCard } from '@/components/compatible-cli/codex-auth-profiles-card';
 import { CodexControlCenterTab } from '@/components/compatible-cli/codex-control-center-tab';
@@ -245,8 +246,16 @@ export function CodexPage() {
   };
 
   return (
-    <div className="h-full min-h-0 overflow-hidden">
-      <PanelGroup direction="horizontal" className="h-full">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex shrink-0 justify-end border-b px-4 py-3">
+        <Button asChild variant="outline" size="sm">
+          <Link to="/codex/accounts">
+            <Users className="mr-2 h-4 w-4" />
+            {t('codexPage.accountsTitle')}
+          </Link>
+        </Button>
+      </div>
+      <PanelGroup direction="horizontal" className="flex-1 min-h-0">
         <Panel defaultSize={45} minSize={35}>
           <div className="h-full border-r bg-muted/20">{renderSidebar()}</div>
         </Panel>

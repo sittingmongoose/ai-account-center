@@ -89,9 +89,11 @@ function ProfileRow({
 }) {
   const { t } = useTranslation();
   return (
-    <TableRow className={isActivated ? 'bg-muted/40' : undefined}>
-      <TableCell className="font-medium">
-        <span className="flex items-center gap-2">
+    <TableRow
+      className={`grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 p-3 @3xl:table-row @3xl:p-0 ${isActivated ? 'bg-muted/40' : ''}`}
+    >
+      <TableCell className="col-start-1 row-start-1 block whitespace-normal p-0 font-medium @3xl:table-cell @3xl:p-2">
+        <span className="flex flex-wrap items-center gap-2">
           {entry.name}
           {isActivated && (
             <Badge variant="secondary" className="text-xs">
@@ -100,10 +102,14 @@ function ProfileRow({
           )}
         </span>
       </TableCell>
-      <TableCell>{entry.email ?? '—'}</TableCell>
-      <TableCell>{entry.plan ?? '—'}</TableCell>
-      <TableCell>{formatLastUsed(entry.lastUsed)}</TableCell>
-      <TableCell>
+      <TableCell className="col-start-1 row-start-2 block break-all whitespace-normal p-0 @3xl:table-cell @3xl:p-2">
+        {entry.email ?? '—'}
+      </TableCell>
+      <TableCell className="col-start-1 row-start-3 block p-0 text-muted-foreground @3xl:table-cell @3xl:p-2 @3xl:text-foreground">
+        {entry.plan ?? '—'}
+      </TableCell>
+      <TableCell className="hidden @3xl:table-cell">{formatLastUsed(entry.lastUsed)}</TableCell>
+      <TableCell className="col-start-1 row-start-4 block p-0 @3xl:table-cell @3xl:p-2">
         {entry.authValid ? (
           <Badge variant="secondary" className="text-xs text-green-700 dark:text-green-400">
             {t('codex.auth.statusOk')}
@@ -114,8 +120,8 @@ function ProfileRow({
           </Badge>
         )}
       </TableCell>
-      <TableCell>
-        <span className="flex gap-1">
+      <TableCell className="col-start-2 row-start-1 row-span-4 block p-0 @3xl:table-cell @3xl:p-2">
+        <span className="flex flex-col gap-1 @3xl:flex-row">
           <Button
             variant="outline"
             size="sm"
@@ -156,7 +162,7 @@ export function CodexAuthProfilesCard() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="@container space-y-3">
       <AccountBanners data={data} />
       {activation.error && (
         <div
@@ -177,8 +183,8 @@ export function CodexAuthProfilesCard() {
         </div>
       ) : (
         <div className="rounded-md border overflow-auto">
-          <Table>
-            <TableHeader>
+          <Table className="block @3xl:table">
+            <TableHeader className="hidden @3xl:table-header-group">
               <TableRow>
                 <TableHead>{t('codex.auth.col.name')}</TableHead>
                 <TableHead>{t('codex.auth.col.email')}</TableHead>
@@ -188,7 +194,7 @@ export function CodexAuthProfilesCard() {
                 <TableHead>{t('codex.auth.col.actions')}</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="block @3xl:table-row-group">
               {data.profiles.map((entry) => (
                 <ProfileRow
                   key={entry.name}

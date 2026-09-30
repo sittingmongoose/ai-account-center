@@ -80,6 +80,11 @@ function buildNavGroups(t: (key: string) => string): SidebarGroupDef[] {
       title: t('nav.identityAccess'),
       items: [
         {
+          path: '/codex/accounts',
+          iconSrc: '/assets/sidebar/codex.svg',
+          label: t('codexPage.accountsTitle'),
+        },
+        {
           path: '/providers',
           icon: Key,
           label: t('nav.apiProfiles'),

@@ -2712,6 +2712,8 @@ const resources = {
         },
       },
       codexPage: {
+        accountsTitle: 'Codex accounts',
+        accountsInstruction: 'Click Activate beside the account you want to use.',
         title: 'Codex',
         controlCenter: 'Control Center',
         overview: 'Overview',
@@ -5539,6 +5541,8 @@ const resources = {
         },
       },
       codexPage: {
+        accountsTitle: 'Contas Codex',
+        accountsInstruction: 'Clique em Ativar ao lado da conta que deseja usar.',
         title: 'Codex',
         controlCenter: 'Central de Controle',
         overview: 'Visão Geral',
@@ -8165,6 +8169,8 @@ const resources = {
         },
       },
       codexPage: {
+        accountsTitle: 'Codex 账户',
+        accountsInstruction: '点击要使用的账户旁边的“激活”。',
         title: 'Codex',
         controlCenter: '控制中心',
         overview: '概览',
@@ -10916,6 +10922,8 @@ const resources = {
         },
       },
       codexPage: {
+        accountsTitle: 'Tài khoản Codex',
+        accountsInstruction: 'Nhấn Kích hoạt bên cạnh tài khoản bạn muốn sử dụng.',
         title: 'Codex',
         controlCenter: 'Trung tâm điều khiển',
         overview: 'Tổng quan',
@@ -12923,6 +12931,8 @@ const resources = {
         },
       },
       codexPage: {
+        accountsTitle: 'Codex アカウント',
+        accountsInstruction: '使用するアカウントの横にある「有効化」をクリックしてください。',
         title: 'Codex',
         controlCenter: 'コントロールセンター',
         overview: '概要',
@@ -16458,6 +16468,8 @@ const resources = {
         },
       },
       codexPage: {
+        accountsTitle: 'Codex 계정',
+        accountsInstruction: '사용할 계정 옆의 활성화 버튼을 클릭하세요.',
         title: 'Codex',
         controlCenter: '제어 센터',
         overview: '개요',

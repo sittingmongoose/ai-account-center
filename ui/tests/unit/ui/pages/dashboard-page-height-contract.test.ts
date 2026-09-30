@@ -18,6 +18,7 @@ const layoutManagedRouteFiles = [
   'src/pages/cursor.tsx',
   'src/pages/claude-extension.tsx',
   'src/pages/codex.tsx',
+  'src/pages/codex-accounts.tsx',
   'src/pages/droid.tsx',
   'src/pages/accounts.tsx',
   'src/pages/settings/index.tsx',
@@ -49,5 +50,8 @@ describe('dashboard route height contract', () => {
     expect(appSource).toContain('<CodexPage />');
     expect(sidebarSource).toContain("path: '/codex'");
     expect(sidebarSource).toContain("label: 'Codex CLI'");
+    expect(appSource).toContain('path="/codex/accounts"');
+    expect(appSource).toContain('<CodexAccountsPage />');
+    expect(sidebarSource).toContain("path: '/codex/accounts'");
   });
 });

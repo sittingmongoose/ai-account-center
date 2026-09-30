@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import i18n from '@/lib/i18n';
 
-const locales = ['en', 'zh-CN', 'vi', 'ja', 'ko'] as const;
+const locales = ['en', 'pt-BR', 'zh-CN', 'vi', 'ja', 'ko'] as const;
 
 const codexAuthKeys = [
   ['codex.auth.sourceDefault'],
@@ -42,6 +42,8 @@ const codexAuthKeys = [
   ['codex.auth.col.status'],
   ['codex.auth.col.actions'],
   ['codexPage.authProfiles'],
+  ['codexPage.accountsTitle'],
+  ['codexPage.accountsInstruction'],
 ] as const;
 
 const originalLanguage = i18n.language;
