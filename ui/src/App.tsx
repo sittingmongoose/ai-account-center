@@ -38,6 +38,9 @@ const CodexPage = lazy(() => import('@/pages/codex').then((m) => ({ default: m.C
 const CodexAccountsPage = lazy(() =>
   import('@/pages/codex-accounts').then((m) => ({ default: m.CodexAccountsPage }))
 );
+const ClaudeAccountsPage = lazy(() =>
+  import('@/pages/claude-accounts').then((m) => ({ default: m.ClaudeAccountsPage }))
+);
 const DroidPage = lazy(() => import('@/pages/droid').then((m) => ({ default: m.DroidPage })));
 const LogsPage = lazy(() => import('@/pages/logs').then((m) => ({ default: m.LogsPage })));
 const AccountsPage = lazy(() =>
@@ -152,6 +155,14 @@ export default function App() {
                       element={
                         <Suspense fallback={<PageLoader />}>
                           <ClaudeExtensionPage />
+                        </Suspense>
+                      }
+                    />
+                    <Route
+                      path="/claude/accounts"
+                      element={
+                        <Suspense fallback={<PageLoader />}>
+                          <ClaudeAccountsPage />
                         </Suspense>
                       }
                     />

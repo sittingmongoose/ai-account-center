@@ -42,6 +42,7 @@ import authRoutes from './auth-routes';
 import persistRoutes from './persist-routes';
 import catalogRoutes from './catalog-routes';
 import claudeExtensionRoutes from './claude-extension-routes';
+import claudeDesktopRoutes from './claude-desktop-routes';
 import logsRoutes from './logs-routes';
 import barRoutes from './bar-routes';
 
@@ -117,6 +118,7 @@ apiRoutes.use('/auth', authRoutes);
 // ==================== Persist (Backup Management) ====================
 apiRoutes.use('/persist', persistRoutes);
 apiRoutes.use('/claude-extension', claudeExtensionRoutes);
+apiRoutes.use('/claude', claudeDesktopRoutes);
 
 // ==================== CLIProxy ====================
 // Variants, auth, accounts, stats, status, models, error logs
