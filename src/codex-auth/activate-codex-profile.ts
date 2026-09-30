@@ -1,0 +1,310 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as lockfile from 'proper-lockfile';
+import { randomBytes } from 'crypto';
+import { CodexProfileRegistry } from './codex-profile-registry';
+import { resolveCodexProfileDir } from './codex-profile-paths';
+import { decodeIdToken, hasStructurallyValidIdToken } from './decode-id-token';
+import { getCodexProfileNameError } from './types';
+import type { CodexAccountIdentity } from './types';
+import { createCodexActivationRuntime } from './codex-activation-runtime';
+import { invalidateCodexAuthProfilesCache } from './codex-auth-dashboard-service';
+
+export type CodexActivationErrorCode =
+  | 'busy'
+  | 'invalid_profile'
+  | 'invalid_codex_home'
+  | 'auth_read_failed'
+  | 'auth_write_failed'
+  | 'restart_failed'
+  | 'verification_failed';
+
+/** Contains only messages assembled from safe identity fields and operation names. */
+export class CodexActivationError extends Error {
+  readonly code: CodexActivationErrorCode;
+
+  constructor(code: CodexActivationErrorCode, message: string) {
+    super(message);
+    this.name = 'CodexActivationError';
+    this.code = code;
+  }
+}
+
+export interface CodexActivationRuntime {
+  stop(): Promise<void>;
+  start(): Promise<void>;
+  dispose?(): Promise<void>;
+}
+
+export interface CodexActivationOptions {
+  registry?: CodexProfileRegistry;
+  /** Explicit dependency injection for tests; never read from CODEX_HOME. */
+  codexHome?: string;
+  runtime?: CodexActivationRuntime;
+}
+
+export interface CodexActivationResult {
+  name: string;
+  email: string;
+  plan: string | null;
+  codexHome: string;
+  previousEmail: string | null;
+}
+
+interface AuthSnapshot {
+  content: Buffer;
+  identity: CodexAccountIdentity & { email: string };
+}
+
+export function getActivationCodexHome(): string {
+  return path.join(os.homedir(), '.codex');
+}
+
+function readAuth(authPath: string, label: string, requireCredentials = false): AuthSnapshot {
+  let content: Buffer;
+  try {
+    content = fs.readFileSync(authPath);
+  } catch {
+    throw new CodexActivationError('auth_read_failed', `Could not read ${label} auth.json.`);
+  }
+  let parsed: {
+    tokens?: { id_token?: unknown; access_token?: unknown; refresh_token?: unknown };
+  };
+  try {
+    parsed = JSON.parse(content.toString('utf8')) as typeof parsed;
+  } catch {
+    // JSON parser errors can embed token fragments; never propagate them.
+    throw new CodexActivationError('auth_read_failed', `${label} auth.json is not valid JSON.`);
+  }
+  const token = parsed?.tokens?.id_token;
+  const identity = typeof token === 'string' ? decodeIdToken(token) : {};
+  if (typeof token !== 'string' || !hasStructurallyValidIdToken(token) || !identity.email) {
+    throw new CodexActivationError(
+      'invalid_profile',
+      `${label} auth.json needs a valid Codex login with a decoded email.`
+    );
+  }
+  if (
+    requireCredentials &&
+    (typeof parsed.tokens?.access_token !== 'string' ||
+      parsed.tokens.access_token.length === 0 ||
+      typeof parsed.tokens.refresh_token !== 'string' ||
+      parsed.tokens.refresh_token.length === 0)
+  ) {
+    throw new CodexActivationError(
+      'invalid_profile',
+      `${label} auth.json needs access and refresh tokens from a Codex login.`
+    );
+  }
+  return { content, identity: { ...identity, email: identity.email } };
+}
+
+function atomicReplace(authPath: string, content: Buffer): void {
+  const temporary = `${authPath}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(fd, content);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, authPath);
+    const directoryFd = fs.openSync(path.dirname(authPath), 'r');
+    try {
+      fs.fsyncSync(directoryFd);
+    } finally {
+      fs.closeSync(directoryFd);
+    }
+  } catch {
+    throw new CodexActivationError('auth_write_failed', 'Could not atomically save auth.json.');
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    try {
+      fs.unlinkSync(temporary);
+    } catch {
+      // Successful rename leaves no temporary file.
+    }
+  }
+}
+
+function asSafeActivationError(error: unknown): CodexActivationError {
+  if (error instanceof CodexActivationError) return error;
+  if (error instanceof Error && error.name === 'CodexActivationRuntimeError') {
+    const runtimeCode = (error as Error & { code?: string }).code;
+    return new CodexActivationError(
+      runtimeCode === 'busy' ? 'busy' : 'restart_failed',
+      error.message
+    );
+  }
+  return new CodexActivationError('restart_failed', 'Could not stop or restart Codex safely.');
+}
+
+function saveLiveProfile(
+  registry: CodexProfileRegistry,
+  requestedName: string,
+  live: AuthSnapshot
+): void {
+  const candidates = registry.listProfiles().filter((name) => {
+    try {
+      return (
+        readAuth(path.join(resolveCodexProfileDir(name), 'auth.json'), 'Profile').identity.email ===
+        live.identity.email
+      );
+    } catch {
+      return false;
+    }
+  });
+  // Prefer the requested profile on a same-account activation so its refreshed
+  // live tokens replace any old copy before the target is read again.
+  const previousName = candidates.includes(requestedName) ? requestedName : candidates[0];
+  if (!previousName) {
+    throw new CodexActivationError(
+      'invalid_profile',
+      'The live Codex account has no saved profile. Import it before activating another account.'
+    );
+  }
+  atomicReplace(path.join(resolveCodexProfileDir(previousName), 'auth.json'), live.content);
+  registry.updateProfile(previousName, {
+    email: live.identity.email,
+    plan_type: live.identity.plan_type ?? null,
+    account_id: live.identity.account_id,
+  });
+}
+
+/**
+ * Switch the shared VM login in one transaction. All writers exit before the
+ * live login is saved, so shutdown refreshes cannot overwrite the new account.
+ * The cross-process lock spans stop, save, replace, restart and verification.
+ */
+export async function activateCodexProfile(
+  name: string,
+  options: CodexActivationOptions = {}
+): Promise<CodexActivationResult> {
+  const nameError = getCodexProfileNameError(name);
+  if (nameError) throw new CodexActivationError('invalid_profile', nameError);
+  const codexHome = path.resolve(options.codexHome ?? getActivationCodexHome());
+  const envHome = process.env.CODEX_HOME?.trim();
+  if (envHome && path.resolve(envHome) !== codexHome) {
+    throw new CodexActivationError(
+      'invalid_codex_home',
+      'Activation uses the shared ~/.codex directory. Unset the per-profile CODEX_HOME first.'
+    );
+  }
+  const registry = options.registry ?? new CodexProfileRegistry();
+  let profileExists: boolean;
+  try {
+    profileExists = registry.hasProfile(name);
+  } catch {
+    throw new CodexActivationError(
+      'invalid_profile',
+      'Codex profile registry could not be read safely.'
+    );
+  }
+  if (!profileExists) {
+    throw new CodexActivationError('invalid_profile', `Codex profile '${name}' does not exist.`);
+  }
+  const targetAuthPath = path.join(resolveCodexProfileDir(name), 'auth.json');
+  const expectedEmail = readAuth(targetAuthPath, 'Target profile', true).identity.email;
+  try {
+    fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  } catch {
+    throw new CodexActivationError(
+      'auth_write_failed',
+      'Could not prepare the shared Codex directory.'
+    );
+  }
+  let release: () => Promise<void>;
+  try {
+    release = await lockfile.lock(codexHome, {
+      realpath: false,
+      lockfilePath: path.join(codexHome, '.ccs-activation.lock'),
+      stale: 120_000,
+      update: 5_000,
+      retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
+    });
+  } catch {
+    throw new CodexActivationError('busy', 'Another Codex account activation is already running.');
+  }
+  const authPath = path.join(codexHome, 'auth.json');
+  const runtime = options.runtime ?? createCodexActivationRuntime(codexHome);
+  let stopped = false;
+  let original: AuthSnapshot | undefined;
+  let authReplaced = false;
+  try {
+    await runtime.stop();
+    stopped = true;
+    // Snapshot ONLY after writers have exited. Never use an active-slot marker.
+    if (fs.existsSync(authPath)) {
+      original = readAuth(authPath, 'Live');
+      saveLiveProfile(registry, name, original);
+    }
+    const target = readAuth(targetAuthPath, 'Target profile', true);
+    if (target.identity.email !== expectedEmail) {
+      throw new CodexActivationError(
+        'verification_failed',
+        'The target profile changed account during activation. Try again.'
+      );
+    }
+    authReplaced = true;
+    atomicReplace(authPath, target.content);
+    await runtime.start();
+    const installed = readAuth(authPath, 'Activated', true);
+    if (installed.identity.email !== expectedEmail) {
+      throw new CodexActivationError(
+        'verification_failed',
+        'Codex did not keep the requested account after restarting.'
+      );
+    }
+    registry.updateProfile(name, {
+      last_used: new Date().toISOString(),
+      email: installed.identity.email,
+      plan_type: installed.identity.plan_type ?? null,
+      account_id: installed.identity.account_id,
+    });
+    invalidateCodexAuthProfilesCache();
+    return {
+      name,
+      email: installed.identity.email,
+      plan: installed.identity.plan_type ?? null,
+      codexHome,
+      previousEmail: original?.identity.email ?? null,
+    };
+  } catch (error) {
+    const safeError = asSafeActivationError(error);
+    if (stopped) {
+      try {
+        // A partial start can leave writers alive. Quiesce them before rollback.
+        if (authReplaced) {
+          await runtime.stop();
+          if (original) atomicReplace(authPath, original.content);
+          else fs.rmSync(authPath, { force: true });
+        }
+        await runtime.start();
+      } catch {
+        try {
+          await runtime.start();
+        } catch {
+          // Surface the rollback failure; finally disposes any remaining lock.
+        }
+        throw new CodexActivationError(
+          safeError.code,
+          `${safeError.message} Rollback could not restore and restart the original account.`
+        );
+      }
+    }
+    throw safeError;
+  } finally {
+    invalidateCodexAuthProfilesCache();
+    try {
+      await runtime.dispose?.();
+    } catch {
+      // Runtime cleanup must not mask the outcome of the activation transaction.
+    }
+    try {
+      await release();
+    } catch {
+      // A failed lock cleanup cannot undo a verified activation or mask its error.
+    }
+  }
+}

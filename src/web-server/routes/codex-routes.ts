@@ -1,6 +1,9 @@
 import type { Request, Response } from 'express';
 import { Router } from 'express';
-import { requireLocalAccessWhenAuthDisabled } from '../middleware/auth-middleware';
+import {
+  isDashboardWebSocketOriginAllowed,
+  requireLocalAccessWhenAuthDisabled,
+} from '../middleware/auth-middleware';
 import {
   CodexRawConfigConflictError,
   CodexRawConfigValidationError,
@@ -9,7 +12,14 @@ import {
   patchCodexConfig,
   saveCodexRawConfig,
 } from '../services/codex-dashboard-service';
-import { getCodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
+import {
+  getCodexAuthProfilesSummary,
+  invalidateCodexAuthProfilesCache,
+} from '../../codex-auth/codex-auth-dashboard-service';
+import {
+  activateCodexProfile,
+  CodexActivationError,
+} from '../../codex-auth/activate-codex-profile';
 
 const router = Router();
 const CODEX_CONFIG_ACCESS_ERROR =
@@ -41,6 +51,74 @@ router.get('/profiles', async (req: Request, res: Response): Promise<void> => {
     res.json(await getCodexAuthProfilesSummary());
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/profiles/:name/activate', async (req: Request, res: Response): Promise<void> => {
+  if (!requireLocalAccessWhenAuthDisabled(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
+    return;
+  }
+  // Apply the dashboard's same-origin policy to writes even when auth is enabled.
+  if (!isDashboardWebSocketOriginAllowed(req)) {
+    res.status(403).json({ error: 'Codex account activation requires the dashboard origin.' });
+    return;
+  }
+  if (!req.is('application/json')) {
+    res.status(415).json({ error: 'Codex account activation requires application/json.' });
+    return;
+  }
+  try {
+    const activated = await activateCodexProfile(req.params.name);
+    res.json({
+      success: true,
+      name: activated.name,
+      email: activated.email,
+      plan: activated.plan,
+      codexHome: activated.codexHome,
+      previousEmail: activated.previousEmail,
+    });
+  } catch (error) {
+    // Never return raw filesystem, process, or auth.json errors to the browser.
+    if (error instanceof CodexActivationError) {
+      const failures = {
+        busy: {
+          status: 409,
+          message:
+            'Codex is busy or another account activation is running. Try again when work finishes.',
+        },
+        invalid_profile: { status: 400, message: 'The selected profile has no valid saved login.' },
+        invalid_codex_home: {
+          status: 400,
+          message: 'Account activation requires the shared ~/.codex home.',
+        },
+        restart_failed: {
+          status: 500,
+          message: 'Codex could not restart. Check its processes before retrying activation.',
+        },
+        verification_failed: {
+          status: 500,
+          message:
+            'The activated account could not be verified. Refresh the account list before retrying.',
+        },
+        auth_read_failed: {
+          status: 500,
+          message: 'The saved Codex login could not be read safely.',
+        },
+        auth_write_failed: {
+          status: 500,
+          message: 'The Codex login could not be installed safely.',
+        },
+      };
+      const failure = failures[error.code];
+      res.status(failure.status).json({ error: failure.message, code: error.code });
+      return;
+    }
+    res.status(500).json({
+      error: 'Codex account activation failed. Refresh the account list before retrying.',
+    });
+  } finally {
+    // A restart error may happen after auth.json changed; never retain the old account summary.
+    invalidateCodexAuthProfilesCache();
   }
 });
 

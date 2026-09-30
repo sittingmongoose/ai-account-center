@@ -83,7 +83,11 @@ async function importService() {
   const { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache } = await import(
     '../../../src/codex-auth/codex-auth-dashboard-service'
   );
-  return { getCodexAuthProfilesSummary, invalidateCodexAuthProfilesCache };
+  return {
+    getCodexAuthProfilesSummary: () =>
+      getCodexAuthProfilesSummary(path.join(tmpDir, 'shared-codex')),
+    invalidateCodexAuthProfilesCache,
+  };
 }
 
 // Setup / teardown ---------------------------------------------------------
@@ -95,6 +99,8 @@ let ccsDir: string;
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-test-'));
   process.env.CCS_HOME = tmpDir;
+  delete process.env.CODEX_HOME;
+  delete process.env.CCS_CODEX_PROFILE;
   ccsDir = path.join(tmpDir, '.ccs');
   fs.mkdirSync(ccsDir, { recursive: true });
   // Clear module cache so cache state doesn't bleed between tests

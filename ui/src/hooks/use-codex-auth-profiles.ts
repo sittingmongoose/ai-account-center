@@ -1,14 +1,14 @@
 /**
  * React hook for fetching codex-auth profile summary from
- * GET /api/codex/profiles. Returns the active profile, default,
- * and per-profile list with decoded identity fields.
+ * GET /api/codex/profiles. Returns the live shared-home account,
+ * CCS launch selection/default, and profiles with decoded identity fields.
  *
  * Mirrors the useCodex pattern (use-codex.ts:70) with a 15s refetch
  * interval — dashboard polls are low-frequency; the server-side 5s
  * cache absorbs bursts.
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { withApiBase } from '@/lib/api-client';
 
 export interface CodexAuthProfileEntry {
@@ -30,8 +30,23 @@ export interface CodexAuthActiveProfile {
 
 export interface CodexAuthProfilesResponse {
   active: CodexAuthActiveProfile | null;
+  /** Actual account installed in the shared ~/.codex/auth.json. */
+  activated: CodexActivatedAccount | null;
   default: string | null;
   profiles: CodexAuthProfileEntry[];
+}
+
+export interface CodexActivatedAccount {
+  name: string | null;
+  email: string;
+  plan: string | null;
+  codexHome: string;
+}
+
+interface CodexActivationResponse extends CodexActivatedAccount {
+  success: true;
+  name: string;
+  previousEmail: string | null;
 }
 
 async function fetchCodexAuthProfiles(): Promise<CodexAuthProfilesResponse> {
@@ -47,5 +62,43 @@ export function useCodexAuthProfiles() {
     queryKey: ['codex-auth-profiles'],
     queryFn: fetchCodexAuthProfiles,
     refetchInterval: 15000,
+  });
+}
+
+async function activateCodexAuthProfile(name: string): Promise<CodexActivationResponse> {
+  const res = await fetch(withApiBase(`/codex/profiles/${encodeURIComponent(name)}/activate`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || 'Failed to activate the Codex account.');
+  }
+  return res.json() as Promise<CodexActivationResponse>;
+}
+
+export function useActivateCodexAuthProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: activateCodexAuthProfile,
+    onSuccess: async (result) => {
+      queryClient.setQueryData<CodexAuthProfilesResponse>(['codex-auth-profiles'], (current) =>
+        current
+          ? {
+              ...current,
+              activated: {
+                name: result.name,
+                email: result.email,
+                plan: result.plan,
+                codexHome: result.codexHome,
+              },
+            }
+          : current
+      );
+      await queryClient.invalidateQueries({ queryKey: ['codex-auth-profiles'] });
+    },
+    // A failed restart may still have changed auth.json; refresh actual live state.
+    onError: () => queryClient.invalidateQueries({ queryKey: ['codex-auth-profiles'] }),
   });
 }

@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "id_token": "eyJhbGciOiAibm9uZSIsICJ0eXAiOiAiSldUIn0.eyJlbWFpbCI6ICJnbWFpbEBleGFtcGxlLnRlc3QiLCAiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjogeyJjaGF0Z3B0X3BsYW5fdHlwZSI6ICJwcm8iLCAiY2hhdGdwdF9hY2NvdW50X2lkIjogImZpeHR1cmUtZ21haWwifX0.fakesig",
+    "access_token": "fake-access-gmail",
+    "refresh_token": "fake-refresh-gmail"
+  },
+  "last_refresh": "2026-09-30T00:00:00Z"
+}

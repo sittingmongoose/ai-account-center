@@ -8,10 +8,12 @@ export function printCodexAuthHelp(): void {
 
 Usage
   ccsx auth <command> [options]
+  ccs codex-auth <command> [options]
 
 Commands
   create <name>          Create a new Codex profile (idempotent)
   login <name>           Run \`codex login\` against the profile (auto-creates if missing)
+  activate <name>        Activate the shared VM login and restart Codex once
   switch <name>          Set the persistent default Codex profile
   use <name>             Emit shell-eval exports to activate a profile in this shell only
   show [name]            List profiles or show details for one
@@ -33,6 +35,7 @@ Examples
   codex                              # each terminal uses its own account
   ccsx auth show
   ccsx auth switch personal     # change persistent default
+  ccs codex-auth activate work  # switch CLI, shared app-server and VM desktop login
   ccsx auth remove old --yes
 
 Options
@@ -49,6 +52,8 @@ Notes
   config.toml is shared via symlink to ~/.codex/config.toml.
   Default profile (switch) is persistent across shells.
   Active profile (use) is per-terminal via CODEX_HOME / CCS_CODEX_PROFILE.
+  activate replaces only ~/.codex/auth.json and preserves shared state.
+  Wait for running Codex work to finish before activating an account.
 
   Note: This feature applies only to native \`codex\`. \`ccsxp\` ignores
   CCS_CODEX_PROFILE and uses its own cliproxy pool.

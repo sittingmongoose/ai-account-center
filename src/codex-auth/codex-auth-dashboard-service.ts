@@ -16,7 +16,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { createLogger } from '../services/logging';
+import { ConfigError } from '../errors/error-types';
 import { decodeAccountIdentity } from './codex-account-identity';
 import { hasStructurallyValidIdToken } from './decode-id-token';
 import { getCodexAuthRegistryPath, getCodexInstancesDir } from './codex-profile-paths';
@@ -46,8 +48,16 @@ export interface CodexAuthActiveProfile {
 
 export interface CodexAuthProfilesSummary {
   active: CodexAuthActiveProfile | null;
+  activated: CodexAuthActivatedProfile | null;
   default: string | null;
   profiles: CodexAuthProfileEntry[];
+}
+
+export interface CodexAuthActivatedProfile {
+  name: string | null;
+  email: string;
+  plan: string | null;
+  codexHome: string;
 }
 
 // ── Cache ───────────────────────────────────────────────────────────────────
@@ -81,7 +91,7 @@ function getRegistryCacheSignature(): string {
     }
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn('codex-auth.dashboard.registry-stat-failed', `Registry stat failed: ${msg}`);
-    throw new Error('Codex auth profile registry could not be checked safely');
+    throw new ConfigError('Codex auth profile registry could not be checked safely');
   }
 }
 
@@ -105,7 +115,7 @@ function readRegistry(): CodexProfileData {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn('codex-auth.dashboard.registry-read-failed', `Registry read failed: ${msg}`);
-    throw new Error(`Codex auth profile registry could not be read safely: ${msg}`);
+    throw new ConfigError(`Codex auth profile registry could not be read safely: ${msg}`);
   }
 }
 
@@ -224,7 +234,7 @@ function resolveActive(registry: CodexProfileData): CodexAuthActiveProfile | nul
 
 // ── Core builder ────────────────────────────────────────────────────────────
 
-async function buildSummary(): Promise<CodexAuthProfilesSummary> {
+async function buildSummary(codexHome: string): Promise<CodexAuthProfilesSummary> {
   const registry = readRegistry();
   const active = resolveActive(registry);
 
@@ -236,8 +246,19 @@ async function buildSummary(): Promise<CodexAuthProfilesSummary> {
     }
   );
 
+  const liveIdentity = decodeAccountIdentity(path.join(codexHome, 'auth.json'));
+  const activated: CodexAuthActivatedProfile | null = liveIdentity.email
+    ? {
+        name: profiles.find((profile) => profile.email === liveIdentity.email)?.name ?? null,
+        email: liveIdentity.email,
+        plan: liveIdentity.plan_type ?? null,
+        codexHome,
+      }
+    : null;
+
   return {
     active,
+    activated,
     default: registry.default,
     profiles,
   };
@@ -249,13 +270,22 @@ async function buildSummary(): Promise<CodexAuthProfilesSummary> {
  * Returns the codex-auth profiles summary, using a 5s in-memory cache.
  * Tokens are never included in the returned object.
  */
-export async function getCodexAuthProfilesSummary(): Promise<CodexAuthProfilesSummary> {
+export async function getCodexAuthProfilesSummary(
+  codexHome: string = path.join(os.homedir(), '.codex')
+): Promise<CodexAuthProfilesSummary> {
   const now = Date.now();
-  const registrySignature = getRegistryCacheSignature();
+  let liveSignature = 'missing';
+  try {
+    const stat = fs.statSync(path.join(codexHome, 'auth.json'));
+    liveSignature = [stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
+  } catch {
+    // A missing/unreadable live login displays no activated account.
+  }
+  const registrySignature = `${getRegistryCacheSignature()}:${codexHome}:${liveSignature}`;
   if (cache && cache.expiresAt > now && cache.registrySignature === registrySignature) {
     return cache.value;
   }
-  const value = await buildSummary();
+  const value = await buildSummary(codexHome);
   cache = { value, expiresAt: now + TTL_MS, registrySignature };
   return value;
 }

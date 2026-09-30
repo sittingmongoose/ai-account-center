@@ -38,6 +38,13 @@ async function main(): Promise<void> {
   const args = bootstrap.args;
   const browserLaunchOverride = bootstrap.browserLaunchOverride;
 
+  // Shared VM account management must bypass per-process profile dispatch.
+  if (args[0] === 'codex-auth') {
+    const { runCodexAuth } = await import('./codex-auth/codex-auth-router');
+    process.exitCode = await runCodexAuth(args.slice(1));
+    return;
+  }
+
   cliLogger.info('command.start', 'CLI invocation started', {
     command: args[0] || 'default',
     argCount: args.length,

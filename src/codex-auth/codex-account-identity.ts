@@ -26,7 +26,9 @@ export function decodeAccountIdentity(authJsonPath: string): CodexAccountIdentit
     }
     return decodeIdToken(idToken);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // Parser messages can contain excerpts of auth.json, including tokens.
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    const msg = typeof code === 'string' && /^[A-Z_]+$/.test(code) ? code : 'invalid auth data';
     logger.warn(
       'codex-auth.identity.decode-failed',
       `Failed to decode account identity from ${authJsonPath}: ${msg}`

@@ -1,13 +1,4 @@
-/**
- * Read-only dashboard card displaying codex-auth profile state.
- *
- * Distinct from codex-profiles-card.tsx (which edits config.toml [profiles]).
- * This card shows CCS-side shell profiles: active account, email, plan tier,
- * last-used timestamp, and auth validity.
- *
- * All mutating actions (switch, remove) are disabled with a terminal redirect
- * tooltip per the read-only dashboard spec (D5).
- */
+/** Codex account activation for the shared VM home, separate from CCS launch defaults. */
 
 import { Loader2 } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -24,10 +15,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { useCodexAuthProfiles } from '@/hooks/use-codex-auth-profiles';
-import type { CodexAuthProfileEntry } from '@/hooks/use-codex-auth-profiles';
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
+import { useActivateCodexAuthProfile, useCodexAuthProfiles } from '@/hooks/use-codex-auth-profiles';
+import type {
+  CodexAuthProfileEntry,
+  CodexAuthProfilesResponse,
+} from '@/hooks/use-codex-auth-profiles';
 
 function InlineCode({ children }: { children?: ReactNode }) {
   return (
@@ -39,20 +31,16 @@ function InlineCode({ children }: { children?: ReactNode }) {
 
 function formatLastUsed(iso: string | null): string {
   if (!iso) return 'never';
-  try {
-    const d = new Date(iso);
-    const diffMs = Date.now() - d.getTime();
-    const diffMin = Math.floor(diffMs / 60_000);
-    if (diffMin < 2) return 'just now';
-    if (diffMin < 60) return `${diffMin} min ago`;
-    const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `${diffH}h ago`;
-    const diffD = Math.floor(diffH / 24);
-    if (diffD === 1) return 'yesterday';
-    return `${diffD}d ago`;
-  } catch {
-    return iso;
-  }
+  const diffMs = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(diffMs)) return iso;
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 2) return 'just now';
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  const diffD = Math.floor(diffH / 24);
+  if (diffD === 1) return 'yesterday';
+  return `${diffD}d ago`;
 }
 
 function sourceLabel(source: 'default' | 'env' | 'explicit-codex-home', t: TFunction): string {
@@ -66,52 +54,48 @@ function sourceLabel(source: 'default' | 'env' | 'explicit-codex-home', t: TFunc
   }
 }
 
-// ── Disabled action button with terminal-redirect tooltip ───────────────────
-
-function TerminalOnlyButton({ label }: { label: string }) {
+function TerminalOnlyRemoveButton() {
+  const { t } = useTranslation();
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          {/* span wrapper needed — disabled buttons don't trigger mouse events */}
           <span tabIndex={0} className="inline-block">
             <Button variant="outline" size="sm" disabled className="pointer-events-none">
-              {label}
+              {t('codex.auth.removeAction')}
             </Button>
           </span>
         </TooltipTrigger>
         <TooltipContent>
-          <Trans
-            i18nKey="codex.auth.terminalOnlyTooltipRich"
-            components={{ code: <InlineCode /> }}
-          />
+          <Trans i18nKey="codex.auth.removeTooltipRich" components={{ code: <InlineCode /> }} />
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );
 }
 
-// ── Profile table row ────────────────────────────────────────────────────────
-
 function ProfileRow({
   entry,
-  isActive,
-  activeSource,
+  isActivated,
+  isActivating,
+  activationPending,
+  onActivate,
 }: {
   entry: CodexAuthProfileEntry;
-  isActive: boolean;
-  activeSource?: 'default' | 'env' | 'explicit-codex-home';
+  isActivated: boolean;
+  isActivating: boolean;
+  activationPending: boolean;
+  onActivate: (name: string) => void;
 }) {
   const { t } = useTranslation();
-
   return (
-    <TableRow className={isActive ? 'bg-muted/40' : undefined}>
+    <TableRow className={isActivated ? 'bg-muted/40' : undefined}>
       <TableCell className="font-medium">
         <span className="flex items-center gap-2">
           {entry.name}
-          {isActive && activeSource && (
+          {isActivated && (
             <Badge variant="secondary" className="text-xs">
-              {t('codex.auth.activeSourceBadge', { source: sourceLabel(activeSource, t) })}
+              {t('codex.auth.activatedBadge')}
             </Badge>
           )}
         </span>
@@ -132,19 +116,28 @@ function ProfileRow({
       </TableCell>
       <TableCell>
         <span className="flex gap-1">
-          <TerminalOnlyButton label={t('codex.auth.switchAction')} />
-          <TerminalOnlyButton label={t('codex.auth.removeAction')} />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!entry.authValid || !entry.email || isActivated || activationPending}
+            title={!entry.email ? t('codex.auth.activationRequiresEmail') : undefined}
+            aria-label={t('codex.auth.activateProfileAction', { name: entry.name })}
+            onClick={() => onActivate(entry.name)}
+          >
+            {isActivating && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+            {isActivating ? t('codex.auth.activatingAction') : t('codex.auth.activateAction')}
+          </Button>
+          <TerminalOnlyRemoveButton />
         </span>
       </TableCell>
     </TableRow>
   );
 }
 
-// ── Main card ────────────────────────────────────────────────────────────────
-
 export function CodexAuthProfilesCard() {
   const { t } = useTranslation();
   const { data, isLoading, error } = useCodexAuthProfiles();
+  const activation = useActivateCodexAuthProfile();
 
   if (isLoading) {
     return (
@@ -154,7 +147,6 @@ export function CodexAuthProfilesCard() {
       </div>
     );
   }
-
   if (error || !data) {
     return (
       <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -163,132 +155,89 @@ export function CodexAuthProfilesCard() {
     );
   }
 
-  // Empty registry — no profiles at all
-  if (data.profiles.length === 0) {
-    return (
-      <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm text-muted-foreground space-y-1">
-        <p>
-          <Trans i18nKey="codex.auth.emptyRegistryRich" components={{ code: <InlineCode /> }} />
-        </p>
-        <p>
-          <Trans i18nKey="codex.auth.legacyCodexHomeRich" components={{ code: <InlineCode /> }} />
-        </p>
-      </div>
-    );
-  }
-
-  // Legacy mode — profiles exist but none active
-  if (!data.active) {
-    return (
-      <div className="space-y-3">
-        <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-          <Trans i18nKey="codex.auth.legacyModeRich" components={{ code: <InlineCode /> }} />
-        </div>
-        <ProfileTable data={data} />
-      </div>
-    );
-  }
-
-  // External CODEX_HOME with no registry match
-  if (data.active.source === 'explicit-codex-home' && data.active.name === null) {
-    return (
-      <div className="space-y-3">
-        <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-          <Trans
-            i18nKey="codex.auth.externalCodexHomeRich"
-            values={{ path: data.active.codexHome }}
-            components={{ code: <InlineCode /> }}
-          />
-        </div>
-        <ProfileTable data={data} />
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-3">
-      <ActiveBanner name={data.active.name} source={data.active.source} profiles={data.profiles} />
-      <ProfileTable data={data} />
-    </div>
-  );
-}
-
-// ── Active profile highlight banner ─────────────────────────────────────────
-
-function ActiveBanner({
-  name,
-  source,
-  profiles,
-}: {
-  name: string | null;
-  source: 'default' | 'env' | 'explicit-codex-home';
-  profiles: CodexAuthProfileEntry[];
-}) {
-  const { t } = useTranslation();
-  const activeEntry = profiles.find((p) => p.name === name);
-
-  return (
-    <div className="rounded-md border bg-muted/20 px-4 py-3 text-sm space-y-1">
-      <div className="flex items-center gap-2 font-medium">
-        {t('codex.auth.activeProfile')}
-        <span>{name ?? t('codex.auth.unknownProfile')}</span>
-        <Badge variant="secondary" className="text-xs">
-          {sourceLabel(source, t)}
-        </Badge>
-      </div>
-      {activeEntry && (
-        <div className="text-muted-foreground text-xs space-x-3">
-          {activeEntry.email && <span>{activeEntry.email}</span>}
-          {activeEntry.plan && (
-            <span>
-              {t('codex.auth.planLabel')} <strong>{activeEntry.plan}</strong>
-            </span>
-          )}
-          {!activeEntry.authValid && (
-            <span className="text-destructive">{t('codex.auth.statusInvalid')}</span>
-          )}
+      <AccountBanners data={data} />
+      {activation.error && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          {activation.error.message}
+        </div>
+      )}
+      {activation.isSuccess && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t('codex.auth.activationSuccess', { email: activation.data.email })}
+        </p>
+      )}
+      {data.profiles.length === 0 ? (
+        <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          <Trans i18nKey="codex.auth.emptyRegistryRich" components={{ code: <InlineCode /> }} />
+        </div>
+      ) : (
+        <div className="rounded-md border overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('codex.auth.col.name')}</TableHead>
+                <TableHead>{t('codex.auth.col.email')}</TableHead>
+                <TableHead>{t('codex.auth.col.plan')}</TableHead>
+                <TableHead>{t('codex.auth.col.lastUsed')}</TableHead>
+                <TableHead>{t('codex.auth.col.status')}</TableHead>
+                <TableHead>{t('codex.auth.col.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.profiles.map((entry) => (
+                <ProfileRow
+                  key={entry.name}
+                  entry={entry}
+                  isActivated={data.activated?.name === entry.name}
+                  isActivating={activation.isPending && activation.variables === entry.name}
+                  activationPending={activation.isPending}
+                  onActivate={activation.mutate}
+                />
+              ))}
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>
   );
 }
 
-// ── Profile table ────────────────────────────────────────────────────────────
-
-function ProfileTable({
-  data,
-}: {
-  data: {
-    active: { name: string | null; source: 'default' | 'env' | 'explicit-codex-home' } | null;
-    profiles: CodexAuthProfileEntry[];
-  };
-}) {
+function AccountBanners({ data }: { data: CodexAuthProfilesResponse }) {
   const { t } = useTranslation();
-
   return (
-    <div className="rounded-md border overflow-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('codex.auth.col.name')}</TableHead>
-            <TableHead>{t('codex.auth.col.email')}</TableHead>
-            <TableHead>{t('codex.auth.col.plan')}</TableHead>
-            <TableHead>{t('codex.auth.col.lastUsed')}</TableHead>
-            <TableHead>{t('codex.auth.col.status')}</TableHead>
-            <TableHead>{t('codex.auth.col.actions')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {data.profiles.map((entry) => (
-            <ProfileRow
-              key={entry.name}
-              entry={entry}
-              isActive={data.active?.name === entry.name}
-              activeSource={data.active?.name === entry.name ? data.active.source : undefined}
-            />
-          ))}
-        </TableBody>
-      </Table>
+    <div className="rounded-md border bg-muted/20 px-4 py-3 text-sm space-y-2">
+      <div className="space-y-1">
+        <div className="font-medium">{t('codex.auth.liveAccount')}</div>
+        {data.activated ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{data.activated.email}</span>
+            <Badge variant="secondary">
+              {data.activated.name ?? t('codex.auth.unknownProfile')}
+            </Badge>
+            {data.activated.plan && <span>{data.activated.plan}</span>}
+          </div>
+        ) : (
+          <div className="text-muted-foreground">{t('codex.auth.noLiveAccount')}</div>
+        )}
+        <p className="text-xs text-muted-foreground">{t('codex.auth.activationDescription')}</p>
+      </div>
+      <div className="border-t pt-2 text-xs text-muted-foreground space-y-1">
+        <p>
+          {t('codex.auth.launchDefault')} {data.default ?? t('codex.auth.noLaunchDefault')}
+        </p>
+        {data.active && (
+          <p>
+            {t('codex.auth.launchProfile')} {data.active.name ?? data.active.codexHome}
+            {' · '}
+            {sourceLabel(data.active.source, t)}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
