@@ -82,7 +82,7 @@ describe('ClaudeAccountsPage', () => {
     expect(screen.getByRole('heading', { name: 'Claude accounts' })).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Choose your computer, then click Open account. Sign in with the matching email if prompted.'
+        'Choose your computer, then click Open account. Each new profile needs one sign-in on that computer; later launches reuse it. You can keep multiple profiles open.'
       )
     ).toBeInTheDocument();
     for (const profile of profiles) {

@@ -23,6 +23,8 @@ import { startAutoSyncWatcher, stopAutoSyncWatcher } from '../cliproxy/sync';
 import { shutdownUsageAggregator } from './usage/aggregator';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
+import { getCodexAutoSwitchService } from './services/codex-auto-switch-service';
+import { ConfigError } from '../errors/error-types';
 
 export interface ServerOptions {
   port: number;
@@ -169,13 +171,16 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // Start auto-sync watcher (if enabled in config)
   startAutoSyncWatcher();
+  const codexAutoSwitch = getCodexAutoSwitchService();
 
   // Combined cleanup function
   const cleanup = () => {
+    codexAutoSwitch.stop();
     wsCleanup();
     stopAutoSyncWatcher().catch(() => {});
     shutdownUsageAggregator();
   };
+  server.once('close', cleanup);
 
   // Start listening
   return new Promise<ServerInstance>((resolve, reject) => {
@@ -210,6 +215,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         port: options.port,
         dev: Boolean(options.dev),
       });
+      codexAutoSwitch.start();
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
       resolve({ server, wss, cleanup });
@@ -263,7 +269,7 @@ function assertSafeDashboardBind(
     return;
   }
 
-  throw new Error(
+  throw new ConfigError(
     `Dashboard host ${listenHost} resolved to non-loopback address ${address.address}; pass --host explicitly to allow network exposure.`
   );
 }

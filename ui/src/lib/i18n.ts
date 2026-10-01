@@ -2756,7 +2756,7 @@ const resources = {
         cliDescription: 'For terminal sessions, use',
         cliLink: 'Claude CLI profiles',
         instruction:
-          'Choose your computer, then click Open account. Sign in with the matching email if prompted.',
+          'Choose your computer, then click Open account. Each new profile needs one sign-in on that computer; later launches reuse it. You can keep multiple profiles open.',
         openAccount: 'Open account',
         openProfile: 'Open account {{email}}',
         opening: 'Opening…',
@@ -2768,6 +2768,30 @@ const resources = {
         noUsageHistory: 'No cached usage yet; open this account and sign in if prompted.',
       },
       codexPage: {
+        autoSwitch: {
+          title: 'Automatic switching',
+          enabled: 'Enabled',
+          disabled: 'Disabled',
+          loading: 'Loading automatic switching…',
+          unavailable: 'Automatic switching status unavailable',
+          description:
+            'Switch to a healthy saved account when 5% or less remains. Waits until Codex is idle before restarting the VM desktop and app server.',
+          claudeManual: 'Claude account switching stays manual.',
+          loadError: 'Unable to load automatic switching settings.',
+          retry: 'Retry',
+          updateError: 'Unable to save automatic switching settings.',
+          outcomes: {
+            disabled: 'Automatic switching is off.',
+            scheduled: 'Waiting for the next usage check.',
+            healthy: 'The current account has enough quota.',
+            no_quota: 'Waiting for current account usage data.',
+            no_candidate: 'No healthy saved account is available.',
+            waiting_idle: 'Codex is busy. Waiting until it is idle before switching.',
+            switching: 'Switching the account and restarting Codex.',
+            switched: 'Switched to a healthy saved account.',
+            error: 'The last automatic switching check failed.',
+          },
+        },
         accountsTitle: 'Codex accounts',
         accountsInstruction:
           'Click Activate beside the account you want to use. Usage windows and reset times are shown as reported by each account. Percentages show how much is used.',
@@ -5642,7 +5666,7 @@ const resources = {
         cliDescription: 'Para sessões de terminal, use',
         cliLink: 'Perfis Claude CLI',
         instruction:
-          'Escolha seu computador e clique em Abrir conta. Entre com o e-mail correspondente se solicitado.',
+          'Escolha seu computador e clique em Abrir conta. Cada novo perfil precisa de um login nesse computador; as próximas aberturas reutilizam o login. Você pode manter vários perfis abertos.',
         openAccount: 'Abrir conta',
         openProfile: 'Abrir conta {{email}}',
         opening: 'Abrindo…',
@@ -5654,6 +5678,30 @@ const resources = {
         noUsageHistory: 'Ainda não há uso em cache; abra esta conta e entre se solicitado.',
       },
       codexPage: {
+        autoSwitch: {
+          title: 'Troca automática',
+          enabled: 'Ativada',
+          disabled: 'Desativada',
+          loading: 'Carregando troca automática…',
+          unavailable: 'Status da troca automática indisponível',
+          description:
+            'Troque para uma conta salva com cota disponível quando restar 5% ou menos. Aguarda o Codex ficar ocioso antes de reiniciar o aplicativo de desktop da VM e o servidor do aplicativo.',
+          claudeManual: 'A troca de contas Claude continua manual.',
+          loadError: 'Não foi possível carregar as configurações de troca automática.',
+          retry: 'Tentar novamente',
+          updateError: 'Não foi possível salvar as configurações de troca automática.',
+          outcomes: {
+            disabled: 'A troca automática está desativada.',
+            scheduled: 'Aguardando a próxima verificação de uso.',
+            healthy: 'A conta atual tem cota suficiente.',
+            no_quota: 'Aguardando os dados de uso da conta atual.',
+            no_candidate: 'Nenhuma conta salva com cota disponível está disponível.',
+            waiting_idle: 'O Codex está ocupado. Aguardando ficar ocioso antes de trocar.',
+            switching: 'Trocando a conta e reiniciando o Codex.',
+            switched: 'Trocou para uma conta salva com cota disponível.',
+            error: 'A última verificação de troca automática falhou.',
+          },
+        },
         accountsTitle: 'Contas Codex',
         accountsInstruction:
           'Clique em Ativar ao lado da conta que deseja usar. Os períodos de uso e horários de redefinição são exibidos conforme informados por cada conta. As porcentagens mostram quanto foi usado.',
@@ -8325,7 +8373,8 @@ const resources = {
         copyFailed: '请选择位置文本并手动复制。',
         cliDescription: '终端会话请使用',
         cliLink: 'Claude CLI 配置',
-        instruction: '选择您的电脑，然后点击打开账户。如提示登录，请使用对应的邮箱。',
+        instruction:
+          '选择您的电脑，然后点击打开账户。每个新配置需要在该电脑上登录一次，之后打开时会复用登录。您可以同时打开多个配置。',
         openAccount: '打开账户',
         openProfile: '打开账户 {{email}}',
         opening: '正在打开…',
@@ -8336,6 +8385,30 @@ const resources = {
         noUsageHistory: '尚无缓存用量，请打开此账户，并在提示时登录。',
       },
       codexPage: {
+        autoSwitch: {
+          title: '自动切换',
+          enabled: '已启用',
+          disabled: '已禁用',
+          loading: '正在加载自动切换…',
+          unavailable: '自动切换状态不可用',
+          description:
+            '剩余额度不足或等于 5% 时，切换到额度充足的已保存账户。等待 Codex 空闲后再重启虚拟机中的桌面应用和应用服务器。',
+          claudeManual: 'Claude 账户仍需手动切换。',
+          loadError: '无法加载自动切换设置。',
+          retry: '重试',
+          updateError: '无法保存自动切换设置。',
+          outcomes: {
+            disabled: '自动切换已关闭。',
+            scheduled: '等待下一次用量检查。',
+            healthy: '当前账户有足够的额度。',
+            no_quota: '正在等待当前账户的用量数据。',
+            no_candidate: '没有额度充足的已保存账户。',
+            waiting_idle: 'Codex 正忙。正在等待空闲后再切换。',
+            switching: '正在切换账户并重启 Codex。',
+            switched: '已切换到额度充足的已保存账户。',
+            error: '上次自动切换检查失败。',
+          },
+        },
         accountsTitle: 'Codex 账户',
         accountsInstruction:
           '点击要使用的账户旁边的“激活”。用量时段和重置时间按各账户报告的数据显示。百分比表示已使用的比例。',
@@ -11135,7 +11208,7 @@ const resources = {
         cliDescription: 'Đối với phiên terminal, sử dụng',
         cliLink: 'Hồ sơ Claude CLI',
         instruction:
-          'Chọn máy tính của bạn, rồi nhấp Mở tài khoản. Đăng nhập bằng email tương ứng nếu được yêu cầu.',
+          'Chọn máy tính của bạn rồi nhấn Mở tài khoản. Mỗi hồ sơ mới cần đăng nhập một lần trên máy tính đó; các lần mở sau sẽ dùng lại phiên đăng nhập. Bạn có thể mở nhiều hồ sơ cùng lúc.',
         openAccount: 'Mở tài khoản',
         openProfile: 'Mở tài khoản {{email}}',
         opening: 'Đang mở…',
@@ -11148,6 +11221,30 @@ const resources = {
           'Chưa có mức sử dụng lưu đệm; hãy mở tài khoản này và đăng nhập nếu được yêu cầu.',
       },
       codexPage: {
+        autoSwitch: {
+          title: 'Tự động chuyển tài khoản',
+          enabled: 'Đã bật',
+          disabled: 'Đã tắt',
+          loading: 'Đang tải thiết lập tự động chuyển…',
+          unavailable: 'Không có trạng thái tự động chuyển tài khoản',
+          description:
+            'Chuyển sang tài khoản đã lưu còn đủ hạn mức khi còn 5% trở xuống. Đợi Codex rảnh trước khi khởi động lại ứng dụng máy tính trên VM và máy chủ ứng dụng.',
+          claudeManual: 'Việc chuyển tài khoản Claude vẫn thực hiện thủ công.',
+          loadError: 'Không thể tải thiết lập tự động chuyển tài khoản.',
+          retry: 'Thử lại',
+          updateError: 'Không thể lưu thiết lập tự động chuyển tài khoản.',
+          outcomes: {
+            disabled: 'Tự động chuyển tài khoản đã tắt.',
+            scheduled: 'Đang đợi lần kiểm tra mức sử dụng tiếp theo.',
+            healthy: 'Tài khoản hiện tại còn đủ hạn mức.',
+            no_quota: 'Đang đợi dữ liệu mức sử dụng của tài khoản hiện tại.',
+            no_candidate: 'Không có tài khoản đã lưu nào còn đủ hạn mức.',
+            waiting_idle: 'Codex đang bận. Đợi Codex rảnh trước khi chuyển.',
+            switching: 'Đang chuyển tài khoản và khởi động lại Codex.',
+            switched: 'Đã chuyển sang tài khoản đã lưu còn đủ hạn mức.',
+            error: 'Lần kiểm tra tự động chuyển gần nhất thất bại.',
+          },
+        },
         accountsTitle: 'Tài khoản Codex',
         accountsInstruction:
           'Nhấn Kích hoạt bên cạnh tài khoản bạn muốn sử dụng. Các khoảng sử dụng và thời gian đặt lại được hiển thị theo dữ liệu từng tài khoản cung cấp. Tỷ lệ cho biết phần đã sử dụng.',
@@ -13203,7 +13300,7 @@ const resources = {
         cliDescription: 'ターミナルのセッションには次を使用してください:',
         cliLink: 'Claude CLI プロファイル',
         instruction:
-          'コンピューターを選び、「アカウントを開く」をクリックします。サインインを求められたら、対応するメールアドレスを使用してください。',
+          'コンピューターを選び、「アカウントを開く」をクリックしてください。新しいプロファイルはそのコンピューターで一度サインインが必要です。次回からはサインインを再利用します。複数のプロファイルを同時に開けます。',
         openAccount: 'アカウントを開く',
         openProfile: 'アカウント {{email}} を開く',
         opening: '開いています…',
@@ -13216,6 +13313,30 @@ const resources = {
           '使用量のキャッシュがまだありません。このアカウントを開き、必要ならサインインしてください。',
       },
       codexPage: {
+        autoSwitch: {
+          title: '自動切り替え',
+          enabled: '有効',
+          disabled: '無効',
+          loading: '自動切り替えを読み込み中…',
+          unavailable: '自動切り替えの状態を取得できません',
+          description:
+            '残りの使用枠が 5% 以下になると、使用枠に余裕がある保存済みアカウントに切り替えます。Codex がアイドル状態になってから VM のデスクトップアプリとアプリサーバーを再起動します。',
+          claudeManual: 'Claude アカウントの切り替えは手動のままです。',
+          loadError: '自動切り替えの設定を読み込めません。',
+          retry: '再試行',
+          updateError: '自動切り替えの設定を保存できません。',
+          outcomes: {
+            disabled: '自動切り替えはオフです。',
+            scheduled: '次の使用量チェックを待っています。',
+            healthy: '現在のアカウントには十分な使用枠があります。',
+            no_quota: '現在のアカウントの使用量データを待っています。',
+            no_candidate: '使用枠に余裕がある保存済みアカウントがありません。',
+            waiting_idle: 'Codex は処理中です。アイドル状態になってから切り替えます。',
+            switching: 'アカウントを切り替えて Codex を再起動しています。',
+            switched: '使用枠に余裕がある保存済みアカウントに切り替えました。',
+            error: '前回の自動切り替えチェックに失敗しました。',
+          },
+        },
         accountsTitle: 'Codex アカウント',
         accountsInstruction:
           '使用するアカウントの横にある「有効化」をクリックしてください。使用量の期間とリセット日時は各アカウントの報告に従って表示されます。割合は使用済みの量を示します。',
@@ -16798,7 +16919,7 @@ const resources = {
         cliDescription: '터미널 세션에는 다음을 사용하세요:',
         cliLink: 'Claude CLI 프로필',
         instruction:
-          '컴퓨터를 선택한 다음 계정 열기를 클릭하세요. 로그인하라는 메시지가 나타나면 해당 이메일을 사용하세요.',
+          '컴퓨터를 선택한 다음 계정 열기를 클릭하세요. 새 프로필은 해당 컴퓨터에서 한 번 로그인해야 하며, 이후에는 로그인을 재사용합니다. 여러 프로필을 동시에 열어 둘 수 있습니다.',
         openAccount: '계정 열기',
         openProfile: '계정 {{email}} 열기',
         opening: '여는 중…',
@@ -16810,6 +16931,30 @@ const resources = {
         noUsageHistory: '아직 캐시된 사용량이 없습니다. 이 계정을 열고 요청 시 로그인하세요.',
       },
       codexPage: {
+        autoSwitch: {
+          title: '자동 전환',
+          enabled: '사용',
+          disabled: '사용 안 함',
+          loading: '자동 전환 설정 불러오는 중…',
+          unavailable: '자동 전환 상태를 확인할 수 없습니다',
+          description:
+            '남은 사용량이 5% 이하이면 사용 가능한 저장된 계정으로 전환합니다. Codex가 유휴 상태가 될 때까지 기다린 후 VM의 데스크톱 앱과 앱 서버를 다시 시작합니다.',
+          claudeManual: 'Claude 계정 전환은 수동으로 유지됩니다.',
+          loadError: '자동 전환 설정을 불러올 수 없습니다.',
+          retry: '다시 시도',
+          updateError: '자동 전환 설정을 저장할 수 없습니다.',
+          outcomes: {
+            disabled: '자동 전환이 꺼져 있습니다.',
+            scheduled: '다음 사용량 확인을 기다리고 있습니다.',
+            healthy: '현재 계정의 사용량이 충분히 남아 있습니다.',
+            no_quota: '현재 계정의 사용량 데이터를 기다리고 있습니다.',
+            no_candidate: '사용량이 충분히 남은 저장된 계정이 없습니다.',
+            waiting_idle: 'Codex가 작업 중입니다. 유휴 상태가 되면 전환합니다.',
+            switching: '계정을 전환하고 Codex를 다시 시작하는 중입니다.',
+            switched: '사용 가능한 저장된 계정으로 전환했습니다.',
+            error: '마지막 자동 전환 확인에 실패했습니다.',
+          },
+        },
         accountsTitle: 'Codex 계정',
         accountsInstruction:
           '사용할 계정 옆의 활성화 버튼을 클릭하세요. 사용량 기간과 재설정 시간은 각 계정이 보고한 대로 표시됩니다. 백분율은 사용한 양을 나타냅니다.',

@@ -21,6 +21,7 @@ import {
   CodexActivationError,
 } from '../../codex-auth/activate-codex-profile';
 import { getCodexProfileQuotas } from '../services/codex-profile-quota-service';
+import { getCodexAutoSwitchService } from '../services/codex-auto-switch-service';
 
 const router = Router();
 const CODEX_CONFIG_ACCESS_ERROR =
@@ -63,6 +64,44 @@ router.get('/profiles/quotas', async (req: Request, res: Response): Promise<void
     res.json(await getCodexProfileQuotas());
   } catch {
     res.status(500).json({ error: 'Codex profile usage could not be read safely.' });
+  }
+});
+
+router.get('/profiles/auto-switch', (req: Request, res: Response): void => {
+  if (req.session?.authenticated !== true) {
+    res.status(401).json({ error: 'Authentication required' });
+    return;
+  }
+  res.json(getCodexAutoSwitchService().getStatus());
+});
+
+router.put('/profiles/auto-switch', (req: Request, res: Response): void => {
+  if (req.session?.authenticated !== true) {
+    res.status(401).json({ error: 'Authentication required' });
+    return;
+  }
+  if (!isDashboardWebSocketOriginAllowed(req)) {
+    res.status(403).json({ error: 'Codex automatic switching requires the dashboard origin.' });
+    return;
+  }
+  if (!req.is('application/json')) {
+    res.status(415).json({ error: 'Codex automatic switching requires application/json.' });
+    return;
+  }
+  if (
+    !req.body ||
+    typeof req.body.enabled !== 'boolean' ||
+    Object.keys(req.body).some((key) => key !== 'enabled')
+  ) {
+    res.status(400).json({ error: 'Provide only an enabled boolean.' });
+    return;
+  }
+  try {
+    res.json(getCodexAutoSwitchService().setEnabled(req.body.enabled));
+  } catch {
+    res
+      .status(500)
+      .json({ error: 'Codex automatic switching settings could not be saved safely.' });
   }
 });
 

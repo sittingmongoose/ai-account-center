@@ -7,6 +7,8 @@ import {
   useActivateCodexAuthProfile,
   useCodexAuthProfiles,
   useCodexAuthProfileQuotas,
+  useCodexAutomaticSwitch,
+  useUpdateCodexAutomaticSwitch,
 } from '@/hooks/use-codex-auth-profiles';
 
 function response(body: unknown, status = 200): Response {
@@ -96,6 +98,112 @@ describe('Codex auth activation hooks', () => {
       expect(result.current.activation.error?.message).toContain('when work finishes')
     );
     expect(fetchMock.mock.calls.filter(([, init]) => !init?.method)).toHaveLength(2);
+  });
+});
+
+const disabledSwitchStatus = {
+  enabled: false,
+  thresholdPercent: 5,
+  pollIntervalSeconds: 60,
+  outcome: 'disabled',
+  message: 'Automatic switching is disabled.',
+  activationInProgress: false,
+};
+
+describe('Codex automatic switching hooks', () => {
+  it('loads the saved setting and backend outcome from its dedicated endpoint', async () => {
+    const status = { ...disabledSwitchStatus, enabled: true, outcome: 'waiting_idle' };
+    const fetchMock = vi.fn(() => Promise.resolve(response(status)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useCodexAutomaticSwitch(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.data).toEqual(status));
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/api/codex/profiles/auto-switch');
+  });
+
+  it('sends only the enabled flag and updates the cache after the server responds', async () => {
+    const savedStatus = { ...disabledSwitchStatus, enabled: true, outcome: 'scheduled' };
+    let finishSave!: (res: Response) => void;
+    const saved = new Promise<Response>((resolve) => {
+      finishSave = resolve;
+    });
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'PUT' ? saved : Promise.resolve(response(disabledSwitchStatus))
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(
+      () => ({ settings: useCodexAutomaticSwitch(), update: useUpdateCodexAutomaticSwitch() }),
+      { wrapper: createWrapper() }
+    );
+    await waitFor(() => expect(result.current.settings.data?.enabled).toBe(false));
+    act(() => result.current.update.mutate(true));
+    await waitFor(() => expect(result.current.update.isPending).toBe(true));
+    expect(result.current.settings.data?.enabled).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith('/api/codex/profiles/auto-switch', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"enabled":true}',
+    });
+    await act(async () => finishSave(response(savedStatus)));
+    await waitFor(() => expect(result.current.settings.data).toEqual(savedStatus));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves saved enabled state when disabling fails', async () => {
+    const currentStatus = { ...disabledSwitchStatus, enabled: true, outcome: 'healthy' };
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      Promise.resolve(
+        init?.method === 'PUT'
+          ? response({ error: 'Settings could not be written.' }, 500)
+          : response(currentStatus)
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(
+      () => ({ settings: useCodexAutomaticSwitch(), update: useUpdateCodexAutomaticSwitch() }),
+      { wrapper: createWrapper() }
+    );
+    await waitFor(() => expect(result.current.settings.data?.enabled).toBe(true));
+    await act(async () => {
+      await expect(result.current.update.mutateAsync(false)).rejects.toThrow(
+        'Settings could not be written.'
+      );
+    });
+    expect(result.current.settings.data).toEqual(currentStatus);
+    expect(fetchMock).toHaveBeenCalledWith('/api/codex/profiles/auto-switch', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"enabled":false}',
+    });
+  });
+
+  it('does not let an older poll overwrite the confirmed saved setting', async () => {
+    const savedStatus = { ...disabledSwitchStatus, enabled: true, outcome: 'scheduled' };
+    let finishPoll!: (res: Response) => void;
+    const pendingPoll = new Promise<Response>((resolve) => {
+      finishPoll = resolve;
+    });
+    let reads = 0;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PUT') return Promise.resolve(response(savedStatus));
+      reads += 1;
+      return reads === 1 ? Promise.resolve(response(disabledSwitchStatus)) : pendingPoll;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(
+      () => ({ settings: useCodexAutomaticSwitch(), update: useUpdateCodexAutomaticSwitch() }),
+      { wrapper: createWrapper() }
+    );
+    await waitFor(() => expect(result.current.settings.data?.enabled).toBe(false));
+    act(() => {
+      void result.current.settings.refetch();
+    });
+    await waitFor(() => expect(reads).toBe(2));
+    await act(async () => {
+      await result.current.update.mutateAsync(true);
+    });
+    await waitFor(() => expect(result.current.settings.data).toEqual(savedStatus));
+    await act(async () => finishPoll(response(disabledSwitchStatus)));
+    expect(result.current.settings.data).toEqual(savedStatus);
   });
 });
 

@@ -44,6 +44,25 @@ const codexAuthKeys = [
   ['codexPage.authProfiles'],
   ['codexPage.accountsTitle'],
   ['codexPage.accountsInstruction'],
+  ['codexPage.autoSwitch.title'],
+  ['codexPage.autoSwitch.enabled'],
+  ['codexPage.autoSwitch.disabled'],
+  ['codexPage.autoSwitch.loading'],
+  ['codexPage.autoSwitch.unavailable'],
+  ['codexPage.autoSwitch.description'],
+  ['codexPage.autoSwitch.claudeManual'],
+  ['codexPage.autoSwitch.loadError'],
+  ['codexPage.autoSwitch.retry'],
+  ['codexPage.autoSwitch.updateError'],
+  ['codexPage.autoSwitch.outcomes.disabled'],
+  ['codexPage.autoSwitch.outcomes.scheduled'],
+  ['codexPage.autoSwitch.outcomes.healthy'],
+  ['codexPage.autoSwitch.outcomes.no_quota'],
+  ['codexPage.autoSwitch.outcomes.no_candidate'],
+  ['codexPage.autoSwitch.outcomes.waiting_idle'],
+  ['codexPage.autoSwitch.outcomes.switching'],
+  ['codexPage.autoSwitch.outcomes.switched'],
+  ['codexPage.autoSwitch.outcomes.error'],
 ] as const;
 
 const originalLanguage = i18n.language;
@@ -59,6 +78,7 @@ describe('codex auth i18n', () => {
     for (const [key, options] of codexAuthKeys) {
       const translated = i18n.t(key, options);
 
+      expect(i18n.exists(key, { lng: locale, fallbackLng: false })).toBe(true);
       expect(translated).not.toBe(key);
       expect(translated).not.toContain('codex.auth.');
       expect(translated).not.toContain('codexPage.');

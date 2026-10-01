@@ -20,6 +20,28 @@ export interface CodexAuthProfileQuotasResponse {
   profiles: CodexAuthProfileQuota[];
 }
 
+export type CodexAutomaticSwitchOutcome =
+  | 'disabled'
+  | 'scheduled'
+  | 'healthy'
+  | 'no_quota'
+  | 'no_candidate'
+  | 'waiting_idle'
+  | 'switching'
+  | 'switched'
+  | 'error';
+
+export interface CodexAutomaticSwitchStatus {
+  enabled: boolean;
+  thresholdPercent: number;
+  pollIntervalSeconds: number;
+  outcome: CodexAutomaticSwitchOutcome;
+  message: string;
+  lastCheckedAt?: string;
+  lastSwitchedAt?: string;
+  activationInProgress: boolean;
+}
+
 export interface CodexAuthProfileEntry {
   name: string;
   codexHome: string;
@@ -89,6 +111,49 @@ export function useCodexAuthProfileQuotas() {
     refetchInterval: 60_000,
     staleTime: 60_000,
     retry: 1,
+  });
+}
+
+async function fetchCodexAutomaticSwitch(): Promise<CodexAutomaticSwitchStatus> {
+  const res = await fetch(withApiBase('/codex/profiles/auto-switch'));
+  if (!res.ok) {
+    throw new Error('Failed to fetch Codex automatic switching');
+  }
+  return res.json() as Promise<CodexAutomaticSwitchStatus>;
+}
+
+export function useCodexAutomaticSwitch() {
+  return useQuery({
+    queryKey: ['codex-automatic-switch'],
+    queryFn: fetchCodexAutomaticSwitch,
+    refetchInterval: 15_000,
+    retry: 1,
+  });
+}
+
+async function updateCodexAutomaticSwitch(enabled: boolean): Promise<CodexAutomaticSwitchStatus> {
+  const res = await fetch(withApiBase('/codex/profiles/auto-switch'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || 'Failed to update Codex automatic switching.');
+  }
+  return res.json() as Promise<CodexAutomaticSwitchStatus>;
+}
+
+export function useUpdateCodexAutomaticSwitch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateCodexAutomaticSwitch,
+    onMutate: () => queryClient.cancelQueries({ queryKey: ['codex-automatic-switch'] }),
+    onSuccess: async (result) => {
+      // A poll started before the save must not replace the confirmed setting.
+      await queryClient.cancelQueries({ queryKey: ['codex-automatic-switch'] });
+      queryClient.setQueryData(['codex-automatic-switch'], result);
+    },
   });
 }
 

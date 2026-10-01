@@ -119,6 +119,8 @@ export interface BarSummaryRow {
    * "quota_windows".
    */
   quotaWindows?: QuotaWindowDetail[];
+  /** Native quota provenance; only network snapshots can drive account rotation. */
+  quotaSource?: 'network' | 'local';
   /**
    * Native-only ISO mtime of the source session that supplied a stale Codex
    * reading. Present only when stale; serialized as "stale_as_of".
