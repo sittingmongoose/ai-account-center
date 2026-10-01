@@ -10,6 +10,15 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { withApiBase } from '@/lib/api-client';
+import type { AccountQuotaSummary } from '@/components/accounts/subscription-quota-display';
+
+export interface CodexAuthProfileQuota extends AccountQuotaSummary {
+  profileName: string;
+}
+
+export interface CodexAuthProfileQuotasResponse {
+  profiles: CodexAuthProfileQuota[];
+}
 
 export interface CodexAuthProfileEntry {
   name: string;
@@ -62,6 +71,24 @@ export function useCodexAuthProfiles() {
     queryKey: ['codex-auth-profiles'],
     queryFn: fetchCodexAuthProfiles,
     refetchInterval: 15000,
+  });
+}
+
+async function fetchCodexAuthProfileQuotas(): Promise<CodexAuthProfileQuotasResponse> {
+  const res = await fetch(withApiBase('/codex/profiles/quotas'));
+  if (!res.ok) {
+    throw new Error('Failed to fetch Codex subscription usage');
+  }
+  return res.json() as Promise<CodexAuthProfileQuotasResponse>;
+}
+
+export function useCodexAuthProfileQuotas() {
+  return useQuery({
+    queryKey: ['codex-auth-profile-quotas'],
+    queryFn: fetchCodexAuthProfileQuotas,
+    refetchInterval: 60_000,
+    staleTime: 60_000,
+    retry: 1,
   });
 }
 

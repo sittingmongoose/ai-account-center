@@ -681,6 +681,45 @@ export async function fetchCodexQuota(
     });
   }
 
+  return runCodexUsageFetch(authData.accessToken, authData.accountId, accountId, verbose);
+}
+
+/** Fetch quota using native credentials without looking up CLIProxy auth files. */
+export async function fetchCodexQuotaWithToken(
+  accessToken: string,
+  chatgptAccountId: string,
+  verbose = false
+): Promise<CodexQuotaResult> {
+  const accountId = chatgptAccountId.trim();
+  const token = accessToken.trim();
+  if (!token) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Missing native Codex access token',
+      errorCode: 'missing_access_token',
+      actionHint: 'Authenticate this native Codex profile again.',
+      needsReauth: true,
+      retryable: false,
+    });
+  }
+  if (!accountId) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Missing ChatGPT-Account-Id in native Codex credentials',
+      errorCode: 'missing_account_id',
+      actionHint: 'Authenticate this native Codex profile again to refresh workspace metadata.',
+      retryable: false,
+    });
+  }
+
+  return runCodexUsageFetch(token, accountId, accountId, verbose);
+}
+
+/** Shared request and normalization for CLIProxy and directly supplied native credentials. */
+async function runCodexUsageFetch(
+  accessToken: string,
+  chatgptAccountId: string,
+  accountId: string,
+  verbose: boolean
+): Promise<CodexQuotaResult> {
   const url = `${CODEX_API_BASE}/wham/usage`;
   let lastErrorMsg = 'Unknown error';
 
@@ -693,8 +732,8 @@ export async function fetchCodexQuota(
         method: 'GET',
         signal: controller.signal,
         headers: {
-          Authorization: `Bearer ${authData.accessToken}`,
-          'ChatGPT-Account-Id': authData.accountId,
+          Authorization: `Bearer ${accessToken}`,
+          'ChatGPT-Account-Id': chatgptAccountId,
           'User-Agent': USER_AGENT,
         },
       });

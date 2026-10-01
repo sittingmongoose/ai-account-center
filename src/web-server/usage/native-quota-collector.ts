@@ -19,7 +19,7 @@
  * yields credentials the profile is emitted as a parked row (paused:true).
  *
  * Codex path: PRIMARY = live network (chatgpt.com/backend-api/wham/usage, via
- * fetchCodexQuota), FALLBACK = local session logs (getCodexLocalQuota), mirroring
+ * fetchCodexQuotaWithToken), FALLBACK = local session logs (getCodexLocalQuota), mirroring
  * the same safety pattern as the Claude path.
  *
  * Multi-profile: each Claude or Codex profile gets its own ProviderState so a
@@ -44,7 +44,10 @@ import {
   type ClaudeNativeCredentials,
 } from './claude-native-credentials';
 import { fetchClaudeQuotaWithToken } from '../../cliproxy/quota/quota-fetcher-claude';
-import { fetchCodexQuota } from '../../cliproxy/quota/quota-fetcher-codex';
+import {
+  fetchCodexQuota,
+  fetchCodexQuotaWithToken,
+} from '../../cliproxy/quota/quota-fetcher-codex';
 import { getDefaultAccount, getProviderAccounts } from '../../cliproxy/accounts/query';
 import { getCodexLocalQuota, type CodexLocalQuota } from './codex-local-quota-collector';
 import type { ClaudeQuotaResult, CodexQuotaResult } from '../../cliproxy/quota/quota-types';
@@ -53,7 +56,9 @@ import type { BarSummaryRow, QuotaWindowDetail } from '../routes/bar-routes';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { createHash } from 'node:crypto';
 import { getCcsDir } from '../../utils/config-manager';
+import { resolveCodexProfileDir } from '../../codex-auth/codex-profile-paths';
 
 // ============================================================================
 // Safety constants (concrete, named, module-level)
@@ -131,6 +136,8 @@ export interface NativeQuotaDeps {
    * Injected so tests never hit chatgpt.com.
    */
   fetchCodexNetworkQuota?: (accountId: string) => Promise<CodexQuotaResult>;
+  /** Fetch a saved native profile's quota without looking up CLIProxy credentials. */
+  fetchCodexQuotaWithToken?: (accessToken: string, accountId: string) => Promise<CodexQuotaResult>;
   /** Read Codex quota from local session logs (zero network, fallback). */
   getCodexQuota?: () => Promise<CodexLocalQuota | null>;
   /**
@@ -138,7 +145,7 @@ export interface NativeQuotaDeps {
    * DEFAULT_PROFILE ('default') reads ~/.codex/auth.json; other names read codex-instances/<name>/auth.json.
    * Returns null when absent/unparseable.
    */
-  readCodexNativeAuth?: (profile: string) => { accessToken: string; accountId: string } | null;
+  readCodexNativeAuth?: (profile: string) => NativeCodexAuth | null;
   /** Enumerate Claude profile names. Injected so tests never touch real fs. */
   listClaudeProfiles?: () => string[];
   /** Enumerate Codex profile names (including DEFAULT_PROFILE for bare ~/.codex). */
@@ -151,6 +158,13 @@ export interface NativeQuotaDeps {
   now?: () => number;
   /** Sleep seam (no real delay in tests). */
   sleep?: (ms: number) => Promise<void>;
+}
+
+interface NativeCodexAuth {
+  accessToken: string;
+  accountId: string;
+  /** Internal digest of the saved file; never returned on a dashboard DTO. */
+  cacheSignature?: string;
 }
 
 // ============================================================================
@@ -172,6 +186,8 @@ interface ProviderState {
   cooldownUntil: number;
   /** Attempt counter feeding exponential backoff. */
   backoffAttempt: number;
+  authSignature?: string;
+  authReader?: (profile: string) => NativeCodexAuth | null;
 }
 
 function freshProviderState(): ProviderState {
@@ -190,13 +206,59 @@ function freshProviderState(): ProviderState {
 const claudeProfileStates = new Map<string, ProviderState>();
 const codexProfileStates = new Map<string, ProviderState>();
 
+function codexScopePrefix(): string {
+  return `${path.resolve(getCcsDir())}\0`;
+}
+
+function stateKey(map: Map<string, ProviderState>, profile: string): string {
+  return map === codexProfileStates ? `${codexScopePrefix()}${profile}` : profile;
+}
+
 function getState(map: Map<string, ProviderState>, key: string): ProviderState {
+  key = stateKey(map, key);
   let s = map.get(key);
   if (!s) {
     s = freshProviderState();
     map.set(key, s);
   }
   return s;
+}
+
+function getProfileState(
+  map: Map<string, ProviderState>,
+  profile: string
+): ProviderState | undefined {
+  const state = map.get(stateKey(map, profile));
+  return map === codexProfileStates && state?.authReader
+    ? validateCodexProfileState(profile, state.authReader).state
+    : state;
+}
+
+/** Changed credentials discard quota, pending work, and old-account cooldowns before serving cache. */
+function validateCodexProfileState(
+  profile: string,
+  reader: (profile: string) => NativeCodexAuth | null
+): { state: ProviderState; auth: NativeCodexAuth | null } {
+  let auth: NativeCodexAuth | null;
+  try {
+    auth = reader(profile);
+  } catch {
+    auth = null;
+  }
+  const signature = auth
+    ? (auth.cacheSignature ??
+      createHash('sha256')
+        .update(JSON.stringify([auth.accessToken, auth.accountId]))
+        .digest('hex'))
+    : 'missing';
+  let state = getState(codexProfileStates, profile);
+  if (state.authSignature !== signature) {
+    state = freshProviderState();
+    state.authSignature = signature;
+    codexProfileStates.set(stateKey(codexProfileStates, profile), state);
+  }
+  state.authReader = reader;
+  return { state, auth };
 }
 
 /** Reset all module state. Tests call this to avoid cross-test pollution. */
@@ -535,21 +597,17 @@ async function readClaudeCredentialsForProfileFromDisk(
 
 /**
  * Read Codex native auth from the profile's on-disk auth.json.
- * 'personal' reads ~/.codex/auth.json; other names read codex-instances/<name>/auth.json.
+ * 'default' reads ~/.codex/auth.json; other names read codex-instances/<name>/auth.json.
  * Returns null when absent or unparseable.
  */
-function readCodexNativeAuthFromDisk(
-  profile: string
-): { accessToken: string; accountId: string } | null {
+function readCodexNativeAuthFromDisk(profile: string): NativeCodexAuth | null {
   try {
     let authPath: string;
     if (profile === DEFAULT_PROFILE) {
       authPath = path.join(os.homedir(), '.codex', 'auth.json');
     } else {
-      // resolveCodexProfileDir would validate, but we do it inline to avoid the
-      // import coupling and to handle invalid names gracefully (return null).
-      const instancesDir = path.join(getCcsDir(), 'codex-instances');
-      authPath = path.join(instancesDir, profile, 'auth.json');
+      // Validate the saved profile name before reading under codex-instances.
+      authPath = path.join(resolveCodexProfileDir(profile), 'auth.json');
     }
 
     if (!fs.existsSync(authPath)) return null;
@@ -563,6 +621,7 @@ function readCodexNativeAuthFromDisk(
     return {
       accessToken,
       accountId: typeof accountId === 'string' ? accountId : '',
+      cacheSignature: createHash('sha256').update(raw).digest('hex'),
     };
   } catch {
     return null;
@@ -798,7 +857,7 @@ function markPausedAndSyncCache(
   profile: string,
   row: BarSummaryRow
 ): BarSummaryRow {
-  const state = map.get(profile);
+  const state = getProfileState(map, profile);
   if (state?.cachedRow) {
     state.cachedRow = { ...state.cachedRow, paused: true };
   }
@@ -837,7 +896,7 @@ function pickRotatingLiveProfile(
   let pickedAt = Number.POSITIVE_INFINITY;
   for (const p of profiles) {
     if (p === defaultProfile) continue;
-    const state = map.get(p);
+    const state = getProfileState(map, p);
     if (state && (now < state.breakerOpenUntil || now < state.cooldownUntil)) continue;
     const cachedRow = state?.cachedRow ?? null;
     const cachedAt = state?.cachedAt ?? 0;
@@ -866,7 +925,7 @@ function markDefaultAndSyncCache(
   row: BarSummaryRow,
   isDefault: boolean
 ): BarSummaryRow {
-  const state = map.get(profile);
+  const state = getProfileState(map, profile);
   const marked = markDefault(row, isDefault);
   if (state?.cachedRow) {
     state.cachedRow = { ...state.cachedRow, is_default: isDefault };
@@ -1032,7 +1091,8 @@ async function collectCodexRowForProfile(
   force = false
 ): Promise<BarSummaryRow | null> {
   const now = (deps.now ?? Date.now)();
-  const state = getState(codexProfileStates, profile);
+  const readNativeAuth = deps.readCodexNativeAuth ?? readCodexNativeAuthFromDisk;
+  const { state, auth: nativeAuth } = validateCodexProfileState(profile, readNativeAuth);
 
   // Serve from cache while within TTL — force bypasses the short-circuit. Parked
   // rows (no auth -> quotaStatus 'unsupported') use a short TTL so a fresh login
@@ -1054,14 +1114,14 @@ async function collectCodexRowForProfile(
     return state.pending;
   }
 
-  // Resolve the native auth for this profile to get a network accountId.
-  const readNativeAuth =
-    deps.readCodexNativeAuth ?? ((p: string) => readCodexNativeAuthFromDisk(p));
-
-  // For the network fallback: the legacy getDefaultCodexAccountId is the
-  // CLIProxy-registry path; for native profiles we use the on-disk auth directly.
+  // Native profiles supply their own saved token and workspace. The old
+  // account-ID seam is retained for existing injected collector harnesses.
+  const legacyFetchNetwork = deps.fetchCodexNetworkQuota;
   const fetchNetwork =
-    deps.fetchCodexNetworkQuota ?? ((accountId: string) => fetchCodexQuota(accountId));
+    deps.fetchCodexQuotaWithToken ??
+    (legacyFetchNetwork
+      ? (_token: string, accountId: string) => legacyFetchNetwork(accountId)
+      : fetchCodexQuotaWithToken);
   const getCodex = deps.getCodexQuota ?? getCodexLocalQuota;
   const sleep = deps.sleep ?? defaultSleep;
 
@@ -1075,11 +1135,14 @@ async function collectCodexRowForProfile(
       // PRIMARY: live network fetch (skipped when breaker/cooldown active)
       // ----------------------------------------------------------------
       if (!breakerOrCooldownActive) {
-        const nativeAuth = readNativeAuth(profile);
         // Use the on-disk accountId for the network call; fall through to local
         // when the auth file is absent (parked profile).
         if (nativeAuth) {
-          const quota = await fetchNetwork(nativeAuth.accountId || profile);
+          const quota = await fetchNetwork(nativeAuth.accessToken, nativeAuth.accountId);
+          const currentState = getProfileState(codexProfileStates, profile);
+          if (currentState !== state) {
+            return currentState ? serveCached(currentState) : null;
+          }
 
           if (quota.success) {
             // A healthy response closes the breaker and clears backoff,
@@ -1172,6 +1235,10 @@ async function collectCodexRowForProfile(
       // ----------------------------------------------------------------
       if (profile === DEFAULT_PROFILE) {
         const localQuota = await getCodex();
+        const currentState = getProfileState(codexProfileStates, profile);
+        if (currentState !== state) {
+          return currentState ? serveCached(currentState) : null;
+        }
         if (localQuota) {
           const row = buildCodexRow(localQuota, now, SURFACE_CODEX, profile);
           state.cachedRow = row;
@@ -1190,6 +1257,10 @@ async function collectCodexRowForProfile(
       state.cachedAt = now;
       return parkedRow;
     } catch {
+      const currentState = getProfileState(codexProfileStates, profile);
+      if (currentState !== state) {
+        return currentState ? serveCached(currentState) : null;
+      }
       // Network/parse rejection -> treat as transient, serve stale.
       const backoff = computeBackoffMs(state.backoffAttempt);
       state.cooldownUntil = now + backoff;
@@ -1556,19 +1627,48 @@ function buildCodexNetworkRowLegacy(quota: CodexQuotaResult, now: number): BarSu
 // ============================================================================
 
 /**
- * Build the native subscription rows for /summary.
- *
- * When profile-enumeration deps are injected (listClaudeProfiles / listCodexProfiles
- * etc.), all profiles are enumerated and the active/default profile is live-polled
- * while non-default profiles are cache-only (parked). This keeps the 2.5s deadline:
- * at most 2 live upstream calls per /summary regardless of profile count.
- *
- * When no enumeration deps are injected (legacy mode / old tests that stub only
- * readCredentials + getDefaultCodexAccountId), the old single-profile collectors
- * are used for backward compatibility.
- *
- * `opts.force` bypasses the TTL short-circuit on the ACTIVE profile. The circuit
- * breaker is always respected regardless of force (account protection).
+ * Retrieve saved Codex profiles for the dashboard without polling unrelated
+ * providers or the bare ~/.codex login. Two workers bound concurrent upstream
+ * requests; each profile still owns the same TTL, in-flight coalescing, and
+ * cooldown as the bar collector. A caller may serve cache while this completes.
+ */
+export async function getCodexProfileQuotaRows(
+  profiles: string[],
+  deps: NativeQuotaDeps = {}
+): Promise<BarSummaryRow[]> {
+  const names = [...new Set(profiles)];
+  const rows: BarSummaryRow[] = [];
+  let nextIndex = 0;
+  const defaultProfile = (deps.defaultCodexProfile ?? getDefaultCodexProfileFromDisk)();
+  const worker = async (): Promise<void> => {
+    while (nextIndex < names.length) {
+      const profile = names[nextIndex++];
+      const row = await collectCodexRowForProfile(profile, deps).catch(() => null);
+      if (row) {
+        rows.push(
+          markDefaultAndSyncCache(codexProfileStates, profile, row, profile === defaultProfile)
+        );
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(2, names.length) }, () => worker()));
+  return rows.sort((a, b) => (a.profile ?? '').localeCompare(b.profile ?? ''));
+}
+
+/** Only known saved-profile cache entries; never invent or persist an unread login row. */
+export function getCachedCodexProfileQuotaRows(profiles: string[]): BarSummaryRow[] {
+  return profiles.flatMap((profile) => {
+    const state = getProfileState(codexProfileStates, profile);
+    const row = state ? serveCached(state) : null;
+    return row ? [row] : [];
+  });
+}
+
+/**
+ * Build native subscription rows for /summary. The active profile plus one
+ * rotating stale profile per provider can fetch live; the remaining rows use
+ * cache. Legacy injected harnesses retain their original single-profile path.
+ * Force bypasses active-profile TTL, while breakers and cooldowns still apply.
  */
 export async function getNativeAccountRows(
   deps: NativeQuotaDeps = {},
@@ -1716,7 +1816,7 @@ async function getNativeAccountRowsMultiProfile(
       collectCodexRowForProfile(
         p,
         deps,
-        force || codexProfileStates.get(p)?.cachedRow?.quotaStatus === 'unsupported'
+        force || getProfileState(codexProfileStates, p)?.cachedRow?.quotaStatus === 'unsupported'
       )
         .then((r) => {
           if (!r) return null;
@@ -1751,8 +1851,11 @@ export function getCachedNativeAccountRows(): BarSummaryRow[] {
   for (const state of claudeProfileStates.values()) {
     if (state.cachedRow) rows.push({ ...state.cachedRow, cached: true });
   }
-  for (const state of codexProfileStates.values()) {
-    if (state.cachedRow) rows.push({ ...state.cachedRow, cached: true });
+  const prefix = codexScopePrefix();
+  for (const key of codexProfileStates.keys()) {
+    if (!key.startsWith(prefix)) continue;
+    const state = getProfileState(codexProfileStates, key.slice(prefix.length));
+    if (state?.cachedRow) rows.push({ ...state.cachedRow, cached: true });
   }
   return rows;
 }

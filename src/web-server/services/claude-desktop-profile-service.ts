@@ -8,6 +8,7 @@ export interface ClaudeDesktopLauncher {
   launcherPath?: string;
   profilePath?: string;
   isDefault?: boolean;
+  sshHost?: string;
 }
 
 export interface ClaudeWindowsDesktopLauncher extends ClaudeDesktopLauncher {
@@ -15,6 +16,7 @@ export interface ClaudeWindowsDesktopLauncher extends ClaudeDesktopLauncher {
 }
 
 export interface ClaudeDesktopProfile {
+  id?: string;
   email: string;
   mac?: ClaudeDesktopLauncher;
   windows?: ClaudeWindowsDesktopLauncher;
@@ -44,7 +46,7 @@ function readLauncher(value: unknown, windows: boolean): ClaudeWindowsDesktopLau
   const launcher: ClaudeWindowsDesktopLauncher = {
     launcherName: readText(value.launcherName, 255),
   };
-  // These are display-only paths on another machine. Never resolve, inspect, or execute them.
+  // Remote paths come only from this private inventory; requests cannot override them.
   for (const field of ['launcherPath', 'profilePath'] as const) {
     if (value[field] !== undefined) launcher[field] = readText(value[field], 4096);
   }
@@ -56,6 +58,13 @@ function readLauncher(value: unknown, windows: boolean): ClaudeWindowsDesktopLau
       throw new ValidationError('Invalid desktop launcher default metadata');
     }
     launcher.isDefault = value.isDefault;
+  }
+  if (value.sshHost !== undefined) {
+    const host = readText(value.sshHost, 128);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(host)) {
+      throw new ValidationError('Invalid desktop SSH alias metadata');
+    }
+    launcher.sshHost = host;
   }
   return launcher;
 }
@@ -70,6 +79,13 @@ function readProfile(value: unknown): ClaudeDesktopProfile {
   }
 
   const profile: ClaudeDesktopProfile = { email };
+  if (value.id !== undefined) {
+    const id = readText(value.id, 64);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) {
+      throw new ValidationError('Invalid desktop profile identifier');
+    }
+    profile.id = id;
+  }
   if (value.mac !== undefined) profile.mac = readLauncher(value.mac, false);
   if (value.windows !== undefined) profile.windows = readLauncher(value.windows, true);
   if (!profile.mac && !profile.windows) {
@@ -99,5 +115,55 @@ export async function listClaudeDesktopProfiles(): Promise<ClaudeDesktopProfile[
   ) {
     throw new ValidationError('Invalid desktop profile manifest');
   }
-  return manifest.profiles.map(readProfile);
+  const profiles = manifest.profiles.map(readProfile);
+  const ids = profiles.flatMap((profile) => (profile.id ? [profile.id] : []));
+  if (new Set(ids).size !== ids.length) {
+    throw new ValidationError('Duplicate desktop profile identifier');
+  }
+  return profiles;
+}
+
+export function canOpenClaudeMacProfile(profile: ClaudeDesktopProfile): boolean {
+  return Boolean(
+    profile.id &&
+      profile.mac?.sshHost &&
+      profile.mac.launcherPath?.startsWith('/') &&
+      profile.mac.launcherPath.endsWith('.app')
+  );
+}
+
+function publicLauncher(launcher: ClaudeDesktopLauncher): Omit<ClaudeDesktopLauncher, 'sshHost'> {
+  const result: Omit<ClaudeDesktopLauncher, 'sshHost'> = { launcherName: launcher.launcherName };
+  for (const field of ['launcherPath', 'profilePath', 'isDefault'] as const) {
+    const value = launcher[field];
+    if (value !== undefined) Object.assign(result, { [field]: value });
+  }
+  return result;
+}
+
+/** Browser metadata never includes the private SSH transport configuration. */
+export async function listClaudeDesktopProfileMetadata() {
+  return (await listClaudeDesktopProfiles()).map((profile) => ({
+    ...(profile.id ? { id: profile.id } : {}),
+    email: profile.email,
+    ...(profile.mac
+      ? {
+          mac: {
+            ...publicLauncher(profile.mac),
+            ...(profile.id ? { canOpen: canOpenClaudeMacProfile(profile) } : {}),
+          },
+        }
+      : {}),
+    ...(profile.windows
+      ? {
+          windows: {
+            ...publicLauncher(profile.windows),
+            ...(profile.windows.startMenuPath
+              ? { startMenuPath: profile.windows.startMenuPath }
+              : {}),
+            ...(profile.id ? { launchUri: `ccs-claude://launch/${profile.id}` } : {}),
+          },
+        }
+      : {}),
+  }));
 }

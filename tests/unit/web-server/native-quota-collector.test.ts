@@ -13,12 +13,15 @@ import * as path from 'path';
 import {
   getNativeAccountRows,
   getCachedNativeAccountRows,
+  getCodexProfileQuotaRows,
+  getCachedCodexProfileQuotaRows,
   resetNativeQuotaState,
   type NativeQuotaDeps,
 } from '../../../src/web-server/usage/native-quota-collector';
 import type { ClaudeQuotaResult, CodexQuotaResult } from '../../../src/cliproxy/quota/quota-types';
 import type { ClaudeNativeCredentials } from '../../../src/web-server/usage/claude-native-credentials';
 import type { CodexLocalQuota } from '../../../src/web-server/usage/codex-local-quota-collector';
+import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 
 // A jump comfortably past any single-call backoff cooldown (<= 60s), used so a
 // breaker-test fetch is not blocked by the prior 429's per-call cooldown.
@@ -1950,5 +1953,302 @@ describe('multi-profile: quota reset invalidates cached rows', () => {
     clock.now += 90_000;
     await getNativeAccountRows(deps);
     expect(deps.codexNetworkCount()).toBe(2);
+  });
+});
+
+describe('saved native Codex dashboard quota', () => {
+  function saveAuth(home: string, token: string, workspace: string): string {
+    const dir = path.join(home, '.ccs', 'codex-instances', 'gmail');
+    fs.mkdirSync(dir, { recursive: true });
+    const authPath = path.join(dir, 'auth.json');
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({ tokens: { access_token: token, account_id: workspace } })
+    );
+    return authPath;
+  }
+
+  it('uses each nested native token and workspace without CLIProxy credentials', async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-native-codex-quota-'));
+    const originalFetch = global.fetch;
+    const requests: Array<{ token: string | null; workspace: string | null }> = [];
+    const profiles = ['gmail', 'party', 'lexxmariah'];
+    try {
+      for (const profile of profiles) {
+        const dir = path.join(tempHome, '.ccs', 'codex-instances', profile);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(
+          path.join(dir, 'auth.json'),
+          JSON.stringify({
+            tokens: { access_token: `fake-native-${profile}`, account_id: `workspace-${profile}` },
+          })
+        );
+      }
+      global.fetch = (async (_input, init) => {
+        const headers = new Headers(init?.headers);
+        requests.push({
+          token: headers.get('Authorization'),
+          workspace: headers.get('ChatGPT-Account-Id'),
+        });
+        return new Response(
+          JSON.stringify({
+            plan_type: 'pro',
+            rate_limit: {
+              primary_window: { used_percent: 25, reset_after_seconds: 3600 },
+              secondary_window: { used_percent: 55, reset_after_seconds: 86400 },
+            },
+          })
+        );
+      }) as typeof fetch;
+      await runWithScopedCcsHome(tempHome, async () => {
+        const rows = await getCodexProfileQuotaRows(profiles, {
+          defaultCodexProfile: () => 'gmail',
+        });
+        expect(rows.map((row) => row.profile)).toEqual(['gmail', 'lexxmariah', 'party']);
+        expect(rows.every((row) => row.quotaStatus === 'ok')).toBe(true);
+        expect(rows.every((row) => row.quotaWindows?.length === 2)).toBe(true);
+        expect(rows[0].quotaWindows?.map((window) => window.usedPercent)).toEqual([25, 55]);
+        expect(requests).toHaveLength(3);
+        for (const profile of profiles) {
+          expect(requests).toContainEqual({
+            token: `Bearer fake-native-${profile}`,
+            workspace: `workspace-${profile}`,
+          });
+        }
+        expect(fs.existsSync(path.join(tempHome, '.ccs', 'cliproxy', 'auth'))).toBe(false);
+        await getCodexProfileQuotaRows(profiles, { defaultCodexProfile: () => 'gmail' });
+        expect(requests).toHaveLength(3);
+      });
+    } finally {
+      global.fetch = originalFetch;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('fills the third profile in a bounded second batch without waiting for another poll', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const called: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = getCodexProfileQuotaRows(['gmail', 'party', 'lexxmariah'], {
+      defaultCodexProfile: () => 'gmail',
+      readCodexNativeAuth: (profile) => ({ accessToken: `fake-${profile}`, accountId: profile }),
+      fetchCodexQuotaWithToken: async (_token, accountId) => {
+        called.push(accountId);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await gate;
+        active -= 1;
+        return codexSuccessQuota();
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(called).toHaveLength(2);
+    release();
+    const rows = await pending;
+    expect(maxActive).toBe(2);
+    expect(called).toHaveLength(3);
+    expect(rows).toHaveLength(3);
+    expect(getCachedCodexProfileQuotaRows(['gmail', 'party', 'lexxmariah'])).toHaveLength(3);
+  });
+
+  it('isolates same-named profile quotas and cache projections across CCS scopes', async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-scoped-quota-'));
+    const originalFetch = global.fetch;
+    let calls = 0;
+    try {
+      const firstHome = path.join(tempHome, 'one');
+      const secondHome = path.join(tempHome, 'two');
+      saveAuth(firstHome, 'fake-one', 'workspace-one');
+      saveAuth(secondHome, 'fake-two', 'workspace-two');
+      global.fetch = (async (_input, init) => {
+        calls += 1;
+        const used =
+          new Headers(init?.headers).get('ChatGPT-Account-Id') === 'workspace-one' ? 25 : 75;
+        return new Response(
+          JSON.stringify({
+            rate_limit: { primary_window: { used_percent: used, reset_after_seconds: 3600 } },
+          })
+        );
+      }) as typeof fetch;
+      for (const [home, used] of [
+        [firstHome, 25],
+        [secondHome, 75],
+      ] as const) {
+        await runWithScopedCcsHome(home, async () => {
+          const rows = await getCodexProfileQuotaRows(['gmail'], {
+            defaultCodexProfile: () => 'gmail',
+          });
+          expect(rows[0].quotaWindows?.[0].usedPercent).toBe(used);
+          expect(getCachedCodexProfileQuotaRows(['gmail'])[0].quotaWindows?.[0].usedPercent).toBe(
+            used
+          );
+          expect(
+            getCachedNativeAccountRows().filter((row) => row.provider === 'codex')
+          ).toHaveLength(1);
+        });
+      }
+      expect(calls).toBe(2);
+    } finally {
+      global.fetch = originalFetch;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('drops replaced or removed auth from cache before TTL and fetches the new identity', async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-auth-cache-'));
+    const originalFetch = global.fetch;
+    let calls = 0;
+    try {
+      const authPath = saveAuth(tempHome, 'fake-old', 'old-workspace');
+      global.fetch = (async (_input, init) => {
+        calls += 1;
+        const used =
+          new Headers(init?.headers).get('ChatGPT-Account-Id') === 'old-workspace' ? 25 : 75;
+        return new Response(
+          JSON.stringify({
+            rate_limit: { primary_window: { used_percent: used, reset_after_seconds: 3600 } },
+          })
+        );
+      }) as typeof fetch;
+      await runWithScopedCcsHome(tempHome, async () => {
+        await getCodexProfileQuotaRows(['gmail'], { defaultCodexProfile: () => 'gmail' });
+        saveAuth(tempHome, 'fake-new', 'new-workspace');
+        expect(getCachedCodexProfileQuotaRows(['gmail'])).toEqual([]);
+        expect(getCachedNativeAccountRows().filter((row) => row.provider === 'codex')).toEqual([]);
+        const rows = await getCodexProfileQuotaRows(['gmail'], {
+          defaultCodexProfile: () => 'gmail',
+        });
+        expect(rows[0].quotaWindows?.[0].usedPercent).toBe(75);
+        expect(calls).toBe(2);
+        fs.unlinkSync(authPath);
+        expect(getCachedCodexProfileQuotaRows(['gmail'])).toEqual([]);
+        const absent = await getCodexProfileQuotaRows(['gmail'], {
+          defaultCodexProfile: () => 'gmail',
+        });
+        expect(absent[0].quotaWindows).toBeUndefined();
+        expect(absent[0].needsReauth).toBe(true);
+        expect(calls).toBe(2);
+      });
+    } finally {
+      global.fetch = originalFetch;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('does not carry an expired account cooldown into a replacement saved login', async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-auth-cooldown-'));
+    const originalFetch = global.fetch;
+    let calls = 0;
+    try {
+      saveAuth(tempHome, 'fake-expired', 'old-workspace');
+      global.fetch = (async (_input, init) => {
+        calls += 1;
+        return new Headers(init?.headers).get('ChatGPT-Account-Id') === 'old-workspace'
+          ? new Response('{}', { status: 401 })
+          : new Response(
+              JSON.stringify({
+                rate_limit: { primary_window: { used_percent: 75, reset_after_seconds: 3600 } },
+              })
+            );
+      }) as typeof fetch;
+      await runWithScopedCcsHome(tempHome, async () => {
+        const expired = await getCodexProfileQuotaRows(['gmail'], {
+          defaultCodexProfile: () => 'gmail',
+        });
+        expect(expired[0].needsReauth).toBe(true);
+        saveAuth(tempHome, 'fake-current', 'new-workspace');
+        const replacement = await getCodexProfileQuotaRows(['gmail'], {
+          defaultCodexProfile: () => 'gmail',
+        });
+        expect(replacement[0].quotaWindows?.[0].usedPercent).toBe(75);
+        expect(replacement[0].needsReauth).toBe(false);
+        expect(calls).toBe(2);
+      });
+    } finally {
+      global.fetch = originalFetch;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('discards an old login result that completes after saved auth was replaced', async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-inflight-auth-'));
+    const originalFetch = global.fetch;
+    let release: (response: Response) => void = () => {};
+    const oldResponse = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const response = (used: number) =>
+      new Response(
+        JSON.stringify({
+          rate_limit: { primary_window: { used_percent: used, reset_after_seconds: 3600 } },
+        })
+      );
+    try {
+      saveAuth(tempHome, 'fake-old', 'old-workspace');
+      global.fetch = (async (_input, init) => {
+        calls += 1;
+        return new Headers(init?.headers).get('ChatGPT-Account-Id') === 'old-workspace'
+          ? oldResponse
+          : response(75);
+      }) as typeof fetch;
+      await runWithScopedCcsHome(tempHome, async () => {
+        const oldPending = getCodexProfileQuotaRows(['gmail'], {
+          defaultCodexProfile: () => 'gmail',
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(calls).toBe(1);
+        saveAuth(tempHome, 'fake-new', 'new-workspace');
+        expect(getCachedCodexProfileQuotaRows(['gmail'])).toEqual([]);
+        await getCodexProfileQuotaRows(['gmail'], { defaultCodexProfile: () => 'gmail' });
+        release(response(25));
+        const completed = await oldPending;
+        expect(completed[0].quotaWindows?.[0].usedPercent).toBe(75);
+        expect(getCachedCodexProfileQuotaRows(['gmail'])[0].quotaWindows?.[0].usedPercent).toBe(75);
+        expect(calls).toBe(2);
+      });
+    } finally {
+      release(response(25));
+      global.fetch = originalFetch;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('cannot return old-account stale usage when its pending refresh rejects after replacement', async () => {
+    let auth = { accessToken: 'fake-old', accountId: 'old-workspace' };
+    const clock = { now: 1_000_000 };
+    let calls = 0;
+    let reject: (error: Error) => void = () => {};
+    const failingRefresh = new Promise<CodexQuotaResult>((_resolve, rejectPromise) => {
+      reject = rejectPromise;
+    });
+    const deps: NativeQuotaDeps = {
+      defaultCodexProfile: () => 'gmail',
+      readCodexNativeAuth: () => auth,
+      now: () => clock.now,
+      fetchCodexQuotaWithToken: async () => {
+        calls += 1;
+        if (calls > 1) return failingRefresh;
+        const quota = codexSuccessQuota();
+        quota.coreUsage!.fiveHour!.remainingPercent = 75;
+        return quota;
+      },
+    };
+    await getCodexProfileQuotaRows(['gmail'], deps);
+    clock.now += 601_000;
+    const pending = getCodexProfileQuotaRows(['gmail'], deps);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toBe(2);
+    auth = { accessToken: 'fake-new', accountId: 'new-workspace' };
+    reject(new Error('Synthetic request failed'));
+    expect(await pending).toEqual([]);
+    expect(getCachedCodexProfileQuotaRows(['gmail'])).toEqual([]);
   });
 });

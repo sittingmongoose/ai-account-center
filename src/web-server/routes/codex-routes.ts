@@ -20,6 +20,7 @@ import {
   activateCodexProfile,
   CodexActivationError,
 } from '../../codex-auth/activate-codex-profile';
+import { getCodexProfileQuotas } from '../services/codex-profile-quota-service';
 
 const router = Router();
 const CODEX_CONFIG_ACCESS_ERROR =
@@ -51,6 +52,17 @@ router.get('/profiles', async (req: Request, res: Response): Promise<void> => {
     res.json(await getCodexAuthProfilesSummary());
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.get('/profiles/quotas', async (req: Request, res: Response): Promise<void> => {
+  if (!requireLocalAccessWhenAuthDisabled(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
+    return;
+  }
+  try {
+    res.json(await getCodexProfileQuotas());
+  } catch {
+    res.status(500).json({ error: 'Codex profile usage could not be read safely.' });
   }
 });
 

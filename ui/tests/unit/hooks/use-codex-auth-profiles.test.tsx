@@ -3,7 +3,11 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { createTestQueryClient } from '../../setup/test-utils';
-import { useActivateCodexAuthProfile, useCodexAuthProfiles } from '@/hooks/use-codex-auth-profiles';
+import {
+  useActivateCodexAuthProfile,
+  useCodexAuthProfiles,
+  useCodexAuthProfileQuotas,
+} from '@/hooks/use-codex-auth-profiles';
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -92,5 +96,40 @@ describe('Codex auth activation hooks', () => {
       expect(result.current.activation.error?.message).toContain('when work finishes')
     );
     expect(fetchMock.mock.calls.filter(([, init]) => !init?.method)).toHaveLength(2);
+  });
+});
+
+describe('Codex subscription quota hook', () => {
+  it('loads dedicated quota data independently of account activation and retains unread statuses', async () => {
+    const quotas = {
+      profiles: [
+        { profileName: 'work', status: 'reauth_required', windows: [] },
+        {
+          profileName: 'personal',
+          status: 'available',
+          windows: [{ key: 'primary', label: '5-hour limit', usedPercent: 7 }],
+        },
+        { profileName: 'unsigned', status: 'not_connected', windows: [] },
+      ],
+    };
+    const fetchMock = vi.fn(() => Promise.resolve(response(quotas)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useCodexAuthProfileQuotas(), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => expect(result.current.data).toEqual(quotas));
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/api/codex/profiles/quotas');
+  });
+
+  it('returns an error after one retry without inventing a zero-usage response', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(response({ error: 'Unavailable' }, 503)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useCodexAuthProfileQuotas(), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.error?.message).toBe('Failed to fetch Codex subscription usage');
   });
 });

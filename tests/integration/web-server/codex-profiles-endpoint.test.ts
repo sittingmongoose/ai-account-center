@@ -84,8 +84,91 @@ beforeEach(async () => {
   delete process.env.CODEX_HOME;
   delete process.env.CCS_CODEX_PROFILE;
   delete process.env.CCS_DASHBOARD_AUTH_ENABLED;
+  const nativeQuota = await import('../../../src/web-server/usage/native-quota-collector');
+  nativeQuota.resetNativeQuotaState();
 
   await startApp();
+});
+
+describe('GET /api/codex/profiles/quotas', () => {
+  it('returns an empty saved-profile quota list without a registry', async () => {
+    const { status, body } = await get('/api/codex/profiles/quotas');
+    expect(status).toBe(200);
+    expect(body).toEqual({ profiles: [] });
+  });
+
+  it('blocks non-local dashboard quota reads when auth is disabled', async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/codex/profiles/quotas`, {
+      headers: { Host: '192.0.2.20:3000' },
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('returns a sanitized error for an unreadable registry', async () => {
+    fs.writeFileSync(path.join(ccsDir, 'codex-profiles.yaml'), '{ invalid: yaml: [');
+    const { status, body } = await get('/api/codex/profiles/quotas');
+    expect(status).toBe(500);
+    expect(body).toEqual({ error: 'Codex profile usage could not be read safely.' });
+    expect(JSON.stringify(body)).not.toContain(ccsDir);
+  });
+
+  it('returns native profile usage without exposing or changing saved authentication', async () => {
+    const profileDir = path.join(ccsDir, 'codex-instances', 'gmail');
+    fs.mkdirSync(profileDir, { recursive: true });
+    const savedAuth = JSON.stringify({
+      tokens: {
+        access_token: 'FAKE_SECRET_ACCESS_MUST_STAY_PRIVATE',
+        account_id: 'fake-workspace-gmail',
+        id_token: buildToken({ email: 'gmail@example.com' }),
+        refresh_token: 'FAKE_SECRET_REFRESH_MUST_STAY_PRIVATE',
+      },
+    });
+    fs.writeFileSync(path.join(profileDir, 'auth.json'), savedAuth);
+    fs.writeFileSync(
+      path.join(ccsDir, 'codex-profiles.yaml'),
+      'version: "1.0"\ndefault: gmail\nprofiles:\n  gmail:\n    type: codex\n    created: "2026-01-01T00:00:00Z"\n    last_used: null\n'
+    );
+    const originalFetch = global.fetch;
+    let quotaCalls = 0;
+    try {
+      global.fetch = (async (input, init) => {
+        if (String(input).startsWith('https://chatgpt.com/backend-api/wham/usage')) {
+          quotaCalls += 1;
+          const headers = new Headers(init?.headers);
+          expect(headers.get('Authorization')).toBe('Bearer FAKE_SECRET_ACCESS_MUST_STAY_PRIVATE');
+          expect(headers.get('ChatGPT-Account-Id')).toBe('fake-workspace-gmail');
+          return new Response(
+            JSON.stringify({
+              plan_type: 'pro',
+              rate_limit: {
+                primary_window: { used_percent: 15, reset_after_seconds: 1000 },
+                secondary_window: { used_percent: 45, reset_after_seconds: 86400 },
+              },
+            })
+          );
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+      const { status, body } = await get('/api/codex/profiles/quotas');
+      const result = body as {
+        profiles: Array<{
+          profileName: string;
+          status: string;
+          windows: Array<{ usedPercent: number }>;
+        }>;
+      };
+      expect(status).toBe(200);
+      expect(result.profiles[0].profileName).toBe('gmail');
+      expect(result.profiles[0].status).toBe('available');
+      expect(result.profiles[0].windows.map((window) => window.usedPercent)).toEqual([15, 45]);
+      expect(quotaCalls).toBe(1);
+      expect(JSON.stringify(body)).not.toContain('FAKE_SECRET');
+      expect(JSON.stringify(body)).not.toContain('fake-workspace');
+      expect(fs.readFileSync(path.join(profileDir, 'auth.json'), 'utf8')).toBe(savedAuth);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });
 
 afterEach(async () => {
@@ -206,8 +289,9 @@ describe('GET /api/codex/profiles', () => {
     // 127.0.0.1 and the test client connects to 127.0.0.1, the built-in fetch
     // will always be loopback. We test the guard directly via a separate
     // Express app that injects a non-loopback remote address.
-    const { requireLocalAccessWhenAuthDisabled } =
-      await import('../../../src/web-server/middleware/auth-middleware');
+    const { requireLocalAccessWhenAuthDisabled } = await import(
+      '../../../src/web-server/middleware/auth-middleware'
+    );
     const { isDashboardAuthEnabled } = await import('../../../src/config/config-loader-facade');
 
     if (!isDashboardAuthEnabled()) {
@@ -245,8 +329,9 @@ describe('GET /api/codex/profiles', () => {
   });
 
   it('returns 403 for loopback remote addresses when host/origin indicate non-local origin', async () => {
-    const { requireLocalAccessWhenAuthDisabled } =
-      await import('../../../src/web-server/middleware/auth-middleware');
+    const { requireLocalAccessWhenAuthDisabled } = await import(
+      '../../../src/web-server/middleware/auth-middleware'
+    );
     const { isDashboardAuthEnabled } = await import('../../../src/config/config-loader-facade');
 
     if (!isDashboardAuthEnabled()) {

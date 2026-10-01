@@ -4,7 +4,7 @@
  * Tests for Codex quota window parsing and transformation logic
  */
 
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -16,6 +16,7 @@ let moduleVersion = 0;
 let buildCodexQuotaWindows: typeof import('../quota-fetcher-codex').buildCodexQuotaWindows;
 let buildCodexCoreUsageSummary: typeof import('../quota-fetcher-codex').buildCodexCoreUsageSummary;
 let fetchCodexQuota: typeof import('../quota-fetcher-codex').fetchCodexQuota;
+let fetchCodexQuotaWithToken: typeof import('../quota-fetcher-codex').fetchCodexQuotaWithToken;
 let getUnknownCodexWindowLabels: typeof import('../quota-fetcher-codex').getUnknownCodexWindowLabels;
 let registerAccount: typeof import('../../accounts/account-manager').registerAccount;
 
@@ -47,6 +48,7 @@ beforeEach(async () => {
     buildCodexQuotaWindows,
     buildCodexCoreUsageSummary,
     fetchCodexQuota,
+    fetchCodexQuotaWithToken,
     getUnknownCodexWindowLabels,
   } = await import(`../quota-fetcher-codex?codex-fetcher=${moduleVersion}`));
 
@@ -568,16 +570,96 @@ describe('Codex Quota Fetcher', () => {
     });
   });
 
+  describe('fetchCodexQuotaWithToken', () => {
+    it('uses supplied native headers without looking up CLIProxy auth', async () => {
+      const configGenerator = await import('../../config/config-generator');
+      const accountManager = await import('../../accounts/account-manager');
+      const getAuthDirSpy = spyOn(configGenerator, 'getAuthDir');
+      const getPausedDirSpy = spyOn(accountManager, 'getPausedDir');
+      const getAccountSpy = spyOn(accountManager, 'getAccount');
+      const fetchSpy = mock((input: RequestInfo | URL, init?: RequestInit) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              plan_type: 'pro',
+              rate_limit: {
+                primary_window: { used_percent: 25, reset_after_seconds: 3600 },
+                secondary_window: { used_percent: 50, reset_after_seconds: 86400 },
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+      );
+      global.fetch = fetchSpy as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken(' native-token ', ' native-workspace ');
+      const headers = new Headers(fetchSpy.mock.calls[0]?.[1]?.headers);
+
+      expect(getAuthDirSpy).not.toHaveBeenCalled();
+      expect(getPausedDirSpy).not.toHaveBeenCalled();
+      expect(getAccountSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://chatgpt.com/backend-api/wham/usage');
+      expect(headers.get('Authorization')).toBe('Bearer native-token');
+      expect(headers.get('ChatGPT-Account-Id')).toBe('native-workspace');
+      expect(result.success).toBe(true);
+      expect(result.accountId).toBe('native-workspace');
+      expect(result.planType).toBe('pro');
+      expect(result.coreUsage?.fiveHour?.remainingPercent).toBe(75);
+      expect(result.coreUsage?.weekly?.remainingPercent).toBe(50);
+    });
+
+    it.each(['', '   '])('rejects an empty native token %j without networking', async (token) => {
+      const fetchSpy = mock(() => Promise.reject(new Error('Unexpected network call')));
+      global.fetch = fetchSpy as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken(token, 'native-workspace');
+
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('missing_access_token');
+      expect(result.needsReauth).toBe(true);
+      expect(result.retryable).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it.each(['', '   '])('rejects a missing workspace %j without networking', async (accountId) => {
+      const fetchSpy = mock(() => Promise.reject(new Error('Unexpected network call')));
+      global.fetch = fetchSpy as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken('native-token', accountId);
+
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('missing_account_id');
+      expect(result.retryable).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('shares structured upstream failure mapping with the CLIProxy wrapper', async () => {
+      global.fetch = mock(() => Promise.resolve(new Response('', { status: 401 }))) as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken('expired-native-token', 'native-workspace');
+
+      expect(result.success).toBe(false);
+      expect(result.accountId).toBe('native-workspace');
+      expect(result.httpStatus).toBe(401);
+      expect(result.errorCode).toBe('reauth_required');
+      expect(result.needsReauth).toBe(true);
+      expect(result.retryable).toBe(false);
+    });
+  });
+
   describe('fetchCodexQuota failure mapping', () => {
     function createValidCodexAccount(
       email: string,
       accountId = `workspace-${email}`,
-      tokenFile?: string
+      tokenFile?: string,
+      accessToken = 'test-token'
     ): void {
       createCodexAccount(
         email,
         {
-          access_token: 'test-token',
+          access_token: accessToken,
           account_id: accountId,
           expired: '2099-01-01T00:00:00.000Z',
           email,
@@ -627,12 +709,14 @@ describe('Codex Quota Fetcher', () => {
       createValidCodexAccount(
         'kaidu.kd@gmail.com',
         'workspace-team',
-        'codex-04a0f049-kaidu.kd@gmail.com-team.json'
+        'codex-04a0f049-kaidu.kd@gmail.com-team.json',
+        'team-token'
       );
       createValidCodexAccount(
         'kaidu.kd@gmail.com',
         'workspace-free',
-        'codex-kaidu.kd@gmail.com-free.json'
+        'codex-kaidu.kd@gmail.com-free.json',
+        'free-token'
       );
 
       registerAccount('codex', 'codex-04a0f049-kaidu.kd@gmail.com-team.json', 'kaidu.kd@gmail.com');
@@ -665,6 +749,7 @@ describe('Codex Quota Fetcher', () => {
       const headers = new Headers(requestInit?.headers);
 
       expect(result.success).toBe(true);
+      expect(headers.get('Authorization')).toBe('Bearer free-token');
       expect(headers.get('ChatGPT-Account-Id')).toBe('workspace-free');
     });
 

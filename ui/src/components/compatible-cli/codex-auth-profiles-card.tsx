@@ -15,7 +15,15 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { useActivateCodexAuthProfile, useCodexAuthProfiles } from '@/hooks/use-codex-auth-profiles';
+import {
+  SubscriptionQuotaDisplay,
+  type AccountQuotaSummary,
+} from '@/components/accounts/subscription-quota-display';
+import {
+  useActivateCodexAuthProfile,
+  useCodexAuthProfiles,
+  useCodexAuthProfileQuotas,
+} from '@/hooks/use-codex-auth-profiles';
 import type {
   CodexAuthProfileEntry,
   CodexAuthProfilesResponse,
@@ -80,69 +88,90 @@ function ProfileRow({
   isActivating,
   activationPending,
   onActivate,
+  quota,
+  quotaLoading,
+  quotaError,
 }: {
   entry: CodexAuthProfileEntry;
   isActivated: boolean;
   isActivating: boolean;
   activationPending: boolean;
   onActivate: (name: string) => void;
+  quota?: AccountQuotaSummary;
+  quotaLoading: boolean;
+  quotaError?: unknown;
 }) {
   const { t } = useTranslation();
   return (
-    <TableRow
-      className={`grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 p-3 @3xl:table-row @3xl:p-0 ${isActivated ? 'bg-muted/40' : ''}`}
-    >
-      <TableCell className="col-start-1 row-start-1 block whitespace-normal p-0 font-medium @3xl:table-cell @3xl:p-2">
-        <span className="flex flex-wrap items-center gap-2">
-          {entry.name}
-          {isActivated && (
-            <Badge variant="secondary" className="text-xs">
-              {t('codex.auth.activatedBadge')}
+    <>
+      <TableRow
+        className={`grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 p-3 @3xl:table-row @3xl:p-0 ${isActivated ? 'bg-muted/40' : ''}`}
+      >
+        <TableCell className="col-start-1 row-start-1 block whitespace-normal p-0 font-medium @3xl:table-cell @3xl:p-2">
+          <span className="flex flex-wrap items-center gap-2">
+            {entry.name}
+            {isActivated && (
+              <Badge variant="secondary" className="text-xs">
+                {t('codex.auth.activatedBadge')}
+              </Badge>
+            )}
+          </span>
+        </TableCell>
+        <TableCell className="col-start-1 row-start-2 block break-all whitespace-normal p-0 @3xl:table-cell @3xl:p-2">
+          {entry.email ?? '—'}
+        </TableCell>
+        <TableCell className="col-start-1 row-start-3 block p-0 text-muted-foreground @3xl:table-cell @3xl:p-2 @3xl:text-foreground">
+          {entry.plan ?? '—'}
+        </TableCell>
+        <TableCell className="hidden @3xl:table-cell">{formatLastUsed(entry.lastUsed)}</TableCell>
+        <TableCell className="col-start-1 row-start-4 block p-0 @3xl:table-cell @3xl:p-2">
+          {entry.authValid ? (
+            <Badge variant="secondary" className="text-xs text-green-700 dark:text-green-400">
+              {t('codex.auth.statusOk')}
+            </Badge>
+          ) : (
+            <Badge variant="destructive" className="text-xs">
+              {t('codex.auth.statusInvalid')}
             </Badge>
           )}
-        </span>
-      </TableCell>
-      <TableCell className="col-start-1 row-start-2 block break-all whitespace-normal p-0 @3xl:table-cell @3xl:p-2">
-        {entry.email ?? '—'}
-      </TableCell>
-      <TableCell className="col-start-1 row-start-3 block p-0 text-muted-foreground @3xl:table-cell @3xl:p-2 @3xl:text-foreground">
-        {entry.plan ?? '—'}
-      </TableCell>
-      <TableCell className="hidden @3xl:table-cell">{formatLastUsed(entry.lastUsed)}</TableCell>
-      <TableCell className="col-start-1 row-start-4 block p-0 @3xl:table-cell @3xl:p-2">
-        {entry.authValid ? (
-          <Badge variant="secondary" className="text-xs text-green-700 dark:text-green-400">
-            {t('codex.auth.statusOk')}
-          </Badge>
-        ) : (
-          <Badge variant="destructive" className="text-xs">
-            {t('codex.auth.statusInvalid')}
-          </Badge>
-        )}
-      </TableCell>
-      <TableCell className="col-start-2 row-start-1 row-span-4 block p-0 @3xl:table-cell @3xl:p-2">
-        <span className="flex flex-col gap-1 @3xl:flex-row">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!entry.authValid || !entry.email || isActivated || activationPending}
-            title={!entry.email ? t('codex.auth.activationRequiresEmail') : undefined}
-            aria-label={t('codex.auth.activateProfileAction', { name: entry.name })}
-            onClick={() => onActivate(entry.name)}
-          >
-            {isActivating && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-            {isActivating ? t('codex.auth.activatingAction') : t('codex.auth.activateAction')}
-          </Button>
-          <TerminalOnlyRemoveButton />
-        </span>
-      </TableCell>
-    </TableRow>
+        </TableCell>
+        <TableCell className="col-start-2 row-start-1 row-span-4 block p-0 @3xl:table-cell @3xl:p-2">
+          <span className="flex flex-col gap-1 @3xl:flex-row">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!entry.authValid || !entry.email || isActivated || activationPending}
+              title={!entry.email ? t('codex.auth.activationRequiresEmail') : undefined}
+              aria-label={t('codex.auth.activateProfileAction', { name: entry.name })}
+              onClick={() => onActivate(entry.name)}
+            >
+              {isActivating && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+              {isActivating ? t('codex.auth.activatingAction') : t('codex.auth.activateAction')}
+            </Button>
+            <TerminalOnlyRemoveButton />
+          </span>
+        </TableCell>
+      </TableRow>
+      <TableRow className={`block @3xl:table-row ${isActivated ? 'bg-muted/40' : ''}`}>
+        <TableCell colSpan={6} className="block whitespace-normal px-3 pb-4 pt-2 @3xl:table-cell">
+          <div aria-label={t('codex.auth.quotaProfileLabel', { name: entry.name })}>
+            <SubscriptionQuotaDisplay
+              quota={quota}
+              isLoading={quotaLoading}
+              error={quotaError}
+              cached={Boolean(quota && quotaError)}
+            />
+          </div>
+        </TableCell>
+      </TableRow>
+    </>
   );
 }
 
 export function CodexAuthProfilesCard() {
   const { t } = useTranslation();
   const { data, isLoading, error } = useCodexAuthProfiles();
+  const quotas = useCodexAuthProfileQuotas();
   const activation = useActivateCodexAuthProfile();
 
   if (isLoading) {
@@ -203,6 +232,9 @@ export function CodexAuthProfilesCard() {
                   isActivating={activation.isPending && activation.variables === entry.name}
                   activationPending={activation.isPending}
                   onActivate={activation.mutate}
+                  quota={quotas.data?.profiles.find((quota) => quota.profileName === entry.name)}
+                  quotaLoading={quotas.isLoading}
+                  quotaError={quotas.error}
                 />
               ))}
             </TableBody>

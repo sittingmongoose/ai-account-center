@@ -3,10 +3,11 @@ import { render, screen, userEvent, within } from '@tests/setup/test-utils';
 import { CodexAuthProfilesCard } from '@/components/compatible-cli/codex-auth-profiles-card';
 import type { CodexAuthProfilesResponse } from '@/hooks/use-codex-auth-profiles';
 
-const hooks = vi.hoisted(() => ({ profiles: vi.fn(), activation: vi.fn() }));
+const hooks = vi.hoisted(() => ({ profiles: vi.fn(), activation: vi.fn(), quotas: vi.fn() }));
 vi.mock('@/hooks/use-codex-auth-profiles', () => ({
   useCodexAuthProfiles: hooks.profiles,
   useActivateCodexAuthProfile: hooks.activation,
+  useCodexAuthProfileQuotas: hooks.quotas,
 }));
 
 const summary: CodexAuthProfilesResponse = {
@@ -39,6 +40,7 @@ function mutation(overrides = {}) {
 beforeEach(() => {
   hooks.profiles.mockReturnValue({ data: summary, isLoading: false, error: null });
   hooks.activation.mockReturnValue(mutation());
+  hooks.quotas.mockReturnValue({ data: { profiles: [] }, isLoading: false, error: null });
 });
 
 describe('CodexAuthProfilesCard activation', () => {
@@ -114,5 +116,99 @@ describe('CodexAuthProfilesCard activation', () => {
     render(<CodexAuthProfilesCard />);
     expect(screen.getByText('work@example.test')).toBeInTheDocument();
     expect(screen.getByText('(unknown)')).toBeInTheDocument();
+  });
+
+  it('associates subscription usage by saved profile name rather than API response order', () => {
+    hooks.quotas.mockReturnValue({
+      data: {
+        profiles: [
+          {
+            profileName: 'work',
+            status: 'available',
+            windows: [{ key: 'primary', label: '5-hour limit', usedPercent: 82 }],
+          },
+          {
+            profileName: 'personal',
+            status: 'available',
+            windows: [{ key: 'secondary', label: 'Weekly limit', usedPercent: 14 }],
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<CodexAuthProfilesCard />);
+    const personal = screen.getByLabelText('personal subscription usage');
+    const work = screen.getByLabelText('work subscription usage');
+    expect(within(personal).getByRole('progressbar', { name: 'Weekly limit' })).toHaveAttribute(
+      'aria-valuenow',
+      '14'
+    );
+    expect(within(work).getByRole('progressbar', { name: '5-hour limit' })).toHaveAttribute(
+      'aria-valuenow',
+      '82'
+    );
+    const missing = screen.getByLabelText('unsigned subscription usage');
+    expect(within(missing).queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(missing).not.toHaveTextContent('0%');
+  });
+
+  it('shows quota reauthentication without disabling a valid saved-account switch', async () => {
+    const activate = mutation();
+    hooks.activation.mockReturnValue(activate);
+    hooks.quotas.mockReturnValue({
+      data: {
+        profiles: [
+          {
+            profileName: 'personal',
+            status: 'reauth_required',
+            windows: [],
+            message: 'Sign in again to read subscription usage.',
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<CodexAuthProfilesCard />);
+    expect(screen.getByLabelText('personal subscription usage')).toHaveTextContent(
+      'Sign in again to read subscription usage.'
+    );
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Activate personal' }));
+    expect(activate.mutate).toHaveBeenCalledWith('personal');
+  });
+
+  it('keeps account identities and activation available when the quota request fails', () => {
+    hooks.quotas.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Subscription usage request failed'),
+    });
+    render(<CodexAuthProfilesCard />);
+    expect(screen.getByRole('button', { name: 'Activate personal' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Activate work' })).toBeDisabled();
+    expect(screen.getByText('personal@example.test')).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('retains a cached quota measurement when its refresh fails', () => {
+    hooks.quotas.mockReturnValue({
+      data: {
+        profiles: [
+          {
+            profileName: 'personal',
+            status: 'available',
+            windows: [{ key: 'primary', label: '5-hour limit', usedPercent: 31 }],
+          },
+        ],
+      },
+      isLoading: false,
+      error: new Error('Subscription usage refresh failed'),
+    });
+    render(<CodexAuthProfilesCard />);
+    const personal = screen.getByLabelText('personal subscription usage');
+    expect(within(personal).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '31');
+    expect(screen.getByRole('button', { name: 'Activate personal' })).toBeEnabled();
   });
 });

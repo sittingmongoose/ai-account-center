@@ -29,11 +29,47 @@ describe('Claude desktop account translations', () => {
         'copyFailed',
         'cliDescription',
         'cliLink',
+        'openAccount',
+        'openProfile',
+        'opening',
+        'openSuccess',
+        'browserOpenHint',
+        'cachedUsageHint',
+        'noUsageHistory',
+        'launcherDetails',
       ]) {
         expect(i18n.exists(`claudeAccountsPage.${key}`, { lng: locale, fallbackLng: false })).toBe(
           true
         );
       }
+      for (const key of [
+        'title',
+        'cached',
+        'loading',
+        'loadError',
+        'refreshError',
+        'reauthRequired',
+        'notConnected',
+        'unavailable',
+        'usedPercent',
+        'resets',
+        'sampled',
+        'fetched',
+        'fiveHour',
+        'weekly',
+        'weeklyOpus',
+        'weeklySonnet',
+        'extra',
+        'explanation',
+        'recordedCliUsage',
+        'recordedCliUsageDescription',
+        'resetUnavailable',
+      ]) {
+        expect(i18n.exists(`accountQuota.${key}`, { lng: locale, fallbackLng: false })).toBe(true);
+      }
+      expect(i18n.exists('codex.auth.quotaProfileLabel', { lng: locale, fallbackLng: false })).toBe(
+        true
+      );
     }
   );
 });

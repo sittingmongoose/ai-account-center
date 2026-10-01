@@ -27,6 +27,7 @@ vi.mock('@/hooks/use-codex-auth-profiles', () => ({
     },
   }),
   useActivateCodexAuthProfile: () => ({ mutate: vi.fn(), isPending: false }),
+  useCodexAuthProfileQuotas: () => ({ data: { profiles: [] }, isLoading: false, error: null }),
 }));
 
 describe('CodexAccountsPage', () => {
@@ -43,5 +44,13 @@ describe('CodexAccountsPage', () => {
     expect(screen.getByRole('button', { name: 'Activate work' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Activate family' })).toBeEnabled();
     expect(diagnostics).not.toHaveBeenCalled();
+  });
+
+  it('links recorded CLI usage separately from subscription limits', () => {
+    render(<CodexAccountsPage />);
+    expect(screen.getByRole('link', { name: 'Recorded CLI usage' })).toHaveAttribute(
+      'href',
+      '/analytics'
+    );
   });
 });
