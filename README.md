@@ -304,10 +304,12 @@ provider availability, successful app replacement or access to another computer.
 Native checks and any live verification have their own scopes in the linked
 guides. Current validation results belong to the tested revision and artifact.
 Release verification is still in progress on this product branch. The latest
-frontend has been checked in Mac and Windows browsers, while its complete new
-backend deployment is still pending. The latest Mac bar passes its isolated
-layout checks, but opening its menu from the status icon remains under
-investigation. Antigravity account switching is not enabled in this checkpoint;
+frontend and newly installed backend have been checked from Mac and Windows.
+The running Mac bar's account Details, hover help, Qwen packs and Settings/Cancel
+controls have been checked; these interaction checks do not establish pixel
+layout on every display. Browser DPI fixtures need matching browser and context
+scaling; see the [dashboard validation guide](web-dashboard/README.md#validation).
+Antigravity account switching is not enabled in this checkpoint;
 preserving an actual native conversation through switching still requires
 verification. Vendor update/restart checks use controlled fixtures and do not
 establish that every installed vendor app has undergone a live update.

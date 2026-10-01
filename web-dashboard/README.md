@@ -81,6 +81,16 @@ The Slint compiler validates UI bindings during the actual WASM release build.
 The data tests cover unknown versus genuine zero, credit units/expiration,
 additional counters, confirmed auto-switch thresholds and complete details.
 
+For automated Chromium DPI checks, launch a disposable browser with
+`--force-device-scale-factor=N` and a new context with `device_scale_factor=N`
+(test N=1 and N=2). Record CSS size, `devicePixelRatio`, ResizeObserver's
+`devicePixelContentBoxSize`, canvas backing size and WebGL dimensions at startup
+and after resizing. A context-only scale override can leave the physical pixel
+box at the browser's original scale, as reported in
+[Playwright issue #18591](https://github.com/microsoft/playwright/issues/18591).
+Preserve that failing context-only result separately from the browser-scale
+comparison. Native-display checks use the display's actual browser scale.
+
 Official API documentation: https://docs.slint.dev/latest/docs/rust/slint/
 
 ## Dependencies and attribution
