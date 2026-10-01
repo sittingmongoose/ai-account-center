@@ -3,6 +3,7 @@ import * as childProcess from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
 import {
   getLiveClaudeDesktopUsage,
   invalidateClaudeDesktopLiveUsageCache,
@@ -40,6 +41,20 @@ function payload(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+async function waitForReadStarted(started: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      started,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Expected helper read did not start.')), 2000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 describe('identity-bound Claude Desktop live usage', () => {
   let root: string;
   let previousCcsDir: string | undefined;
@@ -52,6 +67,29 @@ describe('identity-bound Claude Desktop live usage', () => {
       path.join(process.env.CCS_DIR!, 'claude-desktop-profiles.json'),
       JSON.stringify({ version: 1, profiles })
     );
+  }
+
+  function holdHelperReads(): { started: Promise<void>; release: () => void } {
+    let notifyStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const callbacks: Array<(error: null, stdout: string) => void> = [];
+    let releasing = false;
+    exec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: null, stdout: string) => void;
+      if (releasing) callback(null, output);
+      else callbacks.push(callback);
+      notifyStarted?.();
+      return {} as childProcess.ChildProcess;
+    });
+    return {
+      started,
+      release: () => {
+        releasing = true;
+        for (const callback of callbacks.splice(0)) callback(null, output);
+      },
+    };
   }
 
   beforeEach(() => {
@@ -397,17 +435,21 @@ describe('identity-bound Claude Desktop live usage', () => {
   });
 
   it('coalesces simultaneous requests, including manual refresh', async () => {
-    let release: ((error: null, stdout: string) => void) | undefined;
-    exec.mockImplementation((...args: unknown[]) => {
-      release = args.at(-1) as typeof release;
-      return {} as childProcess.ChildProcess;
-    });
+    // Both callers share an already-resolved manifest read so this fixture
+    // holds the helper boundary, rather than racing independent filesystem I/O.
+    spyOn(claudeProfiles, 'listClaudeDesktopProfiles').mockResolvedValue([profile]);
+    const held = holdHelperReads();
     const first = getLiveClaudeDesktopUsage('gmail');
     const second = getLiveClaudeDesktopUsage('gmail', { refresh: true });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(exec).toHaveBeenCalledTimes(1);
-    release!(null, output);
-    expect(await first).toBe(await second);
+    try {
+      await waitForReadStarted(held.started);
+      expect(exec).toHaveBeenCalledTimes(1);
+      held.release();
+      expect(await first).toBe(await second);
+    } finally {
+      held.release();
+      await Promise.allSettled([first, second]);
+    }
   });
 
   it('reuses live quota for two minutes then refreshes; manual refresh bypasses successful cache', async () => {
@@ -424,6 +466,7 @@ describe('identity-bound Claude Desktop live usage', () => {
   });
 
   it('recovers a cold transient failure after thirty seconds while coalescing manual retries', async () => {
+    spyOn(claudeProfiles, 'listClaudeDesktopProfiles').mockResolvedValue([profile]);
     let now = Date.now();
     spyOn(Date, 'now').mockImplementation(() => now);
     exec.mockImplementation((...args: unknown[]) => {
@@ -436,11 +479,7 @@ describe('identity-bound Claude Desktop live usage', () => {
     expect(await getLiveClaudeDesktopUsage('gmail', { refresh: true })).toBeNull();
     expect(exec).toHaveBeenCalledTimes(1);
     now += 1;
-    let release: ((error: null, stdout: string) => void) | undefined;
-    exec.mockImplementation((...args: unknown[]) => {
-      release = args.at(-1) as typeof release;
-      return {} as childProcess.ChildProcess;
-    });
+    const held = holdHelperReads();
     output = payload({
       windows: [
         { key: 'seven_day', usedPercent: 100, resetAt: '2026-10-02T03:00:00Z' },
@@ -449,18 +488,23 @@ describe('identity-bound Claude Desktop live usage', () => {
     });
     const regular = getLiveClaudeDesktopUsage('gmail');
     const manual = getLiveClaudeDesktopUsage('gmail', { refresh: true });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(exec).toHaveBeenCalledTimes(2);
-    release!(null, output);
-    const recovered = await regular;
-    expect(await manual).toBe(recovered);
-    expect(recovered?.windows).toMatchObject([
-      { key: 'seven_day', usedPercent: 100, resetAt: '2026-10-02T03:00:00.000Z' },
-      { key: 'prepaid_balance', remaining: 0, unit: 'USD' },
-    ]);
-    expect(await getLiveClaudeDesktopUsage('gmail')).toBe(recovered);
-    expect(exec).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(recovered)).not.toContain('PRIVATE_CREDENTIAL');
+    try {
+      await waitForReadStarted(held.started);
+      expect(exec).toHaveBeenCalledTimes(2);
+      held.release();
+      const recovered = await regular;
+      expect(await manual).toBe(recovered);
+      expect(recovered?.windows).toMatchObject([
+        { key: 'seven_day', usedPercent: 100, resetAt: '2026-10-02T03:00:00.000Z' },
+        { key: 'prepaid_balance', remaining: 0, unit: 'USD' },
+      ]);
+      expect(await getLiveClaudeDesktopUsage('gmail')).toBe(recovered);
+      expect(exec).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(recovered)).not.toContain('PRIVATE_CREDENTIAL');
+    } finally {
+      held.release();
+      await Promise.allSettled([regular, manual]);
+    }
   });
 
   it('binds cache to the current email, configured SSH host and CCS directory', async () => {
