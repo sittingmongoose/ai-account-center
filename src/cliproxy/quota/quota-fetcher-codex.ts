@@ -76,6 +76,8 @@ interface CodexWindowData {
   usedPercent?: number;
   reset_after_seconds?: number | null;
   resetAfterSeconds?: number | null;
+  limit_window_seconds?: number | null;
+  limitWindowSeconds?: number | null;
 }
 
 interface ParsedCodexErrorBody {
@@ -174,8 +176,17 @@ export function buildCodexCoreUsageSummary(windows: CodexQuotaWindow[]): CodexCo
     }
   }
 
-  if ((!fiveHourWindow || !weeklyWindow) && nonCodeReviewWindows.length > 0) {
-    const withReset = nonCodeReviewWindows
+  // A recognized cadence must never be reused for the other core window, and
+  // an explicit unsupported duration cannot be guessed from time until reset.
+  const fallbackWindows = nonCodeReviewWindows.filter(
+    (window) =>
+      window !== fiveHourWindow &&
+      window !== weeklyWindow &&
+      !window.cadence &&
+      window.limitWindowSeconds === undefined
+  );
+  if ((!fiveHourWindow || !weeklyWindow) && fallbackWindows.length > 0) {
+    const withReset = fallbackWindows
       .filter(
         (w) =>
           typeof w.resetAfterSeconds === 'number' &&
@@ -185,14 +196,14 @@ export function buildCodexCoreUsageSummary(windows: CodexQuotaWindow[]): CodexCo
       .sort((a, b) => (a.resetAfterSeconds || 0) - (b.resetAfterSeconds || 0));
 
     if (!fiveHourWindow) {
-      fiveHourWindow = withReset[0] || nonCodeReviewWindows[0] || null;
+      fiveHourWindow = withReset[0] || fallbackWindows[0] || null;
     }
 
     if (!weeklyWindow) {
       weeklyWindow =
         withReset.length > 1
           ? withReset[withReset.length - 1]
-          : nonCodeReviewWindows.find((w) => w !== fiveHourWindow) || null;
+          : fallbackWindows.find((w) => w !== fiveHourWindow) || null;
     }
   }
 
@@ -329,6 +340,23 @@ function buildCodexQuotaWindows(payload: CodexUsageResponse): CodexQuotaWindow[]
     const usedPercent = Math.max(0, Math.min(100, rawUsedPercent));
     const resetAfterSeconds =
       windowData.reset_after_seconds ?? windowData.resetAfterSeconds ?? null;
+    const rawWindowSeconds = windowData.limit_window_seconds ?? windowData.limitWindowSeconds;
+    const limitWindowSeconds =
+      typeof rawWindowSeconds === 'number' &&
+      Number.isFinite(rawWindowSeconds) &&
+      rawWindowSeconds > 0
+        ? rawWindowSeconds
+        : undefined;
+    // Position is a legacy fallback only. Pro accounts may expose their weekly
+    // window as primary, while other plans still have separate 5h/week windows.
+    const cadence =
+      limitWindowSeconds === undefined
+        ? meta.cadence
+        : limitWindowSeconds === 18_000
+          ? '5h'
+          : limitWindowSeconds === 604_800
+            ? 'weekly'
+            : undefined;
 
     // Calculate reset timestamp if we have seconds
     let resetAt: string | null = null;
@@ -343,7 +371,8 @@ function buildCodexQuotaWindows(payload: CodexUsageResponse): CodexQuotaWindow[]
       resetAfterSeconds,
       resetAt,
       category: meta.category,
-      cadence: meta.cadence,
+      ...(cadence ? { cadence } : {}),
+      ...(limitWindowSeconds !== undefined ? { limitWindowSeconds } : {}),
     };
     if (meta.featureLabel) {
       window.featureLabel = meta.featureLabel;

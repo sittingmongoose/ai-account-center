@@ -174,9 +174,9 @@ export function ClaudeAccountsPage() {
                 );
                 return (
                   <Card key={profile.email} className="gap-0 py-4">
-                    <CardContent className="grid gap-3 px-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:gap-6 sm:px-6">
+                    <CardContent className="space-y-3 px-4 sm:px-6">
                       <div className="min-w-0 space-y-2">
-                        <h2 className="break-all text-sm font-semibold">{profile.email}</h2>
+                        <h2 className="break-words text-sm font-semibold">{profile.email}</h2>
                         {launcher?.isDefault && (
                           <Badge variant="secondary">
                             {t('claudeAccountsPage.originalProfile')}

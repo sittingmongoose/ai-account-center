@@ -36,7 +36,9 @@ describe('CodexAccountsPage', () => {
 
     expect(screen.getByRole('heading', { name: 'Codex accounts' })).toBeInTheDocument();
     expect(
-      screen.getByText('Click Activate beside the account you want to use.')
+      screen.getByText(
+        'Click Activate beside the account you want to use. Usage windows and reset times are shown as reported by each account. Percentages show how much is used.'
+      )
     ).toBeInTheDocument();
     expect(screen.getByText('work@example.test')).toBeInTheDocument();
     expect(screen.getByText('family@example.test')).toBeInTheDocument();

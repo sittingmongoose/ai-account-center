@@ -2732,7 +2732,7 @@ const resources = {
         weeklySonnet: 'Weekly Sonnet limit',
         extra: 'Extra usage',
         explanation:
-          'Subscription limits cover 5-hour and weekly windows. Each percentage shows how much of that limit is used.',
+          'Subscription limits can include 5-hour and weekly windows. Each percentage shows how much of that limit is used.',
         recordedCliUsage: 'Recorded CLI usage',
         recordedCliUsageDescription: 'Hourly breakdowns from recorded CLI sessions.',
       },
@@ -2769,7 +2769,8 @@ const resources = {
       },
       codexPage: {
         accountsTitle: 'Codex accounts',
-        accountsInstruction: 'Click Activate beside the account you want to use.',
+        accountsInstruction:
+          'Click Activate beside the account you want to use. Usage windows and reset times are shown as reported by each account. Percentages show how much is used.',
         title: 'Codex',
         controlCenter: 'Control Center',
         overview: 'Overview',
@@ -5617,7 +5618,7 @@ const resources = {
         weeklySonnet: 'Limite semanal do Sonnet',
         extra: 'Uso extra',
         explanation:
-          'Os limites da assinatura abrangem períodos de 5 horas e semanais. Cada porcentagem mostra quanto desse limite foi usado.',
+          'Os limites da assinatura podem incluir períodos de 5 horas e semanais. Cada porcentagem mostra quanto desse limite foi usado.',
         recordedCliUsage: 'Uso CLI registrado',
         recordedCliUsageDescription: 'Detalhamento por hora das sessões CLI registradas.',
       },
@@ -5654,7 +5655,8 @@ const resources = {
       },
       codexPage: {
         accountsTitle: 'Contas Codex',
-        accountsInstruction: 'Clique em Ativar ao lado da conta que deseja usar.',
+        accountsInstruction:
+          'Clique em Ativar ao lado da conta que deseja usar. Os períodos de uso e horários de redefinição são exibidos conforme informados por cada conta. As porcentagens mostram quanto foi usado.',
         title: 'Codex',
         controlCenter: 'Central de Controle',
         overview: 'Visão Geral',
@@ -8300,7 +8302,7 @@ const resources = {
         weeklyOpus: 'Opus 每周限额',
         weeklySonnet: 'Sonnet 每周限额',
         extra: '额外用量',
-        explanation: '订阅限额包含 5 小时和每周时段。百分比表示已使用的限额比例。',
+        explanation: '订阅限额可能包含 5 小时和每周时段。百分比表示已使用的限额比例。',
         recordedCliUsage: '已记录的 CLI 用量',
         recordedCliUsageDescription: '已记录 CLI 会话的每小时明细。',
       },
@@ -8335,7 +8337,8 @@ const resources = {
       },
       codexPage: {
         accountsTitle: 'Codex 账户',
-        accountsInstruction: '点击要使用的账户旁边的“激活”。',
+        accountsInstruction:
+          '点击要使用的账户旁边的“激活”。用量时段和重置时间按各账户报告的数据显示。百分比表示已使用的比例。',
         title: 'Codex',
         controlCenter: '控制中心',
         overview: '概览',
@@ -11107,7 +11110,7 @@ const resources = {
         weeklySonnet: 'Giới hạn tuần Sonnet',
         extra: 'Mức sử dụng bổ sung',
         explanation:
-          'Giới hạn gói đăng ký tính theo khoảng 5 giờ và theo tuần. Mỗi tỷ lệ cho biết phần giới hạn đã sử dụng.',
+          'Giới hạn gói đăng ký có thể tính theo khoảng 5 giờ và theo tuần. Mỗi tỷ lệ cho biết phần giới hạn đã sử dụng.',
         recordedCliUsage: 'Mức sử dụng CLI đã ghi nhận',
         recordedCliUsageDescription: 'Phân tích theo giờ từ các phiên CLI đã ghi nhận.',
       },
@@ -11146,7 +11149,8 @@ const resources = {
       },
       codexPage: {
         accountsTitle: 'Tài khoản Codex',
-        accountsInstruction: 'Nhấn Kích hoạt bên cạnh tài khoản bạn muốn sử dụng.',
+        accountsInstruction:
+          'Nhấn Kích hoạt bên cạnh tài khoản bạn muốn sử dụng. Các khoảng sử dụng và thời gian đặt lại được hiển thị theo dữ liệu từng tài khoản cung cấp. Tỷ lệ cho biết phần đã sử dụng.',
         title: 'Codex',
         controlCenter: 'Trung tâm điều khiển',
         overview: 'Tổng quan',
@@ -13174,7 +13178,7 @@ const resources = {
         weeklySonnet: 'Sonnet の週間上限',
         extra: '追加の使用量',
         explanation:
-          'サブスクリプションの上限は5時間と週間の期間で設定されています。各割合はその上限の使用済み割合を示します。',
+          'サブスクリプションの上限には5時間と週間の期間が含まれる場合があります。各割合はその上限の使用済み割合を示します。',
         recordedCliUsage: '記録済み CLI 使用量',
         recordedCliUsageDescription: '記録された CLI セッションの時間別内訳。',
       },
@@ -13213,7 +13217,8 @@ const resources = {
       },
       codexPage: {
         accountsTitle: 'Codex アカウント',
-        accountsInstruction: '使用するアカウントの横にある「有効化」をクリックしてください。',
+        accountsInstruction:
+          '使用するアカウントの横にある「有効化」をクリックしてください。使用量の期間とリセット日時は各アカウントの報告に従って表示されます。割合は使用済みの量を示します。',
         title: 'Codex',
         controlCenter: 'コントロールセンター',
         overview: '概要',
@@ -16769,7 +16774,7 @@ const resources = {
         weeklySonnet: 'Sonnet 주간 한도',
         extra: '추가 사용량',
         explanation:
-          '구독 한도는 5시간 및 주간 기간을 기준으로 합니다. 각 백분율은 해당 한도에서 사용한 비율을 나타냅니다.',
+          '구독 한도에는 5시간 및 주간 기간이 포함될 수 있습니다. 각 백분율은 해당 한도에서 사용한 비율을 나타냅니다.',
         recordedCliUsage: '기록된 CLI 사용량',
         recordedCliUsageDescription: '기록된 CLI 세션의 시간별 내역.',
       },
@@ -16806,7 +16811,8 @@ const resources = {
       },
       codexPage: {
         accountsTitle: 'Codex 계정',
-        accountsInstruction: '사용할 계정 옆의 활성화 버튼을 클릭하세요.',
+        accountsInstruction:
+          '사용할 계정 옆의 활성화 버튼을 클릭하세요. 사용량 기간과 재설정 시간은 각 계정이 보고한 대로 표시됩니다. 백분율은 사용한 양을 나타냅니다.',
         title: 'Codex',
         controlCenter: '제어 센터',
         overview: '개요',

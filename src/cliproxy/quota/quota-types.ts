@@ -50,8 +50,10 @@ export interface CodexQuotaWindow {
    * - 'additional' -> additional_rate_limits[] windows (e.g. GPT-5.3 Codex Spark)
    */
   category?: 'usage' | 'code-review' | 'additional';
-  /** Cadence of the window: '5h' = primary, 'weekly' = secondary. Optional for legacy data. */
+  /** Cadence from upstream duration; primary/secondary position is used only for legacy payloads. */
   cadence?: '5h' | 'weekly';
+  /** Authoritative upstream window length, when supplied; independent of time until reset. */
+  limitWindowSeconds?: number;
   /** Raw upstream label (e.g. 'GPT-5.3-Codex-Spark', 'Code Review'); absent for plain usage windows. */
   featureLabel?: string;
 }

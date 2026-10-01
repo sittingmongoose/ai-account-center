@@ -113,6 +113,103 @@ describe('Codex Quota Fetcher', () => {
       expect(windows[0].resetAfterSeconds).toBe(7200);
     });
 
+    it('classifies a snake_case weekly primary window by duration even when it resets soon', () => {
+      const windows = buildCodexQuotaWindows({
+        rate_limit: {
+          primary_window: {
+            used_percent: 35,
+            limit_window_seconds: 604800,
+            reset_after_seconds: 3600,
+          },
+        },
+      });
+
+      expect(windows).toHaveLength(1);
+      expect(windows[0].limitWindowSeconds).toBe(604800);
+      expect(windows[0].category).toBe('usage');
+      expect(windows[0].cadence).toBe('weekly');
+      expect(windows[0].resetAfterSeconds).toBe(3600);
+
+      const summary = buildCodexCoreUsageSummary(windows);
+      expect(summary.fiveHour).toBeNull();
+      expect(summary.weekly?.label).toBe('Primary');
+      expect(summary.weekly?.remainingPercent).toBe(65);
+      expect(summary.weekly?.resetAfterSeconds).toBe(3600);
+    });
+
+    it('normalizes camelCase weekly window duration without inventing a five-hour window', () => {
+      const windows = buildCodexQuotaWindows({
+        rateLimit: {
+          primaryWindow: {
+            usedPercent: 45,
+            limitWindowSeconds: 604800,
+            resetAfterSeconds: 3500,
+          },
+        },
+      });
+
+      expect(windows).toHaveLength(1);
+      expect(windows[0].limitWindowSeconds).toBe(604800);
+      expect(windows[0].cadence).toBe('weekly');
+
+      const summary = buildCodexCoreUsageSummary(windows);
+      expect(summary.fiveHour).toBeNull();
+      expect(summary.weekly?.remainingPercent).toBe(55);
+      expect(summary.weekly?.resetAfterSeconds).toBe(3500);
+    });
+
+    it('uses explicit durations instead of primary and secondary positions for core cadence', () => {
+      const windows = buildCodexQuotaWindows({
+        rate_limit: {
+          primary_window: {
+            used_percent: 70,
+            limit_window_seconds: 604800,
+            reset_after_seconds: 3600,
+          },
+          secondary_window: {
+            used_percent: 20,
+            limit_window_seconds: 18000,
+            reset_after_seconds: 7200,
+          },
+        },
+      });
+
+      expect(windows[0].limitWindowSeconds).toBe(604800);
+      expect(windows[0].cadence).toBe('weekly');
+      expect(windows[1].limitWindowSeconds).toBe(18000);
+      expect(windows[1].cadence).toBe('5h');
+
+      const summary = buildCodexCoreUsageSummary(windows);
+      expect(summary.fiveHour?.label).toBe('Secondary');
+      expect(summary.fiveHour?.remainingPercent).toBe(80);
+      expect(summary.fiveHour?.resetAfterSeconds).toBe(7200);
+      expect(summary.weekly?.label).toBe('Primary');
+      expect(summary.weekly?.remainingPercent).toBe(30);
+      expect(summary.weekly?.resetAfterSeconds).toBe(3600);
+    });
+
+    it('keeps an explicit unknown duration unclassified instead of guessing a core cadence', () => {
+      const windows = buildCodexQuotaWindows({
+        rate_limit: {
+          primary_window: {
+            used_percent: 20,
+            limit_window_seconds: 3600,
+            reset_after_seconds: 1800,
+          },
+        },
+      });
+
+      expect(windows).toHaveLength(1);
+      expect(windows[0].label).toBe('Primary');
+      expect(windows[0].category).toBe('usage');
+      expect(windows[0].limitWindowSeconds).toBe(3600);
+      expect(windows[0].cadence).toBeUndefined();
+
+      const summary = buildCodexCoreUsageSummary(windows);
+      expect(summary.fiveHour).toBeNull();
+      expect(summary.weekly).toBeNull();
+    });
+
     it('should handle code review rate limits', () => {
       const response = {
         code_review_rate_limit: {
@@ -516,6 +613,52 @@ describe('Codex Quota Fetcher', () => {
       expect(summary.fiveHour?.resetAfterSeconds).toBe(18000);
       expect(summary.weekly?.label).toBe('Secondary');
       expect(summary.weekly?.resetAfterSeconds).toBe(604800);
+    });
+
+    it('keeps weekly-only core usage separate from duration-classified feature windows', () => {
+      const windows = buildCodexQuotaWindows({
+        rate_limit: {
+          primary_window: {
+            used_percent: 25,
+            limit_window_seconds: 604800,
+            reset_after_seconds: 3600,
+          },
+        },
+        code_review_rate_limit: {
+          primary_window: {
+            used_percent: 70,
+            limit_window_seconds: 604800,
+            reset_after_seconds: 1800,
+          },
+        },
+        additional_rate_limits: [
+          {
+            limit_name: 'Custom-Feature',
+            rate_limit: {
+              secondary_window: {
+                used_percent: 90,
+                limit_window_seconds: 18000,
+                reset_after_seconds: 100,
+              },
+            },
+          },
+        ],
+      });
+
+      const codeReview = windows.find((window) => window.category === 'code-review');
+      const additional = windows.find((window) => window.category === 'additional');
+      expect(codeReview?.cadence).toBe('weekly');
+      expect(codeReview?.limitWindowSeconds).toBe(604800);
+      expect(codeReview?.featureLabel).toBe('Code Review');
+      expect(additional?.cadence).toBe('5h');
+      expect(additional?.limitWindowSeconds).toBe(18000);
+      expect(additional?.featureLabel).toBe('Custom-Feature');
+
+      const summary = buildCodexCoreUsageSummary(windows);
+      expect(summary.fiveHour).toBeNull();
+      expect(summary.weekly?.label).toBe('Primary');
+      expect(summary.weekly?.remainingPercent).toBe(75);
+      expect(summary.weekly?.resetAfterSeconds).toBe(3600);
     });
   });
 
