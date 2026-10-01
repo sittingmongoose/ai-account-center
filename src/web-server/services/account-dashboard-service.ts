@@ -22,6 +22,7 @@ import { getAdditionalDashboardAccounts } from './additional-account-service';
 import { getOpenCodeConsoleWalletAccounts } from './opencode-console-wallet-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import {
+  getCachedClaudeDesktopLiveUsage,
   getLiveClaudeDesktopUsage,
   type ClaudeDesktopLiveUsage,
 } from './claude-desktop-live-service';
@@ -53,6 +54,7 @@ export interface AccountDashboardDeps {
     profileId: string,
     refresh: boolean
   ) => Promise<ClaudeDesktopLiveUsage | null>;
+  getCachedLiveClaudeUsage?: (profileId: string) => Promise<ClaudeDesktopLiveUsage | null>;
   getAdditionalAccounts?: () => Promise<DashboardAccount[]>;
   getOptionalWalletAccounts?: (refresh: boolean) => Promise<DashboardAccount[]>;
   getAutoSwitchStatus?: () => AccountDashboard['codexAutoSwitch'];
@@ -145,12 +147,33 @@ export class AccountDashboardService {
     // Launch preference never partitions a verified account's quota. Bind retained
     // samples to the complete manifest entry so a changed source cannot inherit them.
     const sampleKeys = profiles.map((profile) => JSON.stringify([scope, profile]));
+    const persisted = await Promise.all(
+      profiles.map((profile) =>
+        profile.id
+          ? (
+              this.deps.getCachedLiveClaudeUsage ??
+              (this.deps.getLiveClaudeUsage ? async () => null : getCachedClaudeDesktopLiveUsage)
+            )(profile.id).catch(() => null)
+          : Promise.resolve(null)
+      )
+    );
     let accounts = profiles.map((profile, index) => {
       const account = claudeAccount(profile, platform);
-      const retained = this.claudeLiveSamples.get(sampleKeys[index]);
+      const previous = this.claudeLiveSamples.get(sampleKeys[index]);
+      const disk = persisted[index];
+      const retained =
+        disk && (!previous || Date.parse(disk.fetchedAt) > Date.parse(previous.fetchedAt))
+          ? disk
+          : previous;
       const result = applyClaudeLiveUsage(account, retained ?? null);
+      if (result !== account && retained) this.claudeLiveSamples.set(sampleKeys[index], retained);
       return result === account ? account : { ...result, status: 'cached' as const };
     });
+    while (this.claudeLiveSamples.size > MAX_SCOPES * 4) {
+      const oldest = this.claudeLiveSamples.keys().next().value;
+      if (oldest === undefined) break;
+      this.claudeLiveSamples.delete(oldest);
+    }
     publishCached(accounts);
     const history = Promise.resolve()
       .then(() => (this.deps.getClaudeUsage ?? getClaudeDesktopUsage)(platform))

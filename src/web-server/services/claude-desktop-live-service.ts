@@ -3,6 +3,10 @@ import { createHash } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 import type { DashboardAccountWindow } from './account-dashboard-types';
+import {
+  readClaudeDesktopLiveSnapshot,
+  writeClaudeDesktopLiveSnapshot,
+} from './claude-desktop-live-cache';
 
 /** Identity-bound quota, independent of the computer selected for launching the account. */
 export interface ClaudeDesktopLiveUsage {
@@ -17,6 +21,7 @@ export interface ClaudeDesktopLiveUsage {
 
 const PROFILE_IDS = new Set(['gmail', 'platyr', 'party', 'me']);
 const CACHE_TTL_MS = 120_000;
+const RETAINED_SAMPLE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const FAILURE_BACKOFF_MS = 30_000;
 const PROCESS_TIMEOUT_MS = 20_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -86,19 +91,38 @@ function normalizeUsage(
     !isRecord(result) ||
     result.schemaVersion !== 1 ||
     result.provider !== 'claude' ||
+    result.status !== 'ok' ||
+    result.accountVerified !== true ||
+    result.organizationVerified !== true
+  ) {
+    return null;
+  }
+  return normalizeSample(result, profileId, expectedEmail, CACHE_TTL_MS);
+}
+
+function normalizeSample(
+  result: unknown,
+  profileId: string,
+  expectedEmail: string,
+  maxAgeMs: number
+): ClaudeDesktopLiveUsage | null {
+  if (
+    !isRecord(result) ||
     result.profileId !== profileId ||
     result.platform !== 'windows' ||
-    result.status !== 'ok' ||
     result.email !== expectedEmail ||
-    result.accountVerified !== true ||
-    result.organizationVerified !== true ||
     !Array.isArray(result.windows) ||
     result.windows.length > Object.keys(WINDOW_FIELDS).length + MAX_RESET_GRANTS + 3
   ) {
     return null;
   }
   const fetchedAt = timestamp(result.fetchedAt);
-  if (!fetchedAt || Math.abs(Date.parse(fetchedAt) - Date.now()) > CACHE_TTL_MS) return null;
+  if (
+    !fetchedAt ||
+    Date.now() - Date.parse(fetchedAt) > maxAgeMs ||
+    Date.parse(fetchedAt) - Date.now() > CACHE_TTL_MS
+  )
+    return null;
   const windows: DashboardAccountWindow[] = [];
   const seen = new Set<string>();
   for (const item of result.windows) {
@@ -318,7 +342,8 @@ export async function getLiveClaudeDesktopUsage(
       return null;
     }
     const manifestHash = createHash('sha256').update(JSON.stringify(profile)).digest('hex');
-    const key = JSON.stringify([getCcsDir(), profileId, manifestHash]);
+    const scope = getCcsDir();
+    const key = JSON.stringify([scope, profileId, manifestHash]);
     const existing = cache.get(key);
     if (
       existing &&
@@ -331,7 +356,23 @@ export async function getLiveClaudeDesktopUsage(
     }
     if (existing) cache.delete(key);
     const promise = runWindowsHelper(sshHost, profileId)
-      .then((contents) => normalizeUsage(contents, profileId, profile.email))
+      .then(async (contents) => {
+        const usage = normalizeUsage(contents, profileId, profile.email);
+        if (usage && cache.get(key) === entry && scope === getCcsDir()) {
+          const current = (await listClaudeDesktopProfiles().catch(() => [])).find(
+            (candidate) => candidate.id === profileId
+          );
+          // An old in-flight source must not overwrite a newer manifest's snapshot.
+          if (
+            current &&
+            createHash('sha256').update(JSON.stringify(current)).digest('hex') === manifestHash &&
+            cache.get(key) === entry
+          ) {
+            await writeClaudeDesktopLiveSnapshot(scope, profileId, manifestHash, usage);
+          }
+        }
+        return usage;
+      })
       .catch(() => null);
     const entry: CacheEntry = { expiresAt: Infinity, pending: true, failed: false, promise };
     cache.set(key, entry);
@@ -347,6 +388,24 @@ export async function getLiveClaudeDesktopUsage(
       entry.expiresAt = Date.now() + (entry.failed ? FAILURE_BACKOFF_MS : CACHE_TTL_MS);
     });
     return promise;
+  } catch {
+    return null;
+  }
+}
+
+/** Previously verified quota may survive a restart, with its original timestamp. */
+export async function getCachedClaudeDesktopLiveUsage(
+  profileId: string
+): Promise<ClaudeDesktopLiveUsage | null> {
+  if (!PROFILE_IDS.has(profileId)) return null;
+  try {
+    const profiles = await listClaudeDesktopProfiles();
+    const profile = profiles.find((candidate) => candidate.id === profileId);
+    if (!profile?.windows?.sshHost) return null;
+    const manifestHash = createHash('sha256').update(JSON.stringify(profile)).digest('hex');
+    const sample = await readClaudeDesktopLiveSnapshot(getCcsDir(), profileId, manifestHash);
+    if (!isRecord(sample) || sample.source !== SOURCE) return null;
+    return normalizeSample(sample, profileId, profile.email, RETAINED_SAMPLE_MAX_AGE_MS);
   } catch {
     return null;
   }

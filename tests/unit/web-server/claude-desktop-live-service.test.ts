@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
 import {
+  getCachedClaudeDesktopLiveUsage,
   getLiveClaudeDesktopUsage,
   invalidateClaudeDesktopLiveUsageCache,
 } from '../../../src/web-server/services/claude-desktop-live-service';
@@ -517,5 +518,107 @@ describe('identity-bound Claude Desktop live usage', () => {
     writeProfiles();
     expect(await getLiveClaudeDesktopUsage('gmail')).not.toBe(first);
     expect(exec).toHaveBeenCalledTimes(4);
+  });
+
+  it('retains verified windows across cold module caches without stamping them fresh or running SSH', async () => {
+    const verified = await getLiveClaudeDesktopUsage('gmail');
+    invalidateClaudeDesktopLiveUsageCache();
+    let now = Date.now();
+    spyOn(Date, 'now').mockImplementation(() => now);
+    now += 5 * 60_000;
+    const retained = await getCachedClaudeDesktopLiveUsage('gmail');
+    expect(retained).toEqual(verified);
+    expect(retained?.fetchedAt).toBe(verified?.fetchedAt);
+    expect(retained?.windows[1].resetAt).toBe('2026-10-02T02:59:59.716Z');
+    expect(exec).toHaveBeenCalledTimes(1);
+    now += 24 * 60 * 60_000;
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toBeNull();
+  });
+
+  it('keeps valid live quota available when protected cache storage cannot be written', async () => {
+    fs.mkdirSync(path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache'), { mode: 0o755 });
+    const current = await getLiveClaudeDesktopUsage('gmail');
+    expect(current?.windows[0].usedPercent).toBe(0);
+    expect(current?.windows[1].resetAt).toBe('2026-10-02T02:59:59.716Z');
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toBeNull();
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects persisted quota after source or account identity changes', async () => {
+    await getLiveClaudeDesktopUsage('gmail');
+    invalidateClaudeDesktopLiveUsageCache();
+    writeProfiles([{ ...profile, windows: { ...profile.windows, sshHost: 'other-source' } }]);
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toBeNull();
+    writeProfiles([{ ...profile, email: 'other@example.com' }]);
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toBeNull();
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let an old-manifest helper finishing late displace the current protected snapshot', async () => {
+    let finishOld: (error: null, stdout: string) => void = () => {};
+    let notifyStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const olderBody = payload({ windows: [{ key: 'seven_day', usedPercent: 42, resetAt: null }] });
+    let calls = 0;
+    exec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: null, stdout: string) => void;
+      if (++calls === 1) {
+        finishOld = callback;
+        notifyStarted();
+      } else {
+        callback(
+          null,
+          payload({ windows: [{ key: 'seven_day', usedPercent: 77, resetAt: null }] })
+        );
+      }
+      return {} as childProcess.ChildProcess;
+    });
+    const olderRead = getLiveClaudeDesktopUsage('gmail');
+    await waitForReadStarted(started);
+    writeProfiles([{ ...profile, windows: { ...profile.windows, sshHost: 'new-source' } }]);
+    const current = await getLiveClaudeDesktopUsage('gmail');
+    finishOld(null, olderBody);
+    await olderRead;
+    invalidateClaudeDesktopLiveUsageCache();
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toEqual(current);
+    expect(current?.windows[0].usedPercent).toBe(77);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('fresh provider zero/null updates replace richer retained metadata normally', async () => {
+    let now = Date.now();
+    spyOn(Date, 'now').mockImplementation(() => now);
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 45, resetAt: '2026-10-02T03:00:00Z' },
+        { key: 'seven_day', usedPercent: 99, resetAt: '2026-10-06T20:00:00Z' },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 50, unit: 'USD' },
+      ],
+    });
+    await getLiveClaudeDesktopUsage('gmail');
+    now += 1000;
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 0, resetAt: null },
+        { key: 'seven_day', usedPercent: 0, resetAt: null },
+      ],
+    });
+    const current = await getLiveClaudeDesktopUsage('gmail', { refresh: true });
+    invalidateClaudeDesktopLiveUsageCache();
+    const retained = await getCachedClaudeDesktopLiveUsage('gmail');
+    expect(retained).toEqual(current);
+    expect(retained?.windows).toHaveLength(2);
+    expect(retained?.windows.map((window) => [window.usedPercent, window.resetAt])).toEqual([
+      [0, null],
+      [0, null],
+    ]);
+    expect(retained?.windows.some((window) => window.key === 'prepaid_balance')).toBe(false);
+    const contents = fs.readFileSync(
+      path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache', 'gmail.json'),
+      'utf8'
+    );
+    expect(contents).not.toContain('credential-sentinel');
   });
 });

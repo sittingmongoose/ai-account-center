@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { createHash } from 'crypto';
 import type { CodexAuthProfilesSummary } from '../../../src/codex-auth/codex-auth-dashboard-service';
 import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
 import {
@@ -6,8 +10,15 @@ import {
   type AccountDashboardDeps,
 } from '../../../src/web-server/services/account-dashboard-service';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
-import type { ClaudeDesktopProfile } from '../../../src/web-server/services/claude-desktop-profile-service';
-import type { ClaudeDesktopLiveUsage } from '../../../src/web-server/services/claude-desktop-live-service';
+import {
+  listClaudeDesktopProfiles,
+  type ClaudeDesktopProfile,
+} from '../../../src/web-server/services/claude-desktop-profile-service';
+import {
+  getCachedClaudeDesktopLiveUsage,
+  type ClaudeDesktopLiveUsage,
+} from '../../../src/web-server/services/claude-desktop-live-service';
+import { writeClaudeDesktopLiveSnapshot } from '../../../src/web-server/services/claude-desktop-live-cache';
 
 function liveClaude(profileId: string): ClaudeDesktopLiveUsage {
   return {
@@ -640,6 +651,142 @@ describe('consolidated account dashboard', () => {
     expect(next?.source).toBe(first?.source);
     expect(next?.sampledAt).toBe(first?.sampledAt);
     expect(next?.windows).toEqual(first?.windows);
+  });
+
+  it('cold Mac and Windows dashboards load all 22 persisted verified windows before sparse Mac history, then accept fresh zero/null updates', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-dashboard-cold-'));
+    const previousCcsDir = process.env.CCS_DIR;
+    process.env.CCS_DIR = root;
+    let release: () => void = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      fs.writeFileSync(
+        path.join(root, 'claude-desktop-profiles.json'),
+        JSON.stringify({
+          version: 1,
+          profiles: claudeProfiles.map((profile) => ({
+            ...profile,
+            windows: { ...profile.windows, sshHost: 'fixture-windows' },
+          })),
+        })
+      );
+      const profiles = await listClaudeDesktopProfiles();
+      const sampledAt = new Date(Date.now() - 5 * 60_000).toISOString();
+      const samples = profiles.map((profile, index): ClaudeDesktopLiveUsage => {
+        const base = liveClaude(profile.id!);
+        const rate = {
+          ...base.windows[0],
+          key: 'five_hour',
+          label: 'Five-hour usage',
+          usedPercent: 45,
+          remainingPercent: 55,
+          windowMinutes: 300,
+        };
+        const balance = {
+          ...base.windows[1],
+          key: 'reset_credits_available',
+          label: 'Rate-limit resets available',
+          remaining: 1,
+          unit: 'resets',
+          expiresAt: null,
+        };
+        const windows: ClaudeDesktopLiveUsage['windows'] = [
+          rate,
+          base.windows[0],
+          {
+            ...rate,
+            key: 'extra_usage',
+            label: 'Extra usage',
+            kind: 'extra_usage',
+            enabled: false,
+            usedPercent: null,
+            remainingPercent: null,
+            resetAt: null,
+            windowMinutes: null,
+          },
+          balance,
+          {
+            ...balance,
+            key: 'reset_credit_available_grant_1',
+            expiresAt: '2026-10-29T12:00:00Z',
+          },
+          ...(index < 2 ? [base.windows[1]] : []),
+        ];
+        return { ...base, fetchedAt: sampledAt, windows };
+      });
+      await Promise.all(
+        profiles.map((profile, index) =>
+          writeClaudeDesktopLiveSnapshot(
+            root,
+            profile.id!,
+            createHash('sha256').update(JSON.stringify(profile)).digest('hex'),
+            samples[index]
+          )
+        )
+      );
+      const currentAt = new Date().toISOString();
+      const service = new AccountDashboardService(
+        deps({
+          scope: () => root,
+          responseBudgetMs: 100,
+          listClaudeProfiles: async () => profiles,
+          getCachedLiveClaudeUsage: getCachedClaudeDesktopLiveUsage,
+          getLiveClaudeUsage: async (id) => {
+            await blocked;
+            const sample = samples.find((candidate) => candidate.profileId === id)!;
+            return {
+              ...sample,
+              fetchedAt: currentAt,
+              windows: sample.windows.slice(0, 2).map((window) => ({
+                ...window,
+                usedPercent: 0,
+                remainingPercent: 100,
+                resetAt: null,
+              })),
+            };
+          },
+        })
+      );
+      for (const platform of ['mac', 'windows'] as const) {
+        const accounts = (await service.get(platform)).accounts.filter(
+          (account) => account.provider === 'claude'
+        );
+        expect(accounts.map((account) => account.windows.length)).toEqual([6, 6, 5, 5]);
+        expect(accounts.reduce((total, account) => total + account.windows.length, 0)).toBe(22);
+        for (const account of accounts) {
+          expect(account.platform).toBe(platform);
+          expect(account.source).toBe('Claude Desktop live quota on Windows');
+          expect(account.status).toBe('cached');
+          expect(account.sampledAt).toBe(sampledAt);
+          expect(account.capabilities.claudePlatforms).toEqual(['mac', 'windows']);
+          expect(account.windows[1].usedPercent).toBe(125.5);
+          expect(account.windows[1].resetAt).toBe('2026-10-02T12:00:00.000Z');
+          expect(account.windows[2].enabled).toBe(false);
+          expect(account.windows[4].expiresAt).toBe('2026-10-29T12:00:00.000Z');
+        }
+      }
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const updated = (await service.get('mac')).accounts.filter(
+        (account) => account.provider === 'claude'
+      );
+      expect(updated.map((account) => account.windows.length)).toEqual([2, 2, 2, 2]);
+      for (const account of updated) {
+        expect(account.source).toBe('Claude Desktop live quota on Windows');
+        expect(account.sampledAt).toBe(currentAt);
+        expect(account.windows.map((window) => [window.usedPercent, window.resetAt])).toEqual([
+          [0, null],
+          [0, null],
+        ]);
+      }
+    } finally {
+      release();
+      if (previousCcsDir === undefined) delete process.env.CCS_DIR;
+      else process.env.CCS_DIR = previousCcsDir;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('shares matching verified Claude quota across launcher platforms and retains it through offline refreshes', async () => {
