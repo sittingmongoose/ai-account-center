@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 import { getCcsDir } from '../../utils/config-manager';
 import type { RawUsageEntry } from '../jsonl-parser';
-import { resolveCodexConfigPaths } from '../services/codex-dashboard-service';
+import { resolveCodexConfigPaths } from '../services/compatible-cli-config-paths';
 
 interface CodexNativeUsageCollectorOptions {
   env?: NodeJS.ProcessEnv;

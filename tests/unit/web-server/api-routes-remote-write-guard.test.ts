@@ -6,8 +6,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { apiRoutes } from '../../../src/web-server/routes';
-import { mutateConfig, loadOrCreateUnifiedConfig } from '../../../src/config/config-loader-facade';
-import { registerSession, deleteSessionLockForPort } from '../../../src/cliproxy/session-tracker';
 import {
   authMiddleware,
   createSessionMiddleware,
@@ -18,9 +16,14 @@ describe('api-routes remote write guard', () => {
   let baseUrl = '';
   let forcedRemoteAddress = '127.0.0.1';
   let tempHome = '';
+  let localSettingsSession = false;
   let originalDashboardAuthEnabled: string | undefined;
   let originalCcsHome: string | undefined;
+  let originalCcsDir: string | undefined;
   let originalCodexHome: string | undefined;
+  let originalDashboardUsername: string | undefined;
+  let originalDashboardPasswordHash: string | undefined;
+  let originalSessionSecret: string | undefined;
 
   beforeAll(async () => {
     const app = express();
@@ -30,6 +33,9 @@ describe('api-routes remote write guard', () => {
         value: forcedRemoteAddress,
         configurable: true,
       });
+      if (localSettingsSession) {
+        Object.assign(req, { session: { authenticated: true } });
+      }
       next();
     });
     app.use('/api', apiRoutes);
@@ -54,11 +60,18 @@ describe('api-routes remote write guard', () => {
   beforeEach(() => {
     originalDashboardAuthEnabled = process.env.CCS_DASHBOARD_AUTH_ENABLED;
     originalCcsHome = process.env.CCS_HOME;
+    originalCcsDir = process.env.CCS_DIR;
     originalCodexHome = process.env.CODEX_HOME;
+    originalDashboardUsername = process.env.CCS_DASHBOARD_USERNAME;
+    originalDashboardPasswordHash = process.env.CCS_DASHBOARD_PASSWORD_HASH;
+    originalSessionSecret = process.env.CCS_SESSION_SECRET;
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-routes-remote-write-guard-'));
     process.env.CCS_HOME = tempHome;
+    process.env.CCS_DIR = path.join(tempHome, '.ccs');
     process.env.CODEX_HOME = path.join(tempHome, '.codex');
     process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+    process.env.CCS_SESSION_SECRET = 'isolated-api-write-guard-session-secret';
+    localSettingsSession = false;
     forcedRemoteAddress = '10.10.0.24';
   });
 
@@ -81,6 +94,16 @@ describe('api-routes remote write guard', () => {
       delete process.env.CODEX_HOME;
     }
 
+    for (const [name, value] of [
+      ['CCS_DIR', originalCcsDir],
+      ['CCS_DASHBOARD_USERNAME', originalDashboardUsername],
+      ['CCS_DASHBOARD_PASSWORD_HASH', originalDashboardPasswordHash],
+      ['CCS_SESSION_SECRET', originalSessionSecret],
+    ] as const) {
+      if (value !== undefined) process.env[name] = value;
+      else delete process.env[name];
+    }
+
     if (tempHome && fs.existsSync(tempHome)) {
       fs.rmSync(tempHome, { recursive: true, force: true });
       tempHome = '';
@@ -88,73 +111,33 @@ describe('api-routes remote write guard', () => {
   });
 
   it('allows remote read-only GET requests when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/profiles`);
+    const response = await fetch(`${baseUrl}/api/health`);
 
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok' });
   });
 
-  it('blocks remote Codex raw config reads when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/codex/config/raw`);
+  it('returns 404 for retired remote Codex config and diagnostics reads', async () => {
+    for (const route of ['/config/raw', '/diagnostics']) {
+      const response = await fetch(`${baseUrl}/api/codex${route}`);
+      expect(response.status).toBe(404);
+    }
+  });
 
+  it('protects remote saved Codex profile identity when dashboard auth is disabled', async () => {
+    const response = await fetch(`${baseUrl}/api/codex/profiles`);
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
-      error: 'Codex configuration endpoints require localhost access when dashboard auth is disabled.',
+      error:
+        'Codex auth profiles endpoint requires localhost access when dashboard auth is disabled.',
     });
   });
 
-  it('allows remote Codex diagnostics when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/codex/diagnostics`);
-
-    expect(response.status).toBe(200);
-  });
-
-  it('redacts sensitive Codex diagnostics data while preserving remote access', async () => {
-    const codexHome = process.env.CODEX_HOME;
-    if (!codexHome) throw new Error('CODEX_HOME was not initialized');
-    fs.mkdirSync(codexHome, { recursive: true });
-    fs.writeFileSync(
-      path.join(codexHome, 'config.toml'),
-      `model_provider = "private"
-
-[model_providers.private]
-base_url = "https://llm.internal.example.test/v1/responses?tenant=alpha"
-env_key = "PRIVATE_PROVIDER_TOKEN"
-wire_api = "responses"
-
-[projects."/Users/someone/CloudPersonal/private-workspace"]
-trust_level = "trusted"
-`
-    );
-
-    const response = await fetch(`${baseUrl}/api/codex/diagnostics`);
-    const body = await response.json();
-    const serialized = JSON.stringify(body);
-
-    expect(response.status).toBe(200);
-    expect(body.config.projectTrust).toEqual([
-      { path: 'private-workspace', trustLevel: 'trusted' },
-    ]);
-    expect(body.config.modelProviders).toEqual([
-      expect.objectContaining({
-        name: 'private',
-        baseUrl: '[redacted:https]',
-        envKey: '[set]',
-      }),
-    ]);
-    expect(serialized).not.toContain('/Users/someone');
-    expect(serialized).not.toContain('llm.internal.example.test');
-    expect(serialized).not.toContain('PRIVATE_PROVIDER_TOKEN');
-  });
-
-  it('blocks remote profile creation when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/profiles`, {
+  it('blocks remote Codex activation before its handler when dashboard auth is disabled', async () => {
+    const response = await fetch(`${baseUrl}/api/codex/profiles/guard-test/activate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'demo',
-        baseUrl: 'https://api.example.com',
-        apiKey: 'token',
-      }),
+      body: JSON.stringify({}),
     });
 
     expect(response.status).toBe(403);
@@ -163,11 +146,11 @@ trust_level = "trusted"
     });
   });
 
-  it('blocks remote backup restore when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/persist/restore`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+  it('blocks remote settings writes even with the dashboard origin when auth is disabled', async () => {
+    const response = await fetch(`${baseUrl}/api/accounts/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+      body: JSON.stringify({ refreshIntervalSeconds: 120 }),
     });
 
     expect(response.status).toBe(403);
@@ -177,10 +160,10 @@ trust_level = "trusted"
   });
 
   it('blocks remote PUT requests when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/cliproxy-server`, {
+    const response = await fetch(`${baseUrl}/api/accounts/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ refreshIntervalSeconds: 120 }),
     });
 
     expect(response.status).toBe(403);
@@ -189,56 +172,58 @@ trust_level = "trusted"
     });
   });
 
-  it('rejects invalid local ports at the cliproxy-server API boundary', async () => {
+  it('rejects invalid local refresh intervals at the account settings API boundary', async () => {
     forcedRemoteAddress = '127.0.0.1';
+    localSettingsSession = true;
 
-    const response = await fetch(`${baseUrl}/api/cliproxy-server`, {
+    const response = await fetch(`${baseUrl}/api/accounts/settings`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        local: { port: 70000 },
-      }),
+      headers: { 'Content-Type': 'application/json', Origin: baseUrl },
+      body: JSON.stringify({ refreshIntervalSeconds: 29 }),
     });
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: 'Invalid local port. Must be an integer between 1 and 65535.',
+      error: 'Choose a whole number of seconds from 30 to 3600.',
     });
   });
 
-  it('rejects local port changes while the current local proxy session is still running', async () => {
+  it('rejects cross-origin account settings writes from a local client', async () => {
     forcedRemoteAddress = '127.0.0.1';
-    mutateConfig((config) => {
-      if (!config.cliproxy_server) {
-        throw new Error('cliproxy_server defaults were not initialized');
-      }
-      config.cliproxy_server.local.port = 8317;
+    localSettingsSession = true;
+
+    const response = await fetch(`${baseUrl}/api/accounts/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://untrusted.example' },
+      body: JSON.stringify({ refreshIntervalSeconds: 120 }),
     });
-    registerSession(8317, process.pid);
 
-    try {
-      const response = await fetch(`${baseUrl}/api/cliproxy-server`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          local: { port: 9000 },
-        }),
-      });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: 'Remote dashboard writes require localhost access when dashboard auth is disabled.',
+    });
+    expect(fs.existsSync(path.join(tempHome, '.ccs', 'account-refresh-settings.json'))).toBe(false);
+  });
 
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({
-        error: 'Proxy is running on the current local port. Stop CLIProxy before changing local.port.',
-        proxyRunning: true,
-        currentLocalPort: 8317,
-      });
-      expect(loadOrCreateUnifiedConfig().cliproxy_server?.local?.port).toBe(8317);
-    } finally {
-      deleteSessionLockForPort(8317);
-    }
+  it('rejects account settings writes with a non-loopback Host even from a local client', async () => {
+    forcedRemoteAddress = '127.0.0.1';
+    localSettingsSession = true;
+
+    const response = await fetch(`${baseUrl}/api/accounts/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Host: 'untrusted.example' },
+      body: JSON.stringify({ refreshIntervalSeconds: 120 }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: 'Remote dashboard writes require localhost access when dashboard auth is disabled.',
+    });
+    expect(fs.existsSync(path.join(tempHome, '.ccs', 'account-refresh-settings.json'))).toBe(false);
   });
 
   it('blocks remote PATCH requests when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/codex/config/patch`, {
+    const response = await fetch(`${baseUrl}/api/accounts/settings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -250,8 +235,8 @@ trust_level = "trusted"
     });
   });
 
-  it('blocks remote DELETE requests when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/profiles/demo`, {
+  it('blocks remote DELETE requests before route dispatch when dashboard auth is disabled', async () => {
+    const response = await fetch(`${baseUrl}/api/accounts/settings`, {
       method: 'DELETE',
     });
 
@@ -261,38 +246,45 @@ trust_level = "trusted"
     });
   });
 
-  it(
-    'allows remote writes again when dashboard auth is enabled',
-    async () => {
-      const password = 'testpassword123';
-      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
-      process.env.CCS_DASHBOARD_USERNAME = 'admin';
-      process.env.CCS_DASHBOARD_PASSWORD_HASH = await bcrypt.hash(password, 4);
+  it('allows remote writes again when dashboard auth is enabled', async () => {
+    const password = 'testpassword123';
+    process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+    process.env.CCS_DASHBOARD_USERNAME = 'admin';
+    process.env.CCS_DASHBOARD_PASSWORD_HASH = await bcrypt.hash(password, 4);
 
-      const authApp = express();
-      authApp.use(express.json());
-      authApp.use((req, _res, next) => {
-        Object.defineProperty(req.socket, 'remoteAddress', {
-          value: forcedRemoteAddress,
-          configurable: true,
-        });
-        next();
+    const authApp = express();
+    authApp.use(express.json());
+    authApp.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', {
+        value: forcedRemoteAddress,
+        configurable: true,
       });
-      authApp.use(createSessionMiddleware());
-      authApp.use(authMiddleware);
-      authApp.use('/api', apiRoutes);
+      next();
+    });
+    authApp.use(createSessionMiddleware());
+    authApp.use(authMiddleware);
+    authApp.use('/api', apiRoutes);
 
-      const authServer = await new Promise<Server>((resolve, reject) => {
-        const instance = authApp.listen(0, '127.0.0.1');
-        instance.once('error', reject);
-        instance.once('listening', () => resolve(instance));
+    const authServer = await new Promise<Server>((resolve, reject) => {
+      const instance = authApp.listen(0, '127.0.0.1');
+      instance.once('error', reject);
+      instance.once('listening', () => resolve(instance));
+    });
+
+    const address = authServer.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Unable to resolve auth-enabled test server port');
+    }
+    const authBaseUrl = `http://127.0.0.1:${address.port}`;
+
+    try {
+      const anonymousResponse = await fetch(`${authBaseUrl}/api/accounts/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Origin: authBaseUrl },
+        body: JSON.stringify({ refreshIntervalSeconds: 120 }),
       });
-
-      const address = authServer.address();
-      if (!address || typeof address === 'string') {
-        throw new Error('Unable to resolve auth-enabled test server port');
-      }
-      const authBaseUrl = `http://127.0.0.1:${address.port}`;
+      expect(anonymousResponse.status).toBe(401);
+      expect(await anonymousResponse.json()).toEqual({ error: 'Authentication required' });
 
       const loginResponse = await fetch(`${authBaseUrl}/api/auth/login`, {
         method: 'POST',
@@ -307,26 +299,35 @@ trust_level = "trusted"
       expect(loginResponse.status).toBe(200);
       expect(cookie).toBeTruthy();
 
-      const response = await fetch(`${authBaseUrl}/api/profiles`, {
-        method: 'POST',
+      const missingOriginResponse = await fetch(`${authBaseUrl}/api/accounts/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie as string },
+        body: JSON.stringify({ refreshIntervalSeconds: 120 }),
+      });
+      expect(missingOriginResponse.status).toBe(403);
+      expect(await missingOriginResponse.json()).toEqual({
+        error: 'Settings require the dashboard origin.',
+      });
+
+      const settingsResponse = await fetch(`${authBaseUrl}/api/accounts/settings`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Cookie: cookie as string,
+          Origin: authBaseUrl,
         },
-        body: JSON.stringify({
-          name: 'demo',
-          baseUrl: 'https://api.example.com',
-          apiKey: 'token',
-        }),
+        body: JSON.stringify({ refreshIntervalSeconds: 120 }),
       });
-
-      expect(response.status).toBe(201);
-
+      expect(settingsResponse.status).toBe(200);
+      expect(await settingsResponse.json()).toEqual({ refreshIntervalSeconds: 120 });
+      expect(settingsResponse.headers.get('cache-control')).toBe('no-store');
+      const savedSettings = await fetch(`${authBaseUrl}/api/accounts/settings`, {
+        headers: { Cookie: cookie as string },
+      });
+      expect(savedSettings.status).toBe(200);
+      expect(await savedSettings.json()).toEqual({ refreshIntervalSeconds: 120 });
+    } finally {
       await new Promise<void>((resolve) => authServer.close(() => resolve()));
-
-      delete process.env.CCS_DASHBOARD_USERNAME;
-      delete process.env.CCS_DASHBOARD_PASSWORD_HASH;
-    },
-    15000
-  );
+    }
+  }, 15000);
 });

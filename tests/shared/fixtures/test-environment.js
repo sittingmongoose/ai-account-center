@@ -65,6 +65,20 @@ function ensureGlobalTestEnvironment() {
   }
 
   const testHome = createIsolatedTestHome();
+  // Inherited overrides must never route tests back to private user state or
+  // pass live credentials to the provider collectors started by server tests.
+  for (const key of Object.keys(process.env)) {
+    if (/(?:TOKEN|API_KEY|SECRET|PASSWORD|ACCESS_KEY|COOKIE)/.test(key)) {
+      delete process.env[key];
+    }
+  }
+  for (const key of [
+    'CCS_DIR', 'CCS_CONFIG', 'CCS_UNIFIED_CONFIG', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
+    'CCS_CLAUDE_PATH', 'CCS_CODEX_PATH', 'CCS_DROID_PATH', 'CCS_PROXY_HOST',
+    'CCS_PROXY_PORT', 'CCS_PROXY_PROTOCOL', 'CCS_TEST_DISABLE_GLOBAL_BOOTSTRAP'
+  ]) {
+    delete process.env[key];
+  }
   process.env.HOME = testHome;
   process.env.USERPROFILE = testHome;
   process.env.CCS_HOME = testHome;
@@ -92,6 +106,7 @@ function createTestEnvironment() {
   // Store original environment
   const originalHome = process.env.HOME;
   const originalCcsHome = process.env.CCS_HOME;
+  const originalCcsDir = process.env.CCS_DIR;
   const originalUserProfile = process.env.USERPROFILE;
   const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
   const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -102,6 +117,7 @@ function createTestEnvironment() {
   process.env.HOME = testHome;
   process.env.USERPROFILE = testHome;
   process.env.CCS_HOME = testHome;
+  delete process.env.CCS_DIR;
   process.env.XDG_CONFIG_HOME = path.join(testHome, '.config');
   process.env.XDG_CACHE_HOME = path.join(testHome, '.cache');
   process.env.XDG_STATE_HOME = path.join(testHome, '.state');
@@ -185,6 +201,11 @@ function createTestEnvironment() {
       } else {
         delete process.env.CCS_HOME;
       }
+      if (originalCcsDir !== undefined) {
+        process.env.CCS_DIR = originalCcsDir;
+      } else {
+        delete process.env.CCS_DIR;
+      }
 
       if (originalXdgConfigHome !== undefined) {
         process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
@@ -241,6 +262,4 @@ module.exports = {
   getCcsDir
 };
 
-if (process.env.CCS_TEST_DISABLE_GLOBAL_BOOTSTRAP !== '1') {
-  ensureGlobalTestEnvironment();
-}
+ensureGlobalTestEnvironment();

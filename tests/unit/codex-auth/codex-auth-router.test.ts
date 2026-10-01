@@ -38,7 +38,7 @@ describe('runCodexAuth — help and no-arg', () => {
     try {
       const code = await runCodexAuth([]);
       expect(code).toBe(0);
-      expect(out.join('')).toContain('ccsx auth');
+      expect(out.join('')).toContain('ai-account-center codex-auth');
     } finally {
       process.stdout.write = origWrite;
     }

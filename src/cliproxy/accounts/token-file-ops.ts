@@ -4,7 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getCliproxyDir, getAuthDir } from '../config/config-generator';
+import { getCliproxyDir, getAuthDir } from '../config/path-resolver';
 import type { CLIProxyProvider } from '../types';
 import { AccountInfo } from './types';
 

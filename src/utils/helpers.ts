@@ -6,7 +6,9 @@ import * as os from 'os';
  */
 export function error(message: string): never {
   console.error(`ERROR: ${message}`);
-  console.error('Try: npm install -g @kaitranntt/ccs --force');
+  console.error(
+    'Setup and recovery: https://github.com/sittingmongoose/ai-account-center/tree/feat/activate-in-place#install-from-current-source'
+  );
   process.exit(1);
 }
 

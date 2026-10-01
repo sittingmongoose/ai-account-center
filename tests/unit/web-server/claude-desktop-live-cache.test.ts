@@ -70,6 +70,34 @@ describe('protected persisted Claude quota snapshots', () => {
     expect(fs.readdirSync(directory)).toEqual(['gmail.json']);
   });
 
+  it('persists only whitelisted optional-group availability and original cached window time', async () => {
+    const value = {
+      ...sample,
+      optionalExtras: {
+        resetCredits: 'unavailable' as const,
+        prepaidBalance: 'ok' as const,
+        token: 'PRIVATE_TOKEN_SENTINEL',
+      },
+      windows: [
+        {
+          ...sample.windows[0],
+          key: 'prepaid_balance',
+          status: 'cached' as const,
+          sampledAt: '2026-10-01T09:00:00Z',
+          cookie: 'PRIVATE_COOKIE_SENTINEL',
+        },
+      ],
+    };
+    await writeClaudeDesktopLiveSnapshot(root, 'gmail', manifest, value);
+    const contents = fs.readFileSync(file, 'utf8');
+    expect(contents).not.toContain('PRIVATE_');
+    expect(await readClaudeDesktopLiveSnapshot(root, 'gmail', manifest)).toMatchObject({
+      fetchedAt: sample.fetchedAt,
+      optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'ok' },
+      windows: [{ status: 'cached', sampledAt: '2026-10-01T09:00:00Z' }],
+    });
+  });
+
   it('rejects malformed or oversized files before unbounded decoding', async () => {
     await writeClaudeDesktopLiveSnapshot(root, 'gmail', manifest, sample);
     fs.writeFileSync(file, '{broken');

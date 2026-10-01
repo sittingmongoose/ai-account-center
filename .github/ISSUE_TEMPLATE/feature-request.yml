@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest a focused improvement for the CLI, dashboard, or contributor workflow.
+description: Suggest a focused improvement for AI Account Center or its contributor workflow.
 title: "feat: "
 labels:
   - enhancement
@@ -14,10 +14,11 @@ body:
     attributes:
       label: Affected area
       options:
-        - CLI runtime
-        - Dashboard UI
-        - Config or auth flow
-        - Provider integration
+        - Dashboard
+        - Account inventory or usage
+        - Account activation or settings
+        - Native macOS or Windows app
+        - Launcher or compatible CLI command
         - Install or packaging
         - Documentation
         - Contributor workflow
@@ -25,22 +26,22 @@ body:
     id: problem
     attributes:
       label: What problem are you trying to solve?
-      placeholder: I manage multiple profiles, but ...
+      placeholder: I manage multiple provider accounts, but ...
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution or direction
-      placeholder: Add a command or dashboard control that ...
+      placeholder: Add an account view or dashboard control that ...
   - type: textarea
     id: user-flow
     attributes:
       label: Suggested user flow
       description: Show the command, screen, or sequence you expect.
       placeholder: |
-        CLI:
-        1. `ccs ...`
+        Launcher:
+        1. `ai-account-center dashboard`
 
         Dashboard:
         1. Open ...

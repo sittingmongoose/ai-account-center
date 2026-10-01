@@ -1,41 +1,44 @@
 import { describe, expect, test } from 'bun:test';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-function resolvePath(relativePath: string) {
-  return path.resolve(import.meta.dir, relativePath);
-}
+const repoRoot = resolve(import.meta.dir, '../../../..');
+const workflowDir = resolve(repoRoot, '.github/workflows');
 
-describe('stable release workflow', () => {
-  test('uses the self-hosted runner and scoped release token path', () => {
-    const workflowPath = resolvePath('../../../../.github/workflows/release.yml');
+describe('product release boundary', () => {
+  test('does not retain inherited package, deployment, project or webhook workflows', () => {
+    const retiredWorkflows = [
+      'release.yml',
+      'dev-release.yml',
+      'docker-release.yml',
+      'promote-release.yml',
+      'publish-npm.yml.deprecated',
+      'deploy-ccs-worker.yml',
+      'smoke-test-compose-url.yml',
+      'sync-dev-after-release.yml',
+      'sync-ccs-backlog-project.yml',
+      'label-pending-release.yml',
+    ];
 
-    expect(fs.existsSync(workflowPath)).toBe(true);
+    for (const file of retiredWorkflows) {
+      expect(existsSync(resolve(workflowDir, file))).toBe(false);
+    }
 
-    const workflow = fs.readFileSync(workflowPath, 'utf8');
-    const checkoutSection = workflow.slice(
-      workflow.indexOf('- name: Checkout code'),
-      workflow.indexOf('- name: Setup Node.js')
-    );
-    const releaseSection = workflow.slice(
-      workflow.indexOf('- name: Release'),
-      workflow.indexOf('- name: Notify Discord')
-    );
+    for (const file of readdirSync(workflowDir).filter((file) => /\.ya?ml$/.test(file))) {
+      const workflow = readFileSync(resolve(workflowDir, file), 'utf8');
+      expect(workflow).not.toMatch(/npm publish|semantic-release|gh release|docker\/build-push-action/);
+      expect(workflow).not.toMatch(/PAT_TOKEN|NPM_TOKEN|DISCORD_WEBHOOK_URL|CLOUDFLARE_API_TOKEN/);
+      expect(workflow).not.toMatch(/kaitranntt|ccs\.kaitran\.ca|(?:contents|packages|id-token): write/);
+    }
+  });
 
-    expect(workflow).toContain('name: Release');
-    expect(workflow).toContain('branches: [main]');
-    expect(workflow).toContain('runs-on: [self-hosted, linux, x64]');
-    expect(workflow).not.toContain('runs-on: ubuntu-latest');
-    expect(checkoutSection).toContain('persist-credentials: false');
-    expect(checkoutSection).not.toContain('token: ${{ secrets.PAT_TOKEN }}');
-    expect(releaseSection).toContain('echo "::add-mask::${auth_header}"');
-    expect(releaseSection).toContain('GIT_CONFIG_COUNT=2');
-    expect(releaseSection).toContain('GIT_CONFIG_KEY_0=http.https://github.com/kaitranntt/ccs.extraheader');
-    expect(releaseSection).toContain('GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth_header}"');
-    expect(releaseSection).toContain('GIT_CONFIG_KEY_1=http.https://github.com/kaitranntt/ccs.git.extraheader');
-    expect(releaseSection).toContain('GIT_CONFIG_VALUE_1="AUTHORIZATION: basic ${auth_header}"');
-    expect(releaseSection).toContain('GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}');
-    expect(releaseSection).toContain('GH_TOKEN: ${{ secrets.PAT_TOKEN }}');
-    expect(releaseSection).toContain('NPM_TOKEN: ${{ secrets.NPM_TOKEN }}');
+  test('does not configure or invoke package publication from the product package', () => {
+    for (const file of ['.releaserc', '.releaserc.cjs', '.releaserc.js', 'release.config.js']) {
+      expect(existsSync(resolve(repoRoot, file))).toBe(false);
+    }
+    const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
+    const packageScripts = Object.values(packageJson.scripts).join('\n');
+    expect(packageScripts).not.toMatch(/npm publish|semantic-release|gh release|wrangler deploy/);
+    expect(packageJson.release).toBeUndefined();
   });
 });

@@ -73,7 +73,17 @@ test('individual pack grammar and bounded inventory reject malformed or excessiv
 test('malformed or empty native samples are rejected', () => {
   assert.throws(() => projectSample({...sample, provider: 'claude'}));
   assert.throws(() => projectSample({...sample, windows: []}));
-  assert.throws(() => projectSample({...sample, windows: [{key: 'weekly', usedPercent: 900}]}));
+  assert.throws(() => projectSample({...sample, windows: [{key: 'weekly', usedPercent: NaN}]}));
+});
+
+test('explicit normalized percentage points preserve fractions and overage without unit reinterpretation', () => {
+  for (const percentage of [0.0125, 1.25, 125]) {
+    const output = projectSample({...sample, windows: [{key: 'monthly', usedPercent: percentage,
+      used: percentage * 10, limit: 1000, remaining: percentage <= 100 ? 1000 - percentage * 10 : null}]});
+    assert.equal(output.windows[0].usedPercent, percentage);
+    assert.equal(output.windows[0].used, percentage * 10);
+    assert.equal(output.windows[0].remainingPercent, Math.max(0, 100 - percentage));
+  }
 });
 
 test('only fixed native error codes are shown', () => {

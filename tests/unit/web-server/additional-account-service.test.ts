@@ -11,6 +11,8 @@ import {
   AdditionalUsageTransportError,
   type AdditionalUsageSource,
 } from '../../../src/web-server/services/additional-usage-transport';
+import { additionalAccounts } from '../../../src/web-server/services/account-dashboard-projection';
+import { AccountDashboardService } from '../../../src/web-server/services/account-dashboard-service';
 
 const instant = '2026-10-01T02:00:00Z';
 const temporaryDirectories: string[] = [];
@@ -232,6 +234,226 @@ describe('additional account usage service', () => {
     expect(row.status).toBe('error');
     expect(row.windows).toEqual([]);
     expect(row.sampledAt).toBeNull();
+  });
+
+  it('preserves Muse helper cached timestamps through manual refresh and subsequent portal unavailability', async () => {
+    let museCalls = 0;
+    let museUnavailable = false;
+    const original = '2026-10-01T01:00:00Z';
+    const { service, setTime, setManifest } = fixture({
+      runSource: async (source) => {
+        if (source.provider !== 'muse') return payload();
+        museCalls++;
+        return museUnavailable
+          ? payload({
+              status: 'unavailable',
+              failureCode: 'rate_limited',
+              windows: [],
+              fetchedAt: instant,
+              sampledAt: null,
+            })
+          : payload({
+              status: 'cached',
+              fetchedAt: instant,
+              sampledAt: original,
+              message:
+                'Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically.',
+            });
+      },
+    });
+    setManifest(configuration([{ provider: 'muse', platform: 'mac', sshHost: 'muse-mac' }]));
+    const initial = (await service.get()).find((account) => account.provider === 'muse')!;
+    expect(initial.status).toBe('cached');
+    expect(initial.platform).toBe('mac');
+    expect(initial.sampledAt).toBe('2026-10-01T01:00:00.000Z');
+    expect(initial.fetchedAt).toBe('2026-10-01T02:00:00.000Z');
+    expect(initial.message).toContain('limiting requests');
+    setTime(5_000);
+    const manual = (await service.get({ refresh: true })).find(
+      (account) => account.provider === 'muse'
+    )!;
+    expect(manual.windows).toEqual(initial.windows);
+    expect(manual.fetchedAt).toBe(initial.fetchedAt);
+    expect(manual.sampledAt).toBe(initial.sampledAt);
+    const projected = additionalAccounts([manual]).find((account) => account.provider === 'muse')!;
+    expect(projected.status).toBe('cached');
+    expect(projected.sampledAt).toBe(initial.sampledAt);
+    expect(projected.fetchedAt).toBe(manual.fetchedAt);
+    expect(projected.windows).toEqual(manual.windows);
+    expect(projected.message).toBe(manual.message);
+    const dashboard = new AccountDashboardService({
+      scope: () => 'muse-cached-fixture',
+      refreshIntervalSeconds: () => 60,
+      getCodexSummary: async () => ({ active: null, activated: null, default: null, profiles: [] }),
+      getCodexRows: async () => [],
+      getCachedCodexRows: () => [],
+      listClaudeProfiles: async () => [],
+      getClaudeUsage: async (platform) => ({ platform, fetchedAt: instant, profiles: [] }),
+      getAdditionalAccounts: async () => [manual],
+      getOptionalWalletAccounts: async () => [],
+      invalidateClaudeCache: () => {},
+      getAutoSwitchStatus: () => ({
+        enabled: false,
+        thresholdPercent: 15,
+        pollIntervalSeconds: 60,
+        outcome: 'disabled',
+        message: 'Disabled',
+        activationInProgress: false,
+      }),
+    });
+    const consolidated = (await dashboard.get('mac', true)).accounts.find(
+      (account) => account.provider === 'muse'
+    )!;
+    expect(consolidated.status).toBe('cached');
+    expect(consolidated.sampledAt).toBe(initial.sampledAt);
+    expect(consolidated.fetchedAt).toBe(manual.fetchedAt);
+    expect(consolidated.windows).toEqual(manual.windows);
+    expect(consolidated.message).toBe(manual.message);
+    museUnavailable = true;
+    setTime(10_000);
+    const unavailable = (await service.get({ refresh: true })).find(
+      (account) => account.provider === 'muse'
+    )!;
+    expect(unavailable.status).toBe('cached');
+    expect(unavailable.windows).toEqual(initial.windows);
+    expect(unavailable.fetchedAt).toBe(initial.fetchedAt);
+    expect(unavailable.sampledAt).toBe(initial.sampledAt);
+    expect(unavailable.message).toContain('last successful Muse usage reading');
+    expect(museCalls).toBe(3);
+    setTime(39_999);
+    await service.get({ refresh: true });
+    expect(museCalls).toBe(3);
+    setTime(40_000);
+    await service.get({ refresh: true });
+    expect(museCalls).toBe(4);
+  });
+
+  it('does not replace newer Muse quota with an older cached helper sample, while fresh zero values replace normally', async () => {
+    let phase = 0;
+    const { service, setTime } = fixture({
+      runSource: async (source) => {
+        if (source.provider !== 'muse') return payload();
+        if (phase === 1)
+          return payload({
+            status: 'cached',
+            fetchedAt: '2026-10-01T01:00:00Z',
+            sampledAt: '2026-10-01T01:00:00Z',
+          });
+        if (phase === 2)
+          return payload({
+            fetchedAt: '2026-10-01T03:00:00Z',
+            sampledAt: '2026-10-01T03:00:00Z',
+            windows: [{ key: 'rolling', label: 'Rolling', usedPercent: 0, resetAt: null }],
+          });
+        return payload();
+      },
+    });
+    const original = (await service.get()).find((account) => account.provider === 'muse')!;
+    phase = 1;
+    setTime(5_000);
+    const older = (await service.get({ refresh: true })).find(
+      (account) => account.provider === 'muse'
+    )!;
+    expect(older.status).toBe('cached');
+    expect(older.windows).toEqual(original.windows);
+    expect(older.sampledAt).toBe(original.sampledAt);
+    phase = 2;
+    setTime(10_000);
+    const zero = (await service.get({ refresh: true })).find(
+      (account) => account.provider === 'muse'
+    )!;
+    expect(zero.status).toBe('ok');
+    expect(zero.windows).toHaveLength(1);
+    expect(zero.windows[0].usedPercent).toBe(0);
+    expect(zero.windows[0].resetAt).toBeNull();
+    expect(zero.sampledAt).toBe('2026-10-01T03:00:00.000Z');
+  });
+
+  it.each(['unavailable', 'error', 'needs_sign_in'])(
+    'does not attach previous Muse quota to a different account when its new status is %s',
+    async (status) => {
+      let changed = false;
+      const { service, setTime } = fixture({
+        runSource: async (source) =>
+          source.provider === 'muse' && changed
+            ? payload({ status, email: 'different@example.com', windows: [] })
+            : payload(),
+      });
+      await service.get();
+      changed = true;
+      setTime(5_000);
+      const account = (await service.get({ refresh: true })).find(
+        (row) => row.provider === 'muse'
+      )!;
+      expect(account.status).toBe(status);
+      expect(account.email).toBe('different@example.com');
+      expect(account.windows).toEqual([]);
+    }
+  );
+
+  it.each(['not-an-email', 'Bearer PRIVATE_TOKEN', ''])(
+    'rejects invalid Muse identity %s and clears previous quota before a later offline retry',
+    async (invalidEmail) => {
+      let phase = 0;
+      const { service, setTime } = fixture({
+        runSource: async (source) => {
+          if (source.provider !== 'muse' || phase === 0) return payload();
+          if (phase === 1) return payload({ status: 'cached', email: invalidEmail });
+          return payload({ status: 'unavailable', email: null, windows: [] });
+        },
+      });
+      await service.get();
+      phase = 1;
+      setTime(5_000);
+      const rejected = (await service.get({ refresh: true })).find(
+        (row) => row.provider === 'muse'
+      )!;
+      expect(rejected.status).toBe('error');
+      expect(rejected.windows).toEqual([]);
+      expect(rejected.email).toBeNull();
+      expect(JSON.stringify(rejected)).not.toContain('PRIVATE_TOKEN');
+      phase = 2;
+      setTime(35_000);
+      const offline = (await service.get({ refresh: true })).find(
+        (row) => row.provider === 'muse'
+      )!;
+      expect(offline.status).toBe('unavailable');
+      expect(offline.windows).toEqual([]);
+    }
+  );
+
+  it('does not restore Muse quota after sign-in is required, even when a later transport failure hides identity', async () => {
+    let phase = 0;
+    const { service, setTime } = fixture({
+      runSource: async (source) => {
+        if (source.provider !== 'muse' || phase === 0) return payload();
+        if (phase === 1) return payload({ status: 'needs_sign_in', windows: [] });
+        throw new AdditionalUsageTransportError();
+      },
+    });
+    await service.get();
+    phase = 1;
+    setTime(5_000);
+    const signedOut = (await service.get({ refresh: true })).find(
+      (row) => row.provider === 'muse'
+    )!;
+    expect(signedOut.status).toBe('needs_sign_in');
+    expect(signedOut.windows).toEqual([]);
+    phase = 2;
+    setTime(35_000);
+    const offline = (await service.get({ refresh: true })).find((row) => row.provider === 'muse')!;
+    expect(offline.status).toBe('error');
+    expect(offline.windows).toEqual([]);
+  });
+
+  it('does not forward arbitrary Muse cached error bodies or credential text as its explanation', async () => {
+    const { service } = fixture({
+      runSource: async () => payload({ status: 'cached', message: 'PRIVATE_PASSWORD=hidden' }),
+    });
+    const account = (await service.get()).find((row) => row.provider === 'muse')!;
+    expect(account.status).toBe('cached');
+    expect(account.message).toBe('Showing the last saved Muse usage sample.');
+    expect(JSON.stringify(account)).not.toContain('PRIVATE_PASSWORD');
   });
 
   it('projects only safe fields and refuses all helper-selected capabilities and identifiers', async () => {

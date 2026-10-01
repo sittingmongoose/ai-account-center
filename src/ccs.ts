@@ -1,188 +1,78 @@
-import { ErrorManager } from './utils/error-manager';
-import { fail } from './utils/ui';
-// Import centralized error handling
-import { handleError, runCleanup } from './errors';
+import { prepareCliArguments } from './commands/cli-bootstrap';
 
-import { createLogger, runWithRequestId } from './services/logging';
-import { redactArgv } from './services/logging/log-redaction';
-import { applyGlobalFetchProxy } from './utils/fetch-proxy-setup';
-// Import target adapter system
-import { registerTarget, ClaudeAdapter, DroidAdapter, CodexAdapter } from './targets';
-
-// Import extracted dispatcher modules
-import { bootstrapAndParseEarlyCli } from './dispatcher/cli-argument-parser';
-import { type ProfileError, dispatchProfile } from './dispatcher/target-executor';
-import { runPreDispatchHandlers } from './dispatcher/pre-dispatch';
-import { resolveProfileAndTarget } from './dispatcher/profile-resolver';
-
-// ========== Main Execution ==========
-
-async function main(): Promise<void> {
-  const fetchProxySetup = applyGlobalFetchProxy();
-  if (fetchProxySetup.error) {
-    console.error(`[!] Skipping global fetch proxy setup: ${fetchProxySetup.error}`);
-  }
-
-  // Register target adapters (singleton wiring — stays in main)
-  registerTarget(new ClaudeAdapter());
-  registerTarget(new DroidAdapter());
-  registerTarget(new CodexAdapter());
-  const cliLogger = createLogger('cli');
-
-  // Phase A: bootstrap + early arg pre-parse
-  const bootstrap = await bootstrapAndParseEarlyCli(process.argv.slice(2));
-  if (bootstrap.exitNow) {
+/** Select the configuration path before invocation logging or command loads. */
+async function runCli(): Promise<void> {
+  const bootstrap = await prepareCliArguments(process.argv.slice(2));
+  if (bootstrap.exitNow) return;
+  const { requiresRuntimeServices, tryHandleRootCommand } = await import(
+    './commands/root-command-router'
+  );
+  // Help, version and migration messages must not load or upgrade private configuration.
+  if (!(await requiresRuntimeServices(bootstrap.args))) {
+    await tryHandleRootCommand(bootstrap.args);
     return;
   }
+  const [{ handleError, runCleanup }, { createLogger, runWithRequestId }, { redactArgv }] =
+    await Promise.all([
+      import('./errors'),
+      import('./services/logging'),
+      import('./services/logging/log-redaction'),
+    ]);
 
-  const args = bootstrap.args;
-  const browserLaunchOverride = bootstrap.browserLaunchOverride;
-
-  // Shared VM account management must bypass per-process profile dispatch.
-  if (args[0] === 'codex-auth') {
-    const { runCodexAuth } = await import('./codex-auth/codex-auth-router');
-    process.exitCode = await runCodexAuth(args.slice(1));
-    return;
-  }
-
-  cliLogger.info('command.start', 'CLI invocation started', {
-    command: args[0] || 'default',
-    argCount: args.length,
-    flags: args.filter((arg) => arg.startsWith('-')).slice(0, 20),
-  });
-
-  // Phase B: pre-dispatch side-effects (update check, migrate, recovery, root commands, routing)
-  const preDispatchConsumed = await runPreDispatchHandlers({ args, cliLogger });
-  if (preDispatchConsumed) {
-    return;
-  }
-
-  try {
-    // Phase C: profile + target detection — inside try so ProfileNotFoundError
-    // reaches the rich showProfileNotFound() handler below instead of falling
-    // through to the bare unhandledRejection handler.
-    const resolvedProfile = await resolveProfileAndTarget({
-      args,
-      browserLaunchOverride,
-      cliLogger,
-    });
-    const { profile, profileInfo, resolvedTarget, nativeClaudeRemainingArgs } = resolvedProfile;
-
-    // Dynamic imports needed by Phase E flows — preserve original load ordering.
-    const InstanceManagerModule = await import('./management/instance-manager');
-    const InstanceManager = InstanceManagerModule.default;
-    const ProfileRegistryModule = await import('./auth/profile-registry');
-    const ProfileRegistry = ProfileRegistryModule.default;
-    const AccountContextModule = await import('./auth/account-context');
-    const { resolveAccountContextPolicy, isAccountContextMetadata } = AccountContextModule;
-    const ProfileContinuityModule = await import('./auth/profile-continuity-inheritance');
-    const { resolveProfileContinuityInheritance } = ProfileContinuityModule;
-
-    // Build full dispatch context (Phase E)
-    const dispatchCtx = {
-      ...resolvedProfile,
-      InstanceManager,
-      ProfileRegistry,
-      resolveAccountContextPolicy,
-      isAccountContextMetadata,
-      resolveProfileContinuityInheritance,
-    };
-
-    // Special case: headless delegation (-p/--prompt)
-    // Keep existing behavior for Claude targets only; non-claude targets must continue
-    // through normal adapter dispatch logic.
-    if (args.some((arg) => arg === '-p' || arg === '--prompt' || arg.startsWith('--prompt='))) {
-      const shouldUseDelegation = resolvedTarget === 'claude' && profileInfo.type === 'settings';
-      if (shouldUseDelegation) {
-        const { DelegationHandler } = await import('./delegation/delegation-handler');
-        const handler = new DelegationHandler();
-        await handler.route([profile, ...nativeClaudeRemainingArgs]);
-        return;
+  process.on('uncaughtException', (error: Error) => handleError(error));
+  process.on('unhandledRejection', (reason: unknown) => handleError(reason));
+  for (const [signal, exitCode] of [
+    ['SIGTERM', 143],
+    ['SIGINT', 130],
+  ] as const) {
+    process.on(signal, () => {
+      try {
+        runCleanup();
+      } catch {
+        // Cleanup failure should not block termination.
       }
-    }
-
-    // Phase E: dispatch to per-profile-type flow (all 6 branches now live in flows/)
-    await dispatchProfile(dispatchCtx);
-  } catch (error) {
-    const err = error as ProfileError;
-    // Check if this is a profile not found error with suggestions
-    if (err.profileName && err.availableProfiles !== undefined) {
-      const allProfiles = err.availableProfiles.split('\n');
-      await ErrorManager.showProfileNotFound(err.profileName, allProfiles, err.suggestions);
-    } else {
-      console.error(fail(err.message));
-    }
-    process.exit(1);
+      if (process.listenerCount(signal) <= 1) process.exit(exitCode);
+    });
   }
-}
 
-// ========== Global Error Handlers ==========
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error: Error) => {
-  handleError(error);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason: unknown) => {
-  handleError(reason);
-});
-
-// Handle process termination signals for cleanup
-process.on('SIGTERM', () => {
-  try {
-    runCleanup();
-  } catch {
-    // Cleanup failure should not block termination.
-  }
-  // If a target exec path registered additional signal listeners, let those
-  // listeners forward/coordinate child shutdown and final exit codes.
-  if (process.listenerCount('SIGTERM') <= 1) {
-    process.exit(143); // 128 + SIGTERM(15)
-  }
-});
-
-process.on('SIGINT', () => {
-  try {
-    runCleanup();
-  } catch {
-    // Cleanup failure should not block termination.
-  }
-  // Same coordination rule as SIGTERM.
-  if (process.listenerCount('SIGINT') <= 1) {
-    process.exit(130); // 128 + SIGINT(2)
-  }
-});
-
-// Run main inside a per-invocation request context so all backend logging
-// emitted during this CLI run shares a single requestId. CLI text output
-// (stdout/stderr) is unaffected — the requestId lives in logs only.
-const cliEntryStartedAt = Date.now();
-const cliEntryLogger = createLogger('cli:entry');
-runWithRequestId(() => {
-  cliEntryLogger.stage('intake', 'cli.command.start', 'CLI invocation started', {
-    argv: redactArgv(process.argv.slice(2)),
-  });
-  return main()
-    .then(() => {
-      cliEntryLogger.stage(
+  const startedAt = Date.now();
+  const logger = createLogger('cli:entry');
+  await runWithRequestId(async () => {
+    logger.stage('intake', 'cli.command.start', 'CLI invocation started', {
+      argv: redactArgv(process.argv.slice(2)),
+    });
+    try {
+      if (!bootstrap.exitNow) {
+        const { applyGlobalFetchProxy } = await import('./utils/fetch-proxy-setup');
+        const fetchProxySetup = applyGlobalFetchProxy();
+        if (fetchProxySetup.error) {
+          console.error(`[!] Skipping global fetch proxy setup: ${fetchProxySetup.error}`);
+        }
+        await tryHandleRootCommand(bootstrap.args);
+      }
+      logger.stage(
         'respond',
         'cli.command.complete',
         'CLI invocation completed',
         { exitCode: process.exitCode ?? 0 },
-        { latencyMs: Date.now() - cliEntryStartedAt }
+        { latencyMs: Date.now() - startedAt }
       );
-    })
-    .catch((err) => {
+    } catch (err) {
       const error =
         err instanceof Error
           ? { name: err.name, message: err.message, stack: err.stack }
           : { name: 'Error', message: String(err) };
-      cliEntryLogger.stage('cleanup', 'cli.command.failed', 'CLI invocation failed', undefined, {
+      logger.stage('cleanup', 'cli.command.failed', 'CLI invocation failed', undefined, {
         level: 'error',
-        latencyMs: Date.now() - cliEntryStartedAt,
+        latencyMs: Date.now() - startedAt,
         error,
       });
       handleError(err);
-    });
+    }
+  });
+}
+
+void runCli().catch((error: unknown) => {
+  console.error(`[X] ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
 });

@@ -1,88 +1,49 @@
-/**
- * Help text for `ccsx auth` command tree.
- * ASCII-only. Includes ccsxp scope clarifier (H5).
- */
-
+/** Help for the saved Codex logins and shared in-place activation workflow. */
 export function printCodexAuthHelp(): void {
-  process.stdout.write(`CCS Concurrent Codex Account Management
+  process.stdout.write(`AI Account Center Codex Login Management
 
 Usage
-  ccsx auth <command> [options]
+  ai-account-center codex-auth <command> [options]
   ccs codex-auth <command> [options]
 
 Commands
-  create <name>          Create a new Codex profile (idempotent)
-  login <name>           Run \`codex login\` against the profile (auto-creates if missing)
-  activate <name>        Activate the shared VM login and restart Codex once
-  switch <name>          Set the persistent default Codex profile
-  use <name>             Emit shell-eval exports to activate a profile in this shell only
-  show [name]            List profiles or show details for one
-  remove <name>          Delete a profile (auth.json + profile dir + registry entry)
-  import-default <name>  Migrate legacy ~/.codex/auth.json into a new profile
-
-Shell activation (per terminal)
-  bash/zsh: eval "$(ccsx auth use work)"
-  fish:     ccsx auth use work | source
-  pwsh:     ccsx auth use work | Invoke-Expression
+  create <name>          Create a saved Codex login (idempotent)
+  login <name>           Run codex login for the saved login (auto-creates if missing)
+  activate <name>        Activate the shared login with busy confirmation and rollback
+  show [name]            List saved logins or show details for one (aliases: list, status)
+  remove <name>          Delete a saved login after confirmation
+  import-default <name>  Save the existing ~/.codex/auth.json as a named login
 
 Examples
-  ccsx auth create work
-  ccsx auth login work          # OAuth in browser
-  ccsx auth create personal
-  ccsx auth login personal
-  eval "$(ccsx auth use work)"  # terminal A
-  eval "$(ccsx auth use personal)"  # terminal B
-  codex                              # each terminal uses its own account
-  ccsx auth show
-  ccsx auth switch personal     # change persistent default
-  ccs codex-auth activate work  # switch CLI, shared app-server and VM desktop login
-  ccsx auth remove old --yes
+  ai-account-center codex-auth show
+  ai-account-center codex-auth login work
+  ai-account-center codex-auth activate work
+  ai-account-center codex-auth remove old --yes
 
 Options
-  --yes, -y              Skip confirmation (remove)
-  --force                Re-link config.toml (create) | override default check (remove) |
-                         overwrite existing profile (import-default)
+  --yes, -y              Skip confirmation for removal
+  --force                Repair config link (create), override saved default protection
+                         (remove), or overwrite a saved login (import-default)
   --json                 JSON output (show)
-  --shell <s>            Override shell detection (use): bash|zsh|fish|pwsh|cmd
-  --with-history         Copy history.jsonl + sessions/ too (import-default, default: off)
-  --force-while-running  Allow import-default even if Codex is running (risky)
+  --with-history         Include history.jsonl and sessions when importing (default: off)
+  --force-while-running  Allow import while Codex is running
 
 Notes
-  Auth state (auth.json) and history.jsonl are isolated per profile.
-  config.toml is shared via symlink to ~/.codex/config.toml.
-  Default profile (switch) is persistent across shells.
-  Active profile (use) is per-terminal via CODEX_HOME / CCS_CODEX_PROFILE.
-  activate replaces only ~/.codex/auth.json and preserves shared state.
+  Saved auth files remain in the existing account configuration directory.
+  remove always protects the current shared login, including with --yes or --force.
+  Unverifiable saved identities are retained while a native login exists.
+  activate replaces the shared ~/.codex/auth.json while preserving shared state.
+  Activation retains busy confirmation, backup, verification, and rollback safeguards.
   Wait for running Codex work to finish before activating an account.
-
-  Note: This feature applies only to native \`codex\`. \`ccsxp\` ignores
-  CCS_CODEX_PROFILE and uses its own cliproxy pool.
+  The old isolated CODEX_HOME use/switch workflows are retired; use activate.
 `);
 }
 
-export function printCodexAuthUseHelp(): void {
-  process.stdout.write(`ccsx auth use — Activate a Codex profile in the current shell
-
-Usage
-  ccsx auth use <name> [--shell <bash|zsh|fish|pwsh|cmd>]
-
-Description
-  Emits shell-evalable export statements to stdout. Use within eval "$(...)"
-  only. Output to stdout is shell-evaluatable; do not pipe to other commands.
-
-  All errors and informational messages go to stderr so the eval is never
-  contaminated.
-
-Shell evaluation
-  bash/zsh: eval "$(ccsx auth use work)"
-  fish:     ccsx auth use work | source
-  pwsh:     ccsx auth use work | Invoke-Expression
-  cmd:      (not supported natively; use PowerShell)
-
-Options
-  --shell <s>   Override auto-detected shell: bash|zsh|fish|pwsh|cmd
-
-Note: This profile applies only to native \`codex\`. \`ccsxp\` ignores
-CCS_CODEX_PROFILE and uses its own cliproxy pool.
-`);
+/** stderr only keeps a retired `use` harmless inside an old shell eval. */
+export function printRetiredCodexAuthCommand(command: string): void {
+  process.stderr.write(`[X] codex-auth ${command} is retired in AI Account Center.\n`);
+  process.stderr.write(
+    '    Use ai-account-center codex-auth activate <saved-login> for the shared login.\n'
+  );
+  process.stderr.write('    No CODEX_HOME exports or persistent profile changes were made.\n');
 }

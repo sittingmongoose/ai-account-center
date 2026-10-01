@@ -108,7 +108,6 @@ function buildUi(options = {}) {
   const crate = path.join(repoRoot, 'web-dashboard');
   const publicDir = path.join(crate, 'public');
   const pkg = path.join(crate, 'pkg');
-  const uiDist = path.join(repoRoot, 'ui', 'dist');
   const packagedUi = path.join(repoRoot, 'dist', 'ui');
 
   assertSlintPin(parse(fs.readFileSync(path.join(crate, 'Cargo.toml'), 'utf8')));
@@ -146,11 +145,11 @@ function buildUi(options = {}) {
   if (!wasm.subarray(0, 8).equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]))) {
     throw new Error('Slint browser output is not a valid WebAssembly module.');
   }
-  fs.rmSync(uiDist, { recursive: true, force: true });
-  fs.mkdirSync(uiDist, { recursive: true });
-  fs.cpSync(publicDir, uiDist, { recursive: true });
+  fs.rmSync(packagedUi, { recursive: true, force: true });
+  fs.mkdirSync(packagedUi, { recursive: true });
+  fs.cpSync(publicDir, packagedUi, { recursive: true });
   // wasm-pack's generated '*' ignore rule would hide the runtime from npm pack.
-  fs.cpSync(pkg, path.join(uiDist, 'pkg'), {
+  fs.cpSync(pkg, path.join(packagedUi, 'pkg'), {
     recursive: true,
     filter: (source) => !['.gitignore', '.npmignore'].includes(path.basename(source)),
   });
@@ -168,11 +167,9 @@ function buildUi(options = {}) {
     },
   };
   fs.writeFileSync(
-    path.join(uiDist, 'ui-build-manifest.json'),
+    path.join(packagedUi, 'ui-build-manifest.json'),
     `${JSON.stringify(manifest, null, 2)}\n`
   );
-  fs.rmSync(packagedUi, { recursive: true, force: true });
-  fs.cpSync(uiDist, packagedUi, { recursive: true });
   return manifest;
 }
 

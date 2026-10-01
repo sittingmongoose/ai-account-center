@@ -16,17 +16,18 @@ body:
       label: Topic
       options:
         - Installation or setup
-        - CLI usage
-        - Dashboard or config
-        - Provider or auth flow
-        - API profiles or proxy
+        - Dashboard
+        - Account inventory or usage
+        - Account activation or settings
+        - Native macOS or Windows app
+        - Launcher or compatible CLI command
         - Contributor workflow
         - Other
   - type: textarea
     id: question
     attributes:
       label: What do you need help with?
-      placeholder: I expected `ccs ...` to do ..., but I am not sure whether I configured it correctly.
+      placeholder: I opened `ai-account-center dashboard`, but I am not sure how to interpret a provider's usage.
     validations:
       required: true
   - type: textarea
@@ -37,9 +38,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: CCS version
-      description: Output of `ccs --version`, if you have it
-      placeholder: 7.56.0
+      label: AI Account Center version
+      description: Output of `ai-account-center --version` (or compatible `ccs --version`), if you have it
+      placeholder: 8.10.0
   - type: dropdown
     id: os
     attributes:

@@ -29,6 +29,9 @@ export interface DashboardAccountWindow {
   expiresAt?: string | null;
   unlimited?: boolean;
   enabled?: boolean;
+  /** Retained optional quota rows keep their original observation time. */
+  status?: 'cached';
+  sampledAt?: string;
 }
 
 export interface DashboardAccount {

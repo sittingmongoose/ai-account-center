@@ -1,15 +1,14 @@
 <!-- quickstart-snippet-start -->
 ## Quick Start (Docker)
 
-With Docker installed:
+From a checkout of [AI Account Center](https://github.com/sittingmongoose/ai-account-center):
 
 ```bash
-curl -fsSL https://ccs.kaitran.ca/docker-compose.yaml -o docker-compose.yaml
-docker compose up -d
+docker compose -f docker/compose.yaml up -d --build
 ```
 
-Dashboard at http://localhost:3000 · CLIProxy at http://localhost:8317.
-
-Need a corporate-proxy alternative? Download directly:
-`https://raw.githubusercontent.com/kaitranntt/ccs/main/docker/compose.yaml`
+Open [the dashboard](http://localhost:3000). This builds the local source image;
+it does not download the upstream CCS package or start a CLIProxy service.
+Existing host credentials and usage-collector connections require explicit
+configuration; see the Docker deployment guide in this checkout.
 <!-- quickstart-snippet-end -->

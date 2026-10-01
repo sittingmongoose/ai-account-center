@@ -64,7 +64,7 @@ export async function handleBarCommand(args: string[]): Promise<void> {
     const argError = validatePortArgs(launchArgs);
     if (argError !== null) {
       console.error(`[X] ${argError}`);
-      console.error('[i] Usage: ccs bar [--port N]');
+      console.error('[i] Usage: ai-account-center bar [--port N]');
       process.exitCode = 1;
       return;
     }
@@ -75,7 +75,9 @@ export async function handleBarCommand(args: string[]): Promise<void> {
   const handler = commandHandlers[subcommand];
   if (!handler) {
     console.error(`[X] Unknown bar subcommand: ${subcommand}`);
-    console.error('[i] Usage: ccs bar [launch|serve|stop|status|install|uninstall|version|--help]');
+    console.error(
+      '[i] Usage: ai-account-center bar [launch|serve|stop|status|install|uninstall|version|--help]'
+    );
     process.exitCode = 1;
     return;
   }

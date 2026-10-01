@@ -18,10 +18,6 @@ import {
   QUOTA_PROVIDER_HELP_TEXT,
 } from '../provider-capabilities';
 import {
-  OAUTH_CALLBACK_PORTS as DIAGNOSTIC_CALLBACK_PORTS,
-  OAUTH_FLOW_TYPES,
-} from '../../management/oauth-port-diagnostics';
-import {
   DEFAULT_KIRO_AUTH_METHOD,
   getKiroCallbackPort,
   getKiroCLIAuthArgs,
@@ -190,13 +186,6 @@ describe('provider-capabilities', () => {
     expect(() =>
       buildProviderAliasMap(capabilitiesWithCollision as typeof PROVIDER_CAPABILITIES)
     ).toThrow(/shared-alias/i);
-  });
-
-  it('keeps diagnostics flow metadata in sync with provider capabilities', () => {
-    for (const provider of CLIPROXY_PROVIDER_IDS) {
-      expect(OAUTH_FLOW_TYPES[provider]).toBe(getOAuthFlowType(provider));
-      expect(DIAGNOSTIC_CALLBACK_PORTS[provider]).toBe(getOAuthCallbackPort(provider));
-    }
   });
 
   it('does not define callback ports for device code providers in auth constants', () => {

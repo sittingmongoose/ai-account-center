@@ -1,5 +1,5 @@
 /**
- * `ccs bar stop` — stop the detached CCS Bar server.
+ * `ai-account-center bar stop` — stop the detached AI Account Center server.
  *
  * Reads ~/.ccs/bar/server.pid, sends SIGTERM, then removes pid + bar.json.
  * ASCII output only. Non-fatal if the server is already gone.
@@ -97,7 +97,7 @@ export async function handleBarStop(_args: string[], deps: Partial<StopDeps> = {
         }));
     outcome = await stopProcessFile(pidPath);
     if (outcome.result === 'no-record') {
-      console.log('[i] CCS Bar server is not running (no server.pid found).');
+      console.log('[i] AI Account Center server is not running (no server.pid found).');
       return;
     }
   } else {
@@ -105,7 +105,7 @@ export async function handleBarStop(_args: string[], deps: Partial<StopDeps> = {
     // always uses the atomic file claim above.
     const pidRaw = readPidFile(pidPath);
     if (pidRaw === null) {
-      console.log('[i] CCS Bar server is not running (no server.pid found).');
+      console.log('[i] AI Account Center server is not running (no server.pid found).');
       return;
     }
     const recordedOutcome = await stopRecordedBarServer(pidRaw, {
@@ -125,7 +125,7 @@ export async function handleBarStop(_args: string[], deps: Partial<StopDeps> = {
 
   if (outcome.result === 'stopped' || outcome.result === 'stale') {
     if (outcome.result === 'stopped') {
-      console.log(`[OK] CCS Bar server stopped (PID ${pid}).`);
+      console.log(`[OK] AI Account Center server stopped (PID ${pid}).`);
     } else {
       console.log(`[i] Server PID ${pid} is no longer running. Cleaning up stale files.`);
     }
@@ -149,7 +149,7 @@ export async function handleBarStop(_args: string[], deps: Partial<StopDeps> = {
     );
     console.error(`[i] Verify manually with: ps -p ${legacyPid} -o command=`);
     console.error(
-      `[i] If it is CCS Bar, stop it manually, then remove ${outcome.recoveryPath ?? pidPath} and ${barJsonPath}.`
+      `[i] If it is AI Account Center, stop it manually, then remove ${outcome.recoveryPath ?? pidPath} and ${barJsonPath}.`
     );
     process.exitCode = 1;
     return;
@@ -165,6 +165,6 @@ export async function handleBarStop(_args: string[], deps: Partial<StopDeps> = {
           : outcome.result === 'timeout'
             ? `PID ${pid} did not exit within 3 seconds`
             : `failed to signal PID ${pid}: ${outcome.error?.message ?? 'unknown error'}`;
-  console.error(`[X] Refusing to remove CCS Bar recovery state: ${reason}.`);
+  console.error(`[X] Refusing to remove AI Account Center recovery state: ${reason}.`);
   process.exitCode = 1;
 }

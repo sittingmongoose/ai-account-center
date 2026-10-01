@@ -41,8 +41,13 @@ export interface AccountActivityScanOptions {
   /** Testable inner budget, always less than the HTTP service worker deadline. */
   budgetMs?: number;
   maxBytesPerFile?: number;
+  /** Smaller fixture/embedding budgets cannot raise the production ceilings. */
+  traversalLimits?: { maxDepth?: number; maxDirectories?: number; maxEntries?: number };
 }
 const MAX_FILES = 20_000;
+const MAX_DEPTH = 64;
+const MAX_DIRECTORIES = 10_000;
+const MAX_ENTRIES = 100_000;
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_ROWS = 10_000;
@@ -55,25 +60,53 @@ async function filesUnder(
   root: string,
   kind: string,
   issues: { failed: number },
-  result: string[] = []
+  deadline: number,
+  limits: AccountActivityScanOptions['traversalLimits']
 ): Promise<string[]> {
-  let items: fs.Dirent[];
-  try {
-    items = await fs.promises.readdir(root, { withFileTypes: true });
-  } catch {
-    issues.failed++;
-    return result;
-  }
-  for (const item of items) {
-    if (result.length >= MAX_FILES) break;
-    const file = path.join(root, item.name);
-    if (item.isDirectory()) await filesUnder(file, kind, issues, result);
-    else if (
-      item.isFile() &&
-      item.name.endsWith('.jsonl') &&
-      (kind === 'claude' || item.name.startsWith('rollout-'))
-    )
-      result.push(file);
+  const ceiling = (value: number | undefined, maximum: number): number =>
+    Number.isSafeInteger(value) && (value as number) >= 1
+      ? Math.min(value as number, maximum)
+      : maximum;
+  const maxDepth = ceiling(limits?.maxDepth, MAX_DEPTH);
+  const maxDirectories = ceiling(limits?.maxDirectories, MAX_DIRECTORIES);
+  const maxEntries = ceiling(limits?.maxEntries, MAX_ENTRIES);
+  const result: string[] = [];
+  const pending = [{ directory: root, depth: 0 }];
+  let visitedDirectories = 0;
+  let visitedEntries = 0;
+  while (pending.length) {
+    if (Date.now() >= deadline || visitedDirectories >= maxDirectories) {
+      issues.failed++;
+      break;
+    }
+    const current = pending.pop();
+    if (!current) break;
+    visitedDirectories++;
+    try {
+      // Streaming iteration also bounds directories containing many irrelevant
+      // entries; neither empty directories nor non-JSONL files evade the cap.
+      const directory = await fs.promises.opendir(current.directory);
+      for await (const item of directory) {
+        if (Date.now() >= deadline || visitedEntries >= maxEntries || result.length >= MAX_FILES) {
+          issues.failed++;
+          return result;
+        }
+        visitedEntries++;
+        const file = path.join(current.directory, item.name);
+        if (item.isDirectory()) {
+          if (current.depth >= maxDepth || pending.length + visitedDirectories >= maxDirectories) {
+            issues.failed++;
+          } else pending.push({ directory: file, depth: current.depth + 1 });
+        } else if (
+          item.isFile() &&
+          item.name.endsWith('.jsonl') &&
+          (kind === 'claude' || item.name.startsWith('rollout-'))
+        )
+          result.push(file);
+      }
+    } catch {
+      issues.failed++;
+    }
   }
   return result;
 }
@@ -406,7 +439,17 @@ export async function collectAccountActivity(
   const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
   const issues = { failed: 0 };
   const files: Array<{ file: string; stats: fs.Stats }> = [];
-  for (const file of await filesUnder(root, request.kind, issues)) {
+  for (const file of await filesUnder(
+    root,
+    request.kind,
+    issues,
+    deadline,
+    options.traversalLimits
+  )) {
+    if (Date.now() >= deadline) {
+      issues.failed++;
+      break;
+    }
     try {
       files.push({ file, stats: fs.statSync(file) });
     } catch {

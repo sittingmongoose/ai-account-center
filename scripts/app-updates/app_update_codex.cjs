@@ -9,6 +9,7 @@ const { execFile, spawn } = require('child_process');
 const home = os.homedir();
 const executable = path.join(home, '.local/bin/codex');
 const modules = [path.resolve(__dirname, '../../dist/codex-auth/codex-activation-runtime.js'),
+  path.join(home, '.local/lib/node_modules/@sittingmongoose/ai-account-center/dist/codex-auth/codex-activation-runtime.js'),
   path.join(home, '.local/lib/node_modules/@kaitranntt/ccs/dist/codex-auth/codex-activation-runtime.js')];
 const flags = Object.fromEntries(process.argv.slice(2).reduce((pairs, arg, index, args) => {
   if (arg.startsWith('--')) pairs.push([arg, args[index + 1]]); return pairs;

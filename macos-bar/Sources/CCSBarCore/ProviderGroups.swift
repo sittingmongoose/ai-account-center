@@ -41,14 +41,15 @@ extension AccountDashboard {
         })?.element
       else { return nil }
 
-      let primary = representative.windows.filter { !Self.isSupplementary($0) }
+      let visible = representative.visibleWindows
+      let primary = visible.filter { !Self.isSupplementary($0) }
       return ProviderGroup(
         id: provider,
         label: Self.groupLabel(provider, fallback: representative.providerLabel),
         accounts: providerAccounts,
         representative: representative,
-        primaryWindows: Array((primary.isEmpty ? representative.windows : primary).prefix(3)),
-        supplementaryWindows: representative.windows.filter { Self.isSupplementary($0) },
+        primaryWindows: Array((primary.isEmpty ? visible : primary).prefix(3)),
+        supplementaryWindows: visible.filter { Self.isSupplementary($0) },
         statusLabel: Self.statusLabel(representative.status)
       )
     }

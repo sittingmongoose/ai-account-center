@@ -5,7 +5,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { getDefaultClaudeConfigDir } from '../../utils/claude-config-path';
 import { listAccountInstancePaths } from '../../management/instance-directory';
 import { CCSError } from '../../errors/error-types';
-import { resolveCodexConfigPaths } from './codex-dashboard-service';
+import { resolveCodexConfigPaths } from './compatible-cli-config-paths';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import type {
   UsageWorkerRequest,

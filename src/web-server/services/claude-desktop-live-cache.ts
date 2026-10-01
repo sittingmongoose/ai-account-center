@@ -102,6 +102,20 @@ export async function writeClaudeDesktopLiveSnapshot(
       source: sample.source,
       plan: sample.plan,
       fetchedAt: sample.fetchedAt,
+      ...(typeof sample.sourceContextFingerprint === 'string' &&
+      /^[a-f0-9]{64}$/.test(sample.sourceContextFingerprint)
+        ? { sourceContextFingerprint: sample.sourceContextFingerprint }
+        : {}),
+      ...(sample.optionalExtras &&
+      ['ok', 'unavailable'].includes(sample.optionalExtras.resetCredits) &&
+      ['ok', 'unavailable'].includes(sample.optionalExtras.prepaidBalance)
+        ? {
+            optionalExtras: {
+              resetCredits: sample.optionalExtras.resetCredits,
+              prepaidBalance: sample.optionalExtras.prepaidBalance,
+            },
+          }
+        : {}),
       windows: sample.windows.map((window) => ({
         key: window.key,
         label: window.label,
@@ -117,6 +131,15 @@ export async function writeClaudeDesktopLiveSnapshot(
         expiresAt: window.expiresAt,
         unlimited: window.unlimited,
         enabled: window.enabled,
+        ...(window.status === 'cached' &&
+        typeof window.sampledAt === 'string' &&
+        window.sampledAt.length <= 64 &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+          window.sampledAt
+        ) &&
+        Number.isFinite(Date.parse(window.sampledAt))
+          ? { status: 'cached' as const, sampledAt: window.sampledAt }
+          : {}),
       })),
     };
     const contents = JSON.stringify({ schemaVersion: 1, manifestHash, sample: publicSample });

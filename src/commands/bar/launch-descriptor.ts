@@ -1,5 +1,5 @@
 /**
- * Safe launch descriptor builder for the native CCS Bar app.
+ * Safe legacy launch descriptor builder for AI Account Center.
  *
  * The Swift app intentionally distrusts `~/.ccs/bar/launch.json`; it only
  * accepts a regular, non-group-writable/non-world-writable `ccs.js` entrypoint.
@@ -38,7 +38,9 @@ export function getLaunchShimPath(home: string = os.homedir()): string {
 function resolveEntrypoint(entrypointPath?: string): string {
   const candidate = entrypointPath ?? process.argv[1];
   if (!candidate) {
-    throw new ConfigError('Unable to resolve the current CCS entrypoint for CCS Bar launch.json.');
+    throw new ConfigError(
+      'Unable to resolve the current AI Account Center entrypoint for launch.json.'
+    );
   }
   return fs.realpathSync(candidate);
 }
@@ -57,12 +59,12 @@ export function writeLaunchShim(home: string, entrypointPath?: string): string {
     `const expectedEntrypoint = ${JSON.stringify(resolvedEntrypoint)};`,
     `const expectedHash = ${JSON.stringify(expectedEntrypointHash)};`,
     'const resolvedEntrypoint = fs.realpathSync(expectedEntrypoint);',
-    "if (resolvedEntrypoint !== expectedEntrypoint) throw new Error('CCS Bar launch shim target changed. Run `ccs bar launch` to refresh launch.json.');",
+    "if (resolvedEntrypoint !== expectedEntrypoint) throw new Error('AI Account Center legacy CCS Bar launch shim target changed. Run `ccs bar launch` to refresh launch.json.');",
     'const entrypointStat = fs.statSync(resolvedEntrypoint);',
-    "if (!entrypointStat.isFile()) throw new Error('CCS Bar launch shim target is not a regular file.');",
+    "if (!entrypointStat.isFile()) throw new Error('AI Account Center launch shim target is not a regular file.');",
     'const source = fs.readFileSync(resolvedEntrypoint);',
     "const actualHash = crypto.createHash('sha256').update(source).digest('hex');",
-    "if (actualHash !== expectedHash) throw new Error('CCS Bar launch shim target changed. Run `ccs bar launch` to refresh launch.json.');",
+    "if (actualHash !== expectedHash) throw new Error('AI Account Center legacy CCS Bar launch shim target changed. Run `ccs bar launch` to refresh launch.json.');",
     'const targetModule = new Module(resolvedEntrypoint, module);',
     'targetModule.filename = resolvedEntrypoint;',
     'targetModule.paths = Module._nodeModulePaths(path.dirname(resolvedEntrypoint));',

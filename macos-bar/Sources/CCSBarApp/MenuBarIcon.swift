@@ -48,8 +48,8 @@ enum MenuBarIcon {
   }
 
   private static func sfSymbol(_ name: String) -> NSImage {
-    NSImage(systemSymbolName: name, accessibilityDescription: "CCS")
-      ?? NSImage(systemSymbolName: "circle", accessibilityDescription: "CCS")
+    NSImage(systemSymbolName: name, accessibilityDescription: "AI Account Center")
+      ?? NSImage(systemSymbolName: "circle", accessibilityDescription: "AI Account Center")
       ?? NSImage()
   }
 }

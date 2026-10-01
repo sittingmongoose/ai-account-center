@@ -297,7 +297,9 @@ describe('Bar server identity probe', () => {
       fs.mkdirSync(ccsDir, { recursive: true });
       fs.writeFileSync(path.join(ccsDir, 'bar.json'), JSON.stringify({ port }));
       try {
-        const result = await defaultFindRunningServer(ccsDir);
+        const result = await defaultFindRunningServer(ccsDir, {
+          targets: [{ port, baseUrl: `http://127.0.0.1:${port}` }],
+        });
         expect(result?.port).not.toBe(port);
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));

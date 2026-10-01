@@ -1,7 +1,7 @@
 /**
- * Security gate for /api/bar/* — these endpoints expose the user's native
- * quota, tier, and cost snapshot, so unlike the rest of the read API they must
- * be refused for non-loopback callers when dashboard auth is disabled.
+ * Security gate for the provider-free native Bar process-identity probe.
+ * Remote callers require dashboard authentication; local probes use a nonce
+ * proof without reading account data or starting provider collection.
  *
  * The gate lives in the top-level apiRoutes middleware (one choke point), so we
  * exercise it by mounting the real apiRoutes and toggling auth via env, mirroring
@@ -20,6 +20,13 @@ import {
   authMiddleware,
   createSessionMiddleware,
 } from '../../../src/web-server/middleware/auth-middleware';
+import {
+  BAR_AUTH_NONCE_HEADER,
+  BAR_AUTH_TOKEN_HEADER,
+  getBarAuthTokenPath,
+  getOrCreateBarAuthToken,
+  isMatchingBarAuthProof,
+} from '../../../src/utils/bar-auth-token';
 
 const BAR_LOCAL_ACCESS_ERROR =
   'CCS Bar endpoints require localhost access when dashboard auth is disabled.';
@@ -31,6 +38,7 @@ describe('api-routes /api/bar/* local-access guard', () => {
   let tempHome = '';
   let originalDashboardAuthEnabled: string | undefined;
   let originalCcsHome: string | undefined;
+  let originalCcsDir: string | undefined;
   let originalCodexHome: string | undefined;
 
   beforeAll(async () => {
@@ -65,9 +73,11 @@ describe('api-routes /api/bar/* local-access guard', () => {
   beforeEach(() => {
     originalDashboardAuthEnabled = process.env.CCS_DASHBOARD_AUTH_ENABLED;
     originalCcsHome = process.env.CCS_HOME;
+    originalCcsDir = process.env.CCS_DIR;
     originalCodexHome = process.env.CODEX_HOME;
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-routes-bar-guard-'));
     process.env.CCS_HOME = tempHome;
+    delete process.env.CCS_DIR;
     process.env.CODEX_HOME = path.join(tempHome, '.codex');
     process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
     forcedRemoteAddress = '192.168.2.50';
@@ -91,6 +101,8 @@ describe('api-routes /api/bar/* local-access guard', () => {
     } else {
       delete process.env.CODEX_HOME;
     }
+    if (originalCcsDir !== undefined) process.env.CCS_DIR = originalCcsDir;
+    else delete process.env.CCS_DIR;
 
     if (tempHome && fs.existsSync(tempHome)) {
       fs.rmSync(tempHome, { recursive: true, force: true });
@@ -98,36 +110,68 @@ describe('api-routes /api/bar/* local-access guard', () => {
     }
   });
 
-  it('rejects a non-loopback GET /api/bar/summary when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/bar/summary`);
-
-    // 403 from the gate means the bar handler never ran (no quota/cost data
-    // loaded) — the body is the gate error, not a summary array.
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: BAR_LOCAL_ACCESS_ERROR });
-  });
-
-  it('rejects a non-loopback GET /api/bar/analytics when dashboard auth is disabled', async () => {
-    const response = await fetch(`${baseUrl}/api/bar/analytics`);
+  it('rejects a non-loopback GET /api/bar/auth when dashboard auth is disabled', async () => {
+    const response = await fetch(`${baseUrl}/api/bar/auth`);
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: BAR_LOCAL_ACCESS_ERROR });
   });
 
-  it('allows a loopback GET /api/bar/summary when dashboard auth is disabled', async () => {
+  it('does not mint a proof for a refused remote probe', async () => {
+    const response = await fetch(`${baseUrl}/api/bar/auth`, {
+      headers: { [BAR_AUTH_NONCE_HEADER]: '1234567890abcdef1234567890abcdef' },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: BAR_LOCAL_ACCESS_ERROR });
+    expect(response.headers.get(BAR_AUTH_TOKEN_HEADER)).toBeNull();
+    expect(fs.existsSync(getBarAuthTokenPath())).toBe(false);
+  });
+
+  it('returns only liveness for a loopback probe without a nonce', async () => {
     forcedRemoteAddress = '127.0.0.1';
 
-    const response = await fetch(`${baseUrl}/api/bar/summary`, {
+    const response = await fetch(`${baseUrl}/api/bar/auth`, {
       headers: { Host: '127.0.0.1' },
     });
 
-    // Loopback passes the gate; the real handler degrades gracefully against an
-    // empty temp CCS_HOME and returns a 200 array.
     expect(response.status).toBe(200);
-    expect(Array.isArray(await response.json())).toBe(true);
+    expect(await response.json()).toEqual({ status: 'ok' });
+    expect(response.headers.get(BAR_AUTH_TOKEN_HEADER)).toBeNull();
+    expect(fs.existsSync(getBarAuthTokenPath())).toBe(false);
   });
 
-  it('allows a non-loopback GET /api/bar/summary when dashboard auth is ENABLED', async () => {
+  it('binds an allowed loopback proof to its nonce without exposing the file token', async () => {
+    forcedRemoteAddress = '127.0.0.1';
+    const nonce = '1234567890abcdef1234567890abcdef';
+    const response = await fetch(`${baseUrl}/api/bar/auth`, {
+      headers: { [BAR_AUTH_NONCE_HEADER]: nonce },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok' });
+    const proof = response.headers.get(BAR_AUTH_TOKEN_HEADER);
+    const token = getOrCreateBarAuthToken();
+    expect(proof).not.toBe(token);
+    expect(isMatchingBarAuthProof(token, nonce, proof || '')).toBe(true);
+    expect(isMatchingBarAuthProof(token, 'abcdef1234567890abcdef1234567890', proof || '')).toBe(
+      false
+    );
+  });
+
+  it('rejects a cross-origin local probe before creating a proof', async () => {
+    forcedRemoteAddress = '127.0.0.1';
+    const response = await fetch(`${baseUrl}/api/bar/auth`, {
+      headers: {
+        Origin: 'https://unrelated.example',
+        [BAR_AUTH_NONCE_HEADER]: '1234567890abcdef1234567890abcdef',
+      },
+    });
+    expect(response.status).toBe(403);
+    expect(response.headers.get(BAR_AUTH_TOKEN_HEADER)).toBeNull();
+    expect(fs.existsSync(getBarAuthTokenPath())).toBe(false);
+  });
+
+  it('allows only an authenticated same-origin remote Bar identity probe', async () => {
     // With auth enabled the helper returns true regardless of peer address, so
     // an authenticated remote dashboard keeps working. We log in to get a session
     // cookie, then a remote (non-loopback) GET must pass.
@@ -171,13 +215,25 @@ describe('api-routes /api/bar/* local-access guard', () => {
       expect(loginResponse.status).toBe(200);
       expect(cookie).toBeTruthy();
 
-      const response = await fetch(`${authBaseUrl}/api/bar/summary`, {
+      const denied = await fetch(`${authBaseUrl}/api/bar/auth`);
+      expect(denied.status).toBe(401);
+      const crossOrigin = await fetch(`${authBaseUrl}/api/bar/auth`, {
+        headers: {
+          Cookie: cookie as string,
+          Origin: 'https://unrelated.example',
+          [BAR_AUTH_NONCE_HEADER]: '1234567890abcdef1234567890abcdef',
+        },
+      });
+      expect(crossOrigin.status).toBe(403);
+      expect(crossOrigin.headers.get(BAR_AUTH_TOKEN_HEADER)).toBeNull();
+      expect(fs.existsSync(getBarAuthTokenPath())).toBe(false);
+      const response = await fetch(`${authBaseUrl}/api/bar/auth`, {
         headers: { Cookie: cookie as string },
       });
 
       // Not the gate's 403 — auth-enabled bypasses the localhost requirement.
       expect(response.status).toBe(200);
-      expect(Array.isArray(await response.json())).toBe(true);
+      expect(await response.json()).toEqual({ status: 'ok' });
     } finally {
       await new Promise<void>((resolve) => authServer.close(() => resolve()));
       delete process.env.CCS_DASHBOARD_USERNAME;

@@ -1,9 +1,7 @@
 #!/bin/sh
 set -eu
 
-LOG_DIR="/var/log/ccs"
-
-mkdir -p /root/.ccs /root/.ccs/cliproxy "$LOG_DIR"
-touch "$LOG_DIR/ccs-dashboard.log" "$LOG_DIR/cliproxy.log"
-
-exec /usr/bin/supervisord -c /etc/supervisord.conf
+# Retired compatibility path. The canonical image runs the dashboard directly.
+# No supervisor, provider login, credential copy, or ownership rewrite occurs.
+cd /app
+exec /usr/local/bin/ai-account-center-entrypoint "$@"

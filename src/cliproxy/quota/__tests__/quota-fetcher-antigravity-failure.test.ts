@@ -33,7 +33,7 @@ describe('Antigravity quota failure metadata', () => {
     const moduleId = Date.now() + Math.random();
     const { fetchAccountQuota } = await import(`../quota-fetcher?agy-early=${moduleId}`);
     const { getProviderAuthDir } = await import(
-      `../../config/config-generator?agy-config=${moduleId}`
+      `../../config/path-resolver?agy-config=${moduleId}`
     );
     const fs = await import('node:fs');
     const os = await import('node:os');
@@ -87,7 +87,7 @@ describe('Antigravity quota failure metadata', () => {
     const moduleId = Date.now() + Math.random();
     const { fetchAccountQuota } = await import(`../quota-fetcher?agy-invalid-project=${moduleId}`);
     const { getProviderAuthDir } = await import(
-      `../../config/config-generator?agy-config=${moduleId}`
+      `../../config/path-resolver?agy-config=${moduleId}`
     );
     const fs = await import('node:fs');
     const os = await import('node:os');
@@ -141,7 +141,7 @@ describe('Antigravity quota failure metadata', () => {
     const moduleId = Date.now() + Math.random();
     const { fetchAccountQuota } = await import(`../quota-fetcher?agy-invalid-models=${moduleId}`);
     const { getProviderAuthDir } = await import(
-      `../../config/config-generator?agy-config=${moduleId}`
+      `../../config/path-resolver?agy-config=${moduleId}`
     );
     const fs = await import('node:fs');
     const os = await import('node:os');
@@ -213,7 +213,7 @@ describe('Antigravity quota failure metadata', () => {
     const moduleId = Date.now() + Math.random();
     const { fetchAccountQuota } = await import(`../quota-fetcher?agy-daily-host=${moduleId}`);
     const { getProviderAuthDir } = await import(
-      `../../config/config-generator?agy-config=${moduleId}`
+      `../../config/path-resolver?agy-config=${moduleId}`
     );
     const fs = await import('node:fs');
     const os = await import('node:os');

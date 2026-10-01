@@ -7,7 +7,7 @@ export const ERROR_MESSAGES = Object.freeze({
   choose_workspace: 'Open the billing page of the OpenCode workspace you want to show, then sync again.',
   workspace_mismatch: 'The open workspace does not belong to this console sign-in.',
   wallet_not_prepaid: 'This workspace does not expose a prepaid Zen wallet.',
-  host_unavailable: 'The Mac CCS OpenCode usage helper is not installed or could not start.',
+  host_unavailable: 'The Mac AI Account Center browser usage helper is not installed or could not start.',
   invalid_request: 'The browser usage request was invalid.',
   invalid_response: 'OpenCode returned no usable workspace wallet.',
   network_error: 'The OpenCode usage request did not finish. Try again later.',
@@ -71,8 +71,9 @@ export function projectSample(value) {
       if (row.unit !== 'USD' || typeof row.remaining !== 'number' || !Number.isFinite(row.remaining) || row.kind !== 'balance') throw new Error('protocol_error');
       windows.push({key: row.key, label: LABELS[row.key], kind: 'balance', remaining: row.remaining, unit: 'USD', expiresAt: iso(row.expiresAt), resetAt: null});
     } else {
-      if (typeof row.usedPercent !== 'number' || !Number.isFinite(row.usedPercent) || row.usedPercent < 0 || row.usedPercent > 100) throw new Error('protocol_error');
-      windows.push({key: row.key, label: LABELS[row.key], kind: 'rate_limit', usedPercent: row.usedPercent, resetAt: iso(row.resetAt)});
+      if (typeof row.usedPercent !== 'number' || !Number.isFinite(row.usedPercent) || row.usedPercent < 0) throw new Error('protocol_error');
+      windows.push({key: row.key, label: LABELS[row.key], kind: 'rate_limit', usedPercent: row.usedPercent,
+        remainingPercent: Math.max(0, 100 - row.usedPercent), resetAt: iso(row.resetAt)});
     }
   }
   if (!seen.has('zen-balance')) throw new Error('protocol_error');
@@ -93,6 +94,7 @@ export const MUSE_ERROR_MESSAGES = Object.freeze({
   invalid_response: 'Muse returned no usable rolling or weekly quota.',
   network_error: 'The Muse usage request did not finish. Try again later.',
   provider_error: 'Muse could not return its usage right now.',
+  rate_limited: 'Muse is limiting requests. Usage refreshes automatically after a cooldown.',
   local_storage_error: 'The private Muse web session could not be read or saved.',
   busy: 'A Muse usage refresh is already running.',
   error: 'Muse usage could not be read.',
@@ -129,7 +131,7 @@ export function projectMuseTeams(values) {
   });
 }
 export function projectMuseSample(value) {
-  if (!value || value.provider !== 'muse' || value.platform !== 'mac' || value.status !== 'ok' ||
+  if (!value || value.provider !== 'muse' || value.platform !== 'mac' || !['ok', 'cached'].includes(value.status) ||
       !iso(value.fetchedAt) || !iso(value.sampledAt) || !Array.isArray(value.windows) || !value.windows.length || value.windows.length > 2 ||
       typeof value.email !== 'string' || value.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email) ||
       typeof value.plan !== 'string' || !value.plan || value.plan.length > 160 || /[\u0000-\u001f\u007f]|dca:|bearer\s|sk-|eyJ/i.test(value.plan)) throw new Error('protocol_error');
@@ -146,7 +148,8 @@ export function projectMuseSample(value) {
       windowMinutes: minutes && minutes <= 525600 ? minutes : null, used, limit, unit: 'weighted tokens', kind: 'rate_limit'};
   });
   return {id: 'native:muse:mac', provider: 'muse', providerLabel: 'Muse Code', label: 'Muse Code', email: value.email, plan: value.plan,
-    platform: 'mac', source: 'Authenticated Meta web quota on Mac', status: 'ok', message: null,
+    platform: 'mac', source: 'Authenticated Meta web quota on Mac', status: value.status,
+    message: value.status === 'cached' ? 'Showing the last successful Muse usage reading. Usage refreshes automatically.' : null,
     fetchedAt: iso(value.fetchedAt), sampledAt: iso(value.sampledAt), isActive: false, windows,
     capabilities: {codexProfile: null, claudeProfileId: null, claudePlatforms: []}};
 }

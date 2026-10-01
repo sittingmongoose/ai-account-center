@@ -5,14 +5,6 @@ import {
   requireLocalAccessWhenAuthDisabled,
 } from '../middleware/auth-middleware';
 import {
-  CodexRawConfigConflictError,
-  CodexRawConfigValidationError,
-  getCodexDashboardDiagnostics,
-  getCodexRawConfig,
-  patchCodexConfig,
-  saveCodexRawConfig,
-} from '../services/codex-dashboard-service';
-import {
   getCodexAuthProfilesSummary,
   invalidateCodexAuthProfilesCache,
 } from '../../codex-auth/codex-auth-dashboard-service';
@@ -28,23 +20,6 @@ import {
 } from '../services/codex-auto-switch-service';
 
 const router = Router();
-const CODEX_CONFIG_ACCESS_ERROR =
-  'Codex configuration endpoints require localhost access when dashboard auth is disabled.';
-
-router.use('/config', (req: Request, res: Response, next) => {
-  if (requireLocalAccessWhenAuthDisabled(req, res, CODEX_CONFIG_ACCESS_ERROR)) {
-    next();
-  }
-});
-
-router.get('/diagnostics', async (_req: Request, res: Response): Promise<void> => {
-  try {
-    res.json(await getCodexDashboardDiagnostics());
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
 // H6: email is PII — require localhost access when dashboard auth is disabled.
 const CODEX_PROFILES_ACCESS_ERROR =
   'Codex auth profiles endpoint requires localhost access when dashboard auth is disabled.';
@@ -55,8 +30,8 @@ router.get('/profiles', async (req: Request, res: Response): Promise<void> => {
   }
   try {
     res.json(await getCodexAuthProfilesSummary());
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
+  } catch {
+    res.status(500).json({ error: 'Codex profiles could not be read.' });
   }
 });
 
@@ -204,73 +179,6 @@ router.post('/profiles/:name/activate', async (req: Request, res: Response): Pro
   } finally {
     // A restart error may happen after auth.json changed; never retain the old account summary.
     invalidateCodexAuthProfilesCache();
-  }
-});
-
-router.get('/config/raw', async (_req: Request, res: Response): Promise<void> => {
-  try {
-    res.json(await getCodexRawConfig());
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-router.put('/config/raw', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { rawText, expectedMtime } = req.body ?? {};
-
-    if (typeof rawText !== 'string') {
-      res.status(400).json({ error: 'rawText must be a string.' });
-      return;
-    }
-    if (
-      expectedMtime !== undefined &&
-      (typeof expectedMtime !== 'number' || !Number.isFinite(expectedMtime))
-    ) {
-      res.status(400).json({ error: 'expectedMtime must be a finite number when provided.' });
-      return;
-    }
-
-    res.json(await saveCodexRawConfig({ rawText, expectedMtime }));
-  } catch (error) {
-    if (error instanceof CodexRawConfigValidationError) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    if (error instanceof CodexRawConfigConflictError) {
-      res.status(409).json({ error: error.message, mtime: error.mtime });
-      return;
-    }
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-router.patch('/config/patch', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const body = req.body ?? {};
-    if (typeof body.kind !== 'string' || body.kind.trim().length === 0) {
-      res.status(400).json({ error: 'kind is required.' });
-      return;
-    }
-    if (
-      body.expectedMtime !== undefined &&
-      (typeof body.expectedMtime !== 'number' || !Number.isFinite(body.expectedMtime))
-    ) {
-      res.status(400).json({ error: 'expectedMtime must be a finite number when provided.' });
-      return;
-    }
-
-    res.json(await patchCodexConfig(body));
-  } catch (error) {
-    if (error instanceof CodexRawConfigValidationError) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    if (error instanceof CodexRawConfigConflictError) {
-      res.status(409).json({ error: error.message, mtime: error.mtime });
-      return;
-    }
-    res.status(500).json({ error: (error as Error).message });
   }
 });
 

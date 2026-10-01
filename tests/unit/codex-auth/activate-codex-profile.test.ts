@@ -352,6 +352,30 @@ describe('confirmed activation transactions', () => {
     expect(events).toEqual([]);
   });
 
+  it('rejects a target-token refresh during lock wait before consuming approval to stop writers', async () => {
+    const { acquireCodexActivationLock } = await import(
+      '../../../src/codex-auth/codex-activation-lock'
+    );
+    const offer = await issue();
+    const release = await acquireCodexActivationLock(codexHome);
+    const events: string[] = [];
+    const pending = activateCodexProfile('platyr', {
+      codexHome,
+      registry,
+      runtime: runtime(events),
+      confirmationToken: offer.token,
+    });
+    const refreshed = Buffer.from(
+      fixture('platyr').toString().replace('fake-access-platyr', 'new-fake-access-platyr')
+    );
+    fs.writeFileSync(auth('platyr'), refreshed);
+    await release();
+    await expect(pending).rejects.toMatchObject({ code: 'confirmation_stale' });
+    expect(events).toEqual([]);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
+    expect(fs.readFileSync(auth('platyr'))).toEqual(refreshed);
+  });
+
   it('restores original auth and restarts after a confirmed startup fails, without creating a new capability', async () => {
     const offer = await issue();
     const events: string[] = [];
@@ -437,5 +461,123 @@ describe('activation CLI and live dashboard identity', () => {
     expect(summary.activated?.email).toBe('platyr@example.test');
     expect(JSON.stringify(summary)).not.toContain('fake-access');
     expect(JSON.stringify(summary)).not.toContain('fake-refresh');
+  });
+});
+
+describe('activation target revalidation under the shared lifecycle lock', () => {
+  it('does not stop writers if target membership disappeared while waiting for the lock', async () => {
+    const { acquireCodexActivationLock } = await import(
+      '../../../src/codex-auth/codex-activation-lock'
+    );
+    const release = await acquireCodexActivationLock(codexHome);
+    const events: string[] = [];
+    const pending = activateCodexProfile('platyr', {
+      codexHome,
+      registry,
+      runtime: runtime(events),
+    });
+    registry.removeProfile('platyr');
+    await release();
+    await expect(pending).rejects.toThrow("Codex profile 'platyr' does not exist.");
+    expect(events).toEqual([]);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
+    expect(fs.existsSync(path.join(codexHome, '.ccs-activation.lock'))).toBe(false);
+  });
+
+  it('does not stop writers if target auth vanished while waiting for the lock', async () => {
+    const { acquireCodexActivationLock } = await import(
+      '../../../src/codex-auth/codex-activation-lock'
+    );
+    const release = await acquireCodexActivationLock(codexHome);
+    const events: string[] = [];
+    const pending = activateCodexProfile('platyr', {
+      codexHome,
+      registry,
+      runtime: runtime(events),
+    });
+    fs.rmSync(auth('platyr'));
+    await release();
+    await expect(pending).rejects.toThrow('Could not read Target profile auth.json.');
+    expect(events).toEqual([]);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
+  });
+
+  it('does not stop writers if target identity changed while waiting for the lock', async () => {
+    const { acquireCodexActivationLock } = await import(
+      '../../../src/codex-auth/codex-activation-lock'
+    );
+    const release = await acquireCodexActivationLock(codexHome);
+    const events: string[] = [];
+    const pending = activateCodexProfile('platyr', {
+      codexHome,
+      registry,
+      runtime: runtime(events),
+    });
+    fs.writeFileSync(auth('platyr'), fixture('gmail'));
+    await release();
+    await expect(pending).rejects.toThrow('changed account before activation');
+    expect(events).toEqual([]);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
+  });
+
+  it('retains a newly activated profile when removal began during the activation', async () => {
+    const { handleRemoveCodex } = await import('../../../src/codex-auth/commands/remove-command');
+    let stopEntered!: () => void;
+    let allowStop!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      stopEntered = resolve;
+    });
+    const allowed = new Promise<void>((resolve) => {
+      allowStop = resolve;
+    });
+    const events: string[] = [];
+    const pendingActivation = activateCodexProfile('platyr', {
+      codexHome,
+      registry,
+      runtime: {
+        async stop() {
+          events.push('stop');
+          stopEntered();
+          await allowed;
+        },
+        async start() {
+          events.push('start');
+        },
+      },
+    });
+    await entered;
+    const originalExit = process.exit;
+    const originalError = console.error;
+    let denied = false;
+    process.exit = () => {
+      denied = true;
+      expect(fs.existsSync(path.join(codexHome, '.ccs-activation.lock'))).toBe(false);
+      throw new Error('fixture exit');
+    };
+    console.error = () => {};
+    try {
+      const pendingRemoval = handleRemoveCodex(
+        { registry, version: 'test' },
+        ['platyr', '--yes', '--force'],
+        { codexHome }
+      ).catch((error: unknown) => {
+        if (!(error instanceof Error) || error.message !== 'fixture exit') throw error;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(fs.existsSync(auth('platyr'))).toBe(true);
+      expect(registry.hasProfile('platyr')).toBe(true);
+      allowStop();
+      await pendingActivation;
+      await pendingRemoval;
+    } finally {
+      allowStop();
+      process.exit = originalExit;
+      console.error = originalError;
+    }
+    expect(denied).toBe(true);
+    expect(events).toEqual(['stop', 'start']);
+    expect(registry.hasProfile('platyr')).toBe(true);
+    expect(fs.readFileSync(auth('platyr'))).toEqual(fixture('platyr'));
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('platyr'));
   });
 });

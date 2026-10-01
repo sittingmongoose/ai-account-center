@@ -1,67 +1,36 @@
-# CCS Maintainer Documentation
+# AI Account Center Maintainer Documentation
 
-This directory explains how the CLI repository is organized and maintained.
-User-facing guides and command reference live at
-[docs.ccs.kaitran.ca](https://docs.ccs.kaitran.ca).
+These guides describe the account dashboard, TypeScript services, native bars
+and local source packaging in this continuing CCS fork. Current product source is
+[sittingmongoose/ai-account-center](https://github.com/sittingmongoose/ai-account-center).
+The original [CCS project](https://github.com/kaitranntt/ccs), authorship,
+[MIT license](../LICENSE) and changelog remain historical attribution.
 
-## Truth Hierarchy
+Source, tests and actual build/package inputs define implemented behavior.
+Do not restore retired features to satisfy outdated prose.
 
-Use the narrowest authoritative source:
-
-1. Source, tests, package scripts, and workflows define implemented behavior.
-2. [`CLAUDE.md`](../CLAUDE.md) and
-   [`CONTRIBUTING.md`](../CONTRIBUTING.md) define repository workflow.
-3. The documents below explain architecture, rationale, and maintainer
-   decisions.
-4. Build artifacts, releases, and runtime checks define shipped or observed
-   state.
-
-When sources disagree, verify the implementation first and update or remove the
-stale prose. Avoid copying volatile counts, recursive trees, and exhaustive
-option lists when a source link can remain accurate.
-
-## Start Here
-
-| Need | Owner |
+| Need | Guide |
 | --- | --- |
-| Repository domains and source entry points | [Codebase summary](./codebase-summary.md) |
-| Coding, testing, error, and size conventions | [Code standards](./code-standards.md) |
-| System boundaries and data flow | [System architecture](./system-architecture/index.md) |
-| Current maintenance direction | [Project roadmap](./project-roadmap.md) |
-| Release mechanics | [Release process](./release-process.md) |
-| Dashboard localization | [Dashboard i18n](./i18n-dashboard.md) |
-| Test layout and commands | [Test suite](../tests/README.md) |
-| Dashboard development | [UI guide](../ui/README.md) |
+| Source ownership and current inputs | [Codebase summary](codebase-summary.md) |
+| Engineering and validation | [Code standards](code-standards.md) |
+| Data/credential boundaries | [System architecture](system-architecture/index.md) |
+| Existing provider collectors | [Provider flows](system-architecture/provider-flows.md) |
+| Codex profiles and guarded activation | [Codex account contract](codex-auth.md), [activation](activate-in-place.md) |
+| Product scope | [Product overview](project-overview-pdr.md) |
+| Current work | [Project direction](project-roadmap.md) |
+| Local packaging and retained automation | [Release process](release-process.md) |
+| Structured diagnostics | [Logging contract](logging-contract.md) |
+| Source-tree measurements | [Hardening method](hardening-debt-burndown.md) |
+| Slint UI and licensing | [Dashboard guide](../web-dashboard/README.md) |
+| Native clients | [Mac](../macos-bar/README.md), [Windows](../windows-bar/README.md) |
+| Container deployment | [Docker guide](../docker/README.md) |
 
-Feature-specific maintainer notes remain in this directory. Discover them by
-filename, then verify referenced behavior against the linked source.
+The primary command is `ai-account-center dashboard`; `ccs config` remains a
+compatibility alias. Private `~/.ccs/` data and session/profile aliases remain
+unchanged. Retired runtime/proxy/tooling guides are available in Git history;
+upstream docs are not the current product's deployment instructions.
 
-## Update Triggers
-
-Update the owning documentation in the same change when any of these move:
-
-- CLI or dashboard behavior, commands, flags, or configuration
-- installation, deployment, release, or contributor workflow
-- architecture, data flow, persistence, security, or public contracts
-- source ownership or the stable entry point named by a guide
-
-Pure refactors need documentation changes only when they invalidate a
-maintainer decision or navigation link. Public behavior changes also require a
-matching update in the separate `kaitranntt/ccs-docs` repository on the same
-target branch. Maintainers using the standard CloudPersonal checkout may have
-that repository at `/Users/kaitran/CloudPersonal/ccs/docs`; fork contributors
-can use their own checkout and coordinate the matching docs change in the PR.
-
-## Validation
-
-Before review:
-
-```bash
-bash tests/docs/quickstart-parity.sh
-git diff --check
-```
-
-The repository-owned docs test currently checks the canonical quickstart
-snippet only. For other changed Markdown, verify each relative link and
-referenced path directly, then run the focused validation command for any code
-or workflow the document describes.
+Verify documentation with `bash tests/docs/quickstart-parity.sh` and
+`node tests/docs/documentation-freshness.js`. Keep relative source links current.
+Generated hardening reports must be regenerated from the current source using
+their owning script; old validation totals are not proof of the current build.

@@ -35,12 +35,12 @@ beforeEach(async () => {
   mock.restore();
 
   const configGenerator = await import(
-    `../../config/config-generator?codex-config-generator=${moduleVersion}`
+    `../../config/path-resolver?codex-config-generator=${moduleVersion}`
   );
   const accountManager = await import(
     `../../accounts/account-manager?codex-account-manager=${moduleVersion}`
   );
-  mock.module('../../config/config-generator', () => configGenerator);
+  mock.module('../../config/path-resolver', () => configGenerator);
   mock.module('../../accounts/account-manager', () => accountManager);
   ({ registerAccount } = accountManager);
 
@@ -714,7 +714,7 @@ describe('Codex Quota Fetcher', () => {
 
   describe('fetchCodexQuotaWithToken', () => {
     it('uses supplied native headers without looking up CLIProxy auth', async () => {
-      const configGenerator = await import('../../config/config-generator');
+      const configGenerator = await import('../../config/path-resolver');
       const accountManager = await import('../../accounts/account-manager');
       const getAuthDirSpy = spyOn(configGenerator, 'getAuthDir');
       const getPausedDirSpy = spyOn(accountManager, 'getPausedDir');

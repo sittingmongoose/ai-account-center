@@ -77,7 +77,7 @@ export function ensureSharedConfigSymlink(
     } else {
       process.stderr.write(
         `[!] codex-auth: preserving existing regular config.toml at ${linkPath}; ` +
-          `use ccsx auth create <name> --force to refresh it.\n`
+          `use ai-account-center codex-auth create <name> --force to refresh it.\n`
       );
       logger.warn('codex-auth.symlink-regular-file-preserved', 'Preserved regular config.toml', {
         link: linkPath,

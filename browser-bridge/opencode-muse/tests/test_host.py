@@ -236,6 +236,24 @@ class CapsuleTests(unittest.TestCase):
 
 
 class NativeProtocolTests(unittest.TestCase):
+    def test_schema_version_requires_integer_one_before_collection_or_storage(self):
+        for version in (True, False, 1.0, "1", None, 0, 2):
+            collector, writer = mock.Mock(), mock.Mock()
+            request = {"schemaVersion": version, "action": "sync", "cookies": [COOKIE]}
+            with self.subTest(version=version), self.assertRaises(core.Unavailable) as caught:
+                host.handle_request(request, "/unused", collector, writer)
+            self.assertEqual(caught.exception.code, "invalid_request")
+            collector.assert_not_called()
+            writer.assert_not_called()
+
+        collector = mock.Mock(return_value=(WORKSPACE, {"status": "ok", "windows": []}))
+        writer = mock.Mock()
+        response = host.handle_request({"schemaVersion": 1, "action": "sync", "cookies": [COOKIE]},
+                                       "/unused", collector, writer)
+        self.assertTrue(response["ok"])
+        collector.assert_called_once()
+        writer.assert_called_once()
+
     def test_native_frame_roundtrip(self):
         stream = io.BytesIO(); value = {"schemaVersion": 1, "action": "sync", "cookies": [COOKIE], "workspaceId": WORKSPACE}
         host.write_frame(stream, value); stream.seek(0)

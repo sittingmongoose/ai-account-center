@@ -191,6 +191,92 @@ describe('account quota analytics', () => {
     expect(mismatch.summary.activeCodexAccountId).toBe(first.id);
   });
 
+  it('deduplicates retained balances at their original time while fresh core readings continue', async () => {
+    let now = NOW;
+    const originalSample = new Date(NOW - 3_600_000).toISOString();
+    const current = account('claude');
+    current.source = 'Claude Desktop live quota on Windows';
+    current.windows.push({
+      key: 'prepaid_balance',
+      label: 'Extra balance',
+      kind: 'balance',
+      usedPercent: null,
+      remainingPercent: null,
+      used: 12.123456,
+      limit: 20.654321,
+      remaining: -4.123456,
+      resetAt: '2026-10-02T01:02:03Z',
+      expiresAt: '2026-10-20T04:05:06Z',
+      unit: 'USD',
+      windowMinutes: null,
+      status: 'cached',
+      sampledAt: originalSample,
+    });
+    const store = memory();
+    const deps = {
+      getDashboard: async () => dashboard([current]),
+      createHistoryStore: () => store,
+      getActivity: async () => noActivity,
+      now: () => now,
+    };
+    const service = new AccountAnalyticsService(deps);
+    const query = { ...QUERY, range: '24h' as const };
+    await service.get(query);
+    for (let index = 1; index <= 2; index++) {
+      now = NOW + index * 3_600_000;
+      current.sampledAt = current.fetchedAt = new Date(now).toISOString();
+      current.windows[0].usedPercent = 50 + index;
+      await service.get(query);
+    }
+    // A new service simulates loading persisted normalized observations cold.
+    const result = await new AccountAnalyticsService(deps).get(query);
+    const balance = result.accounts[0].windows.find((window) => window.key === 'prepaid_balance');
+    expect(balance?.points).toHaveLength(1);
+    expect(balance?.points[0]).toMatchObject({
+      sampledAt: originalSample,
+      observedAt: new Date(now).toISOString(),
+      status: 'cached',
+      source: 'Claude Desktop live quota on Windows (cached window)',
+      platform: 'windows',
+      used: 12.123456,
+      limit: 20.654321,
+      remaining: -4.123456,
+      resetAt: '2026-10-02T01:02:03.000Z',
+      expiresAt: '2026-10-20T04:05:06.000Z',
+    });
+    const core = result.accounts[0].windows.find((window) => window.key === 'five_hour');
+    expect(core?.points.map((point) => point.sampledAt)).toEqual(
+      [NOW, NOW + 3_600_000, NOW + 2 * 3_600_000].map((time) => new Date(time).toISOString())
+    );
+    expect(core?.points.map((point) => point.usedPercent)).toEqual([50, 51, 52]);
+    expect(core?.points.every((point) => point.status === 'ok')).toBe(true);
+    expect(core?.points.every((point) => point.source === current.source)).toBe(true);
+  });
+
+  it('does not bring an old cached optional sample into a newer selected range', async () => {
+    const current = account('claude');
+    current.windows.push({
+      ...current.windows[0],
+      key: 'extra_usage',
+      kind: 'extra_usage',
+      status: 'cached',
+      sampledAt: new Date(NOW - 25 * 3_600_000).toISOString(),
+    });
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => dashboard([current]),
+      createHistoryStore: () => memory(),
+      getActivity: async () => noActivity,
+      now: () => NOW,
+    });
+    const result = await service.get({ ...QUERY, range: '24h' });
+    expect(
+      result.accounts[0].windows.find((window) => window.key === 'extra_usage')?.points
+    ).toEqual([]);
+    expect(
+      result.accounts[0].windows.find((window) => window.key === 'five_hour')?.points
+    ).toHaveLength(1);
+  });
+
   it('retains genuine reset drops, signed balances, and unavailable gaps rather than zero-filling them', async () => {
     let now = NOW;
     let current = account();

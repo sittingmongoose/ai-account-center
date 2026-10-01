@@ -11,6 +11,7 @@ import argparse
 import base64
 import ctypes
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -41,6 +42,7 @@ MAX_BYTES = 1024 * 1024
 MAX_CAPSULE_BYTES = 65536
 CHROMIUM_EPOCH = 11644473600000000
 MAX_RESET_GRANTS = 20
+MAX_SCOPED_LIMITS = 64
 UTC = dt.timezone.utc
 
 
@@ -240,6 +242,38 @@ class Client:
             raise UsageUnavailable("error")
 
 
+def normalize_fable_limit(usage):
+    """Read the reported global Fable weekly cap, never infer it from other models."""
+    limits = usage.get("limits")
+    if not isinstance(limits, list) or len(limits) > MAX_SCOPED_LIMITS:
+        return []
+    window = None
+    for entry in limits:
+        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped" or entry.get("group") != "weekly":
+            continue
+        scope = entry.get("scope")
+        model = scope.get("model") if isinstance(scope, dict) else None
+        if (not isinstance(model, dict) or model.get("display_name") != "Fable"
+            or scope.get("surface") is not None):
+            continue
+        used = number(entry.get("percent"))
+        if used is None:
+            return []
+        candidate = {
+            "key": "seven_day_fable", "label": "Weekly Fable usage", "kind": "rate_limit",
+            "usedPercent": used, "remainingPercent": max(0, 100 - used),
+            "resetAt": reset_at(entry.get("resets_at")), "expiresAt": None,
+            "windowMinutes": 10080, "used": None, "limit": None, "unit": None,
+        }
+        if window is not None and candidate != window:
+            # Conflicting scopes must not silently pick one account quota.
+            return []
+        window = candidate
+    # is_active selects the provider's current limiting bucket. False is still
+    # a genuine model quota, including an unused zero-percent Fable window.
+    return [window] if window is not None else []
+
+
 def normalize_windows(usage):
     windows = []
     for key, (label, minutes) in WINDOWS.items():
@@ -262,6 +296,7 @@ def normalize_windows(usage):
             "limit": None,
             "unit": None,
         })
+    windows.extend(normalize_fable_limit(usage))
     extra = usage.get("extra_usage")
     if isinstance(extra, dict) and isinstance(extra.get("is_enabled"), bool):
         used, limit = number(extra.get("used_credits")), number(extra.get("monthly_limit"))
@@ -432,9 +467,11 @@ class WebClient:
             response.close()
 
 
-def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None):
+def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None):
     # This optional path must never turn a valid native OAuth quota failure
     # into a sign-in request, nor an unreadable web balance into a false zero.
+    if availability is not None:
+        availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
     try:
         cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home)
         client = WebClient(cookies, organization_uuid)
@@ -453,11 +490,15 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None)
     windows = []
     try:
         usage = client.get("/api/organizations/" + organization_uuid + "/usage?cedar_ember=1")
+        if availability is not None:
+            availability["resetCredits"] = "ok"
         windows.extend(normalize_reset_credits(usage.get("cedar_ember")))
     except Exception:
         pass
     try:
         prepaid = client.get("/api/organizations/" + organization_uuid + "/prepaid/credits")
+        if availability is not None:
+            availability["prepaidBalance"] = "ok"
         windows.extend(normalize_prepaid(prepaid))
     except Exception:
         pass
@@ -501,11 +542,17 @@ def collect(profile_id, platform, home=None):
             windows = normalize_windows(usage)
             if not windows:
                 raise UsageUnavailable()
-            windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home))
+            optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
+            windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras))
             result.update(
                 status="ok", email=PROFILE_EMAILS[profile_id],
                 plan="max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
                 fetchedAt=now_iso(), accountVerified=True, organizationVerified=True, windows=windows,
+                optionalExtras=optional_extras,
+                sourceContextFingerprint=hashlib.sha256(json.dumps([
+                    "claude-desktop-windows-v1", profile_id, account_uuid.lower(),
+                    organization["uuid"].lower(), identities[1].lower(), "https://api.anthropic.com",
+                ], separators=(",", ":")).encode("ascii")).hexdigest(),
             )
             return result
         raise UsageUnavailable("needs_sign_in")

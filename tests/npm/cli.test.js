@@ -1,208 +1,183 @@
-const assert = require('assert');
+const { describe, it, expect, beforeEach, afterEach } = require('bun:test');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const os = require('os');
 const path = require('path');
-const { createTestEnvironment } = require('../shared/fixtures/test-environment');
+const { spawnSync } = require('child_process');
 
-describe('npm CLI', () => {
-  const distCcsPath = path.join(__dirname, '..', '..', 'dist', 'ccs.js');
-  const srcCcsPath = path.join(__dirname, '..', '..', 'src', 'ccs.ts');
-  let testEnv;
-  let testCcsHome;
+const packageRoot = path.resolve(__dirname, '../..');
+const cliSource = path.join(packageRoot, 'src/ccs.ts');
+let testHome;
+let configDir;
+let credentialFiles;
 
-  function buildCliCommand(args = '') {
-    if (fs.existsSync(distCcsPath)) {
-      return `node "${distCcsPath}" ${args}`;
-    }
+beforeEach(() => {
+  testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-account-center-cli-'));
+  configDir = path.join(testHome, '.ccs');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.mkdirSync(path.join(testHome, '.codex'), { recursive: true });
+  credentialFiles = new Map([
+    [
+      path.join(configDir, 'config.yaml'),
+      'version: 2\ndashboard_auth:\n  enabled: true\n  username: test-account\n  password_hash: test-only-hash\n',
+    ],
+    [path.join(configDir, 'codex-profiles.yaml'), 'version: 1\ndefault: null\nprofiles: {}\n'],
+    [path.join(configDir, 'profiles.json'), '{"profiles":{"saved":{"path":"preserve-me"}}}\n'],
+    [path.join(testHome, '.codex/auth.json'), '{"test_fixture":"preserve-auth"}\n'],
+  ]);
+  for (const [filename, content] of credentialFiles) fs.writeFileSync(filename, content);
+});
 
-    // Some test files rebuild or clean dist during the same Bun process.
-    return `bun "${srcCcsPath}" ${args}`;
+afterEach(() => {
+  for (const [filename, content] of credentialFiles) {
+    expect(fs.readFileSync(filename, 'utf8')).toBe(content);
   }
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
 
-  beforeAll(() => {
-    // Create isolated test environment
-    testEnv = createTestEnvironment();
-    testCcsHome = testEnv.testHome;
+function runCli(args) {
+  const env = {
+    ...process.env,
+    CCS_HOME: testHome,
+    CODEX_HOME: path.join(testHome, '.codex'),
+    CI: '1',
+    NO_COLOR: '1',
+  };
+  delete env.CCS_DIR;
+  return spawnSync(process.execPath, [cliSource, ...args], {
+    cwd: packageRoot,
+    env,
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+}
 
-    // Run postinstall to create config in test environment
-    const postinstallScript = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
-    execSync(`node "${postinstallScript}"`, {
-      stdio: 'ignore',
-      env: { ...process.env, CCS_HOME: testCcsHome }
-    });
+describe('AI Account Center CLI', () => {
+  it('shows product help with retained commands and no profile launch defaults', () => {
+    for (const args of [[], ['--help'], ['-h'], ['help']]) {
+      const result = runCli(args);
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('AI Account Center');
+      expect(result.stdout).not.toMatch(/\u001b\[/);
+      expect(result.stdout).toContain('codex-auth');
+      expect(result.stdout).toContain('dashboard');
+      expect(result.stdout).not.toContain('ccs <profile>');
+      expect(result.stdout).not.toContain('CLIProxy variants');
+    }
   });
 
-  afterAll(() => {
-    // Clean up test environment
-    if (testEnv) {
-      testEnv.cleanup();
-    }
-  });
-
-  // Helper to run CLI with test environment
-  function runCli(args, options = {}) {
-    return execSync(buildCliCommand(args), {
-      ...options,
-      env: { ...process.env, CCS_HOME: testCcsHome }
-    });
-  }
-
-  describe('Argument parsing', () => {
-    it('handles flag -c without profile error', function() {
-      try {
-        runCli('-c', { stdio: 'pipe', timeout: 3000 });
-      } catch (e) {
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        // Should NOT show "Profile '-c' not found" error
-        assert(!output.includes("Profile '-c' not found"), 'Should not treat -c as profile');
-      }
-    });
-
-    it('handles flag --verbose without profile error', function() {
-      try {
-        runCli('--verbose', { stdio: 'pipe', timeout: 3000 });
-      } catch (e) {
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        assert(!output.includes("Profile '--verbose' not found"), 'Should not treat --verbose as profile');
-      }
-    });
-
-    it('handles flag -p with value', function() {
-      try {
-        runCli('-p "test prompt"', { stdio: 'pipe', timeout: 8000 });
-      } catch (e) {
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        assert(!output.includes("Profile '-p' not found"), 'Should not treat -p as profile');
-      }
-    });
-
-    it('handles multiple flags', function() {
-      try {
-        runCli('-c --verbose', { stdio: 'pipe', timeout: 3000 });
-      } catch (e) {
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        assert(!output.includes("Profile '-c' not found"), 'Should not treat flags as profiles');
-        assert(!output.includes("Profile '--verbose' not found"), 'Should not treat flags as profiles');
-      }
-    });
-
-    it('routes cursor probe through the cursor command handler', function() {
-      let output = '';
-      try {
-        output = execSync(`bun "${srcCcsPath}" cursor probe`, {
-          encoding: 'utf8',
-          stdio: 'pipe',
-          timeout: 3000,
-          env: { ...process.env, CCS_HOME: testCcsHome }
-        });
-      } catch (e) {
-        output = e.stderr?.toString() || e.stdout?.toString() || '';
-      }
-      assert(!output.includes("Profile 'cursor' not found"), 'Should not fall through to profile lookup');
-      assert(
-        output.includes('Cursor Live Probe') || output.includes('legacy cursor probe'),
-        'Should route through the legacy cursor compatibility handler'
+  it('reads package version and reports existing config paths', () => {
+    for (const args of [['--version'], ['-v'], ['version']]) {
+      const result = runCli(args);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        `AI Account Center v${require('../../package.json').version}`
       );
-    });
+      expect(result.stdout).toContain(configDir);
+    }
+  });
 
-    it('routes gitlab --help to provider shortcut help instead of starting auth', function() {
-      const output = execSync(`bun "${srcCcsPath}" gitlab --help`, {
+  it('preserves dashboard/config help aliases without starting the server', () => {
+    for (const args of [
+      ['dashboard', '--help'],
+      ['config', '--help'],
+      ['dashboard', '--help=true'],
+      ['config', '--help=true'],
+      ['help', 'dashboard'],
+      ['help', 'config'],
+    ]) {
+      const result = runCli(args);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('--no-open');
+      expect(result.stdout).not.toContain('Starting dashboard server');
+      expect(result.stdout).not.toContain('Starting CLIProxy');
+    }
+  });
+
+  it('selects --config-dir before logs and version commands read configuration', () => {
+    const alternate = path.join(testHome, 'private-config');
+    fs.mkdirSync(alternate);
+    const result = runCli(['--config-dir', alternate, '--version']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Account configuration: ${alternate}`);
+    expect(result.stdout).not.toContain(`Account configuration: ${configDir}`);
+  });
+
+  it('rejects invalid global paths before commands execute', () => {
+    const result = runCli(['--config-dir', path.join(testHome, 'missing'), '--version']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Config directory not found');
+    expect(result.stdout).not.toContain('AI Account Center v');
+  });
+
+  it('retired commands and profile invocations fail explicitly without launching CLIs', () => {
+    for (const args of [
+      ['glm'],
+      ['codex', 'login'],
+      ['cursor', 'probe'],
+      ['docker', 'up'],
+      ['api', 'create'],
+      ['-p', 'old prompt'],
+      ['config', 'channels'],
+      ['--install'],
+      ['--uninstall'],
+      ['--doctor'],
+    ]) {
+      const result = runCli(args);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('retired');
+      expect(result.stderr).toContain('ai-account-center dashboard');
+      expect(result.stdout).not.toContain('Starting');
+    }
+  });
+
+  it('Codex retired shell commands emit no exports and preserve private files', () => {
+    for (const command of ['use', 'switch']) {
+      const result = runCli(['codex-auth', command, 'saved']);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('codex-auth activate <saved-login>');
+      expect(result.stderr).toContain('No CODEX_HOME exports');
+    }
+  });
+
+  it('legacy launcher bins point to a migration-only stub with no shell output', () => {
+    const pkg = require('../../package.json');
+    for (const alias of ['ccsx', 'ccs-codex', 'ccsd', 'ccs-droid', 'ccsxp']) {
+      expect(pkg.bin[alias]).toBe('dist/bin/compat-cli.js');
+    }
+    const env = { ...process.env, CCS_HOME: testHome, CODEX_HOME: path.join(testHome, '.codex') };
+    delete env.CCS_DIR;
+    const result = spawnSync(
+      process.execPath,
+      [path.join(packageRoot, 'src/bin/compat-cli.ts'), 'auth', 'use', 'saved'],
+      {
+        cwd: packageRoot,
+        env,
         encoding: 'utf8',
-        timeout: 3000,
-        env: { ...process.env, CCS_HOME: testCcsHome }
-      });
-
-      assert(output.includes('CCS gitlab Shortcut Help'), 'Should render provider shortcut help');
-      assert(output.includes('--gitlab-token-login'), 'Should document canonical GitLab PAT flag');
-      assert(output.includes('--token-login'), 'Should document legacy GitLab PAT alias');
-      assert(output.includes('--gitlab-url <url>'), 'Should document self-hosted GitLab URL flag');
-      assert(!output.includes('Starting GitLab Duo OAuth'), 'Should not start OAuth when help is requested');
-    });
+        timeout: 10000,
+      }
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('retired upstream CCS launcher');
+    expect(result.stderr).toContain('codex-auth activate <saved-login>');
   });
 
-  describe('Profile handling', () => {
-    // Note: GLM/Kimi profiles are no longer auto-created (v6.0).
-    // Legacy GLMT files may still exist, but new supported API profiles are created
-    // via UI presets or CLI: ccs api create --preset glm
-
-    it('shows helpful error for non-existent profile', function() {
-      try {
-        runCli('glm --help', { stdio: 'pipe' });
-        // If GLM profile exists from previous setup, this is fine too
-      } catch (e) {
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        // Either profile exists and works, or shows helpful "not found" message
-        // Both are valid behaviors depending on user's setup
-        const isValid = !output.includes("Profile 'glm' not found") ||
-                        output.includes("not found") ||
-                        output.includes("ccs api create");
-        assert(isValid, 'Should either find profile or show helpful message');
-      }
-    });
-
-    it('shows error for invalid profile', function() {
-      try {
-        runCli('invalid-profile-name', { stdio: 'pipe' });
-        assert(false, 'Should have thrown an error for invalid profile');
-      } catch (e) {
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        assert(output.includes("not found") || output.includes("invalid"), 'Should show profile not found error');
-      }
-    });
-
-    it('handles profile with flags correctly', function() {
-      try {
-        // Use a known command instead of profile that may not exist
-        runCli('api --help', { stdio: 'pipe', timeout: 3000 });
-      } catch (e) {
-        const output = e.stderr?.toString() || '';
-        assert(!output.includes("Profile '-c' not found"), 'Should not treat flags as profiles');
-      }
-    });
-  });
-
-  describe('Version and help', () => {
-    it('shows version with --version flag', function() {
-      const output = runCli('--version', { encoding: 'utf8' });
-      assert(/\d+\.\d+\.\d+/.test(output), 'Should show version number');
-    });
-
-    it('shows version with -v flag', function() {
-      const output = runCli('-v', { encoding: 'utf8' });
-      assert(/\d+\.\d+\.\d+/.test(output), 'Should show version number');
-    });
-
-    it('shows help with --help flag', function() {
-      const output = runCli('--help', { encoding: 'utf8' });
-      assert(/usage|help|options/i.test(output), 'Should show help information');
-    });
-
-    it('shows help with -h flag', function() {
-      const output = runCli('-h', { encoding: 'utf8' });
-      assert(/usage|help|options/i.test(output), 'Should show help information');
-    });
-  });
-
-  describe('Error handling', () => {
-    it('handles empty arguments gracefully', function() {
-      try {
-        runCli('', { stdio: 'pipe', timeout: 3000 });
-      } catch (e) {
-        // Should either succeed or fail gracefully with a helpful error
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        assert(!output.includes('TypeError') && !output.includes('Cannot read'), 'Should not crash with TypeError');
-      }
-    });
-
-    it('handles very long argument', function() {
-      const longArg = 'a'.repeat(1000);
-      try {
-        runCli(`"${longArg}"`, { stdio: 'pipe', timeout: 3000 });
-      } catch (e) {
-        // Should handle gracefully, not crash
-        const output = e.stderr?.toString() || e.stdout?.toString() || '';
-        assert(!output.includes('TypeError') && !output.includes('Cannot read'), 'Should not crash with TypeError');
-      }
-    });
+  it('retired self-update cannot invoke package installation for any old flag variant', () => {
+    for (const args of [
+      ['update'],
+      ['--update', '--force'],
+      ['update', '--beta'],
+      ['update', '--dev'],
+      ['update', '--help'],
+    ]) {
+      const result = runCli(args);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('Upstream CCS self-update is retired');
+      expect(result.stderr).toContain('Installed application updates remain available');
+      expect(result.stdout).not.toContain('Installing');
+      expect(result.stdout).not.toContain('npm');
+    }
   });
 });

@@ -2,7 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, dev]
+
+permissions:
+  contents: read
 
 # Design notes:
 # - Matrix parallelism cuts wall time from ~3-4min to ~60-90s (cache warm).
@@ -18,9 +20,9 @@ jobs:
   validate:
     if: >-
       contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.pull_request.author_association)
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     env:
-      # Keep Bun cache isolated per job workspace so parallel self-hosted runs
+      # Keep Bun cache isolated per job workspace so parallel jobs
       # do not race on ~/.bun/install/cache and corrupt restore/install state.
       BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.bun/install/cache
     strategy:
@@ -51,7 +53,7 @@ jobs:
         with:
           path: |
             ${{ env.BUN_INSTALL_CACHE_DIR }}
-          key: ${{ runner.os }}-bun-cache-v2-${{ hashFiles('bun.lock', 'ui/bun.lock') }}
+          key: ${{ runner.os }}-bun-cache-v3-${{ hashFiles('bun.lock', 'web-dashboard/Cargo.lock') }}
 
       - name: Ensure dependencies
         run: bash scripts/ensure-deps.sh
@@ -62,7 +64,7 @@ jobs:
   build:
     if: >-
       contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.pull_request.author_association)
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     name: build
     env:
       BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.bun/install/cache
@@ -85,7 +87,7 @@ jobs:
         with:
           path: |
             ${{ env.BUN_INSTALL_CACHE_DIR }}
-          key: ${{ runner.os }}-bun-cache-v2-${{ hashFiles('bun.lock', 'ui/bun.lock') }}
+          key: ${{ runner.os }}-bun-cache-v3-${{ hashFiles('bun.lock', 'web-dashboard/Cargo.lock') }}
 
       - name: Ensure dependencies
         run: bash scripts/ensure-deps.sh
@@ -117,7 +119,7 @@ jobs:
   test:
     if: >-
       contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.pull_request.author_association)
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
     name: test
     needs: [build]
     env:
@@ -141,7 +143,7 @@ jobs:
         with:
           path: |
             ${{ env.BUN_INSTALL_CACHE_DIR }}
-          key: ${{ runner.os }}-bun-cache-v2-${{ hashFiles('bun.lock', 'ui/bun.lock') }}
+          key: ${{ runner.os }}-bun-cache-v3-${{ hashFiles('bun.lock', 'web-dashboard/Cargo.lock') }}
 
       - name: Ensure dependencies
         run: bash scripts/ensure-deps.sh
@@ -155,29 +157,24 @@ jobs:
       - name: Test
         run: bun run test:all
 
-      - name: Test CLI e2e
-        env:
-          CCS_E2E_SKIP_BUILD: '1'
-        run: bun run test:e2e
-
-  compose-parity:
-    if: >-
-      contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.pull_request.author_association)
-    runs-on: [self-hosted, linux, x64, cliproxy]
-    name: compose-parity
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Assert compose parity (compose.yaml vs docker-compose.integrated.yml)
-        run: bash tests/docker/compose-parity.sh
+      - name: Test offline Claude quota collector
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ai-account-center-claude-ci.XXXXXX")"
+          trap 'rm -rf "$TEST_FIXTURE_ROOT"' EXIT
+          mkdir -p "$TEST_FIXTURE_ROOT/.ccs" "$TEST_FIXTURE_ROOT/.config" \
+            "$TEST_FIXTURE_ROOT/.cache" "$TEST_FIXTURE_ROOT/.state"
+          env -i PATH="$PATH" HOME="$TEST_FIXTURE_ROOT" USERPROFILE="$TEST_FIXTURE_ROOT" \
+            CCS_HOME="$TEST_FIXTURE_ROOT" XDG_CONFIG_HOME="$TEST_FIXTURE_ROOT/.config" \
+            XDG_CACHE_HOME="$TEST_FIXTURE_ROOT/.cache" XDG_STATE_HOME="$TEST_FIXTURE_ROOT/.state" \
+            TMPDIR="${TMPDIR:-/tmp}" LANG="${LANG:-C.UTF-8}" TZ=UTC NODE_ENV=test \
+            PYTHONDONTWRITEBYTECODE=1 python3 tests/unit/account-usage/claude_usage_test.py
 
   # Single always-reporting status that branch protection requires.
   #
-  # The validate/build/test/compose-parity jobs are gated to trusted author associations so
-  # untrusted fork code never executes on the self-hosted runners. A job skipped
+  # The validate/build/test jobs are gated to trusted author associations so
+  # source execution remains restricted to trusted contributors. A job skipped
   # by a job-level `if` reports no status, so requiring those job names directly
   # leaves fork PRs stuck on "Expected - waiting for status to be reported"
   # forever. Requiring this gate instead keeps the contract satisfiable:
@@ -186,11 +183,11 @@ jobs:
   #                 (fork code is still reviewed by a maintainer before merge)
   #
   # No checkout here: the gate only inspects upstream job results, so it runs no
-  # third-party code and is safe on the self-hosted runner.
+  # third-party code.
   ci-gate:
     if: always()
-    needs: [validate, build, test, compose-parity]
-    runs-on: [self-hosted, linux, x64]
+    needs: [validate, build, test]
+    runs-on: ubuntu-latest
     name: CI Gate
     steps:
       - name: Verify gated jobs did not fail
@@ -198,10 +195,9 @@ jobs:
           VALIDATE: ${{ needs.validate.result }}
           BUILD: ${{ needs.build.result }}
           TEST: ${{ needs.test.result }}
-          COMPOSE_PARITY: ${{ needs.compose-parity.result }}
         run: |
-          echo "validate=$VALIDATE build=$BUILD test=$TEST compose-parity=$COMPOSE_PARITY"
-          for result in "$VALIDATE" "$BUILD" "$TEST" "$COMPOSE_PARITY"; do
+          echo "validate=$VALIDATE build=$BUILD test=$TEST"
+          for result in "$VALIDATE" "$BUILD" "$TEST"; do
             if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
               echo "[X] A required CI job did not pass (result: $result)"
               exit 1

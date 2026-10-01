@@ -1,36 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[WARN] ghcr.io/kaitranntt/ccs-dashboard is deprecated. Migrate to ghcr.io/kaitranntt/ccs:latest. See https://github.com/kaitranntt/ccs/issues/1251" >&2
-
-ccs_home_dir="${CCS_HOME_DIR:-/home/node/.ccs}"
+cd /app
+umask 077
+ccs_home_dir="${CCS_DIR:-${CCS_HOME_DIR:-${CCS_HOME:-/home/node}/.ccs}}"
+export CCS_DIR="$ccs_home_dir"
 
 mkdir -p "$ccs_home_dir"
 
-# Fix volume permissions if running as root
-if [ "$(id -u)" = "0" ]; then
-  if ! chown -R node:node "$ccs_home_dir" 2>/dev/null; then
-    echo "[!] Warning: Could not change ownership of $ccs_home_dir (read-only volume?)" >&2
-  fi
-fi
-
-# Show usage if no command provided
-if [ "$#" -eq 0 ]; then
-  echo "[X] No command provided" >&2
-  echo "" >&2
-  echo "Usage: docker run ccs-dashboard <command>" >&2
-  echo "" >&2
-  echo "Examples:" >&2
-  echo "  docker run ccs-dashboard node dist/ccs.js config" >&2
-  echo "  docker run ccs-dashboard ccs --help" >&2
-  echo "" >&2
+# Never rewrite ownership or authentication state from an older installation.
+if [ ! -r "$ccs_home_dir" ] || [ ! -w "$ccs_home_dir" ]; then
+  echo "[X] Account state directory is not readable and writable by runtime UID $(id -u): $ccs_home_dir" >&2
+  echo "    Review the existing volume ownership or explicitly select its existing runtime UID." >&2
   exit 1
 fi
 
-# Drop privileges from root to node user
-if [ "$(id -u)" = "0" ]; then
-  cmd="$(printf '%q ' "$@")"
-  exec su -s /bin/bash node -c "exec ${cmd}"
+# Match the image's dashboard default when invoked without a command.
+if [ "$#" -eq 0 ]; then
+  set -- ai-account-center dashboard --host 0.0.0.0 --port 3000 --no-open
 fi
 
 exec "$@"

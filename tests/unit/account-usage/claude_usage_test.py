@@ -56,7 +56,8 @@ class IdentityTests(unittest.TestCase):
         client = FakeClient(*responses)
         with mock.patch.object(usage.sys, "platform", "win32"), \
                 mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, saved_cache or cache())), \
-                mock.patch.object(usage, "Client", return_value=client):
+                mock.patch.object(usage, "Client", return_value=client), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]):
             result = usage.collect("gmail", "windows")
         return result, client
 
@@ -121,6 +122,19 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(result["windows"], [])
                 self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile"])
 
+    def test_opaque_source_context_changes_with_verified_organization_and_client(self):
+        quota = {"five_hour": {"utilization": 0}}
+        first, _ = self.collect([profile(), quota])
+        other_client, _ = self.collect([profile(), quota], cache(key(client=OTHER)))
+        other_org, _ = self.collect([profile(organization={"uuid": OTHER}), quota], cache(key(org=OTHER)))
+        fingerprints = [sample["sourceContextFingerprint"] for sample in [first, other_client, other_org]]
+        self.assertEqual(len(set(fingerprints)), 3)
+        for value in fingerprints:
+            self.assertRegex(value, r"^[a-f0-9]{64}$")
+        for sample in [first, other_client, other_org]:
+            for identity in [ACCOUNT, CLIENT, ORG, OTHER, TOKEN]:
+                self.assertNotIn(identity, json.dumps(sample))
+
     def test_expired_or_empty_cache_never_calls_network(self):
         result, client = self.collect([], cache(expiresAt=0))
         self.assertEqual(result["status"], "needs_sign_in")
@@ -142,6 +156,52 @@ class IdentityTests(unittest.TestCase):
 
 
 class WindowTests(unittest.TestCase):
+    def fable(self, **overrides):
+        return {"kind": "weekly_scoped", "group": "weekly", "percent": 0,
+                "resets_at": "2026-10-08T12:00:00+00:00", "is_active": False,
+                "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}, **overrides}
+
+    def test_reported_inactive_fable_zero_preserves_core_model_and_extra_windows(self):
+        windows = usage.normalize_windows({
+            "five_hour": {"utilization": 11, "resets_at": "2026-10-01T21:20:00.499Z"},
+            "seven_day": {"utilization": 9, "resets_at": "2026-10-08T12:00:00.499Z"},
+            "seven_day_opus": {"utilization": 3},
+            "limits": [{"kind": "session", "group": "session", "percent": 11}, self.fable()],
+            "extra_usage": {"is_enabled": False, "monthly_limit": 5000, "used_credits": 0,
+                            "currency": "USD", "utilization": 0},
+        })
+        self.assertEqual([window["key"] for window in windows],
+                         ["five_hour", "seven_day", "seven_day_opus", "seven_day_fable", "extra_usage"])
+        self.assertEqual(windows[3], {
+            "key": "seven_day_fable", "label": "Weekly Fable usage", "kind": "rate_limit",
+            "usedPercent": 0, "remainingPercent": 100, "resetAt": "2026-10-08T12:00:00.000Z",
+            "expiresAt": None, "windowMinutes": 10080, "used": None, "limit": None, "unit": None,
+        })
+        self.assertEqual(windows[0]["resetAt"], "2026-10-01T21:20:00.499Z")
+        self.assertEqual(windows[1]["resetAt"], "2026-10-08T12:00:00.499Z")
+        self.assertEqual((windows[4]["limit"], windows[4]["remaining"], windows[4]["enabled"]), (50, 50, False))
+
+    def test_fable_is_never_inferred_from_legacy_other_models_or_surface_caps(self):
+        cases = [None, [], [self.fable(kind="weekly_all")], [self.fable(group="session")],
+                 [self.fable(scope={"model": {"display_name": "Opus"}, "surface": None})],
+                 [self.fable(scope={"model": {"display_name": "Fable"}, "surface": {"id": "code"}})]]
+        for limits in cases:
+            with self.subTest(limits=limits):
+                windows = usage.normalize_windows({"seven_day": {"utilization": 42},
+                    "seven_day_opus": {"utilization": 80}, "seven_day_fable": {"utilization": 12}, "limits": limits})
+                self.assertEqual([window["key"] for window in windows], ["seven_day", "seven_day_opus"])
+
+    def test_fable_nonzero_over_limit_and_duplicate_conflicts_are_safe(self):
+        for percent in (12.5, 125.5):
+            window = usage.normalize_windows({"limits": [self.fable(percent=percent)]})[0]
+            self.assertEqual((window["usedPercent"], window["remainingPercent"]), (percent, max(0, 100 - percent)))
+        self.assertEqual(len(usage.normalize_windows({"limits": [self.fable(), self.fable()]})), 1)
+        self.assertEqual(usage.normalize_windows({"limits": [self.fable(), self.fable(percent=4)]}), [])
+        for value in (True, -1, float("inf"), "0", None):
+            with self.subTest(value=value):
+                self.assertEqual(usage.normalize_windows({"limits": [self.fable(percent=value)]}), [])
+        self.assertEqual(usage.normalize_windows({"limits": [self.fable()] * 65}), [])
+
     def test_invalid_percent_and_unknown_window_do_not_become_zero(self):
         self.assertEqual(usage.normalize_windows({
             "five_hour": {"utilization": True}, "seven_day": {"utilization": -1},
@@ -300,11 +360,11 @@ class WebExtraTests(unittest.TestCase):
         for value in ({}, {"amount": True}, {"amount": -1}, {"amount": 0, "currency": "unknown"}):
             self.assertEqual(usage.normalize_prepaid(value), [])
 
-    def web_windows(self, *responses):
+    def web_windows(self, *responses, availability=None):
         client = mock.Mock()
         client.get.side_effect = responses
         with mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]), mock.patch.object(usage, "WebClient", return_value=client):
-            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG)
+            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, availability=availability)
         return windows, client
 
     def web_account(self, **overrides):
@@ -331,12 +391,40 @@ class WebExtraTests(unittest.TestCase):
         with mock.patch.object(usage, "capsule_cookies", side_effect=RuntimeError("private-path")):
             self.assertEqual(usage.optional_web_windows("gmail", ACCOUNT, ORG), [])
 
+    def test_optional_group_markers_distinguish_failure_from_successful_empty_null_and_zero(self):
+        availability = {}
+        windows, _ = self.web_windows(self.web_account(), RuntimeError("private-error"),
+            {"amount": 0, "currency": "USD"}, availability=availability)
+        self.assertEqual(availability, {"resetCredits": "unavailable", "prepaidBalance": "ok"})
+        self.assertEqual(windows[0]["remaining"], 0)
+        for reset, prepaid in (({}, {}), ({"cedar_ember": None}, {"amount": None}),
+                               ({"cedar_ember": {"eligible": False, "grants": []}}, {"amount": 0})):
+            with self.subTest(reset=reset, prepaid=prepaid):
+                availability = {}
+                windows, _ = self.web_windows(self.web_account(), reset, prepaid, availability=availability)
+                self.assertEqual(availability, {"resetCredits": "ok", "prepaidBalance": "ok"})
+                self.assertEqual(len(windows), 2 if prepaid.get("amount") == 0 else 0)
+        availability = {}
+        self.web_windows(self.web_account(uuid=OTHER), availability=availability)
+        self.assertEqual(availability, {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})
+
+    def test_native_collector_reports_successful_empty_web_groups_without_invented_windows(self):
+        client = FakeClient(profile(), {"five_hour": {"utilization": 0}, "limits": [WindowTests().fable()]})
+        web = mock.Mock()
+        web.get.side_effect = [self.web_account(), {"cedar_ember": None}, {"amount": None}]
+        with mock.patch.object(usage.sys, "platform", "win32"), mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), mock.patch.object(usage, "Client", return_value=client), mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]), mock.patch.object(usage, "WebClient", return_value=web):
+            result = usage.collect("gmail", "windows")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["optionalExtras"], {"resetCredits": "ok", "prepaidBalance": "ok"})
+        self.assertEqual([window["key"] for window in result["windows"]], ["five_hour", "seven_day_fable"])
+
     def test_native_quota_survives_missing_optional_session(self):
         client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
         with mock.patch.object(usage.sys, "platform", "win32"), mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), mock.patch.object(usage, "Client", return_value=client), mock.patch.object(usage, "capsule_cookies", side_effect=ValueError("PRIVATE")):
             result = usage.collect("gmail", "windows")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["windows"][0]["usedPercent"], 7)
+        self.assertEqual(result["optionalExtras"], {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})
         self.assertNotIn("PRIVATE", json.dumps(result))
 
     def test_web_client_hosts_routes_redirect_and_response_boundaries(self):

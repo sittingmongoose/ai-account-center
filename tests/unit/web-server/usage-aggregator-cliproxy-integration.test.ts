@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -170,7 +170,10 @@ beforeEach(async () => {
   writeClaudeJsonlFixture();
   writeCliproxySnapshotFixture();
 
+  // Both registry pricing and proxy management reads use deterministic offline failures.
+  spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network disabled in usage fixtures.'));
   aggregator = await import('../../../src/web-server/usage/aggregator');
+  aggregator.shutdownUsageAggregator();
   aggregator.clearUsageCache();
 });
 
@@ -178,6 +181,7 @@ afterEach(() => {
   aggregator.shutdownUsageAggregator();
   aggregator.clearUsageCache();
 
+  mock.restore();
   if (originalCcsDir !== undefined) {
     process.env.CCS_DIR = originalCcsDir;
   } else {
@@ -244,7 +248,10 @@ describe('usage aggregator cliproxy integration', () => {
         },
       },
     });
-    fs.writeFileSync(path.join(claudeDir, 'projects', 'project-one', 'global.jsonl'), `${globalLine}\n`);
+    fs.writeFileSync(
+      path.join(claudeDir, 'projects', 'project-one', 'global.jsonl'),
+      `${globalLine}\n`
+    );
 
     const instanceLine = JSON.stringify({
       type: 'assistant',
@@ -453,11 +460,7 @@ describe('usage aggregator cliproxy integration', () => {
     ]);
 
     expect(result[0].modelBreakdowns).toHaveLength(3);
-    expect(result[0].modelsUsed).toEqual([
-      'gpt-5.5',
-      'openai/gpt-5.5',
-      'github-copilot/gpt-5.5',
-    ]);
+    expect(result[0].modelsUsed).toEqual(['gpt-5.5', 'openai/gpt-5.5', 'github-copilot/gpt-5.5']);
   });
 
   it('falls back to model cardinality when merging legacy hourly buckets without requestCount', () => {

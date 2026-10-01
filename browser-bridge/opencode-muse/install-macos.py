@@ -71,7 +71,7 @@ def install():
         raise ValueError()
     shutil.copyfile(muse_source, module)
     os.chmod(module, 0o600)
-    manifest = {"name": HOST, "description": "CCS read-only OpenCode and Muse browser usage",
+    manifest = {"name": HOST, "description": "AI Account Center read-only OpenCode and Muse browser usage",
                 "path": str(launcher), "type": "stdio", "allowed_origins": ["chrome-extension://" + ID + "/"]}
     installed = []
     for browser, relative in (("Brave", "Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"),

@@ -7,9 +7,9 @@
   <key>CFBundleIdentifier</key>
   <string>party.sittingmongoose.ccs.accounts-bar</string>
   <key>CFBundleName</key>
-  <string>CCS Bar</string>
+  <string>AI Account Center</string>
   <key>CFBundleDisplayName</key>
-  <string>CCS Bar</string>
+  <string>AI Account Center</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -23,9 +23,9 @@
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>NSHumanReadableCopyright</key>
-  <string>CCS Bar</string>
+  <string>AI Account Center — based on CCS Bar, MIT license</string>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>CCS Bar connects to your authenticated CCS dashboard to show accounts and usage.</string>
+  <string>AI Account Center connects to your authenticated account dashboard to show accounts and usage.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>

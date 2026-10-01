@@ -5,6 +5,10 @@ import * as os from 'os';
 import * as path from 'path';
 import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
 import {
+  applyClaudeLiveUsage,
+  claudeAccount,
+} from '../../../src/web-server/services/account-dashboard-projection';
+import {
   getCachedClaudeDesktopLiveUsage,
   getLiveClaudeDesktopUsage,
   invalidateClaudeDesktopLiveUsageCache,
@@ -32,6 +36,7 @@ function payload(overrides: Record<string, unknown> = {}): string {
     plan: 'max',
     accountVerified: true,
     organizationVerified: true,
+    sourceContextFingerprint: 'a'.repeat(64),
     fetchedAt: new Date(Date.now()).toISOString(),
     windows: [
       { key: 'five_hour', usedPercent: 0, resetAt: null },
@@ -165,6 +170,60 @@ describe('identity-bound Claude Desktop live usage', () => {
     expect(options).toMatchObject({ timeout: 20000, maxBuffer: 65536, windowsHide: true });
   });
 
+  it('preserves genuine Fable zero and reset alongside core quota and all existing balances across a cold cache', async () => {
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 11, resetAt: '2026-10-01T21:20:00.499Z' },
+        { key: 'seven_day', usedPercent: 9, resetAt: '2026-10-08T12:00:00.499Z' },
+        {
+          key: 'seven_day_fable',
+          usedPercent: 0,
+          resetAt: '2026-10-08T12:00:00Z',
+          label: 'untrusted upstream text',
+        },
+        {
+          key: 'extra_usage',
+          enabled: false,
+          usedPercent: 0,
+          used: 0,
+          limit: 50,
+          remaining: 50,
+          unit: 'USD',
+        },
+        { key: 'reset_credits_available', kind: 'balance', remaining: 0, unit: 'resets' },
+        {
+          key: 'reset_credit_used_grant_1',
+          kind: 'balance',
+          remaining: 0,
+          used: 1,
+          limit: 1,
+          unit: 'resets',
+          expiresAt: '2026-10-22T16:00:00Z',
+        },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 0, unit: 'USD' },
+      ],
+    });
+    const live = await getLiveClaudeDesktopUsage('gmail');
+    expect(live?.windows).toHaveLength(7);
+    expect(live?.windows[2]).toMatchObject({
+      key: 'seven_day_fable',
+      label: 'Weekly Fable usage',
+      kind: 'rate_limit',
+      usedPercent: 0,
+      remainingPercent: 100,
+      resetAt: '2026-10-08T12:00:00.000Z',
+      windowMinutes: 10080,
+    });
+    expect(live?.windows[2]).not.toHaveProperty('enabled');
+    expect(live?.windows[5]?.expiresAt).toBe('2026-10-22T16:00:00.000Z');
+    expect(live?.windows[6]?.remaining).toBe(0);
+    invalidateClaudeDesktopLiveUsageCache();
+    const retained = await getCachedClaudeDesktopLiveUsage('gmail');
+    expect(retained).toEqual(live);
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(retained)).not.toContain('untrusted upstream text');
+  });
+
   it.each([
     { schemaVersion: 2 },
     { provider: 'codex' },
@@ -182,6 +241,18 @@ describe('identity-bound Claude Desktop live usage', () => {
     { windows: [{ key: 'five_hour', usedPercent: true }] },
     { windows: [{ key: 'five_hour', usedPercent: 0, resetAt: 'private-reset-sentinel' }] },
     { windows: [{ key: 'five_hour', usedPercent: 0, expiresAt: 'private-expiry-sentinel' }] },
+    {
+      windows: [
+        {
+          key: 'prepaid_balance',
+          kind: 'balance',
+          remaining: 5,
+          unit: 'USD',
+          status: 'cached',
+          sampledAt: '2026-10-01T12:00:00Z',
+        },
+      ],
+    },
     {
       windows: [
         { key: 'five_hour', usedPercent: 0 },
@@ -587,7 +658,141 @@ describe('identity-bound Claude Desktop live usage', () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
-  it('fresh provider zero/null updates replace richer retained metadata normally', async () => {
+  it('retains prior optional extras with original times when fresh Fable succeeds but web extras are unavailable', async () => {
+    let now = Date.now();
+    spyOn(Date, 'now').mockImplementation(() => now);
+    const originalTime = new Date(now).toISOString();
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 45 },
+        { key: 'seven_day', usedPercent: 99 },
+        { key: 'reset_credits_available', kind: 'balance', remaining: 0, unit: 'resets' },
+        {
+          key: 'reset_credit_used_grant_1',
+          kind: 'balance',
+          remaining: 0,
+          used: 1,
+          limit: 1,
+          unit: 'resets',
+          expiresAt: '2026-10-22T16:00:00Z',
+        },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 50, unit: 'USD' },
+      ],
+    });
+    await getLiveClaudeDesktopUsage('gmail');
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'unavailable' },
+      windows: [
+        { key: 'five_hour', usedPercent: 0, resetAt: null },
+        { key: 'seven_day', usedPercent: 0, resetAt: null },
+        { key: 'seven_day_fable', usedPercent: 0, resetAt: '2026-10-08T12:00:00Z' },
+      ],
+    });
+    const current = await getLiveClaudeDesktopUsage('gmail');
+    expect(current?.fetchedAt).toBe(new Date(now).toISOString());
+    expect(current?.windows).toHaveLength(6);
+    expect(current?.windows[2]).toMatchObject({
+      key: 'seven_day_fable',
+      usedPercent: 0,
+      remainingPercent: 100,
+    });
+    expect(current?.windows[2]).not.toHaveProperty('status');
+    expect(current?.windows.find((window) => window.key === 'prepaid_balance')).toMatchObject({
+      remaining: 50,
+      unit: 'USD',
+      status: 'cached',
+      sampledAt: originalTime,
+    });
+    expect(
+      current?.windows.find((window) => window.key === 'reset_credit_used_grant_1')
+    ).toMatchObject({
+      remaining: 0,
+      expiresAt: '2026-10-22T16:00:00.000Z',
+      status: 'cached',
+      sampledAt: originalTime,
+    });
+    const publicAccount = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), current);
+    expect(publicAccount.fetchedAt).toBe(current?.fetchedAt);
+    expect(publicAccount).not.toHaveProperty('sourceContextFingerprint');
+    expect(JSON.stringify(publicAccount)).not.toContain('a'.repeat(64));
+    expect(publicAccount.windows.find((window) => window.key === 'prepaid_balance')).toMatchObject({
+      status: 'cached',
+      sampledAt: originalTime,
+    });
+    invalidateClaudeDesktopLiveUsageCache();
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toEqual(current);
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'unavailable' },
+      windows: [
+        { key: 'five_hour', usedPercent: 0, resetAt: null },
+        { key: 'seven_day', usedPercent: 0, resetAt: null },
+        { key: 'seven_day_fable', usedPercent: 7, resetAt: null },
+      ],
+    });
+    const again = await getLiveClaudeDesktopUsage('gmail');
+    expect(again?.windows.find((window) => window.key === 'prepaid_balance')).toMatchObject({
+      sampledAt: originalTime,
+      status: 'cached',
+    });
+    now += 24 * 60 * 60 * 1000;
+    output = payload({
+      optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'unavailable' },
+      windows: [{ key: 'seven_day_fable', usedPercent: 8, resetAt: null }],
+    });
+    const expired = await getLiveClaudeDesktopUsage('gmail');
+    expect(expired?.windows.map((window) => window.key)).toEqual(['seven_day_fable']);
+  });
+
+  it('clears retained extras on successful empty inventory and keeps independent failed groups cached', async () => {
+    let now = Date.now();
+    spyOn(Date, 'now').mockImplementation(() => now);
+    const originalTime = new Date(now).toISOString();
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 12 },
+        { key: 'reset_credits_available', kind: 'balance', remaining: 1, unit: 'resets' },
+        {
+          key: 'reset_credit_available_grant_1',
+          kind: 'balance',
+          remaining: 1,
+          used: 0,
+          limit: 1,
+          unit: 'resets',
+          expiresAt: '2026-10-22T16:00:00Z',
+        },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 50, unit: 'USD' },
+      ],
+    });
+    await getLiveClaudeDesktopUsage('gmail');
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'ok', prepaidBalance: 'unavailable' },
+      windows: [{ key: 'seven_day_fable', usedPercent: 0, resetAt: null }],
+    });
+    const partial = await getLiveClaudeDesktopUsage('gmail');
+    expect(partial?.windows.map((window) => window.key)).toEqual([
+      'seven_day_fable',
+      'prepaid_balance',
+    ]);
+    expect(partial?.windows[1]).toMatchObject({
+      status: 'cached',
+      sampledAt: originalTime,
+      remaining: 50,
+    });
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'ok', prepaidBalance: 'ok' },
+      windows: [{ key: 'seven_day_fable', usedPercent: 0, resetAt: null }],
+    });
+    const empty = await getLiveClaudeDesktopUsage('gmail');
+    expect(empty?.windows.map((window) => window.key)).toEqual(['seven_day_fable']);
+    invalidateClaudeDesktopLiveUsageCache();
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toEqual(empty);
+  });
+
+  it('fresh reported provider zero/null updates replace richer retained metadata normally', async () => {
     let now = Date.now();
     spyOn(Date, 'now').mockImplementation(() => now);
     output = payload({
@@ -603,22 +808,108 @@ describe('identity-bound Claude Desktop live usage', () => {
       windows: [
         { key: 'five_hour', usedPercent: 0, resetAt: null },
         { key: 'seven_day', usedPercent: 0, resetAt: null },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 0, unit: 'USD' },
       ],
     });
     const current = await getLiveClaudeDesktopUsage('gmail', { refresh: true });
     invalidateClaudeDesktopLiveUsageCache();
     const retained = await getCachedClaudeDesktopLiveUsage('gmail');
     expect(retained).toEqual(current);
-    expect(retained?.windows).toHaveLength(2);
-    expect(retained?.windows.map((window) => [window.usedPercent, window.resetAt])).toEqual([
+    expect(retained?.windows).toHaveLength(3);
+    expect(
+      retained?.windows.slice(0, 2).map((window) => [window.usedPercent, window.resetAt])
+    ).toEqual([
       [0, null],
       [0, null],
     ]);
-    expect(retained?.windows.some((window) => window.key === 'prepaid_balance')).toBe(false);
+    expect(retained?.windows[2]?.remaining).toBe(0);
+    expect(retained?.windows[2]).not.toHaveProperty('status');
     const contents = fs.readFileSync(
       path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache', 'gmail.json'),
       'utf8'
     );
     expect(contents).not.toContain('credential-sentinel');
+  });
+
+  it.each([
+    'plan',
+    'source',
+    'unknown-availability',
+    'organization-context',
+    'client-context',
+    'legacy-unbound-cache',
+  ])('never inherits optional extras across changed %s', async (changed) => {
+    output = payload({
+      ...(changed === 'legacy-unbound-cache' ? { sourceContextFingerprint: undefined } : {}),
+      windows: [
+        { key: 'five_hour', usedPercent: 7 },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 50, unit: 'USD' },
+      ],
+    });
+    await getLiveClaudeDesktopUsage('gmail');
+    if (changed === 'source')
+      writeProfiles([
+        { ...profile, windows: { ...profile.windows, sshHost: 'different-windows' } },
+      ]);
+    output = payload({
+      ...(changed === 'plan' ? { plan: 'pro' } : {}),
+      ...(changed === 'organization-context' ? { sourceContextFingerprint: 'b'.repeat(64) } : {}),
+      ...(changed === 'client-context' ? { sourceContextFingerprint: 'c'.repeat(64) } : {}),
+      ...(changed === 'unknown-availability'
+        ? {}
+        : { optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'unavailable' } }),
+      windows: [{ key: 'seven_day_fable', usedPercent: 0, resetAt: null }],
+    });
+    const current = await getLiveClaudeDesktopUsage('gmail', { refresh: true });
+    expect(current?.windows.map((window) => window.key)).toEqual(['seven_day_fable']);
+  });
+
+  it('retains the latest verified memory extras when protected storage cannot be written', async () => {
+    let now = Date.now();
+    spyOn(Date, 'now').mockImplementation(() => now);
+    const originalTime = new Date(now).toISOString();
+    fs.writeFileSync(path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache'), 'blocked');
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 7 },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 50, unit: 'USD' },
+      ],
+    });
+    await getLiveClaudeDesktopUsage('gmail');
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'unavailable' },
+      windows: [{ key: 'seven_day_fable', usedPercent: 0, resetAt: null }],
+    });
+    const retained = await getLiveClaudeDesktopUsage('gmail');
+    expect(retained?.windows[1]).toMatchObject({
+      remaining: 50,
+      status: 'cached',
+      sampledAt: originalTime,
+    });
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'ok', prepaidBalance: 'ok' },
+      windows: [
+        { key: 'seven_day_fable', usedPercent: 0, resetAt: null },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 0, unit: 'USD' },
+      ],
+    });
+    await getLiveClaudeDesktopUsage('gmail');
+    const zeroTime = new Date(now).toISOString();
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'unavailable' },
+      windows: [{ key: 'seven_day_fable', usedPercent: 0, resetAt: null }],
+    });
+    const latest = await getLiveClaudeDesktopUsage('gmail');
+    expect(latest?.windows[1]).toMatchObject({
+      remaining: 0,
+      status: 'cached',
+      sampledAt: zeroTime,
+    });
+    expect(
+      fs.readFileSync(path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache'), 'utf8')
+    ).toBe('blocked');
   });
 });

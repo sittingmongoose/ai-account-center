@@ -43,6 +43,19 @@ test('usage percentages and actual resets remain independent from wallet', () =>
   assert.equal(projected.windows[0].resetAt, '2026-10-03T04:00:00.000Z');
   assert.equal(projected.windows[1].resetAt, null);
 });
+test('reported Go overage retains signed real wallet and exact quota without negative remaining', () => {
+  const row = {key: 'console-week', usedPercent: 125.5, resetAt: '2026-10-03T04:00:00Z', api_key: 'sk-private'};
+  const projected = projectSample({...sample, windows: [row, ...sample.windows]});
+  assert.equal(projected.windows[0].usedPercent, 125.5);
+  assert.equal(projected.windows[0].remainingPercent, 0);
+  assert.equal(projected.windows[0].resetAt, '2026-10-03T04:00:00.000Z');
+  assert.equal(projected.windows[1].remaining, -1.25);
+  assert.equal(projected.windows[1].unit, 'USD');
+  assert.equal(JSON.stringify(projected).includes('sk-private'), false);
+  for (const usedPercent of [-1, Infinity, NaN, '125.5', null, true]) {
+    assert.throws(() => projectSample({...sample, windows: [{...row, usedPercent}, ...sample.windows]}), /protocol_error/);
+  }
+});
 test('duplicates, missing wallet and unknown secret errors are rejected', () => {
   assert.throws(() => projectSample({...sample, windows: [...sample.windows, ...sample.windows]}), /protocol_error/);
   assert.throws(() => projectSample({...sample, windows: []}), /protocol_error/);

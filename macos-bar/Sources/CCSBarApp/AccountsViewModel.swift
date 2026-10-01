@@ -10,8 +10,9 @@ struct PendingCodexSwitch: Identifiable {
   var id: String { confirmation.token }
   var warningText: String {
     let programs = confirmation.processes.map { "• \($0.label) (PID \($0.pid), \($0.role))" }.joined(separator: "\n")
-    let requiredWarning = "Stopping these programs interrupts active Codex work. CCS will switch the account and restart the affected programs without replaying prompts."
-    let warning = confirmation.warning == requiredWarning ? requiredWarning : "\(requiredWarning)\n\n\(confirmation.warning)"
+    let legacyWarning = "Stopping these programs interrupts active Codex work. CCS will switch the account and restart the affected programs without replaying prompts."
+    let requiredWarning = "Stopping these programs interrupts active Codex work. AI Account Center will switch the account and restart the affected programs without replaying prompts."
+    let warning = [legacyWarning, requiredWarning].contains(confirmation.warning) ? requiredWarning : "\(requiredWarning)\n\n\(confirmation.warning)"
     return "Switch to \(identity)?\n\nAffected programs:\n\(programs)\n\n\(warning)"
   }
 }
@@ -52,9 +53,9 @@ final class AccountsViewModel: ObservableObject {
 
   var statusTitle: String {
     guard let row = dashboard?.accounts.first(where: { $0.provider == "codex" && $0.isActive }),
-      let remaining = row.windows.compactMap(\.remainingPercent).min()
+      let remaining = row.visibleWindows.compactMap(\.remainingPercent).min()
     else { return "" }
-    return "\(Int(remaining.rounded()))%"
+    return "\(remaining.formatted(.number.precision(.fractionLength(0...2))))%"
   }
 
   func configure() {
@@ -69,7 +70,7 @@ final class AccountsViewModel: ObservableObject {
       connection = nil
       client = nil
       message = FileManager.default.fileExists(atPath: BarConnection.configURL.path)
-        ? error.localizedDescription : "Connect to your CCS dashboard to see your accounts."
+        ? error.localizedDescription : "Connect to your AI Account Center dashboard to see your accounts."
     }
   }
 

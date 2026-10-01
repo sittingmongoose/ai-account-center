@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -227,7 +227,10 @@ beforeEach(async () => {
   writeCliproxySnapshotFixture();
   writeCodexFixture();
 
+  // Real local JSONL parsing remains exercised; optional network reads stay offline.
+  spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network disabled in usage fixtures.'));
   aggregator = await import('../../../src/web-server/usage/aggregator');
+  aggregator.shutdownUsageAggregator();
   aggregator.clearUsageCache();
 });
 
@@ -235,6 +238,7 @@ afterEach(() => {
   aggregator.shutdownUsageAggregator();
   aggregator.clearUsageCache();
 
+  mock.restore();
   if (originalCcsDir !== undefined) process.env.CCS_DIR = originalCcsDir;
   else delete process.env.CCS_DIR;
 

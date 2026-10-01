@@ -3,29 +3,35 @@ import { color, dim, header, initUI, subheader } from '../../utils/ui';
 export async function showHelp(): Promise<void> {
   await initUI();
   console.log('');
-  console.log(header('CCS Bar (macOS Menu Bar App)'));
+  console.log(header('AI Account Center - macOS bar'));
   console.log('');
   console.log(subheader('Usage:'));
-  console.log(`  ${color('ccs bar', 'command')} [command] [options]`);
+  console.log(`  ${color('ai-account-center bar', 'command')} [command] [options]`);
   console.log('');
 
   const sections: [string, [string, string][]][] = [
     [
       'Commands:',
       [
-        ['launch', 'Spawn the server detached, write ~/.ccs/bar.json, open the app (default)'],
-        ['serve', 'Run the CCS Bar server in the foreground (used internally by launch)'],
-        ['stop', 'Stop the detached CCS Bar server'],
-        ['status', 'Show whether the CCS Bar server is running'],
-        ['install', 'Download CCS Bar from the ccs-bar-latest GitHub release into ~/Applications'],
-        ['uninstall', 'Remove the app and version pin'],
+        [
+          'launch',
+          'Start or reuse the local dashboard server and open the installed app (default)',
+        ],
+        ['serve', 'Run the dashboard server in the foreground'],
+        ['stop', 'Stop the verified detached dashboard server'],
+        ['status', 'Show the detached dashboard server status'],
+        [
+          'install',
+          'Build and install the macOS app from the native sources included in this package',
+        ],
+        ['uninstall', 'Remove the owned app while preserving connection and account settings'],
         ['version', 'Show CLI and installed app versions'],
       ],
     ],
     [
       'Options:',
       [
-        ['--port <n>', 'Run the server on this port (persists; later launches keep the same port)'],
+        ['--port <n>', 'Use this local server port and preserve it for later launches'],
         ['--help, -h', 'Show this help message'],
         ['--version', 'Show CLI and installed app versions'],
       ],
@@ -33,30 +39,26 @@ export async function showHelp(): Promise<void> {
     [
       'Install options:',
       [
-        ['--launch', 'Launch CCS Bar immediately after install without prompting'],
-        ['--no-launch', 'Skip the launch prompt after install'],
-        [
-          '--await-quit',
-          'Wait for a running CCS Bar to quit, then swap and relaunch (used by the in-app updater)',
-        ],
+        ['--launch', 'Launch the app after installation'],
+        ['--no-launch', 'Install without launching'],
       ],
     ],
     [
       'Examples:',
       [
-        ['ccs bar', 'Start the server detached and open CCS Bar'],
-        ['ccs bar --port 3999', 'Start (or move) the server on port 3999 instead of 3000'],
-        ['ccs bar stop', 'Stop the detached CCS Bar server'],
-        ['ccs bar status', 'Show server running state and PID'],
-        ['ccs bar install', 'Download and install CCS Bar, then prompt to launch'],
-        ['ccs bar install --launch', 'Install and launch immediately (no prompt)'],
-        ['ccs bar install --no-launch', 'Install without launching'],
-        ['ccs bar version', 'Show CLI and installed app versions'],
-        ['ccs bar uninstall', 'Remove CCS Bar and its version pin'],
+        ['ai-account-center bar', 'Start the local dashboard server and open the app'],
+        ['ai-account-center bar --port 3999', 'Use local server port 3999'],
+        [
+          'ai-account-center bar install --launch',
+          'Build, install and launch the packaged native app',
+        ],
+        ['ai-account-center bar install --no-launch', 'Build and install without launching'],
+        ['ai-account-center bar status', 'Show server running state'],
+        ['ai-account-center bar stop', 'Stop the verified server'],
+        ['ai-account-center bar version', 'Show CLI and installed native app versions'],
       ],
     ],
   ];
-
   for (const [title, rows] of sections) {
     console.log(subheader(title));
     const width = Math.max(...rows.map(([command]) => command.length));
@@ -65,15 +67,12 @@ export async function showHelp(): Promise<void> {
     }
     console.log('');
   }
-
-  console.log(dim('  macOS only. The app communicates with the CCS web-server on localhost only.'));
-  console.log(dim('  Gatekeeper quarantine is kept in place for macOS first-launch verification.'));
+  console.log(dim('  macOS builds require Xcode or Command Line Tools with Swift.'));
   console.log(
-    dim('  `ccs bar launch` spawns the server detached — the terminal is freed immediately.')
+    dim('  Installation preserves the saved connection, startup preference and legacy app path.')
   );
-  console.log(dim('  The server persists until stopped with `ccs bar stop` or system reboot.'));
-  console.log(
-    dim('  If macOS blocks the app, right-click > Open to make an explicit trust decision.')
-  );
+  console.log(dim('  The native app uses its saved dashboard address and login.'));
+  console.log(dim('  The compatible `ccs bar` command uses the same installer.'));
+  console.log(dim('  On Windows, use the installed AI Account Center tray app.'));
   console.log('');
 }

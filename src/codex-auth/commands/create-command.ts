@@ -27,12 +27,14 @@ const logger = createLogger('codex-auth:cmd:create');
 export async function handleCreateCodex(ctx: CodexCommandContext, args: string[]): Promise<void> {
   await initUI();
   const parsed = parseArgs(args);
-  rejectUnsupportedOptions(parsed, 'ccsx auth create <name> [--force]', { force: true });
+  rejectUnsupportedOptions(parsed, 'ai-account-center codex-auth create <name> [--force]', {
+    force: true,
+  });
 
   const { profileName, force } = parsed;
 
   if (!profileName) {
-    console.log(`Usage: ccsx auth create <name> [--force]`);
+    console.log(`Usage: ai-account-center codex-auth create <name> [--force]`);
     exitWithError('Profile name required', ExitCode.PROFILE_ERROR);
     return;
   }
@@ -59,7 +61,7 @@ export async function handleCreateCodex(ctx: CodexCommandContext, args: string[]
       console.log(info(`Profile already exists: ${profileName}`));
       console.log(ok(`Profile shared resources are ready.`));
       console.log(`  Profile dir: ${profileDir}`);
-      console.log(`  Run: ccsx auth login ${profileName}`);
+      console.log(`  Run: ai-account-center codex-auth login ${profileName}`);
     }
     return;
   }
@@ -148,7 +150,7 @@ async function _spawnLogin(
   if (!codexCli) {
     process.stderr.write(`[!] codex CLI not found — skipping auto-login.\n`);
     process.stderr.write(`    Install: npm i -g @openai/codex\n`);
-    process.stderr.write(`    Then run: ccsx auth login ${profileName}\n`);
+    process.stderr.write(`    Then run: ai-account-center codex-auth login ${profileName}\n`);
     return;
   }
 
@@ -200,7 +202,7 @@ async function _spawnLogin(
     process.stderr.write(
       `[!] Login cancelled or failed. Profile ${profileName} remains unauthenticated.\n`
     );
-    process.stderr.write(`    Retry: ccsx auth login ${profileName}\n`);
+    process.stderr.write(`    Retry: ai-account-center codex-auth login ${profileName}\n`);
     exitWithError('codex login failed', ExitCode.AUTH_ERROR);
   }
 }

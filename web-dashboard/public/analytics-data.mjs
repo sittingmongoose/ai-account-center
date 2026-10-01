@@ -1,3 +1,5 @@
+import { visibleUsageWindows } from './visible-usage.mjs';
+
 /** A view of observed quotas. These samples are never summed into token or cost totals. */
 export const ANALYTICS_PROVIDERS = [
   ['claude', 'Claude'], ['codex', 'Codex'], ['cursor', 'Cursor'],
@@ -9,13 +11,29 @@ const array = value => Array.isArray(value) ? value : [];
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const text = value => typeof value === 'string' ? value : '';
 const timestamp = value => typeof value === 'string' && value ? Date.parse(value) : NaN;
-const number = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(value);
+const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+const compactFormat = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 });
+const moneyFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+const compactMoneyFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 2 });
+const dateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const number = value => numberFormat.format(value);
+const axisNumber = value => Math.abs(value) >= 10_000 ? compactFormat.format(value) : number(value);
 const percentage = value => finite(value) && value >= 0 ? value : null;
 const usedPercent = value => percentage(value?.usedPercent) ?? (finite(value?.remainingPercent) && value.remainingPercent >= 0 && value.remainingPercent <= 100 ? 100 - value.remainingPercent : null);
+const windowKind = value => ['rate_limit', 'balance', 'spend', 'extra_usage'].includes(value) ? value : '';
+const historyIdentity = (account, window) => [text(account.id), text(window.key), text(window.label), text(window.unit), windowKind(window.kind)];
+function compareHistories(account, first, second) {
+  const a = historyIdentity(account, first), b = historyIdentity(account, second);
+  for (let index = 1; index < a.length; index++) {
+    const comparison = a[index].localeCompare(b[index]);
+    if (comparison) return comparison;
+  }
+  return 0;
+}
 const status = value => ({ ok: 'Live', cached: 'Cached', unavailable: 'Unavailable', error: 'Refresh failed', needs_sign_in: 'Sign-in needed' }[value] || 'Unavailable');
 function dateLabel(value, prefix = '') {
   if (!Number.isFinite(timestamp(value))) return '';
-  return `${prefix}${new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+  return `${prefix}${dateFormat.format(new Date(value))}`;
 }
 function accountLabel(account) {
   const provider = text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider';
@@ -27,20 +45,27 @@ function options(payload, catalog) {
     if (typeof account?.id === 'string' && ANALYTICS_PROVIDERS.some(row => row[0] === account.provider)) merged.set(account.id, account);
   }
   const provider = text(payload?.filters?.provider) || 'all';
+  const accounts = [...merged.values()].filter(account => provider === 'all' || account.provider === provider);
+  const counts = new Map();
+  for (const account of accounts) counts.set(accountLabel(account), (counts.get(accountLabel(account)) || 0) + 1);
   return {
     providers: [{ id: 'all', label: 'All providers' }, ...ANALYTICS_PROVIDERS.map(([id, label]) => ({ id, label }))],
-    accounts: [{ id: 'all', label: 'All accounts' }, ...[...merged.values()]
-      .filter(account => provider === 'all' || account.provider === provider)
-      .map(account => ({ id: account.id, label: accountLabel(account) }))],
+    accounts: [{ id: 'all', label: 'All accounts' }, ...accounts.map(account => ({ id: account.id, label: accountLabel(account) + (counts.get(accountLabel(account)) > 1 ? ` · ${account.id}` : '') }))],
   };
 }
-function metrics(windows) {
-  const counts = new Map();
-  for (const window of windows) counts.set(text(window.label), (counts.get(text(window.label)) || 0) + 1);
-  return windows.filter(window => typeof window?.key === 'string').map(window => ({
-    id: window.key,
-    label: (text(window.label) || 'Usage') + (counts.get(text(window.label)) > 1 ? ` · ${window.key}` : ''),
-  }));
+function historicalWindows(account, range) {
+  const windows = array(account.windows).filter(window => window && typeof window === 'object' && !Array.isArray(window) && text(window.key));
+  const visible = visibleUsageWindows(account.provider, windows);
+  if (account.provider !== 'zai') return visible;
+  const from = timestamp(range?.from), to = timestamp(range?.to);
+  // A currently empty pack summary stays hidden in the dashboard. Analytics
+  // retains it only when real in-range history contains a positive pack count.
+  const positivePast = windows.filter(window => !visible.includes(window)
+    && /packs?|reset[\s_-]*(?:cards?|credits?)/i.test(`${text(window.key)} ${text(window.label)}`)
+    && array(window.points).some(point => ['ok', 'cached'].includes(point?.status)
+      && Number.isFinite(timestamp(point.sampledAt)) && timestamp(point.sampledAt) >= from && timestamp(point.sampledAt) <= to
+      && ['used', 'limit', 'remaining'].some(key => finite(point[key]) && point[key] > 0)));
+  return [...visible, ...positivePast];
 }
 function actualValue(point, metric, valueKind) {
   if (valueKind === 'percent') return usedPercent(point);
@@ -49,35 +74,19 @@ function actualValue(point, metric, valueKind) {
 }
 function metricValueKind(metric) {
   if (!metric) return 'percent';
-  if (metric.unlimited === true || metric.enabled === false) return 'unavailable';
+  // Current entitlement state must not discard genuine historical observations.
   if (metric.kind === 'balance' || metric.kind === 'extra_usage') {
-    if (finite(metric.remaining) || array(metric.points).some(point => finite(point?.remaining))) return 'remaining';
-    if (finite(metric.used) || array(metric.points).some(point => finite(point?.used))) return 'used';
+    if (array(metric.points).some(point => finite(point?.remaining))) return 'remaining';
+    if (array(metric.points).some(point => finite(point?.used))) return 'used';
+    if (finite(metric.remaining)) return 'remaining';
+    if (finite(metric.used)) return 'used';
   }
   if (usedPercent(metric) !== null || array(metric.points).some(point => usedPercent(point) !== null)) return 'percent';
   if (finite(metric.used) || array(metric.points).some(point => finite(point?.used))) return 'used';
   if (finite(metric.remaining) || array(metric.points).some(point => finite(point?.remaining))) return 'remaining';
   return 'unavailable';
 }
-function hasHistory(account) {
-  return array(account?.windows).some(metric => {
-    const kind = metricValueKind(metric);
-    return kind !== 'unavailable' && array(metric.points).some(point => actualValue(point, metric, kind) !== null && Number.isFinite(timestamp(point?.sampledAt)));
-  });
-}
-function currentAmount(metric) {
-  if (metric.enabled === false) return 'Disabled';
-  if (metric.unlimited === true) return 'Unlimited';
-  const unit = text(metric.unit) ? ` ${metric.unit}` : '';
-  const parts = [];
-  const percent = usedPercent(metric);
-  if (percent !== null && metric.kind !== 'balance' && metric.kind !== 'extra_usage') parts.push(`${number(percent)}% used`);
-  if (finite(metric.used)) parts.push(`${number(metric.used)}${finite(metric.limit) ? ` / ${number(metric.limit)}` : ''}${unit} used`);
-  else if (finite(metric.limit)) parts.push(`${number(metric.limit)}${unit} limit`);
-  if (finite(metric.remaining)) parts.push(`${number(metric.remaining)}${unit} remaining`);
-  return parts.join(' · ') || 'Usage unavailable';
-}
-export function buildQuotaPlot(metric, range, now = Date.now()) {
+export function buildQuotaPlot(metric, range, now = Date.now(), percentMaximum = 100) {
   const kind = metricValueKind(metric);
   const from = timestamp(range?.from), to = timestamp(range?.to);
   const usableRange = Number.isFinite(from) && Number.isFinite(to) && to > from;
@@ -89,24 +98,25 @@ export function buildQuotaPlot(metric, range, now = Date.now()) {
   }).sort((a, b) => a.time - b.time);
   const values = raw.map(row => row.value);
   const minimum = kind === 'percent' ? 0 : Math.min(0, ...values);
-  const maximum = kind === 'percent' ? Math.max(100, ...values) : Math.max(0, ...values);
+  const maximum = kind === 'percent' ? Math.max(100, percentMaximum, ...values) : Math.max(0, ...values);
   const span = maximum - minimum || 1;
   const unit = kind === 'percent' ? '%' : text(metric?.unit) ? ` ${metric.unit}` : '';
   const valueLabel = value => `${number(value)}${unit}${kind === 'percent' ? ' used' : kind === 'remaining' ? ' remaining' : ' used'}`;
   const points = raw.map(({ point, time, value }) => {
     const extra = [
+      timestamp(point.observedAt) !== timestamp(point.sampledAt) ? dateLabel(point.observedAt, 'Recorded ') : '',
       dateLabel(point.resetAt, 'Resets '), dateLabel(point.expiresAt, 'Expires '),
       text(point.source), text(point.platform), point.status === 'cached' ? 'Cached observation' : '',
       point.isActive === true ? 'Active Codex account' : '',
     ].filter(Boolean);
-    return { x: (time - from) / (to - from), percent: Math.max(0, Math.min(100, (value - minimum) / span * 100)), label: `${dateLabel(point.sampledAt)} · ${valueLabel(value)}${extra.length ? ` · ${extra.join(' · ')}` : ''}` };
+    return { x: (time - from) / (to - from), percent: Math.max(0, Math.min(100, (value - minimum) / span * 100)), label: `${dateLabel(point.sampledAt, 'Sampled ')} · ${valueLabel(value)}${extra.length ? ` · ${extra.join(' · ')}` : ''}` };
   });
   const sampledAt = raw.at(-1)?.time;
   return {
-    points, metricPercent: kind === 'percent', chartHasPoints: points.length > 0,
-    chartTop: `${number(maximum)}${unit}`, chartMiddle: `${number((minimum + maximum) / 2)}${unit}`, chartBottom: `${number(minimum)}${unit}`,
+    points, axisMaximum: maximum, metricPercent: kind === 'percent', chartHasPoints: points.length > 0,
+    chartTop: `${axisNumber(maximum)}${unit}`, chartMiddle: `${axisNumber((minimum + maximum) / 2)}${unit}`, chartBottom: `${axisNumber(minimum)}${unit}`,
     chartStart: dateLabel(range?.from), chartEnd: dateLabel(range?.to),
-    chartNote: points.length ? `${points.length} actual observations · ${kind === 'percent' ? 'Percent used' : kind === 'remaining' ? 'Remaining balance' : 'Reported usage'}${sampledAt && now - sampledAt > 15 * 60_000 ? ' · Last observation is over 15 minutes old' : ''}. Gaps are unavailable samples; resets are not connected.` : 'No usable historical observations for this metric in the selected range. Current values are shown below.',
+    chartNote: points.length ? `${points.length} actual observations · ${kind === 'percent' ? 'Percent used' : kind === 'remaining' ? 'Remaining balance' : 'Reported usage'}${sampledAt && now - sampledAt > 15 * 60_000 ? ' · Last observation is over 15 minutes old' : ''}. Gaps are unavailable samples; resets are not connected.` : 'No usable historical observations for this metric in the selected range.',
   };
 }
 export function analyticsChoiceId(view, kind, label) {
@@ -118,78 +128,108 @@ function tokenTotal(row) {
   return tokenFields.every(key => finite(row?.[key]) && row[key] >= 0) ? tokenFields.reduce((sum, key) => sum + row[key], 0) : null;
 }
 function dollars(value) {
-  return finite(value) && value >= 0 ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value) : 'Unavailable';
+  return finite(value) && value >= 0 ? moneyFormat.format(value) : 'Unavailable';
 }
-export function activityView(activity = {}, range = {}) {
-  const totals = activity?.totals;
-  const validTotals = tokenTotal(totals) !== null;
-  const available = ['ok', 'cached'].includes(activity.status) && validTotals;
-  const daily = new Map();
-  if (available) for (const row of array(activity.byDay)) {
+function nativeRows(activity, range, interval) {
+  const hourly = interval === 'Hourly';
+  const step = hourly ? 3_600_000 : 86_400_000;
+  const grouped = new Map();
+  for (const row of array(hourly ? activity.byHour : activity.byDay)) {
     const total = tokenTotal(row);
-    const time = /^\d{4}-\d{2}-\d{2}$/.test(text(row?.date)) ? timestamp(`${row.date}T00:00:00Z`) : NaN;
-    if (total === null || !Number.isFinite(time) || !['claude', 'codex'].includes(row.provider)) continue;
-    const prior = daily.get(time) || { total: 0, date: row.date, providers: new Set() };
-    // The backend returns one provider/day. Reject duplicate rows instead of double-counting them.
+    const value = text(hourly ? row?.hour : row?.date);
+    const validDate = hourly ? /^\d{4}-\d{2}-\d{2}T\d{2}:00(?::00)?Z$/.test(value) : /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const time = validDate ? timestamp(hourly ? value : `${value}T00:00:00Z`) : NaN;
+    const canonical = Number.isFinite(time) ? new Date(time).toISOString() : '';
+    if (total === null || !Number.isFinite(time) || (hourly ? canonical.slice(0, 13) !== value.slice(0, 13) : canonical.slice(0, 10) !== value) || !['claude', 'codex'].includes(row.provider)) continue;
+    const prior = grouped.get(time) || { ...Object.fromEntries(tokenFields.map(key => [key, 0])), cost: 0, hasCost: true, providers: new Set() };
+    // A native aggregate is unique per provider/bucket. Never count duplicate rows twice.
     if (prior.providers.has(row.provider)) continue;
-    prior.total += total; prior.providers.add(row.provider); daily.set(time, prior);
+    tokenFields.forEach(key => { prior[key] += row[key]; });
+    if (finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0) prior.cost += row.estimatedCostUsd;
+    else prior.hasCost = false;
+    prior.providers.add(row.provider); grouped.set(time, prior);
   }
   const from = timestamp(range.from), to = timestamp(range.to);
-  const rows = [...daily.entries()].filter(([time]) => !Number.isFinite(from) || !Number.isFinite(to) || time + 86_400_000 > from && time <= to).sort((a, b) => a[0] - b[0]);
-  const maximum = Math.max(0, ...rows.map(([, row]) => row.total));
-  const first = rows[0]?.[0], last = rows.at(-1)?.[0];
-  const points = rows.map(([time, row]) => ({ x: first === last ? 0.5 : (time - first) / (last - first), percent: maximum > 0 ? row.total / maximum * 100 : 0, label: `${row.date} UTC · ${number(row.total)} actual tokens · ${[...row.providers].join(' + ')}` }));
+  return [...grouped.entries()].filter(([time]) => !Number.isFinite(from) || !Number.isFinite(to) || time + step > from && time <= to).sort((a, b) => a[0] - b[0]);
+}
+export function activityView(activity = {}, range = {}, interval = 'Daily') {
+  interval = interval === 'Hourly' ? 'Hourly' : 'Daily';
+  const totals = activity?.totals;
+  const available = ['ok', 'cached'].includes(activity.status) && tokenTotal(totals) !== null;
+  const rows = available ? nativeRows(activity, range, interval) : [];
+  const tokenMaximum = Math.max(0, ...rows.map(([, row]) => tokenTotal(row)));
+  const costMaximum = Math.max(0, ...rows.filter(([, row]) => row.hasCost).map(([, row]) => row.cost));
+  const step = interval === 'Hourly' ? 3_600_000 : 86_400_000;
+  const parsedFrom = timestamp(range.from), parsedTo = timestamp(range.to);
+  const from = Number.isFinite(parsedFrom) ? Math.floor(parsedFrom / step) * step : rows[0]?.[0];
+  const to = Number.isFinite(parsedTo) ? parsedTo : rows.at(-1)?.[0];
+  const position = time => from === to ? 0.5 : (time - from) / (to - from);
+  const bucketLabel = time => new Date(time).toISOString().slice(0, interval === 'Hourly' ? 16 : 10).replace('T', ' ') + ' UTC';
+  const label = (time, row) => `${bucketLabel(time)} · ${number(tokenTotal(row))} actual tokens · ${number(row.inputTokens)} input · ${number(row.outputTokens)} output · ${number(row.cacheCreationTokens)} cache created · ${number(row.cacheReadTokens)} cache read · ${row.hasCost ? dollars(row.cost) : 'Unavailable'} estimated API-equivalent cost · ${[...row.providers].join(' + ')}`;
+  const providers = available ? array(activity.providers).filter(row => tokenTotal(row.totals) !== null && ['claude', 'codex'].includes(row.provider)) : [];
+  const uniqueProviders = [...new Map(providers.map(row => [row.provider, row])).values()];
+  const counter = key => uniqueProviders.length && uniqueProviders.every(row => Number.isInteger(row[key]) && row[key] >= 0) ? uniqueProviders.reduce((sum, row) => sum + row[key], 0) : null;
+  const sessions = counter('sessionCount'), events = counter('usageEvents');
+  const models = available ? [...new Map(array(activity.models).filter(row => tokenTotal(row) !== null && ['claude', 'codex'].includes(row.provider) && text(row.model)).map(row => [JSON.stringify([row.provider, row.model]), row])).values()].sort((a, b) => (finite(b.estimatedCostUsd) ? b.estimatedCostUsd : -1) - (finite(a.estimatedCostUsd) ? a.estimatedCostUsd : -1) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model)) : [];
+  const listedTokens = models.reduce((sum, row) => sum + tokenTotal(row), 0);
+  const largestCost = Math.max(0, ...models.filter(row => finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0).map(row => row.estimatedCostUsd));
   return {
-    activityTitle: 'Local CLI activity',
-    activityNote: [text(activity.message), 'Ubuntu Claude Code and Codex CLI logs only. Input excludes cached tokens; output includes reasoning. These totals cover all accounts and cannot be attributed to the currently active account. Costs are estimated API equivalents, not subscription charges.', activity.status === 'cached' ? 'Cached activity data.' : '', dateLabel(activity.fetchedAt, 'Updated ')].filter(Boolean).join(' '),
+    activityTitle: 'Local CLI activity', activityIntervalValue: interval,
+    activityNote: [text(activity.message), 'Ubuntu Claude Code and Codex CLI logs only; UTC buckets. Input excludes cached tokens; output includes reasoning. Activity covers all accounts and cannot be attributed to an individual account. Every cost is an estimated API equivalent, not a subscription charge.', activity.status === 'cached' ? 'Cached activity data.' : '', dateLabel(activity.fetchedAt, 'Updated ')].filter(Boolean).join(' '),
     activityHasData: available,
     activitySummaries: available ? [
-      { label: 'Input tokens', value: number(totals.inputTokens), note: 'Uncached input from local CLI events' },
-      { label: 'Output tokens', value: number(totals.outputTokens), note: 'Actual local CLI events' },
-      { label: 'Cache tokens', value: number(totals.cacheCreationTokens + totals.cacheReadTokens), note: `${number(totals.cacheCreationTokens)} created · ${number(totals.cacheReadTokens)} read` },
-      { label: 'Estimated API cost', value: dollars(totals.estimatedCostUsd), note: 'API equivalent; not your bill' },
+      { label: 'Input tokens', value: axisNumber(totals.inputTokens), note: `${number(totals.inputTokens)} tokens · Actual uncached input` },
+      { label: 'Output tokens', value: axisNumber(totals.outputTokens), note: `${number(totals.outputTokens)} tokens · Includes reasoning tokens` },
+      { label: 'Cache created', value: axisNumber(totals.cacheCreationTokens), note: `${number(totals.cacheCreationTokens)} tokens · Actual cache-creation tokens` },
+      { label: 'Cache read', value: axisNumber(totals.cacheReadTokens), note: `${number(totals.cacheReadTokens)} tokens · Actual cache-read tokens` },
+      { label: 'Estimated API cost', value: finite(totals.estimatedCostUsd) && totals.estimatedCostUsd >= 10_000 ? compactMoneyFormat.format(totals.estimatedCostUsd) : dollars(totals.estimatedCostUsd), note: `${dollars(totals.estimatedCostUsd)} estimated API equivalent; not your bill` },
+      { label: 'Sessions', value: sessions === null ? 'Unavailable' : axisNumber(sessions), note: `${events === null ? 'Unavailable' : number(events)} parsed usage-log entries · ${sessions === null ? 'Unavailable' : number(sessions)} sessions last active in range` },
     ] : [],
-    activityPoints: points, activityChartTop: number(maximum), activityChartMiddle: number(maximum / 2), activityChartBottom: '0',
-    activityChartStart: rows[0]?.[1].date || '', activityChartEnd: rows.at(-1)?.[1].date || '',
-    activityModels: available ? array(activity.models).filter(row => tokenTotal(row) !== null && ['claude', 'codex'].includes(row.provider)).map(row => ({ label: text(row.model) || 'Model unavailable', provider: row.provider === 'claude' ? 'Claude' : 'Codex', input: number(row.inputTokens), output: number(row.outputTokens), cache: number(row.cacheCreationTokens + row.cacheReadTokens), cost: dollars(row.estimatedCostUsd) })) : [],
-    activityProviders: available ? array(activity.providers).filter(row => tokenTotal(row.totals) !== null && ['claude', 'codex'].includes(row.provider)).map(row => ({ key: row.provider, label: text(row.label) || row.provider, amount: `${number(tokenTotal(row.totals))} tokens · ${dollars(row.totals.estimatedCostUsd)} estimated API cost`, reset: `${Number.isInteger(row.usageEvents) ? number(row.usageEvents) : 'Unavailable'} usage events`, expiration: `${Number.isInteger(row.sessionCount) ? number(row.sessionCount) : 'Unavailable'} sessions`, note: 'Ubuntu local CLI · all accounts' })) : [],
+    activityPoints: rows.map(([time, row]) => ({ x: position(time), percent: tokenMaximum > 0 ? tokenTotal(row) / tokenMaximum * 100 : 0, label: label(time, row) })),
+    activityStackPoints: rows.map(([time, row]) => ({ x: position(time), input: tokenMaximum > 0 ? row.inputTokens / tokenMaximum * 100 : 0, output: tokenMaximum > 0 ? row.outputTokens / tokenMaximum * 100 : 0, cacheCreated: tokenMaximum > 0 ? row.cacheCreationTokens / tokenMaximum * 100 : 0, cacheRead: tokenMaximum > 0 ? row.cacheReadTokens / tokenMaximum * 100 : 0, label: label(time, row) })),
+    activityCostPoints: rows.filter(([, row]) => row.hasCost).map(([time, row]) => ({ x: position(time), percent: costMaximum > 0 ? row.cost / costMaximum * 100 : 0, label: `${bucketLabel(time)} · ${dollars(row.cost)} estimated API-equivalent cost · ${[...row.providers].join(' + ')}` })),
+    activityChartTop: axisNumber(tokenMaximum), activityChartMiddle: axisNumber(tokenMaximum / 2), activityChartBottom: '0',
+    activityCostTop: rows.some(([, row]) => row.hasCost) ? dollars(costMaximum) : 'Unavailable', activityCostMiddle: rows.some(([, row]) => row.hasCost) ? dollars(costMaximum / 2) : '', activityCostBottom: rows.some(([, row]) => row.hasCost) ? '$0.00' : '',
+    activityChartStart: Number.isFinite(from) ? bucketLabel(from) : '', activityChartEnd: Number.isFinite(to) ? bucketLabel(to) : '',
+    activityModelNote: `Top models reported by the collector (up to 30, ranked by estimated API cost). Token shares use the ${number(models.length)} listed models only; they are not a complete account or subscription distribution. Input, output and the two cache categories remain separate.`,
+    activityModels: models.map(row => ({ label: row.model, provider: row.provider === 'claude' ? 'Claude' : 'Codex', input: number(row.inputTokens), output: number(row.outputTokens), cache: number(row.cacheCreationTokens + row.cacheReadTokens), cacheCreated: number(row.cacheCreationTokens), cacheRead: number(row.cacheReadTokens), total: number(tokenTotal(row)), cost: dollars(row.estimatedCostUsd), hasCost: finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0, costPercent: finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 && largestCost > 0 ? row.estimatedCostUsd / largestCost * 100 : 0, tokenPercent: listedTokens > 0 ? tokenTotal(row) / listedTokens * 100 : 0, share: listedTokens > 0 ? `${number(tokenTotal(row) / listedTokens * 100)}%` : '0%' })),
+    activityProviders: uniqueProviders.map(row => ({ key: row.provider, label: text(row.label) || row.provider, amount: `${number(tokenTotal(row.totals))} tokens · ${dollars(row.totals.estimatedCostUsd)} estimated API-equivalent cost`, reset: `${Number.isInteger(row.usageEvents) && row.usageEvents >= 0 ? number(row.usageEvents) : 'Unavailable'} parsed usage-log entries`, expiration: `${Number.isInteger(row.sessionCount) && row.sessionCount >= 0 ? number(row.sessionCount) : 'Unavailable'} sessions last active in range`, note: 'Ubuntu local CLI · all accounts' })),
   };
 }
-export function analyticsView(payload, { catalog = [], metricKey = '' } = {}, now = Date.now()) {
-  const accounts = array(payload?.accounts);
-  const choices = options(payload, catalog);
+export function analyticsView(payload, { catalog = [], metricKey = '', activityInterval = 'Daily' } = {}, now = Date.now()) {
   const providerId = text(payload?.filters?.provider) || 'all';
   const accountId = text(payload?.filters?.account) || 'all';
-  const selected = accounts.find(account => account.id === accountId)
-    || accounts.find(account => account.id === payload?.summary?.activeCodexAccountId && hasHistory(account))
-    || accounts.find(hasHistory) || accounts[0];
-  const windows = array(selected?.windows);
-  const chosenMetric = windows.find(window => window.key === metricKey)
-    || windows.find(window => window.kind !== 'balance' && window.kind !== 'extra_usage' && metricValueKind(window) !== 'unavailable' && array(window.points).some(point => usedPercent(point) !== null))
-    || windows.find(window => metricValueKind(window) !== 'unavailable') || windows[0];
-  choices.metrics = metrics(windows);
-  const selectedMetric = choices.metrics.find(row => row.id === chosenMetric?.key);
-  const summary = payload?.summary || {};
-  const history = payload?.history || {};
-  const oldest = dateLabel(history.oldestSampleAt);
-  const newest = dateLabel(history.newestSampleAt);
-  const rangeValue = { '24h': 'Last 24 hours', '7d': 'Last 7 days', '30d': 'Last 30 days' }[payload?.range?.preset] || 'Last 7 days';
+  const providerOrder = new Map(ANALYTICS_PROVIDERS.map(([id], index) => [id, index]));
+  const accounts = array(payload?.accounts).filter(account => account && text(account.id) && ANALYTICS_PROVIDERS.some(row => row[0] === account.provider) && (providerId === 'all' || account.provider === providerId) && (accountId === 'all' || account.id === accountId)).map(account => ({ ...account, windows: historicalWindows(account, payload?.range) })).sort((a, b) => (providerOrder.get(a.provider) ?? 99) - (providerOrder.get(b.provider) ?? 99) || (text(a.email) || text(a.label)).localeCompare(text(b.email) || text(b.label)) || text(a.id).localeCompare(text(b.id)));
+  const choices = options(payload, catalog);
+  // Changed labels, units and kinds are distinct reported historical series.
+  // Qualify the selector with only validated scalar metadata; active status never selects a default.
+  const histories = accounts.flatMap(account => array(account.windows).toSorted((a, b) => compareHistories(account, a, b)).map(window => ({ account, window, key: JSON.stringify(historyIdentity(account, window)), plot: buildQuotaPlot(window, payload?.range, now) }))).filter(row => row.plot.chartHasPoints);
+  const percentMaximum = Math.max(100, ...histories.filter(row => row.plot.metricPercent).map(row => row.plot.axisMaximum));
+  const allCharts = histories.map(({ account, window, key, plot: initial }) => {
+    const plot = initial.metricPercent ? { ...initial, chartTop: `${axisNumber(percentMaximum)}%`, chartMiddle: `${axisNumber(percentMaximum / 2)}%`, points: initial.points.map(point => ({ ...point, percent: point.percent * initial.axisMaximum / percentMaximum })) } : initial;
+    return { key, title: `${text(account.email) || text(account.label) || 'Account'} · ${text(window.label) || 'Usage'}`, subtitle: [text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1], text(window.unit), account.provider === 'codex' && account.isActive ? 'Active Codex' : '', metricValueKind(window) === 'percent' ? 'Percent used' : metricValueKind(window) === 'remaining' ? 'Remaining balance' : 'Reported usage'].filter(Boolean).join(' · '), note: [status(account.status), text(account.platform), text(account.source), plot.chartNote].filter(Boolean).join(' · '), top: plot.chartTop, middle: plot.chartMiddle, bottom: plot.chartBottom, start: plot.chartStart, end: plot.chartEnd, points: plot.points };
+  });
+  choices.metrics = [{ id: 'all', label: 'All histories' }, ...allCharts.map(row => {
+    const [, key, , unit, kind] = JSON.parse(row.key);
+    const kindLabel = { rate_limit: 'Quota', balance: 'Balance', spend: 'Spending', extra_usage: 'Extra usage' }[kind] || '';
+    return { id: row.key, label: [row.subtitle.split(' · ')[0], row.title, key.replace(/[_-]+/g, ' '), unit, kindLabel].filter(Boolean).join(' · ') };
+  })];
+  const selectedKey = choices.metrics.some(row => row.id === metricKey) ? metricKey : 'all';
+  const quotaCharts = selectedKey === 'all' ? allCharts : allCharts.filter(row => row.key === selectedKey);
+  const summary = payload?.summary || {}, history = payload?.history || {};
+  const oldest = dateLabel(history.oldestSampleAt), newest = dateLabel(history.newestSampleAt);
   const available = Number.isInteger(summary.availableAccounts) ? summary.availableAccounts : accounts.filter(account => ['ok', 'cached'].includes(account.status)).length;
   const samples = Number.isInteger(summary.sampleCount) ? summary.sampleCount : Number.isInteger(history.sampleCount) ? history.sampleCount : 0;
   const accountCount = Number.isInteger(summary.accountCount) ? summary.accountCount : accounts.length;
-  const plot = buildQuotaPlot(chosenMetric, payload?.range, now);
+  const rangeValue = { '24h': 'Last 24 hours', '7d': 'Last 7 days', '30d': 'Last 30 days' }[payload?.range?.preset] || 'Last 7 days';
   return {
     loading: false, error: '', updated: dateLabel(payload?.updatedAt, 'Updated ') || 'Analytics data unavailable',
-    historyNote: [text(history.message), oldest ? `Observed ${oldest}${newest && newest !== oldest ? ` – ${newest}` : ''}` : 'History starts as CCS receives real account observations.', 'Quota observations are snapshots, not additive token or cost totals.'].filter(Boolean).join(' '),
-    rangeValue, providerValue: choices.providers.find(row => row.id === providerId)?.label || 'All providers',
-    accountValue: choices.accounts.find(row => row.id === accountId)?.label || 'All accounts', metricValue: selectedMetric?.label || 'No metrics available',
+    historyNote: [text(history.message), oldest ? `Observed ${oldest}${newest && newest !== oldest ? ` – ${newest}` : ''}` : 'History starts as AI Account Center receives real account observations.', 'Quota observations are snapshots, not additive token or cost totals. Each account/window keeps its own history; gaps and resets are not connected. Percentage charts share one scale, extended when actual usage exceeds 100%; balance units scale independently.'].filter(Boolean).join(' '),
+    overviewNote: `${number(accountCount)} accounts · ${number(available)} live or cached · ${number(samples)} observations in range · ${Number.isInteger(history.retentionDays) ? history.retentionDays : 30} day retention · ${number(allCharts.length)} available histories`,
+    rangeValue, providerValue: choices.providers.find(row => row.id === providerId)?.label || 'All providers', accountValue: choices.accounts.find(row => row.id === accountId)?.label || 'All accounts', metricValue: choices.metrics.find(row => row.id === selectedKey)?.label || 'All histories',
     providerOptions: choices.providers.map(row => row.label), accountOptions: choices.accounts.map(row => row.label), metricOptions: choices.metrics.map(row => row.label),
-    summaries: [
-      { label: 'Accounts', value: number(accountCount), note: providerId === 'all' ? 'Across your selected accounts' : choices.providers.find(row => row.id === providerId)?.label || '' },
-      { label: 'Available accounts', value: number(available), note: 'Live or explicitly cached samples' },
-      { label: 'Observed samples', value: number(samples), note: 'Within this time range' },
-      { label: 'History retention', value: `${Number.isInteger(history.retentionDays) ? history.retentionDays : 30} days`, note: 'Collects actual samples from every provider' },
-    ],
+    summaries: [],
     providers: ANALYTICS_PROVIDERS.map(([id, label]) => {
       const provider = array(payload?.providers).find(row => row.provider === id);
       const outside = providerId !== 'all' && providerId !== id || accountId !== 'all' && !accounts.some(account => account.provider === id);
@@ -197,11 +237,10 @@ export function analyticsView(payload, { catalog = [], metricKey = '' } = {}, no
       return { id, label, accounts: `${Number.isInteger(provider?.accountCount) ? provider.accountCount : accounts.filter(account => account.provider === id).length} accounts`, availability: `${Number.isInteger(provider?.availableAccounts) ? provider.availableAccounts : accounts.filter(account => account.provider === id && ['ok', 'cached'].includes(account.status)).length} available`, sample: dateLabel(provider?.latestSampleAt) || 'No observations' };
     }),
     accounts: accounts.map(account => ({ id: text(account.id), label: text(account.email) || text(account.label) || 'Account identity unavailable', provider: text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider', status: status(account.status), platform: text(account.platform), source: text(account.source), plan: text(account.plan), active: account.provider === 'codex' && account.isActive === true, samples: `${Number.isInteger(account.sampleCount) ? account.sampleCount : 0} observations` })),
-    metrics: windows.map(window => ({ key: text(window.key), label: text(window.label) || 'Usage', amount: currentAmount(window), reset: dateLabel(window.resetAt, 'Resets ') || 'Reset not reported', expiration: dateLabel(window.expiresAt, 'Expires '), note: [window.enabled === false ? 'Disabled' : '', window.unlimited === true ? 'Unlimited' : '', text(window.unit), finite(window.windowMinutes) ? `${number(window.windowMinutes)} minute window` : ''].filter(Boolean).join(' · ') })),
-    chartTitle: selected ? `${text(selected.email) || text(selected.label) || 'Account'} · ${selectedMetric?.label || 'Usage'}` : 'Account usage history',
-    selectedAccountNote: selected ? [text(selected.providerLabel), text(selected.plan), text(selected.platform), status(selected.status), text(selected.source), text(selected.message)].filter(Boolean).join(' · ') : 'No account samples are available for this filter.',
-    ...plot,
-    ...activityView(payload?.activity, payload?.range),
-    choices, selection: { providerId, accountId, metricKey: chosenMetric?.key || '' },
+    quotaCharts,
+    // Legacy single-chart bindings are empty; all histories are rendered by quotaCharts.
+    metrics: [], points: [], chartTitle: 'Account histories', chartNote: '', chartHasPoints: false,
+    ...activityView(accountId === 'all' ? payload?.activity : { ...payload?.activity, status: 'unavailable', totals: null, message: text(payload?.activity?.message) || 'Local CLI activity cannot be attributed to an individual account.' }, payload?.range, activityInterval),
+    choices, selection: { providerId, accountId, metricKey: selectedKey },
   };
 }

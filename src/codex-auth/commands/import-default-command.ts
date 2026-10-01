@@ -5,7 +5,7 @@
  * Implements C3 torn-write protection: read-with-retry + JWT-shape validation
  * + current-user Codex-running detection + atomic write.
  *
- * Usage: ccsx auth import-default <name> [--with-history] [--force] [--force-while-running]
+ * Usage: ai-account-center codex-auth import-default <name> [--with-history] [--force] [--force-while-running]
  */
 
 import * as fs from 'fs';
@@ -31,7 +31,7 @@ const RETRY_DELAY_MS = 100;
 // CLIProxy format marker (reject these with a clear message)
 const CLIPROXY_TYPE_MARKER = 'type';
 const IMPORT_DEFAULT_USAGE =
-  'ccsx auth import-default <name> [--with-history] [--force] [--force-while-running]';
+  'ai-account-center codex-auth import-default <name> [--with-history] [--force] [--force-while-running]';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -280,7 +280,9 @@ export async function handleImportDefaultCodex(
 
   // Check legacy auth.json exists
   if (!fs.existsSync(legacyAuthPath)) {
-    console.log(`  Use \`ccsx auth login ${args.name}\` to authenticate a new profile instead.`);
+    console.log(
+      `  Use \`ai-account-center codex-auth login ${args.name}\` to authenticate a new profile instead.`
+    );
     exitWithError('No legacy auth.json', ExitCode.PROFILE_ERROR);
     return;
   }
@@ -408,5 +410,5 @@ export async function handleImportDefaultCodex(
   console.log(`  Email   : ${emailDisplay}`);
   console.log(`  History : ${historyStatus}`);
   console.log(`  Sessions: ${sessionsStatus}`);
-  console.log(`  Next    : ccsx auth switch ${args.name}`);
+  console.log(`  Next    : ai-account-center codex-auth activate ${args.name}`);
 }

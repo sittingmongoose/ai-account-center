@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-type HandlersModule = typeof import('../../../src/web-server/usage/handlers');
+import { normalizeProfileQuery } from '../../../src/web-server/usage/profile-filter';
+
 type AggregatorModule = typeof import('../../../src/web-server/usage/aggregator');
 
 interface AssistantFixture {
@@ -17,19 +18,12 @@ interface AssistantFixture {
   cacheReadTokens?: number;
 }
 
-interface MockResponse {
-  payload: unknown;
-  statusCode: number;
-  status: (code: number) => MockResponse;
-  json: (body: unknown) => MockResponse;
-}
-
 let tempHome = '';
 let claudeDir = '';
 let codexDir = '';
-let handlers: HandlersModule;
 let aggregator: AggregatorModule;
 let originalCcsHome: string | undefined;
+let originalCcsDir: string | undefined;
 let originalClaudeConfigDir: string | undefined;
 let originalCodexHome: string | undefined;
 
@@ -87,36 +81,24 @@ function writeAssistantEntriesToDir(baseClaudeDir: string, entries: AssistantFix
   }
 }
 
-function createMockResponse(): MockResponse {
-  return {
-    payload: undefined,
-    statusCode: 200,
-    status(code: number) {
-      this.statusCode = code;
-      return this;
-    },
-    json(body: unknown) {
-      this.payload = body;
-      return this;
-    },
-  };
-}
-
 beforeEach(async () => {
-  tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-usage-handlers-'));
+  tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-usage-aggregator-semantics-'));
   claudeDir = path.join(tempHome, '.claude');
   codexDir = path.join(tempHome, '.codex');
 
   originalCcsHome = process.env.CCS_HOME;
+  originalCcsDir = process.env.CCS_DIR;
   originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   originalCodexHome = process.env.CODEX_HOME;
   process.env.CCS_HOME = tempHome;
+  process.env.CCS_DIR = path.join(tempHome, '.ccs');
   process.env.CLAUDE_CONFIG_DIR = claudeDir;
   process.env.CODEX_HOME = codexDir;
 
   writeUnifiedConfigFixture();
 
-  handlers = await import('../../../src/web-server/usage/handlers');
+  // Pricing refresh and optional proxy reads must never leave these fixtures.
+  spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network disabled in usage fixtures.'));
   aggregator = await import('../../../src/web-server/usage/aggregator');
   aggregator.shutdownUsageAggregator();
   aggregator.clearUsageCache();
@@ -132,6 +114,12 @@ afterEach(() => {
     delete process.env.CCS_HOME;
   }
 
+  if (originalCcsDir !== undefined) {
+    process.env.CCS_DIR = originalCcsDir;
+  } else {
+    delete process.env.CCS_DIR;
+  }
+
   if (originalClaudeConfigDir !== undefined) {
     process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   } else {
@@ -144,11 +132,12 @@ afterEach(() => {
     delete process.env.CODEX_HOME;
   }
 
+  mock.restore();
   fs.rmSync(tempHome, { recursive: true, force: true });
 });
 
-describe('usage handlers semantics', () => {
-  it('includes cache tokens in summary totals and uses calendar-day averages', async () => {
+describe('retained usage aggregator semantics', () => {
+  it('preserves every token category in daily aggregates', async () => {
     writeAssistantEntries([
       {
         project: 'project-one',
@@ -162,25 +151,23 @@ describe('usage handlers semantics', () => {
       },
     ]);
 
-    const res = createMockResponse();
-    await handlers.handleSummary(
-      { query: { since: '20260301', until: '20260303' } } as never,
-      res as never
-    );
-
-    expect(res.statusCode).toBe(200);
-    expect(res.payload).toMatchObject({
-      success: true,
-      data: {
-        totalTokens: 1_400_000,
-        totalCacheTokens: 300_000,
-        totalDays: 3,
-        activeDays: 1,
-        averageTokensPerDay: 466_667,
-        averageTokensPerActiveDay: 1_400_000,
-        averageCostPerDay: 1.65,
-        averageCostPerActiveDay: 4.93,
-      },
+    const daily = await aggregator.getCachedDailyData();
+    expect(daily).toHaveLength(1);
+    expect(daily[0]).toMatchObject({
+      date: '2026-03-02',
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheCreationTokens: 100_000,
+      cacheReadTokens: 200_000,
+      modelBreakdowns: [
+        expect.objectContaining({
+          modelName: 'claude-sonnet-4-5',
+          inputTokens: 1_000_000,
+          outputTokens: 100_000,
+          cacheCreationTokens: 100_000,
+          cacheReadTokens: 200_000,
+        }),
+      ],
     });
   });
 
@@ -212,84 +199,44 @@ describe('usage handlers semantics', () => {
       },
     ]);
 
-    const res = createMockResponse();
-    await handlers.handleHourly(
-      { query: { since: '20260302', until: '20260302' } } as never,
-      res as never
-    );
-
-    const payload = res.payload as {
-      success: boolean;
-      data: Array<{ hour: string; requests: number }>;
-    };
-    const targetHour = payload.data.find((row) => row.hour === '2026-03-02 10:00');
-
-    expect(targetHour?.requests).toBe(3);
+    const hourly = await aggregator.getCachedHourlyData();
+    const targetHour = hourly.find((row) => row.hour === '2026-03-02 10:00');
+    expect(targetHour).toMatchObject({ requestCount: 3, inputTokens: 300, outputTokens: 45 });
+    expect(targetHour?.modelBreakdowns).toHaveLength(2);
   });
 
-  it('uses overlapping months for monthly filtering', async () => {
-    writeAssistantEntries([
-      {
-        project: 'march-project',
-        sessionId: 'session-march',
-        timestamp: '2026-03-20T10:00:00.000Z',
-        model: 'claude-sonnet-4-5',
-        inputTokens: 100,
-        outputTokens: 10,
-      },
-      {
-        project: 'april-project',
-        sessionId: 'session-april',
-        timestamp: '2026-04-05T10:00:00.000Z',
-        model: 'claude-sonnet-4-5',
-        inputTokens: 200,
-        outputTokens: 20,
-      },
-    ]);
-
-    const res = createMockResponse();
-    await handlers.handleMonthly(
-      { query: { since: '20260315', until: '20260410' } } as never,
-      res as never
-    );
-
-    expect(res.payload).toMatchObject({
-      success: true,
-      data: [
-        expect.objectContaining({ month: '2026-03' }),
-        expect.objectContaining({ month: '2026-04' }),
-      ],
-    });
-  });
-
-  it('reports actual cache size after warming the usage cache', async () => {
-    writeAssistantEntries([
-      {
-        project: 'project-one',
-        sessionId: 'session-a',
-        timestamp: '2026-03-02T10:00:00.000Z',
-        model: 'claude-sonnet-4-5',
-        inputTokens: 100,
-        outputTokens: 10,
-      },
-    ]);
-
-    await aggregator.getCachedDailyData();
-
-    const res = createMockResponse();
-    handlers.handleStatus({} as never, res as never);
-
-    const payload = res.payload as {
-      success: boolean;
-      data: { lastFetch: number | null; cacheSize: unknown };
+  it('retains warmed data until explicit cache invalidation reloads the source', async () => {
+    const entry: AssistantFixture = {
+      project: 'project-one',
+      sessionId: 'session-a',
+      timestamp: '2026-03-02T10:00:00.000Z',
+      model: 'claude-sonnet-4-5',
+      inputTokens: 100,
+      outputTokens: 10,
     };
-    expect(payload.success).toBe(true);
-    expect(payload.data.lastFetch).not.toBeNull();
-    expect(payload.data.cacheSize).toBe(aggregator.getUsageCacheSize());
+    writeAssistantEntries([entry]);
+    expect(aggregator.getUsageCacheSize()).toBe(0);
+    expect(aggregator.getLastFetchTimestamp()).toBeNull();
+
+    const warmed = await aggregator.getCachedDailyData();
+    const fetchedAt = aggregator.getLastFetchTimestamp();
+    expect(fetchedAt).not.toBeNull();
     expect(aggregator.getUsageCacheSize()).toBeGreaterThan(0);
+    expect(warmed[0].inputTokens).toBe(100);
+
+    writeAssistantEntries([{ ...entry, inputTokens: 200 }]);
+    expect(await aggregator.getCachedDailyData()).toEqual(warmed);
+    expect(aggregator.getLastFetchTimestamp()).toBe(fetchedAt);
+
+    aggregator.clearUsageCache();
+    expect(aggregator.getUsageCacheSize()).toBe(0);
+    expect(aggregator.getLastFetchTimestamp()).toBeNull();
+    const reloaded = await aggregator.getCachedDailyData();
+    expect(reloaded[0].inputTokens).toBe(200);
+    expect(reloaded[0].outputTokens).toBe(10);
   });
 
-  it('includes cache-only model activity in model token percentages', async () => {
+  it('preserves cache-only model activity in daily model breakdowns', async () => {
     writeAssistantEntries([
       {
         project: 'project-one',
@@ -297,35 +244,34 @@ describe('usage handlers semantics', () => {
         timestamp: '2026-03-02T10:00:00.000Z',
         model: 'claude-sonnet-4-5',
         inputTokens: 100,
-        outputTokens: 0,
       },
       {
         project: 'project-two',
         sessionId: 'session-b',
         timestamp: '2026-03-02T11:00:00.000Z',
         model: 'gemini-2.5-pro',
-        inputTokens: 0,
-        outputTokens: 0,
         cacheReadTokens: 100,
       },
     ]);
 
-    const res = createMockResponse();
-    await handlers.handleModels(
-      { query: { since: '20260302', until: '20260302' } } as never,
-      res as never
+    const daily = await aggregator.getCachedDailyData();
+    expect(daily).toHaveLength(1);
+    expect(daily[0].inputTokens).toBe(100);
+    expect(daily[0].cacheReadTokens).toBe(100);
+    expect(daily[0].modelsUsed).toContain('gemini-2.5-pro');
+    expect(daily[0].modelBreakdowns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelName: 'claude-sonnet-4-5', inputTokens: 100 }),
+        expect.objectContaining({
+          modelName: 'gemini-2.5-pro',
+          inputTokens: 0,
+          cacheReadTokens: 100,
+        }),
+      ])
     );
-
-    expect(res.payload).toMatchObject({
-      success: true,
-      data: expect.arrayContaining([
-        expect.objectContaining({ model: 'claude-sonnet-4-5', tokens: 100, percentage: 50 }),
-        expect.objectContaining({ model: 'gemini-2.5-pro', tokens: 100, percentage: 50 }),
-      ]),
-    });
   });
 
-  it('filters summary totals to the selected stable account profile', async () => {
+  it('isolates daily profile reads without changing the shared all-profile cache', async () => {
     writeAssistantEntries([
       {
         project: 'default-project',
@@ -347,37 +293,19 @@ describe('usage handlers semantics', () => {
       },
     ]);
 
-    const allProfilesRes = createMockResponse();
-    await handlers.handleSummary(
-      { query: { since: '20260302', until: '20260302' } } as never,
-      allProfilesRes as never
-    );
-
-    expect(allProfilesRes.payload).toMatchObject({
-      success: true,
-      data: {
-        totalInputTokens: 400,
-        totalOutputTokens: 40,
-      },
-    });
-
-    aggregator.clearUsageCache();
-    const workProfileRes = createMockResponse();
-    await handlers.handleSummary(
-      { query: { since: '20260302', until: '20260302', profile: 'work' } } as never,
-      workProfileRes as never
-    );
-
-    expect(workProfileRes.payload).toMatchObject({
-      success: true,
-      data: {
-        totalInputTokens: 300,
-        totalOutputTokens: 30,
-      },
-    });
+    const allProfiles = await aggregator.getCachedDailyData();
+    expect(allProfiles).toHaveLength(1);
+    expect(allProfiles[0]).toMatchObject({ inputTokens: 400, outputTokens: 40 });
+    expect(await aggregator.getCachedDailyData('work')).toEqual([
+      expect.objectContaining({ inputTokens: 300, outputTokens: 30 }),
+    ]);
+    expect(await aggregator.getCachedDailyData('default')).toEqual([
+      expect.objectContaining({ inputTokens: 100, outputTokens: 10 }),
+    ]);
+    expect(await aggregator.getCachedDailyData()).toEqual(allProfiles);
   });
 
-  it('filters sessions to the default profile without including account sessions', async () => {
+  it('isolates default and account sessions while retaining the combined inventory', async () => {
     writeAssistantEntries([
       {
         project: 'default-project',
@@ -399,46 +327,18 @@ describe('usage handlers semantics', () => {
       },
     ]);
 
-    const res = createMockResponse();
-    await handlers.handleSessions(
-      { query: { since: '20260302', until: '20260302', profile: 'default' } } as never,
-      res as never
-    );
-
-    expect(res.payload).toMatchObject({
-      success: true,
-      data: {
-        total: 1,
-        sessions: [expect.objectContaining({ sessionId: 'session-default' })],
-      },
-    });
+    expect(await aggregator.getCachedSessionData('default')).toEqual([
+      expect.objectContaining({ sessionId: 'session-default', profile: 'default' }),
+    ]);
+    expect(await aggregator.getCachedSessionData('work')).toEqual([
+      expect.objectContaining({ sessionId: 'session-work', profile: 'work' }),
+    ]);
+    expect(await aggregator.getCachedSessionData()).toHaveLength(2);
   });
 
-  it('rejects non-string profile filters as validation errors', async () => {
+  it('preserves shared profile-filter rejection of non-string query values', () => {
     for (const profile of [['work', 'default'], { name: 'work' }]) {
-      const res = createMockResponse();
-      await handlers.handleSummary({ query: { profile } } as never, res as never);
-
-      expect(res.statusCode).toBe(400);
-      expect(res.payload).toMatchObject({
-        success: false,
-        error: 'Invalid profile filter',
-      });
+      expect(() => normalizeProfileQuery(profile)).toThrow('Invalid profile filter');
     }
-  });
-
-  it('rejects reversed date ranges before computing summary totals', async () => {
-    const res = createMockResponse();
-
-    await handlers.handleSummary(
-      { query: { since: '20260410', until: '20260401' } } as never,
-      res as never
-    );
-
-    expect(res.statusCode).toBe(400);
-    expect(res.payload).toMatchObject({
-      success: false,
-      error: 'The "since" date must be earlier than or equal to "until"',
-    });
   });
 });

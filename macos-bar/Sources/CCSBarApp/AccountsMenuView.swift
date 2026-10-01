@@ -30,6 +30,7 @@ struct AccountsMenuView: View {
   @ObservedObject var model: AccountsViewModel
   @Environment(\.openWindow) private var openWindow
   @State private var showAutoSettings = false
+  @State private var showQwenPacks = false
   @State private var detailedProviders: Set<String> = []
   @State private var measuredContentHeight: CGFloat = 0
 
@@ -50,7 +51,6 @@ struct AccountsMenuView: View {
         VStack(alignment: .leading, spacing: 8) {
           if let error = model.message { errorBanner(error) }
           if let dashboard = model.dashboard {
-            automaticSection(dashboard.codexAutoSwitch)
             ForEach(dashboard.providerGroups) { group in
               if group.id == "claude" || group.id == "codex" { accountSection(group) }
               else { providerCard(group) }
@@ -62,7 +62,7 @@ struct AccountsMenuView: View {
             HStack { ProgressView().controlSize(.small); Text("Loading accounts…").font(.caption) }
               .frame(maxWidth: .infinity).padding(.vertical, 28)
           } else {
-            Button("Connect to CCS") { settings() }.buttonStyle(.borderedProminent).tint(AccountsPalette.accent)
+            Button("Connect to AI Account Center") { settings() }.buttonStyle(.borderedProminent).tint(AccountsPalette.accent)
               .frame(maxWidth: .infinity).padding(.vertical, 20)
           }
         }.padding(.horizontal, 18).padding(.bottom, 10)
@@ -94,27 +94,19 @@ struct AccountsMenuView: View {
 
   private var header: some View {
     HStack(spacing: 12) {
-      CCSStackMark().frame(width: 34, height: 34)
-      VStack(alignment: .leading, spacing: 3) {
-        Text("CCS").font(.system(size: 21, weight: .semibold))
-        if let identity = model.activeCodexIdentity {
-          Label("Codex: \(identity)", systemImage: "checkmark.circle.fill")
-            .font(.system(size: 10, weight: .medium)).foregroundStyle(AccountsPalette.green)
-            .lineLimit(1).help("Active Codex account: \(identity)")
-        }
-      }
+      CCSStackMark().frame(width: 28, height: 28)
+      Text("AI Account Center").font(.system(size: 20, weight: .semibold))
       Spacer()
       if model.isRefreshing { ProgressView().controlSize(.mini) }
       Circle().fill(model.connected ? AccountsPalette.green : AccountsPalette.amber)
         .frame(width: 7, height: 7)
       Text(model.connected ? "Connected" : "Connecting")
         .font(.system(size: 11)).foregroundStyle(AccountsPalette.muted)
-      Button { settings() } label: { Image(systemName: "gearshape") }
-        .help("Connection settings").buttonStyle(.borderless).foregroundStyle(AccountsPalette.muted)
-      Menu { Button("Quit CCS Bar") { NSApplication.shared.terminate(nil) } } label: {
-        Image(systemName: "ellipsis")
-      }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("CCS Bar menu")
-    }.padding(.horizontal, 22).padding(.vertical, 16)
+      NativeTooltipButton(symbol: "ellipsis", tooltip: "AI Account Center menu", identifier: "header-menu", menuActions: [
+        NativeMenuAction(title: "About AI Account Center") { openWindow(id: "about"); NSApplication.shared.activate(ignoringOtherApps: true) },
+        NativeMenuAction(title: "Quit AI Account Center") { NSApplication.shared.terminate(nil) },
+      ]) {}.frame(width: 24, height: 26)
+    }.padding(.horizontal, 18).padding(.vertical, 10)
   }
 
   private func errorBanner(_ error: String) -> some View {
@@ -125,34 +117,35 @@ struct AccountsMenuView: View {
       .background(AccountsPalette.amber.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
   }
 
-  private func automaticSection(_ status: CodexAutoSwitch) -> some View {
-    VStack(alignment: .leading, spacing: 9) {
-      HStack(spacing: 14) {
-        Text("Codex Auto-switch").font(.system(size: 12)).foregroundStyle(AccountsPalette.muted)
-        Toggle("Codex automatic switching", isOn: Binding(
-          get: { status.enabled }, set: { model.toggleAutomaticSwitching($0) }
-        )).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(AccountsPalette.accent)
-          .disabled(model.busyAction != nil || model.isRefreshing)
-        Rectangle().fill(AccountsPalette.border).frame(width: 1, height: 22).padding(.horizontal, 10)
-        Text("Used threshold").font(.system(size: 11)).foregroundStyle(AccountsPalette.muted)
-        Picker("Used quota threshold", selection: Binding(
-          get: { 100 - Int(status.thresholdPercent) },
-          set: { model.setAutomaticThreshold(usedPercent: $0) }
-        )) {
-          ForEach(thresholdOptions(status), id: \.self) { value in Text("\(value)%").tag(value) }
-        }.labelsHidden().pickerStyle(.menu).frame(width: 82)
-          .disabled(model.busyAction != nil || model.isRefreshing)
-        Spacer(minLength: 4)
-        Button { showAutoSettings.toggle() } label: { Image(systemName: "info.circle") }
-          .buttonStyle(.borderless).foregroundStyle(AccountsPalette.muted).help("Codex automatic switching settings")
-      }
-      if showAutoSettings {
-        Text(status.message).font(.system(size: 11)).foregroundStyle(AccountsPalette.muted)
-        Text("Switch at \(Int(status.thresholdPercent))% remaining (\(100 - Int(status.thresholdPercent))% used). Check every \(status.pollIntervalSeconds) seconds. Switching waits until Codex is idle. Claude accounts stay manual.")
-          .font(.system(size: 10)).foregroundStyle(AccountsPalette.muted)
-      }
-    }.padding(.horizontal, 14).padding(.vertical, 10).background(AccountsPalette.card, in: RoundedRectangle(cornerRadius: 10))
-      .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(AccountsPalette.border.opacity(0.6), lineWidth: 1))
+  private func automaticControls(_ status: CodexAutoSwitch) -> some View {
+    HStack(spacing: 6) {
+      Text("Auto-switch").font(.system(size: 10)).foregroundStyle(AccountsPalette.muted)
+      Toggle("Codex automatic switching", isOn: Binding(
+        get: { status.enabled }, set: { model.toggleAutomaticSwitching($0) }
+      )).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(AccountsPalette.accent)
+        .accessibilityIdentifier("codex-auto-switch")
+        .disabled(model.busyAction != nil || model.isRefreshing)
+      Picker("Used quota threshold", selection: Binding(
+        get: { 100 - Int(status.thresholdPercent) },
+        set: { model.setAutomaticThreshold(usedPercent: $0) }
+      )) {
+        ForEach(thresholdOptions(status), id: \.self) { value in Text("at \(value)%").tag(value) }
+      }.labelsHidden().pickerStyle(.menu).frame(width: 82)
+        .accessibilityIdentifier("codex-auto-threshold")
+        .disabled(model.busyAction != nil || model.isRefreshing)
+      NativeTooltipButton(symbol: "info.circle", tooltip: "Codex automatic switching settings", identifier: "codex-auto-info") {
+        showAutoSettings = true
+      }.frame(width: 24, height: 26)
+        .popover(isPresented: $showAutoSettings, arrowEdge: .top) {
+          VStack(alignment: .leading, spacing: 9) {
+            Text("Codex automatic switching").font(.system(size: 12, weight: .semibold))
+            Text(status.message).font(.system(size: 11))
+            Text("Switch at \(Int(status.thresholdPercent))% remaining (\(100 - Int(status.thresholdPercent))% used). Check every \(status.pollIntervalSeconds) seconds. Switching waits until Codex is idle. Claude accounts stay manual.")
+              .font(.system(size: 10)).foregroundStyle(AccountsPalette.muted)
+          }.padding(16).frame(width: 350).foregroundStyle(AccountsPalette.text)
+            .background(AccountsPalette.plate).environment(\.colorScheme, .dark)
+        }
+    }
   }
 
   private func thresholdOptions(_ status: CodexAutoSwitch) -> [Int] {
@@ -180,7 +173,7 @@ struct AccountsMenuView: View {
   private func providerCard(_ group: ProviderGroup) -> some View {
     HStack(spacing: 12) {
       HStack(spacing: 11) {
-        ProviderMark(provider: group.id).frame(width: 30, height: 30)
+        ProviderMark(provider: group.id).frame(width: group.id == "cursor" ? 34 : 30, height: group.id == "cursor" ? 34 : 30)
         VStack(alignment: .leading, spacing: 3) {
           Text(group.label).font(.system(size: 12, weight: .semibold)).lineLimit(1)
           HStack(spacing: 5) {
@@ -196,54 +189,154 @@ struct AccountsMenuView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
         HStack(spacing: 14) {
-          ForEach(group.primaryWindows) { quota in PrimaryQuotaView(quota: quota, showReset: true) }
-          if group.primaryWindows.count < 3,
+          ForEach(group.primaryWindows) { quota in
+            PrimaryQuotaView(quota: quota, percentageOnly: group.id == "muse", showReset: true, showFractionPercentage: group.id == "qwen")
+          }
+          if group.id == "qwen", !qwenPacks(group).isEmpty {
+            qwenPackChip(group)
+          } else if group.primaryWindows.count < 3,
             let extra = group.supplementaryWindows.first(where: { item in !group.primaryWindows.contains(where: { $0.key == item.key }) }) {
             SupplementaryQuotaChip(quota: extra)
           }
         }.frame(maxWidth: .infinity)
       }
-      Button { detailedProviders.insert(group.id) } label: { Image(systemName: "info.circle").font(.system(size: 12)) }
-        .buttonStyle(.borderless).foregroundStyle(AccountsPalette.muted)
-        .help("Every reported usage window, balance, reset and expiration")
-        .popover(isPresented: Binding(
-          get: { detailedProviders.contains(group.id) },
-          set: { if !$0 { detailedProviders.remove(group.id) } }
-        ), arrowEdge: .trailing) {
-          ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-              ForEach(group.accounts) { account in AccountInformationView(account: account) }
-            }.padding(16)
-          }.frame(width: min(640, panelWidth - 40), height: min(480, maximumContentHeight))
-            .background(AccountsPalette.plate).environment(\.colorScheme, .dark)
-        }
     }.padding(.horizontal, 13).padding(.vertical, 9)
       .background(AccountsPalette.card, in: RoundedRectangle(cornerRadius: 10))
       .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(AccountsPalette.border.opacity(0.65), lineWidth: 1))
+      .overlay {
+        NativeTooltipButton(symbol: "", tooltip: "\(group.label) usage details: windows, balances and reset times", identifier: "provider-row-\(group.id)", isDetailsRow: true) { detailedProviders.insert(group.id) }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .popover(isPresented: Binding(
+            get: { detailedProviders.contains(group.id) },
+            set: { if !$0 { detailedProviders.remove(group.id) } }
+          ), arrowEdge: .trailing) {
+            ScrollView {
+              VStack(alignment: .leading, spacing: 18) {
+                ForEach(group.accounts) { account in AccountInformationView(account: account) }
+              }.padding(16)
+            }.frame(width: min(640, panelWidth - 40), height: min(480, maximumContentHeight))
+              .background(AccountsPalette.plate).environment(\.colorScheme, .dark)
+              .accessibilityIdentifier("provider-details-\(group.id)")
+          }
+      }
+  }
+
+  private func qwenPacks(_ group: ProviderGroup) -> [QwenPackEntry] {
+    group.accounts.flatMap { account in
+      account.visibleWindows.filter { $0.key.hasPrefix("addon-pack-") }
+        .map { QwenPackEntry(account: account, quota: $0) }
+    }
+  }
+
+  private func qwenPackChip(_ group: ProviderGroup) -> some View {
+    let packs = qwenPacks(group)
+    return NativeTooltipButton(symbol: "gift", title: "\(packs.count) packs", tooltip: "View every Qwen credit pack", identifier: "qwen-packs") {
+      showQwenPacks = true
+    }.frame(width: 88, height: 27)
+      .background(AccountsPalette.track.opacity(0.4), in: RoundedRectangle(cornerRadius: 7))
+      .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(AccountsPalette.border, lineWidth: 1))
+      .popover(isPresented: $showQwenPacks, arrowEdge: .bottom) {
+        QwenPacksPopover(packs: packs, showAccount: group.accounts.count > 1,
+          maximumHeight: min(420, maximumContentHeight), width: min(430, panelWidth - 40))
+      }
   }
 
   private var footer: some View {
-    HStack(spacing: 10) {
-      footerButton("Open Dashboard", symbol: "arrow.up.right.square", disabled: model.connection == nil) { model.openDashboard() }
-      footerButton("Refresh", symbol: "arrow.clockwise", disabled: model.isRefreshing || model.busyAction != nil) { Task { await model.refresh(force: true) } }
-      footerButton("Settings", symbol: "gearshape") { settings() }
-    }.padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 16)
-  }
-
-  private func footerButton(_ title: String, symbol: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      HStack(spacing: 8) {
-        Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(AccountsPalette.accent)
-        Text(title).font(.system(size: 12))
-      }.frame(maxWidth: .infinity).padding(.vertical, 12)
-        .background(AccountsPalette.track.opacity(0.3), in: RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(AccountsPalette.border, lineWidth: 1))
-    }.buttonStyle(.plain).disabled(disabled)
+    HStack(spacing: 8) {
+      if let status = model.dashboard?.codexAutoSwitch { automaticControls(status) }
+      Spacer(minLength: 8)
+      NativeTooltipButton(symbol: "", title: "Dashboard", tooltip: "Open account dashboard", enabled: model.connection != nil, identifier: "footer-dashboard") { model.openDashboard() }
+        .frame(width: 70, height: 28)
+      NativeTooltipButton(symbol: "arrow.clockwise", tooltip: "Refresh account usage", enabled: !model.isRefreshing && model.busyAction == nil, identifier: "footer-refresh") { Task { await model.refresh(force: true) } }
+        .frame(width: 28, height: 28)
+      NativeTooltipButton(symbol: "gearshape", tooltip: "Connection and startup settings", identifier: "footer-settings", dismissWindowOnPress: true) { settings() }
+        .frame(width: 28, height: 28)
+    }.padding(.horizontal, 12).padding(.vertical, 6)
+      .background(AccountsPalette.card, in: RoundedRectangle(cornerRadius: 10))
+      .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(AccountsPalette.border, lineWidth: 1))
+      .padding(.horizontal, 18).padding(.top, 6).padding(.bottom, 10)
   }
 
   private func settings() {
-    openWindow(id: "connection")
-    NSApplication.shared.activate(ignoringOtherApps: true)
+    SettingsWindowController.shared.show(model: model)
+  }
+}
+
+private struct QwenPackEntry: Identifiable {
+  let account: DashboardAccount
+  let quota: AccountQuotaWindow
+  var id: String { "\(account.id):\(quota.key)" }
+}
+
+private struct QwenPacksPopover: View {
+  let packs: [QwenPackEntry]
+  let showAccount: Bool
+  let maximumHeight: CGFloat
+  let width: CGFloat
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("Qwen credit packs").font(.system(size: 13, weight: .semibold))
+        Spacer()
+        Text("\(packs.count) listed").font(.system(size: 10)).foregroundStyle(AccountsPalette.muted)
+      }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(packs) { pack in
+            VStack(alignment: .leading, spacing: 5) {
+              Text(pack.quota.label).font(.system(size: 11, weight: .medium))
+              if showAccount {
+                Text(pack.account.identity).font(.system(size: 9)).foregroundStyle(AccountsPalette.muted)
+              }
+              HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(amount(pack.quota)).font(.system(size: 10)).monospacedDigit()
+                Spacer(minLength: 8)
+                Text(status(pack.quota)).font(.system(size: 9)).foregroundStyle(AccountsPalette.muted)
+              }
+              if pack.quota.remaining != nil, let used = pack.quota.used, let limit = pack.quota.limit {
+                Text("\(quantity(used)) / \(quantity(limit))\(unit(pack.quota)) used")
+                  .font(.system(size: 9)).monospacedDigit().foregroundStyle(AccountsPalette.muted)
+              }
+              Text(AccountFormatting.expiration(pack.quota.expiresAt))
+                .font(.system(size: 9)).foregroundStyle(AccountsPalette.muted)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+              .background(AccountsPalette.card, in: RoundedRectangle(cornerRadius: 8))
+              .accessibilityElement(children: .contain)
+              .accessibilityIdentifier("qwen-pack-\(pack.quota.key)")
+          }
+        }
+      }.scrollIndicators(.visible).accessibilityIdentifier("qwen-packs-list")
+    }.padding(16).frame(width: width, height: min(maximumHeight, CGFloat(packs.count) * (showAccount ? 113 : 99) + 66))
+      .foregroundStyle(AccountsPalette.text).background(AccountsPalette.plate)
+      .environment(\.colorScheme, .dark)
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("qwen-packs-popup")
+  }
+
+  private func amount(_ quota: AccountQuotaWindow) -> String {
+    if let remaining = quota.remaining { return "\(quantity(remaining))\(unit(quota)) remaining" }
+    if let used = quota.used, let limit = quota.limit { return "\(quantity(used)) / \(quantity(limit))\(unit(quota)) used" }
+    if let limit = quota.limit { return "\(quantity(limit))\(unit(quota)) total" }
+    if let used = quota.used { return "\(quantity(used))\(unit(quota)) used" }
+    return "Amount not supplied"
+  }
+
+  private func status(_ quota: AccountQuotaWindow) -> String {
+    if quota.enabled == false { return "Disabled" }
+    if let expiry = AccountFormatting.date(quota.expiresAt), expiry <= Date() { return "Expired" }
+    if quota.remaining == 0 { return "Depleted" }
+    if quota.enabled == true { return "Enabled" }
+    return "Status not supplied"
+  }
+
+  private func unit(_ quota: AccountQuotaWindow) -> String {
+    guard let unit = quota.unit, !unit.isEmpty else { return "" }
+    return " \(unit)"
+  }
+
+  private func quantity(_ value: Double) -> String {
+    value.formatted(.number.precision(.fractionLength(0...2)))
   }
 }
 
@@ -251,6 +344,7 @@ struct PrimaryQuotaView: View {
   let quota: AccountQuotaWindow
   var percentageOnly = false
   var showReset = false
+  var showFractionPercentage = false
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
       HStack(spacing: 4) {
@@ -290,9 +384,13 @@ struct PrimaryQuotaView: View {
   private var value: String {
     if quota.enabled == false { return "Disabled" }
     if quota.unlimited == true { return "Unlimited" }
-    if !percentageOnly, let used = quota.used, let limit = quota.limit { return "\(quantity(used)) / \(quantity(limit))" }
-    if let used = quota.clampedUsedPercent { return "\(used.formatted(.number.precision(.fractionLength(0))))%" }
-    if let remaining = quota.clampedRemainingPercent { return "\(Int(remaining.rounded()))% left" }
+    if !percentageOnly, let used = quota.used, let limit = quota.limit {
+      let fraction = "\(quantity(used)) / \(quantity(limit))"
+      if showFractionPercentage, let percent = quota.clampedUsedPercent { return "\(fraction) · \(quantity(percent))%" }
+      return fraction
+    }
+    if let used = quota.clampedUsedPercent { return "\(used.formatted(.number.precision(.fractionLength(0...2))))%" }
+    if let remaining = quota.clampedRemainingPercent { return "\(remaining.formatted(.number.precision(.fractionLength(0...2))))% left" }
     if let remaining = quota.remaining { return "\(quantity(remaining)) \(quota.unit ?? "")" }
     return "Unavailable"
   }

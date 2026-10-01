@@ -1,47 +1,32 @@
-name: Bar Release
+name: AI Account Center macOS package
 
-# Build and publish the macOS CCS Bar app to the floating `ccs-bar-latest`
-# release asset (what `ccs bar install` downloads).
-#
-# Scoped deliberately so it NEVER burdens other PRs or CI:
-#   - Triggers ONLY on push to `main` that changes `macos-bar/**`, or a manual
-#     run from `main`. Regular PRs, dev pushes, and non-bar changes do not start it.
-#   - Runs ONLY on the dedicated self-hosted macOS runner (label `ccs-bar` on
-#     kai-minim4). The Linux CI runners never match this job, and this job never
-#     competes for them.
-#
-# Version source: `macos-bar/VERSION` (single line semver). Bump it in the same
-# PR when you want a new number; the asset is always "latest" regardless.
+# Package the native app from this repository on demand. This workflow retains
+# the Mac build inputs without publishing a floating release or invoking an
+# upstream installer. macos-bar/VERSION is the app's version source.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'macos-bar/**'
   workflow_dispatch:
 
-# Least privilege: only the release-asset write the publish step needs.
 permissions:
-  contents: write
+  contents: read
 
-# One release at a time; never cancel a publish midway.
 concurrency:
-  group: bar-release
+  group: ai-account-center-macos-package
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish CCS Bar
-    if: github.ref == 'refs/heads/main'
+  package:
+    name: Build AI Account Center for macOS
+    if: github.repository == 'sittingmongoose/ai-account-center' && github.ref_name == github.event.repository.default_branch
     runs-on: [self-hosted, macos, ccs-bar]
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: Read bar version
+      - name: Read app version
         id: ver
         run: |
           version="$(tr -d '[:space:]' < macos-bar/VERSION)"
@@ -50,33 +35,15 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "[i] CCS Bar version: $version"
 
-      - name: Build and package CCS Bar.app
+      - name: Package AI Account Center.app
         working-directory: macos-bar
         run: ./Scripts/package_app.sh "${{ steps.ver.outputs.version }}"
 
-      - name: Publish to ccs-bar-latest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          # gh lives in Homebrew on the self-hosted runner; ensure it is on PATH.
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          gh release upload ccs-bar-latest macos-bar/dist/CCS-Bar.app.zip --clobber
-          printf '%s\n' "${VERSION}" > version.txt
-          gh release upload ccs-bar-latest version.txt --clobber
-          echo "[OK] Published version.txt (${VERSION}) to ccs-bar-latest"
-          rm -f version.txt
-          notes="$(mktemp)"
-          cat > "$notes" <<NOTES
-          CCS Bar v${VERSION}
-
-          Install or update: ccs bar install
-          Ad-hoc signed: first launch may need right-click then Open.
-
-          Built automatically from main when macos-bar changes.
-          NOTES
-          gh release edit ccs-bar-latest --target "$GITHUB_SHA" --title "CCS Bar v${VERSION}" --notes-file "$notes"
-          rm -f "$notes"
-          echo "[OK] Published CCS Bar v${VERSION} to ccs-bar-latest"
+      - name: Upload app archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Account-Center-macos-${{ steps.ver.outputs.version }}
+          path: macos-bar/dist/AI-Account-Center.app.zip
+          retention-days: 14
+          if-no-files-found: error

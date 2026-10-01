@@ -7,7 +7,12 @@ enum LaunchAtLogin {
     FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/LaunchAgents/party.sittingmongoose.ccs.accounts-bar.plist")
   }
-  static var enabled: Bool { FileManager.default.fileExists(atPath: file.path) }
+  static var enabled: Bool {
+    guard let data = try? Data(contentsOf: file),
+      let document = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    else { return false }
+    return document["RunAtLoad"] as? Bool ?? true
+  }
   static func setEnabled(_ enabled: Bool) throws {
     if !enabled {
       if self.enabled { try FileManager.default.removeItem(at: file) }
@@ -27,6 +32,7 @@ enum LaunchAtLogin {
 
 struct ConnectionSettingsView: View {
   @ObservedObject var model: AccountsViewModel
+  var onClose: (() -> Void)? = nil
   @Environment(\.dismiss) private var dismiss
   @State private var baseURL = ""
   @State private var username = ""
@@ -36,25 +42,28 @@ struct ConnectionSettingsView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      Text("Connect CCS Bar").font(.title3.weight(.semibold))
-      Text("Use your CCS dashboard address and login. Account credentials remain on the CCS server.")
+      Text("Connect AI Account Center").font(.title3.weight(.semibold))
+      Text("Use your AI Account Center dashboard address and login. Account credentials remain on the server."
+        + (URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.scheme?.lowercased() == "http"
+          ? "\nHTTP does not encrypt this connection. Use HTTPS or an encrypted SSH tunnel." : ""))
         .font(.caption).foregroundStyle(.secondary)
       Form {
         TextField("Dashboard address", text: $baseURL)
         TextField("Username", text: $username)
         SecureField("Password", text: $password)
-        Toggle("Open CCS Bar when I sign in", isOn: $launchAtLogin)
+        Toggle("Open AI Account Center when I sign in", isOn: $launchAtLogin)
       }
       if let error { Text(error).font(.caption).foregroundStyle(AccountsPalette.coral) }
       HStack {
         Spacer()
-        Button("Cancel") { password = ""; dismiss() }
+        Button("Cancel") { password = ""; closeWindow() }
         Button("Save") { save() }.buttonStyle(.borderedProminent).tint(AccountsPalette.accent)
           .keyboardShortcut(.defaultAction)
       }
     }
     .padding(22).frame(width: 430)
     .background(AccountsPalette.plate).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
+    .background(SettingsWindowRegistration(model: model).frame(width: 0, height: 0).allowsHitTesting(false))
     .onAppear {
       baseURL = model.connection?.baseURL.absoluteString ?? "http://192.168.50.179:3000"
       username = model.connection?.username ?? ""
@@ -80,7 +89,42 @@ struct ConnectionSettingsView: View {
       try LaunchAtLogin.setEnabled(launchAtLogin)
       password = ""
       model.configure()
-      dismiss()
+      closeWindow()
     } catch { self.error = error.localizedDescription }
+  }
+
+  private func closeWindow() {
+    if let onClose { onClose() }
+    else { dismiss() }
+  }
+}
+
+private struct SettingsWindowRegistration: NSViewRepresentable {
+  let model: AccountsViewModel
+
+  func makeNSView(context: Context) -> SettingsWindowRegistrationView {
+    let view = SettingsWindowRegistrationView()
+    view.model = model
+    return view
+  }
+
+  func updateNSView(_ view: SettingsWindowRegistrationView, context: Context) {
+    guard view.model !== model else { return }
+    view.model = model
+    view.registerWindow()
+  }
+}
+
+private final class SettingsWindowRegistrationView: NSView {
+  weak var model: AccountsViewModel?
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    registerWindow()
+  }
+
+  func registerWindow() {
+    guard let window, let model else { return }
+    SettingsWindowController.shared.register(window: window, model: model)
   }
 }

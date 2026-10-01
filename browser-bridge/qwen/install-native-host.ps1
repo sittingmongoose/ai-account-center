@@ -41,7 +41,7 @@ New-Item -ItemType Directory -Path $TargetHost, $TargetExtension, $TargetHelpers
 $HelperNames | ForEach-Object { Copy-Item -LiteralPath (Join-Path $SourceHelpers $_) -Destination $TargetHelpers -Force }
 Get-ChildItem -LiteralPath $SourceHost -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $TargetHost -Force }
 Get-ChildItem -LiteralPath $SourceExtension -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $TargetExtension -Force }
-$HostManifest = [ordered]@{ name = $HostName; description = 'CCS Qwen usage only'; path = (Join-Path $TargetHost $BinaryName); type = 'stdio'; allowed_origins = @('chrome-extension://clobbdmblhillanldmmjnlpbaafbnklj/') }
+$HostManifest = [ordered]@{ name = $HostName; description = 'AI Account Center Qwen usage only'; path = (Join-Path $TargetHost $BinaryName); type = 'stdio'; allowed_origins = @('chrome-extension://clobbdmblhillanldmmjnlpbaafbnklj/') }
 [IO.File]::WriteAllText($ManifestPath, ($HostManifest | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 foreach ($Key in $RegistryPaths) {
   New-Item -Path $Key -Force | Out-Null

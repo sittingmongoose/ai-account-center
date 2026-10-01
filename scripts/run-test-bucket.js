@@ -19,28 +19,10 @@ const candidateRoots = ['tests/unit', 'tests/integration', 'tests/npm', 'src'];
 // (catches deletion drift) but CANNOT detect new undeclared slow tests.
 // Automated perf-budget enforcement tracked in issue #1071.
 const slowTests = [
-  'tests/integration/cursor-daemon-lifecycle.test.ts',
   'tests/integration/logging-request-context.test.ts',
-  'tests/integration/proxy/daemon-lifecycle.test.ts',
   'tests/integration/web-server/codex-profiles-endpoint.test.ts',
-  'tests/unit/commands/persist-command-handler.test.ts',
-  'tests/unit/hooks/browser-mcp-advanced-interactions.test.ts',
-  'tests/unit/hooks/browser-mcp-downloads-and-files.test.ts',
-  'tests/unit/hooks/browser-mcp-navigation-and-query.test.ts',
-  'tests/unit/hooks/browser-mcp-orchestration-and-artifacts.test.ts',
-  'tests/unit/hooks/browser-mcp-recording-and-replay.test.ts',
-  'tests/unit/hooks/browser-mcp-session-and-intercepts.test.ts',
-  'tests/unit/targets/codex-runtime-integration.test.ts',
-  'tests/unit/targets/codex-settings-bridge-launch.test.ts',
-  'tests/unit/targets/droid-command-routing-integration.test.ts',
-  'tests/unit/targets/droid-config-manager.test.ts',
-  'tests/unit/targets/native-claude-effort-launch.test.ts',
-  'tests/unit/targets/settings-profile-browser-launch.test.ts',
-  'tests/unit/targets/settings-profile-image-analysis-launch.test.ts',
-  'tests/unit/targets/settings-profile-websearch-launch.test.ts',
-  'tests/unit/web-server/cursor-routes.test.ts',
-  'tests/unit/web-server/websearch-routes.test.ts',
-  'src/cliproxy/auth/__tests__/oauth-handler-gemini-backend-guidance.test.ts',
+  'tests/unit/docker/dockerfile-lifecycle-scripts.test.ts',
+  'tests/unit/web-server/muse-failure-contract-interop.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are
@@ -49,10 +31,6 @@ const fastJsTests = new Set(['tests/unit/flag-parsing-simple.test.js']);
 
 const isolatedTests = new Set([
   'tests/unit/commands/bar-command.test.ts',
-  'tests/unit/targets/codex-adapter-exec.test.ts',
-  'tests/unit/targets/codex-adapter.test.ts',
-  'tests/unit/targets/droid-adapter.test.ts',
-  'tests/unit/targets/target-registry.test.ts',
   'tests/unit/utils/fetch-proxy-setup.test.ts',
   'tests/unit/web-server/usage/account-attribution.test.ts',
 ]);

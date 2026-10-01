@@ -5,7 +5,6 @@ import * as path from 'path';
 
 import { appendThirdPartyWebSearchToolArgs } from '../../../../src/utils/websearch/claude-tool-args';
 import { resolveWebSearchLaunchState } from '../../../../src/utils/websearch/launch-state';
-import { ensureWebSearchMcpForLaunch } from '../../../../src/utils/websearch/mcp-installer';
 
 describe('WebSearch launch state', () => {
   let originalCcsHome: string | undefined;
@@ -30,11 +29,10 @@ describe('WebSearch launch state', () => {
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it('keeps provisioning, hook env, and steering on one snapshot when config changes', () => {
+  it('keeps hook env and steering on one snapshot when config changes', () => {
     fs.writeFileSync(configPath, 'version: 12\nwebsearch:\n  enabled: false\n', 'utf8');
     const launch = resolveWebSearchLaunchState();
 
-    ensureWebSearchMcpForLaunch(launch.config);
     fs.writeFileSync(configPath, 'version: 12\nwebsearch:\n  enabled: true\n', 'utf8');
 
     const args = appendThirdPartyWebSearchToolArgs(['smoke'], launch.enabled);

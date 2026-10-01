@@ -1,6 +1,7 @@
 use crate::{
-    AnalyticsAccountView, AnalyticsMetricView, AnalyticsModelView, AnalyticsPointView,
-    AnalyticsProviderView, AnalyticsSummaryView, Dashboard, model,
+    AnalyticsAccountView, AnalyticsChartView, AnalyticsMetricView, AnalyticsModelView,
+    AnalyticsPointView, AnalyticsProviderView, AnalyticsStackPointView, AnalyticsSummaryView,
+    Dashboard, model,
 };
 use serde::Deserialize;
 use wasm_bindgen::JsValue;
@@ -109,6 +110,7 @@ impl From<AccountDto> for AnalyticsAccountView {
 }
 #[derive(Default, Deserialize)]
 #[serde(default)]
+#[serde(rename_all = "camelCase")]
 struct ModelDto {
     label: String,
     provider: String,
@@ -116,6 +118,13 @@ struct ModelDto {
     output: String,
     cache: String,
     cost: String,
+    cache_created: String,
+    cache_read: String,
+    total: String,
+    share: String,
+    cost_percent: f32,
+    token_percent: f32,
+    has_cost: bool,
 }
 impl From<ModelDto> for AnalyticsModelView {
     fn from(v: ModelDto) -> Self {
@@ -126,6 +135,65 @@ impl From<ModelDto> for AnalyticsModelView {
             output: v.output.into(),
             cache: v.cache.into(),
             cost: v.cost.into(),
+            cache_created: v.cache_created.into(),
+            cache_read: v.cache_read.into(),
+            total: v.total.into(),
+            share: v.share.into(),
+            cost_percent: v.cost_percent,
+            token_percent: v.token_percent,
+            has_cost: v.has_cost,
+        }
+    }
+}
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ChartDto {
+    key: String,
+    title: String,
+    subtitle: String,
+    note: String,
+    top: String,
+    middle: String,
+    bottom: String,
+    start: String,
+    end: String,
+    points: Vec<PointDto>,
+}
+impl From<ChartDto> for AnalyticsChartView {
+    fn from(v: ChartDto) -> Self {
+        Self {
+            key: v.key.into(),
+            title: v.title.into(),
+            subtitle: v.subtitle.into(),
+            note: v.note.into(),
+            top: v.top.into(),
+            middle: v.middle.into(),
+            bottom: v.bottom.into(),
+            start: v.start.into(),
+            end: v.end.into(),
+            points: model(v.points.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct StackPointDto {
+    x: f32,
+    input: f32,
+    output: f32,
+    cache_created: f32,
+    cache_read: f32,
+    label: String,
+}
+impl From<StackPointDto> for AnalyticsStackPointView {
+    fn from(v: StackPointDto) -> Self {
+        Self {
+            x: v.x,
+            input: v.input,
+            output: v.output,
+            cache_created: v.cache_created,
+            cache_read: v.cache_read,
+            label: v.label.into(),
         }
     }
 }
@@ -170,6 +238,15 @@ struct AnalyticsDto {
     activity_points: Vec<PointDto>,
     activity_models: Vec<ModelDto>,
     activity_providers: Vec<MetricDto>,
+    quota_charts: Vec<ChartDto>,
+    overview_note: String,
+    activity_interval_value: String,
+    activity_stack_points: Vec<StackPointDto>,
+    activity_cost_points: Vec<PointDto>,
+    activity_cost_top: String,
+    activity_cost_middle: String,
+    activity_cost_bottom: String,
+    activity_model_note: String,
 }
 pub(crate) fn set_analytics(ui: &Dashboard, json: &str) -> Result<(), JsValue> {
     let v: AnalyticsDto = serde_json::from_str(json)
@@ -229,5 +306,21 @@ pub(crate) fn set_analytics(ui: &Dashboard, json: &str) -> Result<(), JsValue> {
     ui.set_analytics_activity_providers(model(
         v.activity_providers.into_iter().map(Into::into).collect(),
     ));
+    ui.set_analytics_quota_charts(model(v.quota_charts.into_iter().map(Into::into).collect()));
+    ui.set_analytics_overview_note(v.overview_note.into());
+    ui.set_analytics_activity_interval_value(v.activity_interval_value.into());
+    ui.set_analytics_activity_stack_points(model(
+        v.activity_stack_points
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+    ));
+    ui.set_analytics_activity_cost_points(model(
+        v.activity_cost_points.into_iter().map(Into::into).collect(),
+    ));
+    ui.set_analytics_activity_cost_top(v.activity_cost_top.into());
+    ui.set_analytics_activity_cost_middle(v.activity_cost_middle.into());
+    ui.set_analytics_activity_cost_bottom(v.activity_cost_bottom.into());
+    ui.set_analytics_activity_model_note(v.activity_model_note.into());
     Ok(())
 }

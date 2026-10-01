@@ -8,15 +8,16 @@ Use what applies. If you skipped something, add a short note instead of forcing 
 
 - [ ] `bun run format && bun run lint:fix && bun run validate`
 - [ ] `bun run validate:ci-parity` before requesting review
-- [ ] `bun run test:e2e` if this PR touches command routing, proxy flows, or workflow/release logic
-- [ ] `cd ui && bun run validate` if UI changed
+- [ ] `bun test tests/unit/commands tests/npm` if CLI commands or local package inputs changed
+- [ ] `bun run ui:build && bun run ui:validate` if the Slint dashboard changed
+- [ ] Relevant offline native-app checks if macOS or Windows app behavior changed
 - [ ] Not run
 
 ## Checklist
 
 Check what applies. Not every item is relevant for every PR.
 
-- [ ] Base branch is `dev` unless this is an approved hotfix
+- [ ] Base branch matches the intended fork branch, normally the repository's default branch
 - [ ] Branch name follows `feat/*`, `fix/*`, `docs/*`, or approved hotfix naming
 - [ ] Relevant `--help` output updated if CLI behavior changed
 - [ ] Tests added or updated if behavior changed

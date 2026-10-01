@@ -18,26 +18,36 @@ describe('pr ci workflow', () => {
 
     expect(workflow).toContain('name: CI');
     expect(workflow).toContain('pull_request:');
-    // main and dev must always be covered; long-lived epic branches may be
-    // appended temporarily (e.g. kai/feat/1464-account-pools) so phase PRs
-    // targeting the epic get full CI.
-    expect(workflow).toMatch(/branches: \[main, dev(?:, [^\]]+)?\]/);
-    // 4 jobs: validate (matrix), build, test, compose-parity — each gated
-    expect(workflow.split(trustedAuthorGate).length - 1).toBe(4);
+    // Unrestricted target branches keep validation available when the product
+    // default branch changes, including the current feat/activate-in-place.
+    expect(workflow).not.toMatch(/^\s+branches:/m);
+    // Every source-executing job is gated: validate (matrix), build and test.
+    expect(workflow.split(trustedAuthorGate).length - 1).toBe(3);
+    expect(workflow).toContain('needs: [validate, build, test]');
     expect(workflow).toContain('group: ci-${{ github.ref }}');
     expect(workflow).toContain('cancel-in-progress: true');
     expect(workflow).toContain('fail-fast: false');
-    expect(workflow).toContain('runs-on: [self-hosted, linux, x64]');
+    expect(workflow).toContain('runs-on: ubuntu-latest');
+    expect(workflow).not.toContain('self-hosted');
     expect(workflow).toContain("cmd: 'bun run typecheck'");
     expect(workflow).toContain("cmd: 'bun run lint'");
     expect(workflow).toContain("cmd: 'bun run format:check'");
-    expect(workflow).toContain("key: ${{ runner.os }}-bun-cache-v2-${{ hashFiles('bun.lock', 'ui/bun.lock') }}");
+    expect(workflow).toContain(
+      "key: ${{ runner.os }}-bun-cache-v3-${{ hashFiles('bun.lock', 'web-dashboard/Cargo.lock') }}"
+    );
+    expect(workflow).not.toContain('ui/bun.lock');
     expect(workflow).not.toContain('restore-keys:');
     expect(workflow).toContain('name: dist');
     expect(workflow).toContain('path: dist/');
     expect(workflow).toContain('needs: [build]');
     expect(workflow).toContain('run: bun run test:all');
-    expect(workflow).toContain("CCS_E2E_SKIP_BUILD: '1'");
-    expect(workflow).toContain('run: bun run test:e2e');
+    expect(workflow).toContain('name: Test offline Claude quota collector');
+    expect(workflow).toContain('env -i PATH="$PATH" HOME="$TEST_FIXTURE_ROOT"');
+    expect(workflow).toContain('CCS_HOME="$TEST_FIXTURE_ROOT"');
+    expect(workflow).toContain(
+      'PYTHONDONTWRITEBYTECODE=1 python3 tests/unit/account-usage/claude_usage_test.py'
+    );
+    expect(workflow).not.toContain('CCS_E2E_SKIP_BUILD');
+    expect(workflow).not.toContain('test:e2e');
   });
 });

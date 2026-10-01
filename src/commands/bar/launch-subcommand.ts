@@ -1,5 +1,5 @@
 /**
- * `ccs bar launch` — start the CCS Bar server detached, write bar.json, open the app.
+ * `ai-account-center bar launch` — start the AI Account Center server detached, write bar.json, open the app.
  *
  * bar.json shape (v1):
  *   { baseUrl: string, port: number, authMode: "loopback" }
@@ -12,8 +12,8 @@
  *   3. Else → pick a port (--port exactly when given; otherwise bar.json's
  *      recorded port first, then the default candidates), refresh launch.json
  *      (including --port so the Swift app self-starts on the same port), spawn
- *      `ccs bar serve --port N` detached with stdio → serve.log, poll
- *      /api/bar/summary until 200 (timeout ~10 s), write bar.json, open app,
+ *      `ai-account-center bar serve --port N` detached with stdio → serve.log, poll
+ *      /api/bar/auth until 200 (timeout ~10 s), write bar.json, open app,
  *      return. The CLI process exits; the server continues as a detached child.
  *
  * All side-effectful deps are injectable so tests can run without real
@@ -42,6 +42,7 @@ import {
 } from './bar-server-probe';
 import type { DashboardInfo as _DashboardInfo } from './bar-server-probe';
 import { stopDetachedBarServer } from './bar-process-control';
+import { getMacAppPaths, resolveOwnedMacApp } from './native-app-paths';
 
 const BAR_PROBE_TIMEOUT_MS = 1500;
 const MAX_BAR_PROBE_RESPONSE_BYTES = 8192;
@@ -69,7 +70,7 @@ export type DashboardInfo = _DashboardInfo;
 
 export interface LaunchDeps {
   /**
-   * Probe candidate ports for a running CCS server.
+   * Probe candidate ports for a running AI Account Center server.
    * Returns { port, baseUrl } of the first live server found, or null if none.
    * Never throws — any error is treated as "not found".
    */
@@ -80,12 +81,12 @@ export interface LaunchDeps {
    */
   getPort: (opts: { port: number[]; host: string }) => Promise<number>;
   /**
-   * Spawn the `ccs bar serve --port N` process detached and return immediately.
+   * Spawn the `ai-account-center bar serve --port N` process detached and return immediately.
    * The spawned process must be unref()ed so the launcher can exit.
    */
   spawnDetachedServer: (port: number, logPath: string) => ChildProcess | void;
   /**
-   * Poll GET {baseUrl}/api/bar/summary until HTTP 200 or timeout.
+   * Poll GET {baseUrl}/api/bar/auth until HTTP 200 or timeout.
    * Returns the live baseUrl on success, throws on timeout.
    */
   waitForServerLive: (baseUrl: string) => Promise<void>;
@@ -99,7 +100,7 @@ export interface LaunchDeps {
    */
   writeLaunchDescriptor: (jsonPath: string, descriptor: LaunchJson) => void;
   /**
-   * Stop the detached CCS Bar server recorded in server.pid and wait briefly
+   * Stop the detached AI Account Center server recorded in server.pid and wait briefly
    * for the port to free. Used when an explicit --port differs from the port
    * the running server occupies.
    */
@@ -108,8 +109,10 @@ export interface LaunchDeps {
   openApp: (appPath: string) => Promise<void>;
   /** Returns path to ~/.ccs (respects CCS_HOME for test isolation). */
   getCcsDir: () => string;
-  /** Full path where the .app should be installed, e.g. ~/Applications/CCS Bar.app */
+  /** Full path where the .app should be installed, e.g. ~/Applications/AI Account Center.app */
   appInstallPath: string;
+  /** Native app launch is supported on macOS; injectable for isolated fixtures. */
+  getPlatform: () => NodeJS.Platform;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +125,7 @@ async function defaultGetPort(opts: { port: number[]; host: string }): Promise<n
 }
 
 /**
- * Spawn `ccs bar serve --port N` detached so it outlives this CLI process.
+ * Spawn `ai-account-center bar serve --port N` detached so it outlives this CLI process.
  *
  * stdio is redirected to serve.log so server output is preserved for
  * debugging without a terminal.  unref() lets the launcher exit immediately.
@@ -145,19 +148,21 @@ function defaultSpawnDetachedServer(port: number, logPath: string): ChildProcess
 }
 
 /**
- * Poll GET {baseUrl}/api/bar/summary every 250 ms until HTTP 200 or ~10 s.
+ * Poll GET {baseUrl}/api/bar/auth every 250 ms until HTTP 200 or ~10 s.
  * Resolves when the server is live. Rejects on timeout.
  */
 export class BarServerAuthRequiredError extends Error {
   constructor(baseUrl: string, statusCode: number) {
-    super(`CCS Bar server at ${baseUrl} requires dashboard authentication (HTTP ${statusCode})`);
+    super(
+      `AI Account Center server at ${baseUrl} requires dashboard authentication (HTTP ${statusCode})`
+    );
     this.name = 'BarServerAuthRequiredError';
   }
 }
 
 export class BarServerTimeoutError extends Error {
   constructor(baseUrl: string, timeoutSeconds: number) {
-    super(`CCS Bar server did not become live at ${baseUrl} within ${timeoutSeconds}s`);
+    super(`AI Account Center server did not become live at ${baseUrl} within ${timeoutSeconds}s`);
     this.name = 'BarServerTimeoutError';
   }
 }
@@ -166,15 +171,15 @@ function isAuthRequiredStatus(statusCode: number): boolean {
   return statusCode === 401 || statusCode === 403;
 }
 
-export async function defaultWaitForServerLive(baseUrl: string): Promise<void> {
+export async function defaultWaitForServerLive(baseUrl: string, ccsDir?: string): Promise<void> {
   const net = await import('net');
-  const token = getOrCreateBarAuthToken();
+  const token = getOrCreateBarAuthToken(ccsDir);
   const INTERVAL_MS = 250;
   const TIMEOUT_MS = 10_000;
   const deadline = Date.now() + TIMEOUT_MS;
 
   async function probe(): Promise<{ statusCode: number | null; tokenMatched: boolean }> {
-    const url = new URL(`${baseUrl}/api/bar/summary`);
+    const url = new URL(`${baseUrl}/api/bar/auth`);
     const nonce = createBarAuthNonce();
     return new Promise((resolve) => {
       let rawResponse = '';
@@ -253,7 +258,8 @@ async function defaultOpenApp(appPath: string): Promise<void> {
   const { execFile } = await import('child_process');
   const { promisify } = await import('util');
   const execFileAsync = promisify(execFile);
-  await execFileAsync('open', ['-a', appPath]);
+  await execFileAsync('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]);
+  await execFileAsync('/usr/bin/open', ['-a', appPath]);
 }
 
 function defaultGetCcsDir(): string {
@@ -261,7 +267,10 @@ function defaultGetCcsDir(): string {
 }
 
 // Fix #5: use os.homedir() to match install-subcommand.ts and uninstall-subcommand.ts.
-const DEFAULT_APP_INSTALL_PATH = path.join(os.homedir(), 'Applications', 'CCS Bar.app');
+function defaultAppInstallPath(): string {
+  const paths = getMacAppPaths();
+  return resolveOwnedMacApp(paths.appsDir)?.path ?? paths.canonical;
+}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -277,12 +286,26 @@ export async function handleBarLaunch(
     process.exitCode = 1;
     return;
   }
+  if ((deps.getPlatform ?? (() => process.platform))() !== 'darwin' && !deps.openApp) {
+    console.error('[X] Native bar launch from the CLI is supported on macOS.');
+    console.error('[i] On Windows, use the installed AI Account Center tray app.');
+    process.exitCode = 1;
+    return;
+  }
+  let appInstallPath: string;
+  try {
+    appInstallPath = deps.appInstallPath ?? defaultAppInstallPath();
+  } catch (error) {
+    console.error(`[X] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    return;
+  }
   const ccsDir = (deps.getCcsDir ?? defaultGetCcsDir)();
   const openApp = deps.openApp ?? defaultOpenApp;
-  const appInstallPath = deps.appInstallPath ?? DEFAULT_APP_INSTALL_PATH;
   const getPortFn = deps.getPort ?? defaultGetPort;
   const spawnDetachedServer = deps.spawnDetachedServer ?? defaultSpawnDetachedServer;
-  const waitForServerLive = deps.waitForServerLive ?? defaultWaitForServerLive;
+  const waitForServerLive =
+    deps.waitForServerLive ?? ((baseUrl) => defaultWaitForServerLive(baseUrl, ccsDir));
   const createLaunchDescriptor = deps.createLaunchDescriptor ?? createBarLaunchDescriptor;
   const writeLaunchDescriptor = deps.writeLaunchDescriptor ?? defaultWriteLaunchDescriptor;
   const stopDetachedServer = deps.stopDetachedServer ?? stopDetachedBarServer;
@@ -317,10 +340,10 @@ export async function handleBarLaunch(
   if (running !== null) {
     if (running.authRequired) {
       console.error(
-        `[X] CCS Bar cannot launch while dashboard authentication protects ${running.baseUrl}.`
+        `[X] AI Account Center cannot launch while dashboard authentication protects ${running.baseUrl}.`
       );
       console.error(
-        '[i] Disable dashboard authentication for CCS Bar or start the dashboard manually.'
+        '[i] Disable dashboard authentication for AI Account Center or start the dashboard manually.'
       );
       return;
     }
@@ -340,7 +363,7 @@ export async function handleBarLaunch(
         console.error(`[X] Failed to write bar.json: ${msg}`);
         return;
       }
-      console.log(`[OK] Reusing running CCS web-server at ${running.baseUrl}`);
+      console.log(`[OK] Reusing running AI Account Center dashboard server at ${running.baseUrl}`);
       console.log(`[i]  Discovery file written: ${barJsonPath}`);
       await _openAppWithFallback(appInstallPath, openApp);
       return;
@@ -349,14 +372,14 @@ export async function handleBarLaunch(
     // Explicit --port that differs from the running server: preflight the
     // destination before disrupting the healthy current service.
     console.log(
-      `[i] CCS Bar server is running on port ${running.port}; moving to port ${requestedPort}...`
+      `[i] AI Account Center server is running on port ${running.port}; moving to port ${requestedPort}...`
     );
     if (requestedPort === null) return;
     try {
       const availablePort = await getPortFn({ port: [requestedPort], host: '127.0.0.1' });
       if (availablePort !== requestedPort) {
         console.error(`[X] Port ${requestedPort} is already in use by another process.`);
-        console.error('[i] The existing CCS Bar server was left running.');
+        console.error('[i] The existing AI Account Center server was left running.');
         process.exitCode = 1;
         return;
       }
@@ -364,7 +387,7 @@ export async function handleBarLaunch(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[X] Could not preflight port ${requestedPort}: ${msg}`);
-      console.error('[i] The existing CCS Bar server was left running.');
+      console.error('[i] The existing AI Account Center server was left running.');
       process.exitCode = 1;
       return;
     }
@@ -413,7 +436,7 @@ export async function handleBarLaunch(
   }
 
   if (port === null) {
-    console.error('[X] Could not resolve a valid CCS Bar port.');
+    console.error('[X] Could not resolve a valid AI Account Center port.');
     process.exitCode = 1;
     return;
   }
@@ -424,10 +447,10 @@ export async function handleBarLaunch(
     try {
       spawnDetachedServer(movingFrom.port, serveLogPath);
       await waitForServerLive(movingFrom.baseUrl);
-      console.log(`[OK] Restored CCS Bar server at ${movingFrom.baseUrl}.`);
+      console.log(`[OK] Restored AI Account Center server at ${movingFrom.baseUrl}.`);
     } catch (rollbackErr) {
       const message = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
-      console.error(`[X] Failed to restore CCS Bar at ${movingFrom.baseUrl}: ${message}`);
+      console.error(`[X] Failed to restore AI Account Center at ${movingFrom.baseUrl}: ${message}`);
       console.error('[i] Existing discovery and launch state was preserved for manual recovery.');
     }
   };
@@ -442,14 +465,15 @@ export async function handleBarLaunch(
     spawnedChild = spawnDetachedServer(selectedPort, serveLogPath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[X] Could not start CCS web-server: ${msg}`);
+    console.error(`[X] Could not start AI Account Center dashboard server: ${msg}`);
     await rollbackPriorServer();
-    if (movingFrom === null) console.error('[i] Run `ccs config` to start the dashboard manually.');
+    if (movingFrom === null)
+      console.error('[i] Run `ai-account-center dashboard` to start the dashboard manually.');
     process.exitCode = 1;
     return;
   }
 
-  console.log('[i] Starting CCS Bar server...');
+  console.log('[i] Starting AI Account Center server...');
 
   // 2d. Poll until live or timeout.
   try {
@@ -458,14 +482,14 @@ export async function handleBarLaunch(
     if (err instanceof BarServerAuthRequiredError) {
       spawnedChild?.kill();
       console.error(
-        `[X] CCS Bar cannot launch while dashboard authentication protects ${baseUrl}.`
+        `[X] AI Account Center cannot launch while dashboard authentication protects ${baseUrl}.`
       );
       console.error(
-        '[i] Disable dashboard authentication for CCS Bar or start the dashboard manually.'
+        '[i] Disable dashboard authentication for AI Account Center or start the dashboard manually.'
       );
     } else {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[X] Could not connect to CCS web-server: ${msg}`);
+      console.error(`[X] Could not connect to AI Account Center dashboard server: ${msg}`);
       console.error(`[i] Check logs at ${serveLogPath}`);
     }
     spawnedChild?.kill();
@@ -498,7 +522,7 @@ export async function handleBarLaunch(
     return;
   }
 
-  console.log(`[OK] CCS web-server running at ${baseUrl}`);
+  console.log(`[OK] AI Account Center dashboard server running at ${baseUrl}`);
   console.log(`[i]  Discovery file written: ${barJsonPath}`);
 
   // 3. Open the app — then return (process exits; server continues detached).
@@ -515,15 +539,15 @@ async function _openAppWithFallback(
 ): Promise<void> {
   try {
     await openApp(appInstallPath);
-    console.log('[OK] CCS Bar launched.');
+    console.log('[OK] AI Account Center launched.');
   } catch {
     if (!fs.existsSync(appInstallPath)) {
-      console.log('[!] CCS Bar app is not installed.');
-      console.log('[i] Run `ccs bar install` to install it.');
+      console.log('[!] AI Account Center app is not installed.');
+      console.log('[i] Run `ai-account-center bar install` to install it.');
     } else {
-      console.log('[!] Could not open CCS Bar. Try right-clicking and selecting Open.');
-      console.log('[i] If Gatekeeper blocks the app, run:');
-      console.log(`      xattr -dr com.apple.quarantine "${appInstallPath}"`);
+      console.log(
+        '[!] Could not open AI Account Center. Check its signature and the macOS launch error.'
+      );
     }
   }
 }

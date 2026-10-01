@@ -99,9 +99,9 @@ export class ErrorManager {
       console.error(dim('Why: Newer Claude CLI versions require explicit login.'));
     } else {
       console.error(header('SOLUTIONS'));
-      console.error(`  ${color('npm install -g @kaitranntt/ccs --force', 'command')}`);
+      console.error('  Restore the private profile settings from a trusted backup.');
       console.error('');
-      console.error(dim('This will recreate missing profile settings.'));
+      console.error(dim('Reinstalling AI Account Center does not recreate private account files.'));
     }
 
     console.error('');
@@ -128,8 +128,9 @@ export class ErrorManager {
     console.error(`  ${dim('# Backup corrupted file')}`);
     console.error(`  ${color(`mv ${configPath} ${configPath}.backup`, 'command')}`);
     console.error('');
-    console.error(`  ${dim('# Reinstall CCS')}`);
-    console.error(`  ${color('npm install -g @kaitranntt/ccs --force', 'command')}`);
+    console.error(
+      '  Setup and recovery: https://github.com/sittingmongoose/ai-account-center/tree/feat/activate-in-place#install-from-current-source'
+    );
     console.error('');
     console.error(dim('Your profile settings will be preserved.'));
     console.error('');
@@ -194,7 +195,9 @@ export class ErrorManager {
     console.error(`  ${color('chmod 755 ~/.ccs ~/.claude', 'command')}`);
     console.error('');
     console.error(`  ${dim('# Retry installation')}`);
-    console.error(`  ${color('npm install -g @kaitranntt/ccs --force', 'command')}`);
+    console.error(
+      '  Setup and recovery: https://github.com/sittingmongoose/ai-account-center/tree/feat/activate-in-place#install-from-current-source'
+    );
     console.error('');
 
     this.showErrorCode(ERROR_CODES.FS_CANNOT_WRITE_FILE);

@@ -26,8 +26,10 @@ import {
   syncCliproxyUsage,
 } from './cliproxy-usage-syncer';
 import { loadUsageInWorker } from './worker-client';
-import { resolveCodexConfigPaths } from '../services/codex-dashboard-service';
-import { resolveDroidConfigPaths } from '../services/droid-dashboard-service';
+import {
+  resolveCodexConfigPaths,
+  resolveDroidConfigPaths,
+} from '../services/compatible-cli-config-paths';
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
   coalesceLegacyProviderlessBreakdowns,

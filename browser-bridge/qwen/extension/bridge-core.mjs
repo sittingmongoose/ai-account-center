@@ -22,7 +22,9 @@ const WINDOW_LABELS = Object.freeze({
 const CREDIT_PACK_KEY = /^addon-pack-[0-9a-f]{12}$/;
 const MAX_USAGE_WINDOWS = 107;
 const nonnegative = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-const percentage = value => nonnegative(value) !== null && value <= 100 ? value : null;
+// Native samples already use percentage points, including reported overage.
+const percentage = nonnegative;
+export const PREVIOUS_SAMPLE_MAX_AGE_MS = 5 * 60 * 1000;
 function iso(value) {
   if (typeof value !== 'string' || value.length > 40 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
   const parsed = new Date(value);
@@ -68,7 +70,7 @@ export function projectSample(value) {
     if (creditPack && ++creditPacks > 100) throw new Error('invalid_response');
     const usedPercent = percentage(window.usedPercent);
     const item = {key: window.key, label: creditPack ? `Additional credit pack ${creditPacks}` : WINDOW_LABELS[window.key], usedPercent,
-      remainingPercent: usedPercent === null ? null : 100 - usedPercent,
+      remainingPercent: usedPercent === null ? null : Math.max(0, 100 - usedPercent),
       resetAt: creditPack || window.key === 'subscription' ? null : iso(window.resetAt), windowMinutes: nonnegative(window.windowMinutes),
       used: nonnegative(window.used), limit: nonnegative(window.limit),
       unit: ['credits', 'packs'].includes(window.unit) ? window.unit : null};
@@ -85,14 +87,32 @@ export function projectSample(value) {
     fetchedAt, sampledAt, isActive: false, windows,
     capabilities: {codexProfile: null, claudeProfileId: null, claudePlatforms: []}};
 }
+export function isQwenCookieDomain(domain) {
+  return typeof domain === 'string' && Object.values(DOMAINS).some(domains => domains.has(domain.toLowerCase()));
+}
+export function previousSample(status, region, now = Date.now()) {
+  if (!Object.hasOwn(CONSOLE_URLS, region) || !status || typeof status !== 'object') return null;
+  const prior = status.ok === true
+    ? {sample: status.sample, region: status.region ?? status.diagnostics?.region, lastSuccessAt: status.lastSyncAt}
+    : status.previousSample;
+  if (!prior || prior.region !== region) return null;
+  try {
+    const sample = projectSample(prior.sample);
+    const times = [sample.sampledAt, sample.fetchedAt].map(value => Date.parse(value));
+    const lastSuccessAt = iso(prior.lastSuccessAt);
+    if (!lastSuccessAt || times.some(value => value < now - PREVIOUS_SAMPLE_MAX_AGE_MS || value > now + 30000)) return null;
+    return {sample, region, lastSuccessAt, identity: 'unknown'};
+  } catch { return null; }
+}
 export const ERROR_MESSAGES = Object.freeze({
   no_browser_cookie: 'No saved Qwen console sign-in was found in this browser profile.',
   needs_sign_in: 'The existing Qwen console sign-in cannot read usage. Open the console in this browser.',
-  host_unavailable: 'The Windows CCS usage helper is not installed or could not start.',
+  host_unavailable: 'The Windows AI Account Center usage helper is not installed or could not start.',
   network_error: 'The Qwen usage request could not finish. Try again later.',
   busy: 'Another Qwen usage refresh is still running. Try again soon.',
   invalid_response: 'Qwen returned no usable usage sample.',
   protocol_error: 'The local usage helper returned an invalid response.',
+  context_changed: 'The selected Qwen region or browser sign-in changed. Refresh usage again.',
   error: 'Qwen usage could not be read.',
 });
 export function safeError(code) {

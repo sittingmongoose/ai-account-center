@@ -8,19 +8,27 @@ struct ProviderMark: View {
       if let url = Bundle.main.url(forResource: "provider-\(provider)", withExtension: "png"),
         let image = NSImage(contentsOf: url) {
         Image(nsImage: image).resizable().scaledToFit()
-      } else if provider == "muse" {
-        Text("M").font(.system(size: 30, weight: .black, design: .rounded))
-          .foregroundStyle(LinearGradient(colors: [.purple, Color(red: 0.36, green: 0.24, blue: 0.93)], startPoint: .top, endPoint: .bottom))
-      } else if provider == "opencode-go" {
-        Image(systemName: "infinity").resizable().scaledToFit().foregroundStyle(Color(red: 0.39, green: 0.38, blue: 1))
       } else {
         Image(systemName: "cpu").resizable().scaledToFit().foregroundStyle(AccountsPalette.accent)
       }
-    }
+    }.help(provider == "muse" ? "Muse Code (Meta publisher mark)" : "\(provider) provider mark")
   }
 }
 
 struct WindowsMark: View {
+  static var nativeImage: NSImage {
+    let image = NSImage(size: NSSize(width: 15, height: 15), flipped: false) { _ in
+      NSColor.white.setFill()
+      for x in [CGFloat(0), CGFloat(8.25)] {
+        for y in [CGFloat(0), CGFloat(8.25)] {
+          NSRect(x: x, y: y, width: 6.75, height: 6.75).fill()
+        }
+      }
+      return true
+    }
+    image.isTemplate = true
+    return image
+  }
   var body: some View {
     VStack(spacing: 1.5) {
       HStack(spacing: 1.5) { Rectangle(); Rectangle() }

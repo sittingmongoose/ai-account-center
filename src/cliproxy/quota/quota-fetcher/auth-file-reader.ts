@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { getAuthDir } from '../../config/config-generator';
+import { getAuthDir } from '../../config/path-resolver';
 import type { CLIProxyProvider } from '../../types';
 import { isTokenExpired, sanitizeEmail } from '../../auth/auth-utils';
 import { getPausedDir } from '../../accounts/account-manager';

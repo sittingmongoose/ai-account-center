@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -11,12 +11,21 @@ import {
   loadCachedCliproxyData,
   startCliproxySync,
   stopCliproxySync,
-  syncCliproxyUsage,
+  syncCliproxyUsage as syncUsageWithDependencies,
 } from '../../../src/web-server/usage/cliproxy-usage-syncer';
 
 let ccsDir = '';
 let rawResponse: CliproxyUsageApiResponse | null = null;
 let fetchCalls = 0;
+
+// Each fixture supplies both management dependencies. Attribution cases override
+// the empty auth list explicitly; no fixture falls back to a real HTTP request.
+function syncCliproxyUsage(
+  fetchRaw: Parameters<typeof syncUsageWithDependencies>[0],
+  fetchAuthFiles: Parameters<typeof syncUsageWithDependencies>[1] = async () => null
+): ReturnType<typeof syncUsageWithDependencies> {
+  return syncUsageWithDependencies(fetchRaw, fetchAuthFiles);
+}
 
 function fetchRawResponse(): Promise<CliproxyUsageApiResponse | null> {
   fetchCalls++;
@@ -69,6 +78,7 @@ function createDeferredFetch(response: CliproxyUsageApiResponse | null) {
 }
 
 beforeEach(() => {
+  spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network disabled in syncer fixtures.'));
   ccsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-cliproxy-syncer-'));
   fetchCalls = 0;
   rawResponse = {
@@ -103,6 +113,7 @@ beforeEach(() => {
 
 afterEach(() => {
   stopCliproxySync();
+  mock.restore();
   fs.rmSync(ccsDir, { recursive: true, force: true });
 });
 

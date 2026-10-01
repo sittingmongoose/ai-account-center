@@ -1,16 +1,15 @@
-# CCS Bar — accounts edition for macOS
+# AI Account Center for macOS
 
-A native SwiftUI menu bar app for the accounts dashboard. It uses the original
-[CCS Bar](https://github.com/kaitranntt/ccs/tree/main/macos-bar) branding and
-packaging, narrowed to the requested account controls. The Windows WPF version
+The macOS menu bar app in [AI Account Center](https://github.com/sittingmongoose/ai-account-center), renamed from the CCS Bar accounts edition. Its packaging originated in
+[CCS Bar](https://github.com/kaitranntt/ccs/tree/main/macos-bar); upstream credit, license and compatibility identifiers are preserved. The Windows WPF version
 matches its 760-point navy panel, individual Claude/Codex rows, compact provider rows, account detail popovers, blue quota bars, and color palette.
 
 The panel shows Claude, Codex, Antigravity, Muse Code, Cursor, Kimi Code, Qwen,
-Z.ai, and OpenCode Go usage returned by CCS. Unknown usage stays unavailable;
-reset and separate expiration labels use actual server timestamps in the computer's local time. Every reported hourly, rolling, weekly, and monthly window is shown, with extra usage, numeric remaining balances, and explicit unlimited/enabled states. Cached
-rows remain marked. Provider credentials never enter the app. All four Claude and all three Codex accounts are visible directly under their section labels. Each compact row shows actual quota percentages and reset times, alongside Mac/Windows Claude launch buttons or Codex activation controls. The active Codex account has a green check, highlighted row, and its email in the panel header. The seven other providers use compact usage rows. Info buttons expose every reported window, balance, and expiration; no disclosure chevrons or account expansion is required. The panel grows up to the available workarea and scrolls only when the content exceeds it. Actual reported usage above 100% remains visible; only quota bar widths are capped at 100%.
+Z.ai, and OpenCode Go usage returned by AI Account Center. Unknown usage stays unavailable;
+reset and separate expiration labels use actual server timestamps in the computer's local time. Supported visible hourly, rolling, weekly, and monthly windows are shown, with extra usage, numeric remaining balances, and explicit unlimited/enabled states. Cached
+rows remain marked. Provider credentials never enter the app. All four Claude and all three Codex accounts are visible directly under their section labels. Each compact row shows actual quota percentages and reset times, alongside Mac/Windows Claude launch buttons or Codex activation controls. The active Codex account has a green check, highlighted row, and its email in the panel header. The seven other providers use compact usage rows. Info buttons expose the supported visible windows, balances, and expiration; raw provider fields remain intact. Codex Chat pass and unknown Pro five-hour windows, Qwen plan subscription, and empty Z.ai reset-pack summaries are hidden; actual Lex five-hour usage and real extra balances remain visible. Fractional display values use at most two decimal places. Native AppKit tooltip labels name each info and footer action. The footer places Codex auto-switch and its threshold beside Dashboard, Refresh and Settings; no disclosure chevrons or account expansion is required. The panel grows up to the available workarea and scrolls only when the content exceeds it. Actual reported usage above 100% remains visible; only quota bar widths are capped at 100%.
 
-Controls are limited to opening configured Claude profiles on the Mac, safely
+Controls are limited to opening configured Claude profiles on Mac or Windows, safely
 activating native Codex profiles on the shared Ubuntu runtime, toggling Codex
 automatic switching, and setting its confirmed threshold, with poll/idle settings. Seven added
 providers have usage display only. Footer controls open the dashboard, refresh,
@@ -29,10 +28,13 @@ swift run ccs-bar-check
 ./Scripts/install_user.sh --launch
 ```
 
-The installer puts `CCS Bar.app` in `~/Applications`, verifies its ad-hoc
-signature, preserves Gatekeeper metadata, and creates a per-user sign-in launch agent. With `--launch` it loads that agent into the active graphical session and starts the app through it. If an
-older copy exists it first saves a backup under
-`~/Library/Application Support/CCS Bar/Backups`. It preserves connection data.
+The installer stages and verifies `AI Account Center.app` before replacing the installed app in `~/Applications`. It preserves Gatekeeper metadata and the existing sign-in startup preference. Existing owned apps are saved in unique backups under `~/Library/Application Support/CCS Bar/Backups`; unrelated apps or foreign symlinks at either install path are rejected. With `--launch`, it starts only this app through the enabled GUI launch agent, or opens it directly if sign-in startup is disabled.
+
+### Rename compatibility
+
+`~/Applications/CCS Bar.app` becomes a relative symlink to `AI Account Center.app`, so existing launch paths continue to resolve. The app retains its executable name `CCSBar`, bundle identifier and launch-agent label `party.sittingmongoose.ccs.accounts-bar`, and private configuration directory `~/.ccs/bar`. The launch-agent program path moves to the new canonical app path. No provider identity, authenticated dashboard setting, API route or native-host identifier is renamed. Existing connection data, account selection, threshold and refresh cadence stay unchanged. The original MIT license is bundled in the app and linked to upstream attribution in About.
+
+`python3 Scripts/migration_check.py` exercises migration, repeat install, alias safety and rollback using temporary fixture apps; it makes no live app or account changes.
 
 ## Private connection
 

@@ -1,144 +1,78 @@
-# CCS CLI Agent Guide
+# AI Account Center Agent Guide
 
-Canonical agent instructions for `/Users/kaitran/CloudPersonal/ccs/cli`.
-`AGENTS.md` must stay a symlink to this file.
+This is the continuing fork of [CCS](https://github.com/kaitranntt/ccs), renamed to
+[AI Account Center](https://github.com/sittingmongoose/ai-account-center).
+Preserve history, original author metadata, copyright notices and LICENSE.
 
-## Scope
+## Product scope
 
-CCS is a TypeScript/Bun CLI and dashboard for managing Claude Code, Codex,
-Factory Droid, CLIProxy, and compatible provider profiles.
+The product owns account usage, dashboard authentication, existing profiles,
+guarded Codex activation/auto-switch, Analytics, explicit app-update jobs and
+native Mac/Windows bars. The backend remains TypeScript; the web UI is Slint
+**1.18.1** compiled to WebAssembly. Native bars remain Swift and WPF.
 
-## Non-Negotiables
+The primary command is `ai-account-center dashboard`; `ccs config` is compatible.
+Retired `ccsx`, `ccs-codex`, `ccsd`, `ccs-droid` and `ccsxp` bins give migration
+guidance. Do not restore the removed runtime dispatcher, React/Vite portal,
+API routing product or introduce a Rust backend rewrite.
 
-- Default branch is `dev`. Feature/fix branches start from `dev`; production
-  hotfixes start from `main` only when explicitly needed.
-- Never touch the user's real `~/.ccs/` or `~/.claude/` in tests. Use
-  `getCcsDir()` from `src/utils/config-manager.ts`; it respects `CCS_HOME`.
-- Do not commit directly to `dev` or `main`.
-- Do not manually bump versions or create release tags. Semantic-release owns
-  versions, changelog, tags, npm publish, and GitHub releases.
-- CLI terminal output must be ASCII only: `[OK]`, `[!]`, `[X]`, `[i]`.
-- Respect `NO_COLOR` and TTY-aware output.
+## Working rules
 
-## Architecture
+- Source, tests, package scripts and workflow inputs define implemented behavior.
+  Current guides are [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md)
+  and [docs/README.md](docs/README.md).
+- Work on a task branch, change assigned files and preserve other agents' edits.
+- Never test against real `~/.ccs/` or `~/.claude/` data. Use `getCcsDir()` with
+  a temporary `CCS_HOME`; never repurpose HOME. Keep credentials out of logs,
+  fixtures and screenshots.
+- Keep private storage paths, profile/provider IDs, session aliases, native
+  messaging identities and existing `CCS_*` settings compatible.
+- Preserve authentication/origin/session checks, target-bound switch approvals,
+  idle-only auto-switch, provider identity guards, migrations and rollback.
+- Failed providers remain unavailable or honestly cached. Never invent zero
+  usage, reset times, quota denominators or account attribution.
+- Provider refresh, software installation, remote writes, publication, new
+  credentials and deployment require explicit authorization.
+- Keep terminal output ASCII and honor `NO_COLOR`/TTY behavior.
 
-- `src/` - TypeScript CLI/server source.
-- `lib/ccs`, `lib/ccs.ps1` - bootstrap wrappers; no help text here.
-- `ui/src/` - React dashboard.
-- `dist/` and `dist/ui/` - build outputs.
-- `docs/` - local development and architecture docs.
-- Docker support lives under `docker/` and related commands.
+## Source map
 
-Profile resolution priority:
+| Area | Inputs |
+| --- | --- |
+| CLI/account/backend | `src/`, `lib/`, `config/` |
+| Dashboard | `web-dashboard/src/`, `web-dashboard/ui/`, `web-dashboard/public/` |
+| Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
+| Native clients | `macos-bar/`, `windows-bar/` |
+| Collectors and updates | `scripts/account-usage/`, `scripts/app-updates/` |
+| Browser bridges | `browser-bridge/` |
+| Container | `docker/Dockerfile`, `docker/compose.yaml` |
 
-1. Built-in CLIProxy providers: Gemini, Codex, Antigravity.
-2. User-defined `config.cliproxy` providers.
-3. Settings-based `config.profiles`.
-4. Account-based `profiles.json` with isolated `CLAUDE_CONFIG_DIR`.
-
-All env values written into settings must be strings.
-
-## Documentation Truth
-
-Use the narrowest authoritative source:
-
-1. Source, tests, package scripts, and workflows define implemented behavior.
-2. `CLAUDE.md` and `CONTRIBUTING.md` define repository workflow.
-3. `docs/README.md` maps maintainer documentation and its owners.
-4. The separate `kaitranntt/ccs-docs` repository and published site own user
-   guides and CLI reference.
-5. Generated artifacts and live runtime checks define what shipped or is
-   currently running.
-
-Do not copy inventories, line counts, locale lists, target lists, or command
-details when a stable source link is enough. Update the owning documentation
-when behavior, commands, setup, architecture, security posture, or maintainer
-workflow changes. Remove stale claims instead of preserving them as TODOs.
-
-## User-Facing Change Checklist
-
-- Update the matching `--help` handler when CLI behavior changes.
-- Keep README concise; do not remove `## Community Projects` or
-  `## Star History` unless explicitly asked.
-- Use neutral broad examples such as `ccs`, `ccs codex`, `ccs glm`, or
-  `ccs <provider>` unless the page is provider-specific.
-- If CLI commands, config, providers, install steps, or user workflows change,
-  update the separate public CCS docs repository. Maintainers using the
-  standard CloudPersonal checkout may have it at
-  `/Users/kaitran/CloudPersonal/ccs/docs`; fork contributors can use their own
-  checkout and coordinate the matching docs change in the PR.
-
-Help locations:
-
-- `ccs --help`: `src/commands/help-command.ts`
-- `ccs api --help`: `src/commands/api-command.ts`
-- `ccs cleanup --help`: `src/commands/cleanup-command.ts`
-- `ccs cliproxy --help`: `src/commands/cliproxy-command.ts`
-- `ccs config --help`: `src/commands/config-command.ts`
-- `ccs copilot --help`: `src/commands/copilot-command.ts`
-- `ccs cursor --help`: `src/commands/cursor-command.ts`
-- `ccs doctor --help`: `src/commands/doctor-command.ts`
-- `ccs docker --help`: `src/commands/docker/help-subcommand.ts`
-- `ccs env --help`: `src/commands/env-command.ts`
-- `ccs migrate --help`: `src/commands/migrate-command.ts`
-- `ccs persist --help`: `src/commands/persist-command.ts`
-- `ccs setup --help`: `src/commands/setup-command.ts`
+`dist/` and `dist/ui/` are generated. Keep Slint's manifest/lock pins and standard
+AboutSlint attribution. Internal generated module filenames may retain CCS names.
 
 ## Validation
 
-Format before validating:
+Use checks relevant to the change, without live provider refresh:
 
 ```bash
-cd /Users/kaitran/CloudPersonal/ccs/cli && bun run format
-cd /Users/kaitran/CloudPersonal/ccs/cli && bun run lint:fix
-cd /Users/kaitran/CloudPersonal/ccs/cli && bun run validate
+bun run typecheck
+bun run lint
+bun run format:check
+bun run test:fast
+node --test web-dashboard/tests/*.test.mjs
 ```
 
-Before requesting review or merge, run:
+Authorized dashboard changes need `bun run build` and `bun run ui:validate` to
+verify the actual Slint runtime/source fingerprint. Native/bridge guides describe
+their offline checks. Report precisely what ran and any limits.
 
-```bash
-cd /Users/kaitran/CloudPersonal/ccs/cli && bun run validate:ci-parity
-```
+## Release and documentation
 
-If UI changed:
+The repository URL is `sittingmongoose/ai-account-center`. Do not publish to
+upstream npm packages, GHCR images, Cloudflare routes, webhooks or project boards.
+Local source packaging is the development path; external publication requires
+separate authorization.
 
-```bash
-cd /Users/kaitran/CloudPersonal/ccs/cli/ui && bun run format && bun run validate
-```
-
-After every push to a PR, watch CI until it finishes. If checks fail, inspect
-logs, fix root cause, push again, and re-watch.
-
-## Issue Triage
-
-Issue triage is GitHub-only unless implementation is explicitly requested.
-Always inspect live state first:
-
-```bash
-cd /Users/kaitran/CloudPersonal/ccs/cli && gh issue view <number> --json title,body,state,labels,assignees,comments
-```
-
-For open issues, prefer one type label and one area label. Use routing labels
-only when they affect handling: `upstream-blocked`, `needs-repro`,
-`needs-split`, `docs-gap`. Do not close issues on age, intuition, or vague
-titles; close only with evidence from README, docs, changelog, source, or a
-canonical duplicate.
-
-## Release Signals
-
-- PR `CI` is the contributor quality gate.
-- `Push CI` is the post-merge signal for `dev`.
-- `Dev Release` publishes the `@dev` npm package.
-- A red `Dev Release` is not automatically contributor failure; check PR `CI`
-  and `Push CI` first.
-
-Use `feat:` or `fix:` for dev-to-main promotion PRs so release automation runs.
-
-## Design Standards
-
-- YAGNI, KISS, DRY.
-- CLI-complete: core configuration features need CLI coverage.
-- Dashboard parity: configuration features usually need dashboard coverage too.
-- Execution remains CLI-first; dashboard should not replace terminal profile
-  launch flows.
-- Error messages should help users recover, not just report failure.
+Keep current guides focused on account management. Label upstream feature history
+and third-party credits as attribution. Update affected help, tests and migration
+notes alongside behavior changes.

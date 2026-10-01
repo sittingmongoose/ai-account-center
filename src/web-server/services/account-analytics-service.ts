@@ -72,8 +72,9 @@ function point(
   record: AccountAnalyticsObservation,
   window: DashboardAccountWindow | undefined
 ): AccountAnalyticsPoint {
+  const cachedWindow = window?.status === 'cached';
   return {
-    sampledAt: record.sampledAt,
+    sampledAt: cachedWindow ? (window?.sampledAt ?? '') : record.sampledAt,
     observedAt: record.observedAt,
     usedPercent: window?.usedPercent ?? null,
     remainingPercent: window?.remainingPercent ?? null,
@@ -82,9 +83,9 @@ function point(
     remaining: window?.remaining ?? null,
     resetAt: window?.resetAt ?? null,
     expiresAt: window?.expiresAt ?? null,
-    source: record.source,
+    source: cachedWindow ? `${record.source} (cached window)` : record.source,
     platform: record.platform,
-    status: record.status,
+    status: cachedWindow ? 'cached' : record.status,
     isActive: record.isActive,
   };
 }
@@ -123,8 +124,13 @@ function accountSeries(
         const matching = record.windows.find(
           (candidate) => analyticsWindowIdentity(candidate) === identityKey
         );
-        const bucket = Math.floor(Date.parse(record.sampledAt) / (bucketMinutes * 60_000));
-        buckets.set(bucket, point(record, matching));
+        const actualPoint = point(record, matching);
+        const sampleTime = Date.parse(actualPoint.sampledAt);
+        // Retained balances keep the measured time, even while core quota is
+        // refreshed repeatedly. Do not add fresh constant-balance points.
+        if (!Number.isFinite(sampleTime) || sampleTime < from || sampleTime > to) continue;
+        const bucket = Math.floor(sampleTime / (bucketMinutes * 60_000));
+        buckets.set(bucket, actualPoint);
       }
       return {
         ...window,
@@ -143,7 +149,9 @@ function accountSeries(
               enabled: undefined,
             }
           : {}),
-        points: [...buckets.values()].slice(-241),
+        points: [...buckets.values()]
+          .sort((a, b) => Date.parse(a.sampledAt) - Date.parse(b.sampledAt))
+          .slice(-241),
       };
     }),
   };

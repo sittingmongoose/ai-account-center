@@ -1,8 +1,8 @@
-# CCS OpenCode Zen browser usage bridge
+# AI Account Center OpenCode Zen browser usage bridge
 
 This small extension reads the existing sign-in through Brave/Chrome's normal cookie API. It avoids macOS Keychain extraction and Windows app-bound-encryption workarounds. It does not log in, reset limits, consume credits, change billing settings, restart apps, or alter browser policy.
 
-The browser sends only `auth` and `__Host-console_session` cookies for the exact HTTPS `opencode.ai` origin, `/` path, with the real cookie expiration. A same-user native Python host validates the live workspace list, reads that workspace's prepaid wallet, and optionally its Go usage. Verified credentials are stored only in the owning Mac user's private directory and 0600 capsule for background CCS refresh. Credentials and request/response bodies are never written to evidence, stdout logs, or extension storage. The normal native messaging transport necessarily carries the cookie in its private browser-to-host request.
+The browser sends only `auth` and `__Host-console_session` cookies for the exact HTTPS `opencode.ai` origin, `/` path, with the real cookie expiration. A same-user native Python host validates the live workspace list, reads that workspace's prepaid wallet, and optionally its Go usage. Verified credentials are stored only in the owning Mac user's private directory and 0600 capsule for background AI Account Center refresh. Credentials and request/response bodies are never written to evidence, stdout logs, or extension storage. The normal native messaging transport necessarily carries the cookie in its private browser-to-host request.
 
 The console workspace is kept separate from an existing API-key Go account. Go's API-key usage endpoint does not expose a workspace identifier, so provider names alone cannot prove that two sources own the same wallet. The normalizer emits a distinct account ID with an opaque workspace hash. It selects the signed-in workspace from the open console URL or from a single returned workspace; multiple workspaces require the user to open the desired billing page.
 
@@ -14,7 +14,7 @@ In **the Mac Brave profile already signed in to OpenCode**, open `brave://extens
 
 `~/.ccs/opencode-usage-bridge/extension`
 
-Open that workspace's OpenCode billing page, open **CCS OpenCode Zen Usage Bridge** from Extensions, and choose **Sync usage**. The popup displays the wallet and only the actual reset/expiry fields returned by the provider. After a successful sync it rereads the browser session every two hours while Brave is running. Failed refreshes do not turn the old sample into a fabricated zero.
+Open that workspace's OpenCode billing page, open **AI Account Center Browser Usage Bridge** from Extensions, and choose **Sync usage**. The popup displays the wallet and only the actual reset/expiry fields returned by the provider. After a successful sync it rereads the browser session every two hours while Brave is running. Failed refreshes do not turn the old sample into a fabricated zero.
 
 Extension ID: `nkabpjmpmbdklhknjnjgmapmcjcmmlop`. The pinned public key is public; the generation key was discarded. Permissions are `cookies`, `nativeMessaging`, `storage`, `activeTab`, `alarms`, scoped to `https://opencode.ai/*` and `https://dev.meta.ai/*`.
 
@@ -37,7 +37,7 @@ Only fixed GET routes are used: `/console/api/orgs`, `/console/api/billing/statu
 The Python tests include a complete native-framed request/response using a synthetic cookie/provider fixture, schema rejection, workspace selection/mismatch, genuine zero/negative/fractional balances, signed units, missing versus malformed expiration, independent console meter windows, secret-free sample output, capsule permissions/symlinks/expiry, and no writes when verification fails. Node tests verify exact cookie scope, URL-selected workspace, projection redaction, and rejection of malformed native responses.
 # Muse Code support
 
-Version 1.1 adds the exact `https://dev.meta.ai/*` scope to this same extension.
+Version 1.3 keeps the exact `https://dev.meta.ai/*` scope to this same extension.
 Choose **Sync Muse usage** in its popup. It reads only the existing Muse portal
 session cookies, verifies the portal email against the live Muse CLI account,
 and checks the selected team's subscription tier. A single team is selected
@@ -48,8 +48,12 @@ routes. The CLI device credential is used only with `api.meta.ai/muse-code/key`.
 No prompt or model request is made. The captured web session remains on its Mac
 in an owner-only directory and file. Dashboard output contains only account
 identity, weighted token usage, actual percentages and reported reset times.
-The regular Muse collector then refreshes live portal quotas from that session.
+The regular Muse collector and the browser bridge share an owner-only usage cache. They request fresh quota at most every five minutes across all dashboard and bar callers. Brave startup, extension reload, and exact Muse session-cookie changes resume refresh automatically; the user does not need to keep pressing Sync. A provider HTTP 429 starts a persistent cooldown (ten minutes by default, or bounded Retry-After), and retains the last successful reading with its original observation time and cached status. Restarting AI Account Center or a helper does not bypass that cooldown. The native CLI credential, verified email, selected team, and plan bind each cached observation; a different identity or expired authentication cannot inherit another account’s quota.
 
 If the existing browser sign-in is unavailable, the dashboard keeps the
 confirmed account and plan and explains the missing quota. It never invents
 zero usage or treats an omitted key-response quota as a failed CLI login.
+
+Muse background tests: `python3 -m unittest discover -s tests -p 'test_muse*.py'` and `node --test tests/muse-*.test.mjs`. The fixtures include concurrent independent collector processes, HTTP 429 recovery/backoff, cold restarts, real zero and unknown reset values, unchanged observation timestamps, exact-origin cookie-change alarms, and browser startup refresh.
+
+Version 1.3 migrates only this extension’s real saved Muse reading through ordinary native messaging, bound to the existing private session, current native credential, email, subscription tier and selected team. It preserves the original observation time, cached status and provider cooldown; it rejects future or mismatched readings and cannot replace newer host observations. Private paths, pinned extension ID and native-host identity stay compatible.

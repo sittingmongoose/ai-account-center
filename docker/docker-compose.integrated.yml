@@ -1,33 +1,27 @@
+# Compatibility filename for existing integrated deployments. CLIProxy is
+# retired; this retains deployment identity and builds the dashboard source.
 services:
   ccs-cliproxy:
+    image: ${CCS_IMAGE:-ai-account-center:local}
     build:
-      context: .
-      dockerfile: Dockerfile.integrated
-      args:
-        CCS_NPM_VERSION: "${CCS_NPM_VERSION:-latest}"
-    image: ccs-cliproxy:latest
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: ccs-cliproxy
     restart: unless-stopped
     init: true
     ports:
       - "${CCS_DOCKER_BIND_HOST:-127.0.0.1}:${CCS_DASHBOARD_PORT:-3000}:3000"
-      - "${CCS_DOCKER_BIND_HOST:-127.0.0.1}:${CCS_CLIPROXY_PORT:-8317}:8317"
     environment:
-      CCS_PORT: 3000
-      NODE_ENV: production
-      NO_COLOR: "${NO_COLOR:-}"
-      CCS_DEBUG: "${CCS_DEBUG:-}"
-      CCS_DOCKER_LEGACY_KEY_GRACE_DAYS: "${CCS_DOCKER_LEGACY_KEY_GRACE_DAYS:-}"
-      CCS_DOCKER_RESTORE_LEGACY_API_KEY: "${CCS_DOCKER_RESTORE_LEGACY_API_KEY:-}"
+      - NODE_ENV=production
+      - CCS_DEBUG
+      - NO_COLOR
+      - CCS_DASHBOARD_AUTH_ENABLED
+      - CCS_DASHBOARD_USERNAME
+      - CCS_DASHBOARD_PASSWORD_HASH
+      - CCS_SESSION_SECRET
     volumes:
-      - ccs_home:/root/.ccs
-      - ccs_logs:/var/log/ccs
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --max-time 2 http://localhost:3000/ >/dev/null && curl -fsS --max-time 2 http://127.0.0.1:8317/ >/dev/null"]
-      interval: 10s
-      timeout: 3s
-      retries: 12
-      start_period: 30s
+      - ccs_home:/home/node/.ccs
+    # Dashboard healthcheck is inherited from the canonical image.
 
 volumes:
   ccs_home:

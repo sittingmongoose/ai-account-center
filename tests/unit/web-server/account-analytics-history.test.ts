@@ -189,6 +189,55 @@ describe('private bounded quota history', () => {
     expect(safe?.remaining).toBeNull();
   });
 
+  it('persists cached optional-window provenance through a private cold read without losing precision', async () => {
+    const current = account();
+    const originalSample = new Date(NOW - 3_600_000).toISOString();
+    current.windows.push({
+      ...current.windows[0],
+      key: 'prepaid_balance',
+      kind: 'balance',
+      status: 'cached',
+      sampledAt: originalSample,
+      used: 12.123456,
+      remaining: -4.123456,
+      resetAt: '2026-10-02T01:02:03Z',
+      expiresAt: '2026-10-20T04:05:06Z',
+    });
+    const root = directory();
+    await new FileAccountAnalyticsHistoryStore(root).write(
+      appendAccountAnalyticsSnapshot(null, [current], NOW)
+    );
+    const cold = await new FileAccountAnalyticsHistoryStore(root).read();
+    expect(cold?.records[0].sampledAt).toBe(new Date(NOW).toISOString());
+    expect(cold?.records[0].windows[0].status).toBeUndefined();
+    expect(cold?.records[0].windows[0].sampledAt).toBeUndefined();
+    expect(cold?.records[0].windows[1]).toMatchObject({
+      status: 'cached',
+      sampledAt: originalSample,
+      used: 12.123456,
+      remaining: -4.123456,
+      resetAt: '2026-10-02T01:02:03.000Z',
+      expiresAt: '2026-10-20T04:05:06.000Z',
+    });
+  });
+
+  it('never converts missing, invalid, future or expired cached-window times into a fresh sample', () => {
+    const fresh = account();
+    const retained = { ...fresh.windows[0], key: 'prepaid', status: 'cached' as const };
+    expect(analyticsWindow(retained)).toBeNull();
+    expect(analyticsWindow({ ...retained, sampledAt: 'not-a-date' })).toBeNull();
+    expect(analyticsWindow({ ...retained, sampledAt: true })).toBeNull();
+    fresh.windows.push(
+      { ...retained, sampledAt: new Date(NOW + 60_000).toISOString() },
+      { ...retained, sampledAt: new Date(NOW - 31 * 86_400_000).toISOString() }
+    );
+    const observed = appendAccountAnalyticsSnapshot(null, [fresh], NOW);
+    expect(observed.records).toHaveLength(1);
+    expect(observed.records[0].windows).toHaveLength(1);
+    expect(observed.records[0].windows[0].usedPercent).toBe(120.5);
+    expect(observed.records[0].sampledAt).toBe(new Date(NOW).toISOString());
+  });
+
   it('retains a full month of hourly observations for the fourteen configured accounts within its storage bounds', () => {
     const rows = Array.from({ length: 14 }, (_, index) => ({
       ...account(),

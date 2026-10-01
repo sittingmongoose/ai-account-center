@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -87,6 +87,89 @@ describe('bounded native account activity checkpoints', () => {
     expect(warm.scan?.readBytes).toBe(0);
     expect(warm.hourly).toEqual(data.hourly);
     expect(warm.session).toEqual(data.session);
+  });
+
+  it('caps deep traversal while retaining measured root usage as partial', async () => {
+    write([meta(), model(), tokens(100, 20, 5)]);
+    let directory = path.dirname(file);
+    for (let index = 0; index < 66; index++) {
+      directory = path.join(directory, `deep-${index}`);
+      fs.mkdirSync(directory);
+    }
+    fs.writeFileSync(
+      path.join(directory, 'rollout-beyond-depth.jsonl'),
+      JSON.stringify(tokens(999999, 0, 1)) + '\n'
+    );
+    const result = await collect();
+    expect(sum(result, 'inputTokens')).toBe(80);
+    expect(result.scan?.complete).toBe(false);
+    expect(result.scan?.failedFiles).toBeGreaterThan(0);
+    expect(result.scan?.totalFiles).toBe(1);
+  });
+
+  it.each([
+    { limits: { maxDirectories: 4 }, irrelevant: 'directories' },
+    { limits: { maxEntries: 8 }, irrelevant: 'files' },
+  ])(
+    'caps irrelevant $irrelevant before parsing and retains only measured usage',
+    async ({ limits, irrelevant }) => {
+      write([meta(), model(), tokens(100, 20, 5)]);
+      for (let index = 0; index < 16; index++) {
+        const entry = path.join(path.dirname(file), `irrelevant-${index}`);
+        if (irrelevant === 'directories') fs.mkdirSync(entry);
+        else fs.writeFileSync(entry, 'not a native usage file');
+      }
+      const pending = collectAccountActivity(
+        { kind: 'codex', codexHome: path.join(root, 'codex'), cacheDir: path.join(root, 'cache') },
+        {
+          minDate: NOW - 31 * 86400000,
+          cacheDir: path.join(root, 'cache'),
+          traversalLimits: limits,
+        }
+      );
+      if (irrelevant === 'directories') {
+        const result = await pending;
+        expect(sum(result, 'inputTokens')).toBe(80);
+        expect(result.scan?.complete).toBe(false);
+        expect(result.scan?.failedFiles).toBeGreaterThan(0);
+      } else {
+        // Enumeration order is unspecified. A cap that hides every native
+        // file must report unavailable, rather than a measured zero.
+        await pending.then(
+          (result) => {
+            expect(sum(result, 'inputTokens')).toBe(80);
+            expect(result.scan?.complete).toBe(false);
+            expect(result.scan?.failedFiles).toBeGreaterThan(0);
+          },
+          (error: Error) => {
+            expect(error.message).toBe('Native log sources are unavailable');
+          }
+        );
+      }
+    }
+  );
+
+  it('honors an expired overall budget before walking history and invents no measured zero', async () => {
+    write([meta(), model(), tokens(100, 20, 5)]);
+    let time = NOW;
+    const clock = spyOn(Date, 'now').mockImplementation(() => {
+      time += 10;
+      return time;
+    });
+    try {
+      await expect(
+        collectAccountActivity(
+          {
+            kind: 'codex',
+            codexHome: path.join(root, 'codex'),
+            cacheDir: path.join(root, 'cache'),
+          },
+          { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), budgetMs: 1 }
+        )
+      ).rejects.toThrow('Native log sources are unavailable');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('reads appends and unfinished tails once, then invalidates truncate/rotate/rewrite fingerprints', async () => {

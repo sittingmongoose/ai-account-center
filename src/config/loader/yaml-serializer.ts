@@ -15,8 +15,9 @@ import type { UnifiedConfig } from '../unified-config-types';
  * Generate YAML header with helpful comments.
  */
 export function generateYamlHeader(): string {
-  return `# CCS Unified Configuration
-# Docs: https://github.com/kaitranntt/ccs
+  return `# AI Account Center Configuration
+# Storage schema: CCS-compatible; retained legacy settings preserve existing account data.
+# Docs: https://github.com/sittingmongoose/ai-account-center
 `;
 }
 
@@ -310,9 +311,9 @@ export function generateYamlWithComments(config: UnifiedConfig): string {
   }
 
   // Dashboard auth section (only if configured)
-  if (config.dashboard_auth?.enabled) {
+  if (config.dashboard_auth) {
     lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Dashboard Auth: Optional login protection for CCS dashboard');
+    lines.push('# Dashboard Auth: Optional login protection for AI Account Center');
     lines.push('# Generate password hash: npx bcrypt-cli hash "your-password"');
     lines.push(
       '# ENV override: CCS_DASHBOARD_AUTH_ENABLED, CCS_DASHBOARD_USERNAME, CCS_DASHBOARD_PASSWORD_HASH'
@@ -376,7 +377,7 @@ export function generateYamlWithComments(config: UnifiedConfig): string {
     lines.push('# Quota Management: Hybrid auto+manual account selection for multi-account setups');
     lines.push('# mode: auto | manual | hybrid (default: hybrid)');
     lines.push('# manual.tier_lock: per-provider tier lock map (e.g. { agy: "ultra" })');
-    lines.push('# Configure via: POST /api/accounts/tier-lock');
+    lines.push('# Compatibility: preserves saved quota tiers for each provider.');
     lines.push('# ----------------------------------------------------------------------------');
     lines.push(
       yaml

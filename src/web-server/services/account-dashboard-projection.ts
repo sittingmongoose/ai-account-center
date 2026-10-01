@@ -52,6 +52,7 @@ function emptyCapabilities(): DashboardAccount['capabilities'] {
 
 function quotaWindow(window: Partial<DashboardAccountWindow>): DashboardAccountWindow {
   const usedPercent = number(window.usedPercent);
+  const sampledAt = window.status === 'cached' ? timestamp(window.sampledAt) : null;
   return {
     key: text(window.key, 64) ?? 'usage',
     label: text(window.label, 80) ?? 'Usage',
@@ -78,6 +79,7 @@ function quotaWindow(window: Partial<DashboardAccountWindow>): DashboardAccountW
     ...(window.expiresAt !== undefined ? { expiresAt: timestamp(window.expiresAt) } : {}),
     ...(typeof window.unlimited === 'boolean' ? { unlimited: window.unlimited } : {}),
     ...(typeof window.enabled === 'boolean' ? { enabled: window.enabled } : {}),
+    ...(sampledAt ? { status: 'cached' as const, sampledAt } : {}),
   };
 }
 

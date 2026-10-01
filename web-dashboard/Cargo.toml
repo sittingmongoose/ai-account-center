@@ -5,8 +5,8 @@ edition = "2024"
 rust-version = "1.92"
 build = "build.rs"
 publish = false
-description = "CCS account and subscription usage dashboard built with Slint"
-repository = "https://github.com/sittingmongoose/ccs"
+description = "AI Account Center account and subscription usage dashboard built with Slint"
+repository = "https://github.com/sittingmongoose/ai-account-center"
 license = "MIT"
 
 [lib]

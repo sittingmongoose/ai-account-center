@@ -3,9 +3,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { pathToFileURL } from 'url';
 import { loadAccountsRegistry } from '../../../src/cliproxy/accounts/registry';
-import { registerSession } from '../../../src/cliproxy/session-tracker';
 import { withSyncLockRetry } from '../../../src/utils/sync-lock-retry';
 
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
@@ -36,21 +34,6 @@ describe('CLIProxy state locks', () => {
 
     try {
       expect(loadAccountsRegistry()).toEqual({ version: 1, providers: {} });
-    } finally {
-      await stopLockHolder(holder);
-    }
-  });
-
-  it('waits for a contended session tracker lock before registering', async () => {
-    const holder = await holdLock(cliproxyDir);
-
-    try {
-      const sessionId = registerSession(8317, process.pid);
-      const sessionState = JSON.parse(
-        fs.readFileSync(path.join(cliproxyDir, 'sessions.json'), 'utf8')
-      ) as { sessions: string[] };
-
-      expect(sessionState.sessions).toContain(sessionId);
     } finally {
       await stopLockHolder(holder);
     }
@@ -106,58 +89,6 @@ describe('CLIProxy state locks', () => {
       expect(holder.exitCode).toBeNull();
     } finally {
       await stopLockHolder(holder);
-    }
-  });
-
-  it('preserves all concurrent session registrations', async () => {
-    const workerCount = 6;
-    const gatePath = path.join(tempDir, 'session-writer-gate');
-    const workerScript = path.join(tempDir, 'session-writer.ts');
-    const sessionTrackerUrl = pathToFileURL(
-      path.join(process.cwd(), 'src/cliproxy/session-tracker.ts')
-    ).href;
-    fs.writeFileSync(
-      workerScript,
-      `
-import * as fs from 'fs';
-import { registerSession } from ${JSON.stringify(sessionTrackerUrl)};
-
-const gatePath = process.argv[2];
-const readyPath = process.argv[3];
-const proxyPid = Number(process.argv[4]);
-fs.writeFileSync(readyPath, String(process.pid));
-while (!fs.existsSync(gatePath)) {
-  await new Promise((resolve) => setTimeout(resolve, 5));
-}
-registerSession(8317, proxyPid);
-`,
-      'utf8'
-    );
-
-    const workers = Array.from({ length: workerCount }, (_, index) => {
-      const readyPath = path.join(tempDir, `session-writer-ready-${index}`);
-      return {
-        readyPath,
-        child: spawn(process.execPath, [workerScript, gatePath, readyPath, String(process.pid)], {
-          cwd: process.cwd(),
-          env: { ...process.env, CCS_HOME: tempDir },
-          stdio: ['ignore', 'ignore', 'pipe'],
-        }),
-      };
-    });
-
-    try {
-      await Promise.all(workers.map(({ readyPath, child }) => waitForFile(readyPath, child)));
-      fs.writeFileSync(gatePath, 'go');
-      await Promise.all(workers.map(({ child }) => waitForSuccessfulExit(child)));
-
-      const sessionState = JSON.parse(
-        fs.readFileSync(path.join(cliproxyDir, 'sessions.json'), 'utf8')
-      ) as { sessions: string[] };
-      expect(sessionState.sessions).toHaveLength(workerCount);
-      expect(new Set(sessionState.sessions).size).toBe(workerCount);
-    } finally {
-      await Promise.all(workers.map(({ child }) => stopLockHolder(child)));
     }
   });
 });
@@ -246,14 +177,5 @@ async function stopLockHolder(child: ChildProcess): Promise<void> {
   }
   if (child.exitCode === null && child.signalCode === null) {
     await new Promise<void>((resolve) => child.once('exit', () => resolve()));
-  }
-}
-
-async function waitForSuccessfulExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode === null && child.signalCode === null) {
-    await new Promise<void>((resolve) => child.once('exit', () => resolve()));
-  }
-  if (child.exitCode !== 0) {
-    throw new Error(`Concurrent session writer exited with code ${child.exitCode}`);
   }
 }

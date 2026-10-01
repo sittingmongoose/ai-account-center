@@ -95,10 +95,56 @@ public actor AccountsClient {
       throw BarClientError.codexConfirmation(confirmation)
     }
     guard (200..<300).contains(response.statusCode) else {
-      let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-      throw BarClientError.status(response.statusCode, message)
+      let publicCode = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+      throw BarClientError.status(response.statusCode, Self.publicError(status: response.statusCode, path: path,
+        codexActivation: confirmationProfile != nil, code: publicCode?["code"] as? String,
+        reason: publicCode?["reason"] as? String))
     }
     return data
+  }
+
+  /// Only fixed client copy and recognized public codes may reach the UI.
+  /// Server error/message strings can contain private paths or credential data.
+  private static func publicError(status: Int, path: String, codexActivation: Bool,
+    code: String?, reason: String?) -> String {
+    if codexActivation {
+      if status == 409 && code == "busy" {
+        if reason == "activation_running" { return "Another Codex account activation is already running. Wait for it to finish." }
+        if reason == "unsupported_process" { return "A running Codex program cannot be restarted safely. Close it and try again." }
+        return "Codex is busy. Try switching after its work finishes."
+      }
+      if status == 409 && code == "confirmation_stale" {
+        return "The running Codex programs or account changed. Activate again to review a new warning."
+      }
+      if status == 400 && code == "invalid_profile" { return "The selected profile has no valid saved login." }
+      if status == 400 && code == "invalid_codex_home" { return "Account activation needs the shared Codex configuration." }
+      if status == 500 {
+        switch code {
+        case "restart_failed": return "Codex could not restart. Check its processes before retrying activation."
+        case "verification_failed": return "The activated account could not be verified. Refresh accounts before retrying."
+        case "auth_read_failed": return "The saved Codex login could not be read safely."
+        case "auth_write_failed": return "The Codex login could not be installed safely."
+        default: break
+        }
+      }
+    }
+    if path.hasPrefix("api/claude/desktop-profiles/") && path.hasSuffix("/open") {
+      if [502, 503].contains(status) { return "Claude could not be opened on the selected computer. Check its profile setup and connection." }
+      if status == 404 { return "The selected Claude profile is not available on that computer." }
+    }
+    if path == "api/codex/profiles/auto-switch" && status == 400 {
+      return "The automatic switching settings were rejected. Refresh and try again."
+    }
+    switch status {
+    case 401: return "Your dashboard session expired. Check the login in Settings."
+    case 403: return "AI Account Center rejected the request. Check the dashboard address in Settings."
+    case 404: return "The requested account operation is unavailable."
+    case 429: return "AI Account Center is busy. Wait before trying again."
+    case 408, 504: return "AI Account Center request timed out. Try again."
+    case 502, 503: return "AI Account Center is temporarily unavailable. Try again."
+    case 400, 415, 422: return "AI Account Center rejected this request. Refresh and try again."
+    default: return path.hasPrefix("api/accounts/dashboard") ? "Usage could not be refreshed. Try Refresh." : "AI Account Center request failed. Try again."
+    }
   }
 
   public func get<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {

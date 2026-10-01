@@ -64,6 +64,10 @@ function numeric(value: unknown, percent = false): number | null {
 /** Whitelist data fields before persisting; raw helper bodies never enter history. */
 export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
   if (!object(value) || !text(value.key, 64) || !text(value.label, 80)) return null;
+  const cachedSampledAt = value.status === 'cached' ? analyticsTimestamp(value.sampledAt) : null;
+  // A retained optional window is not a new observation of the refreshed core.
+  // Without its original time, it cannot safely enter measured history.
+  if (value.status === 'cached' && !cachedSampledAt) return null;
   const kind = ['rate_limit', 'balance', 'spend', 'extra_usage'].includes(String(value.kind))
     ? (value.kind as DashboardAccountWindow['kind'])
     : undefined;
@@ -82,6 +86,7 @@ export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
     expiresAt: analyticsTimestamp(value.expiresAt),
     ...(typeof value.unlimited === 'boolean' ? { unlimited: value.unlimited } : {}),
     ...(typeof value.enabled === 'boolean' ? { enabled: value.enabled } : {}),
+    ...(cachedSampledAt ? { status: 'cached' as const, sampledAt: cachedSampledAt } : {}),
   };
 }
 
@@ -263,6 +268,10 @@ export function appendAccountAnalyticsSnapshot(
     const windows = healthy
       ? account.windows.slice(0, 256).flatMap((window) => {
           const safe = analyticsWindow(window);
+          if (safe?.status === 'cached') {
+            const actualSampleTime = Date.parse(safe.sampledAt ?? '');
+            if (actualSampleTime > now || actualSampleTime < cutoff) return [];
+          }
           return safe ? [safe] : [];
         })
       : [];

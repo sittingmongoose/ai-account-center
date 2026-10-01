@@ -7,7 +7,7 @@
 import { spawn, spawnSync, ChildProcess, type SpawnOptions } from 'child_process';
 import * as path from 'path';
 import { ErrorManager } from './error-manager';
-import { getWebSearchHookEnv } from './websearch-manager';
+import { getWebSearchHookEnv } from './websearch/hook-env';
 import { wireChildProcessSignals } from './signal-forwarder';
 import {
   isClaudeSubcommandInvocation,

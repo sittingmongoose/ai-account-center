@@ -45,11 +45,9 @@ function validateUi(options = {}) {
     env,
   });
   const source = sourceFingerprint(crate);
-  for (const output of [path.join(repoRoot, 'ui', 'dist'), path.join(repoRoot, 'dist', 'ui')]) {
-    const { manifest } = verifyBundle(output);
-    if (manifest.source?.sha256 !== source.sha256 || manifest.source?.files !== source.files) {
-      throw new Error('Dashboard source changed after the build. Run bun run ui:build.');
-    }
+  const { manifest } = verifyBundle(path.join(repoRoot, 'dist', 'ui'));
+  if (manifest.source?.sha256 !== source.sha256 || manifest.source?.files !== source.files) {
+    throw new Error('Dashboard source changed after the build. Run bun run ui:build.');
   }
   return source;
 }

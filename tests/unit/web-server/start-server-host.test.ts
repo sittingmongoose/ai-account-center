@@ -1,13 +1,55 @@
-import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import type { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
 import { startServer } from '../../../src/web-server';
+import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
+import * as analyticsSampling from '../../../src/web-server/services/account-analytics-service';
 
 const instances: Array<Awaited<ReturnType<typeof startServer>>> = [];
 const staticDirs: string[] = [];
+const fixtureEnvKeys = ['CCS_HOME', 'CCS_DIR', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const;
+let fixtureHome = '';
+let originalEnv: Partial<Record<(typeof fixtureEnvKeys)[number], string | undefined>> = {};
+let autoSwitchStart: ReturnType<typeof spyOn<CodexAutoSwitchService, 'start'>>;
+let analyticsStart: ReturnType<
+  typeof spyOn<typeof analyticsSampling, 'startAccountAnalyticsSampling'>
+>;
+
+beforeEach(() => {
+  fixtureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-server-fixture-'));
+  originalEnv = Object.fromEntries(fixtureEnvKeys.map((key) => [key, process.env[key]]));
+  process.env.CCS_HOME = fixtureHome;
+  process.env.CCS_DIR = path.join(fixtureHome, '.ccs');
+  process.env.CLAUDE_CONFIG_DIR = path.join(fixtureHome, '.claude');
+  process.env.CODEX_HOME = path.join(fixtureHome, '.codex');
+
+  // Exercise the real HTTP/session/upgrade stack while avoiding background
+  // account activation and usage helpers unrelated to these server fixtures.
+  autoSwitchStart = spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
+  analyticsStart = spyOn(analyticsSampling, 'startAccountAnalyticsSampling').mockImplementation(
+    () => {}
+  );
+  const realFetch = globalThis.fetch;
+  spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+    const target = new URL(
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    );
+    const ownsTarget = instances.some((instance) => {
+      const address = instance.server.address();
+      return (
+        address &&
+        typeof address !== 'string' &&
+        target.origin === `http://127.0.0.1:${address.port}`
+      );
+    });
+    if (!ownsTarget)
+      return Promise.reject(new Error('Only owned server fixtures may receive requests.'));
+    return realFetch(input, init);
+  });
+});
 
 class MockUpgradeSocket {
   data = '';
@@ -37,6 +79,8 @@ function dispatchUpgrade(instance: Awaited<ReturnType<typeof startServer>>, url:
 }
 
 afterEach(async () => {
+  expect(autoSwitchStart).toHaveBeenCalledTimes(1);
+  expect(analyticsStart).toHaveBeenCalledTimes(1);
   while (instances.length > 0) {
     const instance = instances.pop();
     if (!instance) {
@@ -48,6 +92,11 @@ afterEach(async () => {
   }
 
   mock.restore();
+  for (const key of fixtureEnvKeys) {
+    if (originalEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = originalEnv[key];
+  }
+  fs.rmSync(fixtureHome, { recursive: true, force: true });
   for (const dir of staticDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 

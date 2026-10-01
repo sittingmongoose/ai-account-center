@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Private security report
-    url: https://github.com/kaitranntt/ccs/security/advisories/new
-    about: Report suspected vulnerabilities privately. Do not open public issues for security reports.
+  - name: Security reporting policy
+    url: https://github.com/sittingmongoose/ai-account-center/blob/feat/activate-in-place/SECURITY.md
+    about: Read the project's reporting policy before sharing a suspected vulnerability. Do not post secrets or private configuration publicly.
   - name: Documentation hub
-    url: https://docs.ccs.kaitran.ca
-    about: Installation, provider guides, CLI reference, and troubleshooting.
+    url: https://github.com/sittingmongoose/ai-account-center/tree/feat/activate-in-place/docs
+    about: Account dashboard setup, usage, native apps, and troubleshooting.

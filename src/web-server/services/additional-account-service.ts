@@ -31,6 +31,11 @@ const LABELS: Record<AdditionalProvider, string> = {
   'opencode-go': 'OpenCode Go',
 };
 const PLATFORM_LABELS = { ubuntu: 'Ubuntu', mac: 'Mac', windows: 'Windows' };
+const MUSE_CACHED_MESSAGES = new Set([
+  'Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically.',
+  'Showing the last successful Muse usage reading. Usage refreshes automatically.',
+]);
+const MUSE_TRANSIENT_FAILURES = new Set(['rate_limited', 'provider_error', 'network_error']);
 
 export interface AdditionalAccountDeps {
   ccsDir?: string;
@@ -182,7 +187,10 @@ function unavailable(
 }
 
 /** Rebuild the public DTO; helper extras, command output and upstream errors are discarded. */
-function normalize(source: AdditionalUsageSource, contents: string): DashboardAccount {
+function normalize(
+  source: AdditionalUsageSource,
+  contents: string
+): { account: DashboardAccount; invalidIdentity: boolean; museTransientFailure: boolean } {
   if (Buffer.byteLength(contents, 'utf8') > MAX_RESULT_BYTES) {
     throw new AdditionalUsageTransportError();
   }
@@ -206,9 +214,12 @@ function normalize(source: AdditionalUsageSource, contents: string): DashboardAc
         : 'Saved account usage is unavailable on this computer.'
   );
   account.email = email(result.email);
+  let invalidIdentity =
+    result.email !== null && result.email !== undefined && account.email === null;
   account.label = account.email ?? LABELS[source.provider];
   const plan = displayText(result.plan, 48);
   account.plan = plan && /^[A-Za-z][A-Za-z0-9 ._+-]*$/.test(plan) ? plan : null;
+  if (source.provider === 'muse' && (!account.email || !account.plan)) invalidIdentity = true;
   account.fetchedAt = timestamp(result.fetchedAt);
   account.sampledAt = timestamp(result.sampledAt);
   if (status === 'ok' || status === 'cached') {
@@ -218,13 +229,30 @@ function normalize(source: AdditionalUsageSource, contents: string): DashboardAc
           .map(usageWindow)
           .filter((window): window is DashboardAccountWindow => window !== null)
       : [];
-    account.message = null;
+    account.message =
+      source.provider === 'muse' && status === 'cached'
+        ? typeof result.message === 'string' && MUSE_CACHED_MESSAGES.has(result.message)
+          ? result.message
+          : 'Showing the last saved Muse usage sample.'
+        : null;
     if (account.windows.length === 0) {
       account.status = 'error';
       account.message = 'Account usage is temporarily unavailable.';
     }
   }
-  return account;
+  if (source.provider === 'muse' && invalidIdentity && (status === 'ok' || status === 'cached')) {
+    account.status = 'error';
+    account.message = 'The saved Muse account identity could not be verified.';
+    account.windows = [];
+  }
+  return {
+    account,
+    invalidIdentity,
+    museTransientFailure:
+      source.provider === 'muse' &&
+      typeof result.failureCode === 'string' &&
+      MUSE_TRANSIENT_FAILURES.has(result.failureCode),
+  };
 }
 
 function copy(account: DashboardAccount, cached = false): DashboardAccount {
@@ -234,6 +262,20 @@ function copy(account: DashboardAccount, cached = false): DashboardAccount {
     windows: account.windows.map((window) => ({ ...window })),
     capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
   };
+}
+
+function matchesMuseIdentity(current: DashboardAccount, previous: DashboardAccount): boolean {
+  return (
+    current.email !== null &&
+    previous.email !== null &&
+    current.email.toLowerCase() === previous.email.toLowerCase() &&
+    current.plan !== null &&
+    current.plan === previous.plan
+  );
+}
+
+function observationTime(account: DashboardAccount): number {
+  return Date.parse(account.sampledAt ?? account.fetchedAt ?? '');
 }
 
 async function readManifestFile(ccsDir: string): Promise<string | null> {
@@ -332,9 +374,14 @@ export class AdditionalAccountService {
     source: AdditionalUsageSource,
     cache: SourceCache
   ): Promise<DashboardAccount> {
+    let invalidIdentity = false;
+    let museTransientFailure = false;
     try {
       const contents = await (this.deps.runSource ?? runAdditionalUsageSource)(source);
-      cache.result = normalize(source, contents);
+      const normalized = normalize(source, contents);
+      cache.result = normalized.account;
+      invalidIdentity = normalized.invalidIdentity;
+      museTransientFailure = normalized.museTransientFailure;
     } catch (error) {
       cache.result = unavailable(
         source,
@@ -344,15 +391,49 @@ export class AdditionalAccountService {
           : 'Account usage is temporarily unavailable.'
       );
     }
+    if (
+      source.provider === 'muse' &&
+      (invalidIdentity ||
+        cache.result.status === 'needs_sign_in' ||
+        (cache.lastGood && !matchesMuseIdentity(cache.result, cache.lastGood)) ||
+        (!['ok', 'cached'].includes(cache.result.status) && !museTransientFailure))
+    ) {
+      // Only explicitly classified transient failures can retain Muse quota.
+      // Unknown failures and rejected bindings also clear later retry state.
+      cache.lastGood = null;
+    }
     cache.fetchedAt = (this.deps.now ?? Date.now)();
     cache.failed = cache.result.status !== 'ok' && cache.result.status !== 'cached';
     if (!cache.failed) {
+      if (
+        source.provider === 'muse' &&
+        cache.result.status === 'cached' &&
+        cache.lastGood &&
+        matchesMuseIdentity(cache.result, cache.lastGood) &&
+        observationTime(cache.result) < observationTime(cache.lastGood)
+      ) {
+        cache.result = {
+          ...copy(cache.lastGood),
+          status: 'cached',
+          message: cache.result.message,
+        };
+      }
       cache.lastGood = copy(cache.result);
-    } else if (cache.result.status === 'error' && cache.lastGood) {
+    } else if (
+      cache.lastGood &&
+      ((source.provider !== 'muse' && cache.result.status === 'error') ||
+        (source.provider === 'muse' &&
+          (cache.result.status === 'unavailable' || cache.result.status === 'error') &&
+          museTransientFailure &&
+          matchesMuseIdentity(cache.result, cache.lastGood)))
+    ) {
       cache.result = {
         ...copy(cache.lastGood),
         status: 'cached',
-        message: 'Live account usage is temporarily unavailable; showing the last saved sample.',
+        message:
+          source.provider === 'muse'
+            ? 'Showing the last successful Muse usage reading. Usage refreshes automatically.'
+            : 'Live account usage is temporarily unavailable; showing the last saved sample.',
       };
     }
     return cache.result;

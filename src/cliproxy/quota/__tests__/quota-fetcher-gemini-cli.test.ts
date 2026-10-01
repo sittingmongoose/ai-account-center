@@ -23,7 +23,7 @@ describe('Gemini CLI Quota Fetcher', () => {
   let fetchGeminiCliQuota: typeof import('../quota-fetcher-gemini-cli').fetchGeminiCliQuota;
   let resolveGeminiCliProjectId: typeof import('../quota-fetcher-gemini-cli').resolveGeminiCliProjectId;
   let geminiTestExports: typeof import('../quota-fetcher-gemini-cli').__testExports;
-  let getProviderAuthDir: typeof import('../../config/config-generator').getProviderAuthDir;
+  let getProviderAuthDir: typeof import('../../config/path-resolver').getProviderAuthDir;
 
   function writeGeminiToken(token: Record<string, unknown>, filename = 'gemini-test.json'): string {
     const authDir = getProviderAuthDir('gemini');
@@ -59,7 +59,7 @@ describe('Gemini CLI Quota Fetcher', () => {
     delete process.env.CCS_DIR;
 
     const configGenerator = await import(
-      `../../config/config-generator?gemini-config-generator=${moduleVersion}`
+      `../../config/path-resolver?gemini-config-generator=${moduleVersion}`
     );
     ({
       buildGeminiCliBuckets,

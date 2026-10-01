@@ -71,6 +71,8 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
   public let expiresAt: String?
   public let unlimited: Bool?
   public let enabled: Bool?
+  public let status: String?
+  public let sampledAt: String?
   public var id: String { key }
 
   public var clampedUsedPercent: Double? {
@@ -85,6 +87,14 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
 }
 
 public enum AccountFormatting {
+  public static func cachedSample(status: String?, sampledAt: String?) -> String? {
+    guard status == "cached" else { return nil }
+    guard let sample = date(sampledAt) else { return "Cached · Sample time unavailable" }
+    let formatter = DateFormatter()
+    formatter.dateFormat = "MMM d, yyyy h:mm:ss a z"
+    return "Cached · Sampled \(formatter.string(from: sample))"
+  }
+
   public static func date(_ iso: String?) -> Date? {
     guard let iso else { return nil }
     let fractional = ISO8601DateFormatter()

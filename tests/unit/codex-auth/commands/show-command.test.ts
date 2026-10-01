@@ -70,7 +70,7 @@ describe('handleShowCodex — empty list', () => {
     const ctx = await makeCtx();
     const out = await captureStdout(() => handleShowCodex(ctx, []));
     expect(out).toContain('No Codex profiles');
-    expect(out).toContain('ccsx auth create');
+    expect(out).toContain('ai-account-center codex-auth create');
   });
 });
 

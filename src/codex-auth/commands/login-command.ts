@@ -24,12 +24,12 @@ const logger = createLogger('codex-auth:cmd:login');
 export async function handleLoginCodex(ctx: CodexCommandContext, args: string[]): Promise<void> {
   await initUI();
   const parsed = parseArgs(args);
-  rejectUnsupportedOptions(parsed, 'ccsx auth login <name>');
+  rejectUnsupportedOptions(parsed, 'ai-account-center codex-auth login <name>');
 
   const { profileName } = parsed;
 
   if (!profileName) {
-    console.log('Usage: ccsx auth login <name>');
+    console.log('Usage: ai-account-center codex-auth login <name>');
     exitWithError('Profile name required', ExitCode.PROFILE_ERROR);
     return;
   }
@@ -61,7 +61,7 @@ export async function handleLoginCodex(ctx: CodexCommandContext, args: string[])
     console.log('  # or follow https://github.com/openai/codex#install');
     console.log('');
     console.log(`After installing, re-run:`);
-    console.log(`  ccsx auth login ${profileName}`);
+    console.log(`  ai-account-center codex-auth login ${profileName}`);
     exitWithError('codex CLI not found', ExitCode.BINARY_ERROR);
     return;
   }

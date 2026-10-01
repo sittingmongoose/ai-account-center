@@ -12,7 +12,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { startQuotaMonitor, stopQuotaMonitor, clearQuotaCache } from '../quota-manager';
-import { __testExports as executorTestExports } from '../../executor';
 
 // Setup test isolation
 let tmpDir: string;
@@ -37,29 +36,6 @@ afterEach(() => {
 });
 
 describe('Runtime Quota Monitor', () => {
-  describe('resolveRuntimeQuotaMonitorProviders', () => {
-    it('should monitor the default provider for non-composite sessions', () => {
-      expect(executorTestExports.resolveRuntimeQuotaMonitorProviders('codex', [])).toEqual([
-        'codex',
-      ]);
-    });
-
-    it('should monitor every unique managed provider in composite sessions', () => {
-      expect(
-        executorTestExports.resolveRuntimeQuotaMonitorProviders('claude', [
-          'codex',
-          'qwen',
-          'gemini',
-          'codex',
-        ])
-      ).toEqual(['codex', 'gemini']);
-    });
-
-    it('should skip unsupported non-composite providers', () => {
-      expect(executorTestExports.resolveRuntimeQuotaMonitorProviders('qwen', [])).toEqual([]);
-    });
-  });
-
   describe('startQuotaMonitor', () => {
     it('should accept all quota-supported providers without throwing', () => {
       for (const provider of ['agy', 'claude', 'codex', 'gemini', 'ghcp'] as const) {

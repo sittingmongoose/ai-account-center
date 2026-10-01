@@ -73,14 +73,12 @@ internal static class SafeProjection
                                                       null, "credits", "balance");
                 }
                 var percent = Number(Property(item, "usedPercent"));
-                if (percent > 100)
-                    percent = null;
                 var used = Number(Property(item, "used"));
                 var limit = Number(Property(item, "limit"));
                 var remaining = Number(Property(item, "remaining"));
                 var reset = Timestamp(Property(item, "resetAt"));
                 var expires = Timestamp(Property(item, "expiresAt"));
-                ValidateCounts(percent, used, limit, remaining);
+                ValidateCounts(percent, used, limit, remaining, key is "5h" or "weekly" or "monthly");
                 // Plan and individual-pack expiration is not a quota reset.
                 if (key == "subscription" || isCreditPack)
                     reset = null;
@@ -94,7 +92,7 @@ internal static class SafeProjection
                 if (key is "5h" or "weekly" or "monthly" && limit is null)
                     unit = null;
                 windows.Add(new UsageWindow(key, definition.Label, percent,
-                    percent is { } valid ? Math.Round(100 - valid, 8) : null, reset, definition.Minutes,
+                    percent is { } valid ? Math.Round(Math.Max(0, 100 - valid), 8) : null, reset, definition.Minutes,
                     used, limit, unit, definition.Kind, remaining, expires));
             }
             if (windows.Count == 0)
@@ -118,13 +116,15 @@ internal static class SafeProjection
         return instant >= now.AddMinutes(-5) && instant <= now.AddSeconds(30);
     }
 
-    private static void ValidateCounts(double? percent, double? used, double? limit, double? remaining)
+    private static void ValidateCounts(double? percent, double? used, double? limit, double? remaining,
+                                       bool quotaOverageAllowed)
     {
         if (limit is not { } maximum)
             return;
         var epsilon = Math.Max(0.000001, maximum * 0.0000001);
-        if (used > maximum + epsilon || remaining > maximum + epsilon ||
-            used is { } consumed && remaining is { } left && Math.Abs(consumed + left - maximum) > epsilon)
+        if ((!quotaOverageAllowed && used > maximum + epsilon) || remaining > maximum + epsilon ||
+            used is { } consumed && remaining is { } left &&
+            Math.Abs(left - Math.Max(0, maximum - consumed)) > epsilon)
             throw new SafeFailure("invalid_response");
         var consumedForCheck = used ?? (remaining is { } available ? Math.Max(0, maximum - available) : null);
         // Permit half a hundredth of a percentage point for a producer that
@@ -158,6 +158,6 @@ internal static class SafeProjection
             !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var instant) ||
             instant.Year is < 2000 or > 2200)
             return null;
-        return instant.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        return instant.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", CultureInfo.InvariantCulture);
     }
 }

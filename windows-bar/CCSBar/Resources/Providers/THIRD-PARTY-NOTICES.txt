@@ -1,0 +1,37 @@
+Provider artwork attribution
+
+Provider artwork identifies the corresponding services. Product names and marks remain their respective owners' trademarks.
+
+OpenCode
+Official OpenCode dark-surface mark from anomalyco/opencode commit 63cf236140b11c15cd645e90a7ded77bdc2193b4.
+
+MIT License
+
+Copyright (c) 2025 opencode
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Cursor
+Official default 2D cube from https://cursor.com/brand and its published Cursor brand archive. Vendor trademark artwork; no separate open-source asset license was found.
+
+Qwen
+Official favicon published by https://qwen.ai (Alibaba Qwen). Vendor trademark artwork; no separate asset license was found.
+
+Muse Code (Meta publisher mark)
+Unchanged official https://dev.meta.ai/favicon.ico pixels, extracted to PNG. The installed Muse launcher is byte-identical to https://api.meta.ai/muse-launcher.sh and embeds api.meta.ai/muse-code endpoints; the official product page is https://dev.meta.ai/products/muse-code. No distinct Muse product icon is published. Meta trademark artwork, governed by https://www.meta.com/brand/resources/meta/company-brand/.

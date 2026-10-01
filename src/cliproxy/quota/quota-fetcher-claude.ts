@@ -6,7 +6,7 @@
 
 import * as path from 'node:path';
 import * as fsp from 'node:fs/promises';
-import { getAuthDir } from '../config/config-generator';
+import { getAuthDir } from '../config/path-resolver';
 import { getPausedDir, getProviderAccounts } from '../accounts/account-manager';
 import { sanitizeEmail, isTokenExpired } from '../auth/auth-utils';
 import type { ClaudeQuotaResult } from './quota-types';

@@ -29,18 +29,16 @@ describe('Account Manager - discoverExistingAccounts', () => {
     process.env.CCS_HOME = testDir;
 
     // Clear cache and reload - must clear all modular submodules too
-    delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/account-manager')];
-    delete require.cache[require.resolve('../../../../dist/cliproxy/config/config-generator')];
-    delete require.cache[require.resolve('../../../../dist/utils/config-manager')];
+    delete require.cache[require.resolve('../../../../src/cliproxy/accounts/account-manager')];
+    delete require.cache[require.resolve('../../../../src/utils/config-manager')];
     // Clear new modular structure (accounts/ and config/ submodules)
-    delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/index')];
-    delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/registry')];
-    delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/token-file-ops')];
-    delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/query')];
-    delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/types')];
-    delete require.cache[require.resolve('../../../../dist/cliproxy/config/index')];
-    delete require.cache[require.resolve('../../../../dist/cliproxy/config/path-resolver')];
-    accountManager = require('../../../../dist/cliproxy/accounts/account-manager');
+    delete require.cache[require.resolve('../../../../src/cliproxy/accounts/index')];
+    delete require.cache[require.resolve('../../../../src/cliproxy/accounts/registry')];
+    delete require.cache[require.resolve('../../../../src/cliproxy/accounts/token-file-ops')];
+    delete require.cache[require.resolve('../../../../src/cliproxy/accounts/query')];
+    delete require.cache[require.resolve('../../../../src/cliproxy/accounts/types')];
+    delete require.cache[require.resolve('../../../../src/cliproxy/config/path-resolver')];
+    accountManager = require('../../../../src/cliproxy/accounts/account-manager');
   });
 
   afterEach(() => {
@@ -303,10 +301,10 @@ describe('Account Manager - discoverExistingAccounts', () => {
       });
 
       // Reload module to clear in-memory cache (including all submodules)
-      delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/account-manager')];
-      delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/index')];
-      delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/registry')];
-      accountManager = require('../../../../dist/cliproxy/accounts/account-manager');
+      delete require.cache[require.resolve('../../../../src/cliproxy/accounts/account-manager')];
+      delete require.cache[require.resolve('../../../../src/cliproxy/accounts/index')];
+      delete require.cache[require.resolve('../../../../src/cliproxy/accounts/registry')];
+      accountManager = require('../../../../src/cliproxy/accounts/account-manager');
       accountManager.discoverExistingAccounts();
 
       const accounts = getAccountsFile();
@@ -387,10 +385,10 @@ describe('Account Manager - discoverExistingAccounts', () => {
       });
 
       // Reload module to pick up pre-existing accounts.json (including all submodules)
-      delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/account-manager')];
-      delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/index')];
-      delete require.cache[require.resolve('../../../../dist/cliproxy/accounts/registry')];
-      accountManager = require('../../../../dist/cliproxy/accounts/account-manager');
+      delete require.cache[require.resolve('../../../../src/cliproxy/accounts/account-manager')];
+      delete require.cache[require.resolve('../../../../src/cliproxy/accounts/index')];
+      delete require.cache[require.resolve('../../../../src/cliproxy/accounts/registry')];
+      accountManager = require('../../../../src/cliproxy/accounts/account-manager');
       accountManager.discoverExistingAccounts();
 
       const accounts = getAccountsFile();

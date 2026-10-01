@@ -146,13 +146,51 @@ def normalize_muse(payload):
     return windows
 
 
-def fetch_muse(credential, result):
-    payload = request_json(MUSE_URL, {"Authorization": "Bearer " + credential.access, "x-api-version": "1.0.0"}, {})
+def fetch_muse(credential, result, home=None):
+    home = pathlib.Path(home) if home is not None else pathlib.Path.home()
+    root = home / ".ccs/account-usage"
+
+    def failed(code, message):
+        # Internal collector classification, never a public dashboard field.
+        # An unclassified failure must not authorize reuse of previous quota.
+        result.update(status="needs_sign_in" if code == "needs_sign_in" else "unavailable",
+                      failureCode=code, message=message, windows=[], sampledAt=None)
+
+    # Use only a previously verified, credential-bound observation during its
+    # shared cooldown. This also avoids minting an unused inference key on each
+    # independent bar/dashboard refresh.
+    cached = None
+    try:
+        from muse_console import MuseError, ERROR_MESSAGES, quota_sample, read_capsule, verify_device_identity
+        cookies, team, bound_email, bound_plan = read_capsule(root)
+        if credential.email and credential.email.lower() == bound_email.lower():
+            result.update(email=bound_email, plan=bound_plan)
+            cached = quota_sample(root, cookies, bound_email, bound_plan, team, credential.access,
+                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan))
+        if cached:
+            result.update(email=bound_email, plan=bound_plan, status="cached" if cached["cached"] else "ok", message=cached["message"],
+                          sampledAt=cached["sampledAt"], windows=normalize_muse({"subscription_quota": cached["quota"]}))
+            result["source"] += " + authenticated Meta web quota"
+            return
+    except ImportError:
+        pass
+    except MuseError as error:
+        if error.code not in {"no_browser_cookie", "local_storage_error"}:
+            failed(error.code, ERROR_MESSAGES[error.code])
+            return
+    try:
+        payload = request_json(MUSE_URL, {"Authorization": "Bearer " + credential.access, "x-api-version": "1.0.0"}, {})
+    except UsageError as error:
+        failed("needs_sign_in" if error.status == "needs_sign_in" else "error", error.message)
+        return
     result["email"] = email(payload.get("user_email")) or credential.email
     result["plan"] = safe_text(payload.get("subs_tier_name"))
     result["windows"] = normalize_muse(payload)
+    if credential.email and result["email"] and credential.email.lower() != result["email"].lower():
+        failed("account_mismatch", "The Muse usage account differs from the signed-in Muse CLI account.")
+        return
     if payload.get("is_subs_active") is False:
-        result["status"], result["message"] = "unavailable", "This account has no active Muse Code subscription."
+        failed("inactive_subscription", "This account has no active Muse Code subscription.")
         return
     if result["windows"]:
         return
@@ -161,23 +199,26 @@ def fetch_muse(credential, result):
     # endpoint. Never send the CLI's device credential to that web origin.
     result["status"], result["message"] = "unavailable", (
         "Muse confirmed this subscription but omitted its usage. Sync Muse in the Mac browser usage bridge to read the rolling and weekly limits.")
+    result["failureCode"] = "invalid_response"
     try:
-        from muse_console import MuseError, ERROR_MESSAGES, fetch_quota, read_capsule
+        from muse_console import MuseError, ERROR_MESSAGES, quota_sample, read_capsule
     except ImportError:
         return
     try:
-        cookies, team, bound_email, bound_plan = read_capsule(pathlib.Path.home() / ".ccs/account-usage")
+        cookies, team, bound_email, bound_plan = read_capsule(root)
         if not result["email"] or not result["plan"] or bound_email.lower() != result["email"].lower() or bound_plan != result["plan"]:
-            result["message"] = ERROR_MESSAGES["account_mismatch"]
+            failed("account_mismatch", ERROR_MESSAGES["account_mismatch"])
             return
-        _, quota = fetch_quota(cookies, result["email"], result["plan"], team)
-        result["windows"] = normalize_muse({"subscription_quota": quota})
+        sample = quota_sample(root, cookies, result["email"], result["plan"], team, credential.access)
+        result["windows"] = normalize_muse({"subscription_quota": sample["quota"]})
         if result["windows"]:
-            result["status"], result["message"] = "ok", None
+            result["status"] = "cached" if sample["cached"] else "ok"
+            result["message"], result["sampledAt"] = sample["message"], sample["sampledAt"]
+            result.pop("failureCode", None)
             result["source"] += " + authenticated Meta web quota"
     except MuseError as error:
-        if error.code != "no_browser_cookie":
-            result["message"] = ERROR_MESSAGES.get(error.code, ERROR_MESSAGES["error"])
+        failed(error.code, result["message"] if error.code == "no_browser_cookie"
+               else ERROR_MESSAGES.get(error.code, ERROR_MESSAGES["error"]))
 
 
 def agy_groups(payload):
@@ -455,9 +496,13 @@ def collect(provider, platform, home=None):
                       email=credential.email, status="ok", message=None)
         if provider == "antigravity":
             fetch_antigravity(credential, result, home)
+        elif provider == "muse":
+            fetch_muse(credential, result, home)
         else:
-            {"muse": fetch_muse, "cursor": fetch_cursor}[provider](credential, result)
-        result["fetchedAt"] = result["sampledAt"] = utc_now()
+            fetch_cursor(credential, result)
+        result["fetchedAt"] = utc_now()
+        if result["windows"] and result["sampledAt"] is None:
+            result["sampledAt"] = result["fetchedAt"]
         if not result["windows"] and result["status"] == "ok":
             result["status"], result["message"] = "unavailable", "The account is signed in, but the service returned no recognized usage limits."
     except UsageError as error:

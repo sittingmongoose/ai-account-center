@@ -1,6 +1,6 @@
-# CCS Code of Conduct
+# AI Account Center Code of Conduct
 
-CCS is a technical project. Keep discussion respectful, constructive, and focused on improving the work.
+AI Account Center is a technical project. Keep discussion respectful, constructive, and focused on improving the work.
 
 ## Expected Behavior
 
@@ -33,7 +33,7 @@ Maintainers may edit or remove content, lock conversations, close threads, rejec
 
 For non-sensitive concerns, use the public issue templates.
 
-For sensitive concerns, do not post details publicly. Use the private reporting path in `SECURITY.md`.
+For sensitive concerns, do not post details publicly. Follow the current reporting policy in [SECURITY.md](../SECURITY.md); do not assume a private intake is enabled.
 
 ## Practical Rule
 

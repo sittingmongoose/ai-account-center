@@ -75,7 +75,7 @@ public partial class App : System.Windows.Application
         {
             // Never log exception bodies: connection credentials and account identities stay private.
             Directory.CreateDirectory(SecureStore.StateDirectory);
-            File.WriteAllText(Path.Combine(SecureStore.StateDirectory, "startup-status.txt"), "CCS Bar startup failed. Check the connection or reinstall CCS Bar.");
+            File.WriteAllText(Path.Combine(SecureStore.StateDirectory, "startup-status.txt"), "AI Account Center startup failed. Check the connection or reinstall AI Account Center.");
             Shutdown(1);
         }
     }
@@ -96,7 +96,7 @@ public partial class App : System.Windows.Application
         var handle = bitmap.GetHicon();
         try { using var borrowed = Icon.FromHandle(handle); icon = (Icon)borrowed.Clone(); }
         finally { NativeIcon.DestroyIcon(handle); }
-        tray = new Forms.NotifyIcon { Text = "CCS · usage & accounts", Icon = icon, Visible = true };
+        tray = new Forms.NotifyIcon { Text = "AI Account Center · accounts", Icon = icon, Visible = true };
         tray.MouseClick += async (_, e) =>
         {
             if (e.Button == Forms.MouseButtons.Left)
@@ -105,7 +105,7 @@ public partial class App : System.Windows.Application
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("Open accounts", null, async (_, _) => await Dispatcher.InvokeAsync(async () => await window.OpenPopup()).Task.Unwrap());
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("Quit CCS Bar", null, (_, _) => Dispatcher.Invoke(Quit));
+        menu.Items.Add("Quit AI Account Center", null, (_, _) => Dispatcher.Invoke(Quit));
         tray.ContextMenuStrip = menu;
     }
 
@@ -113,7 +113,7 @@ public partial class App : System.Windows.Application
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptions(Formatting.Json) { WriteIndented = true }));
-        Console.WriteLine(report.Passed ? "CCS Bar checks passed." : "CCS Bar checks failed.");
+        Console.WriteLine(report.Passed ? "AI Account Center checks passed." : "AI Account Center checks failed.");
     }
 
     public void Quit()

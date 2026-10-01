@@ -457,6 +457,129 @@ private func checkConfirmedCodexSwitch() async throws {
   try expect(freshBody.isEmpty, "A fresh action must not retain or replay the expired-session confirmation token")
 }
 
+private func checkSafeHTTPFailures() async throws {
+  enum Context: CaseIterable {
+    case refresh, claudeOpen, codexActivate
+
+    var requestKey: String {
+      switch self {
+      case .refresh: return "GET /api/accounts/dashboard"
+      case .claudeOpen: return "POST /api/claude/desktop-profiles/gmail/open"
+      case .codexActivate: return "POST /api/codex/profiles/party/activate"
+      }
+    }
+  }
+  let canary = "FIXTURE_ONLY_PRIVATE_ERROR_CANARY fixture-token /fixture/private/profile"
+  let canaryJSON = try JSONSerialization.data(withJSONObject: [
+    "error": canary, "message": canary, "reason": canary,
+    "code": "unknown-fixture-code", "context": "codex-activate",
+  ])
+
+  func failure(_ context: Context, _ status: Int, _ data: Data) async throws -> String {
+    // Authentication retry is intentionally bounded to one extra request.
+    let replies = Array(repeating: MockReply(status, data), count: status == 401 ? 2 : 1)
+    let transport = MockTransport(replies: [context.requestKey: replies])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    do {
+      switch context {
+      case .refresh: _ = try await client.dashboard(refresh: true)
+      case .claudeOpen: try await client.openClaude(profile: "gmail")
+      case .codexActivate: try await client.activateCodex(profile: "party")
+      }
+    } catch BarClientError.status(let actual, let message) {
+      try expect(actual == status && message?.isEmpty == false,
+        "HTTP failure must retain its status and useful public guidance")
+      let visible = BarClientError.status(actual, message).localizedDescription
+      try expect(!visible.contains("FIXTURE_ONLY_PRIVATE_ERROR_CANARY") &&
+        !visible.contains("fixture-token") && !visible.contains("/fixture/private/profile"),
+        "Raw private server error text must never reach the UI")
+      let calls = await transport.recorded()
+      try expect(calls.allSatisfy { $0.url.host == "ccs.invalid" } &&
+        calls.filter { "\($0.method) \($0.url.path)" == context.requestKey }.count == replies.count,
+        "Sanitization must preserve the bounded request/authentication flow")
+      return visible
+    } catch {
+      throw CheckFailure(description: "HTTP failure changed its public error type")
+    }
+    throw CheckFailure(description: "An HTTP error unexpectedly succeeded")
+  }
+
+  // Unknown bodies, including a spoofed action context, must produce the same
+  // guidance as an empty body for every supported status and actual local action.
+  let statuses = [400, 401, 403, 404, 408, 409, 415, 422, 429, 500, 502, 503, 504]
+  for context in Context.allCases {
+    for status in statuses {
+      let baseline = try await failure(context, status, Data("{}".utf8))
+      let polluted = try await failure(context, status, canaryJSON)
+      try expect(baseline == polluted, "Unknown server strings must not change public guidance")
+    }
+  }
+
+  let publicCodes: [(Int, String, String?, String)] = [
+    (409, "busy", "activation_running", "Another Codex account activation is already running. Wait for it to finish."),
+    (409, "busy", "unsupported_process", "A running Codex program cannot be restarted safely. Close it and try again."),
+    (409, "busy", "running_processes", "Codex is busy. Try switching after its work finishes."),
+    (409, "confirmation_stale", nil, "The running Codex programs or account changed. Activate again to review a new warning."),
+    (400, "invalid_profile", nil, "The selected profile has no valid saved login."),
+    (400, "invalid_codex_home", nil, "Account activation needs the shared Codex configuration."),
+    (500, "restart_failed", nil, "Codex could not restart. Check its processes before retrying activation."),
+    (500, "verification_failed", nil, "The activated account could not be verified. Refresh accounts before retrying."),
+    (500, "auth_read_failed", nil, "The saved Codex login could not be read safely."),
+    (500, "auth_write_failed", nil, "The Codex login could not be installed safely."),
+  ]
+  for (status, code, reason, expected) in publicCodes {
+    var body: [String: Any] = ["error": canary, "message": canary, "code": code]
+    if let reason { body["reason"] = reason }
+    let actual = try await failure(.codexActivate, status, JSONSerialization.data(withJSONObject: body))
+    try expect(actual == expected, "Recognized public Codex codes must retain useful fixed guidance")
+  }
+  for data in [
+    Data("{malformed \(canary)".utf8),
+    Data("<html>\(canary)</html>".utf8),
+    try JSONSerialization.data(withJSONObject: ["error": canary + String(repeating: "x", count: 256 * 1024)]),
+  ] {
+    let actual = try await failure(.refresh, 500, data)
+    try expect(actual == "Usage could not be refreshed. Try Refresh.",
+      "Malformed, HTML, and large server failures must use fixed refresh guidance")
+  }
+
+  let spoofed = try JSONSerialization.data(withJSONObject: [
+    "error": canary, "message": canary, "code": "auth_write_failed", "context": "codex-activate",
+  ])
+  for context in [Context.refresh, .claudeOpen] {
+    let baseline = try await failure(context, 500, Data("{}".utf8))
+    let actual = try await failure(context, 500, spoofed)
+    try expect(actual == baseline, "The server cannot select a different local action's error mapping")
+  }
+
+  let settingsTransport = MockTransport(replies: [
+    "PUT /api/codex/profiles/auto-switch": [MockReply(400, canaryJSON)],
+  ])
+  let settingsClient = AccountsClient(connection: testConnection(), transport: settingsTransport)
+  do {
+    _ = try await settingsClient.setAutomaticSwitching(enabled: true, thresholdPercent: 5)
+    throw CheckFailure(description: "Rejected automatic settings unexpectedly succeeded")
+  } catch BarClientError.status(let status, let message) {
+    try expect(status == 400 && message == "The automatic switching settings were rejected. Refresh and try again.",
+      "Settings failures must use fixed, action-specific guidance")
+  }
+
+  let fixture = confirmationObject()
+  let transport = MockTransport(replies: [
+    "POST /api/codex/profiles/party/activate": [MockReply(409, try JSONSerialization.data(withJSONObject: [
+      "error": canary, "message": canary, "code": "busy", "reason": "running_processes", "confirmation": fixture,
+    ]))],
+  ])
+  let confirmation = try await expectCodexConfirmation(AccountsClient(connection: testConnection(), transport: transport), profile: "party")
+  try expect(confirmation.token == fixture["token"] as? String &&
+    confirmation.warning == fixture["warning"] as? String &&
+    confirmation.processes.count == 2 && confirmation.processes[0].pid == 123,
+    "Valid structured busy consent must survive removal of arbitrary top-level server error text")
+  let calls = await transport.recorded()
+  try expect(calls.filter { $0.url.path == "/api/codex/profiles/party/activate" }.count == 1,
+    "A sanitized busy response must still wait for explicit user consent")
+}
+
 private func checkLoginBackoffAndBadPayload() async throws {
   for (status, error) in [(401, ExpectedError.authentication), (429, .rateLimited), (503, .status(503))] {
     let transport = MockTransport(replies: ["POST /api/auth/login": [MockReply(status)]])
@@ -610,13 +733,50 @@ private func checkUsageMetadata() throws {
 
 private func safeLiveError(_ error: Error) -> String {
   guard let clientError = error as? BarClientError else {
-    return "The CCS connection or account request could not be completed."
+    return "The AI Account Center connection or account request could not be completed."
   }
   switch clientError {
-  case .status(let status, _): return "CCS returned HTTP \(status)."
+  case .status(let status, _): return "AI Account Center returned HTTP \(status)."
   case .codexConfirmation: return "The Codex switch requires user confirmation."
-  default: return clientError.errorDescription ?? "The CCS account request could not be completed."
+  default: return clientError.errorDescription ?? "The AI Account Center account request could not be completed."
   }
+}
+
+private func checkCachedWindowProvenance() throws {
+  let legacy = try JSONDecoder().decode(AccountDashboard.self, from: dashboardJSON)
+  try expect(legacy.accounts[0].windows.allSatisfy { $0.status == nil && $0.sampledAt == nil },
+    "Older quota responses must decode missing per-window provenance as unknown")
+  var object = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  var account = (object["accounts"] as! [[String: Any]])[0]
+  let originalWindows = account["windows"] as! [[String: Any]]
+  let originalSample = "2026-09-30T13:20:06.123Z"
+  var retained = originalWindows[5]
+  retained["status"] = "cached"
+  retained["sampledAt"] = originalSample
+  account["provider"] = "claude"
+  account["status"] = "ok"
+  account["fetchedAt"] = "2026-10-01T17:00:00Z"
+  account["sampledAt"] = "2026-10-01T17:00:00Z"
+  account["windows"] = [originalWindows[1], retained]
+  object["accounts"] = [account]
+  let decoded = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  let fresh = decoded.accounts[0].windows[0], cached = decoded.accounts[0].windows[1]
+  try expect(fresh.status == nil && fresh.sampledAt == nil && fresh.usedPercent == 0,
+    "Fresh core quota must not inherit cached optional-window metadata")
+  try expect(cached.status == "cached" && cached.sampledAt == originalSample && cached.remaining == 40.25 && cached.used == 9.75,
+    "Retained extras must preserve the original sample and actual fractional values")
+  try expect(cached.resetAt == legacy.accounts[0].windows[5].resetAt && cached.expiresAt == legacy.accounts[0].windows[5].expiresAt,
+    "Cached provenance must not change actual reset or expiration timestamps")
+  let label = AccountFormatting.cachedSample(status: cached.status, sampledAt: cached.sampledAt)
+  try expect(label?.hasPrefix("Cached · Sampled ") == true &&
+    label != AccountFormatting.cachedSample(status: "cached", sampledAt: decoded.accounts[0].fetchedAt),
+    "Cached Details must use the original window sample rather than the fresh account fetch")
+  try expect(AccountFormatting.cachedSample(status: nil, sampledAt: originalSample) == nil &&
+    AccountFormatting.cachedSample(status: "ok", sampledAt: originalSample) == nil,
+    "Only explicit per-window cached status may display a Cached label")
+  try expect(AccountFormatting.cachedSample(status: "cached", sampledAt: nil) == "Cached · Sample time unavailable" &&
+    AccountFormatting.cachedSample(status: "cached", sampledAt: "invalid-date") == "Cached · Sample time unavailable",
+    "Missing or malformed original samples must remain unavailable, without a fresh-date fallback")
 }
 
 private func checkProviderGrouping() throws {
@@ -661,6 +821,247 @@ private func checkProviderGrouping() throws {
     "Collapsed provider selection must not drop detail windows")
   try expect(groups[1].statusLabel == "Cached" && groups[0].statusLabel == "Live",
     "Provider status must describe the selected sample rather than claim every account is online")
+}
+
+private func checkVisibleUsageWindows() throws {
+  let original = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  let prototype = (original["accounts"] as! [[String: Any]])[0]
+  func window(_ key: String, _ label: String, _ values: [String: Any] = [:]) -> [String: Any] {
+    var result: [String: Any] = [
+      "key": key, "label": label,
+      "usedPercent": NSNull(), "remainingPercent": NSNull(), "resetAt": NSNull(),
+      "windowMinutes": NSNull(), "used": NSNull(), "limit": NSNull(), "unit": NSNull(),
+    ]
+    for (key, value) in values { result[key] = value }
+    return result
+  }
+  func accountObject(_ id: String, _ provider: String, _ windows: [[String: Any]], plan: String? = nil) -> [String: Any] {
+    var result = prototype
+    result["id"] = id
+    result["provider"] = provider
+    result["plan"] = plan.map { $0 as Any } ?? NSNull()
+    result["windows"] = windows
+    return result
+  }
+  func decodeAccount(_ object: [String: Any]) throws -> DashboardAccount {
+    try JSONDecoder().decode(DashboardAccount.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let common = [
+    window("chat_pass", "Quota", ["usedPercent": 20]),
+    window("label-matched", "Chat Pass", ["usedPercent": 30]),
+    window("five_hour", "5-hour", ["windowMinutes": 300]),
+    window("weekly", "Weekly", ["windowMinutes": 10080]),
+    window("plan_subscription", "Subscription"),
+    window("subscription", "Entitlement"),
+    window("plan-label-matched", "Plan subscription"),
+    window("reset-packs-5h", "Five-hour reset packs", ["remaining": 0, "unit": "packs"]),
+    window("reset-packs-weekly", "Weekly reset packs", ["remaining": 0, "unit": "packs"]),
+  ]
+  let rawKeys = common.map { $0["key"] as! String }
+  let pro = try decodeAccount(accountObject("codex-pro", "codex", common, plan: "ChatGPT Pro"))
+  try expect(pro.visibleWindows.map(\.key) == rawKeys.filter { !["chat_pass", "label-matched", "five_hour"].contains($0) },
+    "Codex Pro presentation must hide ChatPass and an unsupplied five-hour window while keeping other data")
+  try expect(pro.windows.map(\.key) == rawKeys && pro.windows[0].usedPercent == 20,
+    "Presentation filtering must preserve every raw Codex window and actual percentage")
+  let zeroFiveHour = window("five_hour", "5-hour", ["windowMinutes": 300, "usedPercent": 0, "remainingPercent": 100])
+  for plan in ["Plus", "Pro"] {
+    let actual = try decodeAccount(accountObject("codex-\(plan)", "codex", [zeroFiveHour], plan: plan))
+    try expect(actual.visibleWindows.count == 1 && actual.visibleWindows[0].usedPercent == 0 &&
+      actual.visibleWindows[0].remainingPercent == 100,
+      "A real zero-used five-hour quota must remain visible for Plus and Pro")
+  }
+  let plusUnknown = try decodeAccount(accountObject("codex-plus-unknown", "codex", [common[2]], plan: "Plus"))
+  try expect(plusUnknown.visibleWindows.count == 1,
+    "The empty-five-hour suppression must be scoped to Pro rather than remove Plus data")
+  let qwen = try decodeAccount(accountObject("qwen", "qwen", common))
+  try expect(qwen.visibleWindows.map(\.key) == rawKeys.filter { !["plan_subscription", "subscription", "plan-label-matched"].contains($0) },
+    "Qwen must suppress subscription metadata by actual subscription key or plan-subscription label")
+  try expect(qwen.windows.map(\.key) == rawKeys,
+    "Qwen presentation must preserve original subscription fields for raw data consumers")
+
+  let packs = [
+    window("reset-packs-5h", "Five-hour reset packs", ["remaining": 0, "unit": "packs"]),
+    window("reset-packs-weekly", "Weekly reset packs", ["remaining": 0, "unit": "packs"]),
+    window("reset-packs-empty", "Reset packs"),
+    window("five-hour", "Five-hour", ["usedPercent": 0, "remainingPercent": 100]),
+    window("weekly", "Weekly", ["usedPercent": 5]),
+    window("reset-packs-5h-positive", "Reset packs", ["remaining": 2, "unit": "packs"]),
+    window("pack-individual", "Individual reset pack", ["remaining": 0, "expiresAt": "2026-12-31T23:59:59Z", "unit": "packs"]),
+  ]
+  let zai = try decodeAccount(accountObject("zai", "zai", packs))
+  try expect(zai.visibleWindows.map(\.key) == ["five-hour", "weekly", "reset-packs-5h-positive", "pack-individual"],
+    "Z.ai must hide zero reset-pack summaries and retain real usage and individual pack details")
+  try expect(zai.windows.count == packs.count && zai.windows[0].remaining == 0 &&
+    zai.windows[6].expiresAt == "2026-12-31T23:59:59Z",
+    "Z.ai filtering must preserve zero summary counts and exact individual expiration in raw data")
+  let positiveSummary = try decodeAccount(accountObject("zai-positive", "zai", [
+    window("reset-packs-5h", "Five-hour reset packs", ["remaining": 2, "unit": "packs"]),
+    window("reset-packs-weekly", "Weekly reset packs", ["remaining": 1, "unit": "packs"]),
+  ]))
+  try expect(positiveSummary.visibleWindows.map(\.remaining) == [2, 1],
+    "Positive Z.ai reset-pack summary counts must remain visible with actual values")
+  let timedSummary = try decodeAccount(accountObject("zai-timed", "zai", [
+    window("reset-packs-5h", "Five-hour reset packs", ["remaining": 0, "resetAt": "2026-12-31T01:02:03Z"]),
+  ]))
+  try expect(timedSummary.visibleWindows.count == 1 && timedSummary.visibleWindows[0].resetAt == "2026-12-31T01:02:03Z",
+    "A reset-pack summary with actual timing detail must not be hidden solely because its count is zero")
+  for provider in ["claude", "cursor", "muse", "antigravity", "kimi-code", "opencode-go"] {
+    let untouched = try decodeAccount(accountObject(provider, provider, common, plan: "Pro"))
+    try expect(untouched.visibleWindows.map(\.key) == rawKeys && untouched.windows.count == common.count,
+      "Codex, Qwen, and Z.ai presentation rules must not filter other providers with similarly named windows")
+  }
+  let claudeModelWindows = [
+    window("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    window("seven_day", "Weekly usage", ["usedPercent": 34]),
+    window("seven_day_opus", "Weekly Opus usage", ["usedPercent": 56]),
+    window("seven_day_fable", "Weekly Fable usage", ["usedPercent": 0, "resetAt": "2026-10-08T12:00:00Z"]),
+  ]
+  let maxClaude = try decodeAccount(accountObject("claude-max", "claude", claudeModelWindows, plan: "Max"))
+  try expect(maxClaude.compactWindows.map(\.key) == ["five_hour", "seven_day", "seven_day_fable"] &&
+    maxClaude.compactWindows.last?.usedPercent == 0 && maxClaude.compactWindows.last?.resetAt == "2026-10-08T12:00:00Z",
+    "Claude Max must display the real Fable quota, exact zero usage/reset, without aliasing Opus")
+  let maxWithoutFable = try decodeAccount(accountObject("claude-max-no-fable", "claude", Array(claudeModelWindows.prefix(3)), plan: "Max"))
+  try expect(!maxWithoutFable.compactWindows.contains { $0.key == "seven_day_fable" },
+    "No Claude Fable quota may be manufactured when absent")
+  let proClaude = try decodeAccount(accountObject("claude-pro", "claude", claudeModelWindows, plan: "Pro"))
+  try expect(proClaude.compactWindows.map(\.key) == ["five_hour", "seven_day", "seven_day_opus"],
+    "Fable compact-bar preference applies only to Claude Max; all raw scoped windows stay in details")
+  let goOne = accountObject("go-account-one", "opencode-go", [
+    window("go-first-hourly", "Hourly", ["usedPercent": 10, "remainingPercent": 90, "resetAt": "2026-12-31T01:00:00Z"]),
+  ])
+  let goTwo = accountObject("go-account-two", "opencode-go", [
+    window("go-second-weekly", "Weekly", ["usedPercent": 80, "remainingPercent": 20, "resetAt": "2027-01-07T02:00:00Z"]),
+  ])
+  var goDashboardObject = original
+  goDashboardObject["accounts"] = [goOne, goTwo]
+  let goDashboard = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: goDashboardObject))
+  let groups = goDashboard.providerGroups
+  try expect(groups.count == 1 && groups[0].accounts.map(\.id) == ["go-account-one", "go-account-two"],
+    "Provider grouping must preserve distinct OpenCode Go accounts")
+  try expect(groups[0].accounts[0].visibleWindows[0].key == "go-first-hourly" &&
+    groups[0].accounts[0].visibleWindows[0].usedPercent == 10 &&
+    groups[0].accounts[1].visibleWindows[0].key == "go-second-weekly" &&
+    groups[0].accounts[1].visibleWindows[0].usedPercent == 80 &&
+    groups[0].accounts[1].visibleWindows[0].resetAt == "2027-01-07T02:00:00Z",
+    "OpenCode Go accounts must retain their own windows, usage, and exact reset data after grouping")
+}
+
+// Decode a complete server DTO rather than reconstructing individual quota windows.
+private func checkCodexCompactFullDashboardDTO() throws {
+  let sourceRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  let packageRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+  let candidates = [sourceRoot, packageRoot].map {
+    $0.appendingPathComponent("Tests/Fixtures/codex-compact-full-dto.json")
+  }
+  guard let fixtureURL = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
+    throw CheckFailure(description: "Full Codex DTO fixture is missing from the source checkout or package root")
+  }
+  let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: Data(contentsOf: fixtureURL))
+  try expect(dashboard.schemaVersion == 1 && dashboard.accounts.count == 11 &&
+    dashboard.updatedAt == "2026-10-01T10:00:00.123Z" && dashboard.settings?.validatedInterval == 120,
+    "The complete offline dashboard DTO must retain its accounts, schema, update time, and refresh settings")
+  try expect(!dashboard.codexAutoSwitch.enabled && dashboard.codexAutoSwitch.thresholdPercent == 5 &&
+    dashboard.codexAutoSwitch.pollIntervalSeconds == 60 && dashboard.codexAutoSwitch.outcome == "disabled" &&
+    !dashboard.codexAutoSwitch.activationInProgress && dashboard.codexAutoSwitch.lastCheckedAt == nil,
+    "Full dashboard decoding must preserve automatic-switch settings without inventing activity")
+  try expect(dashboard.accounts.allSatisfy { $0.identity.hasSuffix("@example.invalid") },
+    "The full-dashboard fixture must contain only synthetic account identities")
+  func account(_ id: String) throws -> DashboardAccount {
+    guard let value = dashboard.accounts.first(where: { $0.id == id }) else {
+      throw CheckFailure(description: "Full dashboard fixture is missing account \(id)")
+    }
+    return value
+  }
+
+  let plus = try account("codex-plus-core")
+  let rawKeys = ["additional_requests", "seven_day", "chat_pass_additional", "five_hour",
+    "weekly", "additional_credits", "label_only_additional"]
+  try expect(plus.windows.map(\.key) == rawKeys && plus.isActive &&
+    plus.capabilities.codexProfile == "codex-plus-core",
+    "Full DTO decoding must preserve source order, active identity, capabilities, and all raw additional windows")
+  try expect(plus.visibleWindows.map(\.key) == ["additional_requests", "seven_day", "five_hour", "weekly", "additional_credits"],
+    "Details must retain generic and supplementary Codex windows while hiding ChatPass by key and label")
+  let compact = plus.compactWindows
+  try expect(compact.map(\.key) == ["five_hour", "seven_day"],
+    "Codex compact bars must order exact five_hour then seven_day even when a generic 300-minute extra precedes reversed core windows")
+  try expect(compact[0].usedPercent == 0 && compact[0].remainingPercent == 100 &&
+    compact[0].used == 0 && compact[0].limit == 100 && compact[0].resetAt == "2026-10-01T15:00:00.789Z" &&
+    compact[1].usedPercent == 24 && compact[1].resetAt == "2026-10-08T10:00:00.123Z",
+    "Compact Codex bars must retain exact reported zero usage, counters, percentages, and each canonical reset")
+  let rawExtra = plus.windows[0], visibleExtra = plus.visibleWindows[0]
+  try expect(rawExtra.key == "additional_requests" && visibleExtra.key == rawExtra.key &&
+    rawExtra.windowMinutes == 300 && rawExtra.usedPercent == 0 && rawExtra.used == 0 &&
+    rawExtra.resetAt == "2026-10-01T14:31:00.125Z" && visibleExtra.usedPercent == 0 && visibleExtra.remainingPercent == 100 &&
+    visibleExtra.used == 0 && visibleExtra.limit == 100 && visibleExtra.remaining == 100 &&
+    visibleExtra.kind == "usage" && visibleExtra.enabled == true && visibleExtra.unit == "requests" &&
+    visibleExtra.resetAt == "2026-10-01T14:31:00.125Z" && visibleExtra.status == "cached" &&
+    visibleExtra.sampledAt == "2026-09-30T23:59:00.456Z",
+    "The generic 300-minute extra must keep its actual values and cached provenance in raw and visible Details")
+  try expect(plus.windows[2].usedPercent == 41 && plus.windows[6].usedPercent == 52 &&
+    !compact.contains { $0.key == "chat_pass_additional" || $0.key == "label_only_additional" },
+    "ChatPass extras must remain raw evidence without becoming visible compact bars")
+  try expect(plus.visibleWindows.last?.remaining == 8.75 &&
+    plus.visibleWindows.last?.expiresAt == "2026-12-31T23:59:59Z",
+    "Codex credits must retain independent balance and expiration in Details")
+
+  let unknownPro = try account("codex-pro-unknown")
+  try expect(unknownPro.windows.map(\.key) == ["additional_requests", "five_hour", "seven_day", "chat_pass_additional"] &&
+    unknownPro.windows[1].usedPercent == nil && unknownPro.windows[1].remainingPercent == nil &&
+    unknownPro.windows[1].resetAt == "2026-10-01T15:00:00Z" &&
+    unknownPro.visibleWindows.map(\.key) == ["additional_requests", "seven_day"] &&
+    unknownPro.compactWindows.map(\.key) == ["seven_day"],
+    "Pro must filter a genuinely unknown five_hour value even when it has timing, without borrowing a populated 300-minute extra")
+  let absentPro = try account("codex-pro-absent")
+  try expect(absentPro.visibleWindows.map(\.key) == ["additional_requests", "weekly", "seven_day"] &&
+    absentPro.compactWindows.map(\.key) == ["seven_day"],
+    "A missing Pro five_hour core must remain missing while generic and weekly-alias windows stay in Details")
+  let missingWeekly = try account("codex-missing-weekly")
+  try expect(missingWeekly.visibleWindows.map(\.key) == ["weekly", "additional_requests", "five_hour"] &&
+    missingWeekly.compactWindows.map(\.key) == ["five_hour"],
+    "A missing seven_day core must not fall back to a weekly alias or another duration")
+  let aliases = try account("codex-aliases-only")
+  let aliasKeys = ["additional_requests", "five-hour", "Five_Hour", "5h", "weekly", "Seven_Day",
+    "duration_only_week", "label_only_core", "label_only_week", "seven-day"]
+  try expect(aliases.windows.map(\.key) == aliasKeys && aliases.visibleWindows.map(\.key) == aliasKeys &&
+    aliases.compactWindows.isEmpty,
+    "With neither exact core key, Codex compact bars must stay empty; duration, labels, case, punctuation, 5h, and weekly aliases are Details only")
+  let hiddenCore = try account("codex-hidden-core")
+  try expect(hiddenCore.windows.map(\.key) == ["additional_requests", "five_hour", "seven_day"] &&
+    hiddenCore.visibleWindows.map(\.key) == ["additional_requests"] && hiddenCore.compactWindows.isEmpty,
+    "Canonical key matching must use visibleWindows so ChatPass-labelled core windows remain hidden with no extra-window fallback")
+  let unknownPlus = try account("codex-plus-unknown")
+  try expect(unknownPlus.visibleWindows.map(\.key) == ["additional_requests", "seven_day", "five_hour"] &&
+    unknownPlus.compactWindows.map(\.key) == ["five_hour", "seven_day"] &&
+    unknownPlus.compactWindows[0].usedPercent == nil && unknownPlus.compactWindows[0].remainingPercent == nil,
+    "Plus must retain its genuinely unknown exact five_hour core without inventing usage or substituting generic values")
+
+  let claude = try account("claude-max-fable")
+  try expect(claude.windows.map(\.key) == ["five_hour", "seven_day", "seven_day_opus", "seven_day_fable"] &&
+    claude.visibleWindows.count == 4 && claude.compactWindows.map(\.key) == ["five_hour", "seven_day", "seven_day_fable"] &&
+    claude.compactWindows.last?.usedPercent == 0 && claude.compactWindows.last?.resetAt == "2026-10-08T12:00:00Z",
+    "The Codex compact selection must preserve Claude Max's genuine zero-used Fable preference and complete model details")
+  let cursor = try account("cursor-unaffected")
+  try expect(cursor.visibleWindows.map(\.key) == cursor.windows.map(\.key) &&
+    cursor.compactWindows.map(\.key) == ["additional_requests", "seven_day", "five_hour"] &&
+    cursor.visibleWindows.contains { $0.key == "chat_pass_additional" } &&
+    cursor.visibleWindows.contains { $0.key == "label_only_additional" },
+    "Other-provider compact ordering and ChatPass-named Details must remain unaffected by Codex rules")
+  let qwen = try account("qwen-subscription")
+  try expect(qwen.windows.count == 3 && qwen.visibleWindows.map(\.key) == ["five_hour", "seven_day"] &&
+    qwen.compactWindows.map(\.key) == ["five_hour", "seven_day"] && qwen.compactWindows[0].usedPercent == 0,
+    "Qwen must preserve raw subscription metadata while keeping its own visibility rule and genuine zero usage")
+  let zai = try account("zai-reset-packs")
+  try expect(zai.windows.count == 5 && zai.visibleWindows.map(\.key) == ["five-hour", "weekly", "pack-individual"] &&
+    zai.compactWindows.map(\.key) == ["five-hour", "weekly", "pack-individual"] &&
+    zai.visibleWindows.last?.remaining == 0 && zai.visibleWindows.last?.expiresAt == "2026-12-31T23:59:59Z",
+    "Z.ai must retain its own zero-summary filtering, alias-key compact windows, and real individual-pack expiration")
+  let codexGroup = dashboard.providerGroups.first(where: { $0.id == "codex" })
+  try expect(dashboard.providerGroups.flatMap(\.accounts).count == dashboard.accounts.count &&
+    codexGroup?.representative.id == plus.id &&
+    codexGroup?.representative.compactWindows.map(\.key) == ["five_hour", "seven_day"],
+    "Provider grouping must preserve every account, the active Codex identity, and its exact account compact cores")
 }
 
 private func printJSON(_ object: [String: Any]) throws {
@@ -708,17 +1109,25 @@ do {
   print("PASS confirmed busy Codex switch, explicit consent, expiry, and rejected confirmation")
   try await checkLoginBackoffAndBadPayload()
   print("PASS failed-login backoff and malformed payload handling")
+  try await checkSafeHTTPFailures()
+  print("PASS 52 private-error canary cases, local action isolation, settings guidance, and structured consent")
   try checkUnknownQuotaAndExactReset()
   print("PASS unknown quota and exact reset timestamps")
   try checkUsageMetadata()
   print("PASS optional usage metadata, balances, and independent expiration")
+  try checkCachedWindowProvenance()
+  print("PASS retained optional-window Cached labels and original sample timestamps")
   try checkProviderGrouping()
   print("PASS provider grouping preserves accounts, actual active quota, and all detail windows")
+  try checkVisibleUsageWindows()
+  print("PASS provider-scoped visible windows, real zero quota, reset packs, and distinct Go accounts")
   try await checkPrivateConnectionFile()
   print("PASS private connection file and origin validation")
-  print("CCS Bar core checks passed (offline; no real credentials or network)")
+  try checkCodexCompactFullDashboardDTO()
+  print("PASS complete Codex dashboard DTO, exact compact cores, no aliases, raw Details, and provider isolation")
+  print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
-  fputs("CCS Bar core check failed: \(error)\n", stderr)
+  fputs("AI Account Center core check failed: \(error)\n", stderr)
   exit(1)
 }
 }

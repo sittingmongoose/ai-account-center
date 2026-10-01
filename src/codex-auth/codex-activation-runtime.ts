@@ -503,12 +503,24 @@ export function createCodexActivationRuntime(
   };
 }
 
-function desktopUserData(desktop: CodexProcessSnapshot, processes: CodexProcessSnapshot[]): string {
-  const args = descendants(desktop, processes).flatMap(argWords);
+function userDataArgument(args: string[]): string {
   const inline = args.find((arg) => arg.startsWith('--user-data-dir='));
   if (inline) return inline.slice('--user-data-dir='.length);
   const index = args.indexOf('--user-data-dir');
-  return index >= 0 ? args[index + 1] || '' : '';
+  const value = index >= 0 ? args[index + 1] : undefined;
+  return value && !value.startsWith('--') ? value : '';
+}
+
+function desktopUserData(desktop: CodexProcessSnapshot, processes: CodexProcessSnapshot[]): string {
+  // Recover each process's own argv; a missing split value cannot consume the
+  // first argument from a different child. The main process's override wins.
+  return (
+    userDataArgument(argWords(desktop)) ||
+    descendants(desktop, processes)
+      .map((child) => userDataArgument(argWords(child)))
+      .find(Boolean) ||
+    ''
+  );
 }
 
 function desktopLauncher(
@@ -536,9 +548,9 @@ function desktopLauncher(
     );
   }
   const args = argWords(desktop);
-  if (!args.some((arg) => arg.startsWith('--user-data-dir'))) {
-    const userData = children.flatMap(argWords).find((arg) => arg.startsWith('--user-data-dir='));
-    args.push(userData || `--user-data-dir=${path.join(os.homedir(), '.config', 'Codex')}`);
+  if (!args.some((arg) => arg === '--user-data-dir' || arg.startsWith('--user-data-dir='))) {
+    const userData = desktopUserData(desktop, processes);
+    args.push(`--user-data-dir=${userData || path.join(os.homedir(), '.config', 'Codex')}`);
   }
   return { ...desktop, args, env };
 }

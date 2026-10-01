@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -87,6 +88,8 @@ public sealed class QuotaWindow
     public double? Limit { get; set; }
     public string? Unit { get; set; }
     public string? Kind { get; set; }
+    public string? Status { get; set; }
+    public string? SampledAt { get; set; }
     public double? Remaining { get; set; }
     public string? ExpiresAt { get; set; }
     public bool Unlimited { get; set; }
@@ -154,9 +157,71 @@ public static class Formatting
     public static string Amount(double amount, string? unit)
     {
         // Preserve reported fractions; do not label a currency or unit that the API omitted.
-        return amount.ToString("N4", CultureInfo.CurrentCulture).TrimEnd('0').TrimEnd(CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator.ToCharArray()) +
+        return amount.ToString("N2", CultureInfo.CurrentCulture).TrimEnd('0').TrimEnd(CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator.ToCharArray()) +
             (string.IsNullOrWhiteSpace(unit) ? "" : " " + unit);
     }
+
+    public static QuotaWindow[] CodexPrimaryWindows(DashboardAccount account)
+    {
+        // Core windows have exact canonical keys. An additional quota with the
+        // same duration is still additional and remains available in Details.
+        var visible = VisibleWindows(account);
+        return new[] { "five_hour", "seven_day" }
+            .Select(key => visible.FirstOrDefault(window => window.Key == key))
+            .Where(window => window is not null).Select(window => window!).ToArray();
+    }
+
+    public static bool IsChatPass(string? text) => Normalize(text).Contains("chatpass", StringComparison.Ordinal);
+
+    public static QuotaWindow[] VisibleWindows(DashboardAccount account) => account.Windows.Where(window =>
+    {
+        var key = Normalize(window.Key); var label = Normalize(window.Label);
+        if (account.Provider == "claude" && window.Key == "seven_day_fable"
+            && (!(account.Plan ?? "").StartsWith("max", StringComparison.OrdinalIgnoreCase) || window.DisplayPercent is null)) return false;
+        if (account.Provider == "codex")
+        {
+            if (IsChatPass(window.Key) || IsChatPass(window.Label)) return false;
+            bool fiveHour = window.WindowMinutes == 300 || key is "fivehour" or "5h" or "fivehours";
+            bool proProfile = account.Capabilities.CodexProfile is "gmail" or "party";
+            if (fiveHour && proProfile && !window.HasUsableUsage && !DateTimeOffset.TryParse(window.ResetAt, out _)) return false;
+        }
+        if (account.Provider == "qwen" && (key is "subscription" or "plansubscription" || label == "plansubscription")) return false;
+        if (account.Provider == "zai" && (key.Contains("pack", StringComparison.Ordinal) || label.Contains("pack", StringComparison.Ordinal)))
+        {
+            bool positive = Positive(window.Remaining) || Positive(window.Used) || Positive(window.Limit);
+            bool individual = DateTimeOffset.TryParse(window.ExpiresAt, out _)
+                || (key.Contains("grant", StringComparison.Ordinal) || key.Contains("record", StringComparison.Ordinal)) && window.HasUsableUsage;
+            if (!positive && !individual) return false;
+        }
+        return true;
+    }).ToArray();
+
+    public static string WindowLabel(DashboardAccount account, QuotaWindow window)
+    {
+        if (account.Provider != "qwen") return window.Label;
+        return Normalize(window.Key) switch
+        {
+            "monthly" => "Monthly", "weekly" => "Weekly", "fivehour" or "5h" => "5-hour usage", _ => window.Label
+        };
+    }
+
+    public static bool IsQwenDuplicateMetadata(QuotaWindow window) => Normalize(window.Key) is "creditsremaining" or "remainingcredits" or "resetdate";
+    public static QuotaWindow[] QwenPacks(DashboardAccount account) => account.Provider == "qwen"
+        ? VisibleWindows(account).Where(window => window.Key.StartsWith("addon-pack-", StringComparison.Ordinal)).ToArray()
+        : Array.Empty<QuotaWindow>();
+
+    public static string PackStatus(QuotaWindow pack, DateTimeOffset? now = null)
+    {
+        if (pack.Enabled == false) return "Disabled";
+        if (DateTimeOffset.TryParse(pack.ExpiresAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var expiry)
+            && expiry <= (now ?? DateTimeOffset.UtcNow)) return "Expired";
+        if (pack.Unlimited) return "Unlimited";
+        if (pack.Remaining == 0 || pack.DisplayPercent is >= 100) return "Depleted";
+        if (Positive(pack.Remaining)) return "Available";
+        return "Status unavailable";
+    }
+    private static bool Positive(double? value) => value is double number && double.IsFinite(number) && number > 0;
+    private static string Normalize(string? text) => new((text ?? "").Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     public static string Sampled(string? timestamp)
     {
@@ -164,6 +229,10 @@ public static class Formatting
         var local = date.ToLocalTime();
         return "Updated " + local.ToString(local.Date == DateTime.Now.Date ? "h:mm tt" : "MMM d, h:mm tt", CultureInfo.CurrentCulture);
     }
+
+    public static string WindowSample(string? timestamp) => DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var sample)
+        ? "Sampled " + sample.ToLocalTime().ToString("MMM d, yyyy h:mm:ss tt zzz", CultureInfo.CurrentCulture)
+        : "Sample time unavailable";
 
     public static bool IsSafeProfile(string? name)
     {

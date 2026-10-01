@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { RawUsageEntry } from '../jsonl-parser';
-import { resolveDroidConfigPaths } from '../services/droid-dashboard-service';
+import { resolveDroidConfigPaths } from '../services/compatible-cli-config-paths';
 import { warn } from '../../utils/ui';
 import { querySqliteJson } from './sqlite-cli';
 

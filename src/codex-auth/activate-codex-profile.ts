@@ -1,13 +1,13 @@
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import * as lockfile from 'proper-lockfile';
 import { randomBytes } from 'crypto';
 import { CodexProfileRegistry } from './codex-profile-registry';
 import { resolveCodexProfileDir } from './codex-profile-paths';
 import { decodeIdToken, hasStructurallyValidIdToken } from './decode-id-token';
 import { getCodexProfileNameError } from './types';
 import type { CodexAccountIdentity } from './types';
+import { acquireCodexActivationLock, getActivationCodexHome } from './codex-activation-lock';
+export { getActivationCodexHome } from './codex-activation-lock';
 import {
   createCodexActivationRuntime,
   CodexActivationRuntimeError,
@@ -75,10 +75,6 @@ export interface CodexActivationResult {
 interface AuthSnapshot {
   content: Buffer;
   identity: CodexAccountIdentity & { email: string };
-}
-
-export function getActivationCodexHome(): string {
-  return path.join(os.homedir(), '.codex');
 }
 
 function readAuth(authPath: string, label: string, requireCredentials = false): AuthSnapshot {
@@ -241,13 +237,7 @@ export async function activateCodexProfile(
   }
   let release: () => Promise<void>;
   try {
-    release = await lockfile.lock(codexHome, {
-      realpath: false,
-      lockfilePath: path.join(codexHome, '.ccs-activation.lock'),
-      stale: 120_000,
-      update: 5_000,
-      retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
-    });
+    release = await acquireCodexActivationLock(codexHome);
   } catch {
     throw new CodexActivationError('busy', 'Another Codex account activation is already running.', {
       reason: 'activation_running',
@@ -258,14 +248,36 @@ export async function activateCodexProfile(
   let stopped = false;
   let original: AuthSnapshot | undefined;
   let authReplaced = false;
+  let lockedTarget = expectedTarget;
   try {
+    // Removal shares this lock. Its completed deletion must not stop writers
+    // merely because our preflight ran before we waited for the lock.
+    let lockedProfileExists: boolean;
+    try {
+      lockedProfileExists = registry.hasProfile(name);
+    } catch {
+      throw new CodexActivationError(
+        'invalid_profile',
+        'Codex profile registry could not be read safely.'
+      );
+    }
+    if (!lockedProfileExists) {
+      throw new CodexActivationError('invalid_profile', `Codex profile '${name}' does not exist.`);
+    }
+    lockedTarget = readAuth(targetAuthPath, 'Target profile', true);
+    if (lockedTarget.identity.email !== expectedEmail) {
+      throw new CodexActivationError(
+        'verification_failed',
+        'The target profile changed account before activation. Try again.'
+      );
+    }
     let approval: CodexActivationStopPlan | undefined;
     if (options.confirmationToken) {
       const live = fs.existsSync(authPath) ? readAuth(authPath, 'Live').content : Buffer.alloc(0);
       approval = consumeCodexActivationConfirmation(
         options.confirmationToken,
         name,
-        codexAuthHash(Buffer.concat([live, expectedTarget.content]))
+        codexAuthHash(Buffer.concat([live, lockedTarget.content]))
       );
       if (!approval) {
         throw new CodexActivationError(
@@ -321,7 +333,7 @@ export async function activateCodexProfile(
           reason: 'running_processes',
           confirmation: issueCodexActivationConfirmation(
             name,
-            codexAuthHash(Buffer.concat([live, expectedTarget.content])),
+            codexAuthHash(Buffer.concat([live, lockedTarget.content])),
             error.stopPlan
           ),
         });

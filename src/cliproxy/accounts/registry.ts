@@ -8,7 +8,7 @@ import * as path from 'path';
 import { CLIProxyProvider } from '../types';
 import { PROVIDER_CAPABILITIES } from '../provider-capabilities';
 import { PROVIDER_TYPE_VALUES } from '../auth/auth-types';
-import { getAuthDir, getCliproxyDir } from '../config/config-generator';
+import { getAuthDir, getCliproxyDir } from '../config/path-resolver';
 import { withSyncLockRetry } from '../../utils/sync-lock-retry';
 import { AccountsRegistry, AccountInfo, PROVIDERS_WITHOUT_EMAIL, DrainOrderConfig } from './types';
 import {

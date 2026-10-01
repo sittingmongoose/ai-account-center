@@ -5,8 +5,6 @@ import {
   stripClaudeSubcommandSessionArgs,
 } from '../../../src/utils/claude-subcommand-detector';
 import { appendThirdPartyWebSearchToolArgs } from '../../../src/utils/websearch/claude-tool-args';
-import { appendThirdPartyImageAnalysisToolArgs } from '../../../src/utils/image-analysis/claude-tool-args';
-import { appendBrowserToolArgs } from '../../../src/utils/browser/claude-tool-args';
 
 describe('isClaudeSubcommandInvocation', () => {
   it('returns false for an empty arg list', () => {
@@ -55,7 +53,6 @@ describe('isClaudeSubcommandInvocation', () => {
     // `--name auth` sets the session display name to "auth" — still an interactive launch.
     expect(isClaudeSubcommandInvocation(['--name', 'auth'])).toBe(false);
   });
-
 
   it('treats --print prompt mode as non-subcommand even with subcommand-like prompt text', () => {
     expect(isClaudeSubcommandInvocation(['--print', 'agents'])).toBe(false);
@@ -204,17 +201,6 @@ describe('subcommand passthrough — injectors short-circuit', () => {
     expect(appendThirdPartyWebSearchToolArgs(['mcp', 'list'])).toEqual(['mcp', 'list']);
     expect(appendThirdPartyWebSearchToolArgs(['remote-control'])).toEqual(['remote-control']);
   });
-
-  it('appendThirdPartyImageAnalysisToolArgs returns args unchanged for subcommand invocations', () => {
-    expect(appendThirdPartyImageAnalysisToolArgs(['agents'])).toEqual(['agents']);
-    expect(appendThirdPartyImageAnalysisToolArgs(['remote-control'])).toEqual(['remote-control']);
-  });
-
-  it('appendBrowserToolArgs returns args unchanged for subcommand invocations', () => {
-    expect(appendBrowserToolArgs(['agents'])).toEqual(['agents']);
-    expect(appendBrowserToolArgs(['remote-control'])).toEqual(['remote-control']);
-  });
-
 
   it('injectors still inject in --print prompt mode with subcommand-like prompt text', () => {
     const out = appendThirdPartyWebSearchToolArgs(['--print', 'agents']);

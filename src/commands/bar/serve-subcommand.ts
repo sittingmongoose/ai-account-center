@@ -1,12 +1,12 @@
 /**
- * `ccs bar serve` — long-lived server host for CCS Bar.
+ * `ai-account-center bar serve` — long-lived server host for AI Account Center.
  *
  * Reuse-or-start: probe candidate ports first. If a live server exists,
  * write bar.json pointing at it and exit 0 (no double-start). Otherwise
  * pick a free port, call startServer(), write bar.json + server.pid,
  * then stay alive until SIGINT/SIGTERM.
  *
- * This is the process that `ccs bar launch` spawns detached. The Swift
+ * This is the process that `ai-account-center bar launch` spawns detached. The Swift
  * app also spawns it directly via launch.json.
  *
  * Accepts: --port N (honours a port the launcher pre-selected via getPort).
@@ -32,10 +32,10 @@ import type { BarServerProcessRecord } from './bar-process-control';
 // ---------------------------------------------------------------------------
 
 export interface ServeDeps {
-  /** Probe candidate ports for a running CCS server. Never throws. */
+  /** Probe candidate ports for a running AI Account Center server. Never throws. */
   findRunningServer: () => Promise<DashboardInfo | null>;
   /**
-   * Start the CCS web-server on the given port.
+   * Start the AI Account Center dashboard server on the given port.
    * Returns { port, baseUrl } of the bound server.
    * The returned server keeps the process event loop alive while listening.
    */
@@ -143,7 +143,7 @@ export async function handleBarServe(args: string[], deps: Partial<ServeDeps> = 
       console.error(`[X] Failed to write bar.json: ${msg}`);
       exit(1);
     }
-    console.log(`[OK] CCS server already running at ${running.baseUrl} — reusing.`);
+    console.log(`[OK] AI Account Center server already running at ${running.baseUrl} — reusing.`);
     exit(0);
   }
 
@@ -177,7 +177,7 @@ export async function handleBarServe(args: string[], deps: Partial<ServeDeps> = 
     dashboardInfo = await startServerFn({ port, host: '127.0.0.1' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[X] Failed to start CCS server: ${msg}`);
+    console.error(`[X] Failed to start AI Account Center server: ${msg}`);
     exit(1);
   }
 
@@ -190,7 +190,9 @@ export async function handleBarServe(args: string[], deps: Partial<ServeDeps> = 
   };
   const birthIdentity = readProcessBirthIdentity(process.pid);
   if (birthIdentity === null) {
-    console.error('[X] Failed to record CCS Bar process identity; stopping unmanaged server.');
+    console.error(
+      '[X] Failed to record AI Account Center process identity; stopping unmanaged server.'
+    );
     exit(1);
     return;
   }
@@ -220,8 +222,8 @@ export async function handleBarServe(args: string[], deps: Partial<ServeDeps> = 
     return;
   }
 
-  console.log(`[OK] CCS Bar server started at ${dashboardInfo.baseUrl}`);
-  console.log(`[i]  PID ${process.pid} — stop with \`ccs bar stop\``);
+  console.log(`[OK] AI Account Center server started at ${dashboardInfo.baseUrl}`);
+  console.log(`[i]  PID ${process.pid} — stop with \`ai-account-center bar stop\``);
 
   // 4. Clean shutdown on SIGINT / SIGTERM.
   const shutdown = (): void => {
@@ -229,7 +231,7 @@ export async function handleBarServe(args: string[], deps: Partial<ServeDeps> = 
     // bar.json is intentionally left in place on clean shutdown so
     // the Swift app self-heal poll can detect the server is gone via
     // the liveness check, not a stale discovery file.
-    console.log('\n[OK] CCS Bar server stopped.');
+    console.log('\n[OK] AI Account Center server stopped.');
     exit(0);
   };
 

@@ -70,7 +70,7 @@ describe('Slint browser build integration', () => {
     expect(() => assertLockedSlint({ package: [{ name: 'slint', version: '1.18.2' }] })).toThrow();
   });
 
-  it('builds locked browser output and publishes matching manifests into both output locations', () => {
+  it('builds locked browser output directly into the packaged dashboard', () => {
     const root = fixture();
     const calls: Array<[string, string[]]> = [];
     const manifest = buildUi({ repoRoot: root, run: runner(calls) });
@@ -88,11 +88,11 @@ describe('Slint browser build integration', () => {
       '--',
       '--locked',
     ]);
-    for (const output of [path.join(root, 'ui', 'dist'), path.join(root, 'dist', 'ui')]) {
-      expect(verifyBundle(output).manifest).toEqual(manifest);
-      expect(fs.readFileSync(path.join(output, 'index.html'), 'utf8')).not.toContain('react');
-      expect(fs.existsSync(path.join(output, 'pkg', '.gitignore'))).toBe(false);
-    }
+    const output = path.join(root, 'dist', 'ui');
+    expect(verifyBundle(output).manifest).toEqual(manifest);
+    expect(fs.readFileSync(path.join(output, 'index.html'), 'utf8')).not.toContain('react');
+    expect(fs.existsSync(path.join(output, 'pkg', '.gitignore'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'ui'))).toBe(false);
   });
 
   it('rejects an older Rust compiler before modifying the existing browser output', () => {

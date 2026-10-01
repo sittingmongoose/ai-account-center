@@ -1,5 +1,5 @@
 /**
- * Detail view renderer for `ccsx auth show <name>`.
+ * Detail view renderer for `ai-account-center codex-auth show <name>`.
  * Extracted from show-command.ts to keep files under 200 lines.
  */
 
@@ -116,6 +116,6 @@ export function showProfileDetail(
     process.stderr.write(
       `[!] config.toml is a regular file, not a symlink. Config changes won't propagate.\n`
     );
-    process.stderr.write(`    Run: ccsx auth create ${profileName} --force\n`);
+    process.stderr.write(`    Run: ai-account-center codex-auth create ${profileName} --force\n`);
   }
 }

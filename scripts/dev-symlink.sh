@@ -1,115 +1,80 @@
-#!/bin/bash
-# CCS Dev Symlink Setup
-# Creates symlinks for testing dev version with 'ccs' command
-#
-# Usage: ./scripts/dev-symlink.sh [--restore]
-#
-# Without --restore: Creates symlink from global 'ccs' to dist/ccs.js
-# With --restore: Restores original global 'ccs' from backup
-
+#!/usr/bin/env bash
+# Temporarily point an existing AI Account Center command at this local build.
+# Usage: ./scripts/dev-symlink.sh [--restore] [--command ai-account-center|ccs]
 set -euo pipefail
 
 RESTORE=false
-
-# Parse arguments
-for arg in "$@"; do
-    case $arg in
-        --restore) RESTORE=true ;;
-        -h|--help)
-            echo "Usage: $0 [--restore]"
-            echo ""
-            echo "Create symlink for dev testing:"
-            echo "  $0"
-            echo ""
-            echo "Restore original global ccs:"
-            echo "  $0 --restore"
-            exit 0
-            ;;
-        *)
-            echo "[X] Unknown option: $arg"
-            echo "Use --help for usage"
-            exit 1
-            ;;
-    esac
+COMMAND_NAME=ai-account-center
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --restore) RESTORE=true; shift ;;
+    --command)
+      if [ "$#" -lt 2 ]; then echo "[X] --command requires a name." >&2; exit 1; fi
+      COMMAND_NAME="$2"; shift 2 ;;
+    -h|--help)
+      echo "Usage: $0 [--restore] [--command ai-account-center|ccs]"
+      echo "Replaces one installed command with this local build, retaining its backup."
+      exit 0 ;;
+    *) echo "[X] Unknown option: $1" >&2; exit 1 ;;
+  esac
 done
+case "$COMMAND_NAME" in
+  ai-account-center|ccs) ;;
+  *) echo "[X] Only AI Account Center and its ccs compatibility command are supported." >&2; exit 1 ;;
+esac
 
-# Get to the right directory
 cd "$(dirname "$0")/.."
-
-# Check if dist/ccs.js exists
-if [ ! -f "dist/ccs.js" ]; then
-    echo "[X] ERROR: dist/ccs.js not found. Run 'bun run build' first."
-    exit 1
+GLOBAL_PATH=$(command -v "$COMMAND_NAME" 2>/dev/null || true)
+if [ -z "$GLOBAL_PATH" ] && [ "$RESTORE" = true ]; then
+  # command -v may omit a dangling link after the local build was removed.
+  IFS=: read -r -a SEARCH_DIRS <<< "$PATH"
+  for SEARCH_DIR in "${SEARCH_DIRS[@]}"; do
+    CANDIDATE="${SEARCH_DIR:-.}/$COMMAND_NAME"
+    if [ -L "$CANDIDATE" ] && { [ -f "${CANDIDATE}.backup-dev" ] || [ -L "${CANDIDATE}.backup-dev" ]; }; then
+      GLOBAL_PATH="$CANDIDATE"
+      break
+    fi
+  done
 fi
-
-# Get absolute path to dev ccs.js
-DEV_CCS_PATH="$(pwd)/dist/ccs.js"
-
-# Find global ccs installation
-GLOBAL_CCS_PATH=$(which ccs 2>/dev/null || true)
-
-if [ -z "$GLOBAL_CCS_PATH" ]; then
-    echo "[X] ERROR: No global 'ccs' installation found."
-    echo "Install CCS globally first: npm install -g @kaitranntt/ccs"
-    exit 1
+if [ -z "$GLOBAL_PATH" ]; then
+  echo "[X] No installed $COMMAND_NAME command was found." >&2
+  echo "Build/install this checkout with scripts/dev-install.sh first." >&2
+  exit 1
 fi
+BACKUP_PATH="${GLOBAL_PATH}.backup-dev"
 
-echo "[i] Found global ccs at: $GLOBAL_CCS_PATH"
-
+# Restore remains available even when the local build was removed.
 if [ "$RESTORE" = true ]; then
-    # Restore original ccs from backup
-    BACKUP_PATH="${GLOBAL_CCS_PATH}.backup-dev"
-
-    if [ ! -f "$BACKUP_PATH" ] && [ ! -L "$BACKUP_PATH" ]; then
-        echo "[X] ERROR: No backup found at $BACKUP_PATH"
-        echo "Cannot restore - backup may have been deleted"
-        exit 1
-    fi
-
-    echo "[i] Restoring original ccs from backup..."
-    rm -f "$GLOBAL_CCS_PATH"
-    if [ -L "$BACKUP_PATH" ]; then
-        # Restore symlink
-        cp -P "$BACKUP_PATH" "$GLOBAL_CCS_PATH"
-    else
-        # Restore regular file
-        cp "$BACKUP_PATH" "$GLOBAL_CCS_PATH"
-    fi
-    chmod +x "$GLOBAL_CCS_PATH"
-    rm -f "$BACKUP_PATH"
-
-    echo "[OK] Restored original global ccs"
-    echo "Run 'ccs --version' to verify"
-    exit 0
+  if [ ! -f "$BACKUP_PATH" ] && [ ! -L "$BACKUP_PATH" ]; then
+    echo "[X] No command backup found at $BACKUP_PATH" >&2
+    exit 1
+  fi
+  if [ ! -L "$GLOBAL_PATH" ] || [ "$(readlink "$GLOBAL_PATH")" != "$(pwd)/dist/ccs.js" ]; then
+    echo "[X] The installed command no longer points to this checkout; restore it deliberately from $BACKUP_PATH." >&2
+    exit 1
+  fi
+  rm -f "$GLOBAL_PATH"
+  cp -P "$BACKUP_PATH" "$GLOBAL_PATH"
+  chmod +x "$GLOBAL_PATH"
+  rm -f "$BACKUP_PATH"
+  echo "[OK] Restored $COMMAND_NAME."
+  exit 0
 fi
 
-# Check if already symlinked to our dev version
-if [ -L "$GLOBAL_CCS_PATH" ]; then
-    CURRENT_TARGET=$(readlink "$GLOBAL_CCS_PATH" 2>/dev/null || true)
-    if [ "$CURRENT_TARGET" = "$DEV_CCS_PATH" ]; then
-        echo "[OK] Already symlinked to dev version"
-        exit 0
-    fi
+DEV_PATH="$(pwd)/dist/ccs.js"
+if [ ! -f "$DEV_PATH" ]; then
+  echo "[X] Local build is missing. Run bun run build first." >&2
+  exit 1
 fi
-
-# Create backup of current global ccs
-BACKUP_PATH="${GLOBAL_CCS_PATH}.backup-dev"
-if [ -f "$BACKUP_PATH" ] || [ -L "$BACKUP_PATH" ]; then
-    echo "[i] Backup already exists, skipping backup creation"
-else
-    echo "[i] Creating backup of current global ccs..."
-    cp -P "$GLOBAL_CCS_PATH" "$BACKUP_PATH"
-    echo "[OK] Backup created at: $BACKUP_PATH"
+if [ -L "$GLOBAL_PATH" ] && [ "$(readlink "$GLOBAL_PATH")" = "$DEV_PATH" ]; then
+  echo "[OK] $COMMAND_NAME already points to this build."
+  exit 0
 fi
-
-# Create symlink
-echo "[i] Creating symlink to dev version..."
-rm -f "$GLOBAL_CCS_PATH"
-ln -s "$DEV_CCS_PATH" "$GLOBAL_CCS_PATH"
-
-echo "[OK] Symlinked global 'ccs' to dev version"
-echo ""
-echo "Now you can test dev changes with: ccs <command>"
-echo "To restore original: $0 --restore"
-echo ""
-echo "Test with: ccs --version"
+if [ ! -f "$BACKUP_PATH" ] && [ ! -L "$BACKUP_PATH" ]; then
+  cp -P "$GLOBAL_PATH" "$BACKUP_PATH"
+fi
+rm -f "$GLOBAL_PATH"
+ln -s "$DEV_PATH" "$GLOBAL_PATH"
+echo "[OK] $COMMAND_NAME points to this local build."
+echo "Open with: $COMMAND_NAME dashboard"
+echo "Restore with: $0 --restore --command $COMMAND_NAME"

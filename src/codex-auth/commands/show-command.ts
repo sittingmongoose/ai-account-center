@@ -19,7 +19,9 @@ import type { CodexAccountIdentity } from '../types';
 export async function handleShowCodex(ctx: CodexCommandContext, args: string[]): Promise<void> {
   await initUI();
   const parsed = parseArgs(args);
-  rejectUnsupportedOptions(parsed, 'ccsx auth show [name] [--json]', { json: true });
+  rejectUnsupportedOptions(parsed, 'ai-account-center codex-auth show [name] [--json]', {
+    json: true,
+  });
 
   const { profileName, json } = parsed;
 
@@ -111,7 +113,7 @@ function _showList(ctx: CodexCommandContext, json: boolean): void {
 
   if (names.length === 0 && !activeMissing) {
     console.log(info('No Codex profiles yet.'));
-    console.log('    Create one: ccsx auth create <name>');
+    console.log('    Create one: ai-account-center codex-auth create <name>');
     return;
   }
 

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1] / "native-host"
 sys.path.insert(0, str(SOURCE))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "ccs/scripts/account-usage"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts/account-usage"))
 import muse_console as muse
 import desktop_usage as usage
 import desktop_helpers as helpers
@@ -141,7 +141,7 @@ class CapsuleTests(unittest.TestCase):
 
 class CollectionTests(unittest.TestCase):
     @patch("muse_console.read_capsule", return_value=([COOKIE], "42", EMAIL, PLAN))
-    @patch("muse_console.fetch_quota", return_value=("42", QUOTA))
+    @patch("muse_console.quota_sample", return_value={"teamId": "42", "quota": QUOTA, "sampledAt": "2026-10-01T00:00:00Z", "cached": False, "message": None})
     @patch("desktop_usage.request_json", return_value={"user_email": EMAIL, "subs_tier_name": PLAN, "is_subs_active": True, "api_key": "sk-private"})
     def test_helper_fallback_preserves_identity_and_real_limits(self, request, quota, capsule):
         result = helpers.account("muse", "mac")
@@ -150,10 +150,10 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual([row["usedPercent"] for row in result["windows"]], [0, 6])
         self.assertIsNone(result["windows"][0]["resetAt"])
         self.assertNotIn("private", json.dumps(result))
-        self.assertEqual(quota.call_args.args[1:], (EMAIL, PLAN, "42"))
+        self.assertEqual(quota.call_args.args[2:], (EMAIL, PLAN, "42", "dca:private"))
 
     @patch("muse_console.read_capsule", return_value=([COOKIE], "42", "other@example.com", PLAN))
-    @patch("muse_console.fetch_quota")
+    @patch("muse_console.quota_sample")
     @patch("desktop_usage.request_json", return_value={"user_email": EMAIL, "subs_tier_name": PLAN, "is_subs_active": True})
     def test_capsule_cannot_cross_accounts(self, request, quota, capsule):
         result = helpers.account("muse", "mac")
@@ -174,6 +174,22 @@ class CollectionTests(unittest.TestCase):
         for extra in ({"url": "https://evil.example"}, {"email": EMAIL}, {"plan": PLAN}):
             with self.assertRaises(muse.MuseError):
                 host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], **extra}, "/unused")
+
+    @patch("muse_console.collect_browser", return_value=("42", {"email": EMAIL, "plan": PLAN, "windows": [], "status": "cached"}))
+    @patch("muse_console.write_capsule")
+    @patch("muse_console.restore_browser_sample", return_value=True)
+    def test_distinct_normal_native_protocol_restores_before_cached_collection(self, restore, writer, collector):
+        previous = {"teamId": "42", "sample": {"sampledAt": "2026-10-01T13:00:00Z"}}
+        response = host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], "teamId": "42", "previousSample": previous}, "/unused")
+        restore.assert_called_once_with("/unused", previous)
+        self.assertEqual(response["sample"]["status"], "cached")
+        self.assertEqual(collector.call_args.args, ([COOKIE], "42", "/unused"))
+
+    @patch("muse_console.restore_browser_sample")
+    def test_cached_sample_cannot_cross_the_explicit_native_protocol_team(self, restore):
+        with self.assertRaises(muse.MuseError):
+            host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], "teamId": "43", "previousSample": {"teamId": "42", "sample": {}}}, "/unused")
+        restore.assert_not_called()
 
 
 if __name__ == "__main__":

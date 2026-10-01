@@ -57,8 +57,8 @@ def number(value):
 
 
 def percent(value):
-    value = number(value)
-    return value if value is not None and value <= 100 else None
+    """Preserve reported used utilization above 100%; clamp only visual bars."""
+    return number(value)
 
 
 def reset_at(value):
@@ -110,7 +110,7 @@ def usage_window(key, label, used_percent=None, reset=None, minutes=None,
         "key": key,
         "label": label,
         "usedPercent": used_percent,
-        "remainingPercent": round(100 - used_percent, 8) if used_percent is not None else None,
+        "remainingPercent": round(max(0, 100 - used_percent), 8) if used_percent is not None else None,
         "resetAt": reset_at(reset),
         "windowMinutes": number(minutes),
         "used": number(used),

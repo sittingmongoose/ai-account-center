@@ -1,73 +1,45 @@
-# Codex Auth Developer Contract
+# AI Account Center Codex Account Contract
 
-The canonical [Codex Adapter guide](https://docs.ccs.kaitran.ca/features/workflow/codex-adapter)
-owns user setup. This local contract documents active `ccsx auth` invariants
-that contributors and operators must preserve.
+The retained CLI surface is `ai-account-center codex-auth` with create, login,
+import-default, show, remove and activate operations. See the current
+[help owner](../src/codex-auth/codex-auth-help.ts) rather than copying every option.
+`ccs codex-auth` remains compatible; `ccsx` and the other retired runtime bins
+only give migration guidance. The former shell-export/use/switch/runtime-launch
+flows are retired.
 
-## Command Surface
+## Existing credentials and storage
 
-`ccsx auth` owns `create`, `login`, `switch`, `use`, `show`, `remove`, and
-`import-default`. Keep syntax and option changes sourced from
-[`src/codex-auth/codex-auth-help.ts`](../src/codex-auth/codex-auth-help.ts)
-rather than copying a long command reference here.
+Import preserves the native `~/.codex/auth.json` source. Profile credentials
+remain in private `~/.ccs/codex-instances/<name>/` with the existing registry,
+shared-resource links/fallbacks and private atomic-write/backup behavior.
+Preserve profile-local content, native sessions and shared config/resources.
 
-- `create <name>` is idempotent and starts native `codex login` for new
-  profiles. `--force` repairs shared resources without replacing `auth.json`.
-- `switch <name>` changes the persistent registry default.
-- `use <name>` emits only shell-evaluable `CODEX_HOME` and
-  `CCS_CODEX_PROFILE` assignments to stdout. It affects the current shell after
-  `eval`/`source`; diagnostics stay on stderr.
-- `ccsx <name>` launches a named profile directly without changing the
-  persistent default.
+The [profile resource helper](../src/codex-auth/codex-profile-resources.ts),
+[configuration link helper](../src/codex-auth/codex-config-symlink.ts) and
+[plugin-cache helper](../src/codex-auth/codex-profile-plugin-cache.ts) own those
+compatibility boundaries. Existing profile names, session aliases and home
+overrides are not renamed with the product.
 
-## Import Safety
+Removing a saved login shares the activation lock and rechecks the native login
+before changing profile files. Every saved alias matching the current native
+account stays protected, including with `--yes` or `--force`; activate another
+saved login first. Unreadable native authentication or an unverifiable saved
+identity also keeps the profile while a native login exists. `--force` only
+overrides the saved-default selection. Confirmation, backup and rollback remain
+part of removal.
 
-`import-default <name>` imports native `~/.codex/auth.json` without deleting the
-source. The implementation in
-[`import-default-command.ts`](../src/codex-auth/commands/import-default-command.ts)
-must continue to:
+## Activation and automatic switching
 
-- refuse import while a current-user Codex process may be refreshing tokens,
-  unless the operator explicitly accepts the race with
-  `--force-while-running`;
-- retry and validate JSON/JWT shape, reject CLIProxy auth-file formats, and fail
-  without registering a profile when a torn write persists;
-- write the destination atomically with private permissions;
-- omit history and sessions unless `--with-history` is requested;
-- refuse an existing profile unless `--force` is used, and preserve its current
-  `auth.json` as `auth.json.bak-<timestamp>` before overwrite.
+[Activation](activate-in-place.md) changes the selected native login in the
+shared Ubuntu home through the existing guarded transaction. Busy work requires
+explicit review; target-bound approvals, stale-token rejection and rollback stay
+intact. A dashboard refresh cannot approve a switch.
 
-## Storage And Cross-Platform Fallback
+The server's [auto-switch service](../src/web-server/services/codex-auto-switch-service.ts)
+uses configured thresholds and fresh provider usage, waits until idle and rechecks
+the active identity. Browser Settings displays server-confirmed values; missing
+usage or local activity estimates cannot trigger a switch. Claude stays manual.
 
-```text
-~/.ccs/
-├── codex-profiles.yaml
-└── codex-instances/<name>/
-    ├── auth.json, history.jsonl, sessions/   # profile-local
-    ├── config.toml -> ~/.codex/config.toml
-    ├── agents/ -> ~/.codex/agents/
-    ├── skills/ -> ~/.codex/skills/
-    └── plugins/
-        └── cache/ -> ~/.codex/plugins/cache/
-```
-
-The `plugins/` parent stays profile-local. Shared config, resources, and plugin
-cache repair must preserve existing profile-local content. On Windows or other
-systems where symlinks are unavailable, CCS copies missing shared content into
-the profile and warns that later upstream edits will not propagate
-automatically. See
-[`codex-config-symlink.ts`](../src/codex-auth/codex-config-symlink.ts),
-[`codex-profile-resources.ts`](../src/codex-auth/codex-profile-resources.ts),
-and
-[`codex-profile-plugin-cache.ts`](../src/codex-auth/codex-profile-plugin-cache.ts).
-
-## `ccsx` And `ccsxp` Isolation
-
-`ccsx auth` applies only to native Codex profiles. `ccsxp` ignores
-`CCS_CODEX_PROFILE`, uses native `~/.codex` history by default, and routes
-through its separate CLIProxy Codex pool. `CCSXP_CODEX_HOME` is its explicit
-home override. Never make a `ccsx auth switch` silently redirect `ccsxp`, merge
-their auth stores, or consume `ccsx` import backups as pool credentials.
-
-Behavior locks live under `tests/unit/codex-auth/` and
-`tests/integration/codex-auth/`.
+The retained account tests, dashboard service and native clients own validation.
+Use offline fixtures and isolated private paths; signing in or live provider
+requests are separately authorized actions.

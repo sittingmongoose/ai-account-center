@@ -2,17 +2,13 @@
  * Config Command Handler
  *
  * Launches web-based configuration dashboard.
- * Ensures CLIProxy service is running for dashboard features.
- * Usage: ccs config [--port PORT] [--host HOST] [--dev]
+ * Usage: ai-account-center dashboard [--port PORT] [--host HOST] [--no-open]
  */
 
 import getPort from 'get-port';
 import open from 'open';
 import { startServer } from '../web-server';
 import { setupGracefulShutdown } from '../web-server/shutdown';
-import { ensureCliproxyService } from '../cliproxy/service-manager';
-import { resolveLifecyclePort } from '../cliproxy/config/port-manager';
-import { isRunningUnderSupervisord } from '../docker/supervisord-lifecycle';
 import { initUI, header, ok, info, warn, fail } from '../utils/ui';
 import { resolveNamedCommand, type NamedCommandRoute } from './named-command-router';
 import {
@@ -24,36 +20,16 @@ import {
 import { parseConfigCommandArgs, showConfigCommandHelp } from './config-command-options';
 import { createLogger } from '../services/logging';
 import { getDashboardAuthConfig } from '../config/config-loader-facade';
+import { showRetiredCommandMessage } from './retired-command';
 
 const logger = createLogger('command:config');
 
 const CONFIG_SUBCOMMAND_ROUTES: readonly NamedCommandRoute[] = [
   {
-    name: 'channels',
-    handle: async (args) => {
-      const { handleConfigChannelsCommand } = await import('./config-channels-command');
-      await handleConfigChannelsCommand(args);
-    },
-  },
-  {
     name: 'auth',
     handle: async (args) => {
       const { handleConfigAuthCommand } = await import('./config-auth');
       await handleConfigAuthCommand(args);
-    },
-  },
-  {
-    name: 'image-analysis',
-    handle: async (args) => {
-      const { handleConfigImageAnalysisCommand } = await import('./config-image-analysis-command');
-      await handleConfigImageAnalysisCommand(args);
-    },
-  },
-  {
-    name: 'thinking',
-    handle: async (args) => {
-      const { handleConfigThinkingCommand } = await import('./config-thinking-command');
-      await handleConfigThinkingCommand(args);
     },
   },
 ];
@@ -63,8 +39,7 @@ interface ConfigCommandDependencies {
   openBrowser: typeof open;
   startServer: typeof startServer;
   setupGracefulShutdown: typeof setupGracefulShutdown;
-  ensureCliproxyService: typeof ensureCliproxyService;
-  isRunningUnderSupervisord?: typeof isRunningUnderSupervisord;
+  platform?: NodeJS.Platform;
   getDashboardAuthConfig: typeof getDashboardAuthConfig;
   initUI: typeof initUI;
   header: typeof header;
@@ -81,8 +56,6 @@ const defaultConfigCommandDependencies: ConfigCommandDependencies = {
   openBrowser: open,
   startServer,
   setupGracefulShutdown,
-  ensureCliproxyService,
-  isRunningUnderSupervisord,
   getDashboardAuthConfig,
   initUI,
   header,
@@ -104,7 +77,12 @@ export async function handleConfigCommand(
   if (args.length === 1 && args[0] === 'help') {
     await deps.initUI();
     showConfigCommandHelp();
-    process.exit(0);
+    return;
+  }
+
+  if (['channels', 'image-analysis', 'thinking'].includes(args[0])) {
+    showRetiredCommandMessage(`config ${args[0]}`);
+    return;
   }
 
   const subcommand = args[0]?.startsWith('-')
@@ -120,56 +98,22 @@ export async function handleConfigCommand(
   const parsed = parseConfigCommandArgs(args);
   if (parsed.help) {
     showConfigCommandHelp();
-    process.exit(0);
+    return;
   }
   if (parsed.error) {
     console.error(deps.fail(parsed.error));
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const options = parsed.options;
-  const verbose = options.dev;
   logger.info('dashboard.launch_requested', 'Config dashboard launch requested', {
-    dev: Boolean(options.dev),
+    noOpen: options.noOpen,
     host: options.host || null,
     port: options.port || null,
   });
 
-  console.log(deps.header('CCS Config Dashboard'));
-  console.log('');
-
-  const lifecyclePort = resolveLifecyclePort();
-  if (deps.isRunningUnderSupervisord?.() ?? false) {
-    logger.info('cliproxy.supervisord_managed', 'Skipping direct CLIProxy startup in Docker', {
-      port: lifecyclePort,
-    });
-    console.log(deps.info(`CLIProxy is managed by supervisord on port ${lifecyclePort}`));
-  } else {
-    // Ensure CLIProxy service is running for dashboard features
-    console.log(deps.info('Starting CLIProxy service...'));
-    const cliproxyResult = await deps.ensureCliproxyService(lifecyclePort, verbose);
-    logger.info('cliproxy.ensure_result', 'Config command checked CLIProxy availability', {
-      started: cliproxyResult.started,
-      alreadyRunning: cliproxyResult.alreadyRunning,
-      configRegenerated: cliproxyResult.configRegenerated,
-      port: cliproxyResult.port || null,
-      error: cliproxyResult.error || null,
-    });
-
-    if (cliproxyResult.started) {
-      if (cliproxyResult.alreadyRunning) {
-        console.log(deps.ok(`CLIProxy already running on port ${cliproxyResult.port}`));
-        if (cliproxyResult.configRegenerated) {
-          console.log(deps.warn('Config updated - restart CLIProxy to apply changes'));
-        }
-      } else {
-        console.log(deps.ok(`CLIProxy started on port ${cliproxyResult.port}`));
-      }
-    } else {
-      console.log(deps.warn(`CLIProxy not available: ${cliproxyResult.error}`));
-      console.log(deps.info('Dashboard will work but Control Panel/Stats may be limited'));
-    }
-  }
+  console.log(deps.header('AI Account Center'));
   console.log('');
 
   console.log(deps.info('Starting dashboard server...'));
@@ -185,7 +129,6 @@ export async function handleConfigCommand(
     // Start server
     const serverOptions: Parameters<typeof startServer>[0] = {
       port,
-      dev: options.dev,
     };
     if (options.host) {
       serverOptions.host = normalizeDashboardHost(options.host);
@@ -199,13 +142,7 @@ export async function handleConfigCommand(
     const urls = resolveDashboardUrls(resolveServerBindHost(server) ?? options.host, port);
     const shouldWarnAboutExposure = urls.bindHost ? !isLoopbackHost(urls.bindHost) : false;
 
-    if (options.dev) {
-      console.log(deps.ok(`Dev Server: ${urls.browserUrl}`));
-      console.log('');
-      console.log(deps.info('HMR enabled - UI changes will hot-reload'));
-    } else {
-      console.log(deps.ok(`Dashboard: ${urls.browserUrl}`));
-    }
+    console.log(deps.ok(`Dashboard: ${urls.browserUrl}`));
 
     if (shouldWarnAboutExposure && urls.bindHost) {
       console.log(deps.info(`Bind host: ${urls.bindHost}`));
@@ -225,7 +162,7 @@ export async function handleConfigCommand(
         deps.warn('Dashboard may be reachable from other devices that can connect to this machine.')
       );
       if (!authConfig.enabled) {
-        console.log(deps.info('Protect it before sharing: ccs config auth setup'));
+        console.log(deps.info('Protect it before sharing: ai-account-center dashboard auth setup'));
       }
       if (isWildcardHost(urls.bindHost) && !urls.networkUrls?.length) {
         console.log(deps.info('Use your machine IP or hostname from the other device.'));
@@ -233,17 +170,21 @@ export async function handleConfigCommand(
     }
     console.log('');
 
-    // Open browser
-    try {
-      await deps.openBrowser(urls.browserUrl, { wait: false });
-      logger.info('dashboard.browser_opened', 'Config dashboard browser launch attempted', {
-        browserUrl: urls.browserUrl,
-      });
-      console.log(deps.info('Browser opened automatically'));
-    } catch {
-      logger.warn('dashboard.browser_open_failed', 'Automatic browser launch failed', {
-        browserUrl: urls.browserUrl,
-      });
+    const shouldOpen = !options.noOpen && (deps.platform ?? process.platform) !== 'linux';
+    if (shouldOpen) {
+      try {
+        await deps.openBrowser(urls.browserUrl, { wait: false });
+        logger.info('dashboard.browser_opened', 'Dashboard browser launch attempted', {
+          browserUrl: urls.browserUrl,
+        });
+        console.log(deps.info('Browser opened automatically'));
+      } catch {
+        logger.warn('dashboard.browser_open_failed', 'Automatic browser launch failed', {
+          browserUrl: urls.browserUrl,
+        });
+        console.log(deps.info(`Open manually: ${urls.browserUrl}`));
+      }
+    } else {
       console.log(deps.info(`Open manually: ${urls.browserUrl}`));
     }
 
@@ -254,7 +195,8 @@ export async function handleConfigCommand(
       message: (error as Error).message,
     });
     console.error(deps.fail(`Failed to start server: ${(error as Error).message}`));
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 }
 

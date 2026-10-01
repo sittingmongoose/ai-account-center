@@ -7,7 +7,7 @@ function resolvePath(relativePath: string) {
 }
 
 describe('push ci workflow', () => {
-  test('keeps dev push quality checks separate from release automation', () => {
+  test('validates pushed branches without publishing a release', () => {
     const workflowPath = resolvePath('../../../../.github/workflows/push-ci.yml');
 
     expect(fs.existsSync(workflowPath)).toBe(true);
@@ -16,11 +16,15 @@ describe('push ci workflow', () => {
 
     expect(workflow).toContain('name: Push CI');
     expect(workflow).toContain('push:');
-    expect(workflow).toContain('branches: [dev]');
+    expect(workflow).not.toMatch(/^\s+branches:/m);
     expect(workflow).toContain('group: push-ci-${{ github.ref }}');
     expect(workflow).toContain('cancel-in-progress: true');
-    expect(workflow).toContain('runs-on: [self-hosted, linux, x64]');
-    expect(workflow).toContain("key: ${{ runner.os }}-bun-cache-v2-${{ hashFiles('bun.lock', 'ui/bun.lock') }}");
+    expect(workflow).toContain('runs-on: ubuntu-latest');
+    expect(workflow).not.toContain('self-hosted');
+    expect(workflow).toContain(
+      "key: ${{ runner.os }}-bun-cache-v3-${{ hashFiles('bun.lock', 'web-dashboard/Cargo.lock') }}"
+    );
+    expect(workflow).not.toContain('ui/bun.lock');
     expect(workflow).not.toContain('restore-keys:');
     expect(workflow).toContain("name: ${{ matrix.check.name }}");
     expect(workflow).toContain("cmd: 'bun run typecheck'");
@@ -35,7 +39,14 @@ describe('push ci workflow', () => {
     expect(workflow).toContain('::warning::test:fast took ${elapsed_seconds}s');
     expect(workflow).toContain('scripts/run-test-bucket.js');
     expect(workflow).toContain('run: bun run test:slow');
-    expect(workflow).toContain("CCS_E2E_SKIP_BUILD: '1'");
-    expect(workflow).toContain('run: bun run test:e2e');
+    expect(workflow).toContain('name: Test offline Claude quota collector');
+    expect(workflow).toContain('env -i PATH="$PATH" HOME="$TEST_FIXTURE_ROOT"');
+    expect(workflow).toContain('CCS_HOME="$TEST_FIXTURE_ROOT"');
+    expect(workflow).toContain(
+      'PYTHONDONTWRITEBYTECODE=1 python3 tests/unit/account-usage/claude_usage_test.py'
+    );
+    expect(workflow).not.toContain('CCS_E2E_SKIP_BUILD');
+    expect(workflow).not.toContain('test:e2e');
+    expect(workflow).not.toMatch(/npm publish|semantic-release|gh release|docker\/build-push-action/);
   });
 });

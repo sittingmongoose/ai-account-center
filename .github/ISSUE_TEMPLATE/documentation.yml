@@ -24,7 +24,7 @@ body:
     attributes:
       label: File or page
       description: Path or URL if you know it.
-      placeholder: README.md or https://docs.ccs.kaitran.ca/providers/oauth/cursor
+      placeholder: README.md or docs/README.md
   - type: textarea
     id: problem
     attributes:

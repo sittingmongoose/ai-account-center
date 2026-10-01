@@ -5,6 +5,15 @@ on:
     paths:
       - 'docs/quickstart-snippet.md'
       - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
+      - 'assets/**'
+      - 'tests/**/README.md'
+      - 'tests/README.md'
+      - 'web-dashboard/README.md'
+      - 'windows-bar/README.md'
       - 'docker/README.md'
       - 'macos-bar/README.md'
       - 'docs/**'
@@ -20,6 +29,15 @@ on:
     paths:
       - 'docs/quickstart-snippet.md'
       - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
+      - 'assets/**'
+      - 'tests/**/README.md'
+      - 'tests/README.md'
+      - 'web-dashboard/README.md'
+      - 'windows-bar/README.md'
       - 'docker/README.md'
       - 'macos-bar/README.md'
       - 'docs/**'
@@ -32,13 +50,16 @@ on:
       - 'tests/docs/documentation-freshness.js'
       - '.github/workflows/docs-parity.yml'
 
+permissions:
+  contents: read
+
 jobs:
   docs-parity:
     name: Assert documentation parity and freshness
     if: >-
       contains(fromJSON('["COLLABORATOR","MEMBER","OWNER"]'), github.event.pull_request.author_association)
       || github.event_name == 'push'
-    runs-on: [self-hosted, linux, x64, cliproxy]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4

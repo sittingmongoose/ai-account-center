@@ -41,13 +41,59 @@ public static class Checks
         report.Checks["old_sample_displays_date"] = Formatting.Sampled("2025-01-01T00:00:00Z") == "Updated " + DateTimeOffset.Parse("2025-01-01T00:00:00Z").ToLocalTime().ToString("MMM d, h:mm tt", System.Globalization.CultureInfo.CurrentCulture);
         report.Checks["expiration_is_distinct_from_reset"] = Formatting.Expiration("2027-01-01T00:00:00Z").StartsWith("Expires ", StringComparison.Ordinal) && Formatting.Expiration(null) == "Expiration date unavailable";
         report.Checks["balance_fraction_preserved_without_currency_inference"] = Formatting.Amount(42.75, null).Contains(42.75.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture), StringComparison.Ordinal) && !Formatting.Amount(42.75, null).Contains("USD", StringComparison.Ordinal);
+        report.Checks["displayed_fractions_round_to_two_decimals"] = Formatting.Amount(123.4567, "USD") == (123.46).ToString("N2", System.Globalization.CultureInfo.CurrentCulture) + " USD" && Formatting.Amount(1000, null) == (1000).ToString("N0", System.Globalization.CultureInfo.CurrentCulture);
+        var rawQuota = new QuotaWindow { Key = "monthly", Label = "Monthly", Used = 49.8765, Limit = 500.4321, UsedPercent = 9.966683, Remaining = 450.5556 };
+        Formatting.Amount(rawQuota.Remaining.Value, null);
+        report.Checks["presentation_rounding_preserves_raw_precision"] = rawQuota.Used == 49.8765 && rawQuota.Limit == 500.4321 && rawQuota.UsedPercent == 9.966683 && rawQuota.Remaining == 450.5556;
+        var pro = new DashboardAccount { Provider = "codex", Capabilities = new AccountCapabilities { CodexProfile = "party" }, Windows = new List<QuotaWindow> { new() { Key = "five_hour", Label = "5h", WindowMinutes = 300 }, new() { Key = "weekly", Label = "Weekly", UsedPercent = 8 }, new() { Key = "extra_additional_2", Label = "Chat pass weekly", UsedPercent = 20 } } };
+        report.Checks["pro_unreported_fivehour_and_chatpass_hidden"] = Formatting.VisibleWindows(pro).Select(window => window.Key).SequenceEqual(new[] { "weekly" });
+        pro.Capabilities.CodexProfile = "lex"; pro.Windows[0].UsedPercent = 120;
+        report.Checks["reported_lex_fivehour_retained"] = Formatting.VisibleWindows(pro).Any(window => window.Key == "five_hour" && window.DisplayPercent == 120);
+        var fullCodex = JsonSerializer.Deserialize<DashboardAccount>("""
+            {"provider":"codex","capabilities":{"codexProfile":"lex"},"windows":[
+                {"key":"extra_additional_1","label":"Additional 5-hour quota","kind":"rate_limit","windowMinutes":300,"usedPercent":92,"resetAt":"2027-01-01T12:00:00Z"},
+                {"key":"five_hour","label":"5h","kind":"rate_limit","windowMinutes":300,"usedPercent":0,"resetAt":"2027-01-01T13:00:00Z"},
+                {"key":"seven_day","label":"Weekly","kind":"rate_limit","windowMinutes":10080,"usedPercent":27,"resetAt":"2027-01-05T12:00:00Z"},
+                {"key":"extra_monthly","label":"Additional monthly quota","kind":"rate_limit","windowMinutes":43200,"usedPercent":71},
+                {"key":"extra_balance","label":"Extra credits","kind":"balance","remaining":42.75},
+                {"key":"extra_chat","label":"Chat pass quota","kind":"rate_limit","windowMinutes":300,"usedPercent":80}]}
+            """, Formatting.Json)!;
+        report.Checks["codex_full_dto_primary_only_exact_canonical_core_keys"] = Formatting.CodexPrimaryWindows(fullCodex).Select(window => window.Key).SequenceEqual(new[] { "five_hour", "seven_day" });
+        report.Checks["codex_canonical_zero_is_real_and_extra_quotas_stay_in_details"] = Formatting.CodexPrimaryWindows(fullCodex)[0].DisplayPercent == 0 && fullCodex.Windows.Count == 6 && Formatting.VisibleWindows(fullCodex).Select(window => window.Key).SequenceEqual(new[] { "extra_additional_1", "five_hour", "seven_day", "extra_monthly", "extra_balance" });
+        fullCodex.Windows.RemoveAll(window => window.Key is "five_hour" or "seven_day");
+        report.Checks["codex_no_core_dto_does_not_promote_additional_duration_or_balance"] = Formatting.CodexPrimaryWindows(fullCodex).Length == 0 && Formatting.VisibleWindows(fullCodex).Length == 3 && fullCodex.Windows.Any(window => window.WindowMinutes == 300 && window.DisplayPercent == 92);
+        foreach (var profile in new[] { "gmail", "party" })
+        {
+            fullCodex.Capabilities.CodexProfile = profile;
+            fullCodex.Windows.Add(new() { Key = "five_hour", Label = "5h", WindowMinutes = 300 });
+            fullCodex.Windows.Add(new() { Key = "seven_day", Label = "Weekly", WindowMinutes = 10080, UsedPercent = 0 });
+            report.Checks["codex_" + profile + "_absent_pro_fivehour_not_substituted_by_extra"] = Formatting.CodexPrimaryWindows(fullCodex).Select(window => window.Key).SequenceEqual(new[] { "seven_day" }) && Formatting.CodexPrimaryWindows(fullCodex)[0].DisplayPercent == 0;
+            fullCodex.Windows.RemoveAll(window => window.Key is "five_hour" or "seven_day");
+        }
+        var claude = new DashboardAccount { Provider = "claude", Plan = "max", Windows = new List<QuotaWindow> { new() { Key = "seven_day_fable", Label = "Weekly Fable usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 0, ResetAt = "2026-10-08T12:00:00Z" }, new() { Key = "seven_day_opus", Label = "Weekly Opus usage", UsedPercent = 32 } } };
+        report.Checks["max_fable_retains_actual_zero_percentage_and_reset"] = Formatting.VisibleWindows(claude).Any(window => window.Key == "seven_day_fable" && window.DisplayPercent == 0 && window.ResetAt == "2026-10-08T12:00:00Z");
+        claude.Plan = "pro";
+        report.Checks["fable_does_not_invent_pro_placeholder_or_opus_alias"] = Formatting.VisibleWindows(claude).Select(window => window.Key).SequenceEqual(new[] { "seven_day_opus" }) && Formatting.WindowLabel(claude, claude.Windows[1]) == "Weekly Opus usage";
+        var qwen = new DashboardAccount { Provider = "qwen", Windows = new List<QuotaWindow> { rawQuota, new() { Key = "subscription", Label = "Plan subscription" }, new() { Key = "plan_subscription", Label = "Plan subscription" } } };
+        report.Checks["qwen_usage_retains_numeric_quota_without_subscription"] = Formatting.VisibleWindows(qwen).Length == 1 && Formatting.WindowLabel(qwen, rawQuota) == "Monthly";
+        qwen.Windows.AddRange(new[] { new QuotaWindow { Key = "addon-pack-a", Remaining = 10, ExpiresAt = "2027-01-01T00:00:00Z" }, new QuotaWindow { Key = "addon-pack-b", Remaining = 0 }, new QuotaWindow { Key = "addon-pack-c", Remaining = 9, ExpiresAt = "2025-01-01T00:00:00Z" }, new QuotaWindow { Key = "addon-pack-d" }, new QuotaWindow { Key = "addon-listed-packs", Remaining = 4 } });
+        var packs = Formatting.QwenPacks(qwen);
+        report.Checks["qwen_individual_pack_inventory_includes_zero_and_unknown"] = packs.Length == 4 && packs.Select(pack => pack.Key).SequenceEqual(new[] { "addon-pack-a", "addon-pack-b", "addon-pack-c", "addon-pack-d" });
+        report.Checks["qwen_pack_status_uses_actual_amount_and_expiry"] = packs.Select(pack => Formatting.PackStatus(pack, DateTimeOffset.Parse("2026-01-01T00:00:00Z"))).SequenceEqual(new[] { "Available", "Depleted", "Expired", "Status unavailable" });
+        report.Checks["qwen_unknown_pack_expiry_not_inferred"] = Formatting.Expiration(packs[1].ExpiresAt) == "Expiration date unavailable" && packs[1].ExpiresAt is null;
+        var zai = new DashboardAccount { Provider = "zai", Windows = new List<QuotaWindow> { new() { Key = "reset-packs-5h", Remaining = 0 }, new() { Key = "reset-packs-weekly" }, new() { Key = "reset-packs-positive", Remaining = 2 }, new() { Key = "pack-record", Remaining = 0, ExpiresAt = "2027-01-01T00:00:00Z" } } };
+        report.Checks["zai_empty_pack_summaries_hidden_actual_packs_retained"] = Formatting.VisibleWindows(zai).Select(window => window.Key).SequenceEqual(new[] { "reset-packs-positive", "pack-record" });
         var balance = JsonSerializer.Deserialize<QuotaWindow>("{\"kind\":\"balance\",\"remaining\":42.75,\"expiresAt\":\"2027-01-01T00:00:00Z\",\"unlimited\":true,\"enabled\":false}", Formatting.Json)!;
         report.Checks["optional_usage_metadata_decoded"] = balance.Kind == "balance" && balance.Remaining == 42.75 && balance.ExpiresAt == "2027-01-01T00:00:00Z" && balance.Unlimited && balance.Enabled == false && balance.DisplayPercent is null;
+        var cachedWindow = JsonSerializer.Deserialize<QuotaWindow>("{\"kind\":\"balance\",\"remaining\":42.75,\"status\":\"cached\",\"sampledAt\":\"2026-09-28T13:00:00Z\"}", Formatting.Json)!;
+        report.Checks["retained_window_cache_decodes_original_sample_timestamp"] = cachedWindow.Status == "cached" && cachedWindow.SampledAt == "2026-09-28T13:00:00Z" && cachedWindow.Remaining == 42.75;
+        report.Checks["cached_window_missing_sample_time_stays_unknown"] = Formatting.WindowSample(new QuotaWindow { Status = "cached" }.SampledAt) == "Sample time unavailable" && Formatting.WindowSample("invalid") == "Sample time unavailable";
         report.Checks["profile_path_and_uri_injection_rejected"] = !Formatting.IsSafeProfile("../gmail") && !Formatting.IsSafeProfile("gmail?x=1") && !Formatting.IsWindowsClaudeProfile("gmail/../../") && !Formatting.IsWindowsClaudeProfile("arbitrary");
         report.Checks["four_windows_launch_ids_allowed"] = new[] { "platyr", "gmail", "party", "me" }.All(Formatting.IsWindowsClaudeProfile);
         report.Checks["connection_with_path_rejected"] = RejectConnection("http://127.0.0.1:3000/account");
         report.Checks["cleartext_remote_connection_rejected"] = RejectConnection("http://example.com");
         report.Checks["dpapi_round_trip"] = SecureStore.CheckRoundTrip(Encoding.UTF8.GetBytes("test-only-secret-value"));
+        await PublicErrorChecks(report);
         await ConfirmationChecks(report);
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
         report.Passed = report.Checks.Values.All(value => value);
@@ -181,6 +227,90 @@ public static class Checks
         Processes = new List<CodexSwitchProcess> { new() { Label = "Fixture Codex desktop", Pid = 1234, Role = "desktop" } },
         Warning = "Fixture only. Active work may be interrupted."
     };
+
+    private static async Task PublicErrorChecks(CheckReport report)
+    {
+        const string canary = "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile";
+        // Reviewed golden table SHA256947f5a63a2c83fcd35296ec3be8ee195328b2852aeb29f8b16eba5965407fd86.
+        var cases = new (int Status, DashboardRequestKind Kind, string? Code, string? Reason, string BodyKind, string Expected)[]
+        {
+            (400, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
+            (400, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
+            (400, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The automatic switching settings were rejected. Refresh and try again."),
+            (401, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Dashboard sign-in needs attention. Check Settings."),
+            (401, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Dashboard sign-in needs attention. Check Settings."),
+            (401, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Dashboard sign-in needs attention. Check Settings."),
+            (403, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this action. Check the connection origin."),
+            (403, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this action. Check the connection origin."),
+            (403, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this action. Check the connection origin."),
+            (404, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account action is not available on this server."),
+            (404, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The selected Claude profile is not available on that computer."),
+            (404, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account action is not available on this server."),
+            (408, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
+            (408, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
+            (408, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
+            (409, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Another account action is running. Try again when it finishes."),
+            (409, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Another account action is running. Try again when it finishes."),
+            (409, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Another account action is running. Try again when it finishes."),
+            (415, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
+            (415, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
+            (415, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The automatic switching settings were rejected. Refresh and try again."),
+            (422, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
+            (422, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
+            (422, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The automatic switching settings were rejected. Refresh and try again."),
+            (429, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard is limiting requests. Wait before trying again."),
+            (429, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard is limiting requests. Wait before trying again."),
+            (429, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard is limiting requests. Wait before trying again."),
+            (500, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Usage could not be refreshed. Try Refresh."),
+            (500, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard could not complete this request. Try again later."),
+            (500, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard could not complete this request. Try again later."),
+            (502, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
+            (502, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Claude could not be opened on the selected computer. Check its profile setup and connection."),
+            (502, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
+            (503, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
+            (503, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Claude could not be opened on the selected computer. Check its profile setup and connection."),
+            (503, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
+            (504, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
+            (504, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
+            (504, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
+            (409, DashboardRequestKind.CodexActivation, "busy", "activation_running", "json", "Another Codex account activation is already running. Wait for it to finish."),
+            (409, DashboardRequestKind.CodexActivation, "busy", "unsupported_process", "json", "A running Codex program cannot be restarted safely. Close it and try again."),
+            (409, DashboardRequestKind.CodexActivation, "busy", "running_processes", "json", "Codex is busy. Try switching after its work finishes."),
+            (409, DashboardRequestKind.CodexActivation, "confirmation_stale", null, "json", "The running Codex programs or account changed. Activate again to review a new warning."),
+            (400, DashboardRequestKind.CodexActivation, "invalid_profile", null, "json", "The selected profile has no valid saved login."),
+            (400, DashboardRequestKind.CodexActivation, "invalid_codex_home", null, "json", "Account activation needs the shared Codex configuration."),
+            (500, DashboardRequestKind.CodexActivation, "restart_failed", null, "json", "Codex could not restart. Check its processes before retrying activation."),
+            (500, DashboardRequestKind.CodexActivation, "verification_failed", null, "json", "The activated account could not be verified. Refresh accounts before retrying."),
+            (500, DashboardRequestKind.CodexActivation, "auth_read_failed", null, "json", "The saved Codex login could not be read safely."),
+            (500, DashboardRequestKind.CodexActivation, "auth_write_failed", null, "json", "The Codex login could not be installed safely."),
+            (400, DashboardRequestKind.Usage, null, null, "malformed", "The dashboard rejected this request. Refresh and try again."),
+            (502, DashboardRequestKind.Usage, null, null, "html", "The requested account service is unavailable. Try Refresh."),
+            (500, DashboardRequestKind.Usage, null, null, "large", "Usage could not be refreshed. Try Refresh."),
+        };
+        bool allFixed = true;
+        foreach (var example in cases)
+        {
+            var body = example.BodyKind switch
+            {
+                "malformed" => "{broken" + canary,
+                "html" => "<html>" + canary + "</html>",
+                "large" => JsonSerializer.Serialize(new { error = string.Concat(Enumerable.Repeat(canary, 100)) }),
+                _ => JsonSerializer.Serialize(new { error = canary, message = canary, code = example.Code, reason = example.Reason })
+            };
+            using var response = new System.Net.Http.HttpResponseMessage((HttpStatusCode)example.Status) { Content = new System.Net.Http.StringContent(body) };
+            try { await DashboardClient.Decode<JsonElement>(response, example.Kind == DashboardRequestKind.CodexActivation ? "party" : null, example.Kind); allFixed = false; }
+            catch (InvalidOperationException error) { allFixed &= error.Message == example.Expected && !error.Message.Contains("FIXTURE_ONLY") && !error.Message.Contains("fixture-token") && !error.Message.Contains("/fixture/private/profile"); }
+        }
+        report.Checks["all_52_server_error_canaries_use_fixed_public_messages"] = allFixed;
+        bool scoped = true;
+        foreach (var example in new[] { (Status: HttpStatusCode.BadRequest, Kind: DashboardRequestKind.Usage), (Status: HttpStatusCode.Conflict, Kind: DashboardRequestKind.AutoSwitch), (Status: HttpStatusCode.BadGateway, Kind: DashboardRequestKind.CodexActivation) })
+        {
+            using var response = new System.Net.Http.HttpResponseMessage(example.Status) { Content = new System.Net.Http.StringContent(JsonSerializer.Serialize(new { code = "invalid_profile", reason = "activation_running", error = canary })) };
+            try { await DashboardClient.Decode<JsonElement>(response, example.Kind == DashboardRequestKind.CodexActivation ? "party" : null, example.Kind); scoped = false; }
+            catch (InvalidOperationException error) { scoped &= error.Message != "The selected profile has no valid saved login." && !error.Message.Contains(canary); }
+        }
+        report.Checks["codex_public_codes_apply_only_to_approved_context_and_status"] = scoped;
+    }
 
     private static async Task ConfirmationChecks(CheckReport report)
     {

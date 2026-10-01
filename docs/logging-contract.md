@@ -1,6 +1,6 @@
-# Logging Contract
+# AI Account Center Logging Contract
 
-CCS structured logs are a machine-readable JSONL channel for backend and
+AI Account Center retains the CCS structured log schema as a machine-readable JSONL channel for backend and
 runtime events. They are separate from terminal UX output and must never be
 used as a substitute for user-facing recovery messages.
 
@@ -129,10 +129,10 @@ implemented by
 
 ## Configuration
 
-CCS-owned logging uses the `logging` section in the unified config. Its defaults
+Account Center logging uses the existing `logging` section in the unified config. Its defaults
 enable logging and redaction at `info` level with bounded rotation, retention,
-and live-buffer settings. This is distinct from `cliproxy.logging`, which
-controls CLIProxy runtime logging.
+and live-buffer settings. Historical `cliproxy.logging` fields remain private
+configuration compatibility data; the current product does not start CLIProxy.
 
 When adding a logging setting, update the schema/defaults, configuration loader,
 dashboard surface if applicable, and focused logging tests. Do not document a

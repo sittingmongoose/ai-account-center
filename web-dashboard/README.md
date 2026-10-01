@@ -1,4 +1,7 @@
-# CCS account dashboard (Slint 1.18.1)
+# AI Account Center web dashboard (Slint 1.18.1)
+
+Source: [AI Account Center](https://github.com/sittingmongoose/ai-account-center),
+a fork of [CCS](https://github.com/kaitranntt/ccs).
 
 The production account dashboard is a real Slint UI compiled from
 `ui/dashboard.slint` to Rust and WebAssembly. `public/bridge.js` supplies browser
@@ -13,6 +16,8 @@ Other startup errors still reach the visible failure state.
 Browser viewport dimensions and device pixel ratio are supplied before Slint's
 first render, so the renderer and scene use the same physical size on
 Retina displays. The dashboard keeps CSS dimensions in logical pixels.
+The root window declares a preferred starting size instead of fixed width/height
+constraints; browser resize and fullscreen requests update both layout and canvas.
 
 ## Build
 
@@ -28,9 +33,9 @@ produced by the installed Rust 1.98, so its optional wasm-opt pass is disabled.
 Rust release optimization and LTO remain enabled.
 
 The repository UI builder stages all `public/` files with `pkg/` at the same
-relative location into `ui/dist/`, mirrored into `dist/ui/`. The public entry
+relative location directly into `dist/ui/`. The public entry
 point is index.html; bridge.js imports `./pkg/ccs_account_dashboard.js`.
-Use the existing CCS server and session-cookie authentication. Do not serve this
+Use the existing AI Account Center server and session-cookie authentication. Do not serve this
 page as file:// or configure a cross-origin API URL.
 
 ## Data and controls
@@ -40,6 +45,8 @@ page as file:// or configure a cross-origin API URL.
   percentages. They never invent token denominators or reset times.
 - Detail views retain every returned quota window, credit balance, numeric
   amount, unlimited/enabled state, reset date and separate expiration date.
+  Product display exclusions remove Codex Chat pass, attach Qwen subscription
+  expiration to monthly usage, and hide empty Z.ai reset-pack summaries.
 - Provider cards preview up to three actual windows. Their Details control
   shows all windows from every returned account.
 - Claude launch icons POST the configured profile ID plus Mac/Windows choice.
@@ -62,6 +69,7 @@ page as file:// or configure a cross-origin API URL.
   activity. History gaps stay empty; estimated API-equivalent costs are labeled.
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
+  Displayed fractions use at most two decimal places; source precision is retained.
 
 ## Validation
 

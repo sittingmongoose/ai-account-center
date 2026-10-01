@@ -9,6 +9,9 @@
     <AssemblyName>CCSBar</AssemblyName>
     <RootNamespace>CCSBar</RootNamespace>
     <Version>1.0.0</Version>
+    <Title>AI Account Center</Title>
+    <Product>AI Account Center</Product>
+    <Description>Native accounts and usage tray for AI Account Center</Description>
     <PublishSingleFile>false</PublishSingleFile>
     <DebugType>none</DebugType>
     <Deterministic>true</Deterministic>
@@ -16,6 +19,8 @@
   <ItemGroup>
     <Resource Include="Resources/HeaderLogo.png" />
     <Resource Include="Resources/Providers/*.png" />
+    <Content Include="Resources/Providers/THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Resources/Providers/sources.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Resources/MenuBarColor.png" />
   </ItemGroup>
 </Project>

@@ -43,15 +43,21 @@ def write_frame(handle, value):
 
 def handle_request(request, root, collector=collect, writer=write_capsule):
     if isinstance(request, dict) and request.get("action") == "museSync":
-        from muse_console import MuseError, collect_browser, validate_cookies as muse_cookies, write_capsule as muse_write
-        if set(request) - {"schemaVersion", "action", "cookies", "teamId"} or type(request.get("schemaVersion")) is not int or request["schemaVersion"] != 1:
+        from muse_console import MuseError, collect_browser, restore_browser_sample, validate_cookies as muse_cookies, write_capsule as muse_write
+        if set(request) - {"schemaVersion", "action", "cookies", "teamId", "previousSample"} or type(request.get("schemaVersion")) is not int or request["schemaVersion"] != 1:
             raise MuseError("invalid_request")
         cookies = muse_cookies(request.get("cookies"))
-        team, sample = collect_browser(cookies, request.get("teamId"))
+        if request.get("previousSample") is not None:
+            if request.get("teamId") is not None and (not isinstance(request["previousSample"], dict)
+                    or request["previousSample"].get("teamId") != request["teamId"]):
+                raise MuseError("team_mismatch")
+            restore_browser_sample(root, request["previousSample"])
+        team, sample = collect_browser(cookies, request.get("teamId"), root)
         muse_write(root, cookies, team, sample["email"], sample["plan"])
         return {"schemaVersion": 1, "ok": True, "sample": sample, "teamId": team}
     if (not isinstance(request, dict) or set(request) - {"schemaVersion", "action", "cookies", "workspaceId"}
-            or request.get("schemaVersion") != 1 or request.get("action") != "sync"):
+            or type(request.get("schemaVersion")) is not int or request["schemaVersion"] != 1
+            or request.get("action") != "sync"):
         raise Unavailable("invalid_request")
     cookies = validate_cookies(request.get("cookies"))
     workspace, sample = collector(cookies, request.get("workspaceId"))

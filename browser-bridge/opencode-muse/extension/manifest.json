@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "CCS Browser Usage Bridge",
-  "description": "Read the signed-in OpenCode wallet and Muse subscription limits for CCS.",
-  "version": "1.1.0",
+  "name": "AI Account Center Browser Usage Bridge",
+  "description": "Read the signed-in OpenCode wallet and Muse subscription limits for AI Account Center.",
+  "version": "1.3.2",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuU5uYonpEe+avJqhtsxOHVgvGJblJBAphFzH2iuzM2vMQZQlstm44gBZiAvLBCaELTu6xZOB0OhuWA/G8CO6yqGDrZDfLz8KC9bG4iDIhaEgPY5H4qBSYbOiaBcZB1VJir9PXMI1dndvLWY5IJkxVnseiA9836XXMi4/fCkcseqz7lsRS2H789H1vV/HByHmIXfoPCXRdMHYcAG47f6izBIM4O+1Zg8HgZz52QcSddjcQyND1xN4TkLdocH4GjT17L44I3b2rYBcFtTGR+q1yqqsg8vfw3aXvrcp2MYFer57M4ec6wHb9x6nrQVUvwGKIRu8QQLc06Cqix2ISzefpwIDAQAB",
   "permissions": [
     "cookies",
@@ -21,6 +21,6 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Sync browser usage for CCS"
+    "default_title": "Sync browser usage for AI Account Center"
   }
 }

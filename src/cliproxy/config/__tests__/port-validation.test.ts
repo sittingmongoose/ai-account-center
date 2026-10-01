@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import { validatePort, CLIPROXY_DEFAULT_PORT } from '../config-generator';
+import { validatePort, CLIPROXY_DEFAULT_PORT } from '../port-manager';
 import { resolveProxyConfig } from '../../proxy/proxy-config-resolver';
 
 describe('Port Validation', () => {

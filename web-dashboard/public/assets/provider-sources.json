@@ -1,0 +1,39 @@
+[
+  {
+    "provider": "qwen",
+    "source": "https://img.alicdn.com/imgextra/i4/O1CN01OXv3EM1FN8t9W4P79_!!6000000000474-2-tps-80-80.png",
+    "sha256": "cd9390bc4209c319121d111f3a1f535b3c7dd909b8f860d41acc9744138d58df",
+    "file": "provider-qwen.png"
+  },
+  {
+    "provider": "opencode-go",
+    "source": "https://raw.githubusercontent.com/anomalyco/opencode/63cf236140b11c15cd645e90a7ded77bdc2193b4/packages/console/app/src/asset/brand/opencode-logo-dark.png",
+    "sha256": "20c8b4794f4c988ab335a519980415ba94ea3442b5a794b920c5408be295bc53",
+    "file": "provider-opencode-go.png"
+  },
+  {
+    "provider": "cursor",
+    "source": "https://ptht05hbb1ssoooe.public.blob.vercel-storage.com/assets/brand/cursor-brand-assets.zip",
+    "member": "General Logos/Cube/PNG/CUBE_2D_DARK.png",
+    "sha256": "944f2b64bcb4b9603edb8721cf669d496ddc408d91c4a8ff471b650e4fb272b5",
+    "file": "provider-cursor.png"
+  },
+  {
+    "provider": "muse",
+    "source": "https://dev.meta.ai/favicon.ico",
+    "sha256": "ec92c3c1c917dd13d2ee6f996a76572b9c879755eaf840a9ae82dc515dcdf5bf",
+    "assetDescription": "Official Meta publisher favicon for Muse Code; no distinct Muse product icon found",
+    "conversion": "Original 64x64 BGRA DIB pixels to RGBA PNG, preserving alpha; no crop/scale/recolor",
+    "icoSha256": "778876a7aae08af4cad55ffebe07e9ec1f2b04507c54cc823a15d236b0aad1fe",
+    "file": "provider-muse.png"
+  },
+  {
+    "provider": "cursor",
+    "theme": "light",
+    "file": "provider-cursor-light.png",
+    "source": "https://ptht05hbb1ssoooe.public.blob.vercel-storage.com/assets/brand/cursor-brand-assets.zip",
+    "archiveSha256": "97488a7751914e60f9ff532bc33810cdeaebdddc017548abe6ca2bc29bbc3928",
+    "member": "General Logos/Cube/PNG/CUBE_2D_LIGHT.png",
+    "sha256": "c61776321cea03d00860d5059029397a9b60e95e5c1f36f1b3bafe5a3a59c545"
+  }
+]

@@ -7,7 +7,7 @@ name: Breaking Change Guard – Docker Compose Contract
 #   services.ccs.image (the image *name*, not the tag)
 #   networks.ccs-net.name
 #   services.ccs.container_name (if set)
-#   services keys (Docker DNS uses the service key; renaming "ccs:" changes http://ccs:8317)
+#   services keys (Docker DNS uses the service key; "ccs:" remains a migration identity)
 #
 # If any of these fields change in a PR, the workflow fails unless at least
 # one commit in the PR includes a breaking-change marker (feat!: or fix!:).
@@ -15,14 +15,15 @@ name: Breaking Change Guard – Docker Compose Contract
 
 on:
   pull_request:
-    branches: [main, dev]
     paths:
       - "docker/compose.yaml"
+
+permissions:
+  contents: read
 
 jobs:
   guard:
     name: Verify breaking changes are intentional
-    # Exception to self-hosted-first policy (documented in CLAUDE.md "Self-Hosted Runner Policy"):
     # This workflow MUST cover ALL PRs including forks — a forked contributor can rename
     # services.ccs or change the image namespace without a breaking-change marker, which
     # silently breaks sibling-container setups for every user. Gating on trusted-author
@@ -63,7 +64,7 @@ jobs:
 
           # 1. Image name change (repo path, not tag — tags change every release)
           #
-          #    compose.yaml uses ${CCS_IMAGE:-ghcr.io/kaitranntt/ccs:latest}. A naive
+          #    compose.yaml may use ${CCS_IMAGE:-ai-account-center:local}. A naive
           #    sed 's/:.*//' truncates at the FIRST colon, yielding "${CCS_IMAGE" instead
           #    of the actual image name. We strip the ${VAR:-default} wrapper first, then
           #    strip only the trailing :tag suffix (preserving internal colons such as
@@ -226,7 +227,7 @@ jobs:
           fi
 
           # 4. Service key contract — Docker DNS on ccs-net uses the compose service
-          #    KEY as the hostname (e.g. http://ccs:8317). Renaming or removing
+          #    KEY as the hostname (e.g. http://ccs:3000). Renaming or removing
           #    "ccs:" breaks every sibling container in the wild. Adding new service
           #    keys (e.g. a sidecar) does NOT affect the "ccs" DNS contract and is
           #    therefore allowed without a breaking-change marker.

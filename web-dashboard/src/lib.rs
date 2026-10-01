@@ -48,6 +48,8 @@ struct AccountDto {
     can_windows: bool,
     five: UsageDto,
     weekly: UsageDto,
+    fable: UsageDto,
+    show_fable: bool,
     windows: Vec<UsageDto>,
     note: String,
 }
@@ -64,6 +66,8 @@ impl From<AccountDto> for AccountView {
             can_windows: v.can_windows,
             five: v.five.into(),
             weekly: v.weekly.into(),
+            fable: v.fable.into(),
+            show_fable: v.show_fable,
             windows: model(v.windows.into_iter().map(UsageView::from).collect()),
             note: v.note.into(),
         }
@@ -152,6 +156,7 @@ pub fn set_dashboard(json: &str) -> Result<(), JsValue> {
     UI.with(|slot| {
         if let Some(ui) = slot.borrow().as_ref() {
             ui.set_claude(model(v.claude.into_iter().map(AccountView::from).collect()));
+            ui.set_codex_has_five_hour(v.codex.iter().any(|account| account.five.has_percent));
             ui.set_codex(model(v.codex.into_iter().map(AccountView::from).collect()));
             ui.set_providers(model(
                 v.providers.into_iter().map(ProviderView::from).collect(),

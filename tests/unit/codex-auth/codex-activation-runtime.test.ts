@@ -508,6 +508,46 @@ afterEach(() => {
     fs.rmSync(directory, { recursive: true, force: true });
 });
 describe('desktop main process detection', () => {
+  it('recovers a split descendant user-data-dir without falling back to another profile', async () => {
+    const splitRenderer = {
+      ...renderer,
+      args: [renderer.exe, '--type=renderer', '--user-data-dir', '/fixture/custom-profile'],
+    };
+    const fake = harness([daemon, desktop, bundled, splitRenderer]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.launches[1].args).toEqual([
+      '/usr/lib/chatgpt/ChatGPT',
+      '--user-data-dir=/fixture/custom-profile',
+    ]);
+  });
+
+  it.each([
+    { parentArgs: ['--user-data-dir=/fixture/parent-profile'] },
+    { parentArgs: ['--user-data-dir', '/fixture/parent-profile'] },
+  ])('preserves an explicit parent user-data-dir override %j', async ({ parentArgs }) => {
+    const parent = { ...desktop, args: [desktop.exe, ...parentArgs] };
+    const fake = harness([daemon, parent, bundled, renderer]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.launches[1].args).toEqual(parent.args);
+  });
+
+  it('does not pair a missing descendant flag value with another child command', async () => {
+    const missing = { ...renderer, args: [renderer.exe, '--type=renderer', '--user-data-dir'] };
+    const sibling = { ...renderer, pid: 23, args: [renderer.exe, '--type=utility'] };
+    const fake = harness([daemon, desktop, bundled, missing, sibling]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.launches[1].args).toEqual([
+      '/usr/lib/chatgpt/ChatGPT',
+      `--user-data-dir=${path.join(os.homedir(), '.config', 'Codex')}`,
+    ]);
+  });
+
   it('treats only the Electron main process as the desktop, including rewritten zygote cmdlines', () => {
     const zygote = processFixture(
       23,

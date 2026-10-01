@@ -1,14 +1,15 @@
 /**
- * `ccs bar status` — report whether the CCS Bar server is running.
+ * `ai-account-center bar status` — report whether the AI Account Center server is running.
  *
  * Checks server.pid for the PID, then verifies the process is alive and
- * the server is reachable at GET /api/bar/summary. ASCII output only.
+ * the server proves its identity at GET /api/bar/auth. ASCII output only.
  */
 
 import * as fs from 'fs';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { getBarJsonPath, getServerPidPath } from './bar-paths';
 import { parseBarServerProcessRecord, parseLegacyServerPid } from './bar-process-control';
+import { probeRecordedBarServer } from './bar-server-probe';
 
 // ---------------------------------------------------------------------------
 // Types — injectable deps
@@ -29,8 +30,8 @@ export interface StatusDeps {
    */
   isProcessAlive: (pid: number) => boolean;
   /**
-   * Probe whether the server is reachable at GET {baseUrl}/api/bar/summary.
-   * Returns true on HTTP 200, false otherwise. Never throws.
+   * Probe whether the recorded loopback server proves its identity at
+   * GET {baseUrl}/api/bar/auth. A plain HTTP 200 is insufficient. Never throws.
    */
   probeServer: (baseUrl: string) => Promise<boolean>;
   /**
@@ -66,22 +67,6 @@ function defaultIsProcessAlive(pid: number): boolean {
   }
 }
 
-async function defaultProbeServer(baseUrl: string): Promise<boolean> {
-  try {
-    const { request } = await import('undici');
-    const { statusCode, body } = await request(`${baseUrl}/api/bar/summary`, {
-      method: 'GET',
-      headersTimeout: 2000,
-      bodyTimeout: 2000,
-    });
-    // Drain body to release the socket.
-    await body.text();
-    return statusCode === 200;
-  } catch {
-    return false;
-  }
-}
-
 function defaultReadBarJsonBaseUrl(barJsonPath: string): string | null {
   try {
     const raw = fs.readFileSync(barJsonPath, 'utf8');
@@ -103,7 +88,7 @@ export async function handleBarStatus(
   const ccsDir = (deps.getCcsDir ?? defaultGetCcsDir)();
   const readPidFile = deps.readPidFile ?? defaultReadPidFile;
   const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
-  const probeServer = deps.probeServer ?? defaultProbeServer;
+  const probeServer = deps.probeServer ?? ((baseUrl) => probeRecordedBarServer(ccsDir, baseUrl));
   const readBarJsonBaseUrl = deps.readBarJsonBaseUrl ?? defaultReadBarJsonBaseUrl;
 
   const pidPath = getServerPidPath(ccsDir);
@@ -112,7 +97,7 @@ export async function handleBarStatus(
   // 1. Check PID file.
   const pidRaw = readPidFile(pidPath);
   if (pidRaw === null) {
-    console.log('[i] CCS Bar server: stopped (no server.pid)');
+    console.log('[i] AI Account Center server: stopped (no server.pid)');
     return;
   }
 
@@ -121,13 +106,15 @@ export async function handleBarStatus(
     const legacyPid = parseLegacyServerPid(pidRaw);
     if (legacyPid !== null) {
       console.log(
-        `[!] CCS Bar server: legacy server.pid has unverified PID ${legacyPid}; status cannot safely identify it.`
+        `[!] AI Account Center server: legacy server.pid has unverified PID ${legacyPid}; status cannot safely identify it.`
       );
       console.log(`[i] Verify manually with: ps -p ${legacyPid} -o command=`);
-      console.log('[i] If it is CCS Bar, stop it manually, remove server.pid, then restart.');
+      console.log(
+        '[i] If it is AI Account Center, stop it manually, remove server.pid, then restart.'
+      );
       return;
     }
-    console.log(`[!] CCS Bar server: server.pid is invalid ("${pidRaw}")`);
+    console.log(`[!] AI Account Center server: server.pid is invalid ("${pidRaw}")`);
     return;
   }
   const { pid } = processRecord;
@@ -135,8 +122,10 @@ export async function handleBarStatus(
   // 2. Check process liveness.
   const alive = isProcessAlive(pid);
   if (!alive) {
-    console.log(`[!] CCS Bar server: PID ${pid} is no longer running (stale server.pid)`);
-    console.log('[i] Run `ccs bar stop` to clean up, then `ccs bar` to restart.');
+    console.log(`[!] AI Account Center server: PID ${pid} is no longer running (stale server.pid)`);
+    console.log(
+      '[i] Run `ai-account-center bar stop` to clean up, then `ai-account-center bar` to restart.'
+    );
     return;
   }
 
@@ -145,9 +134,11 @@ export async function handleBarStatus(
   const reachable = await probeServer(baseUrl);
 
   if (reachable) {
-    console.log(`[OK] CCS Bar server: running (PID ${pid}, ${baseUrl})`);
+    console.log(`[OK] AI Account Center server: running (PID ${pid}, ${baseUrl})`);
   } else {
-    console.log(`[!] CCS Bar server: PID ${pid} alive but HTTP probe failed at ${baseUrl}`);
+    console.log(
+      `[!] AI Account Center server: PID ${pid} alive but HTTP probe failed at ${baseUrl}`
+    );
     console.log('[i] The server may still be starting up. Try again in a moment.');
   }
 }

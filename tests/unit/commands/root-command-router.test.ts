@@ -1,129 +1,220 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { readFileSync } from 'fs';
 
-let calls: string[] = [];
+import * as configCommand from '../../../src/commands/config-command';
+import * as codexAuthCommand from '../../../src/codex-auth/codex-auth-router';
+import * as barCommand from '../../../src/commands/bar';
+import * as versionCommand from '../../../src/commands/version-command';
+import * as helpCommand from '../../../src/commands/help-command';
+import {
+  requiresRuntimeServices,
+  tryHandleRootCommand,
+} from '../../../src/commands/root-command-router';
+
+let calls: Array<{ command: string; args: string[] }> = [];
 let logLines: string[] = [];
-let originalConsoleLog: typeof console.log;
-let originalProcessExit: typeof process.exit;
+let errorLines: string[] = [];
+let originalExitCode: typeof process.exitCode;
+const restoreSpies: Array<() => void> = [];
 
 beforeEach(() => {
   calls = [];
   logLines = [];
-  originalConsoleLog = console.log;
-  originalProcessExit = process.exit;
-
-  console.log = (...args: unknown[]) => {
+  errorLines = [];
+  originalExitCode = process.exitCode;
+  process.exitCode = 0;
+  const logSpy = spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
     logLines.push(args.map(String).join(' '));
-  };
-
-  mock.module('../../../src/commands/version-command', () => ({
-    handleVersionCommand: async () => {
-      calls.push('version');
-    },
-  }));
-
-  mock.module('../../../src/commands/update-command', () => ({
-    handleUpdateCommand: async (options: Record<string, unknown>) => {
-      calls.push(`update:${JSON.stringify(options)}`);
-    },
-  }));
-
-  mock.module('../../../src/commands/api-command/index', () => ({
-    handleApiCommand: async (args: string[]) => {
-      calls.push(`api:${args.join(' ')}`);
-    },
-  }));
-
-  mock.module('../../../src/commands/docker-command', () => ({
-    handleDockerCommand: async (args: string[]) => {
-      calls.push(`docker:${args.join(' ')}`);
-    },
-  }));
-
-  mock.module('../../../src/commands/tokens-command', () => ({
-    handleTokensCommand: async () => 37,
-  }));
+  });
+  const errorSpy = spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    errorLines.push(args.map(String).join(' '));
+  });
+  const configSpy = spyOn(configCommand, 'handleConfigCommand').mockImplementation(async (args) => {
+    calls.push({ command: 'dashboard', args: [...args] });
+  });
+  const authSpy = spyOn(codexAuthCommand, 'runCodexAuth').mockImplementation(async (args) => {
+    calls.push({ command: 'codex-auth', args: [...args] });
+    return 37;
+  });
+  const barSpy = spyOn(barCommand, 'handleBarCommand').mockImplementation(async (args) => {
+    calls.push({ command: 'bar', args: [...args] });
+  });
+  const versionSpy = spyOn(versionCommand, 'handleVersionCommand').mockImplementation(async () => {
+    calls.push({ command: 'version', args: [] });
+  });
+  const helpSpy = spyOn(helpCommand, 'handleHelpRoute').mockImplementation(async (args) => {
+    calls.push({ command: 'help', args: [...args] });
+  });
+  const rootHelpSpy = spyOn(helpCommand, 'handleHelpCommand').mockImplementation(async () => {
+    calls.push({ command: 'help', args: [] });
+  });
+  const exitSpy = spyOn(process, 'exit').mockImplementation(() => {
+    throw new Error('Root commands must return without terminating the process');
+  });
+  restoreSpies.push(
+    ...[
+      logSpy,
+      errorSpy,
+      configSpy,
+      authSpy,
+      barSpy,
+      versionSpy,
+      helpSpy,
+      rootHelpSpy,
+      exitSpy,
+    ].map((spy) => () => spy.mockRestore())
+  );
 });
 
 afterEach(() => {
-  console.log = originalConsoleLog;
-  process.exit = originalProcessExit;
-  mock.restore();
+  for (const restore of restoreSpies.splice(0).reverse()) restore();
+  process.exitCode = originalExitCode ?? 0;
 });
 
-async function loadTryHandleRootCommand() {
-  const mod = await import(
-    `../../../src/commands/root-command-router?test=${Date.now()}-${Math.random()}`
+describe('retained root command routing', () => {
+  it.each(['dashboard', 'config'])(
+    'passes dashboard arguments unchanged through %s',
+    async (command) => {
+      const args = ['--host=127.0.0.1', '--port', '4100', '--no-open'];
+
+      await expect(tryHandleRootCommand([command, ...args])).resolves.toBe(true);
+      expect(calls).toEqual([{ command: 'dashboard', args }]);
+    }
   );
-  return mod.tryHandleRootCommand;
-}
 
-describe('root-command-router', () => {
-  it('routes command aliases to their handlers', async () => {
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
+  it('delegates native Codex account arguments and preserves the returned status', async () => {
+    await expect(tryHandleRootCommand(['codex-auth', 'activate', 'work'])).resolves.toBe(true);
 
-    await expect(tryHandleRootCommand(['--version'])).resolves.toBe(true);
-
-    expect(calls).toEqual(['version']);
+    expect(calls).toEqual([{ command: 'codex-auth', args: ['activate', 'work'] }]);
+    expect(process.exitCode).toBe(37);
   });
 
-  it('returns false for profile-like tokens that are not root commands', async () => {
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
+  it('passes menu bar arguments unchanged without launching another command', async () => {
+    await expect(tryHandleRootCommand(['bar', 'status', '--port', '3999'])).resolves.toBe(true);
 
-    await expect(tryHandleRootCommand(['glm'])).resolves.toBe(false);
-
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ command: 'bar', args: ['status', '--port', '3999'] }]);
   });
 
-  it('does not capture cursor so bare cursor can fall through to profile routing', async () => {
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
+  it.each(['version', '--version', '-v'])('routes a version alias: %s', async (command) => {
+    await expect(tryHandleRootCommand([command])).resolves.toBe(true);
 
-    await expect(tryHandleRootCommand(['cursor'])).resolves.toBe(false);
-    await expect(tryHandleRootCommand(['cursor', 'status'])).resolves.toBe(false);
-
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ command: 'version', args: [] }]);
   });
 
-  it('prints update help without invoking the updater', async () => {
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
+  it('rejects extra version arguments before invoking the version handler', async () => {
+    await expect(tryHandleRootCommand(['version', '--force'])).resolves.toBe(true);
 
-    await expect(tryHandleRootCommand(['update', '--help'])).resolves.toBe(true);
-
-    expect(calls).toEqual([]);
-    expect(logLines.join('\n')).toContain('Usage: ccs update [options]');
-    expect(logLines.join('\n')).toContain('ccs update --beta');
+    expect(calls).toHaveLength(0);
+    expect(process.exitCode).toBe(1);
+    expect(errorLines.join('\n')).toContain('Unexpected version arguments: --force');
   });
 
-  it('passes remaining args through to nested command handlers', async () => {
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
+  it.each(['help', '--help', '-h'])(
+    'routes retained help aliases and topics: %s',
+    async (command) => {
+      await expect(tryHandleRootCommand([command, 'dashboard'])).resolves.toBe(true);
 
-    await expect(tryHandleRootCommand(['api', 'discover', '--register'])).resolves.toBe(true);
+      expect(calls).toEqual([{ command: 'help', args: ['dashboard'] }]);
+    }
+  );
 
-    expect(calls).toEqual(['api:discover --register']);
+  it('shows root help for an empty invocation', async () => {
+    await expect(tryHandleRootCommand([])).resolves.toBe(true);
+
+    expect(calls).toEqual([{ command: 'help', args: [] }]);
   });
 
-  it('routes docker commands through the root router', async () => {
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
+  it.each([['update'], ['--update'], ['update', '--help'], ['--update', '--force', '--beta']])(
+    'retires the upstream updater instead of calling any handler: %j',
+    async (...args) => {
+      await expect(tryHandleRootCommand(args)).resolves.toBe(true);
 
-    await expect(tryHandleRootCommand(['docker', 'status', '--host', 'my-box'])).resolves.toBe(
-      true
-    );
+      expect(calls).toHaveLength(0);
+      expect(process.exitCode).toBe(1);
+      const rendered = [...logLines, ...errorLines].join('\n');
+      expect(rendered).toMatch(/self-update is retired/i);
+      expect(rendered).toContain('AI Account Center');
+      expect(rendered).toMatch(/own release|own.*checkout/i);
+    }
+  );
 
-    expect(calls).toEqual(['docker:status --host my-box']);
+  it.each([
+    'auth',
+    'api',
+    'browser',
+    'cliproxy',
+    'docker',
+    'env',
+    'persist',
+    'proxy',
+    'tokens',
+    'migrate',
+    'setup',
+    'doctor',
+    'sync',
+    'cleanup',
+    '__complete',
+    '--shell-completion',
+    '--install',
+    '--uninstall',
+    'glm',
+    'cursor',
+    'my-private-profile',
+  ])('consumes retired commands and profile names with migration guidance: %s', async (command) => {
+    await expect(tryHandleRootCommand([command, 'status'])).resolves.toBe(true);
+
+    expect(calls).toHaveLength(0);
+    expect(process.exitCode).toBe(1);
+    const rendered = [...logLines, ...errorLines].join('\n');
+    expect(rendered).toContain(command);
+    expect(rendered).toMatch(/retired|no longer/i);
+    expect(rendered).toContain('ai-account-center dashboard');
   });
 
-  it('exits with the nested command exit code when required', async () => {
-    process.exit = ((code?: number) => {
-      throw new Error(`process.exit(${code ?? 0})`);
-    }) as typeof process.exit;
-
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
-
-    await expect(tryHandleRootCommand(['tokens', 'list'])).rejects.toThrow('process.exit(37)');
+  it('keeps updater imports and child process launches out of the root and entry modules', () => {
+    for (const sourcePath of [
+      '../../../src/commands/root-command-router.ts',
+      '../../../src/ccs.ts',
+    ]) {
+      const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8');
+      expect(source).not.toMatch(/(?:from\s*|import\s*\()["'][^"']*update-(?:command|checker)/);
+      expect(source).not.toMatch(/(?:from\s*|import\s*\()["'](?:node:)?child_process["']/);
+      expect(source).not.toMatch(/\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(/);
+    }
   });
+});
 
-  it('routes hidden completion queries through the completion backend', async () => {
-    const tryHandleRootCommand = await loadTryHandleRootCommand();
+describe('configuration-backed runtime service gate', () => {
+  it.each([
+    [],
+    ['--help'],
+    ['--version'],
+    ['update', '--force'],
+    ['old-profile'],
+    ['config', '--help=true'],
+    ['config', 'channels'],
+    ['config', '--dev'],
+    ['config', '--port', 'invalid'],
+    ['config', 'auth', '--help'],
+    ['codex-auth', '--help'],
+    ['codex-auth', 'use', 'saved'],
+    ['codex-auth', 'switch', 'saved'],
+    ['bar', '--help=true'],
+    ['bar', 'version'],
+  ])(
+    'keeps metadata and retired invocations outside configuration logging: %j',
+    async (...args) => {
+      expect(await requiresRuntimeServices(args)).toBe(false);
+    }
+  );
 
-    await expect(tryHandleRootCommand(['__complete', '--shell', 'bash', '--current', 'do'])).resolves.toBe(true);
+  it.each([
+    ['dashboard', '--no-open'],
+    ['config', '--port', '4100'],
+    ['config', 'auth', 'setup'],
+    ['codex-auth', 'activate', 'saved'],
+    ['bar', 'status'],
+  ])('preserves runtime service setup for account operations: %j', async (...args) => {
+    expect(await requiresRuntimeServices(args)).toBe(true);
   });
 });

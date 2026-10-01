@@ -9,7 +9,7 @@
 
 import { randomBytes } from 'crypto';
 
-import { CCS_INTERNAL_API_KEY, CCS_CONTROL_PANEL_SECRET } from '../config/generator';
+import { CCS_INTERNAL_API_KEY, CCS_CONTROL_PANEL_SECRET } from '../config/auth-defaults';
 import { loadOrCreateUnifiedConfig, mutateConfig } from '../../config/config-loader-facade';
 import { ProfileError } from '../../errors/error-types';
 

@@ -1,53 +1,83 @@
 import { resolveNamedCommand, type NamedCommandRoute } from './named-command-router';
-
-async function printUpdateCommandHelp(): Promise<void> {
-  console.log('');
-  console.log('Usage: ccs update [options]');
-  console.log('');
-  console.log('Options:');
-  console.log('  --force       Force reinstall current version');
-  console.log('  --beta, --dev Install from dev channel (unstable)');
-  console.log('  --help, -h    Show this help message');
-  console.log('');
-  console.log('Examples:');
-  console.log('  ccs update           Update to latest stable');
-  console.log('  ccs update --force   Force reinstall');
-  console.log('  ccs update --beta    Install dev channel');
-  console.log('');
-}
+import { showRetiredCommandMessage } from './retired-command';
+import { hasAnyFlag } from './arg-extractor';
 
 export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
   {
-    name: 'migrate',
-    aliases: ['--migrate'],
+    name: 'dashboard',
+    aliases: ['config'],
     handle: async (args) => {
-      const { handleMigrateCommand, printMigrateHelp } = await import('./migrate-command');
-      if (args.includes('--help') || args.includes('-h')) {
-        printMigrateHelp();
+      if (
+        args[0] === 'auth' &&
+        (!args[1] || args.slice(1).some((arg) => ['help', '--help', '-h'].includes(arg)))
+      ) {
+        const { showConfigAuthHelp } = await import('./config-command-options');
+        showConfigAuthHelp();
         return;
       }
-      await handleMigrateCommand(args);
+      if (args[0] !== 'auth' && (hasAnyFlag(args, ['--help', '-h']) || args[0] === 'help')) {
+        const { showConfigCommandHelp } = await import('./config-command-options');
+        showConfigCommandHelp();
+        return;
+      }
+      const { handleConfigCommand } = await import('./config-command');
+      await handleConfigCommand(args);
     },
   },
   {
-    name: 'update',
-    aliases: ['--update'],
+    name: 'codex-auth',
     handle: async (args) => {
-      if (args.includes('--help') || args.includes('-h')) {
-        await printUpdateCommandHelp();
+      if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
+        const { printCodexAuthHelp } = await import('../codex-auth/codex-auth-help');
+        printCodexAuthHelp();
         return;
       }
-      const { handleUpdateCommand } = await import('./update-command');
-      await handleUpdateCommand({
-        force: args.includes('--force'),
-        beta: args.includes('--beta') || args.includes('--dev'),
-      });
+      if (['use', 'switch'].includes(args[0])) {
+        const { printRetiredCodexAuthCommand } = await import('../codex-auth/codex-auth-help');
+        printRetiredCodexAuthCommand(args[0]);
+        process.exitCode = 1;
+        return;
+      }
+      if (['--version', '-v'].includes(args[0])) {
+        const { getVersion } = await import('../utils/version');
+        console.log(`AI Account Center codex-auth ${getVersion()}`);
+        return;
+      }
+      if (
+        ![
+          'create',
+          'login',
+          'activate',
+          'show',
+          'list',
+          'status',
+          'remove',
+          'import-default',
+        ].includes(args[0])
+      ) {
+        showRetiredCommandMessage(`codex-auth ${args[0]}`);
+        return;
+      }
+      const { runCodexAuth } = await import('../codex-auth/codex-auth-router');
+      process.exitCode = await runCodexAuth(args);
+    },
+  },
+  {
+    name: 'bar',
+    handle: async (args) => {
+      const { handleBarCommand } = await import('./bar');
+      await handleBarCommand(args);
     },
   },
   {
     name: 'version',
     aliases: ['--version', '-v'],
-    handle: async () => {
+    handle: async (args) => {
+      if (args.length) {
+        console.error(`[X] Unexpected version arguments: ${args.join(' ')}`);
+        process.exitCode = 1;
+        return;
+      }
       const { handleVersionCommand } = await import('./version-command');
       await handleVersionCommand();
     },
@@ -61,153 +91,61 @@ export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
     },
   },
   {
-    name: '--install',
-    handle: async () => {
-      const { handleInstallCommand } = await import('./install-command');
-      await handleInstallCommand();
-    },
-  },
-  {
-    name: '--uninstall',
-    handle: async () => {
-      const { handleUninstallCommand } = await import('./install-command');
-      await handleUninstallCommand();
-    },
-  },
-  {
-    name: '--shell-completion',
-    aliases: ['-sc'],
-    handle: async (args) => {
-      const { handleShellCompletionCommand } = await import('./shell-completion-command');
-      await handleShellCompletionCommand(args);
-    },
-  },
-  {
-    name: '__complete',
-    handle: async (args) => {
-      const { handleCompletionCommand } = await import('./completion-backend');
-      await handleCompletionCommand(args);
-    },
-  },
-  {
-    name: 'doctor',
-    aliases: ['--doctor'],
-    handle: async (args) => {
-      const { handleDoctorCommand } = await import('./doctor-command');
-      await handleDoctorCommand(args);
-    },
-  },
-  {
-    name: 'sync',
-    aliases: ['--sync'],
-    handle: async () => {
-      const { handleSyncCommand } = await import('./sync-command');
-      await handleSyncCommand();
-    },
-  },
-  {
-    name: 'browser',
-    handle: async (args) => {
-      const { handleBrowserCommand } = await import('./browser-command');
-      await handleBrowserCommand(args);
-    },
-  },
-  {
-    name: 'cleanup',
-    aliases: ['--cleanup'],
-    handle: async (args) => {
-      const { handleCleanupCommand } = await import('./cleanup-command');
-      await handleCleanupCommand(args);
-    },
-  },
-  {
-    name: 'auth',
-    handle: async (args) => {
-      const AuthCommandsModule = await import('../auth/auth-commands');
-      const AuthCommands = AuthCommandsModule.default;
-      const authCommands = new AuthCommands();
-      await authCommands.route(args);
-    },
-  },
-  {
-    name: 'api',
-    handle: async (args) => {
-      const { handleApiCommand } = await import('./api-command/index');
-      await handleApiCommand(args);
-    },
-  },
-  {
-    name: 'cliproxy',
-    handle: async (args) => {
-      const { handleCliproxyCommand } = await import('./cliproxy-command');
-      await handleCliproxyCommand(args);
-    },
-  },
-  {
-    name: 'proxy',
-    handle: async (args) => {
-      const { handleProxyCommand } = await import('./proxy-command');
-      process.exit(await handleProxyCommand(args));
-    },
-  },
-  {
-    name: 'docker',
-    handle: async (args) => {
-      const { handleDockerCommand } = await import('./docker-command');
-      await handleDockerCommand(args);
-    },
-  },
-  {
-    name: 'config',
-    handle: async (args) => {
-      const { handleConfigCommand } = await import('./config-command');
-      await handleConfigCommand(args);
-    },
-  },
-  {
-    name: 'tokens',
-    handle: async (args) => {
-      const { handleTokensCommand } = await import('./tokens-command');
-      process.exit(await handleTokensCommand(args));
-    },
-  },
-  {
-    name: 'persist',
-    handle: async (args) => {
-      const { handlePersistCommand } = await import('./persist-command');
-      await handlePersistCommand(args);
-    },
-  },
-  {
-    name: 'env',
-    handle: async (args) => {
-      const { handleEnvCommand } = await import('./env-command');
-      await handleEnvCommand(args);
-    },
-  },
-  {
-    name: 'setup',
-    aliases: ['--setup'],
-    handle: async (args) => {
-      const { handleSetupCommand } = await import('./setup-command');
-      await handleSetupCommand(args);
-    },
-  },
-  {
-    name: 'bar',
-    handle: async (args) => {
-      const { handleBarCommand } = await import('./bar');
-      await handleBarCommand(args);
-    },
+    name: 'update',
+    aliases: ['--update'],
+    handle: () => showRetiredCommandMessage('update'),
   },
 ];
 
-export async function tryHandleRootCommand(args: string[]): Promise<boolean> {
-  const route = resolveNamedCommand(args[0], ROOT_COMMAND_ROUTES);
-  if (!route) {
-    return false;
+/** Only an actual account/dashboard/bar operation needs configuration-backed logging. */
+export async function requiresRuntimeServices(args: string[]): Promise<boolean> {
+  const [command, subcommand, ...rest] = args;
+  if (command === 'dashboard' || command === 'config') {
+    if (subcommand === 'auth') {
+      return (
+        ['setup', 'show', 'status', 'disable'].includes(rest[0]) &&
+        !rest.some((arg) => ['help', '--help', '-h'].includes(arg))
+      );
+    }
+    const { parseConfigCommandArgs } = await import('./config-command-options');
+    const parsed = parseConfigCommandArgs(args.slice(1));
+    return !parsed.help && !parsed.error;
   }
+  if (command === 'codex-auth') {
+    return (
+      [
+        'create',
+        'login',
+        'activate',
+        'show',
+        'list',
+        'status',
+        'remove',
+        'import-default',
+      ].includes(subcommand) && !rest.some((arg) => ['--help', '-h'].includes(arg))
+    );
+  }
+  if (command === 'bar') {
+    return (
+      !hasAnyFlag(args, ['--help', '-h']) &&
+      !args.some((arg) => ['help', 'version', '--version'].includes(arg)) &&
+      (!subcommand ||
+        subcommand.startsWith('-') ||
+        ['launch', 'serve', 'stop', 'status', 'install', 'uninstall'].includes(subcommand))
+    );
+  }
+  return false;
+}
 
-  await route.handle(args.slice(1));
+/** Every invocation is consumed here; unknown tokens never become profile launches. */
+export async function tryHandleRootCommand(args: string[]): Promise<boolean> {
+  if (!args.length) {
+    const { handleHelpCommand } = await import('./help-command');
+    await handleHelpCommand();
+    return true;
+  }
+  const route = resolveNamedCommand(args[0], ROOT_COMMAND_ROUTES);
+  if (route) await route.handle(args.slice(1));
+  else showRetiredCommandMessage(args[0]);
   return true;
 }

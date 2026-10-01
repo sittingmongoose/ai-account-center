@@ -11,6 +11,10 @@ function read(relativePath) {
 }
 
 function requireText(relativePath, expected) {
+  if (!fs.existsSync(path.join(root, relativePath))) {
+    failures.push(`${relativePath} is missing`);
+    return;
+  }
   if (!read(relativePath).includes(expected)) {
     failures.push(`${relativePath} is missing: ${expected}`);
   }
@@ -34,32 +38,90 @@ const removedGuides = [
   'docs/cursor-integration.md',
   'docs/dashboard-auth-cli.md',
   'docs/session-sharing-technical-analysis.md',
+  'docs/browser-automation.md',
+  'docs/openai-compatible-providers.md',
+  'docs/image-analysis.md',
+  'docs/websearch.md',
+  'docs/system-architecture/target-adapters.md',
 ];
 
 for (const relativePath of removedGuides) {
   if (fs.existsSync(path.join(root, relativePath))) {
-    failures.push(`${relativePath} should use its canonical public-doc replacement`);
+    failures.push(`${relativePath} is retired; maintain the current product guides instead`);
   }
 }
 
-requireText('README.md', 'https://docs.ccs.kaitran.ca/features/proxy/openai-compatible-providers');
-requireText('README.md', 'https://docs.ccs.kaitran.ca/features/workflow/browser-automation');
-requireText('docs/browser-automation.md', 'CCS_BROWSER_INTERCEPT_FULFILL_MODE=enabled');
-requireText('docs/browser-automation.md', 'CCS_BROWSER_UPLOAD_ROOTS');
-requireText('docs/browser-automation.md', 'CCS_BROWSER_DOWNLOAD_ROOTS');
-requireText('docs/browser-automation.md', 'browser_wait_for_event');
-requireText('docs/browser-automation.md', 'path-scoped bearer values');
+const retainedPaths = [
+  'LICENSE',
+  'docs/README.md',
+  'docs/codebase-summary.md',
+  'docs/code-standards.md',
+  'docs/project-overview-pdr.md',
+  'docs/project-roadmap.md',
+  'docs/release-process.md',
+  'docs/codex-auth.md',
+  'docs/logging-contract.md',
+  'docs/activate-in-place.md',
+  'docs/system-architecture/index.md',
+  'docs/system-architecture/provider-flows.md',
+  'src/commands/command-catalog.ts',
+  'src/web-server/index.ts',
+  'src/web-server/middleware/auth-middleware.ts',
+  'src/utils/config-manager.ts',
+  'src/codex-auth/codex-auth-help.ts',
+  'web-dashboard/Cargo.toml',
+  'web-dashboard/Cargo.lock',
+  'web-dashboard/ui/dashboard.slint',
+  'web-dashboard/public/bridge.js',
+  'macos-bar/Package.swift',
+  'macos-bar/Scripts/package_app.sh',
+  'macos-bar/Scripts/install_user.sh',
+  'windows-bar/CCSBar/CCSBar.csproj',
+  'windows-bar/scripts/Build.ps1',
+  'windows-bar/scripts/Install.ps1',
+  'docker/Dockerfile',
+  'docker/compose.yaml',
+  'docker/entrypoint.sh',
+];
+for (const relativePath of retainedPaths) {
+  if (!fs.existsSync(path.join(root, relativePath))) {
+    failures.push(`${relativePath} is missing from the retained product`);
+  }
+}
+
+for (const expected of [
+  'AI Account Center',
+  'sittingmongoose/ai-account-center',
+  'ai-account-center dashboard',
+  'ccs config',
+  '~/.ccs/',
+  'CCS_HOME',
+  'session aliases',
+  'Tam Nhu Tran',
+  'Copyright (c) 2025 CCS Contributors',
+]) {
+  requireText('README.md', expected);
+}
+requireText('LICENSE', 'Copyright (c) 2025 CCS Contributors');
+requireText('docs/README.md', '../web-dashboard/README.md');
+requireText('docs/release-process.md', '.github/workflows/bar-release.yml');
 requireText('docs/codex-auth.md', 'src/codex-auth/codex-auth-help.ts');
-requireText('docs/codex-auth.md', 'CCSXP_CODEX_HOME');
-requireText('docs/image-analysis.md', 'https://docs.ccs.kaitran.ca/features/ai/image-analysis');
-requireText('docs/openai-compatible-providers.md', 'CCS_OPENAI_PROXY_INSECURE');
-requireText('docs/openai-compatible-providers.md', 'CCS_OPENAI_PROXY_REQUEST_TIMEOUT_MS');
-requireText('macos-bar/README.md', 'macos-bar/VERSION');
-requireText('macos-bar/README.md', '.github/workflows/bar-release.yml');
-requireText(
-  '.github/ISSUE_TEMPLATE/documentation.yml',
-  'https://docs.ccs.kaitran.ca/providers/oauth/cursor'
-);
+requireText('docs/system-architecture/index.md', 'src/utils/config-manager.ts');
+requireText('docs/system-architecture/index.md', 'web-dashboard/public/bridge.js');
+requireText('web-dashboard/README.md', '=1.18.1');
+requireText('web-dashboard/README.md', 'AboutSlint');
+requireText('web-dashboard/README.md', 'dist/ui/');
+requireText('macos-bar/README.md', './Scripts/package_app.sh');
+requireText('macos-bar/README.md', './Scripts/install_user.sh');
+requireText('macos-bar/README.md', '~/.ccs/bar');
+requireText('windows-bar/README.md', './scripts/Build.ps1');
+requireText('windows-bar/README.md', 'connection.dpapi');
+requireText('docker/README.md', 'ai-account-center:local');
+requireText('docker/README.md', '127.0.0.1');
+requireText('docker/README.md', '/home/node/.ccs');
+requireText('docker/README.md', 'CCS_SESSION_SECRET');
+requireText('.github/ISSUE_TEMPLATE/documentation.yml', 'docs/README.md');
+requireText('.github/ISSUE_TEMPLATE/config.yml', 'sittingmongoose/ai-account-center');
 
 const practicalGuidanceFiles = [
   path.join(root, 'README.md'),
@@ -84,8 +146,15 @@ for (const staleGuidePath of removedGuides) {
 
 const markdownFiles = [
   path.join(root, 'README.md'),
+  path.join(root, 'CLAUDE.md'),
+  path.join(root, 'CONTRIBUTING.md'),
+  path.join(root, 'SECURITY.md'),
+  path.join(root, 'tests', 'README.md'),
+  path.join(root, 'tests', 'npm', 'README.md'),
+  path.join(root, 'web-dashboard', 'README.md'),
   path.join(root, 'docker', 'README.md'),
   path.join(root, 'macos-bar', 'README.md'),
+  path.join(root, 'windows-bar', 'README.md'),
   ...collectFiles(path.join(root, 'docs'), /\.mdx?$/),
 ];
 const linkPattern = /!?\[[^\]]*]\(([^)]+)\)/g;

@@ -4,16 +4,14 @@
  * Exports runCodexAuth(argv) which routes argv[0] (the subcommand) to
  * the appropriate handler. Returns an exit code (0 = success, non-zero = error).
  *
- * Phase 3 wires this into src/bin/codex-runtime.ts for argv[2]==='auth'.
+ * Invoked by the AI Account Center codex-auth command.
  */
 
 import { CodexProfileRegistry } from './codex-profile-registry';
-import { printCodexAuthHelp } from './codex-auth-help';
+import { printCodexAuthHelp, printRetiredCodexAuthCommand } from './codex-auth-help';
 import {
   handleCreateCodex,
   handleLoginCodex,
-  handleSwitchCodex,
-  handleUseCodex,
   handleShowCodex,
   handleRemoveCodex,
   handleImportDefaultCodex,
@@ -26,7 +24,7 @@ import { CodexActivationError } from './activate-codex-profile';
 const packageJson = require('../../package.json') as { version: string };
 
 /**
- * Route a `ccsx auth <subcommand> [...args]` invocation.
+ * Route a `ai-account-center codex-auth <subcommand> [...args]` invocation.
  *
  * @param argv - Arguments after `auth`, e.g. ['create', 'work'] or ['--help']
  * @returns Exit code (0 success, 1 user error, 2+ system error)
@@ -45,8 +43,13 @@ export async function runCodexAuth(
 
   // Version passthrough
   if (subcommand === '--version' || subcommand === '-v') {
-    process.stdout.write(`ccsx auth ${packageJson.version}\n`);
+    process.stdout.write(`ai-account-center codex-auth ${packageJson.version}\n`);
     return 0;
+  }
+
+  if (subcommand === 'use' || subcommand === 'switch') {
+    printRetiredCodexAuthCommand(subcommand);
+    return 1;
   }
 
   const registry = new CodexProfileRegistry();
@@ -66,12 +69,8 @@ export async function runCodexAuth(
       case 'login':
         await handleLoginCodex(ctx, rest);
         return 0;
-      case 'switch':
-        await handleSwitchCodex(ctx, rest);
-        return 0;
-      case 'use':
-        await handleUseCodex(ctx, rest);
-        return 0;
+      case 'list':
+      case 'status':
       case 'show':
         await handleShowCodex(ctx, rest);
         return 0;
@@ -83,7 +82,7 @@ export async function runCodexAuth(
         return 0;
       default:
         process.stderr.write(`[X] Unknown command: ${subcommand}\n`);
-        process.stderr.write(`    ccsx auth --help\n`);
+        process.stderr.write(`    ai-account-center codex-auth --help\n`);
         return 1;
     }
   } catch (err) {
@@ -93,7 +92,7 @@ export async function runCodexAuth(
     process.stderr.write(
       err instanceof CodexActivationError
         ? `[X] ${msg}\n`
-        : `[X] Unexpected error in ccsx auth ${subcommand}: ${msg}\n`
+        : `[X] Unexpected error in ai-account-center codex-auth ${subcommand}: ${msg}\n`
     );
     return 1;
   }

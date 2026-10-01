@@ -25,7 +25,7 @@ button.addEventListener('click', async () => {
   try {
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
     const result = await chrome.runtime.sendMessage({action: 'sync', tabURL: tab?.url ?? null});
-    if (result?.ok) { render(result.sample); status.textContent = 'Usage synced for CCS.'; }
+    if (result?.ok) { render(result.sample); status.textContent = 'Usage synced for AI Account Center.'; }
     else status.textContent = ERROR_MESSAGES[safeCode(result?.code)];
   } catch { status.textContent = ERROR_MESSAGES.host_unavailable; }
   finally { button.disabled = false; }
@@ -47,6 +47,9 @@ function renderMuse(sample) {
     if (window.resetAt) { const date = document.createElement('small'); date.textContent = `Resets ${new Date(window.resetAt).toLocaleString()}`; row.append(date); }
     museDisplay.append(row);
   }
+  const observed = document.createElement('p');
+  observed.textContent = `${sample.status === 'cached' ? 'Last successful reading' : 'Updated'} ${new Date(sample.sampledAt).toLocaleString()}`;
+  museDisplay.append(observed);
 }
 function renderTeams(teams) {
   museTeamSelect.replaceChildren();
@@ -57,12 +60,13 @@ function renderTeams(teams) {
 const museSaved = await chrome.storage.local.get(['lastMuseSample', 'lastMuseError', 'museTeams', 'selectedMuseTeamId']);
 renderMuse(museSaved.lastMuseSample); renderTeams(museSaved.museTeams ?? []);
 if (museSaved.lastMuseError) museStatus.textContent = MUSE_ERROR_MESSAGES[safeMuseCode(museSaved.lastMuseError)];
+else if (museSaved.lastMuseSample?.status === 'cached') museStatus.textContent = museSaved.lastMuseSample.message;
 museButton.addEventListener('click', async () => {
   museButton.disabled = true; museStatus.textContent = 'Reading Muse usage…';
   try {
     const teamId = museTeamLabel.hidden ? museSaved.selectedMuseTeamId ?? null : museTeamSelect.value || null;
     const result = await chrome.runtime.sendMessage({action: 'museSync', teamId});
-    if (result?.ok) { renderMuse(result.sample); museTeamLabel.hidden = true; museStatus.textContent = 'Muse usage synced for CCS.'; }
+    if (result?.ok) { renderMuse(result.sample); museTeamLabel.hidden = true; museStatus.textContent = result.sample.status === 'cached' ? result.sample.message : 'Muse usage synced for AI Account Center.'; }
     else { if (result?.teams) renderTeams(result.teams); museStatus.textContent = MUSE_ERROR_MESSAGES[safeMuseCode(result?.code)]; }
   } catch { museStatus.textContent = MUSE_ERROR_MESSAGES.host_unavailable; }
   finally { museButton.disabled = false; }

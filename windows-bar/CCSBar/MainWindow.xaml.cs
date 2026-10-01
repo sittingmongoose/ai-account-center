@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private bool autoDetailsVisible;
     private bool staleSample;
     private bool confirmationVisible;
+    private bool packMenuVisible;
     private DateTimeOffset lastFailure = DateTimeOffset.MinValue;
 
     public MainWindow()
@@ -39,7 +40,7 @@ public partial class MainWindow : Window
         Background = Brushes.Transparent;
         Width = Math.Min(760, SystemParameters.WorkArea.Width - 24);
         Height = Math.Min(850, SystemParameters.WorkArea.Height - 24);
-        Deactivated += (_, _) => { if (!settingsVisible && !confirmationVisible) Hide(); };
+        Deactivated += (_, _) => { if (!settingsVisible && !confirmationVisible && !packMenuVisible) Hide(); };
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { settingsVisible = false; Hide(); } };
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         timer.Tick += async (_, _) => await Refresh(false);
@@ -77,29 +78,35 @@ public partial class MainWindow : Window
 
     public async Task Refresh(bool force)
     {
-        if (busy || settingsVisible || client is null) return;
+        if (busy || settingsVisible || packMenuVisible || client is null) return;
         if (!force && DateTimeOffset.UtcNow - lastFailure < TimeSpan.FromMinutes(1)) return;
-        busy = true; RefreshButton.IsEnabled = false;
+        busy = true; RefreshButton.IsEnabled = false; DisableMutations();
         StatusText.Text = dashboard is null ? "Loading accounts…" : "Refreshing usage…";
         StatusDot.Fill = Accent;
         try
         {
-            dashboard = await client.Dashboard(force);
-            timer.Interval = TimeSpan.FromSeconds(dashboard.Settings?.ValidatedInterval ?? 60);
-            staleSample = false;
-            lastFailure = DateTimeOffset.MinValue;
-            UpdateDashboardStatus();
-            RenderDashboard();
+            ApplyDashboardSample(await client.Dashboard(force));
         }
         catch (Exception error)
         {
             lastFailure = DateTimeOffset.UtcNow;
             StatusText.Text = DisplayError(error);
             StatusDot.Fill = ColorBrush("#DDBE72");
-            if (dashboard is null) RenderEmpty("Usage is unavailable", "Check the dashboard connection or try Refresh.");
-            else MarkStale();
+            if (!settingsVisible)
+            {
+                if (dashboard is null) RenderEmpty("Usage is unavailable", "Check the dashboard connection or try Refresh.");
+                else MarkStale();
+            }
         }
-        finally { busy = false; RefreshButton.IsEnabled = true; }
+        finally { FinishRequest(); }
+    }
+
+    private void ApplyDashboardSample(AccountDashboard sample)
+    {
+        dashboard = sample;
+        timer.Interval = TimeSpan.FromSeconds(sample.Settings?.ValidatedInterval ?? 60);
+        staleSample = false; lastFailure = DateTimeOffset.MinValue;
+        if (!settingsVisible) { UpdateDashboardStatus(); RenderDashboard(); }
     }
 
     private void UpdateDashboardStatus()
@@ -115,9 +122,7 @@ public partial class MainWindow : Window
     private void MarkStale()
     {
         staleSample = true;
-        var active = dashboard?.Accounts.FirstOrDefault(account => account.Provider == "codex" && account.IsActive);
-        ActiveCodexText.Text = "Codex active: " + (active?.Email ?? active?.Label ?? "unavailable") + " · last confirmed";
-        ActiveCodexText.ToolTip = ActiveCodexText.Text;
+        if (settingsVisible) return;
         // Keep the last sample visible, but never present it as a successful fresh poll.
         if (ContentPanel.Children.Count > 0 && ContentPanel.Children[0] is Border previous && previous.Tag as string == "stale")
             ContentPanel.Children.RemoveAt(0);
@@ -125,44 +130,32 @@ public partial class MainWindow : Window
         warning.Child = Text("Showing the last confirmed sample. Refresh to verify current usage, account and settings.", 11, ColorBrush("#DDBE72"), wrap: true);
         ContentPanel.Children.Insert(0, warning);
         // Prevent decisions made from stale active-account information.
-        SetButtonsEnabled(ContentPanel, false);
+        DisableMutations();
     }
 
     private void RenderDashboard()
     {
-        if (dashboard is null) return;
+        if (dashboard is null || settingsVisible) return;
         ContentPanel.Children.Clear();
-        var active = dashboard.Accounts.FirstOrDefault(account => account.Provider == "codex" && account.IsActive);
-        ActiveCodexText.Text = "Codex active: " + (active?.Email ?? active?.Label ?? "unavailable") + (staleSample ? " · last confirmed" : "");
-        ActiveCodexText.ToolTip = ActiveCodexText.Text;
-        ContentPanel.Children.Add(AutoCard(dashboard.CodexAutoSwitch));
+        AutoSwitchPanel.Content = AutoControls(dashboard.CodexAutoSwitch);
         foreach (var provider in ProviderOrder)
         {
             var accounts = dashboard.Accounts.Where(account => account.Provider == provider).ToArray();
             if (accounts.Length == 0) continue;
             if (provider is "claude" or "codex")
-            {
-                var label = Section((provider == "claude" ? "CLAUDE" : "CODEX") + $"  ({accounts.Length})");
-                label.Margin = new Thickness(3, 3, 0, 6);
-                ContentPanel.Children.Add(label);
-                foreach (var account in accounts) ContentPanel.Children.Add(AccountOverview(account));
-            }
+                ContentPanel.Children.Add(AccountProviderBox(provider, accounts));
             else ContentPanel.Children.Add(ProviderGroup(provider, accounts));
         }
-        if (dashboard.Accounts.Count == 0) RenderEmpty("No accounts found", "Your signed-in accounts will appear here when CCS discovers them.");
-        else if (staleSample) MarkStale();
+        if (dashboard.Accounts.Count == 0) RenderEmpty("No accounts found", "Your signed-in accounts will appear here when AI Account Center discovers them.");
+        if (staleSample) MarkStale();
+        if (busy) DisableMutations();
     }
 
-    private UIElement AutoCard(AutoSwitchStatus status)
+    private UIElement AutoControls(AutoSwitchStatus status)
     {
-        var panel = new StackPanel();
-        var row = new Grid();
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        left.Children.Add(Text("Codex auto-switch", 13, Muted));
-        var toggle = new CheckBox { IsChecked = status.Enabled, IsEnabled = !status.ActivationInProgress, Style = (Style)FindResource("SwitchStyle"), Margin = new Thickness(13, 0, 0, 0), ToolTip = "Automatic Codex account switching" };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var caption = Text("Auto-switch", 12, Muted); caption.VerticalAlignment = VerticalAlignment.Center; row.Children.Add(caption);
+        var toggle = new CheckBox { IsChecked = status.Enabled, IsEnabled = !status.ActivationInProgress, Style = (Style)FindResource("SwitchStyle"), Margin = new Thickness(7, 0, 0, 0), ToolTip = Help("Automatically switch Codex accounts when usage reaches the selected threshold and Codex is idle. Claude stays manual.") };
         toggle.Click += async (_, _) =>
         {
             var requested = toggle.IsChecked == true;
@@ -170,13 +163,11 @@ public partial class MainWindow : Window
             toggle.IsChecked = status.Enabled;
             await Action(async () => { if (client is not null) await client.SetAutoSwitch(requested); }, "Automatic switching updated.");
         };
-        left.Children.Add(toggle); row.Children.Add(left);
-        var threshold = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(15, 0, 12, 0) };
-        var caption = Text("Threshold", 12, Muted); caption.VerticalAlignment = VerticalAlignment.Center; caption.Margin = new Thickness(0, 0, 9, 0); threshold.Children.Add(caption);
+        row.Children.Add(toggle);
         int currentUsed = 100 - (int)Math.Round(status.ThresholdPercent);
-        var picker = new ComboBox { Width = 92, Style = (Style)FindResource("ThresholdPickerStyle"), IsEnabled = !status.ActivationInProgress, ToolTip = "Codex used percentage that triggers an idle account switch" };
+        var picker = new ComboBox { Width = 74, Margin = new Thickness(10, 0, 7, 0), Style = (Style)FindResource("ThresholdPickerStyle"), IsEnabled = !status.ActivationInProgress, ToolTip = Help("Used percentage that triggers an automatic Codex account switch once Codex is idle.") };
         var choices = new[] { 85, 90, 95, 98 }.Append(currentUsed).Distinct().OrderBy(value => value);
-        foreach (var value in choices) picker.Items.Add(new ComboBoxItem { Content = value + "% used", Tag = value });
+        foreach (var value in choices) picker.Items.Add(new ComboBoxItem { Content = "at " + value + "%", Tag = value });
         picker.SelectedItem = picker.Items.Cast<ComboBoxItem>().First(item => (int)item.Tag == currentUsed);
         picker.SelectionChanged += async (_, _) =>
         {
@@ -185,18 +176,32 @@ public partial class MainWindow : Window
             picker.SelectedItem = picker.Items.Cast<ComboBoxItem>().First(item => (int)item.Tag == currentUsed);
             await Action(async () => { if (client is not null) await client.SetAutoSwitch(status.Enabled, remaining); }, "Automatic switch threshold updated.");
         };
-        threshold.Children.Add(picker);
-        Grid.SetColumn(threshold, 1); row.Children.Add(threshold);
-        var details = new Button { Content = "ⓘ", Padding = new Thickness(7, 1, 7, 1), Background = Brushes.Transparent, Tag = "read-only", ToolTip = "Automatic switch settings and status" };
+        row.Children.Add(picker);
+        var details = new Button { Content = "ⓘ", Padding = new Thickness(7, 1, 7, 1), Background = Brushes.Transparent, Tag = "read-only", ToolTip = Help("View the confirmed auto-switch threshold, check interval and status.") };
         details.Click += (_, _) => { autoDetailsVisible = !autoDetailsVisible; RenderDashboard(); };
-        Grid.SetColumn(details, 2); row.Children.Add(details); panel.Children.Add(row);
+        row.Children.Add(details);
+        AutoSwitchDetails.Content = null;
+        AutoSwitchDetails.Visibility = autoDetailsVisible ? Visibility.Visible : Visibility.Collapsed;
         if (autoDetailsVisible)
         {
+            var panel = new StackPanel();
             var help = Text($"Check every {status.PollIntervalSeconds}s; switch at {100 - status.ThresholdPercent:0}% used ({status.ThresholdPercent:0}% remaining) once Codex is idle. Claude stays manual.", 11, Muted, wrap: true);
-            help.Margin = new Thickness(0, 10, 0, 0); panel.Children.Add(help);
+            panel.Children.Add(help);
             if (!string.IsNullOrWhiteSpace(status.Message)) panel.Children.Add(Text(status.Message, 11, Muted, wrap: true));
+            AutoSwitchDetails.Content = panel;
         }
-        return CardBorder(panel);
+        return row;
+    }
+
+    private UIElement AccountProviderBox(string provider, DashboardAccount[] accounts)
+    {
+        var group = new StackPanel();
+        var label = Section((provider == "claude" ? "CLAUDE" : "CODEX") + $"  ({accounts.Length})");
+        label.Margin = new Thickness(9, 1, 0, 4); group.Children.Add(label);
+        foreach (var account in accounts) group.Children.Add(AccountOverview(account));
+        var box = CardBorder(group); box.Tag = "provider-accounts:" + provider;
+        box.Padding = new Thickness(3, 5, 3, 5); box.Margin = new Thickness(0, 0, 0, 8);
+        return box;
     }
 
     private UIElement AccountOverview(DashboardAccount account)
@@ -210,22 +215,23 @@ public partial class MainWindow : Window
         Grid.SetColumn(usage, 1); row.Children.Add(usage);
         var controls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         AddControls(controls, account, compact: true);
-        controls.Children.Add(InfoButton("View all usage windows and details for this account", () =>
+        Grid.SetColumn(controls, 2); row.Children.Add(controls);
+        group.Children.Add(RowTarget(row, "account-details:" + account.Id, "View usage windows, balances and reset times for " + (account.Email ?? account.Label), () =>
         {
             if (!expandedAccounts.Add(account.Id)) expandedAccounts.Remove(account.Id);
             RenderPreservingScroll();
         }));
-        Grid.SetColumn(controls, 2); row.Children.Add(controls); group.Children.Add(row);
         if (expandedAccounts.Contains(account.Id))
         {
             group.Children.Add(Divider());
             group.Children.Add(AccountCard(account, includeControls: false));
         }
-        var plate = CompactPlate(group); plate.Tag = "account-row:" + account.Id;
+        var plate = new Border { Child = group, Tag = "account-row:" + account.Id, Background = Brushes.Transparent,
+            BorderBrush = Brushes.Transparent, BorderThickness = new Thickness(2), CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(7, 2, 6, 2) };
         if (account.Provider == "codex" && account.IsActive)
         {
             plate.Background = ColorBrush("#15314C"); plate.BorderBrush = ColorBrush("#3498FF");
-            plate.BorderThickness = new Thickness(2); plate.Padding = new Thickness(9, 4, 8, 4);
         }
         return plate;
     }
@@ -238,14 +244,13 @@ public partial class MainWindow : Window
         var group = new StackPanel();
         var row = CompactRow();
         var label = provider switch { "muse" => "Muse Code", "cursor" => "Cursor", "antigravity" => "Google Antigravity CLI", "kimi-code" => "Kimi Code", "qwen" => "Qwen Token Plan", "zai" => "Z.ai Coding Plan", "opencode-go" => "OpenCode Go", _ => representative.ProviderLabel };
-        row.Children.Add(Identity(provider, label + (accounts.Length > 1 ? $"  ({accounts.Length})" : ""), AccountStatus(representative)));
+        row.Children.Add(Identity(provider, label + (provider != "opencode-go" && accounts.Length > 1 ? $"  ({accounts.Length})" : ""), AccountStatus(representative)));
         var usage = PrimaryUsage(representative); Grid.SetColumn(usage, 1); row.Children.Add(usage);
-        var info = InfoButton("View all accounts and usage details", () =>
+        group.Children.Add(RowTarget(row, "provider-details:" + provider, "View all " + label + " usage windows, balances and reset times", () =>
         {
             if (!expandedProviders.Add(provider)) expandedProviders.Remove(provider);
             RenderPreservingScroll();
-        });
-        Grid.SetColumn(info, 2); row.Children.Add(info); group.Children.Add(row);
+        }));
         if (expandedProviders.Contains(provider))
         {
             group.Children.Add(Divider());
@@ -271,9 +276,9 @@ public partial class MainWindow : Window
         identity.Children.Add(ProviderIcon(provider));
         var words = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         var title = Text(label, label.Length > 23 ? 10.5 : 12, weight: FontWeights.SemiBold);
-        title.TextTrimming = TextTrimming.CharacterEllipsis; title.ToolTip = label; words.Children.Add(title);
+        title.TextTrimming = TextTrimming.CharacterEllipsis; title.ToolTip = Help(label); words.Children.Add(title);
         var detail = Text(status, 9, Muted); detail.Margin = new Thickness(0, 3, 0, 0);
-        detail.TextTrimming = TextTrimming.CharacterEllipsis; detail.ToolTip = status; words.Children.Add(detail);
+        detail.TextTrimming = TextTrimming.CharacterEllipsis; detail.ToolTip = Help(status); words.Children.Add(detail);
         Grid.SetColumn(words, 1); identity.Children.Add(words); return identity;
     }
 
@@ -282,18 +287,89 @@ public partial class MainWindow : Window
         "ok" => "Usage available", "cached" => "Cached usage", "needs_sign_in" => "Sign-in required", _ => "Usage unavailable"
     };
 
-    private static Grid PrimaryUsage(DashboardAccount account)
+    private Grid PrimaryUsage(DashboardAccount account)
     {
         var windows = PrimaryWindows(account);
         var usage = new Grid { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 5, 0) };
+        if (account.Provider == "qwen")
+        {
+            // The chip is a list of reported individual packs, never the aggregate summary or subscription.
+            windows = windows.Where(window => !window.Key.StartsWith("addon-", StringComparison.Ordinal)).Take(1).ToArray();
+            var packs = Formatting.QwenPacks(account);
+            if (packs.Length > 0)
+            {
+                usage.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                if (windows.Length > 0) usage.Children.Add(PrimaryWindow(account, windows[0]));
+                usage.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var chip = QwenPackChip(packs); Grid.SetColumn(chip, 1); usage.Children.Add(chip);
+                return usage;
+            }
+        }
         if (windows.Length == 0) usage.Children.Add(Text(account.Status == "needs_sign_in" ? "Sign-in required" : "Usage unavailable", 11, Muted));
         else for (int i = 0; i < windows.Length; i++)
         {
             usage.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var glance = PrimaryWindow(windows[i], account.Provider == "codex");
+            var glance = PrimaryWindow(account, windows[i]);
             Grid.SetColumn(glance, i); usage.Children.Add(glance);
         }
         return usage;
+    }
+
+    private Button QwenPackChip(QuotaWindow[] packs)
+    {
+        bool hasTotal = packs.All(pack => pack.Remaining is double value && double.IsFinite(value) && value >= 0)
+            && packs.Select(pack => pack.Unit).Distinct(StringComparer.Ordinal).Count() == 1;
+        var caption = hasTotal ? Formatting.Amount(packs.Sum(pack => pack.Remaining!.Value), packs[0].Unit) : "Extra packs";
+        var label = new StackPanel { Margin = new Thickness(0, 1, 0, 0) };
+        label.Children.Add(Text(caption, 10, Muted));
+        label.Children.Add(Text(packs.Length + (packs.Length == 1 ? " extra pack" : " extra packs"), 9, Muted));
+        var chip = new Button { Content = label, Tag = "qwen-packs", Padding = new Thickness(7, 4, 7, 4), Margin = new Thickness(5, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center, Background = ColorBrush("#142C46"), BorderBrush = ColorBrush("#274566"),
+            ToolTip = Help("View all " + packs.Length + " reported Qwen extra packs, including remaining credits, status and expiration dates.") };
+        var menu = new ContextMenu { PlacementTarget = chip, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            Background = ColorBrush("#102033"), Foreground = ColorBrush("#EAF2FF"), BorderBrush = ColorBrush("#3498FF"),
+            BorderThickness = new Thickness(1), Padding = new Thickness(6), MaxHeight = Math.Min(480, SystemParameters.WorkArea.Height - 60),
+            MinWidth = 300 };
+        var scroll = new FrameworkElementFactory(typeof(ScrollViewer));
+        scroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+        scroll.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+        scroll.AppendChild(new FrameworkElementFactory(typeof(ItemsPresenter)));
+        var menuBorder = new FrameworkElementFactory(typeof(Border));
+        menuBorder.SetValue(Border.BackgroundProperty, ColorBrush("#102033"));
+        menuBorder.SetValue(Border.BorderBrushProperty, Accent);
+        menuBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        menuBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(7));
+        menuBorder.SetValue(Border.PaddingProperty, new Thickness(5)); menuBorder.AppendChild(scroll);
+        menu.Template = new ControlTemplate(typeof(ContextMenu)) { VisualTree = menuBorder };
+        // Explicit native menu item colors prevent the system theme from producing blank-looking labels.
+        var itemBorder = new FrameworkElementFactory(typeof(Border));
+        itemBorder.SetValue(Border.PaddingProperty, new Thickness(9, 7, 9, 7));
+        itemBorder.SetValue(Border.BackgroundProperty, ColorBrush("#102033"));
+        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        presenter.SetValue(ContentPresenter.ContentSourceProperty, "Header"); itemBorder.AppendChild(presenter);
+        var itemTemplate = new ControlTemplate(typeof(MenuItem)) { VisualTree = itemBorder };
+        foreach (var pack in packs)
+        {
+            var detail = new StackPanel { MaxWidth = 360 };
+            detail.Children.Add(Text(pack.Label + " · " + Formatting.PackStatus(pack), 11, weight: FontWeights.SemiBold, wrap: true));
+            var amounts = new List<string>();
+            if (pack.Used is double used && double.IsFinite(used) && used >= 0) amounts.Add("Used " + Formatting.Amount(used, pack.Unit));
+            if (pack.Limit is double limit && double.IsFinite(limit) && limit >= 0) amounts.Add("Limit " + Formatting.Amount(limit, pack.Unit));
+            if (pack.Remaining is double remaining && double.IsFinite(remaining) && remaining >= 0) amounts.Add("Remaining " + Formatting.Amount(remaining, pack.Unit));
+            detail.Children.Add(Text(amounts.Count > 0 ? string.Join(" · ", amounts) : "Pack amount unavailable", 10, Muted, wrap: true));
+            detail.Children.Add(Text(Formatting.Expiration(pack.ExpiresAt), 10, Muted, wrap: true));
+            if (pack.Status == "cached") detail.Children.Add(Text("Cached · " + Formatting.WindowSample(pack.SampledAt), 10, Muted, wrap: true));
+            menu.Items.Add(new MenuItem { Header = detail, Tag = pack.Key, Template = itemTemplate, StaysOpenOnClick = true });
+        }
+        chip.ContextMenu = menu;
+        menu.Opened += (_, _) => packMenuVisible = true;
+        menu.Closed += (_, _) =>
+        {
+            packMenuVisible = false;
+            Dispatcher.BeginInvoke(new System.Action(() => { if (!IsActive && !settingsVisible && !confirmationVisible) Hide(); }), DispatcherPriority.Background);
+        };
+        chip.Click += (_, _) => { packMenuVisible = true; menu.IsOpen = true; };
+        return chip;
     }
 
     private static Border CompactPlate(UIElement child)
@@ -304,10 +380,18 @@ public partial class MainWindow : Window
 
     private static Border Divider() => new() { BorderBrush = ColorBrush("#20364E"), BorderThickness = new Thickness(0, 1, 0, 0), Margin = new Thickness(0, 9, 0, 8) };
 
-    private static Button InfoButton(string tooltip, System.Action click)
+    private Button RowTarget(UIElement row, string id, string tooltip, System.Action click)
     {
-        var button = new Button { Content = "ⓘ", Width = 22, Height = 24, Padding = new Thickness(2), Background = Brushes.Transparent, Tag = "read-only", ToolTip = tooltip, Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        button.Click += (_, _) => click(); return button;
+        var button = new Button { Content = row, Uid = id, Tag = "read-only", Style = (Style)FindResource("AccountRowButtonStyle"),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch, Cursor = Cursors.Hand, ToolTip = Help(tooltip) };
+        System.Windows.Automation.AutomationProperties.SetName(button, tooltip);
+        button.Click += (_, args) =>
+        {
+            // Nested launch/activate/pack buttons retain their own action only.
+            if (!ReferenceEquals(args.OriginalSource, button)) return;
+            args.Handled = true; click();
+        };
+        return button;
     }
 
     private void RenderPreservingScroll()
@@ -318,28 +402,39 @@ public partial class MainWindow : Window
 
     private static QuotaWindow[] PrimaryWindows(DashboardAccount account)
     {
-        var regular = account.Windows.Where(window => window.Kind is not ("balance" or "extra_usage")).ToArray();
-        if (regular.Length == 0) return account.Windows.Take(3).ToArray();
+        if (account.Provider == "codex") return Formatting.CodexPrimaryWindows(account);
+        var visible = Formatting.VisibleWindows(account).Where(window => account.Provider != "qwen" || !Formatting.IsQwenDuplicateMetadata(window)).ToArray();
+        var fable = account.Provider == "claude" ? visible.FirstOrDefault(window => window.Key == "seven_day_fable") : null;
+        var regular = visible.Where(window => window.Kind is not ("balance" or "extra_usage") && window != fable).ToArray();
+        if (regular.Length == 0) return fable is not null ? new[] { fable } : visible.Take(3).ToArray();
         var selected = new List<QuotaWindow>();
+        if (account.Provider == "claude")
+            foreach (var key in new[] { "five_hour", "seven_day" })
+            {
+                var window = regular.FirstOrDefault(candidate => candidate.Key == key);
+                if (window is not null) selected.Add(window);
+            }
         foreach (var duration in new[] { 300d, 10080d, 43200d })
         {
             var window = regular.FirstOrDefault(candidate => candidate.WindowMinutes == duration);
             if (window is not null && !selected.Contains(window)) selected.Add(window);
         }
         foreach (var window in regular) if (selected.Count < 3 && !selected.Contains(window)) selected.Add(window);
-        var balance = account.Windows.FirstOrDefault(window => window.Kind == "balance");
+        if (fable is not null) return selected.Take(2).Concat(new[] { fable }).ToArray();
+        var balance = visible.FirstOrDefault(window => window.Kind == "balance");
         if (balance is not null && account.Provider is not ("claude" or "codex")) return selected.Take(2).Concat(new[] { balance }).ToArray();
         return selected.Take(3).ToArray();
     }
 
-    private static UIElement PrimaryWindow(QuotaWindow window, bool percentOnly)
+    private static UIElement PrimaryWindow(DashboardAccount account, QuotaWindow window)
     {
         var panel = new StackPanel { Margin = new Thickness(6, 0, 9, 0) };
         var heading = new Grid();
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var name = Text(window.Label, 10, Muted); name.TextTrimming = TextTrimming.CharacterEllipsis; name.ToolTip = window.Label; heading.Children.Add(name);
-        var amount = window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : percentOnly && window.DisplayPercent is double codex ? $"{codex:0}%" : window.Used is double used && window.Limit is double limit ? $"{used:0.##} / {limit:0.##}" + (string.IsNullOrEmpty(window.Unit) ? "" : " " + window.Unit) : window.DisplayPercent is double percentage ? $"{percentage:0}%" : window.Remaining is double remaining ? Formatting.Amount(remaining, window.Unit) : "—";
+        var label = Formatting.WindowLabel(account, window);
+        var name = Text(label, 10, Muted); name.TextTrimming = TextTrimming.CharacterEllipsis; name.ToolTip = Help(label); heading.Children.Add(name);
+        var amount = window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : account.Provider is "codex" or "muse" && window.DisplayPercent is double codex ? $"{codex:0.##}%" : window.Used is double used && window.Limit is double limit ? Formatting.Amount(used, null) + " / " + Formatting.Amount(limit, window.Unit) + (account.Provider == "qwen" && window.DisplayPercent is double qwenPercent ? $" · {qwenPercent:0.##}%" : "") : window.DisplayPercent is double percentage ? $"{percentage:0.##}%" : window.Remaining is double remaining ? Formatting.Amount(remaining, window.Unit) : "—";
         var value = Text(amount, 10, Muted); value.Margin = new Thickness(7, 0, 0, 0); Grid.SetColumn(value, 1); heading.Children.Add(value); panel.Children.Add(heading);
         if (window.Kind == "balance") value.Visibility = Visibility.Collapsed;
         var track = new Border { Height = 6, Background = ColorBrush("#203A55"), CornerRadius = new CornerRadius(3), Margin = new Thickness(0, 5, 0, 0) };
@@ -355,21 +450,17 @@ public partial class MainWindow : Window
         }
         else panel.Children.Add(track);
         var timing = window.Kind is "balance" or "extra_usage" ? Formatting.Expiration(window.ExpiresAt) : Formatting.Reset(window.ResetAt);
+        if (window.Status == "cached") timing += " · Cached · " + Formatting.WindowSample(window.SampledAt);
         var reset = Text(window.Kind is "balance" or "extra_usage" ? timing : Formatting.ShortReset(window.ResetAt), 9, Muted); reset.Margin = new Thickness(0, 4, 0, 0);
-        reset.TextTrimming = TextTrimming.CharacterEllipsis; reset.ToolTip = timing; panel.Children.Add(reset);
+        reset.TextTrimming = TextTrimming.CharacterEllipsis; reset.ToolTip = Help(timing); panel.Children.Add(reset);
         return panel;
     }
 
     private static UIElement ProviderIcon(string provider)
     {
-        var plate = new Border { Width = 31, Height = 34, CornerRadius = new CornerRadius(7), Background = ColorBrush("#16283F"), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
-        if (provider is "claude" or "codex" or "cursor" or "kimi-code" or "qwen" or "zai" or "antigravity")
-            plate.Child = new Image { Source = new BitmapImage(new Uri($"pack://application:,,,/CCSBar;component/Resources/Providers/{provider}.png")), Width = 25, Height = 25 };
-        else if (provider == "muse")
-        {
-            plate.Child = new System.Windows.Shapes.Path { Data = Geometry.Parse("M3,23 L7,7 Q9,3 12,7 L16,21 L20,7 Q23,3 25,7 L29,23"), Stroke = ColorBrush("#7E5EFF"), StrokeThickness = 5, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round, Stretch = Stretch.Uniform, Width = 25, Height = 25 };
-        }
-        else { var infinity = Text("∞", 30, ColorBrush("#756EFF"), FontWeights.SemiBold); infinity.HorizontalAlignment = HorizontalAlignment.Center; infinity.Margin = new Thickness(0, -5, 0, 0); plate.Child = infinity; }
+        var plate = new Border { Width = 31, Height = 34, CornerRadius = new CornerRadius(7), Background = provider == "cursor" ? Brushes.Transparent : ColorBrush("#16283F"), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+        if (provider == "muse") plate.ToolTip = Help("Muse Code (Meta publisher mark)");
+        plate.Child = new Image { Source = new BitmapImage(new Uri($"pack://application:,,,/CCSBar;component/Resources/Providers/{provider}.png")), Width = provider == "cursor" ? 29 : 25, Height = provider == "cursor" ? 29 : 25 };
         return plate;
     }
 
@@ -391,13 +482,14 @@ public partial class MainWindow : Window
         panel.Children.Add(title);
         var identity = Text(account.Email ?? account.Label, 11, Muted);
         identity.TextTrimming = TextTrimming.CharacterEllipsis;
-        identity.ToolTip = account.Email ?? account.Label;
+        identity.ToolTip = Help(account.Email ?? account.Label);
         identity.Margin = new Thickness(0, 3, 0, 7);
         panel.Children.Add(identity);
-        foreach (var quota in account.Windows) panel.Children.Add(QuotaRow(quota, account.Provider == "codex"));
-        if (account.Windows.Count == 0)
+        var windows = Formatting.VisibleWindows(account);
+        foreach (var quota in windows) panel.Children.Add(QuotaRow(account, quota));
+        if (windows.Length == 0)
             panel.Children.Add(Text(account.Status == "needs_sign_in" ? "Sign-in required" : "Usage unavailable", 11, ColorBrush("#DBAB4F")));
-        if (!string.IsNullOrWhiteSpace(account.Message))
+        if (!string.IsNullOrWhiteSpace(account.Message) && (account.Provider != "codex" || !Formatting.IsChatPass(account.Message)))
             panel.Children.Add(Text(account.Message, 11, Muted, wrap: true));
         var detail = Formatting.Sampled(account.SampledAt ?? account.FetchedAt);
         if (account.Status == "cached") detail += " · cached";
@@ -407,14 +499,15 @@ public partial class MainWindow : Window
         return CardBorder(panel);
     }
 
-    private UIElement QuotaRow(QuotaWindow quota, bool percentOnly)
+    private UIElement QuotaRow(DashboardAccount account, QuotaWindow quota)
     {
         var panel = new StackPanel { Margin = new Thickness(0, 2, 0, 5) };
         var line = new Grid();
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) });
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(43) });
-        var label = Text(quota.Label, 11, Muted, wrap: true); label.ToolTip = quota.Label;
+        var labelText = Formatting.WindowLabel(account, quota);
+        var label = Text(labelText, 11, Muted, wrap: true); label.ToolTip = Help(labelText);
         line.Children.Add(label);
         var track = new Border { Background = ColorBrush("#203A55"), CornerRadius = new CornerRadius(3), Height = 6, Margin = new Thickness(3, 5, 7, 0), VerticalAlignment = VerticalAlignment.Top };
         Grid.SetColumn(track, 1);
@@ -430,7 +523,7 @@ public partial class MainWindow : Window
             state.Margin = new Thickness(3, 0, 0, 0); Grid.SetColumn(state, 1); line.Children.Add(state);
         }
         else line.Children.Add(track);
-        var percent = Text(!quota.Unlimited && quota.Enabled != false && quota.DisplayPercent is double value ? value.ToString("0", CultureInfo.CurrentCulture) + "%" : quota.Unlimited || quota.Enabled == false ? "" : "—", 11);
+        var percent = Text(!quota.Unlimited && quota.Enabled != false && quota.DisplayPercent is double value ? value.ToString("0.##", CultureInfo.CurrentCulture) + "%" : quota.Unlimited || quota.Enabled == false ? "" : "—", 11);
         percent.HorizontalAlignment = HorizontalAlignment.Right; Grid.SetColumn(percent, 2); line.Children.Add(percent);
         panel.Children.Add(line);
         var reset = Text(Formatting.Reset(quota.ResetAt), 10, Muted); reset.Margin = new Thickness(183, 2, 0, 0); reset.TextWrapping = TextWrapping.Wrap;
@@ -439,7 +532,7 @@ public partial class MainWindow : Window
         if (quota.Used is double amount) counts.Add("Used " + Formatting.Amount(amount, quota.Unit));
         if (quota.Limit is double limit) counts.Add("Limit " + Formatting.Amount(limit, quota.Unit));
         if (quota.Remaining is double remaining) counts.Add("Remaining " + Formatting.Amount(remaining, quota.Unit));
-        if (counts.Count > 0 && (!percentOnly || quota.Kind is "balance" or "extra_usage"))
+        if (counts.Count > 0 && (account.Provider != "codex" || quota.Kind is "balance" or "extra_usage"))
         {
             var detail = Text(string.Join(" · ", counts), 10, Muted, wrap: true);
             detail.Margin = new Thickness(0, 2, 0, 0); panel.Children.Add(detail);
@@ -448,6 +541,11 @@ public partial class MainWindow : Window
         {
             var expires = Text(Formatting.Expiration(quota.ExpiresAt), 10, Muted, wrap: true);
             expires.Margin = new Thickness(0, 2, 0, 0); panel.Children.Add(expires);
+        }
+        if (quota.Status == "cached")
+        {
+            var cached = Text("Cached · " + Formatting.WindowSample(quota.SampledAt), 10, ColorBrush("#DDBE72"), wrap: true);
+            cached.Margin = new Thickness(0, 2, 0, 0); panel.Children.Add(cached);
         }
         return panel;
     }
@@ -458,7 +556,7 @@ public partial class MainWindow : Window
         {
             var button = new Button { Content = compact ? account.IsActive ? "✓ Active" : "⇄" : account.IsActive ? "Active" : "Activate", IsEnabled = !account.IsActive && dashboard?.CodexAutoSwitch.ActivationInProgress != true, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, compact ? 0 : 8, 0, 0), Background = account.IsActive ? ColorBrush("#143D58") : ColorBrush("#1979D2") };
             if (compact) { button.Width = account.IsActive ? 62 : 30; button.Height = 26; button.Padding = new Thickness(3); button.FontSize = account.IsActive ? 10 : 15; }
-            button.ToolTip = account.IsActive ? "Active Codex account" : "Activate this Codex account";
+            button.ToolTip = Help(account.IsActive ? "Active Codex account: " + (account.Email ?? account.Label) : "Activate Codex account: " + (account.Email ?? account.Label));
             button.Click += async (_, _) => await ActivateAccount(account);
             panel.Children.Add(button);
         }
@@ -468,7 +566,7 @@ public partial class MainWindow : Window
             var choices = account.Capabilities.ClaudePlatforms.Where(p => p is "windows" or "mac").Distinct().ToList();
             foreach (var platform in new[] { "mac", "windows" }.Where(choices.Contains))
             {
-                var button = new Button { Content = PlatformGlyph(platform), Width = 30, Height = 26, Padding = new Thickness(5), Margin = new Thickness(5, 0, 0, 0), ToolTip = "Open this Claude account on " + (platform == "mac" ? "Mac" : "Windows") };
+                var button = new Button { Content = PlatformGlyph(platform), Width = 32, Height = 30, Padding = new Thickness(4), Margin = new Thickness(5, 0, 0, 0), ToolTip = Help("Open Claude account " + (account.Email ?? account.Label) + " on " + (platform == "mac" ? "Mac" : "Windows")) };
                 button.Click += async (_, _) => await Action(async () =>
                 {
                     var id = account.Capabilities.ClaudeProfileId!;
@@ -485,7 +583,7 @@ public partial class MainWindow : Window
     private async Task ActivateAccount(DashboardAccount account)
     {
         if (busy || staleSample || client is null) return;
-        busy = true; RefreshButton.IsEnabled = false; SetButtonsEnabled(ContentPanel, false);
+        busy = true; RefreshButton.IsEnabled = false; DisableMutations();
         StatusText.Text = "Checking running Codex programs…";
         try
         {
@@ -510,13 +608,13 @@ public partial class MainWindow : Window
             StatusText.Text = DisplayError(error);
             if (dashboard is not null) { RenderDashboard(); MarkStale(); }
         }
-        finally { busy = false; RefreshButton.IsEnabled = true; }
+        finally { FinishRequest(); }
     }
 
     private async Task Action(Func<Task> action, string success)
     {
-        if (busy || client is null) return;
-        busy = true; RefreshButton.IsEnabled = false; SetButtonsEnabled(ContentPanel, false);
+        if (busy || staleSample || client is null) return;
+        busy = true; RefreshButton.IsEnabled = false; DisableMutations();
         StatusText.Text = "Working…";
         try
         {
@@ -531,23 +629,30 @@ public partial class MainWindow : Window
             StatusText.Text = DisplayError(error);
             if (dashboard is not null) { RenderDashboard(); MarkStale(); }
         }
-        finally { busy = false; RefreshButton.IsEnabled = true; }
+        finally { FinishRequest(); }
     }
 
     private void RenderConnection()
     {
         settingsVisible = true; ContentPanel.Children.Clear();
+        AutoSwitchPanel.Content = null; AutoSwitchDetails.Content = null; AutoSwitchDetails.Visibility = Visibility.Collapsed;
         StatusText.Text = "Dashboard connection"; StatusDot.Fill = ColorBrush("#69809A");
         ContentPanel.Children.Add(Section("DASHBOARD CONNECTION"));
         var panel = new StackPanel();
-        panel.Children.Add(Text("CCS Bar uses your CCS dashboard login.", 12, wrap: true));
+        panel.Children.Add(Text("AI Account Center uses your dashboard login.", 12, wrap: true));
         var url = Field(panel, "Dashboard URL", connection?.BaseURL ?? "http://192.168.50.179:3000");
+        var httpWarning = Text("HTTP does not encrypt this connection. Use HTTPS or an encrypted SSH tunnel.", 11, ColorBrush("#DDBE72"), wrap: true);
+        httpWarning.Uid = "http-connection-warning";
+        httpWarning.Margin = new Thickness(0, 6, 0, 0);
+        void UpdateHttpWarning() => httpWarning.Visibility = Uri.TryCreate(url.Text.Trim(), UriKind.Absolute, out var origin) && origin.Scheme == Uri.UriSchemeHttp ? Visibility.Visible : Visibility.Collapsed;
+        url.TextChanged += (_, _) => UpdateHttpWarning();
+        UpdateHttpWarning(); panel.Children.Add(httpWarning);
         var user = Field(panel, "Username", connection?.Username ?? "");
         panel.Children.Add(Text("Password", 11, Muted));
         var password = new PasswordBox { Margin = new Thickness(0, 4, 0, 10) };
         panel.Children.Add(password);
         if (connection is not null) panel.Children.Add(Text("Leave password blank to keep the saved password.", 10, Muted, wrap: true));
-        panel.Children.Add(Text("Saved privately for your Windows user. Provider credentials stay on the CCS server.", 11, Muted, wrap: true));
+        panel.Children.Add(Text("Saved privately for your Windows user. Provider credentials stay on the AI Account Center server.", 11, Muted, wrap: true));
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
         if (client is not null)
         {
@@ -596,14 +701,39 @@ public partial class MainWindow : Window
     private static UIElement PlatformGlyph(string platform)
     {
         var data = platform == "windows" ? "M0,1 L7,0V7H0Z M8,0H15V7H8Z M0,8H7V15L0,14Z M8,8H15V16H8Z" : "M11,3 C9,3 8,4 7,4 C6,4 5,3 3,4 C0,5 0,8 1,11 C2,14 3,16 5,16 C6,16 7,15 8,15 C9,15 10,16 11,16 C13,16 14,13 15,11 C12,10 12,6 15,5 C14,3 12,3 11,3Z M8,3 C8,1 9,0 12,0 C12,2 10,3 8,3Z";
-        return new System.Windows.Shapes.Path { Data = Geometry.Parse(data), Fill = ColorBrush("#B8D9FF"), Width = 15, Height = 16, Stretch = Stretch.Uniform };
+        var geometry = Geometry.Parse(data).Clone();
+        var bounds = geometry.Bounds;
+        // Normalize the actual mark bounds and retain an optical inset so leaf
+        // and panel edges fit at fractional desktop display scales.
+        geometry.Transform = new TranslateTransform(1 - bounds.X, 1 - bounds.Y);
+        geometry.Freeze();
+        var canvas = new Canvas { Width = bounds.Width + 2, Height = bounds.Height + 2 };
+        canvas.Children.Add(new System.Windows.Shapes.Path { Data = geometry, Fill = ColorBrush("#B8D9FF") });
+        return new Viewbox { Width = 16, Height = 18, Stretch = Stretch.Uniform, Child = canvas, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     }
     private static string DisplayError(Exception error) => error is InvalidOperationException or ArgumentException ? error.Message : error is TaskCanceledException ? "The dashboard took too long to respond. Try Refresh." : "Could not reach the dashboard. Check Connection or try Refresh.";
+    private static ToolTip Help(string text) => new()
+    {
+        Content = Text(text, 11, ColorBrush("#EAF2FF"), wrap: true), MaxWidth = 330
+    };
+
+    private void DisableMutations()
+    {
+        SetButtonsEnabled(ContentPanel, false);
+        SetButtonsEnabled(AutoSwitchPanel, false);
+    }
+
+    private void FinishRequest()
+    {
+        busy = false; RefreshButton.IsEnabled = true;
+        if (dashboard is not null && !settingsVisible) RenderPreservingScroll();
+    }
+
     private static void SetButtonsEnabled(DependencyObject parent, bool enabled)
     {
         foreach (var child in LogicalTreeHelper.GetChildren(parent))
         {
-            if (child is Button button && button.Tag as string != "read-only") button.IsEnabled = enabled;
+            if (child is Button button && button.Tag as string is not ("read-only" or "qwen-packs")) button.IsEnabled = enabled;
             if (child is CheckBox checkbox) checkbox.IsEnabled = enabled;
             if (child is ComboBox picker) picker.IsEnabled = enabled;
             if (child is DependencyObject dependency) SetButtonsEnabled(dependency, enabled);
@@ -611,7 +741,7 @@ public partial class MainWindow : Window
     }
 
     private async void RefreshClicked(object sender, RoutedEventArgs e) { settingsVisible = false; await Refresh(true); }
-    private void SettingsClicked(object sender, RoutedEventArgs e) { if (!busy) RenderConnection(); }
+    private void SettingsClicked(object sender, RoutedEventArgs e) => RenderConnection();
     private void DashboardClicked(object sender, RoutedEventArgs e) { if (client is not null) Process.Start(new ProcessStartInfo(client.BaseURL.ToString()) { UseShellExecute = true }); }
     private void QuitClicked(object sender, RoutedEventArgs e) => ((App)System.Windows.Application.Current).Quit();
     protected override void OnClosing(CancelEventArgs e)

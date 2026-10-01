@@ -1,127 +1,102 @@
 const assert = require('assert');
-const { execSync } = require('child_process');
+const fs = require('fs');
+const { spawnSync } = require('child_process');
+const os = require('os');
 const path = require('path');
-const { createTestEnvironment } = require('../shared/fixtures/test-environment');
 
-describe('npm postinstall', () => {
-  let testEnv;
-  const postinstallScript = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
+describe('account-center package lifecycle', () => {
+  const scripts = path.resolve(__dirname, '../../scripts');
+  let testHome;
 
   beforeEach(() => {
-    // Create isolated test environment for each test
-    testEnv = createTestEnvironment();
+    testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'account-center-lifecycle-'));
   });
 
   afterEach(() => {
-    // Clean up test environment
-    if (testEnv) {
-      testEnv.cleanup();
+    fs.rmSync(testHome, { recursive: true, force: true });
+  });
+
+  function run(script, overrides = {}) {
+    return spawnSync('node', [path.join(scripts, script)], {
+      encoding: 'utf8',
+      env: { ...process.env, CCS_HOME: testHome, CCS_DIR: '', ...overrides },
+    });
+  }
+
+  it('creates only the private account directory on a fresh install', () => {
+    const result = run('postinstall.js');
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.deepStrictEqual(fs.readdirSync(testHome), ['.ccs']);
+    assert.deepStrictEqual(fs.readdirSync(path.join(testHome, '.ccs')), []);
+    if (process.platform !== 'win32') {
+      assert.strictEqual(fs.statSync(path.join(testHome, '.ccs')).mode & 0o777, 0o700);
     }
   });
 
-  it('creates config.yaml (primary format)', () => {
-    execSync(`node "${postinstallScript}"`, {
-      stdio: 'ignore',
-      env: { ...process.env, CCS_HOME: testEnv.testHome }
-    });
-
-    // config.yaml is now the primary format (v6.x+)
-    assert(testEnv.fileExists('config.yaml'), 'config.yaml should be created');
-
-    // Read YAML config and verify structure
-    const yaml = require('js-yaml');
-    const configContent = testEnv.readFile('config.yaml', false);
-    const config = yaml.load(configContent);
-
-    assert(config.profiles !== undefined, 'config.yaml should have profiles');
-    assert(typeof config.profiles === 'object', 'profiles should be an object');
-    // Profiles are now empty by default - users create via presets
-    assert.deepStrictEqual(config.profiles, {}, 'profiles should be empty by default');
-    assert(config.version, 'config.yaml should have version');
-  });
-
-  it('does NOT auto-create glm.settings.json (v6.0 - use presets instead)', () => {
-    execSync(`node "${postinstallScript}"`, {
-      stdio: 'ignore',
-      env: { ...process.env, CCS_HOME: testEnv.testHome }
-    });
-
-    // GLM/Kimi profiles are NO LONGER auto-created during install.
-    // Legacy glmt.settings.json files may still exist from older setups.
-    // Users create supported API profiles via UI presets or CLI: ccs api create --preset glm
-    assert(!testEnv.fileExists('glm.settings.json'), 'glm.settings.json should NOT be auto-created');
-    assert(!testEnv.fileExists('glmt.settings.json'), 'glmt.settings.json should NOT be auto-created');
-    assert(!testEnv.fileExists('kimi.settings.json'), 'kimi.settings.json should NOT be auto-created');
-  });
-
-  it('is idempotent', () => {
-    const env = { ...process.env, CCS_HOME: testEnv.testHome };
-    const yaml = require('js-yaml');
-
-    // Run postinstall first time
-    execSync(`node "${postinstallScript}"`, { stdio: 'ignore', env });
-
-    // Create custom config.yaml to test preservation
-    const customConfig = {
-      version: '2.0',
-      profiles: {
-        custom: '~/.custom.json',
-        glm: '~/.ccs/glm.settings.json'
-      },
-      accounts: {},
-      cliproxy: { variants: {}, oauth_accounts: {} }
+  it('preserves existing configs, account files, Claude settings and old integrations through install and uninstall', () => {
+    const files = {
+      '.ccs/config.yaml': 'existing malformed YAML: [\n',
+      '.ccs/config.json': '{"profiles":{"existing":"~/existing.settings.json"}}\n',
+      '.ccs/codex/profiles/saved/auth.json': '{"fixture":"saved account"}\n',
+      '.ccs/hooks/websearch-transformer.cjs': '// existing user-owned integration\n',
+      '.ccs/.hook-migrated': 'existing migration marker\n',
+      '.ccs/completions/ccs.bash': '# existing completion\n',
+      '.claude/settings.json': '{"fixture":"existing Claude settings"}\n',
     };
-    const yamlContent = yaml.dump(customConfig, { indent: 2 });
-    testEnv.createFile('config.yaml', yamlContent);
-
-    // Run postinstall again
-    execSync(`node "${postinstallScript}"`, { stdio: 'ignore', env });
-
-    // Verify custom config preserved
-    const configContent = testEnv.readFile('config.yaml', false);
-    const config = yaml.load(configContent);
-    assert(config.profiles.custom, 'Custom profile should be preserved');
-    assert.strictEqual(config.profiles.custom, '~/.custom.json');
+    for (const [relative, contents] of Object.entries(files)) {
+      const file = path.join(testHome, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, contents, { mode: 0o600 });
+    }
+    const originalModes = Object.fromEntries(
+      Object.keys(files).map((relative) => [
+        relative,
+        fs.statSync(path.join(testHome, relative)).mode,
+      ])
+    );
+    for (const script of ['postinstall.js', 'postinstall.js', 'postuninstall.js']) {
+      const result = run(script);
+      assert.strictEqual(result.status, 0, result.stderr);
+    }
+    for (const [relative, contents] of Object.entries(files)) {
+      const file = path.join(testHome, relative);
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), contents, relative);
+      assert.strictEqual(fs.statSync(file).mode, originalModes[relative], relative);
+    }
+    assert(!fs.existsSync(path.join(testHome, '.ccs/shared')));
+    assert(!fs.existsSync(path.join(testHome, '.ccs/config.json.bak')));
+    assert(!fs.existsSync(path.join(testHome, '.ccs/uninstall.log')));
   });
 
-  it('uses ASCII symbols', () => {
-    const output = execSync(`node "${postinstallScript}"`, {
-      encoding: 'utf8',
-      env: { ...process.env, CCS_HOME: testEnv.testHome }
-    });
-
-    // Check for ASCII symbols [OK], [!], [X], [i] - not emojis
-    assert(/\[(OK|!|X|i)\]/.test(output), 'Should use ASCII symbols, not emojis');
-
-    // Verify no emojis in output
-    const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/u;
-    assert(!emojiRegex.test(output), 'Should not contain emojis');
+  it('honors CCS_DIR without creating the legacy home directory', () => {
+    const directory = path.join(testHome, 'custom-account-directory');
+    const result = run('postinstall.js', { CCS_DIR: directory });
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.deepStrictEqual(fs.readdirSync(testHome), ['custom-account-directory']);
+    assert.deepStrictEqual(fs.readdirSync(directory), []);
   });
 
-  it('handles existing directory gracefully', () => {
-    // Create directory manually first
-    testEnv.createFile('existing.txt', 'exists');
-
-    // Run postinstall
-    execSync(`node "${postinstallScript}"`, {
-      stdio: 'ignore',
-      env: { ...process.env, CCS_HOME: testEnv.testHome }
-    });
-
-    // Verify existing file still exists and new files are created
-    assert(testEnv.fileExists('existing.txt'), 'Existing files should be preserved');
-    assert(testEnv.fileExists('config.yaml'), 'config.yaml should be created');
-    // GLM/Kimi are no longer auto-created. Legacy GLMT files remain untouched if present.
-    assert(!testEnv.fileExists('glm.settings.json'), 'glm.settings.json should NOT be auto-created');
+  it('fails without replacing a file at the account directory path', () => {
+    const file = path.join(testHome, '.ccs');
+    fs.writeFileSync(file, 'preserve this file');
+    const result = run('postinstall.js');
+    assert.strictEqual(result.status, 1);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), 'preserve this file');
   });
 
-  it('does not create VERSION file', () => {
-    execSync(`node "${postinstallScript}"`, {
-      stdio: 'ignore',
-      env: { ...process.env, CCS_HOME: testEnv.testHome }
-    });
+  it('fails without repairing a dangling account-directory symlink', () => {
+    if (process.platform === 'win32') return;
+    const link = path.join(testHome, '.ccs');
+    fs.symlinkSync(path.join(testHome, 'missing'), link);
+    const result = run('postinstall.js');
+    assert.strictEqual(result.status, 1);
+    assert(fs.lstatSync(link).isSymbolicLink());
+    assert(!fs.existsSync(path.join(testHome, 'missing')));
+  });
 
-    // The postinstall script doesn't create VERSION file (only native install does)
-    assert(!testEnv.fileExists('VERSION'), 'VERSION file should NOT be created by npm postinstall');
+  it('uninstall alone does not create or remove user storage', () => {
+    const result = run('postuninstall.js');
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.deepStrictEqual(fs.readdirSync(testHome), []);
   });
 });

@@ -11,6 +11,7 @@ namespace CCSBar;
 /// <summary>Current-user Windows DPAPI. Provider credentials never enter this client.</summary>
 public static class SecureStore
 {
+    // Intentional compatibility: branding never rewrites the existing private store or DPAPI purpose.
     public static readonly string StateDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CCS Bar");
     public static readonly string SettingsPath = Path.Combine(StateDirectory, "connection.dpapi");
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("CCSBar/dashboard-connection/v1");

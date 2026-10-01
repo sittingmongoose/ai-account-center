@@ -1,7 +1,7 @@
-# Qwen usage Native Messaging host
+# AI Account Center Qwen usage Native Messaging host
 
 `CCS.QwenUsageBridge.exe` is a framework-dependent .NET 8 Windows console host.
-The browser must be the installed CCS bridge extension with the pinned origin
+The browser must be the installed AI Account Center bridge extension with the pinned origin
 `chrome-extension://clobbdmblhillanldmmjnlpbaafbnklj/`.
 It receives exactly one standard Chromium Native Messaging request (four-byte
 little-endian JSON byte length followed by UTF-8 JSON) and sends one framed,
@@ -62,7 +62,7 @@ C:\Program Files\Python313\python.exe -E -s -X utf8 "%USERPROFILE%\.ccs\account-
 ```
 
 The Python helper and its `plan_common.py` companion must already be deployed by
-the parent CCS installation. No caller can choose a program, script, host, path,
+the parent AI Account Center installation. No caller can choose a program, script, host, path,
 provider or URL. Both child pipes are bounded at 65,536 characters; stderr is
 discarded. The child has a 60-second deadline and is killed on failure/timeout.
 A global, user-SID-specific mutex serializes the capsule write, usage read and

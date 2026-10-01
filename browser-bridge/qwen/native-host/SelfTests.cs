@@ -255,6 +255,19 @@ internal static class SelfTests
               "rounded percent is consistent");
         Check(SafeProjection.Parse(WithFirstNumbers(json, 1e307, 1e308, 9e307, 10), Now).Windows[0].UsedPercent == 10,
               "finite high counts avoid percent multiplication overflow");
+        foreach (var percentage in new[] { 0.0125, 1.25, 125 })
+        {
+            var used = 10 * percentage;
+            var remaining = percentage <= 100 ? (double?)(1000 - used) : null;
+            var projectedWindow = SafeProjection.Parse(WithFirstNumbers(json, used, 1000, remaining, percentage), Now).Windows[0];
+            Check(projectedWindow.UsedPercent == percentage && projectedWindow.Used == used && projectedWindow.Remaining == remaining,
+                  "normalized percentage points and counts preserve units and overage");
+            Check(projectedWindow.RemainingPercent == Math.Max(0, 100 - percentage),
+                  "overage has no negative remaining percentage");
+        }
+        Fails(() => SafeProjection.Parse(WithFirstNumbers(json, 12.5, 1000, 987.5, 0.0125), Now), "invalid_response");
+        Fails(() => SafeProjection.Parse(WithFirstNumbers(json, 1250, 1000, null, 1.25), Now), "invalid_response");
+        Fails(() => SafeProjection.Parse(WithFirstNumbers(json, 12.5, 1000, 987.5, 125), Now), "invalid_response");
         var nullLimits = SafeProjection.Parse(json.Replace("\"limit\":1000,", "\"limit\":null,"), Now);
         Check(nullLimits.Windows[0].Limit is null && nullLimits.Windows[0].Unit is null, "unknown core limit remains null");
         var nullUsage = SafeProjection.Parse(json.Replace("\"usedPercent\":25", "\"usedPercent\":null"), Now);

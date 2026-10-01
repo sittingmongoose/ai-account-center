@@ -1,7 +1,7 @@
 /**
- * Integration tests: two-terminal profile isolation.
+ * Integration tests: saved Codex login snapshot independence.
  *
- * Verifies that two profiles with separate CODEX_HOME dirs write to their own
+ * Verifies that two saved login snapshots in separate profile dirs write to their own
  * auth.json/history.jsonl with zero crosstalk. Uses real filesystem.
  *
  * Cases:
@@ -48,7 +48,7 @@ async function createProfile(name: string) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('two-terminal isolation — auth.json independence', () => {
+describe('saved login independence — auth.json independence', () => {
   it('writing auth.json to profile A does not affect profile B', async () => {
     const { dir: dirA } = await createProfile('terminal-a');
     const { dir: dirB } = await createProfile('terminal-b');
@@ -78,7 +78,7 @@ describe('two-terminal isolation — auth.json independence', () => {
   });
 });
 
-describe('two-terminal isolation — history.jsonl independence', () => {
+describe('saved login independence — history.jsonl independence', () => {
   it('writing history.jsonl to profile A does not affect profile B', async () => {
     const { dir: dirA } = await createProfile('hist-a');
     const { dir: dirB } = await createProfile('hist-b');

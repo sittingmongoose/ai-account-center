@@ -204,7 +204,7 @@ describe('GET /api/codex/profiles', () => {
     const { status, body } = await get('/api/codex/profiles');
 
     expect(status).toBe(500);
-    expect((body as { error?: string }).error).toContain('could not be read safely');
+    expect((body as { error?: string }).error).toBe('Codex profiles could not be read.');
   });
 
   it('returns 500 when a malformed registry appears after an empty response was cached', async () => {
@@ -219,7 +219,7 @@ describe('GET /api/codex/profiles', () => {
     const { status, body } = await get('/api/codex/profiles');
 
     expect(status).toBe(500);
-    expect((body as { error?: string }).error).toContain('could not be read safely');
+    expect((body as { error?: string }).error).toBe('Codex profiles could not be read.');
   });
 
   it('returns a sanitized 500 when registry stat fails', async () => {
@@ -239,7 +239,7 @@ describe('GET /api/codex/profiles', () => {
     const error = (body as { error?: string }).error ?? '';
 
     expect(status).toBe(500);
-    expect(error).toContain('could not be checked safely');
+    expect(error).toBe('Codex profiles could not be read.');
     expect(error).not.toContain(registryPath);
     expect(error).not.toContain('EACCES');
   });

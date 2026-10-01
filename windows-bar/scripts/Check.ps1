@@ -1,12 +1,35 @@
-param([switch]$Live)
+param([switch]$Live, [string]$Dotnet, [string]$PublishDirectory, [string]$ReportDirectory)
 $ErrorActionPreference = 'Stop'
+function Resolve-Dotnet([string]$Requested) {
+    $candidates = @()
+    if ($Requested) {
+        if (Test-Path -LiteralPath $Requested -PathType Leaf) { $candidates += (Get-Item -LiteralPath $Requested).FullName }
+        else { $command = Get-Command $Requested -CommandType Application -ErrorAction SilentlyContinue; if ($command) { $candidates += $command.Source } }
+    }
+    else {
+        $command = Get-Command dotnet -CommandType Application -ErrorAction SilentlyContinue
+        if ($command) { $candidates += $command.Source }
+        $candidates += (Join-Path $env:LOCALAPPDATA 'CCS Bar\build\dotnet\dotnet.exe')
+    }
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        try {
+            $sdks = @(& $candidate --list-sdks 2>$null)
+            if ($LASTEXITCODE -eq 0 -and @($sdks | Where-Object { $_ -match '^8\.\d+\.\d+' }).Count -gt 0) { return $candidate }
+        }
+        catch { continue }
+    }
+    throw 'A .NET 8 SDK is required. Install the Windows x64 SDK from https://dotnet.microsoft.com/en-us/download/dotnet/8.0, reopen PowerShell, or pass -Dotnet with its dotnet.exe path.'
+}
 $source = Split-Path -Parent $PSScriptRoot
-$dll = Join-Path $source 'publish\CCSBar.dll'
-$dotnet = Join-Path $env:LOCALAPPDATA 'CCS Bar\build\dotnet\dotnet.exe'
-$evidence = Join-Path $source 'evidence'
+$publish = if ($PublishDirectory) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PublishDirectory) } else { Join-Path $source 'publish' }
+$dll = Join-Path $publish 'CCSBar.dll'
+if (-not (Test-Path -LiteralPath $dll)) { throw 'Build AI Account Center first, or pass -PublishDirectory with its published files.' }
+$dotnetCommand = Resolve-Dotnet $Dotnet
+$evidence = if ($ReportDirectory) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReportDirectory) } else { Join-Path $source 'evidence' }
 New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 $mode = if ($Live) { '--check-live' } else { '--check' }
 $report = Join-Path $evidence $(if ($Live) { 'live-check.json' } else { 'checks.json' })
-& $dotnet $dll $mode $report
-if ($LASTEXITCODE -ne 0) { throw "CCS Bar verification failed. See $report" }
-Get-Content $report
+& $dotnetCommand $dll $mode $report
+if ($LASTEXITCODE -ne 0) { throw "AI Account Center verification failed. See $report" }
+Get-Content -LiteralPath $report

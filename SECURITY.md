@@ -1,36 +1,30 @@
-# Security Policy
+# AI Account Center Security Policy
 
-## Supported Versions
+Security fixes target the current product source branch and reviewed local
+builds. This fork does not currently promise published npm `@latest`/`@dev`
+channels or the original upstream project's response times.
 
-Security fixes are applied to the latest supported release line and the active development branch.
+## Reporting
 
-| Branch / channel | Status |
-| --- | --- |
-| `main` / `@latest` | Supported |
-| `dev` / `@dev` | Supported |
-| Older releases | Best effort only |
+For general, non-sensitive defects, use
+[AI Account Center issues](https://github.com/sittingmongoose/ai-account-center/issues/new/choose).
 
-## Report A Vulnerability
+Private vulnerability reporting was verified **disabled** for this repository
+on 2026-10-01. There is no active private advisory intake advertised here. If a
+suspected vulnerability needs private handling, request a private contact path
+from this repository's maintainers with only a minimal, non-sensitive public
+description. Wait for that channel before sharing exploit details or private data.
 
-Do not open public GitHub issues for suspected security vulnerabilities.
+If maintainers later enable GitHub private vulnerability reporting, the product
+repository's [Security page](https://github.com/sittingmongoose/ai-account-center/security)
+will provide that private intake. The original CCS advisory destination is not
+the current product's reporting channel.
 
-Use GitHub Private Vulnerability Reporting instead:
+Once a private channel is established, provide the affected source revision or
+local package version, a sanitized reproduction, expected/actual behavior and
+impact. Do not include live tokens, cookies, session capsules, passwords, private
+configuration or screenshots exposing them.
 
-- https://github.com/kaitranntt/ccs/security/advisories/new
-
-Include:
-
-- A short description of the issue
-- Affected version, branch, or install method
-- Reproduction steps or proof of concept
-- Impact assessment if you have one
-
-Please avoid posting tokens, cookies, private configs, or exploit details in public issues, discussions, or screenshots.
-
-## What To Expect
-
-- Initial acknowledgement target: within 3 business days
-- Triage and severity assessment after reproduction
-- A coordinated fix and release when the report is confirmed
-
-If you already opened a public issue by mistake, edit it down to a minimal note and ask for a private reporting path instead of posting more detail.
+The rename retains original CCS authorship and the unchanged MIT license.
+Upstream historical security reports remain associated with their original
+project rather than being reassigned to this fork.

@@ -17,6 +17,12 @@ export interface ClaudeDesktopLiveUsage {
   plan: 'max' | 'pro' | null;
   fetchedAt: string;
   windows: DashboardAccountWindow[];
+  /** Private transport/cache binding; never projected into the account dashboard DTO. */
+  sourceContextFingerprint?: string;
+  optionalExtras?: {
+    resetCredits: 'ok' | 'unavailable';
+    prepaidBalance: 'ok' | 'unavailable';
+  };
 }
 
 const PROFILE_IDS = new Set(['gmail', 'platyr', 'party', 'me']);
@@ -32,6 +38,7 @@ const SOURCE = 'Claude Desktop live quota on Windows' as const;
 const WINDOW_FIELDS = {
   five_hour: { label: 'Five-hour usage', minutes: 300 },
   seven_day: { label: 'Weekly usage', minutes: 10_080 },
+  seven_day_fable: { label: 'Weekly Fable usage', minutes: 10_080 },
   seven_day_opus: { label: 'Weekly Opus usage', minutes: 10_080 },
   seven_day_sonnet: { label: 'Weekly Sonnet usage', minutes: 10_080 },
   seven_day_oauth_apps: { label: 'Weekly OAuth app usage', minutes: 10_080 },
@@ -139,6 +146,20 @@ function normalizeSample(
       return null;
     }
     seen.add(item.key);
+    let retainedMetadata: { status: 'cached'; sampledAt: string } | undefined;
+    if (item.status === 'cached') {
+      const sampledAt = timestamp(item.sampledAt);
+      if (
+        maxAgeMs !== RETAINED_SAMPLE_MAX_AGE_MS ||
+        optionalWindowGroup(item.key) === null ||
+        !sampledAt ||
+        Date.parse(sampledAt) > Date.parse(fetchedAt)
+      )
+        return null;
+      // Repeated successful core checks must not keep old balances alive forever.
+      if (Date.now() - Date.parse(sampledAt) > RETAINED_SAMPLE_MAX_AGE_MS) continue;
+      retainedMetadata = { status: 'cached', sampledAt };
+    }
     const resetAt =
       item.resetAt === null || item.resetAt === undefined ? null : timestamp(item.resetAt);
     if (isPresent(item.resetAt) && resetAt === null) return null;
@@ -205,6 +226,7 @@ function normalizeSample(
         remaining,
         unit,
         ...(typeof item.enabled === 'boolean' ? { enabled: item.enabled } : {}),
+        ...retainedMetadata,
       });
       continue;
     }
@@ -261,6 +283,16 @@ function normalizeSample(
     });
   }
   if (windows.length === 0) return null;
+  const availability = result.optionalExtras;
+  const optionalExtras: ClaudeDesktopLiveUsage['optionalExtras'] =
+    isRecord(availability) &&
+    (availability.resetCredits === 'ok' || availability.resetCredits === 'unavailable') &&
+    (availability.prepaidBalance === 'ok' || availability.prepaidBalance === 'unavailable')
+      ? {
+          resetCredits: availability.resetCredits,
+          prepaidBalance: availability.prepaidBalance,
+        }
+      : undefined;
   return {
     profileId,
     email: expectedEmail,
@@ -269,7 +301,52 @@ function normalizeSample(
     plan: result.plan === 'max' || result.plan === 'pro' ? result.plan : null,
     fetchedAt,
     windows,
+    ...(optionalExtras ? { optionalExtras } : {}),
+    ...(typeof result.sourceContextFingerprint === 'string' &&
+    /^[a-f0-9]{64}$/.test(result.sourceContextFingerprint)
+      ? { sourceContextFingerprint: result.sourceContextFingerprint }
+      : {}),
   };
+}
+
+function optionalWindowGroup(key: string): 'resets' | 'prepaid' | null {
+  if (key === 'prepaid_balance') return 'prepaid';
+  if (key === 'reset_credits_available' || RESET_GRANT_KEY.test(key)) return 'resets';
+  return null;
+}
+
+function retainUnavailableExtras(
+  usage: ClaudeDesktopLiveUsage,
+  previous: ClaudeDesktopLiveUsage | null
+): ClaudeDesktopLiveUsage {
+  if (
+    !previous ||
+    previous.profileId !== usage.profileId ||
+    previous.email !== usage.email ||
+    previous.plan !== usage.plan ||
+    !usage.sourceContextFingerprint ||
+    usage.sourceContextFingerprint !== previous.sourceContextFingerprint ||
+    previous.source !== usage.source ||
+    previous.platform !== usage.platform
+  )
+    return usage;
+  const reportedGroups = new Set(usage.windows.map((window) => optionalWindowGroup(window.key)));
+  const retained = previous.windows.flatMap((window) => {
+    const group = optionalWindowGroup(window.key);
+    const sampledAt = window.sampledAt ?? previous.fetchedAt;
+    if (
+      group === null ||
+      (group === 'resets'
+        ? usage.optionalExtras?.resetCredits !== 'unavailable'
+        : usage.optionalExtras?.prepaidBalance !== 'unavailable') ||
+      reportedGroups.has(group) ||
+      Date.now() - Date.parse(sampledAt) > RETAINED_SAMPLE_MAX_AGE_MS ||
+      Date.parse(sampledAt) > Date.parse(usage.fetchedAt)
+    )
+      return [];
+    return [{ ...window, status: 'cached' as const, sampledAt }];
+  });
+  return retained.length ? { ...usage, windows: [...usage.windows, ...retained] } : usage;
 }
 
 function nonnegative(value: unknown): number | null {
@@ -355,10 +432,28 @@ export async function getLiveClaudeDesktopUsage(
       return existing.promise;
     }
     if (existing) cache.delete(key);
+    const previousInMemory =
+      existing && !existing.pending && !existing.failed ? existing.promise : Promise.resolve(null);
     const promise = runWindowsHelper(sshHost, profileId)
       .then(async (contents) => {
-        const usage = normalizeUsage(contents, profileId, profile.email);
+        let usage = normalizeUsage(contents, profileId, profile.email);
         if (usage && cache.get(key) === entry && scope === getCcsDir()) {
+          const [retained, memory] = await Promise.all([
+            readClaudeDesktopLiveSnapshot(scope, profileId, manifestHash),
+            previousInMemory,
+          ]);
+          const disk =
+            isRecord(retained) && retained.source === SOURCE
+              ? normalizeSample(retained, profileId, profile.email, RETAINED_SAMPLE_MAX_AGE_MS)
+              : null;
+          const inMemory = memory
+            ? normalizeSample(memory, profileId, profile.email, RETAINED_SAMPLE_MAX_AGE_MS)
+            : null;
+          const previous =
+            inMemory && (!disk || Date.parse(inMemory.fetchedAt) >= Date.parse(disk.fetchedAt))
+              ? inMemory
+              : disk;
+          usage = retainUnavailableExtras(usage, previous);
           const current = (await listClaudeDesktopProfiles().catch(() => [])).find(
             (candidate) => candidate.id === profileId
           );

@@ -19,14 +19,14 @@ let usageTimer = null;
 let analyticsPayload = null;
 let analyticsModel = null;
 let analyticsGeneration = 0;
-const analyticsSelection = { range: '7d', provider: 'all', account: 'all', metricKey: '' };
+const analyticsSelection = { range: '7d', provider: 'all', account: 'all', metricKey: '', activityInterval: 'Daily' };
 const platform = /Windows/i.test(navigator.userAgent) ? 'windows' : 'mac';
 function notice(message = '', inProgress = false) { noticeMessage = message; busy = inProgress; set_message(message, inProgress); }
 async function request(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    if (response.status === 401 && path !== '/api/auth/login') { authenticated = false; set_session(false, false, false, 'Your CCS session expired. Sign in again.'); }
+    if (response.status === 401 && path !== '/api/auth/login') { authenticated = false; set_session(false, false, false, 'Your AI Account Center session expired. Sign in again.'); }
     const error = new Error(payload?.error || `Request failed (${response.status}).`);
     error.status = response.status;
     error.payload = payload;
@@ -74,7 +74,7 @@ async function refresh(force = false) {
 }
 function renderAnalytics() {
   if (!analyticsPayload) return;
-  analyticsModel = analyticsView(analyticsPayload, { catalog: data?.accounts || [], metricKey: analyticsSelection.metricKey });
+  analyticsModel = analyticsView(analyticsPayload, { catalog: data?.accounts || [], metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval });
   set_analytics(JSON.stringify(analyticsModel));
 }
 async function refreshAnalytics(force = false) {
@@ -91,6 +91,15 @@ async function refreshAnalytics(force = false) {
   } catch (error) { if (generation === analyticsGeneration) { renderAnalytics(); set_analytics_loading(false, error?.message || 'Unable to load account analytics.'); } }
 }
 async function analyticsAction(action, value) {
+  if (action === 'analytics-activity-interval') {
+    if (!['Daily', 'Hourly'].includes(value)) return;
+    analyticsSelection.activityInterval = value; renderAnalytics(); return;
+  }
+  if (action === 'analytics-account-id') {
+    if (!analyticsModel?.choices?.accounts?.some(row => row.id === value)) return;
+    analyticsSelection.account = value; analyticsSelection.metricKey = '';
+    await refreshAnalytics(); return;
+  }
   if (action === 'analytics-range') {
     const label = value.toLowerCase();
     const range = label.includes('24') ? '24h' : label.includes('30') ? '30d' : label.includes('7') ? '7d' : null;
@@ -125,7 +134,7 @@ async function checkSession() {
     authenticated = status.authenticated === true || status.authRequired === false;
     set_session(authenticated, false, false, status.accessMode === 'setup' ? 'Dashboard authentication must be configured on the server.' : '');
     if (authenticated) { await loadSettings(); await refresh(); await updateStatus(); if (currentPage === 'analytics') await refreshAnalytics(); }
-  } catch { authenticated = false; set_session(false, false, false, 'Unable to connect to CCS. Try refreshing this page.'); }
+  } catch { authenticated = false; set_session(false, false, false, 'Unable to connect to AI Account Center. Try refreshing this page.'); }
 }
 function details(id) {
   const account = data?.accounts?.find(row => row.id === id);

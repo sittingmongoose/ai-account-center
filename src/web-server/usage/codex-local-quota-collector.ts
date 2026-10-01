@@ -16,7 +16,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { resolveCodexConfigPaths } from '../services/codex-dashboard-service';
+import { resolveCodexConfigPaths } from '../services/compatible-cli-config-paths';
 
 /**
  * One Codex quota window normalized for the bar's per-window detail.

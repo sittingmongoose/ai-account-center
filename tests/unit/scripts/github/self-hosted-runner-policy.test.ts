@@ -1,145 +1,117 @@
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-function workflowsDir() {
-  return path.resolve(import.meta.dir, '../../../../.github/workflows');
+const workflowDirectory = path.resolve(import.meta.dir, '../../../../.github/workflows');
+// This pure Compose diff check must cover fork PRs without executing their source.
+const forkSafeWorkflows = new Set(['breaking-change-guard.yml']);
+
+function readWorkflow(file: string) {
+  return fs.readFileSync(path.join(workflowDirectory, file), 'utf8');
 }
 
-  // Documented exceptions to the self-hosted-first policy (see CLAUDE.md "Self-Hosted Runner Policy").
-  // Each entry must include a justification comment explaining why GitHub-hosted runners
-  // are required for correctness (not just convenience).
-  const GITHUB_HOSTED_RUNNER_EXCEPTIONS: Record<string, string> = {
-    // Pure YAML diff parser — no untrusted code execution. Must cover ALL PRs including
-    // forks to prevent forked contributors from bypassing the breaking-change check.
-    // Gating on trusted-author association would silently allow contract-breaking changes
-    // from forks. No build, install, or arbitrary PR-branch scripts are run here.
-    'breaking-change-guard.yml': 'ubuntu-latest — fork-safe YAML diff check; no untrusted code execution',
-  };
+function activeWorkflowFiles() {
+  return fs.readdirSync(workflowDirectory).filter((file) => /\.ya?ml$/.test(file));
+}
 
-describe('self-hosted runner policy', () => {
-  test('keeps active workflows on local runners', () => {
-    const hostedRunnerLabels = [
-      'ubuntu-latest',
-      'ubuntu-24.04',
-      'ubuntu-22.04',
-      'macos-latest',
-      'windows-latest',
-    ];
-    const workflowFiles = fs
-      .readdirSync(workflowsDir())
-      .filter((file) => file.endsWith('.yml') || file.endsWith('.yaml'));
+function withoutComments(workflow: string) {
+  return workflow.replace(/^\s*#.*$/gm, '');
+}
 
+function jobBlocks(workflow: string) {
+  const jobs = workflow.slice(workflow.indexOf('\njobs:\n') + '\njobs:\n'.length);
+  return [...jobs.matchAll(/^ {2}([\w-]+):\s*\n([\s\S]*?)(?=^ {2}[\w-]+:\s*\n|$(?![\s\S]))/gm)].map(
+    ([, name, source]) => ({ name, source })
+  );
+}
+
+describe('workflow execution safety', () => {
+  test('uses runnable hosted Linux CI and preserves the existing manual Mac runner', () => {
+    const workflowFiles = activeWorkflowFiles();
     expect(workflowFiles.length).toBeGreaterThan(0);
 
     for (const file of workflowFiles) {
-      // Skip files with documented, justified exceptions to the self-hosted-first policy
-      if (GITHUB_HOSTED_RUNNER_EXCEPTIONS[file]) continue;
+      const workflow = withoutComments(readWorkflow(file));
+      const jobs = jobBlocks(workflow);
+      expect(jobs.length, `${file} must expose its jobs to the safety check`).toBeGreaterThan(0);
 
-      const workflow = fs.readFileSync(path.join(workflowsDir(), file), 'utf8');
-
-      for (const label of hostedRunnerLabels) {
-        expect(workflow, `${file} must not use GitHub-hosted runner ${label}`).not.toContain(
-          `runs-on: ${label}`
+      for (const { name, source } of jobs) {
+        if (file === 'bar-release.yml') {
+          expect(source, `${file}:${name} must keep the existing Mac packaging runner`).toMatch(
+            /^\s*runs-on:.*\bself-hosted\b.*\bmacos\b/m
+          );
+          continue;
+        }
+        expect(source, `${file}:${name} must have an available hosted Linux runner`).toMatch(
+          /^\s*runs-on: ubuntu-latest\s*$/m
         );
+        expect(source).not.toContain('self-hosted');
       }
-
-      expect(workflow, `${file} must target a self-hosted runner`).toContain('self-hosted');
     }
   });
 
-  test('documented exceptions use github-hosted runners for justified safety reasons', () => {
-    // Verify each documented exception actually uses a GitHub-hosted runner
-    // (prevents stale exception entries that no longer reflect the workflow)
-    for (const [file, reason] of Object.entries(GITHUB_HOSTED_RUNNER_EXCEPTIONS)) {
-      const workflow = fs.readFileSync(path.join(workflowsDir(), file), 'utf8');
-      const hasGitHubHosted = ['ubuntu-latest', 'ubuntu-24.04', 'ubuntu-22.04', 'macos-latest', 'windows-latest']
-        .some((label) => workflow.includes(`runs-on: ${label}`));
-      expect(hasGitHubHosted, `${file} is in exceptions list (reason: ${reason}) but does not use a GitHub-hosted runner — remove the exception or restore the runner type`).toBe(true);
-    }
-  });
-
-  test('breaking-change guard scopes compose contract checks to services.ccs', () => {
-    const workflow = fs.readFileSync(path.join(workflowsDir(), 'breaking-change-guard.yml'), 'utf8');
-
-    expect(workflow).toContain('OLD_RAW=$(service_field_value "$BASE_COMPOSE" ccs image)');
-    expect(workflow).toContain('NEW_RAW=$(service_field_value docker/compose.yaml ccs image)');
-    expect(workflow).toContain('has_service_network_effective_name docker/compose.yaml ccs ccs-net');
-    expect(workflow).toContain('OLD_CN=$(service_field_value "$BASE_COMPOSE" ccs container_name');
-    expect(workflow).not.toContain("grep -m1 '^[[:space:]]*image:'");
-    expect(workflow).not.toContain('services.ccs.hostname override');
-  });
-
-  test('gates pull-request self-hosted worker deploys to trusted authors', () => {
-    const workflow = fs.readFileSync(path.join(workflowsDir(), 'deploy-ccs-worker.yml'), 'utf8');
-
-    expect(workflow).toContain("github.event_name != 'pull_request'");
-    expect(workflow).toContain(
-      'contains(fromJSON(\'["COLLABORATOR","MEMBER","OWNER"]\'), github.event.pull_request.author_association)'
-    );
-  });
-
-  test('gates pull-request workflows that check out code on self-hosted runners', () => {
+  test('each PR job that executes checked-out source keeps its trusted-author gate', () => {
     const trustedAuthorGate =
       'contains(fromJSON(\'["COLLABORATOR","MEMBER","OWNER"]\'), github.event.pull_request.author_association)';
-    const workflowFiles = fs
-      .readdirSync(workflowsDir())
-      .filter((file) => file.endsWith('.yml') || file.endsWith('.yaml'));
 
-    for (const file of workflowFiles) {
-      const workflow = fs.readFileSync(path.join(workflowsDir(), file), 'utf8');
-
-      if (workflow.includes('pull_request_target:')) {
-        expect(workflow, `${file} must not check out code from pull_request_target`).not.toContain(
-          'uses: actions/checkout'
+    for (const file of activeWorkflowFiles()) {
+      const workflow = withoutComments(readWorkflow(file));
+      const triggers = workflow.split('\njobs:\n')[0];
+      if (/^ {2}pull_request_target:/m.test(triggers)) {
+        expect(workflow, `${file} must not check out source with pull_request_target`).not.toMatch(
+          /^\s*uses: actions\/checkout@/m
         );
       }
+      if (!/^ {2}pull_request:/m.test(triggers) || forkSafeWorkflows.has(file)) continue;
 
-      // Documented exceptions run on GitHub-hosted runners for justified safety reasons
-      // (e.g. must cover forked PRs, no untrusted code execution). These workflows do not
-      // use self-hosted runners for their PR jobs, so the trusted-author gate does not apply.
-      if (GITHUB_HOSTED_RUNNER_EXCEPTIONS[file]) continue;
-
-      if (
-        workflow.includes('pull_request:') &&
-        workflow.includes('self-hosted') &&
-        workflow.includes('uses: actions/checkout')
-      ) {
-        expect(workflow, `${file} must gate self-hosted PR checkout to trusted authors`).toContain(
+      for (const { name, source } of jobBlocks(workflow)) {
+        if (!/^\s*uses: actions\/checkout@/m.test(source)) {
+          continue;
+        }
+        const jobSettings = source.split('\n    steps:')[0];
+        expect(jobSettings, `${file}:${name} must gate checkout at the job level`).toContain(
           trustedAuthorGate
         );
       }
     }
   });
 
-  test('scoped PAT headers match repository URL forms used by git', () => {
-    const header = 'AUTHORIZATION: basic test-token';
-    const env = {
-      ...process.env,
-      GIT_CONFIG_COUNT: '2',
-      GIT_CONFIG_KEY_0: 'http.https://github.com/kaitranntt/ccs.extraheader',
-      GIT_CONFIG_VALUE_0: header,
-      GIT_CONFIG_KEY_1: 'http.https://github.com/kaitranntt/ccs.git.extraheader',
-      GIT_CONFIG_VALUE_1: header,
-    };
+  test('the universal Compose guard parses the contract without running untrusted source', () => {
+    const workflow = withoutComments(readWorkflow('breaking-change-guard.yml'));
 
-    for (const url of ['https://github.com/kaitranntt/ccs', 'https://github.com/kaitranntt/ccs.git']) {
-      const result = spawnSync('git', ['config', '--get-urlmatch', 'http.extraheader', url], {
-        env,
-        encoding: 'utf8',
-      });
+    expect(workflow).toContain('persist-credentials: false');
+    expect(workflow.match(/^\s*uses: (.+)$/gm)).toEqual([
+      '        uses: actions/checkout@v4',
+    ]);
+    expect(workflow).not.toMatch(
+      /\b(?:bun|npm|yarn|pnpm|cargo|wasm-pack|node|python\d*|bash|sh|curl|wget)\s/
+    );
+    expect(workflow).toContain('OLD_RAW=$(service_field_value "$BASE_COMPOSE" ccs image)');
+    expect(workflow).toContain('NEW_RAW=$(service_field_value docker/compose.yaml ccs image)');
+    expect(workflow).toContain('has_service_network_effective_name docker/compose.yaml ccs ccs-net');
+    expect(workflow).toContain('OLD_CN=$(service_field_value "$BASE_COMPOSE" ccs container_name');
+  });
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(header);
-    }
+  test('manual Mac packaging checks out the fork default branch without publishing access', () => {
+    const workflow = withoutComments(readWorkflow('bar-release.yml'));
+    const triggers = workflow.split('\npermissions:')[0];
+    const packageJob = jobBlocks(workflow).find(({ name }) => name === 'package');
 
-    for (const file of ['release.yml', 'dev-release.yml', 'sync-dev-after-release.yml']) {
-      const workflow = fs.readFileSync(path.join(workflowsDir(), file), 'utf8');
-
-      expect(workflow).toContain('echo "::add-mask::${auth_header}"');
-      expect(workflow).toContain('http.https://github.com/kaitranntt/ccs.extraheader');
-      expect(workflow).toContain('http.https://github.com/kaitranntt/ccs.git.extraheader');
-    }
+    expect(triggers).toMatch(/^ {2}workflow_dispatch:/m);
+    expect(triggers).not.toMatch(/^ {2}(?:push|pull_request(?:_target)?|release|schedule):/m);
+    expect(packageJob).toBeDefined();
+    expect(packageJob!.source.split('\n    steps:')[0]).toContain(
+      "github.repository == 'sittingmongoose/ai-account-center' && github.ref_name == github.event.repository.default_branch"
+    );
+    expect(workflow).toContain('ref: ${{ github.event.repository.default_branch }}');
+    expect(workflow).toContain('persist-credentials: false');
+    expect(workflow).toContain('permissions:\n  contents: read');
+    expect(workflow).not.toMatch(/^\s*[\w-]+:\s*write\s*$/m);
+    expect(workflow).not.toMatch(/secrets\.|create-github-app-token|PAT_TOKEN/);
+    expect(workflow).not.toMatch(
+      /action-gh-release|build-push-action|\bgh release\b|\b(?:npm|bun) publish\b|\bdocker\s+(?:buildx\s+)?push\b|\bwrangler\b|\bgit push\b/
+    );
+    expect(workflow).toContain('uses: actions/upload-artifact@v4');
+    expect(workflow).toContain('path: macos-bar/dist/AI-Account-Center.app.zip');
   });
 });

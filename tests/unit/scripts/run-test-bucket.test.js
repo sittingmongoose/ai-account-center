@@ -1,30 +1,32 @@
 const { describe, expect, test } = require('bun:test');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const bucket = require('../../../scripts/run-test-bucket.js');
 
+// Disposable source fixtures test runner detection independently of retired product suites.
+function withValidationFixtures(check) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-test-bucket-'));
+  const root = path.resolve(__dirname, '../../../');
+  const suitePath = path.join(directory, 'suite.test.ts');
+  const standalonePath = path.join(directory, 'standalone.js');
+  fs.writeFileSync(suitePath, "import { test } from 'bun:test';\n");
+  fs.writeFileSync(standalonePath, "console.log('standalone fixture');\n");
+  try {
+    check({
+      suite: path.relative(root, suitePath),
+      standalone: path.relative(root, standalonePath),
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 describe('run-test-bucket', () => {
-  const browserMcpSplitSuites = [
-    'tests/unit/hooks/browser-mcp-advanced-interactions.test.ts',
-    'tests/unit/hooks/browser-mcp-downloads-and-files.test.ts',
-    'tests/unit/hooks/browser-mcp-navigation-and-query.test.ts',
-    'tests/unit/hooks/browser-mcp-orchestration-and-artifacts.test.ts',
-    'tests/unit/hooks/browser-mcp-recording-and-replay.test.ts',
-    'tests/unit/hooks/browser-mcp-session-and-intercepts.test.ts',
-  ];
-
-  test('all declared slow tests still exist on disk', () => {
-    for (const relativePath of bucket.slowTests) {
+  test('all declared slow and isolated tests still exist on disk', async () => {
+    for (const relativePath of [...bucket.slowTests, ...bucket.isolatedTests]) {
       const absolutePath = path.resolve(__dirname, '../../../', relativePath);
-      expect(Bun.file(absolutePath).exists()).resolves.toBe(true);
-    }
-  });
-
-  test('keeps the split Browser MCP suites in the slow bucket', () => {
-    const slowSet = bucket.getSlowSet();
-
-    expect(slowSet.has('tests/unit/hooks/ccs-browser-mcp-server.test.ts')).toBe(false);
-    for (const relativePath of browserMcpSplitSuites) {
-      expect(slowSet.has(relativePath)).toBe(true);
+      await expect(Bun.file(absolutePath).exists()).resolves.toBe(true);
     }
   });
 
@@ -87,32 +89,26 @@ describe('run-test-bucket', () => {
   test('isolates known sticky mock suites outside src', () => {
     const runs = bucket.getBunRuns('fast', [
       'tests/unit/scripts/run-test-bucket.test.js',
-      'tests/unit/commands/bar-command.test.ts',
-      'tests/unit/targets/target-registry.test.ts',
+      'tests/unit/utils/fetch-proxy-setup.test.ts',
+      'tests/unit/web-server/usage/account-attribution.test.ts',
     ]);
 
     expect(runs.map((run) => run.label)).toEqual([
       'shared',
-      'tests/unit/commands/bar-command.test.ts',
-      'tests/unit/targets/target-registry.test.ts',
+      'tests/unit/utils/fetch-proxy-setup.test.ts',
+      'tests/unit/web-server/usage/account-attribution.test.ts',
     ]);
   });
 
   test('isolates standalone validation scripts that are not Bun test suites', () => {
-    const runs = bucket.getBunRuns('slow', [
-      'tests/integration/cursor-daemon-lifecycle.test.ts',
-      'tests/integration/token-counting-test.js',
-    ]);
+    withValidationFixtures(({ suite, standalone }) => {
+      const runs = bucket.getBunRuns('slow', [suite, standalone]);
 
-    expect(bucket.usesBunTestRunner('tests/integration/cursor-daemon-lifecycle.test.ts')).toBe(
-      true
-    );
-    expect(bucket.usesBunTestRunner('tests/integration/token-counting-test.js')).toBe(false);
-    expect(runs.map((run) => run.label)).toEqual([
-      'shared',
-      'tests/integration/token-counting-test.js',
-    ]);
-    expect(runs[1].quietOnPass).toBe(true);
+      expect(bucket.usesBunTestRunner(suite)).toBe(true);
+      expect(bucket.usesBunTestRunner(standalone)).toBe(false);
+      expect(runs.map((run) => run.label)).toEqual(['shared', standalone]);
+      expect(runs[1].quietOnPass).toBe(true);
+    });
   });
 
   test('parses Bun file counts from test summaries', () => {
@@ -131,16 +127,10 @@ describe('run-test-bucket', () => {
   });
 
   test('skips Bun file-count verification for standalone validation scripts', () => {
-    expect(
-      bucket.shouldVerifyRunFileCount({
-        selected: ['tests/integration/token-counting-test.js'],
-      })
-    ).toBe(false);
-    expect(
-      bucket.shouldVerifyRunFileCount({
-        selected: ['tests/integration/cursor-daemon-lifecycle.test.ts'],
-      })
-    ).toBe(true);
+    withValidationFixtures(({ suite, standalone }) => {
+      expect(bucket.shouldVerifyRunFileCount({ selected: [standalone] })).toBe(false);
+      expect(bucket.shouldVerifyRunFileCount({ selected: [suite] })).toBe(true);
+    });
   });
 
   test('keeps dist-independent javascript tests in the fast bucket', () => {
@@ -148,7 +138,7 @@ describe('run-test-bucket', () => {
   });
 
   test('keeps non-allowlisted javascript tests in the slow bucket', () => {
-    expect(bucket.shouldForceSlow('tests/unit/commands/persist-command.test.js')).toBe(true);
+    expect(bucket.shouldForceSlow('tests/unit/scripts/run-test-bucket.test.js')).toBe(true);
   });
 
   test('still forces dist-dependent tests into the slow bucket', () => {

@@ -1,7 +1,7 @@
 /**
- * CCS Config Dashboard - Web Server
+ * AI Account Center - Web Server
  *
- * Express server with WebSocket support for real-time config management.
+ * Express server for the account dashboard and native account controls.
  * Single HTTP server handles REST API, static files, and WebSocket connections.
  * The same Slint WebAssembly dashboard is served in development and production.
  */
@@ -11,7 +11,6 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import path from 'path';
 import { WebSocketServer } from 'ws';
-import { setupWebSocket } from './websocket';
 import {
   authMiddleware,
   createSessionMiddleware,
@@ -19,7 +18,6 @@ import {
   isDashboardWebSocketUpgradeAllowed,
 } from './middleware/auth-middleware';
 import { requestLoggingMiddleware } from './middleware/request-logging-middleware';
-import { startAutoSyncWatcher, stopAutoSyncWatcher } from '../cliproxy/sync';
 import { shutdownUsageAggregator } from './usage/aggregator';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
@@ -86,25 +84,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // Auth middleware (protects API routes when enabled)
   app.use(authMiddleware);
 
-  // CLIProxy local reverse proxy (avoids cross-origin issues in Docker)
-  const cliproxyLocalProxy = (await import('./routes/cliproxy-local-proxy')).default;
-  app.use('/api/cliproxy-local', cliproxyLocalProxy);
-
   // REST API routes (modularized)
   const { apiRoutes } = await import('./routes/index');
   app.use('/api', apiRoutes);
-
-  // Shared data routes (Phase 07)
-  const { sharedRoutes } = await import('./shared-routes');
-  app.use('/api/shared', sharedRoutes);
-
-  // Overview routes (Phase 07)
-  const { overviewRoutes } = await import('./overview-routes');
-  app.use('/api/overview', overviewRoutes);
-
-  // Usage analytics routes
-  const { usageRoutes } = await import('./usage-routes');
-  app.use('/api/usage', usageRoutes);
 
   const staticDir = options.staticDir || path.join(__dirname, '../ui');
   app.use(
@@ -165,19 +147,13 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     );
   });
 
-  // WebSocket connection handler + file watcher
-  const { cleanup: wsCleanup } = setupWebSocket(wss);
-
-  // Start auto-sync watcher (if enabled in config)
-  startAutoSyncWatcher();
   const codexAutoSwitch = getCodexAutoSwitchService();
 
   // Combined cleanup function
   const cleanup = () => {
     codexAutoSwitch.stop();
     stopAccountAnalyticsSampling();
-    wsCleanup();
-    stopAutoSyncWatcher().catch(() => {});
+    wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
     shutdownUsageAggregator();
   };
   server.once('close', cleanup);

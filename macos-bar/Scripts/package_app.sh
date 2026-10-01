@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assemble and sign "CCS Bar.app" from a release build.
+# Assemble and sign "AI Account Center.app" from a release build.
 #
 # Signing mode (CCS_BAR_SIGNING):
 #   adhoc        (default) ad-hoc sign with `codesign -s -`. Free, no Apple
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 SIGNING="${CCS_BAR_SIGNING:-adhoc}"
-APP_NAME="CCS Bar"
+APP_NAME="AI Account Center"
 EXEC_NAME="CCSBar"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -41,11 +41,17 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$EXEC_NAME"
 sed "s/__VERSION__/$VERSION/g" "$ROOT/Resources/Info.plist" > "$APP/Contents/Info.plist"
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 
 # Bundle the CCS icon assets (menu-bar color/template + header logo) so
 # Bundle.main can resolve them at runtime.
 if [[ -d "$ROOT/Resources/Assets" ]]; then
   cp "$ROOT/Resources/Assets/"*.png "$APP/Contents/Resources/" 2>/dev/null || true
+  for notice in PROVIDER-SOURCES.md THIRD-PARTY-NOTICES.txt; do
+    if [[ -f "$ROOT/Resources/Assets/$notice" ]]; then
+      cp "$ROOT/Resources/Assets/$notice" "$APP/Contents/Resources/$notice"
+    fi
+  done
 fi
 
 # Build AppIcon.icns from AppIcon-source.png (1024x1024 RGBA PNG).
@@ -89,14 +95,14 @@ case "$SIGNING" in
     ;;
 esac
 
-ZIP="$DIST/CCS-Bar.app.zip"
+ZIP="$DIST/AI-Account-Center.app.zip"
 echo "[i] Zipping -> $ZIP"
 rm -f "$ZIP"
-( cd "$DIST" && ditto -c -k --keepParent "$APP_NAME.app" "CCS-Bar.app.zip" )
+( cd "$DIST" && ditto -c -k --keepParent "$APP_NAME.app" "AI-Account-Center.app.zip" )
 
 echo "[OK] Packaged: $APP"
 echo "[OK] Asset:    $ZIP"
 if [[ "$SIGNING" == "adhoc" ]]; then
   echo "[i] Ad-hoc local build. Installation retains Gatekeeper metadata."
 fi
-echo "[i] To publish: gh release upload ccs-bar-latest \"$ZIP\" --clobber"
+echo "[i] Archive ready for the AI Account Center release workflow."

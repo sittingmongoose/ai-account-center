@@ -1,37 +1,46 @@
-/**
- * `ccs bar --version` / `ccs bar version`
- *
- * Prints the CCS CLI version alongside the installed CCS Bar app version
- * (read from ~/.ccs/bar/.version, if present).
- */
-
 import * as fs from 'fs';
 import * as path from 'path';
 import { getVersion } from '../../utils/version';
 import { getCcsDir } from '../../config/config-loader-facade';
+import { getMacAppPaths, resolveOwnedMacApp } from './native-app-paths';
 
-function readInstalledBarVersion(ccsDir: string): string | null {
-  const versionFile = path.join(ccsDir, 'bar', '.version');
+export interface VersionDeps {
+  getCcsDir: () => string;
+  getVersion: () => string;
+  getAppsDir: () => string;
+}
+
+function readRecordedVersion(ccsDir: string): string | null {
   try {
-    const content = fs.readFileSync(versionFile, 'utf8').trim();
-    return content || null;
+    const file = path.join(ccsDir, 'bar', '.version');
+    if (!fs.lstatSync(file).isFile()) return null;
+    const value = fs.readFileSync(file, 'utf8').trim();
+    return value.length < 100 && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value)
+      ? value
+      : null;
   } catch {
     return null;
   }
 }
 
-export async function handleBarVersion(): Promise<void> {
-  const cliVersion = getVersion();
-  const ccsDir = getCcsDir();
-  const barVersion = readInstalledBarVersion(ccsDir);
-
-  // Finding #13: label each line unambiguously — CLI version vs installed Bar app version.
-  console.log(`[i] CCS CLI v${cliVersion}`);
-  if (barVersion) {
-    console.log(`[i] CCS Bar app: v${barVersion}`);
-  } else {
-    console.log('[i] CCS Bar app: not installed (run `ccs bar install`)');
+/** Read metadata only; neither this command nor the native resolver changes private state. */
+export async function handleBarVersion(deps: Partial<VersionDeps> = {}): Promise<void> {
+  console.log(`[i] AI Account Center CLI v${(deps.getVersion ?? getVersion)()}`);
+  try {
+    const appsDir = (deps.getAppsDir ?? (() => getMacAppPaths().appsDir))();
+    const installed = resolveOwnedMacApp(appsDir);
+    if (installed) {
+      console.log(`[i] AI Account Center macOS app: v${installed.version ?? 'unknown'}`);
+      return;
+    }
+    console.log(
+      '[i] AI Account Center macOS app: not installed (run `ai-account-center bar install`)'
+    );
+    const recorded = readRecordedVersion((deps.getCcsDir ?? getCcsDir)());
+    if (recorded) console.log(`[i] Last recorded bar version: v${recorded}`);
+  } catch (error) {
+    console.log(
+      `[!] Native app metadata unavailable: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
-
-  process.exit(0);
 }

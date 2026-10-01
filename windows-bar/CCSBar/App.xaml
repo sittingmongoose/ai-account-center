@@ -11,7 +11,21 @@
    <Setter Property="FontFamily" Value="Segoe UI" />
    <Setter Property="FontSize" Value="12" />
   </Style>
+  <Style TargetType="ToolTip">
+   <Setter Property="Foreground" Value="#EAF2FF" /><Setter Property="Background" Value="#142C46" />
+   <Setter Property="BorderBrush" Value="#3498FF" /><Setter Property="BorderThickness" Value="1" />
+   <Setter Property="Padding" Value="10,7" /><Setter Property="FontFamily" Value="Segoe UI" /><Setter Property="FontSize" Value="11" />
+   <Setter Property="MaxWidth" Value="330" />
+   <Setter Property="Template">
+    <Setter.Value><ControlTemplate TargetType="ToolTip">
+     <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="7" Padding="{TemplateBinding Padding}">
+      <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" />
+     </Border>
+    </ControlTemplate></Setter.Value>
+   </Setter>
+  </Style>
   <Style TargetType="Button">
+   <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
    <Setter Property="Foreground" Value="#EAF2FF" />
    <Setter Property="Background" Value="#142C46" />
    <Setter Property="BorderThickness" Value="0" />
@@ -32,6 +46,19 @@
      </ControlTemplate>
     </Setter.Value>
    </Setter>
+  </Style>
+  <Style x:Key="AccountRowButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+   <Setter Property="Background" Value="Transparent" /><Setter Property="Padding" Value="0" />
+   <Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="FocusVisualStyle" Value="{x:Null}" />
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+    <Border x:Name="RowPlate" Background="{TemplateBinding Background}" BorderBrush="Transparent" BorderThickness="1" CornerRadius="6">
+     <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+    </Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="RowPlate" Property="Background" Value="#17324D" /></Trigger>
+     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="RowPlate" Property="BorderBrush" Value="#3498FF" /></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
   </Style>
   <Style TargetType="CheckBox">
    <Setter Property="Foreground" Value="#EAF2FF" />
@@ -68,16 +95,25 @@
    <Setter Property="Template">
     <Setter.Value>
      <ControlTemplate TargetType="ComboBox">
-      <Grid>
-       <ToggleButton IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" Focusable="False">
-        <ToggleButton.Template><ControlTemplate TargetType="ToggleButton"><Border Background="#142C46" BorderBrush="#274566" BorderThickness="1" CornerRadius="6" /></ControlTemplate></ToggleButton.Template>
+      <Grid x:Name="PickerLayout" MinHeight="28" SnapsToDevicePixels="True">
+       <Border x:Name="PickerPlate" Background="#142C46" BorderBrush="#274566" BorderThickness="1" CornerRadius="6" />
+       <ToggleButton x:Name="PickerToggle" IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" Focusable="False">
+        <ToggleButton.Template><ControlTemplate TargetType="ToggleButton"><Border Background="Transparent" /></ControlTemplate></ToggleButton.Template>
        </ToggleButton>
-       <ContentPresenter Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" Margin="8,7,22,7" VerticalAlignment="Center" IsHitTestVisible="False" />
-       <TextBlock Text="⌄" Foreground="#A4C1E4" HorizontalAlignment="Right" Margin="0,0,7,0" VerticalAlignment="Center" IsHitTestVisible="False" />
-       <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False">
-        <Border Background="#142C46" BorderBrush="#274566" BorderThickness="1" CornerRadius="5" MinWidth="92"><ScrollViewer><ItemsPresenter /></ScrollViewer></Border>
+       <ContentPresenter Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" TextElement.Foreground="{TemplateBinding Foreground}" TextElement.FontSize="{TemplateBinding FontSize}" Margin="9,3,28,3" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False" />
+       <Path x:Name="PickerChevron" Data="M1,1 L4.5,4.5 L8,1" Width="9" Height="6" Stroke="#A4C1E4" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" HorizontalAlignment="Right" Margin="0,0,9,0" VerticalAlignment="Center" IsHitTestVisible="False" />
+       <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}" AllowsTransparency="True" Focusable="False">
+        <Border Background="#142C46" BorderBrush="#3498FF" BorderThickness="1" CornerRadius="6" MinWidth="{TemplateBinding ActualWidth}" Padding="3">
+         <ScrollViewer MaxHeight="{TemplateBinding MaxDropDownHeight}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" CanContentScroll="True"><ItemsPresenter SnapsToDevicePixels="True" /></ScrollViewer>
+        </Border>
        </Popup>
       </Grid>
+      <ControlTemplate.Triggers>
+       <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="PickerPlate" Property="Background" Value="#1C3A58" /><Setter TargetName="PickerPlate" Property="BorderBrush" Value="#456A91" /></Trigger>
+       <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="PickerPlate" Property="BorderBrush" Value="#3498FF" /></Trigger>
+       <Trigger Property="IsDropDownOpen" Value="True"><Setter TargetName="PickerPlate" Property="Background" Value="#1E3F60" /><Setter TargetName="PickerPlate" Property="BorderBrush" Value="#3498FF" /><Setter TargetName="PickerChevron" Property="RenderTransform"><Setter.Value><RotateTransform Angle="180" CenterX="4.5" CenterY="3" /></Setter.Value></Setter></Trigger>
+       <Trigger Property="IsEnabled" Value="False"><Setter TargetName="PickerLayout" Property="Opacity" Value="0.45" /></Trigger>
+      </ControlTemplate.Triggers>
      </ControlTemplate>
     </Setter.Value>
    </Setter>
