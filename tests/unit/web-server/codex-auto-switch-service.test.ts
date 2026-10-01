@@ -84,6 +84,7 @@ function row(profile: string, used: number, overrides: Partial<BarSummaryRow> = 
 
 function harness(overrides: CodexAutoSwitchDeps = {}) {
   let enabled = true;
+  let thresholdPercent = 5;
   const getSummary = mock(async () => summary());
   const getRows = mock(async (_names: string[]) => [
     row('alpha', 95),
@@ -93,9 +94,10 @@ function harness(overrides: CodexAutoSwitchDeps = {}) {
   const activate = mock(async (_name: string) => undefined);
   const service = new CodexAutoSwitchService({
     ccsDir: '/fake/native-auto',
-    readConfig: () => ({ enabled }),
+    readConfig: () => ({ enabled, thresholdPercent }),
     writeConfig: (config) => {
       enabled = config.enabled;
+      thresholdPercent = config.thresholdPercent ?? 5;
     },
     getSummary,
     getRows,
@@ -151,6 +153,112 @@ function authContent(headerWorkspace: unknown, claimWorkspace: unknown = 'alpha'
 }
 
 describe('native Codex automatic switching', () => {
+  it('uses the configured remaining threshold, so 85% used means 15% remaining', async () => {
+    const h = harness({
+      getRows: async () => [row('alpha', 85), row('beta', 80), row('gamma', 90)],
+    });
+    await h.service.runCycle();
+    expect(h.activate).not.toHaveBeenCalled();
+    expect(h.service.getStatus().outcome).toBe('healthy');
+    const status = h.service.updateSettings({ thresholdPercent: 15 });
+    expect(status).toMatchObject({ enabled: true, thresholdPercent: 15, outcome: 'scheduled' });
+    await h.service.runCycle();
+    expect(h.activate).toHaveBeenCalledWith('beta');
+  });
+
+  it('requires a candidate above the configured threshold in every reported core window', async () => {
+    const candidate = row('beta', 0);
+    candidate.quotaWindows?.push({
+      key: 'five_hour',
+      label: '5h',
+      usedPercent: 85,
+      remainingPercent: 15,
+      resetAt: null,
+      windowMinutes: 300,
+    });
+    const h = harness({ getRows: async () => [row('alpha', 85), candidate, row('gamma', 85)] });
+    h.service.updateSettings({ thresholdPercent: 15 });
+    await h.service.runCycle();
+    expect(h.activate).not.toHaveBeenCalled();
+    expect(h.service.getStatus().outcome).toBe('no_candidate');
+  });
+
+  it('persists custom thresholds through new service instances and enabled-only updates', () => {
+    const ccsDir = temporaryDirectory();
+    const first = new CodexAutoSwitchService({ ccsDir });
+    expect(first.updateSettings({ thresholdPercent: 15 })).toMatchObject({
+      enabled: false,
+      thresholdPercent: 15,
+    });
+    first.setEnabled(true);
+    const restarted = new CodexAutoSwitchService({ ccsDir });
+    expect(restarted.getStatus()).toMatchObject({ enabled: true, thresholdPercent: 15 });
+    restarted.setEnabled(false);
+    expect(new CodexAutoSwitchService({ ccsDir }).getStatus()).toMatchObject({
+      enabled: false,
+      thresholdPercent: 15,
+    });
+    const file = path.join(ccsDir, 'codex-auto-switch.json');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
+      version: 1,
+      enabled: false,
+      thresholdPercent: 15,
+      pollIntervalSeconds: 60,
+    });
+  });
+
+  it('preserves enabled legacy config and defaults a missing legacy threshold to 5% remaining', () => {
+    const ccsDir = temporaryDirectory();
+    const file = path.join(ccsDir, 'codex-auto-switch.json');
+    fs.writeFileSync(file, JSON.stringify({ version: 1, enabled: true, pollIntervalSeconds: 60 }));
+    const service = new CodexAutoSwitchService({ ccsDir });
+    expect(service.getStatus()).toMatchObject({ enabled: true, thresholdPercent: 5 });
+    service.updateSettings({ thresholdPercent: 15 });
+    expect(service.getStatus()).toMatchObject({ enabled: true, thresholdPercent: 15 });
+  });
+
+  it.each([0, 100, -1, 1.5, NaN, Infinity, '15', null])(
+    'rejects invalid threshold %s without persisting changes',
+    (thresholdPercent) => {
+      const ccsDir = temporaryDirectory();
+      const service = new CodexAutoSwitchService({ ccsDir });
+      expect(() => service.updateSettings({ thresholdPercent } as never)).toThrow();
+      expect(fs.readdirSync(ccsDir)).toEqual([]);
+    }
+  );
+
+  it('changing the threshold cancels a queued decision and preserves cycle coalescing', async () => {
+    let release!: (rows: BarSummaryRow[]) => void;
+    const pending = new Promise<BarSummaryRow[]>((resolve) => {
+      release = resolve;
+    });
+    const h = harness({ getRows: async () => pending });
+    const first = h.service.runCycle();
+    const overlapping = h.service.runCycle();
+    expect(first).toBe(overlapping);
+    await Promise.resolve();
+    h.service.updateSettings({ thresholdPercent: 15 });
+    release([row('alpha', 100), row('beta', 0)]);
+    await Promise.all([first, overlapping]);
+    expect(h.activate).not.toHaveBeenCalled();
+    expect(h.service.getStatus()).toMatchObject({ thresholdPercent: 15, outcome: 'scheduled' });
+    await h.service.runCycle();
+    expect(h.activate).toHaveBeenCalledTimes(1);
+  });
+
+  it('rereads an externally changed threshold before activation and evaluates it on the next cycle', async () => {
+    let reads = 0;
+    const h = harness({
+      readConfig: () => ({ enabled: true, thresholdPercent: ++reads === 1 ? 5 : 15 }),
+    });
+    await h.service.runCycle();
+    expect(h.activate).not.toHaveBeenCalled();
+    expect(h.service.getStatus()).toMatchObject({ thresholdPercent: 15, outcome: 'scheduled' });
+    await h.service.runCycle();
+    expect(h.activate).toHaveBeenCalledWith('beta');
+  });
+
   it('retains a private auth snapshot only when quota header and saved JWT workspace agree', () => {
     const value = getCodexAutoSwitchAuthSnapshotFromContents(authContent('alpha'), {
       alpha: authContent('alpha'),

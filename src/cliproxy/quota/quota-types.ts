@@ -88,6 +88,25 @@ export interface CodexQuotaResult extends QuotaErrorMetadata {
   windows: CodexQuotaWindow[];
   /** Explicit core usage windows (5h + weekly) for easier reset display */
   coreUsage?: CodexCoreUsageSummary;
+  /** Raw provider credit units, matching the official Codex status display. */
+  credits?: {
+    hasCredits: boolean | null;
+    unlimited: boolean | null;
+    balance: number | null;
+  };
+  /** Effective monthly workspace spend control, only when explicitly reported. */
+  monthlySpend?: {
+    used: number | null;
+    limit: number | null;
+    remainingPercent: number | null;
+    resetAt: string | null;
+  };
+  /** Banked resets are separate from spendable credits and never redeemed here. */
+  resetCredits?: {
+    available: number | null;
+    applicable: number | null;
+    credits?: { resetType: string; expiresAt: string | null }[];
+  };
   /** Plan type: free, plus, pro, team, or null if unknown */
   planType: 'free' | 'plus' | 'pro' | 'team' | null;
   /** Timestamp of fetch */

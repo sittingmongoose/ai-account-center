@@ -331,7 +331,7 @@ describe('Codex Quota Fetcher', () => {
       expect(windows).toHaveLength(0);
     });
 
-    it('should default usedPercent to 0 when missing', () => {
+    it('should omit a window when the provider has not reported usage', () => {
       const response = {
         rate_limit: {
           primary_window: {
@@ -342,8 +342,7 @@ describe('Codex Quota Fetcher', () => {
 
       const windows = buildCodexQuotaWindows(response);
 
-      expect(windows[0].usedPercent).toBe(0);
-      expect(windows[0].remainingPercent).toBe(100);
+      expect(windows).toHaveLength(0);
     });
 
     it('should attach category and cadence metadata to standard usage windows', () => {

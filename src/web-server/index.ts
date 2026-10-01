@@ -3,7 +3,7 @@
  *
  * Express server with WebSocket support for real-time config management.
  * Single HTTP server handles REST API, static files, and WebSocket connections.
- * In dev mode, integrates Vite for HMR.
+ * The same Slint WebAssembly dashboard is served in development and production.
  */
 
 import express from 'express';
@@ -24,6 +24,10 @@ import { shutdownUsageAggregator } from './usage/aggregator';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
 import { getCodexAutoSwitchService } from './services/codex-auto-switch-service';
+import {
+  startAccountAnalyticsSampling,
+  stopAccountAnalyticsSampling,
+} from './services/account-analytics-service';
 import { ConfigError } from '../errors/error-types';
 
 export interface ServerOptions {
@@ -102,29 +106,26 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const { usageRoutes } = await import('./usage-routes');
   app.use('/api/usage', usageRoutes);
 
-  // Dev mode: use Vite middleware for HMR
-  if (options.dev) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      root: path.join(__dirname, '../../ui'),
-      server: {
-        middlewareMode: true,
-        // Reuse the dashboard HTTP server for HMR in middleware mode.
-        hmr: { server },
+  const staticDir = options.staticDir || path.join(__dirname, '../ui');
+  app.use(
+    express.static(staticDir, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.wasm')) res.setHeader('Content-Type', 'application/wasm');
       },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    // Production: serve static files from dist/ui/
-    const staticDir = options.staticDir || path.join(__dirname, '../ui');
-    app.use(express.static(staticDir));
-
-    // SPA fallback - return index.html for all non-API routes
-    app.get('*', (_req, res) => {
+    })
+  );
+  // Slint owns the account dashboard and login state; no React portal is served.
+  app.get('*', (req, res) => {
+    if (req.path === '/' || req.path === '/login') {
       res.sendFile(path.join(staticDir, 'index.html'));
-    });
-  }
+      return;
+    }
+    if (req.path.startsWith('/api/')) {
+      res.status(404).json({ error: 'API endpoint was not found.' });
+      return;
+    }
+    res.redirect('/');
+  });
 
   server.on('upgrade', (request, socket, head) => {
     const pathname = getUpgradePathname(request.url);
@@ -134,9 +135,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     }
 
     if (pathname !== '/ws') {
-      if (!options.dev) {
-        rejectWebSocketUpgrade(socket, 404, 'WebSocket endpoint not found');
-      }
+      rejectWebSocketUpgrade(socket, 404, 'WebSocket endpoint not found');
       return;
     }
 
@@ -176,6 +175,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // Combined cleanup function
   const cleanup = () => {
     codexAutoSwitch.stop();
+    stopAccountAnalyticsSampling();
     wsCleanup();
     stopAutoSyncWatcher().catch(() => {});
     shutdownUsageAggregator();
@@ -216,6 +216,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         dev: Boolean(options.dev),
       });
       codexAutoSwitch.start();
+      startAccountAnalyticsSampling();
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
       resolve({ server, wss, cleanup });

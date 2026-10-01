@@ -18,6 +18,10 @@ import {
 // Import domain routers
 import profileRoutes from './profile-routes';
 import accountRoutes from './account-routes';
+import accountDashboardRoutes from './account-dashboard-routes';
+import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
+import accountAnalyticsRoutes from './account-analytics-routes';
+import appUpdateRoutes from './app-update-routes';
 import configRoutes from './config-routes';
 import healthRoutes from './health-routes';
 import providerRoutes from './provider-routes';
@@ -103,7 +107,11 @@ apiRoutes.use((req, res, next) => {
 apiRoutes.use('/profiles', profileRoutes);
 apiRoutes.use('/settings', settingsRoutes);
 apiRoutes.use('/channels', channelsRoutes);
+apiRoutes.use('/accounts', accountDashboardRoutes);
+apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
+apiRoutes.use('/accounts', accountAnalyticsRoutes);
 apiRoutes.use('/accounts', accountRoutes);
+apiRoutes.use('/app-updates', appUpdateRoutes);
 
 // ==================== Unified Config ====================
 // Config format, migration

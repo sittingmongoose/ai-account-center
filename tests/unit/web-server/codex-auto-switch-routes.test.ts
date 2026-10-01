@@ -120,7 +120,11 @@ describe('native Codex automatic switching routes', () => {
     ['missing enabled', {}],
     ['string enabled', { enabled: 'true' }],
     ['numeric enabled', { enabled: 1 }],
-    ['threshold', { enabled: true, thresholdPercent: 99 }],
+    ['zero threshold', { enabled: true, thresholdPercent: 0 }],
+    ['threshold above range', { thresholdPercent: 100 }],
+    ['fractional threshold', { thresholdPercent: 15.5 }],
+    ['string threshold', { thresholdPercent: '15' }],
+    ['null threshold', { thresholdPercent: null }],
     ['interval', { enabled: true, pollIntervalSeconds: 1 }],
     ['host', { enabled: true, host: 'attacker.example.test' }],
     ['path', { enabled: true, path: '/private/auth.json' }],
@@ -131,6 +135,30 @@ describe('native Codex automatic switching routes', () => {
     expect(response.status).toBe(400);
     expect(fs.existsSync(path.join(tmpDir, 'codex-auto-switch.json'))).toBe(false);
   });
+
+  it('persists threshold-only changes while preserving enabled and enabled-only changes preserve threshold', async () => {
+    await request('PUT', { enabled: true });
+    const updated = await request('PUT', { thresholdPercent: 15 });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toMatchObject({
+      enabled: true,
+      thresholdPercent: 15,
+      outcome: 'scheduled',
+    });
+    const disabled = await request('PUT', { enabled: false });
+    expect(await disabled.json()).toMatchObject({ enabled: false, thresholdPercent: 15 });
+    const read = await request('GET');
+    expect(await read.json()).toMatchObject({ enabled: false, thresholdPercent: 15 });
+  });
+
+  it.each([1, 99])(
+    'accepts integer threshold boundary %s with an explicit enabled update',
+    async (thresholdPercent) => {
+      const response = await request('PUT', { enabled: true, thresholdPercent });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ enabled: true, thresholdPercent });
+    }
+  );
 
   it.each([
     { Origin: 'https://attacker.example.test' },

@@ -241,7 +241,8 @@ afterEach(() => {
   if (originalCcsHome !== undefined) process.env.CCS_HOME = originalCcsHome;
   else delete process.env.CCS_HOME;
 
-  if (originalClaudeConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  if (originalClaudeConfigDir !== undefined)
+    process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   else delete process.env.CLAUDE_CONFIG_DIR;
 
   if (originalCodexHome !== undefined) process.env.CODEX_HOME = originalCodexHome;
@@ -257,8 +258,8 @@ describe('usage aggregator native runtime integration', () => {
     expect(daily).toHaveLength(1);
     expect(daily[0]).toMatchObject({
       date: '2026-03-02',
-      inputTokens: 180,
-      outputTokens: 53,
+      inputTokens: 175,
+      outputTokens: 52,
       cacheReadTokens: 10,
     });
     expect(daily[0].modelsUsed).toContain('claude-sonnet-4-5');

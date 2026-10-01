@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "CCS Qwen Usage Bridge",
+  "version": "0.1.2",
+  "description": "Read Qwen usage through this browser’s existing sign-in while keeping that sign-in on Windows.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwQWi0hMXneoR3ziLa6tMpVI2ZaoFtHISC7/vL3kd0F+ILPA/50qsz+xH999RF2TPOOXyo8gFA9ZQ4+WVdz7ls8gx52JoaZq/aKMnKeTRG0rEAPEHth59wu5BsBs2/smE7yvT2HaNCyIIj6Kz/t6koc5s/gzKIdEljfAEx4i3RcfX3dOsisn+nzO43YxplgnLxBTY4zf6fmYenH1M9J6P+jnj1Hgbem+KPQEgWSriYUuVUrErLgw6uatAmhT/pI3M7vRg/K5i1wJXHUmiP4+WCiRSyh3/yDecYhxK3cQRUtgWp9OEBDwNW9hFKNN3EZceDlUtsPYO0eafcsplcN3ZfQIDAQAB",
+  "permissions": [
+    "cookies",
+    "nativeMessaging",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://qwencloud.com/*",
+    "*://home.qwencloud.com/*",
+    "*://cs-data.qwencloud.com/*",
+    "*://aliyun.com/*",
+    "*://bailian.console.aliyun.com/*",
+    "*://bailian-cs.console.aliyun.com/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CCS Qwen usage"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

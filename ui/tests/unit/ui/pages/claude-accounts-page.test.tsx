@@ -218,7 +218,7 @@ describe('ClaudeAccountsPage', () => {
     expect(screen.queryByText('Private metadata validation failed')).not.toBeInTheDocument();
   });
 
-  it('provides a direct Claude accounts sidebar link beside Codex accounts', () => {
+  it('provides home anchors for Claude and Codex accounts without unrelated tools', () => {
     render(
       <SidebarProvider>
         <AppSidebar />
@@ -227,11 +227,8 @@ describe('ClaudeAccountsPage', () => {
 
     expect(screen.getByRole('link', { name: 'Claude accounts' })).toHaveAttribute(
       'href',
-      '/claude/accounts'
+      '/#claude'
     );
-    expect(screen.getByRole('link', { name: 'Codex accounts' })).toHaveAttribute(
-      'href',
-      '/codex/accounts'
-    );
+    expect(screen.getByRole('link', { name: 'Codex accounts' })).toHaveAttribute('href', '/#codex');
   });
 });

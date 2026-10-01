@@ -1,7 +1,10 @@
 import { execFile } from 'child_process';
 import path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
-import type { ClaudeDesktopLauncher } from './claude-desktop-profile-service';
+import {
+  CLAUDE_WINDOWS_PROFILE_IDS,
+  type ClaudeDesktopLauncher,
+} from './claude-desktop-profile-service';
 
 const SSH_TIMEOUT_MS = 8000;
 const MAX_HISTORY_BYTES = 1024 * 1024;
@@ -95,6 +98,30 @@ export async function openClaudeMacLauncher(launcher: ClaudeDesktopLauncher): Pr
     `test "$console_uid" = "$current_uid" || exit 1`,
     `exec /usr/bin/open ${app}`,
   ].join('\n');
+  await runDesktopSsh(checkHost(launcher.sshHost), command);
+}
+
+/** Start only the existing fixed interactive task; SSH never launches a desktop app in session 0. */
+export async function openClaudeWindowsLauncher(
+  launcher: ClaudeDesktopLauncher,
+  profileId: string
+): Promise<void> {
+  if (!CLAUDE_WINDOWS_PROFILE_IDS.has(profileId)) {
+    throw new ValidationError('Select a configured Claude Windows account.');
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$task = Get-ScheduledTask -TaskPath '\\' -TaskName 'ccs-claude-${profileId}' -ErrorAction Stop`,
+    '$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    '$taskUser = [string]$task.Principal.UserId',
+    "$taskSid = if ($taskUser -match '^S-1-') { $taskUser } else { (New-Object Security.Principal.NTAccount($taskUser)).Translate([Security.Principal.SecurityIdentifier]).Value }",
+    "if ($taskSid -ne $currentSid -or [string]$task.Principal.LogonType -notin @('Interactive', 'InteractiveToken') -or [string]$task.Principal.RunLevel -ne 'Limited') { exit 1 }",
+    "$helper = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude', 'ccs-claude.exe')",
+    `if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ne $helper -or $task.Actions[0].Arguments -cne 'ccs-claude://launch/${profileId}') { exit 1 }`,
+    'if (@($task.Triggers | Where-Object { $null -ne $_ }).Count -ne 0 -or -not $task.Settings.Enabled -or -not $task.Settings.AllowDemandStart) { exit 1 }',
+    'Start-ScheduledTask -InputObject $task',
+  ].join('; ');
+  const command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
   await runDesktopSsh(checkHost(launcher.sshHost), command);
 }
 

@@ -1,0 +1,7 @@
+native-host/bin/
+native-host/obj/
+native-host/publish/
+*.zip
+*.log
+*-session.json
+*.dpapi

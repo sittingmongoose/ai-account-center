@@ -4,7 +4,10 @@ import {
   isDashboardWebSocketOriginAllowed,
   requireLocalAccessWhenAuthDisabled,
 } from '../middleware/auth-middleware';
-import { listClaudeDesktopProfileMetadata } from '../services/claude-desktop-profile-service';
+import {
+  CLAUDE_WINDOWS_PROFILE_IDS,
+  listClaudeDesktopProfileMetadata,
+} from '../services/claude-desktop-profile-service';
 import { openClaudeDesktopProfile } from '../services/claude-desktop-open-service';
 import { ClaudeDesktopTransportError } from '../services/claude-desktop-transport';
 import { getClaudeDesktopUsage } from '../services/claude-desktop-usage-service';
@@ -50,21 +53,24 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(req.params.id) ||
     !req.body ||
-    req.body.platform !== 'mac' ||
+    (req.body.platform !== 'mac' && req.body.platform !== 'windows') ||
+    (req.body.platform === 'windows' && !CLAUDE_WINDOWS_PROFILE_IDS.has(req.params.id)) ||
     Object.keys(req.body).some((key) => key !== 'platform')
   ) {
-    res.status(400).json({ error: 'Select a configured Claude Mac account.' });
+    res.status(400).json({ error: 'Select a configured Claude desktop account and platform.' });
     return;
   }
 
   try {
-    await openClaudeDesktopProfile(req.params.id);
-    res.json({ opened: true, id: req.params.id, platform: 'mac' });
+    await openClaudeDesktopProfile(req.params.id, req.body.platform);
+    res.json({ opened: true, id: req.params.id, platform: req.body.platform });
   } catch (error) {
     if (error instanceof ProfileError) {
       res.status(404).json({ error: 'Claude desktop profile was not found.' });
     } else if (error instanceof ConfigError) {
-      res.status(409).json({ error: 'Claude Mac launcher is not configured.' });
+      res
+        .status(409)
+        .json({ error: 'Claude desktop launcher is not configured for this platform.' });
     } else if (error instanceof ClaudeDesktopTransportError) {
       res.status(error.timedOut ? 504 : 502).json({ error: error.message });
     } else {

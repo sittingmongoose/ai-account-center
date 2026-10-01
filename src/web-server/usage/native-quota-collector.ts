@@ -52,6 +52,7 @@ import { getDefaultAccount, getProviderAccounts } from '../../cliproxy/accounts/
 import { getCodexLocalQuota, type CodexLocalQuota } from './codex-local-quota-collector';
 import type { ClaudeQuotaResult, CodexQuotaResult } from '../../cliproxy/quota/quota-types';
 import type { BarSummaryRow, QuotaWindowDetail } from '../routes/bar-routes';
+import { getCodexAdditionalUsageWindows } from './codex-network-extra-windows';
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -523,6 +524,9 @@ function buildCodexNetworkRow(
     .sort((a, b) => a.ms - b.ms);
   const nextReset = resets.length > 0 ? resets[0].iso : null;
 
+  const extraUsage = getCodexAdditionalUsageWindows(quota);
+  windows.push(...extraUsage.quotaWindows);
+
   return {
     account_id: `${surface}:${profile}`,
     provider: CODEX_NATIVE_PROVIDER,
@@ -545,6 +549,7 @@ function buildCodexNetworkRow(
     needsReauth: false,
     // No staleAsOf — live data is always fresh.
     ...(windows.length > 0 ? { quotaWindows: windows } : {}),
+    ...(extraUsage.balanceWindows.length > 0 ? { balanceWindows: extraUsage.balanceWindows } : {}),
   };
 }
 
@@ -1636,7 +1641,8 @@ function buildCodexNetworkRowLegacy(quota: CodexQuotaResult, now: number): BarSu
  */
 export async function getCodexProfileQuotaRows(
   profiles: string[],
-  deps: NativeQuotaDeps = {}
+  deps: NativeQuotaDeps = {},
+  opts?: { force?: boolean }
 ): Promise<BarSummaryRow[]> {
   const names = [...new Set(profiles)];
   const rows: BarSummaryRow[] = [];
@@ -1645,7 +1651,9 @@ export async function getCodexProfileQuotaRows(
   const worker = async (): Promise<void> => {
     while (nextIndex < names.length) {
       const profile = names[nextIndex++];
-      const row = await collectCodexRowForProfile(profile, deps).catch(() => null);
+      const row = await collectCodexRowForProfile(profile, deps, opts?.force ?? false).catch(
+        () => null
+      );
       if (row) {
         rows.push(
           markDefaultAndSyncCache(codexProfileStates, profile, row, profile === defaultProfile)

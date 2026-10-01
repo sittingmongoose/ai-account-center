@@ -3,10 +3,11 @@ import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { CCSError } from '../../errors/error-types';
 import type { DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
+import type { AccountActivityScanOptions } from './account-activity-collector';
 
 export type UsageWorkerRequest =
-  | { kind: 'claude'; projectsDir: string }
-  | { kind: 'codex'; codexHome: string; cacheDir: string }
+  | { kind: 'claude'; projectsDir: string; activity?: AccountActivityScanOptions }
+  | { kind: 'codex'; codexHome: string; cacheDir: string; activity?: AccountActivityScanOptions }
   | { kind: 'droid'; homeDir: string };
 
 export interface UsageWorkerResult {
@@ -15,6 +16,16 @@ export interface UsageWorkerResult {
   monthly: MonthlyUsage[];
   session: SessionUsage[];
   eventCount: number;
+  /** Internal bounded-scan progress; never claims partial history is complete. */
+  scan?: {
+    complete: boolean;
+    completedFiles: number;
+    totalFiles: number;
+    skippedLines: number;
+    failedFiles: number;
+    readBytes: number;
+    unfinishedFiles?: number;
+  };
 }
 
 export type UsageWorkerResponse =

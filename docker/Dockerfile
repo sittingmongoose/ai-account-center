@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # =============================================================================
-# Build stage: compile TypeScript and build UI
+# Build stage: compile TypeScript and the pinned Slint browser UI
 # Bun is used here for speed; npm lockfile is generated for the runtime stage.
 # =============================================================================
 FROM node:20-bookworm-slim AS build
@@ -10,15 +10,23 @@ SHELL ["/bin/bash", "-lc"]
 
 # Pin bun version for reproducible builds
 ARG BUN_VERSION=1.2.21
+ARG RUST_VERSION=1.98.0
+ARG WASM_PACK_VERSION=0.13.1
 ENV BUN_INSTALL=/usr/local/bun
-ENV PATH="$BUN_INSTALL/bin:$PATH"
+ENV CARGO_HOME=/usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV PATH="$CARGO_HOME/bin:$BUN_INSTALL/bin:$PATH"
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates unzip \
+  && apt-get install -y --no-install-recommends curl ca-certificates unzip build-essential pkg-config libssl-dev \
   && rm -rf /var/lib/apt/lists/*
 
 # Install specific bun version
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
+
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- \
+      -y --profile minimal --default-toolchain "${RUST_VERSION}" --target wasm32-unknown-unknown --component rustfmt \
+  && "$CARGO_HOME/bin/cargo" install wasm-pack --version "${WASM_PACK_VERSION}" --locked
 
 WORKDIR /app
 

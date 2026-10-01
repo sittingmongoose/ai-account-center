@@ -1,0 +1,469 @@
+/** Bounded, resumable native history for the Accounts Analytics page. */
+import * as fs from 'fs';
+import * as path from 'path';
+import { createHash } from 'crypto';
+import { CCSError } from '../../errors/error-types';
+import { parseUsageEntry, type RawUsageEntry } from '../jsonl-parser';
+import {
+  createCodexNativeParserState,
+  parseCodexNativeUsageLine,
+  type CodexNativeParserState,
+} from './codex-native-usage-collector';
+import { getModelPricing, type ModelPricing } from '../model-pricing';
+import { getModelsUsed, normalizeUsageProvider } from './model-identity';
+import type { ModelBreakdown } from './types';
+import type { UsageWorkerRequest, UsageWorkerResult } from './worker-client';
+
+interface CompactEntry {
+  entry: RawUsageEntry;
+  events: number;
+}
+interface Checkpoint {
+  version: 2;
+  size: number;
+  mtimeMs: number;
+  identity: string;
+  head: string;
+  tail: string;
+  offset: number;
+  minDate: number;
+  complete: boolean;
+  discardingLine: boolean;
+  skippedLines: number;
+  largeLineParserVersion?: 3;
+  unfinishedTail?: boolean;
+  state: CodexNativeParserState;
+  rows: CompactEntry[];
+}
+export interface AccountActivityScanOptions {
+  minDate: number;
+  cacheDir: string;
+  /** Testable inner budget, always less than the HTTP service worker deadline. */
+  budgetMs?: number;
+  maxBytesPerFile?: number;
+}
+const MAX_FILES = 20_000;
+const MAX_LINE_BYTES = 8 * 1024 * 1024;
+const MAX_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_FILE_ROWS = 10_000;
+const MAX_TOTAL_ROWS = 100_000;
+
+function hash(value: string | Buffer): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+async function filesUnder(
+  root: string,
+  kind: string,
+  issues: { failed: number },
+  result: string[] = []
+): Promise<string[]> {
+  let items: fs.Dirent[];
+  try {
+    items = await fs.promises.readdir(root, { withFileTypes: true });
+  } catch {
+    issues.failed++;
+    return result;
+  }
+  for (const item of items) {
+    if (result.length >= MAX_FILES) break;
+    const file = path.join(root, item.name);
+    if (item.isDirectory()) await filesUnder(file, kind, issues, result);
+    else if (
+      item.isFile() &&
+      item.name.endsWith('.jsonl') &&
+      (kind === 'claude' || item.name.startsWith('rollout-'))
+    )
+      result.push(file);
+  }
+  return result;
+}
+function fingerprint(fd: number, start: number, length: number): string {
+  const buffer = Buffer.alloc(length);
+  const read = fs.readSync(fd, buffer, 0, length, start);
+  return hash(buffer.subarray(0, read));
+}
+function fresh(stats: fs.Stats, minDate: number): Checkpoint {
+  return {
+    version: 2,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    identity: `${stats.dev}:${stats.ino}`,
+    head: '',
+    tail: '',
+    offset: 0,
+    minDate,
+    complete: false,
+    discardingLine: false,
+    skippedLines: 0,
+    largeLineParserVersion: 3,
+    unfinishedTail: false,
+    state: createCodexNativeParserState(),
+    rows: [],
+  };
+}
+function loadCheckpoint(cache: string, file: string, stats: fs.Stats, minDate: number): Checkpoint {
+  try {
+    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate);
+    const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
+    if (
+      value.version !== 2 ||
+      value.identity !== `${stats.dev}:${stats.ino}` ||
+      !Number.isSafeInteger(value.offset) ||
+      value.offset < 0 ||
+      value.offset > stats.size ||
+      value.size > stats.size ||
+      !Number.isFinite(value.minDate) ||
+      value.minDate > minDate ||
+      !Array.isArray(value.rows) ||
+      value.rows.length > MAX_FILE_ROWS ||
+      !value.state ||
+      typeof value.state.sessionId !== 'string' ||
+      (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
+      (value.skippedLines > 0 && value.largeLineParserVersion !== 3)
+    )
+      return fresh(stats, minDate);
+    const fd = fs.openSync(file, 'r');
+    try {
+      // Check the consumed prefix and boundary before resuming an append. A
+      // replaced/truncated/re-written log never inherits cumulative counters.
+      if (
+        value.head !== fingerprint(fd, 0, Math.min(256, value.offset)) ||
+        value.tail !== fingerprint(fd, Math.max(0, value.offset - 256), Math.min(256, value.offset))
+      )
+        return fresh(stats, minDate);
+    } finally {
+      fs.closeSync(fd);
+    }
+    value.rows = value.rows.filter((row) => Date.parse(row.entry.timestamp) >= minDate);
+    if (stats.size > value.size) value.complete = false;
+    return value;
+  } catch {
+    return fresh(stats, minDate);
+  }
+}
+function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: fs.Stats): void {
+  const fd = fs.openSync(file, 'r');
+  try {
+    value.head = fingerprint(fd, 0, Math.min(256, value.offset));
+    value.tail = fingerprint(fd, Math.max(0, value.offset - 256), Math.min(256, value.offset));
+  } finally {
+    fs.closeSync(fd);
+  }
+  value.size = stats.size;
+  value.mtimeMs = stats.mtimeMs;
+  const body = JSON.stringify(value);
+  if (Buffer.byteLength(body) > MAX_CACHE_BYTES)
+    throw new CCSError('Native checkpoint exceeds limit');
+  const temporary = `${cache}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, body, { mode: 0o600 });
+  fs.renameSync(temporary, cache);
+  fs.chmodSync(cache, 0o600);
+}
+function addEntry(rows: Map<string, CompactEntry>, entry: RawUsageEntry, minDate: number): boolean {
+  const epoch = Date.parse(entry.timestamp);
+  if (!Number.isFinite(epoch) || epoch < minDate) return true;
+  const timestamp = new Date(epoch).toISOString();
+  const key = `${timestamp.slice(0, 13)}\0${entry.model}\0${entry.sessionId}\0${entry.target ?? ''}`;
+  const existing = rows.get(key);
+  if (existing) {
+    for (const field of [
+      'inputTokens',
+      'outputTokens',
+      'cacheCreationTokens',
+      'cacheReadTokens',
+    ] as const)
+      existing.entry[field] += entry[field];
+    existing.entry.timestamp =
+      existing.entry.timestamp > timestamp ? existing.entry.timestamp : timestamp;
+    existing.events++;
+  } else {
+    if (rows.size >= MAX_FILE_ROWS) return false;
+    rows.set(key, { entry: { ...entry, timestamp, projectPath: '' }, events: 1 });
+  }
+  return true;
+}
+function rowKey(row: CompactEntry): string {
+  const entry = row.entry;
+  return `${entry.timestamp.slice(0, 13)}\0${entry.model}\0${entry.sessionId}\0${entry.target ?? ''}`;
+}
+
+/** Pricing is stable for one bounded read, so resolve each native model once. */
+function aggregateRows(
+  rows: CompactEntry[],
+  source: string
+): Pick<UsageWorkerResult, 'hourly' | 'session'> {
+  interface Bucket {
+    models: Map<string, ModelBreakdown>;
+    requestCount: number;
+    lastActivity: string;
+    versions: Set<string>;
+    target?: string;
+  }
+  const hours = new Map<string, Bucket>();
+  const sessions = new Map<string, Bucket>();
+  const pricing = new Map<string, ModelPricing>();
+  const add = (map: Map<string, Bucket>, key: string, row: CompactEntry): void => {
+    const entry = row.entry;
+    const bucket: Bucket = map.get(key) ?? {
+      models: new Map(),
+      requestCount: 0,
+      lastActivity: '',
+      versions: new Set(),
+    };
+    const provider = normalizeUsageProvider(entry.target);
+    const modelKey = `${provider ?? ''}\0${entry.model}`;
+    const model = bucket.models.get(modelKey) ?? {
+      modelName: entry.model,
+      ...(provider && { provider }),
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 0,
+    };
+    for (const field of [
+      'inputTokens',
+      'outputTokens',
+      'cacheCreationTokens',
+      'cacheReadTokens',
+    ] as const)
+      model[field] += entry[field];
+    bucket.models.set(modelKey, model);
+    bucket.requestCount += row.events;
+    if (entry.timestamp > bucket.lastActivity) bucket.lastActivity = entry.timestamp;
+    if (entry.version) bucket.versions.add(entry.version);
+    if (entry.target) bucket.target = entry.target;
+    map.set(key, bucket);
+  };
+  for (const row of rows) {
+    add(hours, `${row.entry.timestamp.slice(0, 10)} ${row.entry.timestamp.slice(11, 13)}:00`, row);
+    if (row.entry.sessionId) add(sessions, row.entry.sessionId, row);
+  }
+  const values = (bucket: Bucket) => {
+    const modelBreakdowns = [...bucket.models.values()];
+    for (const model of modelBreakdowns) {
+      const key = `${model.provider ?? ''}\0${model.modelName}`;
+      let rates = pricing.get(key);
+      if (!rates) {
+        rates = getModelPricing(model.modelName, { provider: model.provider });
+        pricing.set(key, rates);
+      }
+      model.cost =
+        (model.inputTokens / 1_000_000) * rates.inputPerMillion +
+        (model.outputTokens / 1_000_000) * rates.outputPerMillion +
+        (model.cacheCreationTokens / 1_000_000) * rates.cacheCreationPerMillion +
+        (model.cacheReadTokens / 1_000_000) * rates.cacheReadPerMillion;
+    }
+    modelBreakdowns.sort((left, right) => right.cost - left.cost);
+    return {
+      source,
+      inputTokens: modelBreakdowns.reduce((sum, item) => sum + item.inputTokens, 0),
+      outputTokens: modelBreakdowns.reduce((sum, item) => sum + item.outputTokens, 0),
+      cacheCreationTokens: modelBreakdowns.reduce((sum, item) => sum + item.cacheCreationTokens, 0),
+      cacheReadTokens: modelBreakdowns.reduce((sum, item) => sum + item.cacheReadTokens, 0),
+      cost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
+      totalCost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
+      modelsUsed: getModelsUsed(modelBreakdowns),
+      modelBreakdowns,
+    };
+  };
+  return {
+    hourly: [...hours]
+      .map(([hour, bucket]) => ({ hour, ...values(bucket), requestCount: bucket.requestCount }))
+      .sort((left, right) => right.hour.localeCompare(left.hour)),
+    session: [...sessions]
+      .map(([sessionId, bucket]) => ({
+        sessionId,
+        projectPath: '',
+        ...values(bucket),
+        lastActivity: bucket.lastActivity,
+        versions: [...bucket.versions],
+        target: bucket.target,
+      }))
+      .sort((left, right) => right.lastActivity.localeCompare(left.lastActivity)),
+  };
+}
+
+async function readBatch(
+  file: string,
+  value: Checkpoint,
+  stats: fs.Stats,
+  kind: 'claude' | 'codex',
+  options: AccountActivityScanOptions,
+  deadline: number
+): Promise<void> {
+  if (value.complete && value.offset === stats.size) return;
+  value.unfinishedTail = false;
+  const rows = new Map(value.rows.map((row) => [rowKey(row), row]));
+  let fragments: Buffer[] = [];
+  let lineBytes = 0;
+  let discarding = value.discardingLine;
+  let position = value.offset;
+  const maxBytes = Math.max(
+    1,
+    Math.min(512 * 1024 * 1024, options.maxBytesPerFile ?? 256 * 1024 * 1024)
+  );
+  const end = Math.min(stats.size, position + maxBytes);
+  if (end <= position) {
+    value.complete = position === stats.size && !discarding;
+    return;
+  }
+  const stream = fs.createReadStream(file, {
+    start: position,
+    end: end - 1,
+    highWaterMark: 1024 * 1024,
+  });
+  const consume = (buffer: Buffer): void => {
+    const line = buffer.toString('utf8');
+    // Avoid parsing conversations/prompts: only actual native usage and the
+    // Codex metadata required to interpret its cumulative counters are read.
+    const entry =
+      kind === 'codex'
+        ? parseCodexNativeUsageLine(line, value.state)
+        : /"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line)
+          ? parseUsageEntry(line, '')
+          : null;
+    if (entry && !addEntry(rows, entry, options.minDate)) value.skippedLines++;
+  };
+  try {
+    for await (const raw of stream) {
+      const chunk = raw as Buffer;
+      let start = 0;
+      while (start < chunk.length) {
+        const newline = chunk.indexOf(10, start);
+        const stop = newline < 0 ? chunk.length : newline;
+        const slice = chunk.subarray(start, stop);
+        if (!discarding) {
+          lineBytes += slice.length;
+          if (lineBytes > MAX_LINE_BYTES) {
+            discarding = true;
+            // A native response_item contains conversation content, never a
+            // token_count. Its unambiguous leading top-level type lets us skip
+            // even enormous payload strings without losing any usage records.
+            const prefixParts: Buffer[] = [];
+            let prefixBytes = 0;
+            for (const fragment of fragments.length ? fragments : [slice]) {
+              const part = fragment.subarray(0, 512 - prefixBytes);
+              prefixParts.push(part);
+              prefixBytes += part.length;
+              if (prefixBytes >= 512) break;
+            }
+            const prefix = Buffer.concat(prefixParts, prefixBytes).toString('utf8');
+            const recordType = prefix.match(
+              /^\s*\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"([^"\\]+)"/
+            );
+            if (!(kind === 'codex' && recordType?.[1] === 'response_item')) value.skippedLines++;
+            fragments = [];
+          } else fragments.push(slice);
+        }
+        position += stop - start + (newline >= 0 ? 1 : 0);
+        if (newline >= 0) {
+          if (!discarding)
+            consume(fragments.length === 1 ? fragments[0] : Buffer.concat(fragments, lineBytes));
+          fragments = [];
+          lineBytes = 0;
+          discarding = false;
+          value.offset = position;
+        }
+        start = stop + (newline >= 0 ? 1 : 0);
+      }
+      if (Date.now() >= deadline) break;
+    }
+    if (position === stats.size && lineBytes > 0 && !discarding) {
+      const final = Buffer.concat(fragments, lineBytes);
+      // A complete final record without a newline is valid. An unfinished
+      // record remains at its prior boundary until the writer finishes it.
+      try {
+        JSON.parse(final.toString('utf8'));
+        consume(final);
+        value.offset = position;
+      } catch {
+        value.unfinishedTail = true;
+      }
+    } else if (discarding) value.offset = position;
+    value.discardingLine = discarding;
+    value.complete = value.offset === stats.size && !discarding;
+    value.rows = [...rows.values()];
+  } finally {
+    stream.destroy();
+  }
+}
+
+/** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
+export async function collectAccountActivity(
+  request: Extract<UsageWorkerRequest, { kind: 'claude' | 'codex' }>,
+  options: AccountActivityScanOptions
+): Promise<UsageWorkerResult> {
+  const root =
+    request.kind === 'claude' ? request.projectsDir : path.join(request.codexHome, 'sessions');
+  const directory = path.join(
+    options.cacheDir,
+    'account-activity-v1',
+    hash(`${request.kind}:${root}`)
+  );
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+  const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
+  const issues = { failed: 0 };
+  const files: Array<{ file: string; stats: fs.Stats }> = [];
+  for (const file of await filesUnder(root, request.kind, issues)) {
+    try {
+      files.push({ file, stats: fs.statSync(file) });
+    } catch {
+      issues.failed++;
+    }
+  }
+  if (!files.length && issues.failed) throw new CCSError('Native log sources are unavailable');
+  files.sort(
+    (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
+  );
+  const rows: CompactEntry[] = [];
+  let completed = 0;
+  let skippedLines = 0;
+  let failed = issues.failed;
+  let readBytes = 0;
+  let unfinishedFiles = 0;
+  for (const { file, stats } of files) {
+    const cache = path.join(directory, `${hash(file)}.json`);
+    try {
+      const value = loadCheckpoint(cache, file, stats, options.minDate);
+      const before = value.offset;
+      if (Date.now() < deadline) {
+        await readBatch(file, value, stats, request.kind, options, deadline);
+        if (value.offset !== before || !fs.existsSync(cache))
+          saveCheckpoint(cache, file, value, stats);
+      }
+      readBytes += Math.max(0, value.offset - before);
+      if (value.complete) completed++;
+      if (value.unfinishedTail) unfinishedFiles++;
+      skippedLines += value.skippedLines;
+      const available = MAX_TOTAL_ROWS - rows.length;
+      rows.push(...value.rows.slice(0, Math.max(0, available)));
+      if (value.rows.length > available) failed++;
+    } catch {
+      failed++;
+    }
+    // Keep already-checkpointed records available even after the scan budget.
+    // Loading every remaining small cache is bounded by MAX_FILES/MAX_TOTAL_ROWS.
+  }
+  const source = request.kind === 'codex' ? 'codex-native' : 'custom-parser';
+  if (!rows.length && failed >= files.length && failed > 0)
+    throw new CCSError('Native log sources could not be read');
+  const { hourly, session } = aggregateRows(rows, source);
+  return {
+    daily: [],
+    monthly: [],
+    hourly,
+    session,
+    eventCount: rows.reduce((sum, row) => sum + row.events, 0),
+    scan: {
+      complete: completed === files.length && files.length < MAX_FILES && !skippedLines && !failed,
+      completedFiles: completed,
+      totalFiles: files.length,
+      skippedLines,
+      failedFiles: failed,
+      readBytes,
+      unfinishedFiles,
+    },
+  };
+}

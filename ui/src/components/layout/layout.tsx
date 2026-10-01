@@ -1,97 +1,68 @@
-import { Suspense, useEffect } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
-import { SidebarProvider } from '@/components/ui/sidebar';
-import { AppSidebar } from './app-sidebar';
+import { useEffect } from 'react';
+import { Link, Outlet, useLocation } from 'react-router-dom';
 import { ThemeToggle } from './theme-toggle';
 import { PrivacyToggle } from '@/components/shared/privacy-toggle';
-import { GitHubLink } from '@/components/shared/github-link';
-import { DocsLink } from '@/components/shared/docs-link';
 import { ConnectionIndicator } from '@/components/shared/connection-indicator';
-import { LocalhostDisclaimer } from '@/components/shared/localhost-disclaimer';
-import { Skeleton } from '@/components/ui/skeleton';
-import { ClaudeKitBadge } from '@/components/shared/claudekit-badge';
-import { CcsBarButton } from '@/components/shared/ccs-bar-button';
-import { SponsorButton } from '@/components/shared/sponsor-button';
-import { ProjectSelectionDialog } from '@/components/shared/project-selection-dialog';
-import { DeviceCodeDialog } from '@/components/shared/device-code-dialog';
+import { CcsLogo } from '@/components/shared/ccs-logo';
 import { UserMenu } from '@/components/auth/user-menu';
 import { LanguageSwitcher } from './language-switcher';
-import { useProjectSelection } from '@/hooks/use-project-selection';
-import { useDeviceCode } from '@/hooks/use-device-code';
 import { storeLastRoute } from '@/lib/last-route';
-
-function PageLoader() {
-  return (
-    <div className="p-6 space-y-4">
-      <Skeleton className="h-8 w-48" />
-      <Skeleton className="h-64 w-full" />
-    </div>
-  );
-}
 
 export function Layout() {
   const location = useLocation();
-  const { isOpen, prompt, onSelect, onClose } = useProjectSelection();
-  const deviceCode = useDeviceCode();
-
   useEffect(() => {
     storeLastRoute(location.pathname, location.search, location.hash);
+    if (location.hash) {
+      const target = document.getElementById(location.hash.slice(1));
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    }
   }, [location.pathname, location.search, location.hash]);
-
   return (
-    <SidebarProvider>
-      <AppSidebar />
-      <main className="flex-1 flex flex-col min-h-0 overflow-hidden bg-background">
-        <header className="flex h-14 items-center justify-between px-6 border-b shrink-0 bg-background shadow-sm z-20">
-          <div className="flex items-center gap-3">
-            <ClaudeKitBadge />
-            <CcsBarButton />
-            <SponsorButton />
+    <div className="flex min-h-screen w-full flex-col bg-background">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur">
+        <div className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-6">
+            <Link to="/" aria-label="CCS accounts home">
+              <CcsLogo size="sm" />
+            </Link>
+            <nav
+              aria-label="Account sections"
+              className="hidden items-center gap-5 text-sm sm:flex"
+            >
+              <Link
+                className="text-muted-foreground transition-colors hover:text-foreground"
+                to="/#codex"
+              >
+                Codex
+              </Link>
+              <Link
+                className="text-muted-foreground transition-colors hover:text-foreground"
+                to="/#claude"
+              >
+                Claude
+              </Link>
+              <Link
+                className="text-muted-foreground transition-colors hover:text-foreground"
+                to="/#usage"
+              >
+                Other accounts
+              </Link>
+            </nav>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             <ConnectionIndicator />
-            <LanguageSwitcher />
-            <DocsLink />
-            <GitHubLink />
+            <div className="hidden lg:block">
+              <LanguageSwitcher />
+            </div>
             <PrivacyToggle />
             <ThemeToggle />
             <UserMenu />
           </div>
-        </header>
-        <div className="flex-1 overflow-auto min-h-0">
-          <Suspense fallback={<PageLoader />}>
-            <Outlet />
-          </Suspense>
         </div>
-        <LocalhostDisclaimer />
+      </header>
+      <main className="flex-1">
+        <Outlet />
       </main>
-
-      {/* Global project selection dialog for OAuth flows */}
-      {prompt && (
-        <ProjectSelectionDialog
-          open={isOpen}
-          onClose={onClose}
-          sessionId={prompt.sessionId}
-          provider={prompt.provider}
-          projects={prompt.projects}
-          defaultProjectId={prompt.defaultProjectId}
-          supportsAll={prompt.supportsAll}
-          onSelect={onSelect}
-        />
-      )}
-
-      {/* Global device code dialog for Device Code OAuth flows (GitHub Copilot, Qwen) */}
-      {deviceCode.prompt && (
-        <DeviceCodeDialog
-          open={deviceCode.isOpen}
-          onClose={deviceCode.onClose}
-          sessionId={deviceCode.prompt.sessionId}
-          provider={deviceCode.prompt.provider}
-          userCode={deviceCode.prompt.userCode}
-          verificationUrl={deviceCode.prompt.verificationUrl}
-          expiresAt={deviceCode.prompt.expiresAt}
-        />
-      )}
-    </SidebarProvider>
+    </div>
   );
 }

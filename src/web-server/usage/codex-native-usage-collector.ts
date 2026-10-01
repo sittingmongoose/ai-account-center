@@ -13,7 +13,9 @@ interface CodexNativeUsageCollectorOptions {
   disableCache?: boolean;
 }
 
-const CODEX_NATIVE_USAGE_CACHE_VERSION = 1;
+// Invalidate cached entries whose input/cache and output/reasoning categories
+// overlapped. The persisted structure stays compatible; token semantics do not.
+const CODEX_NATIVE_USAGE_CACHE_VERSION = 2;
 const SECURE_CACHE_DIR_MODE = 0o700;
 const SECURE_CACHE_FILE_MODE = 0o600;
 
@@ -31,9 +33,12 @@ interface CodexNativeUsageCache {
   files: Record<string, CachedRolloutFile>;
 }
 
-interface CodexTokenSnapshot {
+export interface CodexTokenSnapshot {
+  /** Uncached input only; the cache categories are disjoint. */
   inputTokens: number;
+  cacheCreationTokens: number;
   cacheReadTokens: number;
+  /** Total output already includes reasoning output. */
   outputTokens: number;
 }
 
@@ -54,15 +59,26 @@ function asNumber(value: unknown): number {
 }
 
 function hasUsage(snapshot: CodexTokenSnapshot): boolean {
-  return snapshot.inputTokens > 0 || snapshot.cacheReadTokens > 0 || snapshot.outputTokens > 0;
+  return (
+    snapshot.inputTokens > 0 ||
+    snapshot.cacheCreationTokens > 0 ||
+    snapshot.cacheReadTokens > 0 ||
+    snapshot.outputTokens > 0
+  );
 }
 
 function normalizeTokenSnapshot(value: unknown): CodexTokenSnapshot | null {
   if (!isObject(value)) return null;
+  // Codex's TokenUsage copies the Responses usage fields. Cached reads and
+  // cache writes are details of input_tokens; reasoning is a detail of output.
+  // https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/sse/responses.rs
+  const cacheReadTokens = asNumber(value.cached_input_tokens);
+  const cacheCreationTokens = asNumber(value.cache_write_input_tokens);
   return {
-    inputTokens: asNumber(value.input_tokens),
-    cacheReadTokens: asNumber(value.cached_input_tokens),
-    outputTokens: asNumber(value.output_tokens) + asNumber(value.reasoning_output_tokens),
+    inputTokens: Math.max(0, asNumber(value.input_tokens) - cacheReadTokens - cacheCreationTokens),
+    cacheReadTokens,
+    cacheCreationTokens,
+    outputTokens: asNumber(value.output_tokens),
   };
 }
 
@@ -72,6 +88,7 @@ function subtractSnapshots(
 ): CodexTokenSnapshot {
   return {
     inputTokens: Math.max(0, current.inputTokens - previous.inputTokens),
+    cacheCreationTokens: Math.max(0, current.cacheCreationTokens - previous.cacheCreationTokens),
     cacheReadTokens: Math.max(0, current.cacheReadTokens - previous.cacheReadTokens),
     outputTokens: Math.max(0, current.outputTokens - previous.outputTokens),
   };
@@ -80,6 +97,7 @@ function subtractSnapshots(
 function snapshotsEqual(left: CodexTokenSnapshot, right: CodexTokenSnapshot): boolean {
   return (
     left.inputTokens === right.inputTokens &&
+    left.cacheCreationTokens === right.cacheCreationTokens &&
     left.cacheReadTokens === right.cacheReadTokens &&
     left.outputTokens === right.outputTokens
   );
@@ -151,6 +169,19 @@ function readUsageCache(
     const cachePath = getCacheFilePath(cacheDir, includeCliproxySessions);
     if (!fs.existsSync(cachePath)) return null;
 
+    const fd = fs.openSync(cachePath, 'r');
+    const header = Buffer.alloc(1024);
+    let length: number;
+    try {
+      length = fs.readSync(fd, header, 0, header.length, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const version = header
+      .subarray(0, length)
+      .toString('utf8')
+      .match(/"version"\s*:\s*(\d+)/);
+    if (!version || Number(version[1]) !== CODEX_NATIVE_USAGE_CACHE_VERSION) return null;
     const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as unknown;
     if (!isCodexNativeUsageCache(parsed)) return null;
     if (parsed.includeCliproxySessions !== includeCliproxySessions) return null;
@@ -196,101 +227,117 @@ function hasMatchingFingerprint(
   );
 }
 
+export interface CodexNativeParserState {
+  sessionId: string;
+  projectPath: string;
+  version?: string;
+  modelProvider?: string;
+  model: string;
+  previousTotal: CodexTokenSnapshot | null;
+}
+
+export function createCodexNativeParserState(): CodexNativeParserState {
+  return { sessionId: '', projectPath: '', model: 'unknown-codex-model', previousTotal: null };
+}
+
+/** Stateful parser shared by full-history and resumable Analytics scans. */
+export function parseCodexNativeUsageLine(
+  line: string,
+  state: CodexNativeParserState,
+  includeCliproxySessions = false
+): RawUsageEntry | null {
+  // Native rollouts contain large prompts/tool outputs. They carry no usage.
+  if (!/"type"\s*:\s*"(?:session_meta|turn_context|event_msg)"/.test(line)) return null;
+  if (!line.includes('"token_count"') && !/"type"\s*:\s*"(?:session_meta|turn_context)"/.test(line))
+    return null;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (parsed.type === 'session_meta' && isObject(parsed.payload)) {
+    state.sessionId = asString(parsed.payload.id) ?? state.sessionId;
+    state.projectPath = asString(parsed.payload.cwd) ?? state.projectPath;
+    state.version = asString(parsed.payload.cli_version) ?? state.version;
+    state.modelProvider = asString(parsed.payload.model_provider) ?? state.modelProvider;
+    return null;
+  }
+
+  if (parsed.type === 'turn_context' && isObject(parsed.payload)) {
+    state.model = asString(parsed.payload.model) ?? state.model;
+    state.projectPath = asString(parsed.payload.cwd) ?? state.projectPath;
+    return null;
+  }
+
+  if (
+    parsed.type !== 'event_msg' ||
+    !isObject(parsed.payload) ||
+    parsed.payload.type !== 'token_count' ||
+    !state.sessionId ||
+    (isCliProxyBackedProvider(state.modelProvider) && !includeCliproxySessions)
+  ) {
+    return null;
+  }
+
+  const totalSnapshot = normalizeTokenSnapshot(
+    parsed.payload.info && isObject(parsed.payload.info)
+      ? (parsed.payload.info as Record<string, unknown>).total_token_usage
+      : null
+  );
+  const lastSnapshot = normalizeTokenSnapshot(
+    parsed.payload.info && isObject(parsed.payload.info)
+      ? (parsed.payload.info as Record<string, unknown>).last_token_usage
+      : null
+  );
+
+  if (!totalSnapshot) return null;
+  if (state.previousTotal && snapshotsEqual(totalSnapshot, state.previousTotal)) return null;
+
+  const delta =
+    state.previousTotal === null
+      ? lastSnapshot && hasUsage(lastSnapshot)
+        ? lastSnapshot
+        : totalSnapshot
+      : subtractSnapshots(totalSnapshot, state.previousTotal);
+  state.previousTotal = totalSnapshot;
+
+  if (!hasUsage(delta)) return null;
+
+  const timestamp = asString(parsed.timestamp);
+  if (!timestamp) return null;
+
+  return {
+    inputTokens: delta.inputTokens,
+    outputTokens: delta.outputTokens,
+    cacheCreationTokens: delta.cacheCreationTokens,
+    cacheReadTokens: delta.cacheReadTokens,
+    model: state.model,
+    sessionId: state.sessionId,
+    timestamp,
+    projectPath: state.projectPath || '/',
+    version: state.version,
+    target: 'codex',
+  };
+}
+
 async function parseRolloutFile(
   filePath: string,
   includeCliproxySessions: boolean
 ): Promise<RawUsageEntry[]> {
   const entries: RawUsageEntry[] = [];
-  let sessionId = '';
-  let projectPath = '';
-  let version: string | undefined;
-  let modelProvider: string | undefined;
-  let model = 'unknown-codex-model';
-  let previousTotal: CodexTokenSnapshot | null = null;
-
+  const state = createCodexNativeParserState();
   const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
   const reader = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
   try {
     for await (const line of reader) {
-      if (!line.trim()) continue;
-
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      if (parsed.type === 'session_meta' && isObject(parsed.payload)) {
-        sessionId = asString(parsed.payload.id) ?? sessionId;
-        projectPath = asString(parsed.payload.cwd) ?? projectPath;
-        version = asString(parsed.payload.cli_version) ?? version;
-        modelProvider = asString(parsed.payload.model_provider) ?? modelProvider;
-        continue;
-      }
-
-      if (parsed.type === 'turn_context' && isObject(parsed.payload)) {
-        model = asString(parsed.payload.model) ?? model;
-        projectPath = asString(parsed.payload.cwd) ?? projectPath;
-        continue;
-      }
-
-      if (
-        parsed.type !== 'event_msg' ||
-        !isObject(parsed.payload) ||
-        parsed.payload.type !== 'token_count' ||
-        !sessionId ||
-        (isCliProxyBackedProvider(modelProvider) && !includeCliproxySessions)
-      ) {
-        continue;
-      }
-
-      const totalSnapshot = normalizeTokenSnapshot(
-        parsed.payload.info && isObject(parsed.payload.info)
-          ? (parsed.payload.info as Record<string, unknown>).total_token_usage
-          : null
-      );
-      const lastSnapshot = normalizeTokenSnapshot(
-        parsed.payload.info && isObject(parsed.payload.info)
-          ? (parsed.payload.info as Record<string, unknown>).last_token_usage
-          : null
-      );
-
-      if (!totalSnapshot) continue;
-      if (previousTotal && snapshotsEqual(totalSnapshot, previousTotal)) continue;
-
-      const delta =
-        previousTotal === null
-          ? lastSnapshot && hasUsage(lastSnapshot)
-            ? lastSnapshot
-            : totalSnapshot
-          : subtractSnapshots(totalSnapshot, previousTotal);
-      previousTotal = totalSnapshot;
-
-      if (!hasUsage(delta)) continue;
-
-      const timestamp = asString(parsed.timestamp);
-      if (!timestamp) continue;
-
-      entries.push({
-        inputTokens: delta.inputTokens,
-        outputTokens: delta.outputTokens,
-        cacheCreationTokens: 0,
-        cacheReadTokens: delta.cacheReadTokens,
-        model,
-        sessionId,
-        timestamp,
-        projectPath: projectPath || '/',
-        version,
-        target: 'codex',
-      });
+      const entry = parseCodexNativeUsageLine(line, state, includeCliproxySessions);
+      if (entry) entries.push(entry);
     }
   } finally {
     reader.close();
     stream.destroy();
   }
-
   return entries;
 }
 

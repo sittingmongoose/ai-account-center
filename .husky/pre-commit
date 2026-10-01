@@ -3,8 +3,8 @@
 # Feature branches use a faster pre-push gate plus GitHub CI.
 bun run typecheck && bun run lint:fix && bun run format:check
 
-# Validate UI if changes detected (typecheck + lint only)
-if git diff --cached --name-only | grep -q "^ui/"; then
+# Validate current Slint sources and the already-built production browser assets.
+if git diff --cached --name-only | grep -qE '^(web-dashboard/|scripts/(build-ui|validate-ui|verify-bundle)\.js|package\.json)'; then
   echo "[i] UI changes detected, running ui:validate..."
   bun run ui:validate
 fi

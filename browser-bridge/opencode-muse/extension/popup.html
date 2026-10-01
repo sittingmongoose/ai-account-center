@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CCS browser usage</title><link rel="stylesheet" href="popup.css"></head>
+<body><h1>Browser usage</h1><h2>OpenCode Zen</h2><p>Reads this browser’s signed-in console wallet for CCS. Open your workspace’s billing page first.</p>
+<button id="sync">Sync usage</button><p id="status" role="status"></p><div id="sample"></div>
+<p class="note">The console workspace remains separate from any API-key account whose identity has not been linked.</p>
+<h2>Muse Code</h2><p>Reads rolling and weekly limits from the existing dev.meta.ai sign-in. The email and subscription must match your Muse CLI account.</p>
+<label id="muse-team-label" hidden>Subscription team <select id="muse-team"></select></label>
+<button id="muse-sync">Sync Muse usage</button><p id="muse-status" role="status"></p><div id="muse-sample"></div>
+<script type="module" src="popup.mjs"></script></body></html>

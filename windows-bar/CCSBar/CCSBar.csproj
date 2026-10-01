@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>CCSBar</AssemblyName>
+    <RootNamespace>CCSBar</RootNamespace>
+    <Version>1.0.0</Version>
+    <PublishSingleFile>false</PublishSingleFile>
+    <DebugType>none</DebugType>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Resources/HeaderLogo.png" />
+    <Resource Include="Resources/Providers/*.png" />
+    <EmbeddedResource Include="Resources/MenuBarColor.png" />
+  </ItemGroup>
+</Project>

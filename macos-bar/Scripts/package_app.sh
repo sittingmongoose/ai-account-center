@@ -3,8 +3,7 @@
 #
 # Signing mode (CCS_BAR_SIGNING):
 #   adhoc        (default) ad-hoc sign with `codesign -s -`. Free, no Apple
-#                Developer account. Users open via right-click > Open or clear
-#                quarantine with `xattr -dr com.apple.quarantine`.
+#                Developer account. Local installation retains Gatekeeper metadata.
 #   developer-id Sign with a Developer ID Application identity (set
 #                CCS_BAR_SIGN_IDENTITY) for the notarized public-launch path.
 #
@@ -98,7 +97,6 @@ rm -f "$ZIP"
 echo "[OK] Packaged: $APP"
 echo "[OK] Asset:    $ZIP"
 if [[ "$SIGNING" == "adhoc" ]]; then
-  echo "[!] Ad-hoc build: first launch needs right-click > Open, or"
-  echo "    xattr -dr com.apple.quarantine \"/Applications/$APP_NAME.app\""
+  echo "[i] Ad-hoc local build. Installation retains Gatekeeper metadata."
 fi
 echo "[i] To publish: gh release upload ccs-bar-latest \"$ZIP\" --clobber"

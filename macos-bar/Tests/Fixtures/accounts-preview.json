@@ -1,0 +1,652 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-01T04:00:00Z",
+  "accounts": [
+    {
+      "id": "preview-claude-platyr",
+      "provider": "claude",
+      "providerLabel": "Claude",
+      "label": "Layout preview",
+      "email": "claude-platyr@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": "platyr",
+        "claudePlatforms": [
+          "mac",
+          "windows"
+        ]
+      }
+    },
+    {
+      "id": "preview-claude-gmail",
+      "provider": "claude",
+      "providerLabel": "Claude",
+      "label": "Layout preview",
+      "email": "claude-gmail@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": "gmail",
+        "claudePlatforms": [
+          "mac",
+          "windows"
+        ]
+      }
+    },
+    {
+      "id": "preview-claude-party",
+      "provider": "claude",
+      "providerLabel": "Claude",
+      "label": "Layout preview",
+      "email": "claude-party@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": "party",
+        "claudePlatforms": [
+          "mac",
+          "windows"
+        ]
+      }
+    },
+    {
+      "id": "preview-claude-me",
+      "provider": "claude",
+      "providerLabel": "Claude",
+      "label": "Layout preview",
+      "email": "claude-me@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": "me",
+        "claudePlatforms": [
+          "mac",
+          "windows"
+        ]
+      }
+    },
+    {
+      "id": "preview-codex-gmail",
+      "provider": "codex",
+      "providerLabel": "Codex",
+      "label": "Layout preview",
+      "email": "codex-gmail@example.test",
+      "plan": "Subscription",
+      "platform": "ubuntu",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": true,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": "gmail",
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-codex-party",
+      "provider": "codex",
+      "providerLabel": "Codex",
+      "label": "Layout preview",
+      "email": "codex-party@example.test",
+      "plan": "Subscription",
+      "platform": "ubuntu",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": "party",
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-codex-lexxmariah",
+      "provider": "codex",
+      "providerLabel": "Codex",
+      "label": "Layout preview",
+      "email": "codex-lexxmariah@example.test",
+      "plan": "Subscription",
+      "platform": "ubuntu",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": "lexxmariah",
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-cursor",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "month",
+          "label": "Monthly included usage",
+          "kind": "spend",
+          "usedPercent": 58,
+          "remainingPercent": 42,
+          "resetAt": "2026-11-01T04:00:00Z",
+          "windowMinutes": null,
+          "used": 11.6,
+          "limit": 20,
+          "remaining": 8.4,
+          "unit": "USD",
+          "expiresAt": null,
+          "unlimited": false,
+          "enabled": true
+        },
+        {
+          "key": "credits",
+          "label": "Extra credits",
+          "kind": "balance",
+          "usedPercent": null,
+          "remainingPercent": null,
+          "resetAt": null,
+          "windowMinutes": null,
+          "used": null,
+          "limit": null,
+          "remaining": 5.75,
+          "unit": "USD",
+          "expiresAt": "2026-12-31T05:00:00Z",
+          "unlimited": false,
+          "enabled": true
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-antigravity",
+      "provider": "antigravity",
+      "providerLabel": "Antigravity",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-muse",
+      "provider": "muse",
+      "providerLabel": "Muse Code",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 120,
+          "remainingPercent": null,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-kimi-code",
+      "provider": "kimi-code",
+      "providerLabel": "Kimi Code",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-qwen",
+      "provider": "qwen",
+      "providerLabel": "Qwen token plan",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-zai",
+      "provider": "zai",
+      "providerLabel": "Z.ai coding plan",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-opencode-go",
+      "provider": "opencode-go",
+      "providerLabel": "OpenCode Go",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "five-hour",
+          "label": "Five-hour",
+          "usedPercent": 42,
+          "remainingPercent": 58,
+          "resetAt": "2026-10-02T04:00:00Z",
+          "windowMinutes": 300,
+          "used": null,
+          "limit": null,
+          "unit": null
+        },
+        {
+          "key": "weekly",
+          "label": "Weekly",
+          "usedPercent": 72,
+          "remainingPercent": 28,
+          "resetAt": "2026-10-06T00:00:00Z",
+          "windowMinutes": 10080,
+          "used": null,
+          "limit": null,
+          "unit": null
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    }
+  ],
+  "codexAutoSwitch": {
+    "enabled": true,
+    "thresholdPercent": 5,
+    "pollIntervalSeconds": 60,
+    "outcome": "healthy",
+    "message": "The active Codex account has more than 5% remaining.",
+    "activationInProgress": false
+  }
+}

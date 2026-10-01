@@ -3,9 +3,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFile, spawn } from 'child_process';
 import WebSocket from 'ws';
+import {
+  codexProcessFingerprint,
+  type CodexActivationStopPlan,
+} from './codex-activation-confirmation';
 
 export interface CodexActivationRuntime {
-  stop(): Promise<void>;
+  stop(approval?: CodexActivationStopPlan): Promise<void>;
   start(): Promise<void>;
   dispose?(): Promise<void>;
 }
@@ -13,7 +17,8 @@ export interface CodexActivationRuntime {
 export class CodexActivationRuntimeError extends Error {
   constructor(
     message: string,
-    public readonly code: 'busy' | 'restart_failed' = 'restart_failed'
+    public readonly code: 'busy' | 'restart_failed' | 'confirmation_stale' = 'restart_failed',
+    public readonly stopPlan?: CodexActivationStopPlan
   ) {
     super(message);
     this.name = 'CodexActivationRuntimeError';
@@ -41,6 +46,8 @@ export interface CodexActivationRuntimeDependencies {
   assertIdle(processes: CodexProcessSnapshot[]): Promise<void>;
   signal(process: CodexProcessSnapshot, signal: NodeJS.Signals): Promise<void>;
   launch(process: CodexProcessSnapshot, desktop: boolean): Promise<void>;
+  prepareCli(process: CodexProcessSnapshot): Promise<void>;
+  launchCli(process: CodexProcessSnapshot): Promise<void>;
   verifyDaemon(process: CodexProcessSnapshot): Promise<void>;
   removeControlSocket(): void;
   sleep(milliseconds: number): Promise<void>;
@@ -120,6 +127,73 @@ function sameProcess(left: CodexProcessSnapshot, right: CodexProcessSnapshot): b
   return left.pid === right.pid && left.startTime === right.startTime;
 }
 
+/** The native browser helper must be owned by a restartable Codex daemon. */
+function isOwnedBrowserHelper(
+  process: CodexProcessSnapshot,
+  processes: CodexProcessSnapshot[],
+  daemons: CodexProcessSnapshot[]
+): boolean {
+  const parent = processes.find((entry) => entry.pid === process.ppid);
+  return Boolean(
+    process.args.includes('app-server') &&
+      process.args.includes('stdio://') &&
+      parent?.exe === '/usr/lib/chatgpt/resources/cua_node/bin/node_repl' &&
+      daemons.some((daemon) => descendants(daemon, processes).includes(process))
+  );
+}
+
+function stopPlan(
+  roots: CodexProcessSnapshot[],
+  all: CodexProcessSnapshot[],
+  browserHelpers: CodexProcessSnapshot[]
+): CodexActivationStopPlan {
+  const targets = new Map<number, CodexProcessSnapshot>();
+  for (const root of roots) {
+    for (const child of descendants(root, all)) targets.set(child.pid, child);
+  }
+  return {
+    identities: [...targets.values()]
+      .sort((left, right) => left.pid - right.pid)
+      .map((entry) => ({
+        pid: entry.pid,
+        ppid: entry.ppid,
+        startTime: entry.startTime,
+        fingerprint: codexProcessFingerprint(entry),
+      })),
+    roots: roots.map((entry) => entry.pid).sort((left, right) => left - right),
+    processes: [
+      ...roots.map((entry) => ({
+        pid: entry.pid,
+        label: isDesktop(entry)
+          ? 'Codex desktop'
+          : isDaemon(entry)
+            ? 'Shared Codex server'
+            : 'Codex CLI',
+        role: isDesktop(entry)
+          ? ('desktop' as const)
+          : isDaemon(entry)
+            ? ('daemon' as const)
+            : ('cli' as const),
+      })),
+      ...browserHelpers.map((entry) => ({
+        pid: entry.pid,
+        label: 'Codex browser automation helper',
+        role: 'automation' as const,
+      })),
+    ],
+  };
+}
+
+function matchesStopPlan(
+  current: CodexActivationStopPlan,
+  approved: CodexActivationStopPlan
+): boolean {
+  return (
+    JSON.stringify(current.identities) === JSON.stringify(approved.identities) &&
+    JSON.stringify(current.roots) === JSON.stringify(approved.roots)
+  );
+}
+
 /**
  * All writer shutdown precedes auth.json replacement. The startup flock remains
  * held until start succeeds (or the caller retries after restoring old auth).
@@ -131,6 +205,9 @@ export function createCodexActivationRuntime(
   const dependencies = { ...createDependencies(codexHome), ...overrides };
   let releaseLock: (() => Promise<void>) | undefined;
   let launchers: CodexProcessSnapshot[] = [];
+  let cliLaunchers: CodexProcessSnapshot[] = [];
+  let confirmed = false;
+  const restartedClis: CodexProcessSnapshot[] = [];
   let stopped = false;
 
   const scan = async (): Promise<CodexProcessSnapshot[]> =>
@@ -244,6 +321,29 @@ export function createCodexActivationRuntime(
           );
         }
       }
+      for (const launcher of cliLaunchers) {
+        const before = await scan();
+        let launchFailed = false;
+        try {
+          await dependencies.launchCli(launcher);
+        } catch {
+          launchFailed = true;
+        }
+        const started = (await scan()).filter(
+          (entry) =>
+            isCodex(entry) &&
+            usesHome(entry, codexHome) &&
+            entry.exe === launcher.exe &&
+            entry.cwd === launcher.cwd &&
+            !before.some((previous) => sameProcess(previous, entry))
+        );
+        // Even a terminal readiness failure can leave a fresh CLI alive. Retain
+        // its start identity so rollback can stop only our partial relaunch.
+        restartedClis.push(...started);
+        if (launchFailed || started.length === 0) {
+          throw new CodexActivationRuntimeError('The confirmed Codex CLI did not restart.');
+        }
+      }
       stopped = false;
       await release();
     } catch {
@@ -255,7 +355,7 @@ export function createCodexActivationRuntime(
   };
 
   return {
-    async stop(): Promise<void> {
+    async stop(approval?: CodexActivationStopPlan): Promise<void> {
       if (dependencies.platform !== 'linux') {
         throw new CodexActivationRuntimeError(
           'In-place Codex activation currently requires Linux.'
@@ -280,13 +380,80 @@ export function createCodexActivationRuntime(
         const unmanaged = writers.filter(
           (process) => !isProxy(process) && !isDaemon(process) && !desktopChildren.includes(process)
         );
-        if (unmanaged.length > 0) {
+        const browserHelpers = unmanaged.filter((entry) =>
+          isOwnedBrowserHelper(entry, processes, daemons)
+        );
+        const cliRoots = unmanaged.filter(
+          (entry) =>
+            !browserHelpers.includes(entry) &&
+            !unmanaged
+              .filter((other) => other !== entry)
+              .some((root) => descendants(root, processes).includes(entry))
+        );
+        const unsupported = cliRoots.some((entry) => entry.args.includes('app-server'));
+        const roots = [...desktops, ...daemons, ...cliRoots];
+        const plan = stopPlan(roots, processes, browserHelpers);
+        if (approval && !matchesStopPlan(plan, approval)) {
           throw new CodexActivationRuntimeError(
-            'Codex CLI work is running. Wait for it to finish, then activate the account again.',
+            'The running Codex programs changed. Review a new activation warning.',
+            'confirmation_stale'
+          );
+        }
+        if (unsupported) {
+          throw new CodexActivationRuntimeError(
+            'A Codex stdio server has no restartable owner. Close its owning program and try again.',
             'busy'
           );
         }
-        await dependencies.assertIdle(processes);
+        if (approval) {
+          // Preflight every fresh CLI terminal before any approved process is stopped.
+          for (const cli of cliRoots) await dependencies.prepareCli(cli);
+          const rechecked = await scan();
+          if (
+            !matchesStopPlan(stopPlan(roots, rechecked, browserHelpers), approval) ||
+            rechecked.some(
+              (entry) =>
+                isCodex(entry) &&
+                usesHome(entry, codexHome) &&
+                !isProxy(entry) &&
+                !approval.identities.some(
+                  (identity) => identity.pid === entry.pid && identity.startTime === entry.startTime
+                )
+            )
+          ) {
+            throw new CodexActivationRuntimeError(
+              'The running Codex programs changed. Review a new activation warning.',
+              'confirmation_stale'
+            );
+          }
+          confirmed = true;
+          cliLaunchers = cliRoots;
+        } else if (!confirmed) {
+          if (unmanaged.some((entry) => !browserHelpers.includes(entry))) {
+            // Ensure the offer only contains programs that can actually be restarted.
+            for (const cli of cliRoots) await dependencies.prepareCli(cli);
+            throw new CodexActivationRuntimeError(
+              'Another Codex program is running. Review it before stopping and switching.',
+              'busy',
+              plan
+            );
+          }
+          try {
+            await dependencies.assertIdle(processes);
+          } catch (error) {
+            if (error instanceof CodexActivationRuntimeError && error.code === 'busy') {
+              throw new CodexActivationRuntimeError(error.message, 'busy', plan);
+            }
+            throw error;
+          }
+        } else {
+          // Rollback may only stop fresh CLI instances started by this transaction.
+          if (
+            cliRoots.some((entry) => !restartedClis.some((started) => sameProcess(entry, started)))
+          ) {
+            throw new CodexActivationRuntimeError('Another Codex CLI started during recovery.');
+          }
+        }
         if (launchers.length === 0) {
           launchers = [
             ...daemons,
@@ -295,7 +462,8 @@ export function createCodexActivationRuntime(
         }
         mutationStarted = true;
         await retire(desktops, processes);
-        await retire(daemons, await scan());
+        await retire(daemons, processes);
+        await retire(cliRoots, processes);
         // A daemon respawned by an SSH proxy is retired again in start(), after the swap.
         const survivors = (await scan()).filter(
           (process) =>
@@ -480,6 +648,44 @@ function runCommand(
   });
 }
 
+function runCliRestartHelper(target: CodexProcessSnapshot, check: boolean): Promise<void> {
+  const helper = path.resolve(__dirname, '../../scripts/app-updates/app_update_confirmed_codex.py');
+  return new Promise((resolve, reject) => {
+    const child = spawn('/usr/bin/python3', [helper, ...(check ? ['--check'] : [])], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    let output = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new CodexActivationRuntimeError('The Codex CLI terminal restart timed out.'));
+    }, 40_000);
+    child.once('error', () => {
+      clearTimeout(timer);
+      reject(new CodexActivationRuntimeError('Could not prepare the Codex CLI terminal.'));
+    });
+    child.stdout.on('data', (data: Buffer) => {
+      output += data.toString('utf8');
+      if (output.length > 16_384) child.kill('SIGTERM');
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      try {
+        if (code !== 0 || JSON.parse(output).success !== true) {
+          throw new CodexActivationRuntimeError('Could not reopen Codex in a fresh terminal.');
+        }
+        resolve();
+      } catch {
+        reject(new CodexActivationRuntimeError('Could not reopen Codex in a fresh terminal.'));
+      }
+    });
+    child.stdin.on('error', () => {
+      // Closed private stdin is reported by the sanitized exit handler.
+    });
+    // Never serialize this private packet into a file, argv, HTTP, or a log.
+    child.stdin.end(JSON.stringify({ exe: target.exe, cwd: target.cwd, env: target.env }));
+  });
+}
+
 function createDependencies(codexHome: string): CodexActivationRuntimeDependencies {
   let nativeRelease: (() => Promise<void>) | undefined;
   let nativeLockFile: string | undefined;
@@ -529,13 +735,24 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
       )) {
         await assertDaemonIdle(daemon, codexHome);
       }
-      for (const desktop of processes.filter(isDesktop)) {
+      for (const desktop of processes
+        .filter(isDesktop)
+        .filter((entry) =>
+          descendants(entry, processes).some(
+            (child) => isCodex(child) && usesHome(child, codexHome) && !isProxy(child)
+          )
+        )) {
         assertDesktopIdle(desktop, processes, codexHome);
       }
     },
     signal: async (target, signal) => {
       const current = readProcesses().find((entry) => sameProcess(target, entry));
       if (current && isAlive(current)) {
+        if (codexProcessFingerprint(current) !== codexProcessFingerprint(target)) {
+          throw new CodexActivationRuntimeError(
+            'A Codex process changed executable during shutdown; no account was changed.'
+          );
+        }
         try {
           process.kill(target.pid, signal);
         } catch (error) {
@@ -570,6 +787,8 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
         if (stream !== undefined) fs.closeSync(stream);
       }
     },
+    prepareCli: (target) => runCliRestartHelper(target, true),
+    launchCli: (target) => runCliRestartHelper(target, false),
     verifyDaemon: async (target) => {
       const deadline = Date.now() + START_TIMEOUT;
       do {

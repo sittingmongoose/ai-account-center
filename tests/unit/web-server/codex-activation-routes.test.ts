@@ -56,11 +56,11 @@ afterEach(async () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function post(headers: Record<string, string> = {}): Promise<Response> {
+function post(headers: Record<string, string> = {}, body: unknown = {}): Promise<Response> {
   return fetch(`${baseUrl}/api/codex/profiles/work/activate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
-    body: '{}',
+    body: JSON.stringify(body),
   });
 }
 
@@ -94,6 +94,81 @@ describe('POST /api/codex/profiles/:name/activate', () => {
       previousEmail: 'personal@example.test',
     });
     expect(JSON.stringify(body)).not.toContain('MUST_NOT_APPEAR_IN_RESPONSE');
+  });
+
+  it.each(
+    [
+      null,
+      [],
+      { force: true },
+      { pid: 12 },
+      { confirmationToken: 'invalid' },
+      { confirmationToken: 'x'.repeat(43), argv: ['/bin/codex'] },
+    ].map((body) => ({ body }))
+  )('rejects malformed or client-selected process scope %j before activation', async ({ body }) => {
+    const activate = stubActivation();
+    const response = await post({}, body);
+    expect(response.status).toBe(400);
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it('forwards only the opaque token after explicit client confirmation', async () => {
+    const activate = stubActivation();
+    const confirmationToken = 'x'.repeat(43);
+    const response = await post({}, { confirmationToken });
+    expect(response.status).toBe(200);
+    expect(activate).toHaveBeenCalledWith('work', { confirmationToken });
+  });
+
+  it('provides a named safe process warning while withholding private plan fields', async () => {
+    const confirmation = {
+      token: 'x'.repeat(43),
+      expiresAt: '2026-10-01T05:00:00.000Z',
+      targetProfile: 'work',
+      processes: [
+        { label: 'Codex CLI', pid: 42, role: 'cli' as const, env: 'MUST_NOT_APPEAR_IN_RESPONSE' },
+      ],
+      warning: 'Stopping these programs interrupts active Codex work.',
+    };
+    spyOn(activation, 'activateCodexProfile').mockRejectedValue(
+      new activation.CodexActivationError('busy', 'MUST_NOT_APPEAR_IN_RESPONSE', {
+        reason: 'running_processes',
+        confirmation,
+      })
+    );
+    const response = await post();
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body.code).toBe('busy');
+    expect(body.reason).toBe('running_processes');
+    expect(body.confirmation.processes).toEqual([{ label: 'Codex CLI', pid: 42, role: 'cli' }]);
+    expect(body.confirmation.token).toBe(confirmation.token);
+    expect(JSON.stringify(body)).not.toContain('MUST_NOT_APPEAR_IN_RESPONSE');
+  });
+
+  it.each(['activation_running', 'unsupported_process'] as const)(
+    'does not offer a force stop for %s',
+    async (reason) => {
+      spyOn(activation, 'activateCodexProfile').mockRejectedValue(
+        new activation.CodexActivationError('busy', 'private-error', { reason })
+      );
+      const response = await post();
+      const body = await response.json();
+      expect(response.status).toBe(409);
+      expect(body.reason).toBe(reason);
+      expect(body.confirmation).toBeUndefined();
+    }
+  );
+
+  it('requires a fresh reviewed activation after a stale capability and does not issue a replacement automatically', async () => {
+    spyOn(activation, 'activateCodexProfile').mockRejectedValue(
+      new activation.CodexActivationError('confirmation_stale', 'private-error')
+    );
+    const response = await post({}, { confirmationToken: 'x'.repeat(43) });
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body.code).toBe('confirmation_stale');
+    expect(body.confirmation).toBeUndefined();
   });
 
   it.each(['busy', 'invalid_profile', 'invalid_codex_home', 'restart_failed'] as const)(

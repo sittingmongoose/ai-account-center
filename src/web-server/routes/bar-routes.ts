@@ -55,7 +55,21 @@ export interface QuotaWindowDetail {
   resetAt: string | null;
   /** Window length in minutes (300 | 10080), null if unknown. */
   windowMinutes: number | null;
+  kind?: 'rate_limit' | 'balance' | 'spend' | 'extra_usage';
+  remaining?: number | null;
+  used?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+  expiresAt?: string | null;
+  unlimited?: boolean;
+  enabled?: boolean;
 }
+
+/** Balances retain unknown percentages instead of inventing a quota gauge. */
+export type BalanceWindowDetail = Omit<QuotaWindowDetail, 'usedPercent' | 'remainingPercent'> & {
+  usedPercent: number | null;
+  remainingPercent: number | null;
+};
 
 /** Single account glance row returned by /api/bar/summary */
 export interface BarSummaryRow {
@@ -119,6 +133,7 @@ export interface BarSummaryRow {
    * "quota_windows".
    */
   quotaWindows?: QuotaWindowDetail[];
+  balanceWindows?: BalanceWindowDetail[];
   /** Native quota provenance; only network snapshots can drive account rotation. */
   quotaSource?: 'network' | 'local';
   /**

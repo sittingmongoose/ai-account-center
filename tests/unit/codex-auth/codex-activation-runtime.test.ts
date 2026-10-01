@@ -10,6 +10,7 @@ import {
   createCodexActivationRuntime,
   readRolloutLifecycle,
 } from '../../../src/codex-auth/codex-activation-runtime';
+import type { CodexActivationStopPlan } from '../../../src/codex-auth/codex-activation-confirmation';
 
 const home = '/fixture/.codex';
 function processFixture(
@@ -106,6 +107,15 @@ function harness(initial: CodexProcessSnapshot[]) {
       if (isDesktop)
         current.push({ ...bundled, pid: nextPid++, ppid: started.pid, startTime: String(nextPid) });
     },
+    prepareCli: async () => {
+      events.push('prepare-cli');
+    },
+    launchCli: async (target) => {
+      events.push('start-cli');
+      const started = { ...target, args: [target.exe], pid: nextPid++, startTime: String(nextPid) };
+      launches.push(started);
+      current.push(started);
+    },
     verifyDaemon: async () => {
       events.push('healthy');
     },
@@ -189,7 +199,7 @@ describe('Codex activation process lifecycle', () => {
     await expect(createCodexActivationRuntime(home, fake.deps).stop()).rejects.toMatchObject({
       code: 'busy',
     });
-    expect(fake.events).toEqual(['lock', 'native-unlock', 'unlock']);
+    expect(fake.events).toEqual(['lock', 'prepare-cli', 'native-unlock', 'unlock']);
   });
 
   it('refuses actual active thread state, including waiting-for-user tasks, without stopping processes', async () => {
@@ -293,6 +303,202 @@ describe('Codex activation process lifecycle', () => {
     await runtime.dispose?.();
     expect(fake.events.at(-1)).toBe('unlock');
     expect(fake.launches).toHaveLength(0);
+  });
+});
+
+describe('explicit confirmed process interruption', () => {
+  async function warning(fake: ReturnType<typeof harness>): Promise<CodexActivationStopPlan> {
+    try {
+      await createCodexActivationRuntime(home, fake.deps).stop();
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexActivationRuntimeError);
+      const plan = (error as CodexActivationRuntimeError).stopPlan;
+      expect(plan).toBeDefined();
+      return plan!;
+    }
+    throw new Error('Expected a confirmation warning');
+  }
+
+  it('does not stop anything on warning/cancellation and exposes only named safe processes', async () => {
+    const cli = processFixture(30, ['/fixture/bin/codex', 'exec', 'private-prompt']);
+    const fake = harness([daemon, cli]);
+    const plan = await warning(fake);
+    expect(fake.current()).toHaveLength(2);
+    expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+    expect(plan.processes).toEqual([
+      { label: 'Shared Codex server', pid: 10, role: 'daemon' },
+      { label: 'Codex CLI', pid: 30, role: 'cli' },
+    ]);
+    expect(JSON.stringify(plan)).not.toContain('private-prompt');
+  });
+
+  it('stops approved work, then restarts both server and a fresh idle CLI without its original prompt', async () => {
+    const fake = harness([
+      daemon,
+      processFixture(30, ['/fixture/bin/codex', 'exec', 'private-prompt']),
+    ]);
+    const plan = await warning(fake);
+    fake.deps.assertIdle = async () => {
+      throw new Error('Confirmed work need not be idle');
+    };
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop(plan);
+    expect(fake.current()).toHaveLength(0);
+    fake.events.push('install-auth');
+    await runtime.start();
+    expect(fake.events).toContain('SIGTERM:10');
+    expect(fake.events).toContain('SIGTERM:30');
+    expect(fake.events.indexOf('start-cli')).toBeGreaterThan(fake.events.indexOf('install-auth'));
+    expect(fake.launches.at(-1)?.args).toEqual(['/fixture/bin/codex']);
+    expect(fake.launches.at(-1)?.env).toEqual({ HOME: '/fixture', CODEX_HOME: home });
+  });
+
+  it.each(['pid-reuse', 'exec-change', 'new-child', 'new-writer', 'exited'] as const)(
+    'rejects a %s scope change before signalling any writer',
+    async (kind) => {
+      const cli = processFixture(30, ['/fixture/bin/codex']);
+      const fake = harness([daemon, cli]);
+      const plan = await warning(fake);
+      if (kind === 'pid-reuse') fake.current()[1].startTime = 'reused';
+      if (kind === 'exec-change') fake.current()[1].args.push('new-command');
+      if (kind === 'new-child') fake.inject(processFixture(31, ['/bin/worker'], { ppid: 30 }));
+      if (kind === 'new-writer') fake.inject(processFixture(32, ['/fixture/bin/codex']));
+      if (kind === 'exited') fake.current()[1].state = 'Z';
+      await expect(createCodexActivationRuntime(home, fake.deps).stop(plan)).rejects.toMatchObject({
+        code: 'confirmation_stale',
+      });
+      expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+    }
+  );
+
+  it('rejects a process spawned during terminal preflight rather than enlarging the stop set', async () => {
+    const fake = harness([daemon, processFixture(30, ['/fixture/bin/codex'])]);
+    const plan = await warning(fake);
+    fake.deps.prepareCli = async () => {
+      fake.inject(processFixture(32, ['/fixture/bin/codex']));
+    };
+    await expect(createCodexActivationRuntime(home, fake.deps).stop(plan)).rejects.toMatchObject({
+      code: 'confirmation_stale',
+    });
+    expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+  });
+
+  it('offers an active daemon by name without signalling it until explicitly confirmed', async () => {
+    const fake = harness([daemon]);
+    fake.deps.assertIdle = async () => {
+      throw new CodexActivationRuntimeError('active task', 'busy');
+    };
+    const plan = await warning(fake);
+    expect(plan.processes).toEqual([{ label: 'Shared Codex server', pid: 10, role: 'daemon' }]);
+    await createCodexActivationRuntime(home, fake.deps).stop(plan);
+    expect(fake.events).toContain('SIGTERM:10');
+  });
+
+  it('handles the native browser stdio regression by restarting its daemon owner, never detaching old stdio arguments', async () => {
+    const node = processFixture(35, ['/usr/lib/chatgpt/resources/cua_node/bin/node_repl'], {
+      ppid: 10,
+    });
+    const helper = processFixture(
+      36,
+      ['/usr/lib/chatgpt/resources/codex', 'app-server', '--listen', 'stdio://'],
+      {
+        ppid: 35,
+      }
+    );
+    const fake = harness([daemon, node, helper]);
+    fake.deps.assertIdle = async () => {
+      throw new CodexActivationRuntimeError('active task', 'busy');
+    };
+    const plan = await warning(fake);
+    expect(plan.processes).toContainEqual({
+      label: 'Codex browser automation helper',
+      pid: 36,
+      role: 'automation',
+    });
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop(plan);
+    await runtime.start();
+    expect(fake.launches).toHaveLength(1);
+    expect(fake.launches[0].args).toEqual(daemon.args);
+    expect(fake.current().some((entry) => entry.pid === 36)).toBe(false);
+    expect(fake.events).not.toContain('start-cli');
+  });
+
+  it('allows the known idle native browser helper during normal activation after the daemon confirms all work is idle', async () => {
+    const node = processFixture(35, ['/usr/lib/chatgpt/resources/cua_node/bin/node_repl'], {
+      ppid: 10,
+    });
+    const helper = processFixture(
+      36,
+      ['/usr/lib/chatgpt/resources/codex', 'app-server', '--listen', 'stdio://'],
+      { ppid: 35 }
+    );
+    const fake = harness([daemon, node, helper]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.events.indexOf('idle')).toBeLessThan(fake.events.indexOf('SIGTERM:10'));
+    expect(fake.launches).toHaveLength(1);
+    expect(fake.current().some((entry) => entry.pid === 36)).toBe(false);
+  });
+
+  it('reopens a CLI nested under the approved daemon rather than silently losing the child program', async () => {
+    const nested = processFixture(30, ['/fixture/bin/codex', 'exec', 'private-prompt'], {
+      ppid: 10,
+    });
+    const fake = harness([daemon, nested]);
+    const plan = await warning(fake);
+    expect(plan.processes).toContainEqual({ pid: 30, label: 'Codex CLI', role: 'cli' });
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop(plan);
+    await runtime.start();
+    expect(fake.events).toContain('start-cli');
+    expect(fake.launches.at(-1)?.args).toEqual(['/fixture/bin/codex']);
+  });
+
+  it('refuses an unowned stdio server because its original pipes cannot be safely reconstructed', async () => {
+    const fake = harness([
+      processFixture(36, ['/fixture/bin/codex', 'app-server', '--listen', 'stdio://']),
+    ]);
+    await expect(createCodexActivationRuntime(home, fake.deps).stop()).rejects.toMatchObject({
+      code: 'busy',
+      stopPlan: undefined,
+    });
+    expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+  });
+
+  it('fails terminal preflight without stopping a process or issuing an unusable offer', async () => {
+    const fake = harness([processFixture(30, ['/fixture/bin/codex'])]);
+    fake.deps.prepareCli = async () => {
+      throw new CodexActivationRuntimeError('No terminal');
+    };
+    await expect(createCodexActivationRuntime(home, fake.deps).stop()).rejects.toMatchObject({
+      code: 'restart_failed',
+      stopPlan: undefined,
+    });
+    expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+  });
+
+  it('retains a partially relaunched CLI start identity so rollback stops only that instance and can reopen it', async () => {
+    const fake = harness([processFixture(30, ['/fixture/bin/codex', 'exec', 'private-prompt'])]);
+    const plan = await warning(fake);
+    const launch = fake.deps.launchCli;
+    let attempt = 0;
+    fake.deps.launchCli = async (target) => {
+      await launch(target);
+      if (++attempt === 1) throw new CodexActivationRuntimeError('Terminal readiness failed');
+    };
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop(plan);
+    await expect(runtime.start()).rejects.toMatchObject({ code: 'restart_failed' });
+    const partial = fake.current()[0];
+    expect(partial).toBeDefined();
+    await runtime.stop();
+    expect(fake.events).toContain(`SIGTERM:${partial.pid}`);
+    await runtime.start();
+    expect(fake.current()).toHaveLength(1);
+    expect(fake.current()[0].args).toEqual(['/fixture/bin/codex']);
+    expect(fake.current()[0].pid).not.toBe(partial.pid);
   });
 });
 

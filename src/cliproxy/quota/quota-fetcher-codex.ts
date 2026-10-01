@@ -11,6 +11,11 @@ import { getAuthDir } from '../config/config-generator';
 import { getAccount, getProviderAccounts, getPausedDir } from '../accounts/account-manager';
 import { sanitizeEmail, isTokenExpired } from '../auth/auth-utils';
 import type { CodexQuotaResult, CodexQuotaWindow, CodexCoreUsageSummary } from './quota-types';
+import {
+  codexResetTimestamp,
+  normalizeCodexExtraUsage,
+  normalizeCodexResetCreditDetails,
+} from './codex-extra-usage';
 import { sanitizeCodexFeatureLabel } from './quota-label-sanitizer';
 import { extractCanonicalEmailFromAccountId } from '../accounts/email-account-identity';
 import { createLogger } from '../../services/logging';
@@ -47,6 +52,7 @@ interface CodexUsageResponse {
   codeReviewRateLimit?: CodexRateLimitWindow | null;
   additional_rate_limits?: CodexAdditionalRateLimit[] | null;
   additionalRateLimits?: CodexAdditionalRateLimit[] | null;
+  chatpass?: { windows?: CodexWindowData[] } | null;
 }
 
 /** Rate limit window from API */
@@ -78,6 +84,8 @@ interface CodexWindowData {
   resetAfterSeconds?: number | null;
   limit_window_seconds?: number | null;
   limitWindowSeconds?: number | null;
+  reset_at?: number | null;
+  resetAt?: number | null;
 }
 
 interface ParsedCodexErrorBody {
@@ -329,14 +337,15 @@ function buildCodexQuotaWindows(payload: CodexUsageResponse): CodexQuotaWindow[]
     windowData: CodexWindowData | undefined,
     meta: {
       category: NonNullable<CodexQuotaWindow['category']>;
-      cadence: NonNullable<CodexQuotaWindow['cadence']>;
+      cadence?: NonNullable<CodexQuotaWindow['cadence']>;
       featureLabel?: string;
     }
   ): void => {
     if (!windowData) return;
 
     // Clamp usedPercent to [0, 100] range
-    const rawUsedPercent = windowData.used_percent ?? windowData.usedPercent ?? 0;
+    const rawUsedPercent = windowData.used_percent ?? windowData.usedPercent;
+    if (typeof rawUsedPercent !== 'number' || !Number.isFinite(rawUsedPercent)) return;
     const usedPercent = Math.max(0, Math.min(100, rawUsedPercent));
     const resetAfterSeconds =
       windowData.reset_after_seconds ?? windowData.resetAfterSeconds ?? null;
@@ -358,9 +367,15 @@ function buildCodexQuotaWindows(payload: CodexUsageResponse): CodexQuotaWindow[]
             ? 'weekly'
             : undefined;
 
-    // Calculate reset timestamp if we have seconds
-    let resetAt: string | null = null;
-    if (resetAfterSeconds !== null && resetAfterSeconds > 0) {
+    // Prefer the exact upstream reset over a timestamp derived from the fetch time.
+    let resetAt = codexResetTimestamp(windowData.reset_at ?? windowData.resetAt);
+    if (
+      resetAt === null &&
+      typeof resetAfterSeconds === 'number' &&
+      Number.isFinite(resetAfterSeconds) &&
+      resetAfterSeconds > 0 &&
+      Number.isFinite(new Date(Date.now() + resetAfterSeconds * 1000).getTime())
+    ) {
       resetAt = new Date(Date.now() + resetAfterSeconds * 1000).toISOString();
     }
 
@@ -425,6 +440,15 @@ function buildCodexQuotaWindows(payload: CodexUsageResponse): CodexQuotaWindow[]
         { category: 'additional', cadence: 'weekly', featureLabel }
       );
     }
+  }
+
+  if (Array.isArray(payload.chatpass?.windows)) {
+    payload.chatpass.windows.slice(0, 32).forEach((window, index) => {
+      addWindow(`Chat pass (${index + 1})`, window, {
+        category: 'additional',
+        featureLabel: 'Chat pass',
+      });
+    });
   }
 
   return windows;
@@ -795,6 +819,33 @@ async function runCodexUsageFetch(
         );
       }
       const coreUsage = buildCodexCoreUsageSummary(windows);
+      const extras = normalizeCodexExtraUsage(data);
+      // Optional read-only metadata must never make ordinary quota collection fail.
+      if (extras.resetCredits && (extras.resetCredits.available ?? 0) > 0) {
+        const resetController = new AbortController();
+        const resetTimeout = setTimeout(() => resetController.abort(), 3000);
+        try {
+          const resetResponse = await fetch(`${CODEX_API_BASE}/wham/rate-limit-reset-credits`, {
+            method: 'GET',
+            signal: resetController.signal,
+            redirect: 'error',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'ChatGPT-Account-Id': chatgptAccountId,
+              'User-Agent': USER_AGENT,
+            },
+          });
+          if (resetResponse.ok) {
+            extras.resetCredits.credits = normalizeCodexResetCreditDetails(
+              await resetResponse.json()
+            );
+          }
+        } catch {
+          /* The quota response still contains the authoritative count. */
+        } finally {
+          clearTimeout(resetTimeout);
+        }
+      }
 
       // Extract plan type
       const planTypeRaw = data.plan_type || data.planType;
@@ -817,6 +868,7 @@ async function runCodexUsageFetch(
         success: true,
         windows,
         coreUsage,
+        ...extras,
         planType,
         lastUpdated: Date.now(),
         accountId,

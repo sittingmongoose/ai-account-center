@@ -11,6 +11,8 @@ ui/node_modules
 dist
 ui/dist
 ui/.vite
+web-dashboard/target
+web-dashboard/pkg
 
 # Test and coverage
 coverage

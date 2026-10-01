@@ -66,3 +66,7 @@ tests/mocks/fixtures/*.d.ts.map
 # Bar demo scaffolding (local dev only)
 _serve*.ts
 _serve*.log
+
+# Python usage readers and updater test caches
+__pycache__/
+*.pyc

@@ -132,6 +132,14 @@ export function canOpenClaudeMacProfile(profile: ClaudeDesktopProfile): boolean 
   );
 }
 
+export const CLAUDE_WINDOWS_PROFILE_IDS = new Set(['platyr', 'gmail', 'party', 'me']);
+
+export function canOpenClaudeWindowsProfile(profile: ClaudeDesktopProfile): boolean {
+  return Boolean(
+    profile.id && CLAUDE_WINDOWS_PROFILE_IDS.has(profile.id) && profile.windows?.sshHost
+  );
+}
+
 function publicLauncher(launcher: ClaudeDesktopLauncher): Omit<ClaudeDesktopLauncher, 'sshHost'> {
   const result: Omit<ClaudeDesktopLauncher, 'sshHost'> = { launcherName: launcher.launcherName };
   for (const field of ['launcherPath', 'profilePath', 'isDefault'] as const) {
@@ -158,6 +166,7 @@ export async function listClaudeDesktopProfileMetadata() {
       ? {
           windows: {
             ...publicLauncher(profile.windows),
+            ...(profile.id ? { canOpen: canOpenClaudeWindowsProfile(profile) } : {}),
             ...(profile.windows.startMenuPath
               ? { startMenuPath: profile.windows.startMenuPath }
               : {}),

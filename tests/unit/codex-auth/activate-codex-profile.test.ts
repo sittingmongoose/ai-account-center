@@ -15,6 +15,11 @@ import {
   invalidateCodexAuthProfilesCache,
 } from '../../../src/codex-auth/codex-auth-dashboard-service';
 import { runCodexAuth } from '../../../src/codex-auth/codex-auth-router';
+import { CodexActivationRuntimeError } from '../../../src/codex-auth/codex-activation-runtime';
+import type {
+  CodexActivationConfirmation,
+  CodexActivationStopPlan,
+} from '../../../src/codex-auth/codex-activation-confirmation';
 
 const oldCcsHome = process.env.CCS_HOME;
 const oldCodexHome = process.env.CODEX_HOME;
@@ -255,6 +260,132 @@ describe('activateCodexProfile', () => {
     await expect(
       activateCodexProfile('platyr', { codexHome, registry, runtime: runtime(events) })
     ).rejects.toThrow('needs access and refresh tokens');
+    expect(events).toEqual([]);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
+  });
+});
+
+describe('confirmed activation transactions', () => {
+  const plan: CodexActivationStopPlan = {
+    identities: [{ pid: 42, ppid: 1, startTime: 'fixture-start', fingerprint: 'safe-digest' }],
+    roots: [42],
+    processes: [{ pid: 42, label: 'Codex CLI', role: 'cli' }],
+  };
+
+  async function issue(): Promise<CodexActivationConfirmation> {
+    try {
+      await activateCodexProfile('platyr', {
+        codexHome,
+        registry,
+        runtime: {
+          stop: async () => {
+            throw new CodexActivationRuntimeError('active CLI', 'busy', plan);
+          },
+          start: async () => {
+            throw new Error('Must not restart before consent');
+          },
+        },
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexActivationError);
+      const offer = (error as CodexActivationError).details?.confirmation;
+      expect(offer).toBeDefined();
+      return offer!;
+    }
+    throw new Error('Expected an offer');
+  }
+
+  it('releases activation lock after the warning, changes no auth on cancellation, and performs a one-shot confirmed swap', async () => {
+    const offer = await issue();
+    expect(fs.existsSync(path.join(codexHome, '.ccs-activation.lock'))).toBe(false);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
+    const events: string[] = [];
+    const stub = runtime(events);
+    stub.stop = async (approval) => {
+      expect(approval).toEqual(plan);
+      events.push('approved-stop');
+    };
+    const result = await activateCodexProfile('platyr', {
+      codexHome,
+      registry,
+      runtime: stub,
+      confirmationToken: offer.token,
+    });
+    expect(result.email).toBe('platyr@example.test');
+    expect(events).toEqual(['approved-stop', 'start']);
+    await expect(
+      activateCodexProfile('platyr', {
+        codexHome,
+        registry,
+        runtime: runtime([]),
+        confirmationToken: offer.token,
+      })
+    ).rejects.toMatchObject({ code: 'confirmation_stale' });
+  });
+
+  it('rejects an auth refresh or an unrelated target before invoking stop', async () => {
+    const offer = await issue();
+    const refreshed = Buffer.from(
+      fixture('gmail').toString().replace('fake-access-gmail', 'fresh-access')
+    );
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), refreshed);
+    const events: string[] = [];
+    await expect(
+      activateCodexProfile('platyr', {
+        codexHome,
+        registry,
+        runtime: runtime(events),
+        confirmationToken: offer.token,
+      })
+    ).rejects.toMatchObject({ code: 'confirmation_stale' });
+    expect(events).toEqual([]);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(refreshed);
+    const nextOffer = await issue();
+    await expect(
+      activateCodexProfile('gmail', {
+        codexHome,
+        registry,
+        runtime: runtime(events),
+        confirmationToken: nextOffer.token,
+      })
+    ).rejects.toMatchObject({ code: 'confirmation_stale' });
+    expect(events).toEqual([]);
+  });
+
+  it('restores original auth and restarts after a confirmed startup fails, without creating a new capability', async () => {
+    const offer = await issue();
+    const events: string[] = [];
+    let starts = 0;
+    const stub = runtime(events);
+    stub.start = async () => {
+      events.push('start');
+      if (++starts === 1) throw new CodexActivationRuntimeError('failed restart');
+    };
+    await expect(
+      activateCodexProfile('platyr', {
+        codexHome,
+        registry,
+        runtime: stub,
+        confirmationToken: offer.token,
+      })
+    ).rejects.toMatchObject({ code: 'restart_failed', details: undefined });
+    expect(events).toEqual(['stop', 'start', 'stop', 'start']);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
+    expect(fs.existsSync(path.join(codexHome, '.ccs-activation.lock'))).toBe(false);
+  });
+
+  it('rejects a changed saved target login before stopping any program', async () => {
+    const offer = await issue();
+    fs.writeFileSync(auth('platyr'), fixture('gmail'));
+    const events: string[] = [];
+    await expect(
+      activateCodexProfile('platyr', {
+        codexHome,
+        registry,
+        runtime: runtime(events),
+        confirmationToken: offer.token,
+      })
+    ).rejects.toMatchObject({ code: 'confirmation_stale' });
     expect(events).toEqual([]);
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
   });

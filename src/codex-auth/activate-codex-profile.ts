@@ -8,11 +8,22 @@ import { resolveCodexProfileDir } from './codex-profile-paths';
 import { decodeIdToken, hasStructurallyValidIdToken } from './decode-id-token';
 import { getCodexProfileNameError } from './types';
 import type { CodexAccountIdentity } from './types';
-import { createCodexActivationRuntime } from './codex-activation-runtime';
+import {
+  createCodexActivationRuntime,
+  CodexActivationRuntimeError,
+} from './codex-activation-runtime';
 import { invalidateCodexAuthProfilesCache } from './codex-auth-dashboard-service';
+import {
+  codexAuthHash,
+  consumeCodexActivationConfirmation,
+  issueCodexActivationConfirmation,
+  type CodexActivationConfirmation,
+  type CodexActivationStopPlan,
+} from './codex-activation-confirmation';
 
 export type CodexActivationErrorCode =
   | 'busy'
+  | 'confirmation_stale'
   | 'invalid_profile'
   | 'invalid_codex_home'
   | 'auth_read_failed'
@@ -24,7 +35,14 @@ export type CodexActivationErrorCode =
 export class CodexActivationError extends Error {
   readonly code: CodexActivationErrorCode;
 
-  constructor(code: CodexActivationErrorCode, message: string) {
+  constructor(
+    code: CodexActivationErrorCode,
+    message: string,
+    public readonly details?: {
+      reason: 'activation_running' | 'running_processes' | 'unsupported_process';
+      confirmation?: CodexActivationConfirmation;
+    }
+  ) {
     super(message);
     this.name = 'CodexActivationError';
     this.code = code;
@@ -32,7 +50,7 @@ export class CodexActivationError extends Error {
 }
 
 export interface CodexActivationRuntime {
-  stop(): Promise<void>;
+  stop(approval?: CodexActivationStopPlan): Promise<void>;
   start(): Promise<void>;
   dispose?(): Promise<void>;
 }
@@ -42,6 +60,8 @@ export interface CodexActivationOptions {
   /** Explicit dependency injection for tests; never read from CODEX_HOME. */
   codexHome?: string;
   runtime?: CodexActivationRuntime;
+  /** Opaque, one-shot server-owned permission; never client-supplied process IDs. */
+  confirmationToken?: string;
 }
 
 export interface CodexActivationResult {
@@ -133,7 +153,11 @@ function asSafeActivationError(error: unknown): CodexActivationError {
   if (error instanceof Error && error.name === 'CodexActivationRuntimeError') {
     const runtimeCode = (error as Error & { code?: string }).code;
     return new CodexActivationError(
-      runtimeCode === 'busy' ? 'busy' : 'restart_failed',
+      runtimeCode === 'busy'
+        ? 'busy'
+        : runtimeCode === 'confirmation_stale'
+          ? 'confirmation_stale'
+          : 'restart_failed',
       error.message
     );
   }
@@ -205,7 +229,8 @@ export async function activateCodexProfile(
     throw new CodexActivationError('invalid_profile', `Codex profile '${name}' does not exist.`);
   }
   const targetAuthPath = path.join(resolveCodexProfileDir(name), 'auth.json');
-  const expectedEmail = readAuth(targetAuthPath, 'Target profile', true).identity.email;
+  const expectedTarget = readAuth(targetAuthPath, 'Target profile', true);
+  const expectedEmail = expectedTarget.identity.email;
   try {
     fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
   } catch {
@@ -224,7 +249,9 @@ export async function activateCodexProfile(
       retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
     });
   } catch {
-    throw new CodexActivationError('busy', 'Another Codex account activation is already running.');
+    throw new CodexActivationError('busy', 'Another Codex account activation is already running.', {
+      reason: 'activation_running',
+    });
   }
   const authPath = path.join(codexHome, 'auth.json');
   const runtime = options.runtime ?? createCodexActivationRuntime(codexHome);
@@ -232,7 +259,22 @@ export async function activateCodexProfile(
   let original: AuthSnapshot | undefined;
   let authReplaced = false;
   try {
-    await runtime.stop();
+    let approval: CodexActivationStopPlan | undefined;
+    if (options.confirmationToken) {
+      const live = fs.existsSync(authPath) ? readAuth(authPath, 'Live').content : Buffer.alloc(0);
+      approval = consumeCodexActivationConfirmation(
+        options.confirmationToken,
+        name,
+        codexAuthHash(Buffer.concat([live, expectedTarget.content]))
+      );
+      if (!approval) {
+        throw new CodexActivationError(
+          'confirmation_stale',
+          'The activation confirmation expired or the account changed. Review a new warning.'
+        );
+      }
+    }
+    await runtime.stop(approval);
     stopped = true;
     // Snapshot ONLY after writers have exited. Never use an active-slot marker.
     if (fs.existsSync(authPath)) {
@@ -272,6 +314,20 @@ export async function activateCodexProfile(
     };
   } catch (error) {
     const safeError = asSafeActivationError(error);
+    if (!stopped && error instanceof CodexActivationRuntimeError && error.code === 'busy') {
+      if (error.stopPlan && !options.confirmationToken) {
+        const live = fs.existsSync(authPath) ? readAuth(authPath, 'Live').content : Buffer.alloc(0);
+        throw new CodexActivationError('busy', safeError.message, {
+          reason: 'running_processes',
+          confirmation: issueCodexActivationConfirmation(
+            name,
+            codexAuthHash(Buffer.concat([live, expectedTarget.content])),
+            error.stopPlan
+          ),
+        });
+      }
+      throw new CodexActivationError('busy', safeError.message, { reason: 'unsupported_process' });
+    }
     if (stopped) {
       try {
         // A partial start can leave writers alive. Quiesce them before rollback.

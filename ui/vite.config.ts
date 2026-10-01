@@ -45,36 +45,19 @@ export default defineConfig({
     minify: 'esbuild',
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Vendor chunks - split large dependencies
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'radix-ui': [
-            '@radix-ui/react-alert-dialog',
-            '@radix-ui/react-checkbox',
-            '@radix-ui/react-collapsible',
-            '@radix-ui/react-dialog',
-            '@radix-ui/react-dropdown-menu',
-            '@radix-ui/react-label',
-            '@radix-ui/react-popover',
-            '@radix-ui/react-scroll-area',
-            '@radix-ui/react-select',
-            '@radix-ui/react-separator',
-            '@radix-ui/react-slot',
-            '@radix-ui/react-switch',
-            '@radix-ui/react-tabs',
-            '@radix-ui/react-tooltip',
-          ],
-          'tanstack': ['@tanstack/react-query', '@tanstack/react-table'],
-          'form-utils': ['react-hook-form', '@hookform/resolvers', 'zod'],
-          'icons': ['lucide-react'],
-          // Charts - large library, separate chunk
-          'charts': ['recharts'],
-          // Code editor / syntax highlighting
-          'code-highlight': ['prism-react-renderer'],
-          // Notifications
-          'notifications': ['sonner'],
-          // Utilities
-          'utils': ['date-fns', 'clsx', 'class-variance-authority', 'tailwind-merge', 'yaml'],
+        // Split only modules the account dashboard actually imports.
+        manualChunks(id) {
+          if (!id.includes('/node_modules/')) return;
+          if (/\/node_modules\/(react|react-dom|react-router|react-router-dom)\//.test(id)) {
+            return 'react-vendor';
+          }
+          if (id.includes('/@radix-ui/')) return 'radix-ui';
+          if (id.includes('/@tanstack/')) return 'tanstack';
+          if (id.includes('/lucide-react/')) return 'icons';
+          if (id.includes('/sonner/')) return 'notifications';
+          if (/\/node_modules\/(clsx|class-variance-authority|tailwind-merge)\//.test(id)) {
+            return 'utils';
+          }
         },
       },
     },

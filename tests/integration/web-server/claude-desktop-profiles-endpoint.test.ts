@@ -117,7 +117,11 @@ describe('Claude desktop launch and cached usage', () => {
         ...fakeProfiles[0],
         id: 'work',
         mac: { ...fakeProfiles[0]!.mac, canOpen: true },
-        windows: { ...fakeProfiles[0]!.windows, launchUri: 'ccs-claude://launch/work' },
+        windows: {
+          ...fakeProfiles[0]!.windows,
+          canOpen: false,
+          launchUri: 'ccs-claude://launch/work',
+        },
       },
     ]);
     expect(JSON.stringify(response.body)).not.toContain('example-mac');
@@ -139,6 +143,43 @@ describe('Claude desktop launch and cached usage', () => {
     const launch = spyOn(transport, 'openClaudeMacLauncher').mockResolvedValue(undefined);
     expect((await request('POST', '/work/open', openOptions())).status).toBe(401);
     expect(launch).not.toHaveBeenCalled();
+  });
+
+  it('launches only an allowlisted configured Windows task with a same-origin session', async () => {
+    authenticated = true;
+    writeManifest({
+      version: 1,
+      profiles: [
+        {
+          ...fakeProfiles[0],
+          id: 'gmail',
+          mac: { ...fakeProfiles[0]!.mac, sshHost: 'example-mac' },
+          windows: { ...fakeProfiles[0]!.windows, sshHost: 'example-windows' },
+        },
+      ],
+    });
+    const launch = spyOn(transport, 'openClaudeWindowsLauncher').mockResolvedValue(undefined);
+    expect(await request('POST', '/gmail/open', openOptions({ platform: 'windows' }))).toEqual({
+      status: 200,
+      body: { opened: true, id: 'gmail', platform: 'windows' },
+    });
+    expect(launch).toHaveBeenCalledWith(
+      { ...fakeProfiles[0]!.windows, sshHost: 'example-windows' },
+      'gmail'
+    );
+    const badOrigin = openOptions({ platform: 'windows' });
+    badOrigin.headers = { ...badOrigin.headers, Origin: 'https://attacker.example.com' };
+    expect((await request('POST', '/gmail/open', badOrigin)).status).toBe(403);
+    expect(
+      (
+        await request(
+          'POST',
+          '/gmail/open',
+          openOptions({ platform: 'windows', command: 'anything' })
+        )
+      ).status
+    ).toBe(400);
+    expect(launch).toHaveBeenCalledTimes(1);
   });
 
   it('rejects cross-origin and non-JSON launch requests before SSH', async () => {

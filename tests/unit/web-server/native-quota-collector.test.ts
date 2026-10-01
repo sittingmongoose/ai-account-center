@@ -2056,6 +2056,35 @@ describe('saved native Codex dashboard quota', () => {
     expect(getCachedCodexProfileQuotaRows(['gmail', 'party', 'lexxmariah'])).toHaveLength(3);
   });
 
+  it('allows a requested profile refresh to bypass TTL while coalescing the forced fetch', async () => {
+    let calls = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deps: NativeQuotaDeps = {
+      defaultCodexProfile: () => 'gmail',
+      readCodexNativeAuth: () => ({ accessToken: 'fake-token', accountId: 'fixture-workspace' }),
+      fetchCodexQuotaWithToken: async () => {
+        calls += 1;
+        if (calls > 1) await gate;
+        return codexSuccessQuota();
+      },
+    };
+    await getCodexProfileQuotaRows(['gmail'], deps);
+    await getCodexProfileQuotaRows(['gmail'], deps);
+    expect(calls).toBe(1);
+    const first = getCodexProfileQuotaRows(['gmail'], deps, { force: true });
+    const second = getCodexProfileQuotaRows(['gmail'], deps, { force: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toBe(2);
+    release();
+    expect(await first).toHaveLength(1);
+    expect(await second).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+
   it('isolates same-named profile quotas and cache projections across CCS scopes', async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-scoped-quota-'));
     const originalFetch = global.fetch;

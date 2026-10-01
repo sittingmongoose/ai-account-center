@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import type { AddressInfo } from 'net';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 import { startServer } from '../../../src/web-server';
 
 const instances: Array<Awaited<ReturnType<typeof startServer>>> = [];
+const staticDirs: string[] = [];
 
 class MockUpgradeSocket {
   data = '';
@@ -44,6 +48,7 @@ afterEach(async () => {
   }
 
   mock.restore();
+  for (const dir of staticDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('startServer host binding', () => {
@@ -72,27 +77,25 @@ describe('startServer host binding', () => {
     expect(['0.0.0.0', '::']).toContain(address.address);
   });
 
-  it('attaches Vite HMR to the existing HTTP server in dev mode', async () => {
-    let viteConfig: Record<string, unknown> | undefined;
-
-    mock.module('vite', () => ({
-      createServer: async (config: Record<string, unknown>) => {
-        viteConfig = config;
-        return {
-          middlewares: (_req: unknown, _res: unknown, next: () => void) => next(),
-        };
-      },
-    }));
-
-    const instance = await startServer({ port: 0, dev: true });
+  it('serves the same Slint assets in dev mode with streaming WebAssembly MIME', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-slint-static-'));
+    staticDirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'index.html'), '<canvas id="slint-dashboard"></canvas>');
+    const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+    fs.writeFileSync(path.join(dir, 'dashboard.wasm'), wasm);
+    const instance = await startServer({ port: 0, host: '127.0.0.1', dev: true, staticDir: dir });
     instances.push(instance);
-
-    expect(viteConfig).toBeDefined();
-    const serverConfig = viteConfig?.server as
-      | { middlewareMode?: boolean; hmr?: { server?: unknown } }
-      | undefined;
-    expect(serverConfig?.middlewareMode).toBe(true);
-    expect(serverConfig?.hmr?.server).toBe(instance.server);
+    const address = instance.server.address() as AddressInfo;
+    const root = `http://127.0.0.1:${address.port}`;
+    expect(await (await fetch(root)).text()).toContain('slint-dashboard');
+    expect(await (await fetch(`${root}/login`)).text()).toContain('slint-dashboard');
+    const previousDashboard = await fetch(`${root}/codex/accounts`, { redirect: 'manual' });
+    expect(previousDashboard.status).toBe(302);
+    expect(previousDashboard.headers.get('location')).toBe('/');
+    const response = await fetch(`${root}/dashboard.wasm`);
+    expect(response.headers.get('content-type')).toBe('application/wasm');
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(wasm);
+    expect(dispatchUpgrade(instance, '/vite-hmr').destroyed).toBe(true);
   });
 
   it('rejects unsupported production websocket upgrade paths', async () => {

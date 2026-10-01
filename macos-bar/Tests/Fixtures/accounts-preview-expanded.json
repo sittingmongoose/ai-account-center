@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-01T04:00:00Z",
+  "accounts": [
+    {
+      "id": "preview-cursor",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "month",
+          "label": "Monthly included usage",
+          "kind": "spend",
+          "usedPercent": 58,
+          "remainingPercent": 42,
+          "resetAt": "2026-11-01T04:00:00Z",
+          "windowMinutes": null,
+          "used": 11.6,
+          "limit": 20,
+          "remaining": 8.4,
+          "unit": "USD",
+          "expiresAt": null,
+          "unlimited": false,
+          "enabled": true
+        },
+        {
+          "key": "credits",
+          "label": "Extra credits",
+          "kind": "balance",
+          "usedPercent": null,
+          "remainingPercent": null,
+          "resetAt": null,
+          "windowMinutes": null,
+          "used": null,
+          "limit": null,
+          "remaining": 5.75,
+          "unit": "USD",
+          "expiresAt": "2026-12-31T05:00:00Z",
+          "unlimited": false,
+          "enabled": true
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": null,
+        "claudePlatforms": []
+      }
+    },
+    {
+      "id": "preview-claude",
+      "provider": "claude",
+      "providerLabel": "Claude",
+      "label": "Layout preview",
+      "email": "preview@example.test",
+      "plan": "Subscription",
+      "platform": "mac",
+      "source": "Preview fixture",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T04:00:00Z",
+      "sampledAt": "2026-10-01T04:00:00Z",
+      "isActive": false,
+      "windows": [
+        {
+          "key": "extra",
+          "label": "Extra usage",
+          "kind": "extra_usage",
+          "usedPercent": null,
+          "remainingPercent": null,
+          "resetAt": "2026-11-01T04:00:00Z",
+          "windowMinutes": null,
+          "used": 0,
+          "limit": null,
+          "remaining": null,
+          "unit": "USD",
+          "expiresAt": null,
+          "unlimited": true,
+          "enabled": false
+        }
+      ],
+      "capabilities": {
+        "codexProfile": null,
+        "claudeProfileId": "gmail",
+        "claudePlatforms": [
+          "mac",
+          "windows"
+        ]
+      }
+    }
+  ],
+  "codexAutoSwitch": {
+    "enabled": true,
+    "thresholdPercent": 5,
+    "pollIntervalSeconds": 60,
+    "outcome": "healthy",
+    "message": "The active Codex account has more than 5% remaining.",
+    "activationInProgress": false
+  }
+}

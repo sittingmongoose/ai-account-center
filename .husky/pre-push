@@ -57,7 +57,7 @@ fi
 
 CHANGED_FILES="$(git diff --name-only "$DIFF_RANGE" || true)"
 
-if printf '%s\n' "$CHANGED_FILES" | grep -q '^ui/'; then
+if printf '%s\n' "$CHANGED_FILES" | grep -qE '^(web-dashboard/|scripts/(build-ui|validate-ui|verify-bundle)\.js|package\.json)'; then
   echo "[i] UI changes detected, running ui:validate..."
   bun run ui:validate
 fi

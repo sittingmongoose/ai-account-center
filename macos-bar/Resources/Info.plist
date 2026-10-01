@@ -5,7 +5,7 @@
   <key>CFBundleExecutable</key>
   <string>CCSBar</string>
   <key>CFBundleIdentifier</key>
-  <string>ca.kaitran.ccs.bar</string>
+  <string>party.sittingmongoose.ccs.accounts-bar</string>
   <key>CFBundleName</key>
   <string>CCS Bar</string>
   <key>CFBundleDisplayName</key>
@@ -17,12 +17,27 @@
   <key>CFBundleVersion</key>
   <string>__VERSION__</string>
   <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
+  <string>14.0</string>
   <key>LSUIElement</key>
   <true/>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>NSHumanReadableCopyright</key>
   <string>CCS Bar</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>CCS Bar connects to your authenticated CCS dashboard to show accounts and usage.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>192.168.50.179</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+      </dict>
+    </dict>
+  </dict>
 </dict>
 </plist>

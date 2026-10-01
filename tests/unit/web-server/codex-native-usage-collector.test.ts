@@ -6,6 +6,7 @@ import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import { scanCodexNativeUsageEntries } from '../../../src/web-server/usage/codex-native-usage-collector';
 
 type TestUsageCache = {
+  version: number;
   includeCliproxySessions: boolean;
   files: Record<string, { mtimeMs: number; entries: unknown[] }>;
 };
@@ -69,14 +70,14 @@ function writeCodexRollout(
             cached_input_tokens: 20,
             output_tokens: 5,
             reasoning_output_tokens: 2,
-            total_tokens: 127,
+            total_tokens: 105,
           },
           last_token_usage: {
             input_tokens: 100,
             cached_input_tokens: 20,
             output_tokens: 5,
             reasoning_output_tokens: 2,
-            total_tokens: 127,
+            total_tokens: 105,
           },
           model_context_window: 200000,
         },
@@ -93,14 +94,14 @@ function writeCodexRollout(
             cached_input_tokens: 20,
             output_tokens: 5,
             reasoning_output_tokens: 2,
-            total_tokens: 127,
+            total_tokens: 105,
           },
           last_token_usage: {
             input_tokens: 100,
             cached_input_tokens: 20,
             output_tokens: 5,
             reasoning_output_tokens: 2,
-            total_tokens: 127,
+            total_tokens: 105,
           },
           model_context_window: 200000,
         },
@@ -117,14 +118,14 @@ function writeCodexRollout(
             cached_input_tokens: 30,
             output_tokens: 10,
             reasoning_output_tokens: 3,
-            total_tokens: 193,
+            total_tokens: 160,
           },
           last_token_usage: {
             input_tokens: 50,
             cached_input_tokens: 10,
             output_tokens: 5,
             reasoning_output_tokens: 1,
-            total_tokens: 66,
+            total_tokens: 55,
           },
           model_context_window: 200000,
         },
@@ -151,14 +152,14 @@ function appendCodexTokenCount(rolloutPath: string): void {
             cached_input_tokens: 40,
             output_tokens: 20,
             reasoning_output_tokens: 5,
-            total_tokens: 265,
+            total_tokens: 220,
           },
           last_token_usage: {
             input_tokens: 50,
             cached_input_tokens: 10,
             output_tokens: 10,
             reasoning_output_tokens: 2,
-            total_tokens: 72,
+            total_tokens: 60,
           },
           model_context_window: 200000,
         },
@@ -202,15 +203,97 @@ describe('codex native usage collector', () => {
       model: 'gpt-5',
       version: '0.126.0',
       target: 'codex',
-      inputTokens: 100,
+      inputTokens: 80,
       cacheReadTokens: 20,
-      outputTokens: 7,
+      outputTokens: 5,
     });
     expect(entries[1]).toMatchObject({
-      inputTokens: 50,
+      inputTokens: 40,
       cacheReadTokens: 10,
-      outputTokens: 6,
+      outputTokens: 5,
     });
+  });
+
+  it('counts cache reads, writes, and reasoning exactly once against Codex reported totals', async () => {
+    const sessions = path.join(tempRoot, 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    const usage = {
+      input_tokens: 100,
+      cached_input_tokens: 40,
+      cache_write_input_tokens: 60,
+      output_tokens: 10,
+      reasoning_output_tokens: 5,
+      total_tokens: 110,
+    };
+    const next = {
+      input_tokens: 160,
+      cached_input_tokens: 50,
+      cache_write_input_tokens: 100,
+      output_tokens: 20,
+      reasoning_output_tokens: 11,
+      total_tokens: 180,
+    };
+    const event = (snapshot: typeof usage, timestamp: string) => ({
+      timestamp,
+      type: 'event_msg',
+      payload: { type: 'token_count', info: { total_token_usage: snapshot } },
+    });
+    const lines = [
+      { type: 'session_meta', payload: { id: 'disjoint-usage', model_provider: 'openai' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.6' } },
+      event(usage, '2026-10-01T15:00:00Z'),
+      event(usage, '2026-10-01T15:01:00Z'),
+      event(next, '2026-10-01T15:02:00Z'),
+    ];
+    fs.writeFileSync(
+      path.join(sessions, 'rollout-disjoint.jsonl'),
+      lines.map((line) => JSON.stringify(line)).join('\n')
+    );
+    const entries = await scanCodexNativeUsageEntries({
+      env: { CODEX_HOME: tempRoot },
+      disableCache: true,
+    });
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      inputTokens: 0,
+      cacheReadTokens: 40,
+      cacheCreationTokens: 60,
+      outputTokens: 10,
+    });
+    expect(entries[1]).toMatchObject({
+      inputTokens: 10,
+      cacheReadTokens: 10,
+      cacheCreationTokens: 40,
+      outputTokens: 10,
+    });
+    expect(
+      entries.reduce(
+        (sum, entry) =>
+          sum +
+          entry.inputTokens +
+          entry.outputTokens +
+          entry.cacheReadTokens +
+          entry.cacheCreationTokens,
+        0
+      )
+    ).toBe(next.total_tokens);
+  });
+
+  it('invalidates old overlapping-token caches even when rollout fingerprints have not changed', async () => {
+    const rolloutPath = writeCodexRollout(tempRoot);
+    const cacheDir = getCacheDir();
+    const options = { env: { CODEX_HOME: tempRoot }, homeDir: tempRoot, cacheDir };
+    await scanCodexNativeUsageEntries(options);
+    const cachePath = path.join(cacheDir, 'codex-native-usage-v1.json');
+    const cached = readTestUsageCache(cachePath);
+    cached.version = 1;
+    cached.files[rolloutPath].entries = [{ inputTokens: 999_999, outputTokens: 999_999 }];
+    fs.writeFileSync(cachePath, JSON.stringify(cached));
+    const rebuilt = await scanCodexNativeUsageEntries(options);
+    expect(rebuilt).toHaveLength(2);
+    expect(rebuilt[0].inputTokens).toBe(80);
+    expect(rebuilt[0].outputTokens).toBe(5);
+    expect(readTestUsageCache(cachePath).version).toBe(2);
   });
 
   it('skips cliproxy-backed codex sessions by default to avoid double counting', async () => {
@@ -291,9 +374,9 @@ describe('codex native usage collector', () => {
     expect(firstEntries).toHaveLength(2);
     expect(secondEntries).toHaveLength(3);
     expect(secondEntries[2]).toMatchObject({
-      inputTokens: 50,
+      inputTokens: 40,
       cacheReadTokens: 10,
-      outputTokens: 12,
+      outputTokens: 10,
     });
   });
 

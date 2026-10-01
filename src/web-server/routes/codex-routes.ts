@@ -20,8 +20,12 @@ import {
   activateCodexProfile,
   CodexActivationError,
 } from '../../codex-auth/activate-codex-profile';
+import { isCodexActivationBody } from '../../codex-auth/codex-activation-confirmation';
 import { getCodexProfileQuotas } from '../services/codex-profile-quota-service';
-import { getCodexAutoSwitchService } from '../services/codex-auto-switch-service';
+import {
+  getCodexAutoSwitchService,
+  isCodexAutoSwitchSettings,
+} from '../services/codex-auto-switch-service';
 
 const router = Router();
 const CODEX_CONFIG_ACCESS_ERROR =
@@ -88,16 +92,14 @@ router.put('/profiles/auto-switch', (req: Request, res: Response): void => {
     res.status(415).json({ error: 'Codex automatic switching requires application/json.' });
     return;
   }
-  if (
-    !req.body ||
-    typeof req.body.enabled !== 'boolean' ||
-    Object.keys(req.body).some((key) => key !== 'enabled')
-  ) {
-    res.status(400).json({ error: 'Provide only an enabled boolean.' });
+  if (!isCodexAutoSwitchSettings(req.body)) {
+    res
+      .status(400)
+      .json({ error: 'Provide an enabled boolean or a remaining threshold integer from 1 to 99.' });
     return;
   }
   try {
-    res.json(getCodexAutoSwitchService().setEnabled(req.body.enabled));
+    res.json(getCodexAutoSwitchService().updateSettings(req.body));
   } catch {
     res
       .status(500)
@@ -118,8 +120,16 @@ router.post('/profiles/:name/activate', async (req: Request, res: Response): Pro
     res.status(415).json({ error: 'Codex account activation requires application/json.' });
     return;
   }
+  if (!isCodexActivationBody(req.body)) {
+    res.status(400).json({ error: 'Provide an empty object or a valid confirmationToken.' });
+    return;
+  }
   try {
-    const activated = await activateCodexProfile(req.params.name);
+    const activated = req.body.confirmationToken
+      ? await activateCodexProfile(req.params.name, {
+          confirmationToken: req.body.confirmationToken,
+        })
+      : await activateCodexProfile(req.params.name);
     res.json({
       success: true,
       name: activated.name,
@@ -134,8 +144,16 @@ router.post('/profiles/:name/activate', async (req: Request, res: Response): Pro
       const failures = {
         busy: {
           status: 409,
+          message: error.details?.confirmation
+            ? 'Another Codex program is running. Review the warning before stopping and switching.'
+            : error.details?.reason === 'activation_running'
+              ? 'Another Codex account activation is already running. Wait for it to finish.'
+              : 'A running Codex process cannot be safely restarted. Close its owning program and try again.',
+        },
+        confirmation_stale: {
+          status: 409,
           message:
-            'Codex is busy or another account activation is running. Try again when work finishes.',
+            'The running Codex programs or account changed. Activate again to review a new warning.',
         },
         invalid_profile: { status: 400, message: 'The selected profile has no valid saved login.' },
         invalid_codex_home: {
@@ -161,7 +179,23 @@ router.post('/profiles/:name/activate', async (req: Request, res: Response): Pro
         },
       };
       const failure = failures[error.code];
-      res.status(failure.status).json({ error: failure.message, code: error.code });
+      const offer = error.details?.confirmation;
+      res.status(failure.status).json({
+        error: failure.message,
+        code: error.code,
+        ...(error.details?.reason ? { reason: error.details.reason } : {}),
+        ...(offer
+          ? {
+              confirmation: {
+                token: offer.token,
+                expiresAt: offer.expiresAt,
+                targetProfile: offer.targetProfile,
+                processes: offer.processes.map(({ label, pid, role }) => ({ label, pid, role })),
+                warning: offer.warning,
+              },
+            }
+          : {}),
+      });
       return;
     }
     res.status(500).json({

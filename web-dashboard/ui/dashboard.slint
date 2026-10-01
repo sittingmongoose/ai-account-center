@@ -1,0 +1,386 @@
+import { ScrollView, LineEdit, ComboBox, AboutSlint, Palette } from "std-widgets.slint";
+import { AnalyticsPage, AnalyticsSummaryView, AnalyticsProviderView, AnalyticsMetricView, AnalyticsPointView, AnalyticsAccountView, AnalyticsModelView } from "analytics.slint";
+
+export struct UsageView {
+    label: string, amount: string, percent: float, has-percent: bool,
+    reset: string, expiration: string, meta: string,
+}
+export struct AccountView {
+    id: string, profile: string, email: string, plan: string, status: string,
+    active: bool, can-mac: bool, can-windows: bool, five: UsageView,
+    weekly: UsageView, windows: [UsageView], note: string,
+}
+export struct ProcessView { label: string, pid: string, role: string }
+export struct ProviderView {
+    id: string, name: string, glyph: string, identity: string, plan: string,
+    status: string, note: string, source: string, windows: [UsageView],
+}
+export global Colors {
+    in-out property <bool> dark: true;
+    out property <color> page: dark ? #0b1522 : #f4f8fd;
+    out property <color> surface: dark ? #142130 : #ffffff;
+    out property <color> inset: dark ? #101c2a : #f7f9fc;
+    out property <color> border: dark ? #293d52 : #e2e9f2;
+    out property <color> text: dark ? #f2f6ff : #101b36;
+    out property <color> muted: dark ? #a4bad5 : #536b8f;
+    out property <color> blue: #2d91ff;
+    out property <color> track: dark ? #243b52 : #e3ecf7;
+}
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <string> hint;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback pressed();
+    width: 84px; height: 30px;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: root.primary ? #298bfa : Colors.border;
+    background: !root.enabled ? Colors.inset : root.primary ? #1479f5 : touch.has-hover ? Colors.track : Colors.inset;
+    opacity: root.enabled ? 1 : 0.5;
+    accessible-role: button;
+    accessible-label: root.hint == "" ? root.text : root.hint;
+    accessible-action-default => { if root.enabled { root.pressed(); } }
+    Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.text; color: root.primary ? white : Colors.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; clicked => { root.pressed(); } }
+    Tooltip { text: @markdown("\{root.hint}"); }
+}
+component LaunchButton inherits Rectangle {
+    in property <bool> windows: false;
+    in property <bool> enabled: true;
+    in property <string> hint;
+    callback pressed();
+    width: 27px; height: 27px; border-radius: 6px;
+    background: touch.has-hover ? Colors.track : Colors.inset;
+    border-width: 1px; border-color: Colors.border;
+    opacity: root.enabled ? 1 : 0.4;
+    accessible-role: button; accessible-label: root.hint;
+    accessible-action-default => { if root.enabled { root.pressed(); } }
+    Image { x: 6px; y: 6px; width: 15px; height: 15px; source: root.windows ? @image-url("../public/assets/windows.svg") : @image-url("../public/assets/mac.svg"); colorize: root.windows ? Colors.blue : Colors.text; }
+    touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; clicked => { root.pressed(); } }
+    Tooltip { text: @markdown("\{root.hint}"); }
+}
+component Metric inherits Rectangle {
+    in property <UsageView> value;
+    height: 48px; background: transparent;
+    Text { x: 0px; y: 0px; width: parent.width; height: 15px; text: root.value.has-percent ? root.value.amount : "—"; color: Colors.text; font-size: 11px; overflow: elide; }
+    Rectangle { x: 0px; y: 19px; width: parent.width; height: 6px; border-radius: 3px; background: Colors.track;
+        if root.value.has-percent: Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.value.percent, 0, 100) / 100; height: 6px; border-radius: 3px; background: root.value.percent >= 90 ? #fca45d : Colors.blue; }
+    }
+    Text { x: 0px; y: 29px; width: parent.width; height: 16px; text: root.value.reset == "" ? "Reset unavailable" : root.value.reset; color: Colors.muted; font-size: 9px; overflow: elide; }
+    Tooltip { text: @markdown("\{root.value.label + " · " + root.value.amount + " · " + root.value.reset}"); }
+}
+component AccountTable inherits Rectangle {
+    in property <string> heading;
+    in property <bool> codex: false;
+    in property <[AccountView]> accounts;
+    in property <bool> busy: false;
+    in property <bool> auto-enabled: false;
+    in property <bool> auto-available: false;
+    in property <string> auto-setting;
+    in property <string> active-email;
+    in property <int> threshold-used: -1;
+    in-out property <string> threshold-value: "—";
+    callback launch(string, string);
+    callback activate(string);
+    callback details(string);
+    callback automatic(bool);
+    callback threshold(string);
+    border-radius: 10px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
+    Rectangle { x: 15px; y: 16px; width: 40px; height: 40px; border-radius: 10px; background: Colors.inset;
+        Image { x: 4px; y: 4px; width: 32px; height: 32px; source: root.codex ? @image-url("../public/assets/provider-codex.png") : @image-url("../public/assets/provider-claude.png"); colorize: root.codex ? Colors.text : transparent; }
+    }
+    Text { x: 65px; y: 18px; height: 23px; text: root.heading; font-size: 20px; font-weight: 700; color: Colors.text; }
+    Text { x: 65px; y: 43px; width: parent.width - 83px; text: root.accounts.length + " accounts" + (root.codex ? (root.active-email == "Active account unavailable" ? " · " : " · ✓ Active: ") + root.active-email : ""); font-size: 10px; color: root.codex ? Colors.blue : Colors.muted; overflow: elide; Tooltip { text: @markdown("\{root.codex ? root.active-email : root.accounts.length + " accounts"}"); } }
+    if root.codex: Rectangle { x: parent.width - 240px; y: 20px; width: 224px; height: 39px;
+        Text { x: 0px; y: 2px; text: "Auto-switch"; color: Colors.muted; font-size: 10px; }
+        Rectangle { x: 75px; y: 0px; width: 35px; height: 20px; border-radius: 10px; background: root.auto-enabled ? Colors.blue : Colors.track;
+            Rectangle { x: root.auto-enabled ? 18px : 3px; y: 3px; width: 14px; height: 14px; border-radius: 7px; background: white; }
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.auto-available && !root.busy; clicked => { root.automatic(!root.auto-enabled); } }
+            Tooltip { text: @markdown("\{"Automatic switching for Codex only; waits until idle"}"); }
+        }
+        ComboBox { x: 118px; y: -3px; width: 105px; height: 29px; model: ["75%", "80%", "85%", "90%", "95%", "99%"]; current-value <=> root.threshold-value; enabled: root.auto-available && !root.busy; selected(value) => { root.threshold(value); }
+            Tooltip { text: @markdown("Switch when the active account reaches this percent used. Waits until idle."); }
+        }
+        Tooltip { text: @markdown("\{root.auto-setting}"); }
+    }
+    Rectangle { x: 1px; y: 72px; width: parent.width - 2px; height: 30px; background: Colors.inset;
+        Text { x: 15px; y: 8px; text: "Account"; color: Colors.muted; font-size: 10px; }
+        Text { x: parent.width * 0.37; y: 8px; text: "5-hour usage"; color: Colors.muted; font-size: 10px; }
+        Text { x: parent.width * 0.57; y: 8px; text: "Weekly usage"; color: Colors.muted; font-size: 10px; }
+        Text { x: parent.width * 0.81; y: 8px; text: "Actions"; color: Colors.muted; font-size: 10px; }
+    }
+    for account[index] in root.accounts: Rectangle {
+        x: 1px; y: 103px + index * 76px; width: parent.width - 2px; height: 76px;
+        background: account.active ? Colors.dark ? #193450 : #edf5ff : transparent;
+        Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: Colors.border; }
+        Text { x: 15px; y: 13px; width: parent.width * 0.34 - 18px; height: 17px; text: account.email; font-size: 11px; font-weight: 600; color: Colors.text; overflow: elide; }
+        Text { x: 15px; y: 35px; width: parent.width * 0.34 - 18px; height: 14px; text: account.plan + (account.plan == "" ? "" : " · ") + account.status; font-size: 9px; color: account.active ? Colors.blue : Colors.muted; overflow: elide; }
+        Metric { x: parent.width * 0.37; y: 12px; width: parent.width * 0.17; value: account.five; }
+        Metric { x: parent.width * 0.57; y: 12px; width: parent.width * 0.17; value: account.weekly; }
+        if !root.codex: HorizontalLayout { x: parent.width * 0.80; y: 14px; width: 90px; spacing: 4px;
+            LaunchButton { enabled: account.can-mac && !root.busy; hint: "Open " + account.email + " on Mac"; pressed => { root.launch(account.profile, "mac"); } }
+            LaunchButton { windows: true; enabled: account.can-windows && !root.busy; hint: "Open " + account.email + " on Windows"; pressed => { root.launch(account.profile, "windows"); } }
+            ActionButton { width: 25px; text: "···"; hint: "All usage and reset times for " + account.email; pressed => { root.details(account.id); } }
+        }
+        if root.codex: VerticalLayout { x: parent.width * 0.79; y: 10px; width: parent.width * 0.19; spacing: 4px;
+            ActionButton { text: account.active ? "✓ Active" : "Activate"; primary: !account.active; enabled: !account.active && account.profile != "" && !root.busy; hint: "Activate " + account.email; pressed => { root.activate(account.profile); } }
+            ActionButton { height: 20px; text: "Details"; hint: "All usage, credits and reset times"; pressed => { root.details(account.id); } }
+        }
+        Tooltip { text: @markdown("\{account.email + " · " + account.note}"); }
+    }
+    if root.accounts.length == 0: Text { x: 18px; y: 140px; text: "Accounts unavailable. Refresh to try again."; font-size: 12px; color: Colors.muted; }
+}
+component UsageBlock inherits Rectangle {
+    in property <UsageView> value;
+    height: 82px;
+    Text { x: 0px; y: 0px; width: parent.width; height: 15px; text: root.value.label; color: Colors.text; font-size: 10px; font-weight: 600; overflow: elide; }
+    Text { x: 0px; y: 19px; width: parent.width; height: 15px; text: root.value.amount; color: Colors.muted; font-size: 10px; overflow: elide; }
+    if root.value.has-percent: Rectangle { x: 0px; y: 38px; width: parent.width; height: 6px; border-radius: 3px; background: Colors.track;
+        Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.value.percent, 0, 100) / 100; height: 6px; border-radius: 3px; background: root.value.percent >= 90 ? #fca45d : Colors.blue; }
+    }
+    Text { x: 0px; y: 50px; width: parent.width; height: 13px; text: root.value.reset; color: Colors.muted; font-size: 9px; overflow: elide; }
+    Text { x: 0px; y: 65px; width: parent.width; height: 13px; text: root.value.expiration + (root.value.expiration != "" && root.value.meta != "" ? " · " : "") + root.value.meta; color: Colors.muted; font-size: 9px; overflow: elide; }
+    Tooltip { text: @markdown("\{root.value.label + " · " + root.value.amount + " · " + root.value.reset + " · " + root.value.expiration + " · " + root.value.meta}"); }
+}
+component ProviderCard inherits Rectangle {
+    in property <ProviderView> data;
+    callback details(string);
+    border-radius: 10px; background: Colors.surface; border-width: 1px; border-color: Colors.border;
+    Rectangle { x: 16px; y: 15px; width: 36px; height: 36px; border-radius: 9px; background: Colors.inset;
+        if root.data.id == "cursor": Image { width: 30px; height: 30px; x: 3px; y: 3px; source: @image-url("../public/assets/provider-cursor.png"); }
+        if root.data.id == "kimi-code": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-kimi-code.png"); colorize: Colors.text; }
+        if root.data.id == "qwen": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-qwen.png"); }
+        if root.data.id == "zai": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-zai.png"); colorize: Colors.text; }
+        if root.data.id == "antigravity": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-antigravity.png"); }
+        if root.data.id == "muse" || root.data.id == "opencode-go": Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.data.glyph; color: root.data.id == "muse" ? #9770ff : Colors.blue; font-size: 27px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    Text { x: 61px; y: 17px; width: parent.width - 96px; text: root.data.name; font-size: 13px; font-weight: 700; color: Colors.text; overflow: elide; }
+    Text { x: 61px; y: 37px; width: parent.width - 85px; text: root.data.status; font-size: 9px; color: Colors.muted; overflow: elide; }
+    ActionButton { x: parent.width - 34px; y: 18px; width: 21px; height: 22px; text: "···"; hint: "All " + root.data.name + " usage and account details"; pressed => { root.details(root.data.id); } }
+    for metric[index] in root.data.windows: UsageBlock { x: 16px; y: 69px + index * 88px; width: parent.width - 32px; value: metric; }
+    if root.data.windows.length == 0: Text { x: 16px; y: 80px; width: parent.width - 32px; text: root.data.note == "" ? "Usage unavailable" : root.data.note; wrap: word-wrap; color: Colors.muted; font-size: 11px; }
+    Text { x: 16px; y: parent.height - 24px; width: parent.width - 32px; text: root.data.source; color: Colors.muted; font-size: 8px; overflow: elide; }
+}
+export component Dashboard inherits Window {
+    title: "CCS Dashboard";
+    width: 1500px; height: 950px;
+    background: Colors.page;
+    in-out property <bool> dark <=> Colors.dark;
+    init => { Palette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
+    changed dark => { Palette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
+    in-out property <bool> authenticated: false;
+    in-out property <bool> auth-loading: true;
+    in-out property <bool> busy: false;
+    in-out property <bool> auto-enabled: false;
+    in-out property <bool> auto-available: false;
+    in-out property <string> auto-setting: "Setting unavailable";
+    in-out property <int> threshold-used: -1;
+    in-out property <string> threshold-label: "—";
+    in-out property <string> auto-message;
+    in-out property <string> active-codex-email: "Active account unavailable";
+    in-out property <string> updated: "Waiting for account data";
+    in-out property <string> message;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <string> update-message;
+    in-out property <bool> update-running: false;
+    in-out property <[AccountView]> claude;
+    in-out property <[AccountView]> codex;
+    in-out property <[ProviderView]> providers;
+    in-out property <bool> details-open: false;
+    in-out property <string> details-title;
+    in-out property <string> details-note;
+    in-out property <[UsageView]> details-windows;
+    in-out property <bool> confirmation-open: false;
+    in-out property <bool> confirmation-busy: false;
+    in-out property <bool> confirmation-valid: false;
+    in-out property <string> confirmation-target;
+    in-out property <string> confirmation-warning;
+    in-out property <string> confirmation-expires;
+    in-out property <string> confirmation-error;
+    in-out property <[ProcessView]> confirmation-processes;
+    in-out property <string> refresh-interval-label: "Unavailable";
+    in-out property <bool> refresh-interval-known: false;
+    in-out property <string> current-page: "dashboard";
+    in-out property <bool> analytics-loading: false;
+    in-out property <string> analytics-error;
+    in-out property <string> analytics-updated;
+    in-out property <string> analytics-history-note;
+    in-out property <string> analytics-range-value: "Last 7 days";
+    in-out property <string> analytics-provider-value: "All providers";
+    in-out property <string> analytics-account-value: "All accounts";
+    in-out property <string> analytics-metric-value;
+    in-out property <[string]> analytics-provider-options;
+    in-out property <[string]> analytics-account-options;
+    in-out property <[string]> analytics-metric-options;
+    in-out property <[AnalyticsSummaryView]> analytics-summary;
+    in-out property <[AnalyticsProviderView]> analytics-providers;
+    in-out property <[AnalyticsAccountView]> analytics-accounts;
+    in-out property <[AnalyticsMetricView]> analytics-metrics;
+    in-out property <[AnalyticsPointView]> analytics-points;
+    in-out property <string> analytics-selected-account-note;
+    in-out property <string> analytics-chart-title;
+    in-out property <string> analytics-chart-note;
+    in-out property <string> analytics-chart-start;
+    in-out property <string> analytics-chart-end;
+    in-out property <string> analytics-chart-top;
+    in-out property <string> analytics-chart-middle;
+    in-out property <string> analytics-chart-bottom;
+    in-out property <bool> analytics-chart-has-points: false;
+    in-out property <bool> analytics-metric-percent: false;
+    in-out property <string> analytics-activity-title;
+    in-out property <string> analytics-activity-note;
+    in-out property <string> analytics-activity-chart-top;
+    in-out property <string> analytics-activity-chart-middle;
+    in-out property <string> analytics-activity-chart-bottom;
+    in-out property <string> analytics-activity-chart-start;
+    in-out property <string> analytics-activity-chart-end;
+    in-out property <bool> analytics-activity-has-data: false;
+    in-out property <[AnalyticsSummaryView]> analytics-activity-summary;
+    in-out property <[AnalyticsPointView]> analytics-activity-points;
+    in-out property <[AnalyticsModelView]> analytics-activity-models;
+    in-out property <[AnalyticsMetricView]> analytics-activity-providers;
+    callback action(string, string);
+    property <length> side: root.width >= 1050px ? 168px : 60px;
+    property <length> body-width: root.width - root.side - 30px;
+    property <bool> wide: root.width >= 1200px;
+    property <int> columns: root.width >= 1250px ? 4 : root.width >= 820px ? 2 : 1;
+    property <length> table-height: 103px + max(4, root.claude.length, root.codex.length) * 76px;
+    property <length> top-height: root.wide ? root.table-height : root.table-height * 2 + 14px;
+    property <length> provider-height: 350px;
+    Rectangle { x: 0px; y: 0px; height: 58px; width: parent.width; background: Colors.inset;
+        Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: Colors.border; }
+        Image { x: 22px; y: 17px; width: 25px; height: 25px; source: @image-url("../public/assets/ccs.svg"); }
+        Text { x: 62px; y: 10px; text: "CCS Dashboard"; color: Colors.text; font-size: 20px; font-weight: 700; }
+        Text { x: 62px; y: 35px; width: max(130px, min(390px, parent.width - 380px)); text: "Active Codex · " + root.active-codex-email; color: Colors.blue; font-size: 10px; overflow: elide; visible: root.authenticated; Tooltip { text: @markdown("\{root.active-codex-email}"); } }
+        Text { x: parent.width - 530px; y: 23px; width: 215px; text: root.updated; color: Colors.muted; font-size: 10px; overflow: elide; visible: parent.width >= 950px; }
+        ActionButton { x: parent.width - 298px; y: 15px; width: 83px; text: "Update apps"; hint: "Update installed apps on Mac, Ubuntu and Windows; updated apps may restart"; enabled: root.authenticated && !root.update-running && !root.busy; pressed => { root.action("update-apps", ""); } }
+        ActionButton { x: parent.width - 205px; y: 15px; width: 34px; text: "↻"; hint: "Refresh account usage"; enabled: root.authenticated && !root.busy; pressed => { root.action("refresh", ""); } }
+        ActionButton { x: parent.width - 160px; y: 15px; width: 34px; text: ""; hint: "Toggle light and dark theme"; pressed => { root.dark = !root.dark; root.action("theme", root.dark ? "dark" : "light"); }
+            Image { x: 9px; y: 7px; width: 16px; height: 16px; source: root.dark ? @image-url("../public/assets/sun.svg") : @image-url("../public/assets/moon.svg"); colorize: Colors.text; }
+        }
+        ActionButton { x: parent.width - 116px; y: 15px; width: 96px; text: root.authenticated ? "Sign out" : "Sign in"; hint: root.authenticated ? "Sign out of CCS" : "Sign in to CCS"; pressed => { if root.authenticated { root.action("logout", ""); } } }
+    }
+    if root.authenticated: Rectangle { x: 0px; y: 58px; width: root.side; height: parent.height - 58px; background: Colors.inset;
+        Rectangle { x: parent.width - 1px; y: 0px; width: 1px; height: parent.height; background: Colors.border; }
+        Rectangle { x: 8px; y: 16px; width: parent.width - 16px; height: 42px; background: root.current-page == "dashboard" ? Colors.dark ? #133257 : #e7f1ff : transparent; border-radius: 7px;
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; clicked => { root.current-page = "dashboard"; root.action("navigate-dashboard", ""); } }
+            Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.side > 100px ? "⌂   Dashboard" : "⌂"; color: Colors.dark ? white : #1674ea; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        Rectangle { x: 8px; y: 66px; width: parent.width - 16px; height: 38px; border-radius: 7px; background: root.current-page == "analytics" ? Colors.dark ? #133257 : #e7f1ff : transparent;
+            Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.side > 100px ? "▥   Analytics" : "▥"; color: root.current-page == "analytics" ? Colors.blue : Colors.muted; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; clicked => { root.current-page = "analytics"; root.action("navigate-analytics", ""); } }
+            Tooltip { text: @markdown("Analytics across all accounts and providers"); }
+        }
+        Text { x: 18px; y: 125px; text: root.side > 100px ? "◉   Accounts" : "◉"; color: Colors.muted; font-size: 12px; }
+        TouchArea { x: 0px; y: 111px; width: parent.width; height: 42px; clicked => { root.action("accounts", ""); } }
+        Text { x: 18px; y: 168px; text: root.side > 100px ? "⚙   Settings" : "⚙"; color: Colors.muted; font-size: 12px; }
+        TouchArea { x: 0px; y: 153px; width: parent.width; height: 42px; clicked => { root.action("settings", ""); } }
+    }
+    if root.authenticated && root.current-page == "dashboard": ScrollView {
+        x: root.side; y: 58px; width: parent.width - root.side; height: parent.height - 58px;
+        content-width: root.body-width + 20px;
+        content-height: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 112px;
+        Rectangle { x: 14px; y: 14px; width: root.body-width; height: parent.height;
+            AccountTable { x: 0px; y: 0px; width: root.wide ? (parent.width - 14px) / 2 : parent.width; height: root.table-height; heading: "Claude"; accounts: root.claude; busy: root.busy;
+                launch(id, platform) => { root.action("launch", id + ":" + platform); }
+                details(id) => { root.action("details", id); }
+            }
+            AccountTable { x: root.wide ? (parent.width + 14px) / 2 : 0px; y: root.wide ? 0px : root.table-height + 14px; width: root.wide ? (parent.width - 14px) / 2 : parent.width; height: root.table-height; heading: "Codex"; codex: true; active-email: root.active-codex-email; accounts: root.codex; busy: root.busy; auto-enabled: root.auto-enabled; auto-available: root.auto-available; auto-setting: root.auto-setting; threshold-used: root.threshold-used; threshold-value <=> root.threshold-label;
+                activate(id) => { root.action("activate", id); }
+                details(id) => { root.action("details", id); }
+                automatic(enabled) => { root.action("automatic", enabled ? "true" : "false"); }
+                threshold(value) => { root.action("threshold", value); }
+            }
+            for provider[index] in root.providers: ProviderCard {
+                x: root.columns == 4 && index >= 4 ? (index - 4) * ((parent.width + 14px) / 3) : mod(index, root.columns) * ((parent.width + 14px) / root.columns);
+                y: root.top-height + 14px + floor(index / root.columns) * (root.provider-height + 14px);
+                width: root.columns == 4 && index >= 4 ? (parent.width - 28px) / 3 : (parent.width - (root.columns - 1) * 14px) / root.columns;
+                height: root.provider-height; data: provider;
+                details(id) => { root.action("details", id); }
+            }
+            Text { x: 0px; y: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 28px; width: parent.width; text: root.message == "" ? root.auto-message : root.message; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
+            Text { x: 0px; y: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 54px; width: parent.width; text: root.update-message; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
+        }
+    }
+    if root.authenticated && root.current-page == "analytics": AnalyticsPage {
+        x: root.side; y: 58px; width: parent.width - root.side; height: parent.height - 58px;
+        dark: root.dark; loading: root.analytics-loading; error: root.analytics-error;
+        updated: root.analytics-updated; history-note: root.analytics-history-note;
+        range-value <=> root.analytics-range-value; provider-value <=> root.analytics-provider-value;
+        account-value <=> root.analytics-account-value; metric-value <=> root.analytics-metric-value;
+        provider-options: root.analytics-provider-options; account-options: root.analytics-account-options;
+        metric-options: root.analytics-metric-options; summary: root.analytics-summary;
+        providers: root.analytics-providers; accounts: root.analytics-accounts;
+        metrics: root.analytics-metrics; points: root.analytics-points;
+        selected-account-note: root.analytics-selected-account-note;
+        chart-title: root.analytics-chart-title; chart-note: root.analytics-chart-note;
+        chart-start: root.analytics-chart-start; chart-end: root.analytics-chart-end;
+        chart-top: root.analytics-chart-top; chart-middle: root.analytics-chart-middle; chart-bottom: root.analytics-chart-bottom;
+        chart-has-points: root.analytics-chart-has-points; metric-percent: root.analytics-metric-percent;
+        activity-title: root.analytics-activity-title; activity-note: root.analytics-activity-note;
+        activity-chart-top: root.analytics-activity-chart-top; activity-chart-middle: root.analytics-activity-chart-middle;
+        activity-chart-bottom: root.analytics-activity-chart-bottom; activity-chart-start: root.analytics-activity-chart-start;
+        activity-chart-end: root.analytics-activity-chart-end; activity-has-data: root.analytics-activity-has-data;
+        activity-summary: root.analytics-activity-summary; activity-points: root.analytics-activity-points;
+        activity-models: root.analytics-activity-models; activity-providers: root.analytics-activity-providers;
+        action(kind, value) => { root.action(kind, value); }
+    }
+    if !root.authenticated: Rectangle {
+        x: max(16px, (parent.width - 420px) / 2); y: max(80px, (parent.height - 330px) / 2); width: min(420px, parent.width - 32px); height: 330px;
+        border-radius: 13px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
+        VerticalLayout { padding: 28px; spacing: 15px;
+            Text { text: root.auth-loading ? "Connecting to CCS…" : "Sign in to CCS"; color: Colors.text; font-size: 24px; font-weight: 700; }
+            Text { text: "Your accounts and subscription usage"; color: Colors.muted; font-size: 12px; }
+            LineEdit { text <=> root.username; placeholder-text: "Username"; enabled: !root.busy && !root.auth-loading; }
+            LineEdit { text <=> root.password; placeholder-text: "Password"; input-type: InputType.password; enabled: !root.busy && !root.auth-loading; accepted => { root.action("login", root.username + "\n" + root.password); } }
+            ActionButton { text: "Sign in"; primary: true; enabled: !root.busy && !root.auth-loading; pressed => { root.action("login", root.username + "\n" + root.password); } }
+            Text { text: root.message; color: #e89479; font-size: 11px; wrap: word-wrap; }
+        }
+    }
+    if root.details-open: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #0009;
+        TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; clicked => { root.details-open = false; } }
+        Rectangle { x: max(16px, (parent.width - 630px) / 2); y: 80px; width: min(630px, parent.width - 32px); height: min(700px, parent.height - 110px); background: Colors.surface; border-radius: 12px; border-width: 1px; border-color: Colors.border;
+            Text { x: 23px; y: 20px; width: parent.width - 80px; text: root.details-title; color: Colors.text; font-size: 18px; font-weight: 600; overflow: elide; }
+            ActionButton { x: parent.width - 52px; y: 17px; width: 30px; text: "×"; hint: "Close usage details"; pressed => { root.details-open = false; } }
+            Text { x: 23px; y: 51px; width: parent.width - 46px; height: 35px; text: root.details-note; color: Colors.muted; font-size: 10px; wrap: word-wrap; overflow: elide; Tooltip { text: @markdown("\{root.details-note}"); } }
+            if root.details-title == "Settings": Rectangle { x: 23px; y: 93px; width: parent.width - 46px; height: 43px;
+                Text { x: 0px; y: 7px; text: "Usage refresh interval"; color: Colors.text; font-size: 12px; }
+                ComboBox { x: parent.width - 126px; y: 0px; width: 126px; height: 30px; model: ["30s", "60s", "120s", "300s", "600s", "1800s", "3600s"]; current-value <=> root.refresh-interval-label; enabled: root.refresh-interval-known && !root.busy; selected(value) => { root.action("refresh-interval", value); } }
+            }
+            ScrollView { x: 23px; y: root.details-title == "Settings" ? 144px : 95px; width: parent.width - 46px; height: parent.height - (root.details-title == "Settings" ? 164px : 115px); content-height: max(140px, root.details-windows.length * 103px + (root.details-title == "Settings" ? 125px : 0px));
+                for usage[index] in root.details-windows: UsageBlock { x: 0px; y: index * 103px; width: parent.width - 15px; value: usage; }
+                if root.details-title == "Settings": AboutSlint { x: max(0px, (parent.width - 285px) / 2); y: root.details-windows.length * 103px + 12px; width: min(285px, parent.width); height: 108px; }
+                if root.details-windows.length == 0 && root.details-title != "Settings": Text { x: 0px; y: 0px; width: parent.width; text: "No usage limits, balances or reset times were reported."; color: Colors.muted; font-size: 12px; wrap: word-wrap; }
+            }
+        }
+    }
+    if root.confirmation-open: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: #000b;
+        TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; }
+        Rectangle {
+            x: max(12px, (parent.width - 610px) / 2); y: max(68px, (parent.height - 490px) / 2);
+            width: min(610px, parent.width - 24px); height: min(490px, parent.height - 82px);
+            border-radius: 12px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
+            Text { x: 24px; y: 22px; width: parent.width - 48px; text: "Another Codex process is running"; color: Colors.text; font-size: 20px; font-weight: 700; wrap: word-wrap; }
+            Text { x: 24px; y: 57px; width: parent.width - 48px; text: "Switch to " + root.confirmation-target + "?"; color: Colors.blue; font-size: 12px; }
+            Text { x: 24px; y: 83px; width: parent.width - 48px; height: 63px; text: root.confirmation-warning; color: Colors.muted; font-size: 12px; wrap: word-wrap; }
+            Rectangle { x: 24px; y: 151px; width: parent.width - 48px; height: max(80px, parent.height - 300px); border-radius: 8px; border-width: 1px; border-color: Colors.border; background: Colors.inset;
+                ScrollView { x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 20px; content-height: max(50px, root.confirmation-processes.length * 43px);
+                    for process[index] in root.confirmation-processes: Rectangle { x: 0px; y: index * 43px; width: parent.width - 12px; height: 40px;
+                        Text { x: 0px; y: 0px; width: parent.width; text: process.label; color: Colors.text; font-size: 12px; font-weight: 600; overflow: elide; }
+                        Text { x: 0px; y: 21px; width: parent.width; text: "PID " + process.pid + (process.role != "" ? " · " + process.role : ""); color: Colors.muted; font-size: 10px; overflow: elide; }
+                    }
+                }
+            }
+            Text { x: 24px; y: parent.height - 132px; width: parent.width - 48px; height: 16px; text: root.confirmation-expires; color: Colors.muted; font-size: 10px; }
+            Text { x: 24px; y: parent.height - 108px; width: parent.width - 48px; height: 43px; text: root.confirmation-busy ? "Stopping the listed processes and restarting Codex…" : root.confirmation-error; color: root.confirmation-error != "" ? #ee9a7b : Colors.muted; font-size: 11px; wrap: word-wrap; }
+            HorizontalLayout { x: parent.width - 278px; y: parent.height - 51px; width: 254px; height: 31px; spacing: 12px;
+                ActionButton { text: "Cancel"; enabled: !root.confirmation-busy; hint: "Cancel; keep all Codex processes and accounts unchanged"; pressed => { root.action("activation-cancel", ""); } }
+                ActionButton { width: 160px; text: "Yes, stop and restart"; primary: true; enabled: root.confirmation-valid && !root.confirmation-busy; hint: "Stop the listed processes and switch the Codex account"; pressed => { root.action("activation-confirm", ""); } }
+            }
+        }
+    }
+
+}

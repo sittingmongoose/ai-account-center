@@ -1,0 +1,41 @@
+<Window x:Class="CCSBar.MainWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="CCS Bar" Width="760" Height="850" MinHeight="320"
+ WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
+ Background="Transparent" ShowInTaskbar="False" Topmost="True">
+ <Border Background="#0B1728" BorderBrush="#284361" BorderThickness="1" CornerRadius="12" Padding="0,0,0,3">
+  <Grid>
+   <Grid.RowDefinitions>
+    <RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" />
+   </Grid.RowDefinitions>
+   <Grid Margin="19,17,19,13">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+    <Canvas Width="32" Height="34" Margin="0,0,12,0">
+     <Path Fill="#3498FF" Data="M0,21 L16,30 32,21 32,26 16,35 0,26Z" />
+     <Path Fill="#42A8FF" Data="M0,12 L16,21 32,12 32,17 16,26 0,17Z" />
+     <Path Fill="#61B8FF" Data="M0,8 L16,0 32,8 16,17Z" />
+    </Canvas>
+    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+     <TextBlock Text="CCS" FontWeight="SemiBold" FontSize="23" />
+     <TextBlock x:Name="ActiveCodexText" Text="Codex active: loading…" Foreground="#82C9FF" FontSize="10" MaxWidth="330" TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+     <Ellipse x:Name="StatusDot" Fill="#69809A" Width="9" Height="9" Margin="0,0,7,0" />
+     <TextBlock x:Name="StatusText" Text="Connecting…" Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" MaxWidth="420" />
+    </StackPanel>
+   </Grid>
+   <ScrollViewer x:Name="ContentScroll" Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
+    <StackPanel x:Name="ContentPanel" Margin="18,0,18,7" />
+   </ScrollViewer>
+   <Border Grid.Row="2" Padding="18,6,18,12">
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+     <Button Content="↗  Open dashboard" Foreground="#EAF2FF" Padding="8,11" Margin="0,0,6,0" Click="DashboardClicked" />
+     <Button Grid.Column="1" x:Name="RefreshButton" Content="↻  Refresh" Padding="8,11" Margin="3,0,3,0" Click="RefreshClicked" />
+     <Button Grid.Column="2" Content="⚙  Settings" Padding="8,11" Margin="6,0,0,0" Click="SettingsClicked" />
+    </Grid>
+   </Border>
+  </Grid>
+ </Border>
+</Window>

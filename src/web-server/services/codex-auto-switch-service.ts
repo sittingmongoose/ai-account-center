@@ -18,7 +18,7 @@ import { getCcsDir, runWithScopedConfigDir } from '../../utils/config-manager';
 import { getCodexProfileQuotaRows } from '../usage/native-quota-collector';
 import type { BarSummaryRow } from '../routes/bar-routes';
 
-const THRESHOLD_PERCENT = 5;
+const DEFAULT_THRESHOLD_PERCENT = 5;
 const POLL_MS = 60_000;
 const MAX_QUOTA_AGE_MS = 630_000;
 const ERROR_BACKOFF_MS = 300_000;
@@ -47,6 +47,29 @@ export interface CodexAutoSwitchStatus {
 
 interface AutoSwitchConfig {
   enabled: boolean;
+  thresholdPercent?: number;
+}
+
+export interface CodexAutoSwitchSettings {
+  enabled?: boolean;
+  /** Remaining usage percentage; the UI displays 100 minus this value as used. */
+  thresholdPercent?: number;
+}
+
+function isThreshold(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 99;
+}
+
+export function isCodexAutoSwitchSettings(value: unknown): value is CodexAutoSwitchSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const settings = value as Record<string, unknown>;
+  const keys = Object.keys(settings);
+  return (
+    keys.length > 0 &&
+    keys.every((key) => key === 'enabled' || key === 'thresholdPercent') &&
+    (!keys.includes('enabled') || typeof settings.enabled === 'boolean') &&
+    (!keys.includes('thresholdPercent') || isThreshold(settings.thresholdPercent))
+  );
 }
 
 export interface CodexAutoSwitchAuthSnapshot {
@@ -129,9 +152,9 @@ function readAuthSnapshot(names: string[]): CodexAutoSwitchAuthSnapshot {
 const messages: Record<CodexAutoSwitchOutcome, string> = {
   disabled: 'Automatic Codex account switching is disabled.',
   scheduled: 'Automatic Codex account switching is enabled; the next check is scheduled.',
-  healthy: 'The active Codex account has more than 5% remaining in its reported limits.',
+  healthy: 'The active Codex account has enough remaining quota.',
   no_quota: 'Waiting for fresh provider usage for the active Codex account.',
-  no_candidate: 'No other authenticated Codex account has fresh usage with more than 5% remaining.',
+  no_candidate: 'No other authenticated Codex account has enough remaining quota to switch.',
   waiting_idle: 'Waiting for Codex to finish active work before switching accounts.',
   switching: 'A Codex account activation is in progress; disabling cannot interrupt it.',
   switched: 'The shared Codex login switched to an account with available usage.',
@@ -149,7 +172,7 @@ function readConfigFile(ccsDir: string): AutoSwitchConfig {
       !value ||
       typeof value.enabled !== 'boolean' ||
       value.version !== 1 ||
-      value.thresholdPercent !== THRESHOLD_PERCENT ||
+      (value.thresholdPercent !== undefined && !isThreshold(value.thresholdPercent)) ||
       value.pollIntervalSeconds !== POLL_MS / 1000 ||
       Object.keys(value).some(
         (key) => !['version', 'enabled', 'thresholdPercent', 'pollIntervalSeconds'].includes(key)
@@ -157,9 +180,13 @@ function readConfigFile(ccsDir: string): AutoSwitchConfig {
     ) {
       throw new ConfigError('Invalid automatic switching config');
     }
-    return { enabled: value.enabled };
+    return {
+      enabled: value.enabled,
+      thresholdPercent: (value.thresholdPercent as number | undefined) ?? DEFAULT_THRESHOLD_PERCENT,
+    };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { enabled: false };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return { enabled: false, thresholdPercent: DEFAULT_THRESHOLD_PERCENT };
     throw new ConfigError('Automatic switching config could not be read safely');
   }
 }
@@ -175,7 +202,7 @@ function writeConfigFile(ccsDir: string, config: AutoSwitchConfig): void {
         {
           version: 1,
           enabled: config.enabled,
-          thresholdPercent: THRESHOLD_PERCENT,
+          thresholdPercent: config.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT,
           pollIntervalSeconds: POLL_MS / 1000,
         },
         null,
@@ -250,15 +277,23 @@ export class CodexAutoSwitchService {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
   }
 
-  private readConfig(): AutoSwitchConfig {
-    return this.deps.readConfig?.() ?? readConfigFile(this.ccsDir);
+  private readConfig(): Required<AutoSwitchConfig> {
+    const value = this.deps.readConfig?.() ?? readConfigFile(this.ccsDir);
+    const thresholdPercent = value.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
+    if (typeof value.enabled !== 'boolean' || !isThreshold(thresholdPercent)) {
+      throw new ConfigError('Invalid automatic switching config');
+    }
+    return { enabled: value.enabled, thresholdPercent };
   }
 
   getStatus(): CodexAutoSwitchStatus {
     let enabled = false;
+    let thresholdPercent = DEFAULT_THRESHOLD_PERCENT;
     let outcome = this.outcome;
     try {
-      enabled = this.readConfig().enabled;
+      const config = this.readConfig();
+      enabled = config.enabled;
+      thresholdPercent = config.thresholdPercent;
       if (!enabled) outcome = this.activationInProgress ? 'switching' : 'disabled';
       else if (outcome === 'disabled') outcome = 'scheduled';
     } catch {
@@ -266,7 +301,7 @@ export class CodexAutoSwitchService {
     }
     return {
       enabled,
-      thresholdPercent: THRESHOLD_PERCENT,
+      thresholdPercent,
       pollIntervalSeconds: POLL_MS / 1000,
       outcome,
       message: messages[outcome],
@@ -277,12 +312,19 @@ export class CodexAutoSwitchService {
   }
 
   setEnabled(enabled: boolean): CodexAutoSwitchStatus {
-    if (this.deps.writeConfig) this.deps.writeConfig({ enabled });
-    else writeConfigFile(this.ccsDir, { enabled });
+    return this.updateSettings({ enabled });
+  }
+
+  updateSettings(settings: CodexAutoSwitchSettings): CodexAutoSwitchStatus {
+    if (!isCodexAutoSwitchSettings(settings))
+      throw new ConfigError('Invalid automatic switching settings');
+    const config = { ...this.readConfig(), ...settings };
+    if (this.deps.writeConfig) this.deps.writeConfig(config);
+    else writeConfigFile(this.ccsDir, config);
     this.generation++;
     this.retryAfter = 0;
-    if (!this.activationInProgress) this.outcome = enabled ? 'scheduled' : 'disabled';
-    if (this.running) this.schedule(enabled ? 1000 : POLL_MS);
+    if (!this.activationInProgress) this.outcome = config.enabled ? 'scheduled' : 'disabled';
+    if (this.running) this.schedule(config.enabled ? 1000 : POLL_MS);
     return this.getStatus();
   }
 
@@ -332,7 +374,8 @@ export class CodexAutoSwitchService {
     const now = this.deps.now ?? Date.now;
     const generation = this.generation;
     try {
-      if (this.stopped || !this.readConfig().enabled) {
+      const config = this.readConfig();
+      if (this.stopped || !config.enabled) {
         this.outcome = 'disabled';
         return;
       }
@@ -365,7 +408,7 @@ export class CodexAutoSwitchService {
         this.outcome = 'no_quota';
         return;
       }
-      if (activeRemaining > THRESHOLD_PERCENT) {
+      if (activeRemaining > config.thresholdPercent) {
         this.outcome = 'healthy';
         return;
       }
@@ -377,7 +420,7 @@ export class CodexAutoSwitchService {
         }))
         .filter(
           (candidate): candidate is typeof candidate & { remaining: number } =>
-            candidate.remaining !== null && candidate.remaining > THRESHOLD_PERCENT
+            candidate.remaining !== null && candidate.remaining > config.thresholdPercent
         )
         .sort((a, b) => b.remaining - a.remaining || (a.profile.name < b.profile.name ? -1 : 1));
       const candidate = candidates[0];
@@ -409,7 +452,16 @@ export class CodexAutoSwitchService {
       }
       // No awaits between the last persisted enable check and starting activation.
       // A disabled/replaced queued decision cannot reach the activation transaction.
-      if (this.stopped || generation !== this.generation || !this.readConfig().enabled) return;
+      const finalConfig = this.readConfig();
+      if (
+        this.stopped ||
+        generation !== this.generation ||
+        !finalConfig.enabled ||
+        finalConfig.thresholdPercent !== config.thresholdPercent
+      ) {
+        this.outcome = finalConfig.enabled && !this.stopped ? 'scheduled' : 'disabled';
+        return;
+      }
       this.activationInProgress = true;
       this.outcome = 'switching';
       try {

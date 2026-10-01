@@ -1,0 +1,228 @@
+import { ScrollView, ComboBox } from "std-widgets.slint";
+
+export struct AnalyticsSummaryView { label: string, value: string, note: string }
+export struct AnalyticsProviderView { id: string, label: string, accounts: string, availability: string, sample: string }
+export struct AnalyticsMetricView { key: string, label: string, amount: string, reset: string, expiration: string, note: string }
+export struct AnalyticsPointView { x: float, percent: float, label: string }
+export struct AnalyticsAccountView { id: string, label: string, provider: string, status: string, platform: string, source: string, plan: string, active: bool, samples: string }
+export struct AnalyticsModelView { label: string, provider: string, input: string, output: string, cache: string, cost: string }
+
+export global AnalyticsPalette {
+    in-out property <bool> dark: true;
+    out property <color> page: dark ? #0b1522 : #f4f8fd;
+    out property <color> surface: dark ? #142130 : white;
+    out property <color> inset: dark ? #101c2a : #f7f9fc;
+    out property <color> border: dark ? #293d52 : #e2e9f2;
+    out property <color> text: dark ? #f2f6ff : #101b36;
+    out property <color> muted: dark ? #a4bad5 : #536b8f;
+    out property <color> blue: #2d91ff;
+    out property <color> track: dark ? #243b52 : #e3ecf7;
+}
+component AnalyticsButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback pressed();
+    border-radius: 7px; border-width: 1px; border-color: AnalyticsPalette.border;
+    background: touch.has-hover ? AnalyticsPalette.track : AnalyticsPalette.inset;
+    opacity: root.enabled ? 1 : 0.5;
+    accessible-role: button; accessible-label: root.text;
+    accessible-action-default => { if root.enabled { root.pressed(); } }
+    Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.text; color: AnalyticsPalette.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; clicked => { root.pressed(); } }
+}
+component SummaryGrid inherits Rectangle {
+    in property <[AnalyticsSummaryView]> items;
+    in property <int> columns: 4;
+    background: transparent;
+    for item[index] in root.items: Rectangle {
+        x: mod(index, root.columns) * (parent.width + 12px) / root.columns;
+        y: floor(index / root.columns) * 102px;
+        width: (parent.width - (root.columns - 1) * 12px) / root.columns; height: 90px;
+        border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
+        Text { x: 15px; y: 13px; width: parent.width - 30px; text: item.label; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
+        Text { x: 15px; y: 33px; width: parent.width - 30px; text: item.value; color: AnalyticsPalette.text; font-size: 24px; font-weight: 700; overflow: elide; }
+        Text { x: 15px; y: 66px; width: parent.width - 30px; text: item.note; color: AnalyticsPalette.muted; font-size: 9px; overflow: elide; }
+        Tooltip { text: @markdown("\{item.label + " · " + item.value + " · " + item.note}"); }
+    }
+}
+component ObservationPlot inherits Rectangle {
+    in property <[AnalyticsPointView]> points;
+    in property <string> top;
+    in property <string> middle;
+    in property <string> bottom;
+    in property <string> start;
+    in property <string> end;
+    in property <string> empty: "No historical observations yet";
+    property <length> plot-height: root.height - 38px;
+    property <length> plot-width: root.width - 76px;
+    background: transparent;
+    Text { x: 0px; y: 0px; width: 59px; text: root.top; color: AnalyticsPalette.muted; font-size: 9px; horizontal-alignment: right; overflow: elide; }
+    Text { x: 0px; y: root.plot-height / 2 - 6px; width: 59px; text: root.middle; color: AnalyticsPalette.muted; font-size: 9px; horizontal-alignment: right; overflow: elide; }
+    Text { x: 0px; y: root.plot-height - 12px; width: 59px; text: root.bottom; color: AnalyticsPalette.muted; font-size: 9px; horizontal-alignment: right; overflow: elide; }
+    Rectangle { x: 69px; y: 5px; width: root.plot-width; height: 1px; background: AnalyticsPalette.border; }
+    Rectangle { x: 69px; y: root.plot-height / 2; width: root.plot-width; height: 1px; background: AnalyticsPalette.border; }
+    Rectangle { x: 69px; y: root.plot-height; width: root.plot-width; height: 1px; background: AnalyticsPalette.border; }
+    for point in root.points: Rectangle {
+        x: 69px + point.x * (root.plot-width - 5px); y: root.plot-height * (1 - point.percent / 100);
+        width: 5px; height: max(3px, root.plot-height * point.percent / 100);
+        background: AnalyticsPalette.blue; border-radius: 2px;
+        Tooltip { text: @markdown("\{point.label}"); }
+    }
+    if root.points.length == 0: Text { x: 79px; y: root.plot-height / 2 + 14px; width: root.plot-width - 30px; text: root.empty; color: AnalyticsPalette.muted; font-size: 12px; horizontal-alignment: center; wrap: word-wrap; }
+    Text { x: 69px; y: root.plot-height + 14px; width: root.plot-width / 2; text: root.start; color: AnalyticsPalette.muted; font-size: 9px; overflow: elide; }
+    Text { x: 69px + root.plot-width / 2; y: root.plot-height + 14px; width: root.plot-width / 2; text: root.end; color: AnalyticsPalette.muted; font-size: 9px; horizontal-alignment: right; overflow: elide; }
+}
+component CurrentMetrics inherits Rectangle {
+    in property <[AnalyticsMetricView]> metrics;
+    background: transparent;
+    for metric[index] in root.metrics: Rectangle {
+        x: 0px; y: index * 86px; height: 86px; width: parent.width;
+        Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: AnalyticsPalette.border; }
+        Text { x: 15px; y: 10px; width: parent.width - 30px; text: metric.label; color: AnalyticsPalette.text; font-size: 11px; font-weight: 600; overflow: elide; }
+        Text { x: 15px; y: 29px; width: parent.width - 30px; text: metric.amount; color: AnalyticsPalette.blue; font-size: 11px; overflow: elide; }
+        Text { x: 15px; y: 49px; width: parent.width - 30px; text: metric.reset + (metric.expiration != "" ? " · " + metric.expiration : ""); color: AnalyticsPalette.muted; font-size: 9px; overflow: elide; }
+        Text { x: 15px; y: 66px; width: parent.width - 30px; text: metric.note; color: AnalyticsPalette.muted; font-size: 9px; overflow: elide; }
+        Tooltip { text: @markdown("\{metric.label + " · " + metric.amount + " · " + metric.reset + " · " + metric.expiration + " · " + metric.note}"); }
+    }
+}
+export component AnalyticsPage inherits Rectangle {
+    in-out property <bool> dark <=> AnalyticsPalette.dark;
+    in property <bool> loading: false;
+    in property <string> error;
+    in property <string> updated;
+    in property <string> history-note;
+    in-out property <string> range-value;
+    in-out property <string> provider-value;
+    in-out property <string> account-value;
+    in-out property <string> metric-value;
+    in property <[string]> provider-options;
+    in property <[string]> account-options;
+    in property <[string]> metric-options;
+    in property <[AnalyticsSummaryView]> summary;
+    in property <[AnalyticsProviderView]> providers;
+    in property <[AnalyticsAccountView]> accounts;
+    in property <[AnalyticsMetricView]> metrics;
+    in property <[AnalyticsPointView]> points;
+    in property <string> selected-account-note;
+    in property <string> chart-title;
+    in property <string> chart-note;
+    in property <string> chart-start;
+    in property <string> chart-end;
+    in property <string> chart-top;
+    in property <string> chart-middle;
+    in property <string> chart-bottom;
+    in property <bool> chart-has-points;
+    in property <bool> metric-percent;
+    in property <string> activity-title;
+    in property <string> activity-note;
+    in property <string> activity-chart-top;
+    in property <string> activity-chart-middle;
+    in property <string> activity-chart-bottom;
+    in property <string> activity-chart-start;
+    in property <string> activity-chart-end;
+    in property <bool> activity-has-data;
+    in property <[AnalyticsSummaryView]> activity-summary;
+    in property <[AnalyticsPointView]> activity-points;
+    in property <[AnalyticsModelView]> activity-models;
+    in property <[AnalyticsMetricView]> activity-providers;
+    callback action(string, string);
+    property <bool> wide: root.width >= 1000px;
+    property <bool> filters-wide: root.width >= 850px;
+    property <bool> filters-narrow: root.width < 500px;
+    property <int> columns: root.width >= 850px ? 4 : root.width >= 450px ? 2 : 1;
+    property <length> head-height: root.filters-wide ? 135px : root.filters-narrow ? 238px : 184px;
+    property <length> summary-height: ceil(root.summary.length / root.columns) * 102px;
+    property <length> chart-y: root.head-height + root.summary-height + 64px;
+    property <length> compare-y: root.chart-y + 344px;
+    property <length> provider-height: 74px + root.providers.length * 43px;
+    property <length> metrics-height: max(root.provider-height, 96px + root.metrics.length * 86px);
+    property <length> compare-height: root.wide ? root.metrics-height : root.provider-height + root.metrics-height + 14px;
+    property <length> accounts-y: root.compare-y + root.compare-height + 14px;
+    property <length> accounts-height: 72px + root.accounts.length * 66px;
+    property <length> activity-y: root.accounts-y + root.accounts-height + 20px;
+    property <length> activity-summary-height: ceil(root.activity-summary.length / root.columns) * 102px;
+    property <length> activity-model-y: root.activity-y + 120px + root.activity-summary-height + 294px + root.activity-providers.length * 86px;
+    background: AnalyticsPalette.page;
+    ScrollView {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        content-width: parent.width - 1px;
+        content-height: root.activity-model-y + 80px + root.activity-models.length * 44px + 30px;
+        content := Rectangle { x: 14px; y: 0px; width: root.width - 28px; height: parent.height;
+            Text { x: 2px; y: 16px; text: "Analytics"; color: AnalyticsPalette.text; font-size: 24px; font-weight: 700; }
+            Text { x: 2px; y: 47px; width: parent.width - 120px; text: root.loading ? "Collecting account observations…" : root.updated; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
+            AnalyticsButton { x: parent.width - 104px; y: 20px; width: 102px; height: 32px; text: "↻ Refresh usage"; enabled: !root.loading; pressed => { root.action("analytics-refresh", ""); } }
+            Text { x: 2px; y: 70px; text: "Time range"; color: AnalyticsPalette.muted; font-size: 9px; }
+            ComboBox { x: 2px; y: 87px; width: 150px; height: 31px; model: ["Last 24 hours", "Last 7 days", "Last 30 days"]; current-value <=> root.range-value; enabled: !root.loading; selected(value) => { root.action("analytics-range", value); } }
+            Text { x: root.filters-narrow ? 2px : 168px; y: root.filters-narrow ? 125px : 70px; text: "Provider"; color: AnalyticsPalette.muted; font-size: 9px; }
+            ComboBox { x: root.filters-narrow ? 2px : 168px; y: root.filters-narrow ? 142px : 87px; width: root.filters-wide ? 235px : root.filters-narrow ? parent.width - 4px : parent.width - 170px; height: 31px; model: root.provider-options; current-value <=> root.provider-value; enabled: !root.loading; selected(value) => { root.action("analytics-provider", value); } }
+            Text { x: root.filters-wide ? 421px : 2px; y: root.filters-wide ? 70px : root.filters-narrow ? 180px : 125px; text: "Account"; color: AnalyticsPalette.muted; font-size: 9px; }
+            ComboBox { x: root.filters-wide ? 421px : 2px; y: root.filters-wide ? 87px : root.filters-narrow ? 197px : 142px; width: root.filters-wide ? parent.width - 423px : parent.width - 4px; height: 31px; model: root.account-options; current-value <=> root.account-value; enabled: !root.loading; selected(value) => { root.action("analytics-account", value); } }
+            SummaryGrid { x: 0px; y: root.head-height; width: parent.width; height: root.summary-height; items: root.summary; columns: root.columns; }
+            Text { x: 2px; y: root.head-height + root.summary-height + 3px; width: parent.width - 4px; height: 47px; text: root.error != "" ? root.error + " Last received observations remain visible." : root.history-note; color: root.error != "" ? #fca45d : AnalyticsPalette.muted; font-size: 10px; wrap: word-wrap; }
+            Rectangle { x: 0px; y: root.chart-y; width: parent.width; height: 330px; border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
+                Text { x: 16px; y: 16px; width: root.width >= 700px ? parent.width - 288px : parent.width - 32px; text: root.chart-title; color: AnalyticsPalette.text; font-size: 14px; font-weight: 700; overflow: elide; }
+                ComboBox { x: root.width >= 700px ? parent.width - 255px : 16px; y: root.width >= 700px ? 12px : 40px; width: root.width >= 700px ? 239px : parent.width - 32px; height: 30px; model: root.metric-options; current-value <=> root.metric-value; enabled: !root.loading && root.metric-options.length > 0; selected(value) => { root.action("analytics-metric", value); } }
+                Text { x: 16px; y: root.width >= 700px ? 51px : 80px; width: parent.width - 32px; text: root.selected-account-note; color: AnalyticsPalette.muted; font-size: 9px; overflow: elide; Tooltip { text: @markdown("\{root.selected-account-note}"); } }
+                ObservationPlot { x: 12px; y: root.width >= 700px ? 80px : 103px; width: parent.width - 28px; height: root.width >= 700px ? 199px : 176px; points: root.points; top: root.chart-top; middle: root.chart-middle; bottom: root.chart-bottom; start: root.chart-start; end: root.chart-end; }
+                Text { x: 17px; y: 289px; width: parent.width - 34px; height: 31px; text: root.chart-note; color: AnalyticsPalette.muted; font-size: 9px; wrap: word-wrap; }
+            }
+            Rectangle { x: 0px; y: root.compare-y; width: root.wide ? (parent.width - 14px) * 0.42 : parent.width; height: root.provider-height; border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
+                Text { x: 16px; y: 16px; text: "Provider overview"; color: AnalyticsPalette.text; font-size: 15px; font-weight: 700; }
+                Text { x: 16px; y: 43px; text: "Every provider · select a row to filter"; color: AnalyticsPalette.muted; font-size: 10px; }
+                for provider[index] in root.providers: Rectangle { x: 0px; y: 68px + index * 43px; height: 43px; width: parent.width;
+                    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: AnalyticsPalette.border; }
+                    Text { x: 16px; y: 8px; width: parent.width * 0.53; text: provider.label; color: AnalyticsPalette.text; font-size: 10px; font-weight: 600; overflow: elide; }
+                    Text { x: 16px; y: 25px; width: parent.width * 0.56; text: provider.sample; color: AnalyticsPalette.muted; font-size: 8px; overflow: elide; }
+                    Text { x: parent.width * 0.60; y: 8px; width: parent.width * 0.36; text: provider.accounts; color: AnalyticsPalette.muted; font-size: 9px; }
+                    Text { x: parent.width * 0.60; y: 25px; width: parent.width * 0.36; text: provider.availability; color: AnalyticsPalette.blue; font-size: 9px; }
+                    TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: !root.loading; clicked => { root.action("analytics-provider", provider.label); } }
+                    Tooltip { text: @markdown("\{provider.label + " · " + provider.accounts + " · " + provider.availability + " · " + provider.sample}"); }
+                }
+            }
+            Rectangle { x: root.wide ? (parent.width - 14px) * 0.42 + 14px : 0px; y: root.compare-y + (root.wide ? 0px : root.provider-height + 14px); width: root.wide ? (parent.width - 14px) * 0.58 : parent.width; height: root.metrics-height; border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
+                Text { x: 16px; y: 16px; text: "Current quotas and balances"; color: AnalyticsPalette.text; font-size: 15px; font-weight: 700; }
+                Text { x: 16px; y: 43px; width: parent.width - 32px; text: root.chart-title; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
+                CurrentMetrics { x: 0px; y: 72px; width: parent.width; height: root.metrics.length * 86px; metrics: root.metrics; }
+                if root.metrics.length == 0: Text { x: 16px; y: 88px; width: parent.width - 32px; text: "No usable quotas were returned for this account."; color: AnalyticsPalette.muted; font-size: 11px; wrap: word-wrap; }
+            }
+            Rectangle { x: 0px; y: root.accounts-y; width: parent.width; height: root.accounts-height; border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
+                Text { x: 16px; y: 16px; text: "Accounts and sources"; color: AnalyticsPalette.text; font-size: 15px; font-weight: 700; }
+                Text { x: 16px; y: 42px; text: "Account identity, source computer and sample availability"; color: AnalyticsPalette.muted; font-size: 10px; }
+                for account[index] in root.accounts: Rectangle { x: 0px; y: 68px + index * 66px; height: 66px; width: parent.width; background: account.active ? AnalyticsPalette.dark ? #193450 : #edf5ff : transparent;
+                    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: AnalyticsPalette.border; }
+                    Text { x: 16px; y: 10px; width: parent.width * 0.58; text: account.label + (account.active ? "  ✓ Active Codex" : ""); color: account.active ? AnalyticsPalette.blue : AnalyticsPalette.text; font-size: 11px; font-weight: 600; overflow: elide; }
+                    Text { x: 16px; y: 31px; width: parent.width * 0.58; text: account.provider + " · " + account.plan + " · " + account.platform + " · " + account.source; color: AnalyticsPalette.muted; font-size: 9px; overflow: elide; }
+                    Text { x: parent.width * 0.66; y: 11px; width: parent.width * 0.30; text: account.status; color: AnalyticsPalette.muted; font-size: 10px; }
+                    Text { x: parent.width * 0.66; y: 32px; width: parent.width * 0.30; text: account.samples; color: AnalyticsPalette.muted; font-size: 9px; }
+                    Tooltip { text: @markdown("\{account.label + " · " + account.provider + " · " + account.plan + " · " + account.platform + " · " + account.source + " · " + account.status}"); }
+                }
+            }
+            Text { x: 2px; y: root.activity-y; text: root.activity-title; color: AnalyticsPalette.text; font-size: 20px; font-weight: 700; }
+            Text { x: 2px; y: root.activity-y + 35px; width: parent.width - 4px; height: 68px; text: root.activity-note; color: AnalyticsPalette.muted; font-size: 10px; wrap: word-wrap; }
+            SummaryGrid { x: 0px; y: root.activity-y + 110px; width: parent.width; height: root.activity-summary-height; items: root.activity-summary; columns: root.columns; }
+            Rectangle { x: 0px; y: root.activity-y + 120px + root.activity-summary-height; width: parent.width; height: 274px; border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
+                Text { x: 16px; y: 16px; text: "Tokens by day · UTC"; color: AnalyticsPalette.text; font-size: 14px; font-weight: 700; }
+                ObservationPlot { x: 12px; y: 55px; width: parent.width - 28px; height: 190px; points: root.activity-points; top: root.activity-chart-top; middle: root.activity-chart-middle; bottom: root.activity-chart-bottom; start: root.activity-chart-start; end: root.activity-chart-end; empty: "Local CLI activity is unavailable for this filter. Other providers have quota history above."; }
+            }
+            CurrentMetrics { x: 0px; y: root.activity-y + 120px + root.activity-summary-height + 284px; width: parent.width; height: root.activity-providers.length * 86px; metrics: root.activity-providers; }
+            Rectangle { x: 0px; y: root.activity-model-y; width: parent.width; height: 72px + root.activity-models.length * 44px; border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
+                Text { x: 16px; y: 16px; text: "Model breakdown · local CLI"; color: AnalyticsPalette.text; font-size: 15px; font-weight: 700; }
+                Text { x: 16px; y: 47px; text: "Model"; color: AnalyticsPalette.muted; font-size: 9px; }
+                Text { x: parent.width * 0.40; y: 47px; text: "Input"; color: AnalyticsPalette.muted; font-size: 9px; }
+                Text { x: parent.width * 0.55; y: 47px; text: "Output"; color: AnalyticsPalette.muted; font-size: 9px; }
+                Text { x: parent.width * 0.69; y: 47px; text: "Cache"; color: AnalyticsPalette.muted; font-size: 9px; }
+                Text { x: parent.width * 0.83; y: 47px; text: "Est. API cost"; color: AnalyticsPalette.muted; font-size: 9px; }
+                for item[index] in root.activity-models: Rectangle { x: 0px; y: 70px + index * 44px; height: 44px; width: parent.width;
+                    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: AnalyticsPalette.border; }
+                    Text { x: 16px; y: 8px; width: parent.width * 0.36; text: item.label; color: AnalyticsPalette.text; font-size: 10px; overflow: elide; }
+                    Text { x: 16px; y: 25px; text: item.provider; color: AnalyticsPalette.muted; font-size: 8px; }
+                    Text { x: parent.width * 0.40; y: 13px; width: parent.width * 0.13; text: item.input; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
+                    Text { x: parent.width * 0.55; y: 13px; width: parent.width * 0.12; text: item.output; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
+                    Text { x: parent.width * 0.69; y: 13px; width: parent.width * 0.12; text: item.cache; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
+                    Text { x: parent.width * 0.83; y: 13px; width: parent.width * 0.15; text: item.cost; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
+                    Tooltip { text: @markdown("\{item.label + " · " + item.provider + " · " + item.input + " input · " + item.output + " output · " + item.cache + " cached · " + item.cost + " estimated API equivalent"}"); }
+                }
+            }
+        }
+    }
+}
