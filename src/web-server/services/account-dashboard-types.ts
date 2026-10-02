@@ -124,6 +124,11 @@ export interface DashboardProviderEntry {
   order: number;
   /** Not in settings.hiddenProviders. */
   visible: boolean;
+  /**
+   * Not in settings.trayHiddenProviders. Independent of visible: hiding on
+   * the dashboard does not hide in the trays, and the reverse also holds.
+   */
+  trayVisible: boolean;
   /** Every account of this provider in accounts[], hidden ones included. */
   accountCount: number;
   switchable: boolean;
@@ -155,6 +160,8 @@ export interface AccountDashboardSettings {
   hiddenProviders?: DashboardProvider[];
   /** Always set by the dashboard service; ids may name accounts that are briefly absent. */
   hiddenAccountIds?: string[];
+  /** Always set by the dashboard service; empty when no provider is hidden in the trays. */
+  trayHiddenProviders?: DashboardProvider[];
   /**
    * False when the visibility file exists but could not be read safely. The
    * lists are then the last good read of this server (never re-shown as

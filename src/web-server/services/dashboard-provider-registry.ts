@@ -193,9 +193,11 @@ export function providerSignInState(
 export function buildDashboardProviders(
   accounts: readonly DashboardAccount[],
   hiddenProviders: readonly DashboardProvider[],
+  trayHiddenProviders: readonly DashboardProvider[],
   facts: ProviderRegistryFacts = DEFAULT_PROVIDER_REGISTRY_FACTS
 ): DashboardProviderEntry[] {
   const hidden = new Set(hiddenProviders);
+  const trayHidden = new Set(trayHiddenProviders);
   return DASHBOARD_PROVIDER_IDS.map((id, order) => {
     const definition = PROVIDERS[id];
     const { kind, unavailableReason } = providerSignInState(id, facts);
@@ -209,6 +211,7 @@ export function buildDashboardProviders(
       iconKey: id,
       order,
       visible: !hidden.has(id),
+      trayVisible: !trayHidden.has(id),
       accountCount,
       switchable: definition.switchable,
       signIn: {

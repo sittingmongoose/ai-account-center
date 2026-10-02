@@ -9,7 +9,9 @@ import {
 
 /**
  * Display-only visibility (CONTRACT-registry-lifecycle sections 3.3 and 4),
- * `~/.ccs/account-visibility.json`, 0600, at most 16 KB. Hidden accounts keep
+ * `~/.ccs/account-visibility.json`, 0600, at most 16 KB. `hiddenProviders` and
+ * `hiddenAccountIds` hide rows on the dashboard, `trayHiddenProviders` hides
+ * providers in the trays; the lists are independent. Hidden accounts keep
  * being collected and stay auto-switch candidates.
  */
 export const ACCOUNT_VISIBILITY_FILE = 'account-visibility.json';
@@ -25,7 +27,12 @@ const WALLET_ACCOUNT_ID = /^plan-opencode-go-console-mac-[a-f0-9]{12}$/;
 export interface AccountVisibility {
   hiddenProviders: DashboardProvider[];
   hiddenAccountIds: string[];
+  /** Providers the trays do not show; independent of hiddenProviders. */
+  trayHiddenProviders: DashboardProvider[];
 }
+
+/** The PUT body: any non-empty subset of the three stored lists. */
+export type AccountVisibilityUpdate = Partial<AccountVisibility>;
 
 export type AccountVisibilityRead =
   | { state: 'ok'; visibility: AccountVisibility }
@@ -43,48 +50,94 @@ function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
 }
 
-/**
- * The PUT body: exactly `{hiddenProviders, hiddenAccountIds}`. Unknown keys,
- * unknown providers, malformed ids and more than 128 ids are rejected.
- * Duplicates are dropped; absent account ids are kept.
- */
-export function parseVisibilityBody(value: unknown): AccountVisibility | null {
+/** The PUT body keys; a key the body leaves out keeps its stored list. */
+const VISIBILITY_KEYS = ['hiddenProviders', 'hiddenAccountIds', 'trayHiddenProviders'] as const;
+
+/** The bound and the known-provider check shared by both provider lists. */
+function parseProviderList(value: unknown): DashboardProvider[] | null {
   if (
-    !record(value) ||
-    Object.keys(value).length !== 2 ||
-    !Array.isArray(value.hiddenProviders) ||
-    !Array.isArray(value.hiddenAccountIds) ||
-    value.hiddenProviders.length > MAX_HIDDEN_PROVIDER_ENTRIES ||
-    value.hiddenAccountIds.length > MAX_HIDDEN_ACCOUNT_IDS ||
-    !value.hiddenProviders.every(isDashboardProviderId) ||
-    !value.hiddenAccountIds.every(isPublicAccountId)
+    !Array.isArray(value) ||
+    value.length > MAX_HIDDEN_PROVIDER_ENTRIES ||
+    !value.every(isDashboardProviderId)
   ) {
     return null;
   }
-  return {
-    hiddenProviders: unique(value.hiddenProviders as DashboardProvider[]),
-    hiddenAccountIds: unique(value.hiddenAccountIds as string[]),
-  };
+  return unique(value as DashboardProvider[]);
 }
 
 /**
- * The stored file. A provider that has left the table since it was hidden is
- * dropped quietly; anything else malformed makes the file unavailable.
+ * The PUT body: a non-empty subset of `{hiddenProviders, hiddenAccountIds,
+ * trayHiddenProviders}`. Unknown keys, unknown providers, malformed ids, more
+ * than 32 provider entries and more than 128 ids are rejected. Duplicates are
+ * dropped; absent account ids are kept.
  */
-function parseVisibilityFile(value: unknown): AccountVisibility | null {
+export function parseVisibilityBody(value: unknown): AccountVisibilityUpdate | null {
   if (
     !record(value) ||
-    value.version !== 1 ||
-    Object.keys(value).length !== 3 ||
-    !Array.isArray(value.hiddenProviders) ||
-    !value.hiddenProviders.every((id) => typeof id === 'string')
+    Object.keys(value).length === 0 ||
+    !Object.keys(value).every((key) => (VISIBILITY_KEYS as readonly string[]).includes(key))
   ) {
     return null;
   }
-  return parseVisibilityBody({
+  const update: AccountVisibilityUpdate = {};
+  if ('hiddenProviders' in value) {
+    const providers = parseProviderList(value.hiddenProviders);
+    if (providers === null) return null;
+    update.hiddenProviders = providers;
+  }
+  if ('trayHiddenProviders' in value) {
+    const providers = parseProviderList(value.trayHiddenProviders);
+    if (providers === null) return null;
+    update.trayHiddenProviders = providers;
+  }
+  if ('hiddenAccountIds' in value) {
+    const ids = value.hiddenAccountIds;
+    if (
+      !Array.isArray(ids) ||
+      ids.length > MAX_HIDDEN_ACCOUNT_IDS ||
+      !ids.every(isPublicAccountId)
+    ) {
+      return null;
+    }
+    update.hiddenAccountIds = unique(ids as string[]);
+  }
+  return update;
+}
+
+/**
+ * The stored file. `trayHiddenProviders` is optional so a file written before
+ * the tray list existed keeps reading. A provider that has left the table
+ * since it was hidden is dropped quietly; anything else malformed makes the
+ * file unavailable.
+ */
+function parseVisibilityFile(value: unknown): AccountVisibility | null {
+  if (!record(value) || value.version !== 1) return null;
+  const hasTray = 'trayHiddenProviders' in value;
+  if (Object.keys(value).length !== (hasTray ? 4 : 3)) return null;
+  const providerKeys = hasTray
+    ? (['hiddenProviders', 'trayHiddenProviders'] as const)
+    : (['hiddenProviders'] as const);
+  for (const key of providerKeys) {
+    const list = value[key];
+    if (!Array.isArray(list) || !list.every((id) => typeof id === 'string')) return null;
+  }
+  const parsed = parseVisibilityBody({
     hiddenProviders: (value.hiddenProviders as string[]).filter(isDashboardProviderId),
     hiddenAccountIds: value.hiddenAccountIds,
+    ...(hasTray
+      ? {
+          trayHiddenProviders: (value.trayHiddenProviders as string[]).filter(
+            isDashboardProviderId
+          ),
+        }
+      : {}),
   });
+  if (!parsed) return null;
+  return {
+    hiddenProviders: parsed.hiddenProviders ?? [],
+    hiddenAccountIds: parsed.hiddenAccountIds ?? [],
+    trayHiddenProviders: parsed.trayHiddenProviders ?? [],
+  };
 }
 
 export function accountVisibilityPath(ccsDir: string): string {
@@ -95,7 +148,10 @@ export function accountVisibilityPath(ccsDir: string): string {
 export async function readAccountVisibility(ccsDir: string): Promise<AccountVisibilityRead> {
   const read = await readPrivateJsonFile(accountVisibilityPath(ccsDir), MAX_VISIBILITY_BYTES);
   if (read.state === 'absent') {
-    return { state: 'ok', visibility: { hiddenProviders: [], hiddenAccountIds: [] } };
+    return {
+      state: 'ok',
+      visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
+    };
   }
   if (read.state === 'invalid') return { state: 'unavailable' };
   const visibility = parseVisibilityFile(read.value);
@@ -112,9 +168,53 @@ export function writeAccountVisibility(
     const saved = {
       hiddenProviders: [...visibility.hiddenProviders],
       hiddenAccountIds: [...visibility.hiddenAccountIds],
+      trayHiddenProviders: [...visibility.trayHiddenProviders],
     };
     await writePrivateJsonFile(file, { version: 1, ...saved });
     return saved;
+  });
+}
+
+export type AccountVisibilityUpdateResult =
+  | { state: 'saved'; visibility: AccountVisibility }
+  | { state: 'unavailable' };
+
+/**
+ * The PUT semantics: every list the update names replaces the stored one; a
+ * list it leaves out is unchanged. The merge reads under the same file mutex,
+ * so two concurrent PUTs cannot clobber each other's lists. A partial update
+ * against a file that cannot be read safely writes nothing; a full one
+ * replaces and repairs the file, exactly as before.
+ */
+export async function updateAccountVisibility(
+  ccsDir: string,
+  update: AccountVisibilityUpdate
+): Promise<AccountVisibilityUpdateResult> {
+  if (
+    update.hiddenProviders !== undefined &&
+    update.hiddenAccountIds !== undefined &&
+    update.trayHiddenProviders !== undefined
+  ) {
+    const visibility = await writeAccountVisibility(ccsDir, {
+      hiddenProviders: update.hiddenProviders,
+      hiddenAccountIds: update.hiddenAccountIds,
+      trayHiddenProviders: update.trayHiddenProviders,
+    });
+    return { state: 'saved', visibility };
+  }
+  const file = accountVisibilityPath(ccsDir);
+  return withPrivateFileLock(file, async (): Promise<AccountVisibilityUpdateResult> => {
+    const current = await readAccountVisibility(ccsDir);
+    if (current.state !== 'ok') return { state: 'unavailable' };
+    const saved: AccountVisibility = {
+      hiddenProviders: [...(update.hiddenProviders ?? current.visibility.hiddenProviders)],
+      hiddenAccountIds: [...(update.hiddenAccountIds ?? current.visibility.hiddenAccountIds)],
+      trayHiddenProviders: [
+        ...(update.trayHiddenProviders ?? current.visibility.trayHiddenProviders),
+      ],
+    };
+    await writePrivateJsonFile(file, { version: 1, ...saved });
+    return { state: 'saved', visibility: saved };
   });
 }
 
@@ -142,6 +242,7 @@ export class VisibilityMemory {
     return {
       hiddenProviders: [...(good?.hiddenProviders ?? [])],
       hiddenAccountIds: [...(good?.hiddenAccountIds ?? [])],
+      trayHiddenProviders: [...(good?.trayHiddenProviders ?? [])],
       available,
     };
   }
@@ -155,6 +256,7 @@ export class VisibilityMemory {
             good: {
               hiddenProviders: [...read.visibility.hiddenProviders],
               hiddenAccountIds: [...read.visibility.hiddenAccountIds],
+              trayHiddenProviders: [...read.visibility.trayHiddenProviders],
             },
             available: true,
           }

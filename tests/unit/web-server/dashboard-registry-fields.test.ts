@@ -1,7 +1,8 @@
 /**
  * Registry fields of GET /api/accounts/dashboard (CONTRACT-registry-lifecycle
- * sections 2, 3.3 and 4): providers[], settings.hiddenProviders and
- * hiddenAccountIds, accounts[].hidden. Fixtures only; no provider or real CCS dir.
+ * sections 2, 3.3 and 4): providers[] with visible and trayVisible,
+ * settings.hiddenProviders, hiddenAccountIds and trayHiddenProviders,
+ * accounts[].hidden. Fixtures only; no provider or real CCS dir.
  */
 import { describe, expect, it } from 'bun:test';
 import {
@@ -118,7 +119,7 @@ function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
     hasAntigravityProfiles: () => false,
     readVisibility: async () => ({
       state: 'ok',
-      visibility: { hiddenProviders: [], hiddenAccountIds: [] },
+      visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
     }),
     ...extra,
   };
@@ -167,6 +168,8 @@ describe('providers[] in the dashboard DTO', () => {
       expect(entry.signIn.secureTransportRequired).toBe(
         ['api-key', 'device-code', 'supervised-cli'].includes(entry.signIn.kind)
       );
+      // With nothing hidden, every provider shows on the dashboard and in the trays.
+      expect([entry.visible, entry.trayVisible]).toEqual([true, true]);
     }
     expect(providers.find((entry) => entry.id === 'zai')?.accountCount).toBe(2);
     expect(providers.filter((entry) => entry.switchable).map((entry) => entry.id)).toEqual([
@@ -181,6 +184,7 @@ describe('providers[] in the dashboard DTO', () => {
     expect(dashboard.providers?.find((entry) => entry.id === 'kimi-code')).toMatchObject({
       accountCount: 0,
       visible: true,
+      trayVisible: true,
     });
     expect(
       dashboard.accounts
@@ -224,7 +228,7 @@ describe('providers[] in the dashboard DTO', () => {
 
   it('derives capabilities from live facts once the lifecycle routes are served', () => {
     const accounts = V2.accounts;
-    const secure = buildDashboardProviders(accounts, [], {
+    const secure = buildDashboardProviders(accounts, [], [], {
       lifecycleRoutes: true,
       secureTransport: true,
     });
@@ -247,7 +251,7 @@ describe('providers[] in the dashboard DTO', () => {
     expect(byId(secure, 'qwen')?.capabilities.add).toBe(false);
     expect(
       byId(
-        buildDashboardProviders([], [], { lifecycleRoutes: true, secureTransport: true }),
+        buildDashboardProviders([], [], [], { lifecycleRoutes: true, secureTransport: true }),
         'cursor'
       )?.capabilities.add
     ).toBe(true);
@@ -257,12 +261,12 @@ describe('providers[] in the dashboard DTO', () => {
     );
     expect(
       byId(
-        buildDashboardProviders(sixteen, [], { lifecycleRoutes: true, secureTransport: true }),
+        buildDashboardProviders(sixteen, [], [], { lifecycleRoutes: true, secureTransport: true }),
         'zai'
       )?.capabilities.add
     ).toBe(false);
 
-    const plain = buildDashboardProviders(accounts, ['zai'], {
+    const plain = buildDashboardProviders(accounts, ['zai'], [], {
       lifecycleRoutes: true,
       secureTransport: false,
     });
@@ -277,8 +281,10 @@ describe('providers[] in the dashboard DTO', () => {
     });
     expect(byId(plain, 'claude')?.capabilities.signInAgain).toBe(true);
     expect(byId(plain, 'zai')?.visible).toBe(false);
+    // Hiding on the dashboard does not hide in the trays.
+    expect(byId(plain, 'zai')?.trayVisible).toBe(true);
 
-    const preflight = buildDashboardProviders(accounts, [], {
+    const preflight = buildDashboardProviders(accounts, [], [], {
       lifecycleRoutes: true,
       secureTransport: true,
       flows: { antigravity: 'preflight_failed', muse: 'tool_missing' },
@@ -312,6 +318,7 @@ describe('visibility in the dashboard DTO', () => {
           visibility: {
             hiddenProviders: ['zai'],
             hiddenAccountIds: ['codex:gmail', 'claude:retired-profile'],
+            trayHiddenProviders: [],
           },
         }),
       })
@@ -320,10 +327,13 @@ describe('visibility in the dashboard DTO', () => {
       refreshIntervalSeconds: 60,
       hiddenProviders: ['zai'],
       hiddenAccountIds: ['codex:gmail', 'claude:retired-profile'],
+      trayHiddenProviders: [],
       visibilityAvailable: true,
     });
+    // Hiding on the dashboard only leaves trayVisible true.
     expect(hiddenDashboard.providers?.find((entry) => entry.id === 'zai')).toMatchObject({
       visible: false,
+      trayVisible: true,
       accountCount: 2,
     });
     expect(
@@ -344,6 +354,38 @@ describe('visibility in the dashboard DTO', () => {
     expect(visible.accounts.every((account) => account.hidden === false)).toBe(true);
   });
 
+  it('hides in the trays independently of the dashboard', async () => {
+    const dashboard = await new AccountDashboardService(
+      deps({
+        readVisibility: async () => ({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: [],
+            trayHiddenProviders: ['zai', 'qwen'],
+          },
+        }),
+      })
+    ).get('mac');
+    expect(dashboard.settings).toEqual({
+      refreshIntervalSeconds: 60,
+      hiddenProviders: [],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['zai', 'qwen'],
+      visibilityAvailable: true,
+    });
+    // Hiding in the tray only leaves visible true, and no row becomes hidden.
+    expect(
+      (dashboard.providers ?? [])
+        .filter((entry) => ['qwen', 'zai'].includes(entry.id))
+        .map((entry) => [entry.id, entry.visible, entry.trayVisible])
+    ).toEqual([
+      ['qwen', true, false],
+      ['zai', true, false],
+    ]);
+    expect(dashboard.accounts.some((account) => account.hidden)).toBe(false);
+  });
+
   it('says when the visibility file could not be read, and hides nothing', async () => {
     const dashboard = await new AccountDashboardService(
       deps({ readVisibility: async () => ({ state: 'unavailable' }) })
@@ -351,6 +393,7 @@ describe('visibility in the dashboard DTO', () => {
     expect(dashboard.settings).toMatchObject({
       hiddenProviders: [],
       hiddenAccountIds: [],
+      trayHiddenProviders: [],
       visibilityAvailable: false,
     });
     expect(dashboard.accounts.some((account) => account.hidden)).toBe(false);
@@ -371,7 +414,11 @@ describe('an unreadable visibility file after a good read', () => {
     const reads: Array<() => Promise<AccountVisibilityRead>> = [
       async () => ({
         state: 'ok',
-        visibility: { hiddenProviders: ['zai'], hiddenAccountIds: ['codex:gmail'] },
+        visibility: {
+          hiddenProviders: ['zai'],
+          hiddenAccountIds: ['codex:gmail'],
+          trayHiddenProviders: ['qwen'],
+        },
       }),
       async () => ({ state: 'unavailable' }),
       async () => {
@@ -379,7 +426,7 @@ describe('an unreadable visibility file after a good read', () => {
       },
       async () => ({
         state: 'ok',
-        visibility: { hiddenProviders: [], hiddenAccountIds: [] },
+        visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
       }),
     ];
     let index = 0;
@@ -392,6 +439,7 @@ describe('an unreadable visibility file after a good read', () => {
     expect(good.settings).toMatchObject({
       hiddenProviders: ['zai'],
       hiddenAccountIds: ['codex:gmail'],
+      trayHiddenProviders: ['qwen'],
       visibilityAvailable: true,
     });
     const expected = ['codex:gmail', 'zai:usage', 'zai:acct:9f2c41d0'];
@@ -403,16 +451,24 @@ describe('an unreadable visibility file after a good read', () => {
         settings: {
           hiddenProviders: ['zai'],
           hiddenAccountIds: ['codex:gmail'],
+          trayHiddenProviders: ['qwen'],
           visibilityAvailable: false,
         },
       });
       expect(hiddenIds(bad)).toEqual(expected);
       expect(bad.providers?.find((entry) => entry.id === 'zai')?.visible).toBe(false);
+      // The tray list falls back to the last good read exactly like the others.
+      expect(bad.providers?.find((entry) => entry.id === 'qwen')?.trayVisible).toBe(false);
       expect(JSON.stringify(bad)).not.toContain('PRIVATE_PATH');
     }
     // A later good read (here: everything shown again on purpose) replaces the memory.
     const repaired = await service.get('mac');
-    expect(repaired.settings).toMatchObject({ hiddenProviders: [], visibilityAvailable: true });
+    expect(repaired.settings).toMatchObject({
+      hiddenProviders: [],
+      trayHiddenProviders: [],
+      visibilityAvailable: true,
+    });
+    expect(repaired.providers?.find((entry) => entry.id === 'qwen')?.trayVisible).toBe(true);
     expect(hiddenIds(repaired)).toEqual([]);
   });
 
@@ -430,6 +486,7 @@ describe('an unreadable visibility file after a good read', () => {
                 visibility: {
                   hiddenProviders: current === '/tmp/aac-scope-a' ? ['zai'] : [],
                   hiddenAccountIds: [],
+                  trayHiddenProviders: [],
                 },
               },
       })
@@ -440,11 +497,13 @@ describe('an unreadable visibility file after a good read', () => {
     // Scope b never had a good read: nothing hidden, and unavailable.
     expect((await service.get('mac')).settings).toMatchObject({
       hiddenProviders: [],
+      trayHiddenProviders: [],
       visibilityAvailable: false,
     });
     scope = '/tmp/aac-scope-a';
     expect((await service.get('mac')).settings).toMatchObject({
       hiddenProviders: ['zai'],
+      trayHiddenProviders: [],
       visibilityAvailable: false,
     });
   });
@@ -461,7 +520,11 @@ describe('a slow visibility read', () => {
             ? new Promise(() => {})
             : Promise.resolve({
                 state: 'ok' as const,
-                visibility: { hiddenProviders: ['zai' as const], hiddenAccountIds: [] },
+                visibility: {
+                  hiddenProviders: ['zai' as const],
+                  hiddenAccountIds: [],
+                  trayHiddenProviders: [],
+                },
               }),
       })
     );
