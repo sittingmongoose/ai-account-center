@@ -181,6 +181,7 @@ export component AnalyticsPage inherits Rectangle {
     property <int> grid-columns: root.width >= 1650px ? 4 : root.width >= 1150px ? 3 : root.width >= 720px ? 2 : 1;
     property <int> provider-columns: root.width >= 1150px ? 5 : root.width >= 720px ? 3 : 2;
     property <bool> show-model-details: false;
+    property <bool> show-source-details: false;
     property <length> head-height: root.filters-wide ? 135px : root.filters-narrow ? 238px : 184px;
     property <length> activity-y: root.head-height + (root.error != "" ? 28px : 0px);
     property <length> activity-summary-y: root.activity-y + 110px;
@@ -191,8 +192,9 @@ export component AnalyticsPage inherits Rectangle {
     property <length> model-bars-height: root.activity-models.length > 0 ? 84px + min(8, root.activity-models.length) * 34px : 0px;
     property <length> models-height: root.activity-models.length > 0 ? (root.wide ? root.model-bars-height : root.model-bars-height * 2 + 14px) + 80px + (root.show-model-details ? 58px + root.activity-models.length * 46px : 0px) : 0px;
     property <length> overview-y: root.models-y + root.models-height + 14px;
-    property <length> provider-height: ceil(root.providers.length / root.provider-columns) * 50px;
-    property <length> overview-height: 82px + root.provider-height + ceil(root.accounts.length / root.grid-columns) * 72px;
+    property <length> provider-height: ceil(root.providers.length / root.provider-columns) * 30px;
+    property <length> account-row-height: root.show-source-details ? 62px : 38px;
+    property <length> overview-height: 72px + root.provider-height + ceil(root.accounts.length / root.grid-columns) * root.account-row-height;
     property <length> histories-y: root.overview-y + root.overview-height + 18px;
     property <length> history-head-height: root.wide ? 106px : 143px;
     background: AnalyticsPalette.page;
@@ -237,18 +239,22 @@ export component AnalyticsPage inherits Rectangle {
             if root.show-model-details && root.activity-models.length > 0: ModelDetails { x: 0px; y: root.models-y + (root.wide ? root.model-bars-height : root.model-bars-height * 2 + 14px) + 80px; width: parent.width; height: 58px + root.activity-models.length * 46px; models: root.activity-models; }
 
             Rectangle { x: 0px; y: root.overview-y; width: parent.width; height: root.overview-height; border-radius: 10px; border-width: 1px; border-color: AnalyticsPalette.border; background: AnalyticsPalette.surface;
-                Text { x: 15px; y: 14px; text: "Providers, accounts and sources"; color: AnalyticsPalette.text; font-size: 15px; font-weight: 700; }
+                Text { x: 15px; y: 14px; width: parent.width - 174px; text: "Providers, accounts and sources"; color: AnalyticsPalette.text; font-size: 15px; font-weight: 700; overflow: elide; }
+                AnalyticsButton { x: parent.width - 154px; y: 9px; width: 139px; height: 27px; text: root.show-source-details ? "Hide source details" : "Show source details"; pressed => { root.show-source-details = !root.show-source-details; } }
                 Text { x: 15px; y: 38px; width: parent.width - 30px; text: root.overview-note; color: AnalyticsPalette.muted; font-size: 10px; overflow: elide; }
-                for provider[index] in root.providers: Rectangle { x: 10px + mod(index, root.provider-columns) * (parent.width - 20px) / root.provider-columns; y: 64px + floor(index / root.provider-columns) * 50px; width: (parent.width - 20px) / root.provider-columns - 6px; height: 43px; border-radius: 6px; background: provider-touch.has-hover ? AnalyticsPalette.track : AnalyticsPalette.inset;
-                    Text { x: 8px; y: 6px; width: parent.width - 16px; text: provider.label; color: AnalyticsPalette.text; font-size: 10px; font-weight: 600; overflow: elide; }
-                    Text { x: 8px; y: 23px; width: parent.width - 16px; text: provider.accounts + " · " + provider.availability; color: AnalyticsPalette.muted; font-size: 8px; overflow: elide; }
+                for provider[index] in root.providers: Rectangle { x: 10px + mod(index, root.provider-columns) * (parent.width - 20px) / root.provider-columns; y: 60px + floor(index / root.provider-columns) * 30px; width: (parent.width - 20px) / root.provider-columns - 6px; height: 24px; border-radius: 5px; background: provider-touch.has-hover ? AnalyticsPalette.track : AnalyticsPalette.inset;
+                    accessible-role: button; accessible-label: provider.label + " · " + provider.accounts + " · " + provider.availability + " · " + provider.sample;
+                    accessible-action-default => { if !root.loading { root.action("analytics-provider", provider.label); } }
+                    Text { x: 8px; y: 6px; width: parent.width - 16px; height: 12px; text: provider.label + " · " + provider.accounts + " · " + provider.availability; color: AnalyticsPalette.text; font-size: 9px; overflow: elide; }
                     provider-touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: !root.loading; mouse-cursor: root.loading ? default : pointer; clicked => { root.action("analytics-provider", provider.label); } }
                     Tooltip { text: @markdown("\{provider.label + " · " + provider.accounts + " · " + provider.availability + " · " + provider.sample}"); }
                 }
-                for account[index] in root.accounts: Rectangle { x: 10px + mod(index, root.grid-columns) * (parent.width - 20px) / root.grid-columns; y: 68px + root.provider-height + floor(index / root.grid-columns) * 72px; width: (parent.width - 20px) / root.grid-columns - 6px; height: 66px; border-radius: 6px; border-width: 1px; border-color: account.active ? AnalyticsPalette.blue : AnalyticsPalette.border; background: account-touch.has-hover ? AnalyticsPalette.track : transparent;
-                    Text { x: 8px; y: 7px; width: parent.width - 16px; text: account.label + (account.active ? " · Active Codex" : ""); color: account.active ? AnalyticsPalette.blue : AnalyticsPalette.text; font-size: 10px; font-weight: 600; overflow: elide; }
-                    Text { x: 8px; y: 26px; width: parent.width - 16px; text: account.provider + " · " + account.plan + " · " + account.status; color: AnalyticsPalette.muted; font-size: 8px; overflow: elide; }
-                    Text { x: 8px; y: 44px; width: parent.width - 16px; text: account.platform + " · " + account.samples + " · " + account.source; color: AnalyticsPalette.muted; font-size: 8px; overflow: elide; }
+                for account[index] in root.accounts: Rectangle { x: 10px + mod(index, root.grid-columns) * (parent.width - 20px) / root.grid-columns; y: 62px + root.provider-height + floor(index / root.grid-columns) * root.account-row-height; width: (parent.width - 20px) / root.grid-columns - 6px; height: root.account-row-height - 6px; border-radius: 5px; border-width: 1px; border-color: account.active ? AnalyticsPalette.blue : AnalyticsPalette.border; background: account-touch.has-hover ? AnalyticsPalette.track : transparent;
+                    accessible-role: button; accessible-label: account.label + " · " + account.provider + " · " + account.plan + " · " + account.platform + " · " + account.source + " · " + account.status + " · " + account.samples;
+                    accessible-action-default => { if !root.loading { root.action("analytics-account-id", account.id); } }
+                    Text { x: 8px; y: 4px; width: parent.width - 16px; height: 12px; text: account.label + (account.active ? " · Active Codex" : ""); color: account.active ? AnalyticsPalette.blue : AnalyticsPalette.text; font-size: 10px; font-weight: 600; overflow: elide; }
+                    Text { x: 8px; y: 18px; width: parent.width - 16px; height: 11px; text: account.provider + " · " + account.plan + " · " + account.status + " · " + account.platform + " · " + account.samples; color: AnalyticsPalette.muted; font-size: 8px; overflow: elide; }
+                    if root.show-source-details: Text { x: 8px; y: 35px; width: parent.width - 16px; height: 17px; text: account.source; color: AnalyticsPalette.muted; font-size: 9px; overflow: elide; }
                     account-touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: !root.loading; mouse-cursor: root.loading ? default : pointer; clicked => { root.action("analytics-account-id", account.id); } }
                     Tooltip { text: @markdown("\{account.label + " · " + account.provider + " · " + account.plan + " · " + account.platform + " · " + account.source + " · " + account.status + " · " + account.samples}"); }
                 }

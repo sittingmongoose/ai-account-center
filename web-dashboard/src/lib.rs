@@ -19,6 +19,7 @@ struct UsageDto {
     percent: f32,
     has_percent: bool,
     reset: String,
+    reset_compact: String,
     expiration: String,
     meta: String,
 }
@@ -30,6 +31,7 @@ impl From<UsageDto> for UsageView {
             percent: v.percent,
             has_percent: v.has_percent,
             reset: v.reset.into(),
+            reset_compact: v.reset_compact.into(),
             expiration: v.expiration.into(),
             meta: v.meta.into(),
         }

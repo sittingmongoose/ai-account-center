@@ -3,7 +3,7 @@ import { AnalyticsPage, AnalyticsSummaryView, AnalyticsProviderView, AnalyticsMe
 
 export struct UsageView {
     label: string, amount: string, percent: float, has-percent: bool,
-    reset: string, expiration: string, meta: string,
+    reset: string, reset-compact: string, expiration: string, meta: string,
 }
 export struct AccountView {
     id: string, profile: string, email: string, plan: string, status: string,
@@ -67,12 +67,14 @@ component LaunchButton inherits Rectangle {
 component Metric inherits Rectangle {
     in property <UsageView> value;
     in property <string> unavailable: "—";
-    height: 48px; background: transparent;
+    height: 59px; background: transparent;
+    accessible-role: text;
+    accessible-label: root.value.label + " · " + root.value.amount + " · " + (root.value.reset == "" ? "Reset unavailable" : root.value.reset);
     Text { x: 0px; y: 0px; width: parent.width; height: 15px; text: root.value.has-percent ? root.value.amount : root.unavailable; color: Colors.text; font-size: 11px; overflow: elide; }
     Rectangle { x: 0px; y: 19px; width: parent.width; height: 6px; border-radius: 3px; background: Colors.track;
         if root.value.has-percent: Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.value.percent, 0, 100) / 100; height: 6px; border-radius: 3px; background: root.value.percent >= 90 ? #fca45d : Colors.blue; }
     }
-    Text { x: 0px; y: 29px; width: parent.width; height: 16px; text: root.value.reset == "" ? "Reset unavailable" : root.value.reset; color: Colors.muted; font-size: 9px; overflow: elide; }
+    Text { x: 0px; y: 29px; width: parent.width; height: 29px; text: root.value.reset-compact != "" ? root.value.reset-compact : root.value.reset == "" ? "Reset unavailable" : root.value.reset; color: Colors.muted; font-size: 9px; wrap: word-wrap; }
     Tooltip { text: @markdown("\{root.value.label + " · " + root.value.amount + " · " + root.value.reset}"); }
 }
 component AccountTable inherits Rectangle {

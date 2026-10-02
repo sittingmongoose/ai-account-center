@@ -1,6 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { usageView, dashboardView, allDetailWindows, timeLabel } from '../public/accounts-data.mjs';
+test('compact reset captions preserve the local date, exact minute and timezone through daylight saving time', () => {
+  const moduleUrl = new URL('../public/accounts-data.mjs', import.meta.url).href;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { usageView } from ${JSON.stringify(moduleUrl)};
+    console.log(JSON.stringify(['2026-10-02T05:30:00Z', '2026-11-02T06:30:00Z'].map(resetAt => usageView({ resetAt }))));
+  `], { encoding: 'utf8', env: { ...process.env, TZ: 'America/New_York' } });
+  assert.equal(child.status, 0, child.stderr);
+  const [summer, winter] = JSON.parse(child.stdout);
+  assert.equal(summer.resetCompact, 'Resets Oct 2\n1:30 AM EDT');
+  assert.equal(winter.resetCompact, 'Resets Nov 2\n1:30 AM EST');
+  assert.match(summer.reset, /Oct 2, 1:30 AM EDT$/);
+  assert.match(winter.reset, /Nov 2, 1:30 AM EST$/);
+});
+test('missing and invalid reset dates do not invent a compact caption or timezone', () => {
+  for (const resetAt of [undefined, null, '', 'not-a-date']) {
+    const view = usageView({ resetAt });
+    assert.equal(view.reset, '');
+    assert.equal(view.resetCompact, '');
+  }
+});
 test('unknown quota never becomes genuine zero', () => {
   assert.equal(usageView({ usedPercent: null }).hasPercent, false);
   assert.equal(usageView({ usedPercent: 0 }).amount, '0% used');

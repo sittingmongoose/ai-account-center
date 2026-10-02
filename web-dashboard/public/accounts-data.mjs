@@ -13,7 +13,15 @@ export function timeLabel(value, prefix) {
   if (typeof value !== 'string' || !value) return '';
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
-  return `${prefix} ${date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+  return `${prefix} ${date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(prefix === 'Resets' ? { timeZoneName: 'short' } : {}) })}`;
+}
+function compactResetLabel(value) {
+  if (typeof value !== 'string' || !value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  return `Resets ${day}\n${time}`;
 }
 const number = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
 export function usageView(window = {}, percentageOnly = false, includeRemaining = true) {
@@ -31,6 +39,7 @@ export function usageView(window = {}, percentageOnly = false, includeRemaining 
     amount: percentageOnly ? (hasPercent ? `${number(p)}% used` : 'Usage unavailable') : parts.length ? parts.join(' · ') + (hasPercent ? ` · ${number(p)}% used` : '') : hasPercent ? `${number(p)}% used` : state || 'Usage unavailable',
     percent: hasPercent ? p : 0, hasPercent,
     reset: timeLabel(window.resetAt, 'Resets'),
+    resetCompact: compactResetLabel(window.resetAt),
     expiration: timeLabel(window.expiresAt, 'Expires'), meta,
   };
 }
