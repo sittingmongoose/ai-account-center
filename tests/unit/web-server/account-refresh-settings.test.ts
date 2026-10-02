@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -9,12 +9,28 @@ import {
   writeAccountRefreshSettings,
 } from '../../../src/web-server/services/account-refresh-settings';
 import { createAccountRefreshSettingsRouter } from '../../../src/web-server/routes/account-refresh-settings-routes';
+import {
+  clearRecentLogEntries,
+  getRecentLogEntries,
+} from '../../../src/services/logging/log-buffer';
+import { invalidateLoggingConfigCache } from '../../../src/services/logging/log-config';
 
 const temporaryDirs: string[] = [];
+const originalCcsHome = process.env.CCS_HOME;
 let server: Server | undefined;
+beforeEach(() => {
+  // Corrupt-settings warnings reach the structured log under CCS_HOME; keep it temporary.
+  process.env.CCS_HOME = directory();
+  clearRecentLogEntries();
+  invalidateLoggingConfigCache();
+});
 afterEach(async () => {
   if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
   server = undefined;
+  if (originalCcsHome === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = originalCcsHome;
+  clearRecentLogEntries();
+  invalidateLoggingConfigCache();
   for (const directory of temporaryDirs.splice(0)) fs.rmSync(directory, { recursive: true });
 });
 
@@ -49,6 +65,75 @@ describe('account usage refresh settings', () => {
     writeAccountRefreshSettings({ refreshIntervalSeconds: 120 }, dir);
     expect(JSON.parse(fs.readFileSync(target, 'utf8')).refreshIntervalSeconds).toBe(30);
     expect(readAccountRefreshSettings(dir).refreshIntervalSeconds).toBe(120);
+  });
+
+  it('saves valid JSON at mode 0600 and fsyncs the file and, except on win32, the folder', () => {
+    const dir = directory();
+    const synced: string[] = [];
+    const originalFsync = fs.fsyncSync;
+    const hook = spyOn(fs, 'fsyncSync').mockImplementation((descriptor) => {
+      originalFsync(descriptor);
+      synced.push(fs.fstatSync(descriptor).isDirectory() ? 'folder' : 'file');
+    });
+    try {
+      writeAccountRefreshSettings({ refreshIntervalSeconds: 300 }, dir);
+    } finally {
+      hook.mockRestore();
+    }
+    const file = path.join(dir, 'account-refresh-settings.json');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ refreshIntervalSeconds: 300 });
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(synced).toEqual(process.platform === 'win32' ? ['file'] : ['file', 'folder']);
+  });
+
+  it('a crash between the temporary write and the rename leaves the saved settings intact', () => {
+    const dir = directory();
+    writeAccountRefreshSettings({ refreshIntervalSeconds: 300 }, dir);
+    const file = path.join(dir, 'account-refresh-settings.json');
+    const hook = spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('simulated power loss'), { code: 'EIO' });
+    });
+    try {
+      expect(() => writeAccountRefreshSettings({ refreshIntervalSeconds: 900 }, dir)).toThrow(
+        'simulated power loss'
+      );
+    } finally {
+      hook.mockRestore();
+    }
+    expect(fs.readFileSync(file, 'utf8')).toBe('{"refreshIntervalSeconds":300}\n');
+    expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 300 });
+    expect(fs.readdirSync(dir)).toEqual(['account-refresh-settings.json']);
+  });
+
+  it('an empty or truncated file falls back to the default with one warning and stays in place', () => {
+    for (const contents of ['', '{"refreshIntervalSeconds":999']) {
+      const dir = directory();
+      const file = path.join(dir, 'account-refresh-settings.json');
+      fs.writeFileSync(file, contents);
+      clearRecentLogEntries();
+      expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 60 });
+      expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 60 });
+      const [warning] = getRecentLogEntries().filter((entry) => entry.level === 'warn');
+      expect(warning).toBeDefined();
+      expect(getRecentLogEntries().filter((entry) => entry.level === 'warn').length).toBe(1);
+      const logged = JSON.stringify(warning);
+      expect(logged).not.toContain('999');
+      expect(logged).not.toContain(dir);
+      expect(fs.readFileSync(file, 'utf8')).toBe(contents);
+      writeAccountRefreshSettings({ refreshIntervalSeconds: 120 }, dir);
+      expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 120 });
+    }
+  });
+
+  it('ignores a leftover temporary file and removes it on the next successful save', () => {
+    const dir = directory();
+    const leftover = path.join(dir, `account-refresh-settings.json.${'ab'.repeat(12)}.tmp`);
+    fs.writeFileSync(leftover, '{"refreshIntervalSeconds":900');
+    expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 60 });
+    expect(fs.existsSync(leftover)).toBe(true);
+    writeAccountRefreshSettings({ refreshIntervalSeconds: 120 }, dir);
+    expect(fs.readdirSync(dir)).toEqual(['account-refresh-settings.json']);
+    expect(readAccountRefreshSettings(dir)).toEqual({ refreshIntervalSeconds: 120 });
   });
 
   it('requires a session and same origin; rejects unsafe bounds and returns only persisted values', async () => {
