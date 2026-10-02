@@ -34,6 +34,8 @@ let analyticsPayload = null;
 let analyticsModel = null;
 let analyticsGeneration = 0;
 let openDetailsId = '';
+// Counts Details opens, so a click outside the panel can tell a row click (which opens that row) from any other.
+let detailsOpens = 0;
 // Sign-in: the session length from GET /api/auth/setup, and what the first-run form may do.
 let sessionHours = 24;
 let setupInfo = { form: false, codeRequired: false };
@@ -139,6 +141,28 @@ function renderDetails(id) {
   show_details(JSON.stringify(view));
 }
 function pendingActivation() { return activationConfirmation.hasPending() || antigravityConfirmation.hasPending(); }
+/** The slide-over's left edge: SlideOver.panel-w in ui/components/slide-over.slint is clamp(30%, 420, 580) px. */
+function detailsPanelLeft() { return innerWidth - Math.min(580, Math.max(420, innerWidth * 0.3)); }
+/**
+ * Details closes on a click anywhere outside its panel (ROUND2). Slint's own background areas only see clicks
+ * that nothing else takes, so a header button, a nested row action or an Analytics card would leave it open.
+ * A click on another row opens that row instead: its `details` action arrives while Slint handles the click,
+ * before the timeout below runs. A pending switch confirmation keeps Details as it is.
+ */
+function closeDetailsOnOutsideClicks(canvas) {
+  if (typeof canvas?.addEventListener !== 'function') return;
+  let pressed = null;
+  canvas.addEventListener('pointerdown', event => {
+    pressed = openDetailsId && event.button === 0 && event.clientX < detailsPanelLeft() && !pendingActivation() ? detailsOpens : null;
+  }, true);
+  canvas.addEventListener('pointerup', () => {
+    const opens = pressed; pressed = null;
+    if (opens === null) return;
+    setTimeout(() => {
+      if (openDetailsId && detailsOpens === opens && !pendingActivation()) { openDetailsId = ''; close_details(); }
+    }, 0);
+  }, true);
+}
 
 const activationConfirmation = createActivationConfirmation({
   activate: (target, body) => mutation(`/api/codex/profiles/${encodeURIComponent(target)}/activate`, body),
@@ -485,7 +509,7 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'accounts' || action === 'settings') { navigate('accounts'); return; }
     if (action.startsWith('analytics-')) { if (authenticated) await analyticsAction(action, value); return; }
     if (action === 'theme') { saveTheme(value); return; }
-    if (action === 'details') { renderDetails(value); return; }
+    if (action === 'details') { detailsOpens++; renderDetails(value); return; }
     if (action === 'details-closed') { openDetailsId = ''; return; }
     if (action === 'login') { await signIn(value); return; }
     if (action === 'setup') { await createSignIn(value); return; }
@@ -635,6 +659,7 @@ try {
   set_current_page(currentPage);
   const resize = () => resize_dashboard(innerWidth, innerHeight);
   addEventListener('resize', resize); resize();
+  closeDetailsOnOutsideClicks(document.querySelector('#canvas'));
   addEventListener('popstate', () => {
     currentPage = pageFromLocation(); set_current_page(currentPage);
     if (currentPage === 'analytics' && authenticated) void refreshAnalytics();

@@ -69,12 +69,14 @@ component Motif inherits Rectangle {
                 stroke-width: ring.idx ? 1.35px : 1px;
                 animate stroke { duration: Motion.tint(Motion.slow); }
             }
+            // the concept's SVG labels are 11 units in a 640 x 560 viewbox, so they scale with the map (never
+            // below 11 px); the baseline sits 3.8 units below the label point (Martian Mono's ascent is 1 em)
             if ring.label != "": Text {
                 x: ring.lx * root.k * 1px - self.preferred-width / 2;
-                y: ring.ly * root.k * 1px - 11px;
+                y: (ring.ly + 3.8) * root.k * 1px - self.font-size;
                 text: ring.label;
                 font-family: Type.mono;
-                font-size: Type.caption;
+                font-size: max(Type.caption, 11px * root.k);
                 color: Theme.ink-4;
             }
         }
@@ -147,12 +149,13 @@ component Motif inherits Rectangle {
                 background: @linear-gradient(90deg, root.apex-a.with-alpha(0) 0%, root.apex-a.with-alpha(0.85) 60%, root.apex-b 100%);
             }
         }
+        // baselines 24 viewbox units below the bar's top, like the concept's scale labels
         for k in 5: Text {
             x: k * scalebar.width / 4 - self.preferred-width / 2;
-            y: scalebar.height + 10px * root.k;
+            y: 24px * root.k - self.font-size;
             text: k * 25;
             font-family: Type.mono;
-            font-size: Type.caption;
+            font-size: max(Type.caption, 11px * root.k);
             color: Theme.ink-3;
         }
     }

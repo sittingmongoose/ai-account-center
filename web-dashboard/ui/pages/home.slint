@@ -940,14 +940,16 @@ export component AccountSection inherits Plate {
             preferred-height: colhead.preferred-height;
             Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
             Rectangle { y: parent.height - 1px; height: 1px; background: Theme.rule-2; }
+            // the concept's .colhead: 8 px padding inside its two hairlines and an 11 px line at line-height 1.35
             colhead := HorizontalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
-                padding-top: 8px;
-                padding-bottom: 8px;
+                padding-top: 9px;
+                padding-bottom: 9px;
                 spacing: root.gap;
-                Caps { width: root.ident-w; text: "ACCOUNT"; vertical-alignment: bottom; }
+                Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
                 for col in root.section.columns: Caps {
+                    min-height: 15px;
                     min-width: 108px;
                     preferred-width: 108px;
                     horizontal-stretch: 1;
@@ -1057,12 +1059,14 @@ export component AccountSection inherits Plate {
             min-height: foot.min-height;
             preferred-height: foot.preferred-height;
             Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
+            // the concept's .plate-foot: 12 px padding under its 1 px rule around a 12.5 px line at 1.45
             foot := HorizontalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
-                padding-top: 12px;
+                padding-top: 13px;
                 padding-bottom: 12px;
                 spacing: 9px;
+                min-height: 13px + 18px + 12px;
                 VerticalLayout {
                     alignment: center;
                     horizontal-stretch: 0;
@@ -1109,6 +1113,8 @@ export component DashedRule inherits Rectangle {
     }
 }
 
+// The concept's .amount: 7 px padding, an 18 px line (12.5 px at 1.45) and the sub line 6 px under it (its
+// 8 px row gap less the sub's -2 px margin).
 export component AmountLine inherits VerticalLayout {
     in property <AmountView> amount;
     in property <bool> rule-above;
@@ -1116,8 +1122,9 @@ export component AmountLine inherits VerticalLayout {
     if root.rule-above: DashedRule { }
     HorizontalLayout {
         padding-top: 7px;
-        padding-bottom: root.amount.sub != "" ? 2px : 7px;
+        padding-bottom: root.amount.sub != "" ? 6px : 7px;
         spacing: 8px;
+        min-height: 18px + 7px + (root.amount.sub != "" ? 6px : 7px);
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
@@ -1154,7 +1161,7 @@ export component AmountLine inherits VerticalLayout {
     if root.amount.sub != "": HorizontalLayout {
         padding-left: 26px;
         padding-bottom: 7px;
-        Text { text: root.amount.sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+        Text { min-height: 17.5px; vertical-alignment: center; text: root.amount.sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
     }
 }
 
@@ -1296,17 +1303,19 @@ export component ProviderCard inherits Card {
     }
     Rectangle { height: 14px; }
     Rectangle { height: 1px; background: Theme.rule-2; }
+    // the concept's .pcard-foot: 11 px over a 12 px line at 1.45
     HorizontalLayout {
         padding-top: 11px;
         spacing: 8px;
+        min-height: 11px + 17.5px;
         HorizontalLayout {
             horizontal-stretch: 1;
             spacing: 0px;
-            if root.card.flag != "": Text { text: root.card.flag; font-size: Type.small; font-weight: 600; color: Theme.warn-text; horizontal-stretch: 0; }
-            if root.card.flag != "": Text { text: " · "; font-size: Type.small; color: Theme.ink-3; horizontal-stretch: 0; }
-            Text { text: root.card.sampled; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; overflow: elide; horizontal-stretch: 1; }
+            if root.card.flag != "": Text { text: root.card.flag; font-size: Type.small; font-weight: 600; color: Theme.warn-text; horizontal-stretch: 0; vertical-alignment: center; }
+            if root.card.flag != "": Text { text: " · "; font-size: Type.small; color: Theme.ink-3; horizontal-stretch: 0; vertical-alignment: center; }
+            Text { text: root.card.sampled; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
         }
-        Text { text: root.card.platform; font-size: Type.small; color: Theme.ink-3; horizontal-stretch: 0; }
+        Text { text: root.card.platform; font-size: Type.small; color: Theme.ink-3; horizontal-stretch: 0; vertical-alignment: center; }
     }
 }
 

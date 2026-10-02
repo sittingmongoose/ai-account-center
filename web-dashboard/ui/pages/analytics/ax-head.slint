@@ -7,6 +7,7 @@ import { Hover } from "../../components/hover-card.slint";
 import { IconButton } from "../../components/icon-button.slint";
 import { Button } from "../../components/button.slint";
 import { Caps } from "../../components/text.slint";
+import { HoverShadow } from "../../components/card.slint";
 import { AxData, AxKpi, AxDay } from "ax-data.slint";
 import { AxColor, AxNum, AxTip, AxSwatch, AxSeg, AxSegItem, AxInfo } from "ax-common.slint";
 
@@ -286,6 +287,16 @@ component KpiCard inherits Rectangle {
     min-height: col.min-height;
     preferred-height: col.preferred-height;
     min-width: 0px;
+    HoverShadow {
+        x: 0px;
+        y: surface.y;
+        width: root.width;
+        height: root.height;
+        radius: Theme.r-plate;
+        on: root.hovered;
+        blur: 24px;
+        offset: 8px;
+    }
     surface := Rectangle {
         x: 0px;
         y: root.hovered ? -2px : 0px;
@@ -297,11 +308,11 @@ component KpiCard inherits Rectangle {
         border-width: 1px;
         border-color: root.hovered ? Theme.rule-strong : Theme.rule;
         animate border-color { duration: Motion.tint(Motion.med); }
-        drop-shadow-color: root.hovered ? Theme.shadow-2 : Theme.shadow-1;
-        drop-shadow-blur: root.hovered ? 24px : 3px;
-        drop-shadow-offset-y: root.hovered ? 8px : 1px;
-        animate drop-shadow-blur, drop-shadow-offset-y, drop-shadow-color { duration: Motion.tint(Motion.on ? Motion.med : 0ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
         ta := TouchArea {
+            cache-rendering-hint: true;
             mouse-cursor: default;
             col := VerticalLayout {
                 padding-left: 18px;

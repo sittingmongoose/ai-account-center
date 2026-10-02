@@ -161,10 +161,12 @@ export component AcRowItem inherits Rectangle {
             ta := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.open-details(root.item.id); }
+                // the concept's .acc-row: 11 px padding under its 1 px rule, 13.5 px and 12 px lines at
+                // line-height 1.45 with 1 px between them (a 61 px row pitch)
                 row-layout := HorizontalLayout {
                     padding-left: 18px;
                     padding-right: 18px;
-                    padding-top: 11px;
+                    padding-top: 12px;
                     padding-bottom: 11px;
                     spacing: 16px;
                     VerticalLayout {
@@ -173,6 +175,8 @@ export component AcRowItem inherits Rectangle {
                         min-width: 180px;
                         spacing: 1px;
                         Text {
+                            min-height: 19.5px;
+                            vertical-alignment: center;
                             text: root.item.email;
                             font-size: Type.body;
                             font-weight: root.is-active ? 640 : 520;
@@ -180,6 +184,8 @@ export component AcRowItem inherits Rectangle {
                             overflow: elide;
                         }
                         Text {
+                            min-height: 17.5px;
+                            vertical-alignment: center;
                             text: root.item.meta + (root.show-src ? "" : (root.item.meta != "" ? " · " : "") + root.item.src-inline);
                             font-size: Type.small;
                             color: Theme.ink-3;
@@ -190,8 +196,10 @@ export component AcRowItem inherits Rectangle {
                         alignment: center;
                         horizontal-stretch: 0.7;
                         min-width: 110px;
-                        spacing: 1px;
+                        spacing: 0px;
                         if root.item.status != "": Text {
+                            min-height: 18px;
+                            vertical-alignment: center;
                             text: root.item.status;
                             font-size: 12.5px;
                             font-weight: 620;
@@ -199,6 +207,8 @@ export component AcRowItem inherits Rectangle {
                             overflow: elide;
                         }
                         Text {
+                            min-height: 17.5px;
+                            vertical-alignment: center;
                             text: root.item.sampled;
                             font-family: Type.tab;
                             font-size: Type.small;
@@ -210,9 +220,9 @@ export component AcRowItem inherits Rectangle {
                         alignment: center;
                         horizontal-stretch: 1;
                         min-width: 140px;
-                        spacing: 1px;
-                        Text { text: root.item.src; font-size: 12.5px; color: Theme.ink-2; overflow: elide; }
-                        Text { text: root.item.src-sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                        spacing: 0px;
+                        Text { min-height: 18px; vertical-alignment: center; text: root.item.src; font-size: 12.5px; color: Theme.ink-2; overflow: elide; }
+                        Text { min-height: 17.5px; vertical-alignment: center; text: root.item.src-sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
                     }
                     acts := HorizontalLayout {
                         width: root.acts-w;
@@ -446,7 +456,8 @@ component SectionFoot inherits Rectangle {
     callback act(string, string);
     property <bool> any-coming: root.provider.foot.length > 0;
     property <length> text-w: max(160px, root.width - 36px - 15px - 8px - 14px - btns.preferred-width);
-    min-height: max(how.preferred-height, 28px) + 24px;
+    // the concept's .prov-foot: its 1 px rule, 11 px above and 13 px below the 28 px controls
+    min-height: max(how.preferred-height, 28px) + 25px;
     preferred-height: self.min-height;
     Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
     Icon {
@@ -526,10 +537,12 @@ export component ProviderSection inherits Plate {
 
     body := VerticalLayout {
         spacing: 0px;
+        // the concept's .prov-head: 15 / 13 px padding inside the plate's 1 px border, a 16 px title and a
+        // 12.5 px kind line at line-height 1.45
         HorizontalLayout {
             padding-left: 18px;
             padding-right: 18px;
-            padding-top: 15px;
+            padding-top: 16px;
             padding-bottom: 13px;
             spacing: 12px;
             VerticalLayout {
@@ -540,10 +553,12 @@ export component ProviderSection inherits Plate {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 1;
-                spacing: 1px;
+                spacing: 0px;
                 opacity: root.provider.visible ? 1 : 0.55;
                 animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
                 Text {
+                    min-height: 23px;
+                    vertical-alignment: center;
                     text: root.provider.label;
                     font-size: 16px;
                     font-weight: 640;
@@ -553,6 +568,7 @@ export component ProviderSection inherits Plate {
                 HorizontalLayout {
                     spacing: 6px;
                     alignment: start;
+                    min-height: 18px;
                     VerticalLayout { alignment: center; Icon { name: root.provider.kind-icon; tint: Theme.ink-3; width: 15px; height: 15px; } }
                     Text {
                         text: root.provider.kind-label + " · " + root.provider.count-text;

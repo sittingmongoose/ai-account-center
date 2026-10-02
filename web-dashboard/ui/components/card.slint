@@ -14,7 +14,34 @@ export component Plate inherits Rectangle {
     drop-shadow-blur: 3px;
     drop-shadow-offset-y: 1px;
     clip: false;
-    @children
+    // Static content renders into a cached layer (cache-rendering-hint): a frame that leaves the section as it
+    // is (scrolling, the slide-over, a page fade, a hover elsewhere) draws one texture instead of re-laying out
+    // its text, meters and icons. Anything that changes inside it re-renders the layer for that frame only.
+    content := Rectangle {
+        cache-rendering-hint: true;
+        @children
+    }
+}
+
+// The hover shadow. Animating a drop shadow's blur, offset or colour makes the renderer blur a new shadow
+// texture on every frame (with a GPU sync each time: 0.1-0.3 s a frame on the VM's SwiftShader for a wide card),
+// so surfaces keep a static small shadow and this second, static large one fades in behind them instead.
+export component HoverShadow inherits Rectangle {
+    in property <bool> on;
+    in property <length> radius;
+    in property <length> blur: 28px;
+    in property <length> offset: 12px;
+    Rectangle {
+        width: root.width;
+        height: root.height;
+        border-radius: root.radius;
+        drop-shadow-color: Theme.shadow-2;
+        drop-shadow-blur: root.blur;
+        drop-shadow-offset-y: root.offset;
+        opacity: root.on ? 1 : 0;
+        visible: self.opacity > 0.005;
+        animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    }
 }
 
 export component Card inherits Rectangle {
@@ -27,10 +54,20 @@ export component Card inherits Rectangle {
     out property <bool> hovered: ta.has-hover;
     callback clicked();
 
-    min-height: body.min-height + root.pad-top + root.pad-bottom;
-    preferred-height: body.preferred-height + root.pad-top + root.pad-bottom;
-    min-width: body.min-width + 2 * root.pad;
+    // body already carries the paddings: adding them again made every card 28 px taller than its content and
+    // spread the extra inside it (looser meters and amounts than the concept's .pcard)
+    min-height: body.min-height;
+    preferred-height: body.preferred-height;
+    min-width: body.min-width;
 
+    HoverShadow {
+        x: 0px;
+        y: surface.y;
+        width: root.width;
+        height: root.height;
+        radius: Theme.r-card;
+        on: root.hovered && root.clickable;
+    }
     surface := Rectangle {
         x: 0px;
         y: root.hovered && root.clickable ? -2px : 0px;
@@ -44,12 +81,13 @@ export component Card inherits Rectangle {
         // a flash lands at once and fades back over 620 ms
         animate background { duration: Motion.tint(root.flash ? 0ms : 620ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate border-color { duration: Motion.tint(Motion.fast); }
-        drop-shadow-color: root.hovered && root.clickable ? Theme.shadow-2 : Theme.shadow-1;
-        drop-shadow-blur: root.hovered && root.clickable ? 28px : 3px;
-        drop-shadow-offset-y: root.hovered && root.clickable ? 12px : 1px;
-        animate drop-shadow-blur, drop-shadow-offset-y, drop-shadow-color { duration: Motion.tint(Motion.on ? Motion.med : 0ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
         // The body is a child of the TouchArea so hovering a nested meter or button keeps the card lifted.
         ta := TouchArea {
+            // the card body is a cached layer (see Plate); the surface's own hover lift and shadow stay outside it
+            cache-rendering-hint: true;
             enabled: root.clickable;
             mouse-cursor: root.clickable ? pointer : default;
             clicked => { root.clicked(); }

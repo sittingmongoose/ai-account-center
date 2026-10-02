@@ -284,140 +284,150 @@ component Header inherits Rectangle {
             NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
         }
         Rectangle { horizontal-stretch: 1; }
-        status := Rectangle {
+        // the concept's .chrome-right: the status line and the controls 8 px apart (the bar keeps 24 px between
+        // the brand, the nav and this group)
+        right := HorizontalLayout {
             horizontal-stretch: 0;
-            min-width: status-row.preferred-width;
-            status-row := HorizontalLayout {
-                spacing: 4px;
-                Text {
-                    text: root.chrome.status-lead;
-                    font-family: Type.tab;
-                    font-size: 12.5px;
-                    color: Theme.ink-3;
-                    vertical-alignment: center;
+            spacing: 8px;
+            status := Rectangle {
+                horizontal-stretch: 0;
+                // the concept's .status-line keeps 6 px more room before the refresh button
+                min-width: status-row.preferred-width + 6px;
+                status-row := HorizontalLayout {
+                    x: 0px;
+                    width: self.preferred-width;
+                    spacing: 4px;
+                    Text {
+                        text: root.chrome.status-lead;
+                        font-family: Type.tab;
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                    }
+                    if root.chrome.status-strong != "": Text {
+                        text: root.chrome.status-strong;
+                        font-family: Type.tab;
+                        font-size: 12.5px;
+                        font-weight: 580;
+                        color: Theme.ink-2;
+                        vertical-alignment: center;
+                    }
+                    if root.chrome.status-more != "" && Breakpoints.width >= 1440px: Text {
+                        text: "· " + root.chrome.status-more;
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                    }
                 }
-                if root.chrome.status-strong != "": Text {
-                    text: root.chrome.status-strong;
-                    font-family: Type.tab;
-                    font-size: 12.5px;
-                    font-weight: 580;
-                    color: Theme.ink-2;
-                    vertical-alignment: center;
-                }
-                if root.chrome.status-more != "" && Breakpoints.width >= 1440px: Text {
-                    text: "· " + root.chrome.status-more;
-                    font-size: 12.5px;
-                    color: Theme.ink-3;
-                    vertical-alignment: center;
-                }
-            }
-            TouchArea {
-                changed has-hover => {
-                    if self.has-hover {
-                        Hover.tip("status", self.absolute-position, self.width, self.height, root.chrome.status-tip);
-                    } else {
-                        Hover.leave("status");
+                TouchArea {
+                    changed has-hover => {
+                        if self.has-hover {
+                            Hover.tip("status", self.absolute-position, self.width, self.height, root.chrome.status-tip);
+                        } else {
+                            Hover.leave("status");
+                        }
                     }
                 }
             }
-        }
-        VerticalLayout {
-            alignment: center;
-            IconButton {
-                icon: "refresh";
-                hint: "Refresh usage now";
-                spinning: root.chrome.refreshing;
-                enabled: !root.busy || root.chrome.refreshing;
-                clicked => { root.refresh(); }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: "refresh";
+                    hint: "Refresh usage now";
+                    spinning: root.chrome.refreshing;
+                    enabled: !root.busy || root.chrome.refreshing;
+                    clicked => { root.refresh(); }
+                }
             }
-        }
-        VerticalLayout {
-            alignment: center;
-            UpdateButton {
-                data: root.update;
-                enabled: !root.busy;
-                clicked => { root.update-apps(); }
+            VerticalLayout {
+                alignment: center;
+                UpdateButton {
+                    data: root.update;
+                    enabled: !root.busy;
+                    clicked => { root.update-apps(); }
+                }
             }
-        }
-        VerticalLayout {
-            alignment: center;
-            Rectangle { width: 1px; height: 22px; background: Theme.rule; }
-        }
-        theme-anchor := Rectangle {
-            width: theme-btn.width;
-            theme-btn := IconButton {
-                y: (parent.height - self.height) / 2;
-                icon: Theme.mode == 1 ? "sun" : Theme.mode == 2 ? "moon" : "monitor";
-                chevron: true;
-                hint: "Appearance";
-                pressed-look: theme-pop.is-open;
-                clicked => { theme-pop.show(); }
+            // .chrome-sep: a 22 px hairline with 4 px on each side
+            Rectangle {
+                width: 9px;
+                Rectangle { x: 4px; y: (parent.height - 22px) / 2; width: 1px; height: 22px; background: Theme.rule; }
             }
-            theme-pop := PopupWindow {
-                x: parent.width - 212px;
-                y: (parent.height + theme-btn.height) / 2 + 8px;
-                width: 212px;
-                height: 28px + 3 * 36px + 12px;
-                close-policy: close-on-click-outside;
-                MenuPanel {
+            theme-anchor := Rectangle {
+                width: theme-btn.width;
+                theme-btn := IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Theme.mode == 1 ? "sun" : Theme.mode == 2 ? "moon" : "monitor";
+                    chevron: true;
+                    hint: "Appearance";
+                    pressed-look: theme-pop.is-open;
+                    clicked => { theme-pop.show(); }
+                }
+                theme-pop := PopupWindow {
+                    x: parent.width - 212px;
+                    y: (parent.height + theme-btn.height) / 2 + 8px;
                     width: 212px;
                     height: 28px + 3 * 36px + 12px;
-                    MenuHead { text: "Appearance"; }
-                    MenuItem { icon: "sun"; text: "Light"; checked: Theme.mode == 1; activated => { theme-pop.close(); root.theme-picked(1); } }
-                    MenuItem { icon: "moon"; text: "Dark"; checked: Theme.mode == 2; activated => { theme-pop.close(); root.theme-picked(2); } }
-                    MenuItem { icon: "monitor"; text: "Auto, follows the system"; checked: Theme.mode == 0; activated => { theme-pop.close(); root.theme-picked(0); } }
+                    close-policy: close-on-click-outside;
+                    MenuPanel {
+                        width: 212px;
+                        height: 28px + 3 * 36px + 12px;
+                        MenuHead { text: "Appearance"; }
+                        MenuItem { icon: "sun"; text: "Light"; checked: Theme.mode == 1; activated => { theme-pop.close(); root.theme-picked(1); } }
+                        MenuItem { icon: "moon"; text: "Dark"; checked: Theme.mode == 2; activated => { theme-pop.close(); root.theme-picked(2); } }
+                        MenuItem { icon: "monitor"; text: "Auto, follows the system"; checked: Theme.mode == 0; activated => { theme-pop.close(); root.theme-picked(0); } }
+                    }
                 }
             }
-        }
-        account-anchor := Rectangle {
-            width: account-btn.width;
-            account-btn := IconButton {
-                y: (parent.height - self.height) / 2;
-                icon: "user";
-                chevron: true;
-                hint: "Signed-in user";
-                pressed-look: account-pop.is-open;
-                clicked => { account-pop.show(); }
-            }
-            account-pop := PopupWindow {
-                x: parent.width - 260px;
-                y: (parent.height + account-btn.height) / 2 + 8px;
-                width: 260px;
-                height: 70px + 13px + 36px + 12px;
-                close-policy: close-on-click-outside;
-                MenuPanel {
+            account-anchor := Rectangle {
+                width: account-btn.width;
+                account-btn := IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: "user";
+                    chevron: true;
+                    hint: "Signed-in user";
+                    pressed-look: account-pop.is-open;
+                    clicked => { account-pop.show(); }
+                }
+                account-pop := PopupWindow {
+                    x: parent.width - 260px;
+                    y: (parent.height + account-btn.height) / 2 + 8px;
                     width: 260px;
                     height: 70px + 13px + 36px + 12px;
-                    HorizontalLayout {
-                        height: 70px;
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        spacing: 11px;
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 32px;
-                                height: 32px;
-                                border-radius: 16px;
-                                border-width: 1px;
-                                border-color: Theme.rule;
-                                Icon { x: 6px; y: 6px; name: "user"; tint: Theme.ink-2; width: 20px; height: 20px; }
+                    close-policy: close-on-click-outside;
+                    MenuPanel {
+                        width: 260px;
+                        height: 70px + 13px + 36px + 12px;
+                        HorizontalLayout {
+                            height: 70px;
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 11px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    border-radius: 16px;
+                                    border-width: 1px;
+                                    border-color: Theme.rule;
+                                    Icon { x: 6px; y: 6px; name: "user"; tint: Theme.ink-2; width: 20px; height: 20px; }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                Text { text: root.chrome.username != "" ? root.chrome.username : "Owner"; font-size: 13.5px; font-weight: 640; color: Theme.ink; overflow: elide; }
+                                Text {
+                                    text: root.chrome.host != "" ? "Signed in to this dashboard on " + root.chrome.host : "Signed in to this dashboard";
+                                    font-size: Type.small;
+                                    color: Theme.ink-3;
+                                    wrap: word-wrap;
+                                }
                             }
                         }
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 1px;
-                            Text { text: root.chrome.username != "" ? root.chrome.username : "Owner"; font-size: 13.5px; font-weight: 640; color: Theme.ink; overflow: elide; }
-                            Text {
-                                text: root.chrome.host != "" ? "Signed in to this dashboard on " + root.chrome.host : "Signed in to this dashboard";
-                                font-size: Type.small;
-                                color: Theme.ink-3;
-                                wrap: word-wrap;
-                            }
-                        }
+                        MenuSeparator { }
+                        MenuItem { icon: "logout"; text: "Sign out"; activated => { account-pop.close(); root.sign-out(); } }
                     }
-                    MenuSeparator { }
-                    MenuItem { icon: "logout"; text: "Sign out"; activated => { account-pop.close(); root.sign-out(); } }
                 }
             }
         }
@@ -589,9 +599,11 @@ export component Dashboard inherits Window {
             return reject;
         }
 
+        // ~100 hairlines: a cached layer, redrawn only when the window resizes or the theme changes
         PaperGrid {
             width: root.width;
             height: root.height;
+            cache-rendering-hint: true;
         }
         // A click that nothing else takes (the header's empty space, the gaps between sections) closes
         // Details; a click on a row opens that row instead.

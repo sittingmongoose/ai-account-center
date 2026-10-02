@@ -1,6 +1,7 @@
 // Analytics building blocks: chart colours, count-up numbers, the card shell and head, swatches, the
 // switch, the segmented control with marks, readout rows, tips and the first-view reveal.
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { HoverShadow } from "../../components/card.slint";
 import { Icon } from "../../components/icon.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { Hover } from "../../components/hover-card.slint";
@@ -227,25 +228,43 @@ export component AxLegendEntry inherits HorizontalLayout {
 // A chart card: paper, hairline border, the small shadow; on hover the shadow grows and the border darkens.
 export component AxCard inherits Rectangle {
     in property <bool> hover-lift: true;
+    // Off for cards whose hover readout moves with the pointer: the readout's shadow changes the layer's bounds,
+    // and a resized layer costs a new texture and a GPU sync every frame (the trend card caches its plot itself).
+    in property <bool> cached: true;
     out property <bool> hovered: hover-ta.has-hover;
-    background: Theme.paper;
-    border-radius: Theme.r-plate;
-    border-width: 1px;
-    border-color: root.hovered && root.hover-lift ? Theme.rule-strong : Theme.rule;
-    animate border-color { duration: Motion.tint(Motion.med); }
-    drop-shadow-color: root.hovered && root.hover-lift ? Theme.shadow-2 : Theme.shadow-1;
-    drop-shadow-blur: root.hovered && root.hover-lift ? 24px : 3px;
-    drop-shadow-offset-y: root.hovered && root.hover-lift ? 8px : 1px;
-    animate drop-shadow-blur, drop-shadow-offset-y, drop-shadow-color { duration: Motion.tint(Motion.on ? Motion.med : 0ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     min-height: body.min-height;
     preferred-height: body.preferred-height;
     min-width: body.min-width;
-    // The content sits inside the hover area so nested rows and buttons keep the card's hover.
-    hover-ta := TouchArea {
-        mouse-cursor: default;
-        body := VerticalLayout {
-            spacing: 0px;
-            @children
+    // a static large shadow fades in on hover (HoverShadow) instead of re-blurring this one every frame
+    HoverShadow {
+        width: root.width;
+        height: root.height;
+        radius: Theme.r-plate;
+        on: root.hovered && root.hover-lift;
+        blur: 24px;
+        offset: 8px;
+    }
+    surface := Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Theme.paper;
+        border-radius: Theme.r-plate;
+        border-width: 1px;
+        border-color: root.hovered && root.hover-lift ? Theme.rule-strong : Theme.rule;
+        animate border-color { duration: Motion.tint(Motion.med); }
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
+        // The content sits inside the hover area so nested rows and buttons keep the card's hover.
+        hover-ta := TouchArea {
+            // the card's content is a cached layer: it re-renders only while something inside it changes (a
+            // reveal, a morph, a hover tint), so scrolling and the slide-over do not redraw every chart
+            cache-rendering-hint: root.cached;
+            mouse-cursor: default;
+            body := VerticalLayout {
+                spacing: 0px;
+                @children
+            }
         }
     }
 }

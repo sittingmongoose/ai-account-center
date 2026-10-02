@@ -67,11 +67,13 @@ export component DetailsPanel inherits Rectangle {
             VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: 3px;
-                Text { text: root.data.title; font-size: 18px; font-weight: 640; letter-spacing: -0.18px; color: Theme.ink; overflow: elide; }
+                // the concept's .so-head lines: 18 px and 12.5 px at line-height 1.45
+                Text { min-height: 26px; vertical-alignment: center; text: root.data.title; font-size: 18px; font-weight: 640; letter-spacing: -0.18px; color: Theme.ink; overflow: elide; }
                 // "Codex · Pro · Active on Ubuntu", the active state with the same check-circle the rows use
                 HorizontalLayout {
                     spacing: 0px;
                     alignment: start;
+                    min-height: 18px;
                     Text {
                         text: root.data.sub-lead != "" ? root.data.sub-lead + " · " : "";
                         font-size: 12.5px;
@@ -128,13 +130,17 @@ export component DetailsPanel inherits Rectangle {
                     padding-top: 16px;
                     padding-bottom: 16px;
                     spacing: 12px;
-                    Caps { text: "USAGE WINDOWS · " + root.data.meter-count; }
-                    for m[i] in root.data.meters: Meter {
-                        data: m;
-                        show-label: true;
-                        played: root.open;
-                        delay: (240 + i * 40) * 1ms;
-                        owner-label: root.data.title;
+                    // the concept's .so-sec: an 11 px caption line at 1.45, 12 px under it, meters 18 px apart
+                    Caps { min-height: 16px; text: "USAGE WINDOWS · " + root.data.meter-count; }
+                    if root.data.meter-count > 0: VerticalLayout {
+                        spacing: 18px;
+                        for m[i] in root.data.meters: Meter {
+                            data: m;
+                            show-label: true;
+                            played: root.open;
+                            delay: (240 + i * 40) * 1ms;
+                            owner-label: root.data.title;
+                        }
                     }
                     if root.data.meter-count == 0: Text {
                         text: "No usage windows reported yet.";
@@ -156,8 +162,8 @@ export component DetailsPanel inherits Rectangle {
                     padding-top: 16px;
                     padding-bottom: 16px;
                     spacing: 0px;
-                    Caps { text: "BALANCES, PACKS AND CREDITS · " + root.data.amount-count; }
-                    Rectangle { height: 8px; }
+                    Caps { min-height: 16px; text: "BALANCES, PACKS AND CREDITS · " + root.data.amount-count; }
+                    Rectangle { height: 12px; }
                     for a[k] in root.data.amounts: AmountLine { amount: a; rule-above: k > 0; }
                 }
             }
@@ -168,19 +174,22 @@ export component DetailsPanel inherits Rectangle {
                 VerticalLayout {
                     padding-top: 16px;
                     padding-bottom: 16px;
-                    spacing: 8px;
-                    Caps { text: "READING"; }
-                    for f in root.data.facts: HorizontalLayout {
-                        spacing: 12px;
-                        Text { text: f.label; width: 110px; min-height: 19px; font-size: 13px; color: Theme.ink-3; }
-                        Text {
-                            min-height: 19px;
-                            text: f.value;
-                            font-family: f.mono ? Type.mono : Type.tab;
-                            font-size: f.mono ? 12px : 13px;
-                            color: Theme.ink;
-                            wrap: word-wrap;
-                            horizontal-stretch: 1;
+                    spacing: 12px;
+                    Caps { min-height: 16px; text: "READING"; }
+                    VerticalLayout {
+                        spacing: 8px;
+                        for f in root.data.facts: HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: f.label; width: 110px; min-height: 19px; font-size: 13px; color: Theme.ink-3; }
+                            Text {
+                                min-height: 19px;
+                                text: f.value;
+                                font-family: f.mono ? Type.mono : Type.tab;
+                                font-size: f.mono ? 12px : 13px;
+                                color: Theme.ink;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
                         }
                     }
                 }

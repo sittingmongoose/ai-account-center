@@ -107,162 +107,177 @@ component TrendChart inherits Rectangle {
         AxData.layout("trend", root.width, root.height);
     }
 
-    if root.fade < 1: TrendAxes {
+    // ---- the data, drawn on through a clip ----
+    property <length> clip-w: root.played || !Motion.on ? root.width : 0px;
+    animate clip-w { duration: Motion.on ? Motion.draw : 0ms; delay: Motion.on ? root.delay : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    // Axes, gridlines and the data paths sit in one cached layer: a crosshair move or a hover elsewhere blits
+    // it instead of parsing and tessellating the eleven long path strings again (about 280 ms a frame on the
+    // VM's SwiftShader). It re-renders while the paths morph, the axes cross-fade or the draw-on clip moves.
+    chart-layer := Rectangle {
+        x: 0px;
+        y: 0px;
         width: root.width;
         height: root.height;
-        opacity: 1 - root.fade;
-        y-ticks: root.old-y;
-        x-ticks: root.old-x;
-        pw: root.pw;
-        ph: root.ph;
-        sx: root.sx;
-        sy: root.sy;
-        cost-shown: AxData.trend.cost-shown;
-    }
-    TrendAxes {
-        width: root.width;
-        height: root.height;
-        opacity: root.fade;
-        y-ticks: root.cur-y;
-        x-ticks: root.cur-x;
-        pw: root.pw;
-        ph: root.ph;
-        sx: root.sx;
-        sy: root.sy;
-        cost-shown: AxData.trend.cost-shown;
-    }
-    // minor x gridlines (dashed)
-    Path {
-        x: AxTrendPad.l;
-        y: AxTrendPad.t;
-        width: root.pw;
-        height: root.ph;
-        viewbox-width: max(1, AxData.trend.pw);
-        viewbox-height: max(1, AxData.trend.ph);
-        fit: fill;
-        commands: AxData.trend.minor;
-        stroke: Theme.grid;
-        stroke-width: 1px;
-        opacity: root.fade;
-    }
-    // logs that are not read yet: a hatched tail after the last read, never drawn as zero
-    if AxData.trend.tail-x >= 0: Rectangle {
-        x: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx;
-        y: AxTrendPad.t;
-        width: max(0px, root.pw - AxData.trend.tail-x * 1px * root.sx);
-        height: root.ph;
-        clip: true;
+        cache-rendering-hint: true;
+        if root.fade < 1: TrendAxes {
+            width: root.width;
+            height: root.height;
+            opacity: 1 - root.fade;
+            y-ticks: root.old-y;
+            x-ticks: root.old-x;
+            pw: root.pw;
+            ph: root.ph;
+            sx: root.sx;
+            sy: root.sy;
+            cost-shown: AxData.trend.cost-shown;
+        }
+        TrendAxes {
+            width: root.width;
+            height: root.height;
+            opacity: root.fade;
+            y-ticks: root.cur-y;
+            x-ticks: root.cur-x;
+            pw: root.pw;
+            ph: root.ph;
+            sx: root.sx;
+            sy: root.sy;
+            cost-shown: AxData.trend.cost-shown;
+        }
+        // minor x gridlines (dashed)
         Path {
-            x: -AxData.trend.tail-x * 1px * root.sx;
-            y: 0px;
+            x: AxTrendPad.l;
+            y: AxTrendPad.t;
             width: root.pw;
             height: root.ph;
             viewbox-width: max(1, AxData.trend.pw);
             viewbox-height: max(1, AxData.trend.ph);
             fit: fill;
-            commands: AxData.trend.hatch;
-            stroke: Theme.grid-strong;
-            stroke-width: 1.2px;
+            commands: AxData.trend.minor;
+            stroke: Theme.grid;
+            stroke-width: 1px;
+            opacity: root.fade;
         }
-    }
-    if AxData.trend.tail-x >= 0: Path {
-        x: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx;
-        y: AxTrendPad.t - 4px;
-        width: 1px;
-        height: root.ph + 4px;
-        viewbox-width: 1;
-        viewbox-height: 1;
-        fit: fill;
-        commands: "M0.5 0V0.04M0.5 0.08V0.12M0.5 0.16V0.2M0.5 0.24V0.28M0.5 0.32V0.36M0.5 0.4V0.44M0.5 0.48V0.52M0.5 0.56V0.6M0.5 0.64V0.68M0.5 0.72V0.76M0.5 0.8V0.84M0.5 0.88V0.92M0.5 0.96V1";
-        stroke: Theme.ink-3;
-        stroke-width: 1px;
-    }
-    if AxData.trend.tail-x >= 0: AxisLabel {
-        ax: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx - 6px;
-        baseline: AxTrendPad.t + 14px;
-        anchor: 2;
-        text: AxData.trend.tail-label;
-        letter-spacing: 0.55px;
-    }
-    if AxData.trend.clip-note != "": AxisLabel {
-        ax: AxTrendPad.l + 6px;
-        baseline: AxTrendPad.t + 14px;
-        text: AxData.trend.clip-note;
-        letter-spacing: 0.55px;
-    }
-
-    // ---- the data, drawn on through a clip ----
-    property <length> clip-w: root.played || !Motion.on ? root.width : 0px;
-    animate clip-w { duration: Motion.on ? Motion.draw : 0ms; delay: Motion.on ? root.delay : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-    clip := Rectangle {
-        x: 0px;
-        y: 0px;
-        width: min(root.width, root.clip-w);
-        height: root.height;
-        clip: true;
-        Rectangle {
-            x: AxTrendPad.l;
+        // logs that are not read yet: a hatched tail after the last read, never drawn as zero
+        if AxData.trend.tail-x >= 0: Rectangle {
+            x: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx;
             y: AxTrendPad.t;
-            width: root.pw;
+            width: max(0px, root.pw - AxData.trend.tail-x * 1px * root.sx);
             height: root.ph;
-            // total tokens: one gradient area (shown when the types are not split)
-            Rectangle {
-                opacity: AxData.split ? 0 : 1;
-                animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-                Path {
-                    width: root.pw;
-                    height: root.ph;
-                    viewbox-width: max(1, AxData.trend.pw);
-                    viewbox-height: max(1, AxData.trend.ph);
-                    fit: fill;
-                    commands: AxData.trend-paths.total;
-                    fill: @linear-gradient(180deg, AxColor.of("tok").with-alpha(0.40) 0%, AxColor.of("tok").with-alpha(0.04) 100%);
-                }
-                Path {
-                    width: root.pw;
-                    height: root.ph;
-                    viewbox-width: max(1, AxData.trend.pw);
-                    viewbox-height: max(1, AxData.trend.ph);
-                    fit: fill;
-                    commands: AxData.trend-paths.total-line;
-                    stroke: AxColor.of("tok");
-                    stroke-width: 1.75px;
-                }
-            }
-            // stacked token types
-            Rectangle {
-                opacity: AxData.split ? 1 : 0;
-                animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-                for k[i] in ["in", "out", "cw", "cr"]: Path {
-                    width: root.pw;
-                    height: root.ph;
-                    viewbox-width: max(1, AxData.trend.pw);
-                    viewbox-height: max(1, AxData.trend.ph);
-                    fit: fill;
-                    commands: i == 0 ? AxData.trend-paths.band0 : i == 1 ? AxData.trend-paths.band1 : i == 2 ? AxData.trend-paths.band2 : AxData.trend-paths.band3;
-                    fill: @linear-gradient(180deg, AxColor.of(k).with-alpha(0.78) 0%, AxColor.of(k).with-alpha(0.46) 100%);
-                }
-                for k[i] in ["in", "out", "cw", "cr"]: Path {
-                    width: root.pw;
-                    height: root.ph;
-                    viewbox-width: max(1, AxData.trend.pw);
-                    viewbox-height: max(1, AxData.trend.ph);
-                    fit: fill;
-                    commands: i == 0 ? AxData.trend-paths.line0 : i == 1 ? AxData.trend-paths.line1 : i == 2 ? AxData.trend-paths.line2 : AxData.trend-paths.line3;
-                    stroke: AxColor.of(k);
-                    stroke-width: 1.25px;
-                }
-            }
-            if AxData.trend.cost-shown: Path {
+            clip: true;
+            Path {
+                x: -AxData.trend.tail-x * 1px * root.sx;
+                y: 0px;
                 width: root.pw;
                 height: root.ph;
                 viewbox-width: max(1, AxData.trend.pw);
                 viewbox-height: max(1, AxData.trend.ph);
                 fit: fill;
-                commands: AxData.trend-paths.cost;
-                stroke: AxColor.of("cost");
-                stroke-width: 2px;
-                stroke-line-cap: round;
+                commands: AxData.trend.hatch;
+                stroke: Theme.grid-strong;
+                stroke-width: 1.2px;
+            }
+        }
+        if AxData.trend.tail-x >= 0: Path {
+            x: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx;
+            y: AxTrendPad.t - 4px;
+            width: 1px;
+            height: root.ph + 4px;
+            viewbox-width: 1;
+            viewbox-height: 1;
+            fit: fill;
+            commands: "M0.5 0V0.04M0.5 0.08V0.12M0.5 0.16V0.2M0.5 0.24V0.28M0.5 0.32V0.36M0.5 0.4V0.44M0.5 0.48V0.52M0.5 0.56V0.6M0.5 0.64V0.68M0.5 0.72V0.76M0.5 0.8V0.84M0.5 0.88V0.92M0.5 0.96V1";
+            stroke: Theme.ink-3;
+            stroke-width: 1px;
+        }
+        if AxData.trend.tail-x >= 0: AxisLabel {
+            ax: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx - 6px;
+            baseline: AxTrendPad.t + 14px;
+            anchor: 2;
+            text: AxData.trend.tail-label;
+            letter-spacing: 0.55px;
+        }
+        if AxData.trend.clip-note != "": AxisLabel {
+            ax: AxTrendPad.l + 6px;
+            baseline: AxTrendPad.t + 14px;
+            text: AxData.trend.clip-note;
+            letter-spacing: 0.55px;
+        }
+
+        // ---- the data, drawn on through a clip ----
+        clip := Rectangle {
+            x: 0px;
+            y: 0px;
+            width: min(root.width, root.clip-w);
+            height: root.height;
+            clip: true;
+            // its own layer too, so the draw-on clip only blits it
+            Rectangle {
+                x: AxTrendPad.l;
+                y: AxTrendPad.t;
+                width: root.pw;
+                height: root.ph;
+                cache-rendering-hint: true;
+                // total tokens: one gradient area (shown when the types are not split)
+                Rectangle {
+                    opacity: AxData.split ? 0 : 1;
+                    visible: self.opacity > 0.005;
+                    animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                    Path {
+                        width: root.pw;
+                        height: root.ph;
+                        viewbox-width: max(1, AxData.trend.pw);
+                        viewbox-height: max(1, AxData.trend.ph);
+                        fit: fill;
+                        commands: AxData.trend-paths.total;
+                        fill: @linear-gradient(180deg, AxColor.of("tok").with-alpha(0.40) 0%, AxColor.of("tok").with-alpha(0.04) 100%);
+                    }
+                    Path {
+                        width: root.pw;
+                        height: root.ph;
+                        viewbox-width: max(1, AxData.trend.pw);
+                        viewbox-height: max(1, AxData.trend.ph);
+                        fit: fill;
+                        commands: AxData.trend-paths.total-line;
+                        stroke: AxColor.of("tok");
+                        stroke-width: 1.75px;
+                    }
+                }
+                // stacked token types
+                Rectangle {
+                    opacity: AxData.split ? 1 : 0;
+                    visible: self.opacity > 0.005;
+                    animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                    for k[i] in ["in", "out", "cw", "cr"]: Path {
+                        width: root.pw;
+                        height: root.ph;
+                        viewbox-width: max(1, AxData.trend.pw);
+                        viewbox-height: max(1, AxData.trend.ph);
+                        fit: fill;
+                        commands: i == 0 ? AxData.trend-paths.band0 : i == 1 ? AxData.trend-paths.band1 : i == 2 ? AxData.trend-paths.band2 : AxData.trend-paths.band3;
+                        fill: @linear-gradient(180deg, AxColor.of(k).with-alpha(0.78) 0%, AxColor.of(k).with-alpha(0.46) 100%);
+                    }
+                    for k[i] in ["in", "out", "cw", "cr"]: Path {
+                        width: root.pw;
+                        height: root.ph;
+                        viewbox-width: max(1, AxData.trend.pw);
+                        viewbox-height: max(1, AxData.trend.ph);
+                        fit: fill;
+                        commands: i == 0 ? AxData.trend-paths.line0 : i == 1 ? AxData.trend-paths.line1 : i == 2 ? AxData.trend-paths.line2 : AxData.trend-paths.line3;
+                        stroke: AxColor.of(k);
+                        stroke-width: 1.25px;
+                    }
+                }
+                if AxData.trend.cost-shown: Path {
+                    width: root.pw;
+                    height: root.ph;
+                    viewbox-width: max(1, AxData.trend.pw);
+                    viewbox-height: max(1, AxData.trend.ph);
+                    fit: fill;
+                    commands: AxData.trend-paths.cost;
+                    stroke: AxColor.of("cost");
+                    stroke-width: 2px;
+                    stroke-line-cap: round;
+                }
             }
         }
     }
@@ -367,6 +382,7 @@ component TrendChart inherits Rectangle {
 }
 
 export component AxTrendCard inherits AxCard {
+    cached: false;
     in property <bool> played;
     in property <duration> delay;
     in property <length> win-h: 900px;

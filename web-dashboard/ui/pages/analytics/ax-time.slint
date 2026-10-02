@@ -37,6 +37,7 @@ component HeatCell inherits Rectangle {
 }
 
 export component AxHeatCard inherits AxCard {
+    cached: false;
     in property <bool> played;
     in property <duration> delay;
     in property <length> win-h: 900px;
@@ -207,6 +208,7 @@ component BarColumn inherits Rectangle {
 }
 
 export component AxDailyCard inherits AxCard {
+    cached: false;
     in property <bool> played;
     in property <duration> delay;
     in property <length> win-h: 900px;

@@ -71,10 +71,31 @@ impl Models {
     }
 }
 
+/// Runs `f` on the dashboard, then makes sure the change is painted (see `wake`).
 fn with_ui(f: impl FnOnce(&Dashboard)) {
     UI.with(|slot| {
         if let Some(ui) = slot.borrow().as_ref() {
             f(ui);
+            wake(ui);
+        }
+    });
+}
+
+/// A push from JavaScript arrives outside winit's event loop. Slint's redraw request then starts its frame
+/// throttle timer, but a loop that is asleep with no timer scheduled never runs it, so the change stayed
+/// unpainted until the next pointer event (seen at 1920 px and wider: the sign-in page kept "Connecting to AI
+/// Account Center…" after the session check had answered). Posting an empty event wakes the loop, which
+/// then schedules the timer.
+fn wake(ui: &Dashboard) {
+    ui.window().request_redraw();
+    let _ = slint::invoke_from_event_loop(|| {});
+}
+
+/// `wake` for the entry points that reach the dashboard through `UI.with`.
+fn redraw() {
+    UI.with(|slot| {
+        if let Some(ui) = slot.borrow().as_ref() {
+            wake(ui);
         }
     });
 }
@@ -723,6 +744,7 @@ pub fn set_dashboard(json: &str) -> Result<(), JsValue> {
             with_models(|m| apply_dashboard(ui, m, v));
         }
     });
+    redraw();
     Ok(())
 }
 
@@ -839,6 +861,7 @@ pub fn push_toast(kind: &str, title: &str, body: &str, ms: i32) {
             ms: if ms > 0 { ms } else { 4800 },
         });
     });
+    redraw();
 }
 
 #[wasm_bindgen]
@@ -913,6 +936,7 @@ pub fn show_details(json: &str) -> Result<(), JsValue> {
             });
         }
     });
+    redraw();
     Ok(())
 }
 
@@ -979,6 +1003,7 @@ pub fn show_activation_confirmation(json: &str) -> Result<(), JsValue> {
             });
         }
     });
+    redraw();
     Ok(())
 }
 
@@ -995,14 +1020,16 @@ pub fn close_activation_confirmation() {
 /// The analytics view model (version 3, public/analytics-data.mjs).
 #[wasm_bindgen]
 pub fn set_analytics(json: &str) -> Result<(), JsValue> {
-    UI.with(|slot| {
+    let result = UI.with(|slot| {
         if let Some(ui) = slot.borrow().as_ref() {
             with_models(|m| analytics::set_analytics(ui, &mut m.analytics, json))
                 .unwrap_or_else(|| Err(JsValue::from_str("Dashboard not initialized")))
         } else {
             Err(JsValue::from_str("Dashboard not initialized"))
         }
-    })
+    });
+    redraw();
+    result
 }
 
 /// The analytics header alone ("read 2m ago" ticks between refreshes).
@@ -1029,14 +1056,16 @@ pub fn set_analytics_loading(loading: bool, error: &str) {
 /// The Accounts & Settings view model (version 1, public/accounts-view.mjs).
 #[wasm_bindgen]
 pub fn set_accounts(json: &str) -> Result<(), JsValue> {
-    UI.with(|slot| {
+    let result = UI.with(|slot| {
         if let Some(ui) = slot.borrow().as_ref() {
             with_models(|m| accounts::set_accounts(ui, &mut m.accounts, json))
                 .unwrap_or_else(|| Err(JsValue::from_str("Dashboard not initialized")))
         } else {
             Err(JsValue::from_str("Dashboard not initialized"))
         }
-    })
+    });
+    redraw();
+    result
 }
 
 /// "home" | "analytics" | "accounts"; the shell animates the change.

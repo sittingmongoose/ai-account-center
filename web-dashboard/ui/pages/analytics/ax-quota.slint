@@ -462,6 +462,7 @@ component QuotaGroup inherits Rectangle {
 }
 
 export component AxQuotaCard inherits AxCard {
+    cached: false;
     in property <bool> played;
     in property <duration> delay;
     AxCardHead { title: "Quota history"; sub: AxData.quota-sub; }
