@@ -22,6 +22,23 @@ import { getCcsDir } from '../../utils/config-manager';
 
 const router = createApiRouter();
 
+/**
+ * Whether the client asked for the asynchronous Open (`Prefer: respond-async`,
+ * RFC 7240). It is a header, so the strict body-key check stays unchanged, and
+ * clients that do not send it (the shipped web UI and both trays) keep the
+ * synchronous 200 or refusal they already handle.
+ */
+export function prefersRespondAsync(header: string | string[] | undefined): boolean {
+  const values = Array.isArray(header) ? header : header === undefined ? [] : [header];
+  return values.some(
+    (value) =>
+      value.length <= 1024 &&
+      value
+        .split(',')
+        .some((preference) => preference.split(';')[0].trim().toLowerCase() === 'respond-async')
+  );
+}
+
 router.get('/desktop-profiles', async (req, res): Promise<void> => {
   if (!requireDashboardSession(req, res)) return;
   try {
@@ -78,15 +95,27 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
 
   const id = req.params.id;
   const platform: 'mac' | 'windows' = req.body.platform;
+  const respondAsync = prefersRespondAsync(req.headers.prefer);
   const scope = getCcsDir();
   const operations = getClaudeOpenOperations();
-  // A click while its Open still runs joins it; the copy's own hold must not refuse it.
-  const running = operations.running(scope, id, platform);
-  if (running) {
-    res.status(202).json({ id, platform, state: running.state, operationId: running.id });
-    return;
-  }
+  const accepted = (operation: { state: string; id: string }): void => {
+    res.setHeader('Preference-Applied', 'respond-async');
+    res.status(202).json({ id, platform, state: operation.state, operationId: operation.id });
+  };
+  // Wait for this Open's end and answer as before: 200, or the same refusal.
+  const awaitOutcome = async (): Promise<void> => {
+    const outcome = await operations.settled(scope, id, platform);
+    if (outcome && !outcome.ok) throw outcome.error;
+    res.json({ opened: true, id, platform });
+  };
   try {
+    // A click while its Open still runs joins it; the copy's own hold must not refuse it.
+    const running = operations.running(scope, id, platform);
+    if (running) {
+      if (respondAsync) accepted(running);
+      else await awaitOutcome();
+      return;
+    }
     if (!(await claudeOpenUsesManagedHistory(id, platform))) {
       // No managed history copy: the ordinary Open, answered when it is done.
       await openClaudeDesktopProfile(id, platform);
@@ -95,10 +124,12 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
     }
     // The same refusals as before, answered before any work starts.
     await assertClaudeDesktopOpenAllowed(id, platform);
+    // Every managed Open is tracked, so a polling client sees its progress too.
     const operation = operations.start(scope, id, platform, (observer) =>
       openClaudeDesktopProfile(id, platform, observer)
     );
-    res.status(202).json({ id, platform, state: operation.state, operationId: operation.id });
+    if (respondAsync) accepted(operation);
+    else await awaitOutcome();
   } catch (error) {
     if (error instanceof ProfileError) {
       res.status(404).json({ error: 'Claude desktop profile was not found.' });

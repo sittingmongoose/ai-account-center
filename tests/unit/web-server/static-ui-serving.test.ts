@@ -13,7 +13,8 @@ import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
 
-import { startServer } from '../../../src/web-server';
+import { requestErrorKind, startServer } from '../../../src/web-server';
+import { getRecentLogEntries } from '../../../src/services/logging';
 import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import { negotiateEncoding, resolvePageRoute } from '../../../src/web-server/static-ui';
@@ -275,13 +276,8 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     expect(response.body.equals(WASM)).toBe(true);
   });
 
-  it('keeps no-cache on index.html, bridge.js, modules and the manifest', async () => {
-    for (const route of [
-      '/index.html',
-      '/bridge.js',
-      '/view-model.mjs',
-      '/ui-build-manifest.json',
-    ]) {
+  it('keeps no-cache on index.html, bridge.js and modules', async () => {
+    for (const route of ['/index.html', '/bridge.js', '/view-model.mjs']) {
       const response = await raw('GET', route, { 'Accept-Encoding': 'br, gzip' });
       expect([route, response.status, response.headers['cache-control']]).toEqual([
         route,
@@ -298,6 +294,58 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     const index = await raw('GET', '/index.html');
     expect(index.headers['x-content-type-options']).toBe('nosniff');
     expect(index.headers['referrer-policy']).toBe('same-origin');
+  });
+
+  it('never serves the build manifest (commit and source hash) to anyone', async () => {
+    expect(fs.existsSync(path.join(staticDir, 'ui-build-manifest.json'))).toBe(true);
+    for (const [method, route] of [
+      ['GET', '/ui-build-manifest.json'],
+      ['HEAD', '/ui-build-manifest.json'],
+      ['GET', '/UI-Build-Manifest.json'],
+      ['GET', '/./ui-build-manifest.json'],
+      ['GET', '/%2e/ui-build-manifest.json'],
+      ['GET', '//ui-build-manifest.json'],
+      ['GET', '/ui-build-manifest%2Ejson'],
+    ]) {
+      const response = await raw(method, route, { 'Accept-Encoding': 'br, gzip' });
+      expect([method, route, response.status]).toEqual([method, route, 404]);
+      expect(response.body.toString()).not.toMatch(/8fb5e3de|buildId|sourceFingerprint/);
+    }
+  });
+
+  it('releases the file and keeps serving when clients go away mid-answer', async () => {
+    const countOpenFiles = () =>
+      process.platform === 'linux' ? fs.readdirSync('/proc/self/fd').length : 0;
+    await raw('GET', wasmUrl(), { 'Accept-Encoding': 'br' });
+    const before = countOpenFiles();
+    for (let index = 0; index < 30; index += 1) {
+      await new Promise<void>((resolve) => {
+        const request = http.request({
+          host: '127.0.0.1',
+          port,
+          method: 'GET',
+          path: wasmUrl(),
+          headers: { 'Accept-Encoding': index % 2 ? 'gzip' : 'br' },
+          agent: false,
+        });
+        request.on('error', () => resolve());
+        request.on('response', (response) => {
+          response.destroy();
+          resolve();
+        });
+        request.end();
+        // Abort as soon as the request is out: before, during or after the file open.
+        setImmediate(() => {
+          request.destroy();
+          resolve();
+        });
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const after = await raw('GET', wasmUrl(), { 'Accept-Encoding': 'br' });
+    expect(after.status).toBe(200);
+    expect(after.body.equals(variant('br'))).toBe(true);
+    expect(countOpenFiles()).toBeLessThanOrEqual(before + 4);
   });
 
   it('never compresses /api responses', async () => {
@@ -434,6 +482,27 @@ describe('JSON error answers', () => {
       error: 'The request could not be processed.',
     });
     expect(response.body.toString()).not.toMatch(/ENOENT|\bat\s|index\.html/);
+    // The server keeps a trace: status and error class, never the message or a path.
+    const failures = getRecentLogEntries().filter((entry) => entry.event === 'web.request.failed');
+    const last = failures[failures.length - 1];
+    expect(last?.level).toBe('warn');
+    expect(last?.context).toEqual({ status: 404, kind: 'ENOENT', headersSent: false });
+    expect(JSON.stringify(last)).not.toMatch(/index\.html|ccs-static-ui|no such file/);
+  });
+
+  it('names an error by its type, code or class, never by its message', () => {
+    expect(requestErrorKind(Object.assign(new Error('x'), { type: 'entity.parse.failed' }))).toBe(
+      'entity.parse.failed'
+    );
+    expect(requestErrorKind(Object.assign(new Error('/home/x/secret'), { code: 'EACCES' }))).toBe(
+      'EACCES'
+    );
+    expect(requestErrorKind(new TypeError('/home/x/secret'))).toBe('TypeError');
+    expect(requestErrorKind(Object.assign(new Error('x'), { name: 'has spaces /home/x' }))).toBe(
+      'unknown'
+    );
+    expect(requestErrorKind(null)).toBe('unknown');
+    expect(requestErrorKind('/home/x/secret')).toBe('unknown');
   });
 });
 

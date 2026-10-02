@@ -2,11 +2,12 @@
  * Claude "Open" progress (CONTRACT-serving-misc section 4.4, agreed with the
  * Codex owner on 2026-10-02).
  *
- * When a managed history policy applies, POST /api/claude/desktop-profiles/:id/open
- * answers 202 and the Open runs here, in the background; GET
- * /api/claude/desktop-profiles shows its progress as `openOperation`. Operations
- * live in memory only: a server restart never resumes one (the durable history
- * marker still holds an unconfirmed copy), and clients never replay the POST.
+ * When a managed history policy applies, every Open runs here so GET
+ * /api/claude/desktop-profiles can show its progress as `openOperation`. A POST
+ * that sends `Prefer: respond-async` gets 202 at once; any other POST waits for
+ * the outcome and keeps today's 200 or refusal. Operations live in memory only:
+ * a server restart never resumes one (the durable history marker still holds an
+ * unconfirmed copy), and clients never replay the POST.
  */
 
 import { randomBytes } from 'crypto';
@@ -17,6 +18,9 @@ import {
   type ClaudeOpenObserver,
 } from './claude-desktop-open-service';
 import { ClaudeDesktopTransportError } from './claude-desktop-transport';
+import { createLogger } from '../../services/logging';
+
+const logger = createLogger('web-server:claude-open');
 
 export type ClaudeOpenOperationState =
   | 'checking'
@@ -57,12 +61,26 @@ export function isTerminalClaudeOpenState(state: ClaudeOpenOperationState): bool
   return TERMINAL.has(state);
 }
 
+/** How an Open ended, for a caller that waits for it. Never rejects. */
+export type ClaudeOpenOutcome = { ok: true } | { ok: false; error: unknown };
+
 interface Entry {
   scope: string;
   profileId: string;
   operation: ClaudeOpenOperation;
   startedAt: number;
   finishedAt: number | null;
+  settled: Promise<ClaudeOpenOutcome>;
+}
+
+/** A short error class for the server log; never a message, stack or path. */
+export function claudeOpenErrorKind(error: unknown): string {
+  if (error instanceof ClaudeHistoryOpenHeldError) return 'history_held';
+  if (error instanceof ProfileError) return 'not_found';
+  if (error instanceof ConfigError) return 'not_configured';
+  if (error instanceof ClaudeDesktopTransportError)
+    return error.timedOut ? 'transport_timeout' : 'transport';
+  return 'other';
 }
 
 function finalState(error: unknown): Pick<ClaudeOpenOperation, 'state' | 'message'> {
@@ -126,11 +144,15 @@ export class ClaudeOpenOperations {
     const key = JSON.stringify([scope, profileId, platform]);
     const existing = this.entries.get(key);
     if (existing && existing.finishedAt === null) return { ...existing.operation };
+    let settle: (outcome: ClaudeOpenOutcome) => void = () => {};
     const entry: Entry = {
       scope,
       profileId,
       startedAt: this.now(),
       finishedAt: null,
+      settled: new Promise<ClaudeOpenOutcome>((resolve) => {
+        settle = resolve;
+      }),
       operation: {
         id: `op_${randomBytes(12).toString('hex')}`,
         platform,
@@ -144,10 +166,24 @@ export class ClaudeOpenOperations {
     const update = (patch: Partial<ClaudeOpenOperation>): void => {
       if (entry.finishedAt === null) Object.assign(entry.operation, patch);
     };
-    const finish = (patch: Pick<ClaudeOpenOperation, 'state' | 'message'>): void => {
+    const finish = (
+      patch: Pick<ClaudeOpenOperation, 'state' | 'message'>,
+      outcome: ClaudeOpenOutcome
+    ): void => {
       if (entry.finishedAt !== null) return;
       Object.assign(entry.operation, patch);
       entry.finishedAt = this.now();
+      settle(outcome);
+      try {
+        // State and error class only: no message, stack, ids or paths.
+        logger[outcome.ok ? 'info' : 'warn']('claude.open.finished', 'Claude Open finished', {
+          state: patch.state,
+          kind: outcome.ok ? 'none' : claudeOpenErrorKind(outcome.error),
+          platform,
+        });
+      } catch {
+        /* Logging never changes how an Open ends. */
+      }
     };
     const observer: ClaudeOpenObserver = {
       copying: (totalCount) => update({ state: 'copying', totalCount, confirmedCount: 0 }),
@@ -165,10 +201,23 @@ export class ClaudeOpenOperations {
     }
     // Both outcomes are handled here, so a failed Open never becomes an unhandled rejection.
     running.then(
-      () => finish({ state: 'opened', message: null }),
-      (error: unknown) => finish(finalState(error))
+      () => finish({ state: 'opened', message: null }, { ok: true }),
+      (error: unknown) => finish(finalState(error), { ok: false, error })
     );
     return { ...entry.operation };
+  }
+
+  /**
+   * How the current Open for this profile and platform ends (a running one, or
+   * the last finished one while it is retained); null when none is known. The
+   * promise never rejects, so a caller that stops waiting leaves nothing unhandled.
+   */
+  settled(
+    scope: string,
+    profileId: string,
+    platform: 'mac' | 'windows'
+  ): Promise<ClaudeOpenOutcome> | null {
+    return this.entries.get(JSON.stringify([scope, profileId, platform]))?.settled ?? null;
   }
 
   /** The running operation for this profile and platform, if any. */

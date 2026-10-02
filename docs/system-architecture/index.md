@@ -36,8 +36,10 @@ snapshots are not additive token totals.
 jobs triggered explicitly, never from startup or routine polling.
 
 A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
-answers 202 and runs in the background; the profile list reports its progress as
-`openOperation` (counts and fixed sentences only). [Operations](../../src/web-server/services/claude-open-operations.ts)
+is tracked as an operation, and the profile list reports its progress as
+`openOperation` (counts and fixed sentences only). A request that sends
+`Prefer: respond-async` gets 202 at once and polls; any other request waits and
+gets the old 200 or refusal. [Operations](../../src/web-server/services/claude-open-operations.ts)
 live in memory, so a restart never resumes one, and a repeated click joins the
 running one. Without a policy the Open answers 200 as before.
 
@@ -68,7 +70,8 @@ and `.gz` copies listed in `ui-build-manifest.json`; folders are 0755 and files
 at startup and negotiates them by `Accept-Encoding`, caches `pkg/<buildId>/**` as
 immutable and revalidates everything else, and answers the page routes `/`,
 `/login`, `/analytics`, `/accounts` and `/accounts/<provider>` with `index.html`.
-API responses are never compressed, and an unmatched `/api` request is a JSON 404.
+API responses are never compressed, an unmatched `/api` request is a JSON 404, and
+the build manifest itself is never served.
 
 [Docker](../../docker/README.md) builds the same source and starts only the
 dashboard on port 3000. Retired routing/runtime/tooling workflows are not part of

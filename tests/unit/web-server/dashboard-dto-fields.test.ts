@@ -174,6 +174,44 @@ describe('Antigravity "Needs setup" row, switchable and lifecycle', () => {
     }
   });
 
+  it('never offers a row whose reading could not be bound to its saved identity as a switch target', async () => {
+    const profiles = [
+      antigravityProfile('gmail', { selected: true, runtimeVerified: true }),
+      antigravityProfile('work'),
+    ];
+    const usage = new AntigravityUsageService({
+      readProfiles: async () => profiles,
+      now: () => Date.parse(NOW),
+      // `work` answers with another account's identity; `gmail` is bound but unavailable.
+      collectQuota: async (id) => ({
+        profileId: id,
+        identityKey: id === 'work' ? 'identity-someone-else' : `identity-${id}`,
+        credentialRevision: `revision-${id}`,
+        status: 'unavailable',
+        email: null,
+        plan: null,
+        fetchedAt: null,
+        sampledAt: null,
+        windows: [],
+      }),
+    });
+    await usage.getAccounts({ refresh: true });
+    const rows = () => usage.cachedAccounts(profiles);
+    const dashboard = await new AccountDashboardService(
+      deps({ getAntigravityAccounts: async () => rows(), getCachedAntigravityAccounts: rows })
+    ).get('mac');
+    expect(dashboard.accounts.find((row) => row.id === 'antigravity:profile:work')).toMatchObject({
+      status: 'error',
+      switchable: false,
+      // Not a setup row: the saved login is verified; only this reading failed.
+      lifecycle: { state: 'ready', jobId: null },
+    });
+    expect(dashboard.accounts.find((row) => row.id === 'antigravity:profile:gmail')).toMatchObject({
+      status: 'unavailable',
+      switchable: true,
+    });
+  });
+
   it('turns a profile whose saved login became unusable into a setup row on a cache hit', async () => {
     let usable = true;
     const profiles = () => [

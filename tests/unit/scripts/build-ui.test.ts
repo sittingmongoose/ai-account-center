@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { spawnSync } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
@@ -7,6 +8,7 @@ import zlib from 'zlib';
 
 const {
   buildUi,
+  readBuildCommit,
   assertSlintPin,
   assertLockedSlint,
   BRIDGE_IMPORT_ERROR,
@@ -300,6 +302,39 @@ describe('Slint browser build integration', () => {
         buildUi({ repoRoot: root, run: runner([]), readCommit: () => value })
       ).not.toHaveProperty('commit');
     }
+  });
+
+  it('reads the commit only when the build root is itself the top of a checkout', () => {
+    const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-build-commit-'));
+    roots.push(repository);
+    const git = (...args: string[]) =>
+      spawnSync('git', ['-C', repository, ...args], { encoding: 'utf8' });
+    expect(readBuildCommit(repository)).toBeNull(); // not a checkout at all
+    expect(git('init', '-q').status).toBe(0);
+    expect(
+      git(
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.com',
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'fixture'
+      ).status
+    ).toBe(0);
+    const head = git('rev-parse', '--short=8', 'HEAD').stdout.trim();
+    expect(head).toMatch(/^[a-f0-9]{8}$/);
+    expect(readBuildCommit(repository)).toBe(head);
+    // A package unpacked inside some other repository must not record that repository's commit.
+    const nested = path.join(repository, 'unpacked', 'package');
+    fs.mkdirSync(nested, { recursive: true });
+    expect(readBuildCommit(nested)).toBeNull();
   });
 
   it('rejects tampered, stray, unversioned or wrongly permissioned packaged files', () => {

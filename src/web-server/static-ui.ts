@@ -14,6 +14,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import type http from 'http';
 import path from 'path';
+import { pipeline } from 'stream';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { createLogger } from '../services/logging';
 
@@ -48,6 +49,8 @@ const CONTENT_TYPES = new Map<string, string>([
   ['.json', 'application/json; charset=utf-8'],
   ['.txt', 'text/plain; charset=utf-8'],
 ]);
+/** Build facts for the build scripts only; the UI never fetches it, so it is not served. */
+const UNSERVED = new Set(['ui-build-manifest.json']);
 const PAGES = new Set(['/', '/login', '/analytics', '/accounts']);
 const PAGE_ALIASES = new Map([
   ['/settings', '/accounts'],
@@ -268,6 +271,11 @@ function serveUiFile(
         fs.close(fd, () => identity());
         return;
       }
+      // The client may have gone while the file was opened: release the fd, send nothing.
+      if (req.destroyed || res.destroyed || res.writableEnded) {
+        fs.close(fd, () => undefined);
+        return;
+      }
       res.status(200);
       res.setHeader('Content-Encoding', encoding);
       res.setHeader('Content-Length', String(variant.bytes));
@@ -276,10 +284,8 @@ function serveUiFile(
         res.end();
         return;
       }
-      const stream = fs.createReadStream('', { fd, autoClose: true });
-      stream.on('error', () => res.destroy());
-      res.on('close', () => stream.destroy());
-      stream.pipe(res);
+      // pipeline destroys both sides (and so closes the fd) on an error or an abort.
+      pipeline(fs.createReadStream('', { fd, autoClose: true }), res, () => undefined);
     });
   });
 }
@@ -289,8 +295,9 @@ function withoutVariantHeaders(res: Response): void {
 }
 
 /**
- * Mounted before express.static. GET and HEAD only; .br/.gz are never addressed
- * directly; paths with a listed variant are negotiated, the rest fall through.
+ * Mounted before express.static. GET and HEAD only; .br/.gz and the build
+ * manifest are never addressed directly; paths with a listed variant are
+ * negotiated, the rest fall through.
  */
 export function precompressedStatic(ui: StaticUi): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -304,7 +311,12 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
       return;
     }
     const lower = relative.toLowerCase();
-    if (lower.endsWith('.br') || lower.endsWith('.gz')) {
+    // `./` segments are folded first, so `/./ui-build-manifest.json` is refused too.
+    if (
+      lower.endsWith('.br') ||
+      lower.endsWith('.gz') ||
+      UNSERVED.has(path.posix.normalize(lower))
+    ) {
       res.status(404).json({ error: 'Not found.' });
       return;
     }

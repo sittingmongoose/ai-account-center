@@ -209,17 +209,29 @@ function normalizeModes(directory) {
   }
 }
 
-/** The short commit of the packaged source, or null outside a git checkout. */
+/**
+ * The short commit of the packaged source, or null when `repoRoot` is not itself
+ * the top of a git checkout (an unpacked copy inside some other repository must
+ * not record that repository's commit).
+ */
 function readBuildCommit(repoRoot) {
   try {
-    const result = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--short=8', 'HEAD'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 5000,
-      windowsHide: true,
-    });
-    const commit = result.status === 0 ? String(result.stdout).trim() : '';
-    return /^[a-f0-9]{7,40}$/.test(commit) ? commit : null;
+    const result = spawnSync(
+      'git',
+      ['-C', repoRoot, 'rev-parse', '--show-toplevel', '--short=8', 'HEAD'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 5000,
+        windowsHide: true,
+      }
+    );
+    if (result.status !== 0) return null;
+    const [topLevel = '', commit = ''] = String(result.stdout).trim().split(/\r?\n/);
+    if (!topLevel || fs.realpathSync(path.resolve(topLevel)) !== fs.realpathSync(repoRoot)) {
+      return null;
+    }
+    return /^[a-f0-9]{7,40}$/.test(commit.trim()) ? commit.trim() : null;
   } catch {
     return null;
   }
@@ -330,6 +342,7 @@ if (require.main === module) {
 
 module.exports = {
   buildUi,
+  readBuildCommit,
   assertSlintPin,
   assertLockedSlint,
   assertBridgeImport,

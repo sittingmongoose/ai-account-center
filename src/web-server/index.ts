@@ -61,6 +61,31 @@ function getListenHost(options: ServerOptions): string {
 const logger = createLogger('web-server');
 
 /**
+ * A short error class for the log: a body-parser type, a system code or the
+ * error's class name, never its message.
+ */
+export function requestErrorKind(error: unknown): string {
+  const candidate = error as { type?: unknown; code?: unknown; name?: unknown } | null;
+  for (const value of [candidate?.type, candidate?.code, candidate?.name]) {
+    if (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value)) return value;
+  }
+  return 'unknown';
+}
+
+/** The final handler's trace: status and error class only, no message, stack or path. */
+function logRequestFailure(status: number, error: unknown, headersSent: boolean): void {
+  try {
+    logger[status >= 500 ? 'error' : 'warn']('web.request.failed', 'Dashboard request failed', {
+      status,
+      kind: requestErrorKind(error),
+      headersSent,
+    });
+  } catch {
+    /* Logging never changes the answer. */
+  }
+}
+
+/**
  * Start Express server with WebSocket support
  */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
@@ -138,12 +163,15 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       res: express.Response,
       next: express.NextFunction
     ) => {
+      const raw = err?.status ?? err?.statusCode;
+      const status =
+        typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw < 500 ? raw : 500;
+      logRequestFailure(status, err, res.headersSent);
       if (res.headersSent) {
         next(err);
         return;
       }
-      const status = err?.status ?? err?.statusCode;
-      if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status < 500) {
+      if (status < 500) {
         res.status(status).json({ error: 'The request could not be processed.' });
         return;
       }

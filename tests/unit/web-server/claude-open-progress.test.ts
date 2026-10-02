@@ -1,8 +1,11 @@
 /**
- * Claude Open progress (CONTRACT-serving-misc section 4.4): a managed history
- * policy makes POST .../open answer 202, and GET /api/claude/desktop-profiles
- * shows `openOperation` until the Open ends. Everything is synthetic: a
- * temporary CCS_DIR, the offline history fixtures and mocked transports.
+ * Claude Open progress (CONTRACT-serving-misc section 4.4): with a managed
+ * history policy, POST .../open answers 202 when the client sends
+ * `Prefer: respond-async`, and GET /api/claude/desktop-profiles shows
+ * `openOperation` until the Open ends. A client that does not send it (the
+ * shipped web UI and both trays) keeps today's 200 or refusal. Everything is
+ * synthetic: a temporary CCS_DIR, the offline history fixtures and mocked
+ * transports.
  */
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import express from 'express';
@@ -11,7 +14,9 @@ import type http from 'http';
 import os from 'os';
 import path from 'path';
 import { authMiddleware } from '../../../src/web-server/middleware/auth-middleware';
-import claudeDesktopRoutes from '../../../src/web-server/routes/claude-desktop-routes';
+import claudeDesktopRoutes, {
+  prefersRespondAsync,
+} from '../../../src/web-server/routes/claude-desktop-routes';
 import * as transport from '../../../src/web-server/services/claude-desktop-transport';
 import { ClaudeDesktopTransportError } from '../../../src/web-server/services/claude-desktop-transport';
 import {
@@ -20,6 +25,7 @@ import {
 } from '../../../src/web-server/services/claude-open-operations';
 import { ClaudeHistoryOpenHeldError } from '../../../src/web-server/services/claude-desktop-open-service';
 import { ProfileError } from '../../../src/errors/error-types';
+import { getRecentLogEntries } from '../../../src/services/logging';
 
 const fx = require('../claude-history/synthetic-history-fixtures.cjs');
 const core = require('../../../scripts/claude-history/history-index-sync.cjs');
@@ -96,7 +102,7 @@ const policy = {
   ),
 };
 
-function writeManifest(withPolicy = true): void {
+function writeManifest(withPolicy = true, withWindowsLauncher = true): void {
   const row: Record<string, unknown> = {
     id: 'platyr',
     email: 'synthetic@example.com',
@@ -114,6 +120,7 @@ function writeManifest(withPolicy = true): void {
     },
   };
   if (withPolicy) row.historySync = policy;
+  if (!withWindowsLauncher) delete row.windows;
   fs.writeFileSync(
     path.join(directory, 'claude-desktop-profiles.json'),
     JSON.stringify({ version: 1, profiles: [row] }),
@@ -121,19 +128,30 @@ function writeManifest(withPolicy = true): void {
   );
 }
 
+interface Answer {
+  status: number;
+  body: Record<string, unknown>;
+  preferenceApplied?: string | null;
+}
+
 async function request(
   method: 'GET' | 'POST',
-  suffix = ''
-): Promise<{ status: number; body: Record<string, unknown> }> {
+  suffix = '',
+  headers: Record<string, string> = {}
+): Promise<Answer> {
   const response = await fetch(`http://127.0.0.1:${port}/api/claude/desktop-profiles${suffix}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     ...(method === 'POST' ? { body: JSON.stringify({ platform: 'windows' }) } : {}),
   });
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
 
-const open = () => request('POST', '/platyr/open');
+const ASYNC = { Prefer: 'respond-async' };
+/** The redesigned clients' Open: asks for the 202 progress form. */
+const open = () => request('POST', '/platyr/open', ASYNC);
+/** The shipped clients' Open: no Prefer header, so it waits for the outcome. */
+const openAndWait = () => request('POST', '/platyr/open');
 
 async function currentOperation(): Promise<ClaudeOpenOperation | null> {
   const { body } = await request('GET');
@@ -304,8 +322,50 @@ describe('Claude Open with a managed history copy', () => {
   });
 
   it('keeps the old refusals for an unknown profile and a configured launcher', async () => {
-    expect((await request('POST', '/missing/open')).status).toBe(400);
-    expect((await request('POST', '/gmail/open')).status).toBe(404);
+    for (const headers of [ASYNC, {}]) {
+      expect((await request('POST', '/missing/open', headers)).status).toBe(400);
+      expect((await request('POST', '/gmail/open', headers)).status).toBe(404);
+    }
+  });
+
+  it('answers 409 for a policy profile whose launcher is not configured, with or without Prefer', async () => {
+    writeManifest(true, false);
+    for (const headers of [ASYNC, {}]) {
+      expect(await request('POST', '/platyr/open', headers)).toEqual({
+        status: 409,
+        body: { error: 'Claude desktop launcher is not configured for this platform.' },
+      });
+    }
+    expect(appendCalls).toBe(0);
+    expect(opened).toBe(0);
+    expect(await currentOperation()).toBeNull();
+  });
+
+  it('gives two concurrent first POSTs the same operation', async () => {
+    appendGate = gate();
+    const [first, second] = await Promise.all([open(), open()]);
+    expect([first.status, second.status]).toEqual([202, 202]);
+    expect(first.body.operationId).toMatch(/^op_[a-f0-9]{24}$/);
+    expect(second.body.operationId).toBe(first.body.operationId);
+    appendGate.release();
+    expect((await waitForState('opened')).id).toBe(first.body.operationId as string);
+    expect(appendCalls).toBe(1);
+    expect(opened).toBe(1);
+  });
+
+  it('marks the 202 with Preference-Applied', async () => {
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/claude/desktop-profiles/platyr/open`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Prefer: 'wait=5, Respond-Async' },
+        body: JSON.stringify({ platform: 'windows' }),
+      }
+    );
+    expect(response.status).toBe(202);
+    expect(response.headers.get('preference-applied')).toBe('respond-async');
+    await response.json();
+    await waitForState('opened');
   });
 
   it('never exposes identities, titles, paths or ssh details in the progress', async () => {
@@ -340,6 +400,99 @@ describe('Claude Open with a managed history copy', () => {
       'state',
       'totalCount',
     ]);
+  });
+});
+
+describe('Claude Open without Prefer: respond-async (the shipped clients)', () => {
+  it('waits for the managed copy and Open, then answers the old 200', async () => {
+    appendGate = gate();
+    const pending = openAndWait();
+    // The progress is still visible to a polling client while the old client waits.
+    expect(await waitForState('copying')).toMatchObject({ confirmedCount: 0, totalCount: 1 });
+    appendGate.release();
+    expect(await pending).toEqual({
+      status: 200,
+      body: { opened: true, id: 'platyr', platform: 'windows' },
+    });
+    expect(await currentOperation()).toMatchObject({ state: 'opened', confirmedCount: 1 });
+    expect(appendCalls).toBe(1);
+    expect(opened).toBe(1);
+  });
+
+  it('answers 409 when the copy ends unconfirmed, as before', async () => {
+    appendOutcome = 'lost';
+    expect(await openAndWait()).toEqual({
+      status: 409,
+      body: { error: UNCONFIRMED, code: 'history_unconfirmed' },
+    });
+    expect((await currentOperation())?.state).toBe('blocked_uncertain');
+    expect(opened).toBe(0);
+    // The durable marker still holds the next click; nothing is replayed.
+    expect((await openAndWait()).status).toBe(409);
+    expect(appendCalls).toBe(1);
+  });
+
+  it.each([
+    [new ClaudeDesktopTransportError(), 502],
+    [new ClaudeDesktopTransportError(true), 504],
+  ])('answers the launcher failure with its old status', async (failure, status) => {
+    openFailure = failure;
+    const response = await openAndWait();
+    expect(response.status).toBe(status);
+    expect(response.body.error).toBe(failure.message);
+    expect((await currentOperation())?.state).toBe('failed');
+  });
+
+  it('joins a running 202 Open and answers with its outcome', async () => {
+    appendGate = gate();
+    const started = await open();
+    expect(started.status).toBe(202);
+    await waitForState('copying');
+    const waits = spyOn(ClaudeOpenOperations.prototype, 'settled');
+    const joined = openAndWait();
+    // Release the copy only once the second POST is waiting on the running Open.
+    for (const deadline = Date.now() + 5000; waits.mock.calls.length === 0; ) {
+      if (Date.now() > deadline) throw new Error('The second POST never joined the Open.');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    appendGate.release();
+    expect(await joined).toEqual({
+      status: 200,
+      body: { opened: true, id: 'platyr', platform: 'windows' },
+    });
+    expect((await currentOperation())?.id).toBe(started.body.operationId as string);
+    expect(appendCalls).toBe(1);
+    expect(opened).toBe(1);
+  });
+
+  it('logs how each Open ended with its state and error class only', async () => {
+    openFailure = new ClaudeDesktopTransportError(true);
+    await openAndWait();
+    const finished = getRecentLogEntries().filter(
+      (entry) => entry.event === 'claude.open.finished'
+    );
+    const last = finished[finished.length - 1];
+    expect(last?.level).toBe('warn');
+    expect(last?.context).toEqual({
+      state: 'failed',
+      kind: 'transport_timeout',
+      platform: 'windows',
+    });
+    expect(JSON.stringify(last)).not.toMatch(/platyr|synthetic|Synthetic/);
+  });
+});
+
+describe('Prefer header parsing', () => {
+  it('reads respond-async as one preference among others, in any letter case', () => {
+    expect(prefersRespondAsync('respond-async')).toBe(true);
+    expect(prefersRespondAsync('wait=10, respond-async')).toBe(true);
+    expect(prefersRespondAsync(' Respond-Async ; x=1')).toBe(true);
+    expect(prefersRespondAsync(['return=minimal', 'respond-async'])).toBe(true);
+    expect(prefersRespondAsync('respond-asynchronously')).toBe(false);
+    expect(prefersRespondAsync('return=respond-async')).toBe(false);
+    expect(prefersRespondAsync('')).toBe(false);
+    expect(prefersRespondAsync(undefined)).toBe(false);
+    expect(prefersRespondAsync(`${'x'.repeat(1100)}, respond-async`)).toBe(false);
   });
 });
 
