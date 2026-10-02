@@ -253,7 +253,7 @@ export component AxCbmCard inherits AxCard {
             share-w: root.share-w;
         }
         if AxData.models.length == 0: Text {
-            text: AxData.ready ? AxData.cbm.empty : "Loading model activity";
+            text: AxData.ready ? AxData.cbm.empty : AxData.head.error != "" ? "Model activity unavailable" : "Loading model activity";
             font-size: 13px;
             color: Theme.ink-3;
             horizontal-alignment: center;

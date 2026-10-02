@@ -21,7 +21,8 @@ export component AnalyticsPage inherits Rectangle {
     in property <length> scroll;
     in property <length> view-bottom;
     in property <length> win-h: 900px;
-    property <bool> armed: AxData.ready;
+    // sections rise in once the first response arrives (or fails: the header then says why)
+    property <bool> armed: AxData.ready || AxData.head.error != "";
     property <bool> wide3: Breakpoints.width >= 1600px;
     property <length> gap: Breakpoints.width < 1180px ? 14px : 18px;
     // first-view memory for the chart grid (it is laid out again when it changes column count)

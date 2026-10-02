@@ -493,7 +493,7 @@ export component AxQuotaCard inherits AxCard {
     }
     for g[i] in AxData.quota-groups: QuotaGroup { g: g; played: root.played; delay: root.delay; n0: i * 4; }
     if AxData.quota-groups.length == 0: Text {
-        text: AxData.ready ? "No account history in this range yet." : "Loading account history";
+        text: AxData.ready ? "No account history in this range yet." : AxData.head.error != "" ? "Account history unavailable" : "Loading account history";
         font-size: 13px;
         color: Theme.ink-3;
         horizontal-alignment: center;

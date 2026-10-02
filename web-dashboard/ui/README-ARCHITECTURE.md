@@ -10,11 +10,12 @@ analytics.css, app*.js). Jared's rules are in that folder's `BRIEF.md`, `ROUND2.
 ```
 public/bridge.js          network, session, timers, URL state; the only code that talks to the API
 public/view-model.mjs     DTO -> view model v2 for Home, Details, header, Update apps (pure, tested)
-public/analytics-data.mjs DTO -> analytics view + analyticsSlintModel() v2 (pure, tested)
+public/analytics-data.mjs DTO -> analytics view + analyticsSlintModel() v3 (pure, tested)
+public/analytics-usage.mjs, analytics-quota.mjs, model-rates.mjs   the Analytics page's numbers and chart geometry
 public/*-data.mjs, *-confirmation.mjs, visible-usage.mjs   truthfulness and switching rules (tested)
 src/lib.rs                wasm entry points; JSON -> Slint structs; persistent models updated in place
 src/sync.rs               sync_rows() and Nested<T>: diff by id with set_row_data
-src/analytics.rs          analytics v2 JSON -> Slint models
+src/analytics.rs          analytics v3 JSON -> the AxData global (persistent models)
 ui/dashboard.slint        the shell: header, routing, overlays, sign-in layer; re-exports models.slint
 ui/models.slint           every view-model struct (the contract between Rust and the pages)
 ui/theme.slint            Theme / Motion / Type / Breakpoints globals and the embedded fonts
@@ -35,18 +36,19 @@ reading in Slint, never add or average across accounts, never turn a missing val
   ("user\npassword"), `details` (account id), `details-closed`, `launch` ("profile:mac|windows"), `activate`
   (Codex profile), `antigravity-activate` (profile id), `automatic`, `threshold` ("95%"),
   `antigravity-automatic`, `antigravity-threshold`, `antigravity-pool`, `refresh-interval` ("1 min"),
-  `activation-confirm`, `activation-cancel`, `analytics-range` (24h|7d|30d), `analytics-refresh`,
+  `activation-confirm`, `activation-cancel`, the Analytics kinds listed under Analytics v3,
   `analytics-metric-key` (quota-history key), and the older `analytics-provider|account|metric|account-id|
   activity-interval`. Add new kinds; never repurpose one.
 - **State comes in through wasm exports** (src/lib.rs): `set_dashboard(json)` (view model v2),
   `set_chrome(json)`, `set_auth(authenticated, json)`, `set_busy`, `set_theme_mode(0 auto|1 light|2 dark)`,
   `set_system_dark`, `set_reduced_motion`, `push_toast(kind, title, body, ms)`, `show_details(json)`,
   `close_details`, `set_update_status(json)`, `show_activation_confirmation(json)`,
-  `close_activation_confirmation`, `set_analytics(json)`, `set_analytics_loading`, `set_current_page`,
+  `close_activation_confirmation`, `set_analytics(json)`, `set_analytics_head(json)`,
+  `set_analytics_trend_paths(json)` (one morph frame), `set_analytics_loading`, `set_current_page`,
   `set_refresh_interval`.
-- **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) and `ANALYTICS_VIEW_VERSION = 2`
-  (analytics-data.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs; a mismatch is refused, not half-rendered.
-  Bump all of them together when a struct changes shape.
+- **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs,
+  and `ANALYTICS_VIEW_VERSION = 3` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
+  a mismatch is refused, not half-rendered. Bump the pair together when its structs change shape.
 - **In-place updates**: lib.rs owns one `Rc<VecModel<T>>` per list (sections, cards, registry, toasts, Details
   meters/amounts/facts, processes, KPIs, quota groups) and a `Nested<T>` per nested list (a section's rows, a
   row's cells, a card's meters and amounts, a group's quota rows), keyed by id. `sync_rows` keeps rows whose

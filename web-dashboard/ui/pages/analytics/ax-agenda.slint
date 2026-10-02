@@ -113,7 +113,7 @@ export component AxAgendaCard inherits AxCard {
     property <bool> wide: Breakpoints.width >= 1600px;
     AxCardHead { title: "Upcoming resets and expiries"; sub: "When each limit resets to 0% used, and when credits or packs expire. Times are local."; }
     if AxData.agenda-empty: Text {
-        text: AxData.ready ? "No upcoming resets or expiries reported." : "Loading account readings";
+        text: AxData.ready ? "No upcoming resets or expiries reported." : AxData.head.error != "" ? "Account readings unavailable" : "Loading account readings";
         font-size: 13px;
         color: Theme.ink-3;
         horizontal-alignment: center;
