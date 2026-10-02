@@ -24,7 +24,7 @@ public sealed class TrayIcon : IDisposable
 
     public TrayIcon()
     {
-        menu = new Forms.ContextMenuStrip { ShowImageMargin = true, Padding = new Forms.Padding(4), DropShadowEnabled = false, AutoSize = true };
+        menu = CreateStyledMenu();
         notify = new Forms.NotifyIcon { Text = "AI Account Center", Visible = false, ContextMenuStrip = menu };
         notify.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) ToggleRequested?.Invoke(); };
         menu.Opening += (_, _) => BuildMenu();
@@ -57,28 +57,40 @@ public sealed class TrayIcon : IDisposable
         menu.BackColor = ToDrawing("Card");
     }
 
+    internal static bool MenuFontIsInstrumentSans { get { EnsureFonts(); return menuFont?.FontFamily.Name == "Instrument Sans"; } }
+
     public void SetTooltip(string text) => notify.Text = text.Length <= 127 ? text : text[..127];
 
-    private void BuildMenu()
+    private void BuildMenu() => Populate(menu, OpenRequested, DashboardRequested, RefreshRequested, SettingsRequested, QuitRequested);
+
+    /// <summary>A styled, empty tray menu (also used by the render checks).</summary>
+    internal static Forms.ContextMenuStrip CreateStyledMenu() => new()
+    {
+        ShowImageMargin = true, Padding = new Forms.Padding(4), DropShadowEnabled = false, AutoSize = true,
+        Renderer = new AtlasMenuRenderer(), BackColor = ToDrawing("Card"),
+    };
+
+    internal static void Populate(Forms.ContextMenuStrip menu, Action? open, Action? dashboard, Action? refresh, Action? settings, Action? quit)
     {
         menu.Items.Clear();
         EnsureFonts();
+        menu.Renderer = new AtlasMenuRenderer(); menu.BackColor = ToDrawing("Card");
         var ink3 = ToMedia("Ink3");
-        var head = new Forms.ToolStripLabel("AI Account Center") { Image = Icons.MenuBitmap("logo", 16, ToMedia("Ink")), Font = menuHead, ForeColor = ToDrawing("Ink3"), Padding = new Forms.Padding(2, 6, 2, 4), ImageAlign = ContentAlignment.MiddleLeft };
+        // The header is a disabled item, so the logo sits in the icon column like the menu icons.
+        var head = new Forms.ToolStripMenuItem("AI Account Center", Icons.MenuBitmap("logo", 16, ToMedia("Ink"))) { Font = menuHead, Enabled = false, Padding = new Forms.Padding(2, 5, 2, 3) };
         menu.Items.Add(head);
-        Forms.ToolStripMenuItem Item(string text, string iconName, Action? action, bool bold = false)
+        void Item(string text, string iconName, Action? action, bool bold = false)
         {
             var item = new Forms.ToolStripMenuItem(text, Icons.MenuBitmap(iconName, 16, ink3)) { Font = bold ? menuBold : menuFont, ForeColor = ToDrawing("Ink"), Padding = new Forms.Padding(2, 7, 2, 7) };
             item.Click += (_, _) => action?.Invoke();
             menu.Items.Add(item);
-            return item;
         }
-        Item("Open accounts", "panel", OpenRequested, bold: true);
-        Item("Open dashboard", "external", DashboardRequested);
-        Item("Refresh now", "refresh", RefreshRequested);
-        Item("Settings", "settings", SettingsRequested);
+        Item("Open accounts", "panel", open, bold: true);
+        Item("Open dashboard", "external", dashboard);
+        Item("Refresh now", "refresh", refresh);
+        Item("Settings", "settings", settings);
         menu.Items.Add(new Forms.ToolStripSeparator());
-        Item("Quit AI Account Center", "power", QuitRequested);
+        Item("Quit AI Account Center", "power", quit);
     }
 
     private static void EnsureFonts()
@@ -140,10 +152,19 @@ public sealed class TrayIcon : IDisposable
             e.Graphics.DrawLine(pen, 6, y, e.Item.Width - 6, y);
         }
 
+        // Text and image share one vertical centre: both are placed against the full item height.
         protected override void OnRenderItemText(Forms.ToolStripItemTextRenderEventArgs e)
         {
-            e.TextColor = e.Item is Forms.ToolStripLabel ? ToDrawing("Ink3") : ToDrawing("Ink");
-            base.OnRenderItemText(e);
+            var bounds = new Rectangle(e.TextRectangle.X, 0, e.Item.Width - e.TextRectangle.X, e.Item.Height);
+            Forms.TextRenderer.DrawText(e.Graphics, e.Text, e.TextFont, bounds, e.Item.Enabled ? ToDrawing("Ink") : ToDrawing("Ink3"),
+                Forms.TextFormatFlags.VerticalCenter | Forms.TextFormatFlags.Left | Forms.TextFormatFlags.SingleLine | Forms.TextFormatFlags.NoPrefix | Forms.TextFormatFlags.NoPadding);
+        }
+
+        protected override void OnRenderItemImage(Forms.ToolStripItemImageRenderEventArgs e)
+        {
+            if (e.Image is null) return;
+            var size = e.ImageRectangle.Size;
+            e.Graphics.DrawImage(e.Image, new Rectangle(e.ImageRectangle.X, (e.Item.Height - size.Height) / 2, size.Width, size.Height));
         }
 
         private static GraphicsPath Rounded(Rectangle r, int radius)

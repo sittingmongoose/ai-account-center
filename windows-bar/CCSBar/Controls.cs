@@ -129,15 +129,16 @@ public static class Ui
         return grid;
     }
 
-    /// <summary>The section column grid: mark | identity | meters | action slot | tail, with 14 px gaps.</summary>
+    /// <summary>The section column grid: mark | identity | meters | action slot | tail. Sections with three meters use
+    /// 12 px meter gaps (two use 14); the tail takes up the difference, so every action slot ends on the same line.</summary>
     public static Grid SectionGrid(int meters, double acts, double identity = 186, double mark = 22)
     {
         var grid = new Grid();
         void Add(GridLength length) => grid.ColumnDefinitions.Add(new ColumnDefinition { Width = length });
-        var gap = new GridLength(14);
-        Add(new GridLength(mark)); Add(gap); Add(new GridLength(identity));
-        for (int i = 0; i < meters; i++) { Add(gap); Add(new GridLength(1, GridUnitType.Star)); }
-        Add(gap); Add(new GridLength(acts)); Add(gap); Add(new GridLength(14));
+        var gap = meters >= 3 ? 12 : 14;
+        Add(new GridLength(mark)); Add(new GridLength(14)); Add(new GridLength(identity));
+        for (int i = 0; i < meters; i++) { Add(new GridLength(gap)); Add(new GridLength(1, GridUnitType.Star)); }
+        Add(new GridLength(gap)); Add(new GridLength(acts)); Add(new GridLength(gap)); Add(new GridLength(28 - gap));
         return grid;
     }
     public static int MeterColumn(int index) => 4 + 2 * index;
@@ -177,7 +178,9 @@ public sealed class Meter : Grid
     private readonly Border trackPlate = new() { CornerRadius = new CornerRadius(3) };
     private readonly Rectangle naOutline = new() { RadiusX = 3, RadiusY = 3, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 2 }, Visibility = Visibility.Collapsed };
     private readonly Grid ticks = new();
-    private readonly Grid fill = new() { HorizontalAlignment = HorizontalAlignment.Left, Width = 0 };
+    // The fill lives on a Canvas, so its per-frame width change never re-lays out the row around it.
+    private readonly Canvas fillHost = new() { ClipToBounds = false };
+    private readonly Grid fill = new() { Width = 0, Height = 6 };
     private readonly Border calm = new() { CornerRadius = new CornerRadius(3) }, warn = new() { CornerRadius = new CornerRadius(3), Opacity = 0 }, crit = new() { CornerRadius = new CornerRadius(3), Opacity = 0 };
     private readonly Border notch = new() { Width = 2, Height = 12, CornerRadius = new CornerRadius(1), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
     private readonly Border over = new() { CornerRadius = new CornerRadius(0, 3, 3, 0), HorizontalAlignment = HorizontalAlignment.Left, Visibility = Visibility.Collapsed };
@@ -199,9 +202,10 @@ public sealed class Meter : Grid
         for (int i = 1; i < 4; i++) { var tick = new Border { Width = 1, Margin = new Thickness(0, 1, 0, 1), HorizontalAlignment = HorizontalAlignment.Left, Background = Theme.Brush("TrackTick") }; Grid.SetColumn(tick, i); ticks.Children.Add(tick); }
         calm.Background = Theme.Gradient("calm"); warn.Background = Theme.Gradient("warn"); crit.Background = Theme.Gradient("crit");
         fill.Children.Add(calm); fill.Children.Add(warn); fill.Children.Add(crit);
+        fillHost.Children.Add(fill);
         notch.Background = Theme.Brush("Ink");
         over.Background = Theme.Brush("Over");
-        track.Children.Add(trackPlate); track.Children.Add(naOutline); track.Children.Add(ticks); track.Children.Add(fill); track.Children.Add(over); track.Children.Add(notch);
+        track.Children.Add(trackPlate); track.Children.Add(naOutline); track.Children.Add(ticks); track.Children.Add(fillHost); track.Children.Add(over); track.Children.Add(notch);
         track.ClipToBounds = false;
         track.SizeChanged += (_, _) => Paint();
         var clock = Icons.Icon("clock", 12, Theme.Brush("Ink3"));
@@ -270,12 +274,12 @@ public sealed class Meter : Grid
             BeginAnimation(ShownProperty, null);
             Target = null; Shown = 0;
             value.Text = next.NaText; value.FontFamily = Theme.Sans; value.FontWeight = FontWeights.Medium; value.FontSize = 12; value.Foreground = Theme.Brush("Ink3");
-            trackPlate.Background = Brushes.Transparent; naOutline.Visibility = Visibility.Visible; ticks.Visibility = Visibility.Collapsed; fill.Visibility = Visibility.Collapsed;
+            trackPlate.Background = Brushes.Transparent; naOutline.Visibility = Visibility.Visible; ticks.Visibility = Visibility.Collapsed; fillHost.Visibility = Visibility.Collapsed;
             severity = "na"; Paint();
             return;
         }
         value.FontFamily = Theme.Numerals; value.FontWeight = FontWeights.SemiBold; value.FontSize = Kind == MeterKind.Compact ? 15 : 14;
-        trackPlate.Background = Theme.Brush("Track"); naOutline.Visibility = Visibility.Collapsed; ticks.Visibility = Visibility.Visible; fill.Visibility = Visibility.Visible;
+        trackPlate.Background = Theme.Brush("Track"); naOutline.Visibility = Visibility.Collapsed; ticks.Visibility = Visibility.Visible; fillHost.Visibility = Visibility.Visible;
         decimals = Formatting.Decimals(target);
         if (nextSeverity != severity)
         {

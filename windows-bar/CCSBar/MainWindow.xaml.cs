@@ -658,7 +658,7 @@ public partial class MainWindow : Window
         chevron.Opacity = isOpen ? 1 : 0; chevron.RenderTransformOrigin = new Point(0.5, 0.5);
         var slide = new TranslateTransform(isOpen ? 0 : -3, 0); var turn = new RotateTransform(isOpen ? 90 : 0);
         chevron.RenderTransform = new TransformGroup { Children = { turn, slide } };
-        chevron.HorizontalAlignment = HorizontalAlignment.Left; chevron.VerticalAlignment = VerticalAlignment.Center;
+        chevron.HorizontalAlignment = HorizontalAlignment.Right; chevron.VerticalAlignment = VerticalAlignment.Center;
         if (content is Grid grid && meterColumns >= 0) { Grid.SetColumn(chevron, Ui.TailColumn(meterColumns)); grid.Children.Add(chevron); }
         else { chevron.HorizontalAlignment = HorizontalAlignment.Right; chevron.Margin = new Thickness(0, 0, 10, 0); root.Children.Add(chevron); }
         root.ToolTip = null;

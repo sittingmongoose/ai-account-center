@@ -116,6 +116,9 @@ public static class FixtureRender
             PressEscape(window);
             report.Checks[$"{name}_escape_then_hides_panel"] = !window.IsVisible;
 
+            // The restyled notification-area menu (WinForms ContextMenuStrip with the Atlas renderer).
+            report.Checks[$"{name}_tray_menu_styled"] = TrayMenu(Path.Combine(directory, $"tray-menu-{name}.png"));
+
             // First run: the sign-in screen.
             var signIn = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
             signIn.Show(); signIn.ShowSignIn(firstRun: true);
@@ -172,6 +175,26 @@ public static class FixtureRender
             report.Checks["platter_glides_without_overshoot"] = target > startY && ySamples.Max() <= target + 1e-6 && Math.Abs(shift.Y - target) < 0.5 && monotonic(ySamples, true) && ySamples.Distinct().Count() > 3;
         }
         finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }
+    }
+
+    private static bool TrayMenu(string path)
+    {
+        using var menu = TrayIcon.CreateStyledMenu();
+        TrayIcon.Populate(menu, null, null, null, null, null);
+        menu.Show(new System.Drawing.Point(-4000, -4000));
+        try
+        {
+            var size = menu.Size;
+            using var bitmap = new System.Drawing.Bitmap(size.Width, size.Height);
+            menu.DrawToBitmap(bitmap, new System.Drawing.Rectangle(0, 0, size.Width, size.Height));
+            bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            var labels = menu.Items.OfType<System.Windows.Forms.ToolStripItem>().Select(item => item.Text).ToArray();
+            return labels.SequenceEqual(new[] { "AI Account Center", "Open accounts", "Open dashboard", "Refresh now", "Settings", "", "Quit AI Account Center" })
+                && menu.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().All(item => item.Image is not null && item.Font.FontFamily.Name == "Instrument Sans")
+                && menu.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Count(item => !item.Enabled) == 1
+                && menu.Renderer is System.Windows.Forms.ToolStripProfessionalRenderer && menu.BackColor.ToArgb() == TrayIcon.ToDrawing("Card").ToArgb();
+        }
+        finally { menu.Close(); }
     }
 
     private static async Task Settle(Window window)

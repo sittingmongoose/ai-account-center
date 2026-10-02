@@ -261,7 +261,7 @@ public partial class MainWindow
         var intro = Ui.Text("Sign in with your dashboard username and password.", 12.5, "Ink3", wrap: true);
         intro.HorizontalAlignment = HorizontalAlignment.Center; intro.TextAlignment = TextAlignment.Center; intro.Margin = new Thickness(0, 6, 0, 0); top.Children.Add(intro);
         SignInPanel.Children.Add(top);
-        var url = Field("Dashboard address", new TextBox { Text = connection?.BaseURL ?? "" });
+        var url = Field("Dashboard address", new TextBox { Text = connection?.BaseURL ?? new ConnectionSettings().BaseURL });
         var user = Field("Username", new TextBox { Text = connection?.Username ?? "" });
         var password = Field("Password", new PasswordBox());
         if (connection is not null) password.Hint.Text = "Leave blank to keep the saved password.";
@@ -309,7 +309,7 @@ public partial class MainWindow
         SignInLayer.Visibility = Visibility.Visible;
         SignInLayer.Opacity = 0; Motion.To(SignInLayer, OpacityProperty, 1, 260);
         RenderFooter(); UpdateStatus();
-        Dispatcher.BeginInvoke(new Action(() => (string.IsNullOrEmpty(((TextBox)url.Input).Text) ? url.Input : ((PasswordBox)password.Input) as Control)?.Focus()), System.Windows.Threading.DispatcherPriority.Input);
+        Dispatcher.BeginInvoke(new Action(() => (string.IsNullOrEmpty(((TextBox)url.Input).Text) ? url.Input : string.IsNullOrEmpty(((TextBox)user.Input).Text) ? user.Input : password.Input).Focus()), System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void CloseSignIn()
