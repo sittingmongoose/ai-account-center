@@ -520,6 +520,9 @@ export function detailsViewModel(data, id, ctx = {}) {
     sub: [provider?.label || text(account.providerLabel), planLabel(text(account.plan)), state].filter(Boolean).join(' · '),
     subLead: [provider?.label || text(account.providerLabel), planLabel(text(account.plan))].filter(Boolean).join(' · '),
     state, active: !!row?.active, switchable, canActivate: !!row?.canActivate, activateKind: row?.activateKind || '',
+    // the row's own action slot and inline confirmation, so Details reads and switches the same way
+    canSwitch: !!section?.canSwitch, activeLabel: row?.activeLabel || '', activateHint: row?.activateHint || '',
+    platform: platformLabel(account.platform), confirm: !!row?.confirm, confirmRuns: row?.confirmRuns || [],
     profile: row?.profile || profile, canMac: !!row?.canMac, canWindows: !!row?.canWindows,
     note: missingFable ? 'Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.' : '',
     meters, amounts: visibleAmounts(account).map(w => amountView(account, w, now)), facts,

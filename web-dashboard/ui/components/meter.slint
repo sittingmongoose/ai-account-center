@@ -10,7 +10,7 @@ import { Caps, ValueUnit } from "text.slint";
 import { Hover } from "hover-card.slint";
 
 // Dashed outline for "no reading": short static segments (Slint draws no dash arrays).
-component DashedTrack inherits Rectangle {
+export component DashedTrack inherits Rectangle {
     in property <color> line: Theme.rule-strong;
     property <int> dashes: max(1, floor((root.width - 6px) / 7px));
     for i in root.dashes: Rectangle {

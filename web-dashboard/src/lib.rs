@@ -374,6 +374,12 @@ struct DetailsDto {
     switchable: bool,
     can_activate: bool,
     activate_kind: String,
+    can_switch: bool,
+    active_label: String,
+    activate_hint: String,
+    platform: String,
+    confirm: bool,
+    confirm_runs: Vec<RunDto>,
     profile: String,
     can_mac: bool,
     can_windows: bool,
@@ -807,6 +813,21 @@ pub fn show_details(json: &str) -> Result<(), JsValue> {
                     switchable: v.switchable,
                     can_activate: v.can_activate,
                     activate_kind: v.activate_kind.into(),
+                    can_switch: v.can_switch,
+                    active_label: v.active_label.into(),
+                    activate_hint: v.activate_hint.into(),
+                    platform: v.platform.into(),
+                    confirm: v.confirm,
+                    confirm_runs: ModelRc::new(VecModel::from(
+                        v.confirm_runs
+                            .into_iter()
+                            .map(|r| RunView {
+                                text: r.text.into(),
+                                strong: r.strong,
+                                tone: r.tone.into(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )),
                     profile: v.profile.into(),
                     can_mac: v.can_mac,
                     can_windows: v.can_windows,

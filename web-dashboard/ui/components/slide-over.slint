@@ -2,9 +2,9 @@
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 
 // Right-hand panel: springs in (600 ms, a few px of overshoot hidden by its 28 px bleed), slides out
-// quickly (220 ms ease-in). The scrim fades and closes the panel on any click outside it; Escape is
-// handled by the window. `swap()` dips the content for 130 ms when another row is opened while it is
-// open. Content goes in @children (the window stacks Details there).
+// quickly (220 ms ease-in). The scrim only tints: like the concept's, it lets clicks through, so a click on
+// another row swaps the content (`swap()` dips it for 130 ms) and the window closes the panel on a click
+// anywhere else (its background TouchAreas) and on Escape. Content goes in @children.
 export component SlideOver inherits Rectangle {
     in-out property <bool> open: false;
     in property <length> view-w;
@@ -37,10 +37,6 @@ export component SlideOver inherits Rectangle {
         opacity: root.open ? 1 : 0;
         visible: self.opacity > 0.005;
         animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-        TouchArea {
-            enabled: root.open;
-            clicked => { root.close-requested(); }
-        }
     }
     panel := Rectangle {
         y: 0px;

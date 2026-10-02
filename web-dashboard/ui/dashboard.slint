@@ -586,6 +586,14 @@ export component Dashboard inherits Window {
             width: root.width;
             height: root.height;
         }
+        // A click that nothing else takes (the header's empty space, the gaps between sections) closes
+        // Details; a click on a row opens that row instead.
+        TouchArea {
+            width: root.width;
+            height: root.height;
+            enabled: root.details-open;
+            clicked => { root.close-details(); }
+        }
 
         scroller := PageScroll {
             y: 62px;
@@ -596,6 +604,10 @@ export component Dashboard inherits Window {
                 x: max(0px, (root.width - Breakpoints.max-content) / 2);
                 width: min(root.width, Breakpoints.max-content);
                 height: max(scroller.height, pages.preferred-height);
+                TouchArea {
+                    enabled: root.details-open;
+                    clicked => { root.close-details(); }
+                }
                 pages := VerticalLayout {
                     padding-left: Breakpoints.gutter;
                     padding-right: Breakpoints.gutter;

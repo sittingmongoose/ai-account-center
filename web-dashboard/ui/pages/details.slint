@@ -8,7 +8,7 @@ import { Caps } from "../components/text.slint";
 import { Button } from "../components/button.slint";
 import { IconButton } from "../components/icon-button.slint";
 import { Meter } from "../components/meter.slint";
-import { ActiveMark } from "home.slint";
+import { SwitchSlot, CheckMark, ConfirmBox, AmountLine } from "home.slint";
 
 component Stagger inherits Rectangle {
     in property <int> index;
@@ -42,6 +42,12 @@ export component DetailsPanel inherits Rectangle {
     callback activate(string, string);
     callback go-accounts();
 
+    // the inline confirmation before activating an account past its switch point
+    property <bool> confirming: false;
+    property <string> shown-id: root.data.id;
+    changed shown-id => { root.confirming = false; }
+    changed open => { if !root.open { root.confirming = false; } }
+
     head := Rectangle {
         x: 0px;
         y: 0px;
@@ -61,8 +67,39 @@ export component DetailsPanel inherits Rectangle {
             VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: 3px;
-                Text { text: root.data.title; font-size: 18px; font-weight: 640; color: Theme.ink; overflow: elide; }
-                Text { text: root.data.sub; font-size: 12.5px; color: Theme.ink-3; overflow: elide; }
+                Text { text: root.data.title; font-size: 18px; font-weight: 640; letter-spacing: -0.18px; color: Theme.ink; overflow: elide; }
+                // "Codex · Pro · Active on Ubuntu", the active state with the same check-circle the rows use
+                HorizontalLayout {
+                    spacing: 0px;
+                    alignment: start;
+                    Text {
+                        text: root.data.sub-lead != "" ? root.data.sub-lead + " · " : "";
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                    }
+                    if root.data.switchable && root.data.active: HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            alignment: center;
+                            CheckMark { size: 14px; drawn: root.data.active; }
+                        }
+                        Text {
+                            text: "Active " + root.data.active-label;
+                            font-size: 12.5px;
+                            font-weight: 640;
+                            color: Theme.accent-text;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if !(root.data.switchable && root.data.active): Text {
+                        text: root.data.state;
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
             }
             VerticalLayout {
                 alignment: start;
@@ -121,31 +158,7 @@ export component DetailsPanel inherits Rectangle {
                     spacing: 0px;
                     Caps { text: "BALANCES, PACKS AND CREDITS · " + root.data.amount-count; }
                     Rectangle { height: 8px; }
-                    for a[k] in root.data.amounts: VerticalLayout {
-                        spacing: 0px;
-                        if k > 0: Rectangle { height: 1px; background: Theme.rule; }
-                        HorizontalLayout {
-                            padding-top: 7px;
-                            padding-bottom: a.sub == "" ? 7px : 2px;
-                            spacing: 8px;
-                            VerticalLayout { alignment: center; Icon { name: a.icon; tint: Theme.ink-3; width: 16px; height: 16px; } }
-                            Text { text: a.label; font-size: 12.5px; color: Theme.ink-2; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
-                            Text {
-                                text: a.value + (a.unit != "" ? " " + a.unit : "");
-                                font-family: Type.tab;
-                                font-size: 12.5px;
-                                font-weight: 600;
-                                color: a.spent ? Theme.crit-text : Theme.ink;
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                            }
-                        }
-                        if a.sub != "": HorizontalLayout {
-                            padding-left: 24px;
-                            padding-bottom: 7px;
-                            Text { text: a.sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
-                        }
-                    }
+                    for a[k] in root.data.amounts: AmountLine { amount: a; rule-above: k > 0; }
                 }
             }
             Rectangle { height: 1px; background: Theme.rule-2; }
@@ -159,8 +172,9 @@ export component DetailsPanel inherits Rectangle {
                     Caps { text: "READING"; }
                     for f in root.data.facts: HorizontalLayout {
                         spacing: 12px;
-                        Text { text: f.label; width: 110px; font-size: 13px; color: Theme.ink-3; }
+                        Text { text: f.label; width: 110px; min-height: 19px; font-size: 13px; color: Theme.ink-3; }
                         Text {
+                            min-height: 19px;
                             text: f.value;
                             font-family: f.mono ? Type.mono : Type.tab;
                             font-size: f.mono ? 12px : 13px;
@@ -195,16 +209,38 @@ export component DetailsPanel inherits Rectangle {
                         enabled: root.data.can-windows && !root.busy;
                         clicked => { root.launch(root.data.profile, "windows"); }
                     }
-                    if root.data.switchable && root.data.active: ActiveMark { where: "on Ubuntu"; }
-                    if root.data.switchable && !root.data.active: Button {
-                        small: true;
-                        kind: "accent-line";
-                        icon: "swap";
-                        text: "Activate";
-                        enabled: root.data.can-activate && !root.busy;
-                        clicked => { root.activate(root.data.activate-kind, root.data.profile); }
+                    // the row's action slot: Activate with the plain "Active" mark stacked on it, so a switch
+                    // while Details is open crossfades in place and the check draws in
+                    if root.data.switchable && (root.data.can-switch || root.data.active): SwitchSlot {
+                        account: {
+                            id: root.data.id,
+                            active: root.data.active,
+                            active-label: root.data.active-label,
+                            platform: root.data.platform,
+                            can-activate: root.data.can-activate,
+                            activate-hint: root.data.activate-hint,
+                        };
+                        can-switch: root.data.can-switch;
+                        busy: root.busy;
+                        activate => {
+                            if root.data.confirm {
+                                root.confirming = true;
+                            } else {
+                                root.activate(root.data.activate-kind, root.data.profile);
+                            }
+                        }
                     }
                     Button { small: true; kind: "ghost"; text: "Manage in Accounts & Settings"; clicked => { root.go-accounts(); } }
+                }
+            }
+            if root.data.confirm: ConfirmBox {
+                runs: root.data.confirm-runs;
+                open: root.confirming;
+                busy: root.busy;
+                keep => { root.confirming = false; }
+                confirm => {
+                    root.confirming = false;
+                    root.activate(root.data.activate-kind, root.data.profile);
                 }
             }
         }

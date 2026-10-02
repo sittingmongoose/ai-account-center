@@ -221,3 +221,14 @@ test('provider cards carry the concept footer, plan note and shared pack expiry 
   assert.equal(m.meters.length, 1); assert.equal(m.meters[0].hasValue, false); assert.equal(m.meters[0].naText, 'Unavailable');
   assert.equal(k.plan, ''); assert.equal(k.flag, 'Sign-in needed');
 });
+
+test('Details carries the row slot and the same inline confirmation (W2)', () => {
+  const a = account({ id: 'codex:a', email: 'a@example.test', isActive: true, windows: [window({ usedPercent: 9 })], capabilities: { codexProfile: 'a' } });
+  const b = account({ id: 'codex:b', email: 'b@example.test', windows: [window({ usedPercent: 99 })], capabilities: { codexProfile: 'b' } });
+  const details = detailsViewModel(data([a, b]), 'codex:b', { now });
+  assert.equal(details.canSwitch, true); assert.equal(details.confirm, true); assert.equal(details.platform, 'Ubuntu');
+  assert.equal(details.confirmRuns[0].text, '99% used'); assert.equal(details.subLead, 'Codex · Pro');
+  const active = detailsViewModel(data([a, b]), 'codex:a', { now });
+  assert.equal(active.active, true); assert.equal(active.activeLabel, 'on Ubuntu'); assert.equal(active.confirm, false);
+  assert.equal(detailsViewModel(data([a]), 'codex:a', { now }).canSwitch, false);
+});

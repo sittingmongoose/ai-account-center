@@ -333,13 +333,21 @@ window.ccsDashboardAction = async (action, value) => {
         const status = await mutation('/api/antigravity/auto-switch', patch, 'PUT');
         if (!validAntigravityAuto(status)) throw new Error('Automatic switching settings could not be confirmed. Refresh before trying again.');
         antigravityAuto = status; render();
+        if (action === 'antigravity-automatic') toast('info', status.enabled ? `Antigravity auto-switch on at ${status.thresholdUsedPercent}% used` : 'Antigravity auto-switch off',
+          status.enabled ? 'The active login switches when its watched pool reaches the threshold.' : 'Logins only switch when you press Activate.');
       } finally { setBusy(false); }
       return;
     }
     if (action === 'automatic') {
       refreshGeneration++;
       setBusy(true);
-      try { const status = await mutation('/api/codex/profiles/auto-switch', { enabled: value === 'true' }, 'PUT'); if (data) data.codexAutoSwitch = status; render(); }
+      try {
+        const status = await mutation('/api/codex/profiles/auto-switch', { enabled: value === 'true' }, 'PUT'); if (data) data.codexAutoSwitch = status; render();
+        // The toast repeats what the server confirmed, not what was asked for.
+        const on = status?.enabled === true, used = Number.isInteger(status?.thresholdPercent) ? 100 - status.thresholdPercent : null;
+        toast('info', on ? `Codex auto-switch on${used !== null ? ` at ${used}% used` : ''}` : 'Codex auto-switch off',
+          on ? 'The active account switches when its weekly or 5-hour window reaches the threshold.' : 'Accounts only switch when you press Activate.');
+      }
       finally { setBusy(false); }
       return;
     }

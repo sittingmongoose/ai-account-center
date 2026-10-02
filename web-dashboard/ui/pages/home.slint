@@ -15,7 +15,7 @@ import { Caps, ValueUnit } from "../components/text.slint";
 import { Button } from "../components/button.slint";
 import { IconButton } from "../components/icon-button.slint";
 import { Toggle } from "../components/toggle.slint";
-import { Meter } from "../components/meter.slint";
+import { Meter, DashedTrack } from "../components/meter.slint";
 import { Plate, Card } from "../components/card.slint";
 import { Reveal } from "../components/reveal.slint";
 import { Hover } from "../components/hover-card.slint";
@@ -146,6 +146,8 @@ export component SwitchSlot inherits Rectangle {
     callback finish-setup();
     property <bool> show-button: root.can-switch && !root.account.active && !root.account.setup;
     out property <length> natural: max(root.can-switch ? btn.preferred-width : 0px, mark.preferred-width, root.account.setup ? setup-btn.preferred-width : 0px);
+    preferred-width: root.natural;
+    min-width: root.natural;
     preferred-height: max(28px, mark.preferred-height);
     min-height: self.preferred-height;
 
@@ -193,6 +195,63 @@ export component SwitchSlot inherits Rectangle {
         icon: "terminal";
         text: "Finish setup";
         clicked => { root.finish-setup(); }
+    }
+}
+
+// The same question in Details: a rounded box under the actions, the buttons on their own line.
+export component ConfirmBox inherits Rectangle {
+    in property <[RunView]> runs;
+    in property <bool> open;
+    in property <bool> busy;
+    callback keep();
+    callback confirm();
+    property <length> natural: inner.preferred-height + 10px;
+    height: root.open ? root.natural : 0px;
+    animate height { duration: Motion.on ? (root.open ? Motion.med : 200ms) : 0ms; easing: root.open ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1); }
+    clip: true;
+    Rectangle {
+        y: 10px;
+        height: inner.preferred-height;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.rule;
+        background: Theme.warn.mix(Theme.paper, 0.07);
+        opacity: root.open ? 1 : 0;
+        animate opacity { duration: Motion.on ? (root.open ? Motion.med : 160ms) : 0ms; delay: Motion.on && root.open ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        inner := VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: start;
+                    padding-top: 1px;
+                    horizontal-stretch: 0;
+                    Icon { name: "alert"; tint: Theme.warn-text; width: 16px; height: 16px; }
+                }
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 0px;
+                    for r in root.runs: Text {
+                        text: r.text;
+                        font-size: 12.5px;
+                        font-weight: r.strong ? 640 : 400;
+                        color: r.tone == "warn" ? Theme.warn-text : r.strong ? Theme.ink : Theme.ink-2;
+                        wrap: r.strong ? no-wrap : word-wrap;
+                        horizontal-stretch: r.strong ? 0 : 1;
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 10px;
+                Button { kind: "ghost"; small: true; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
+                Button { kind: "accent-line"; small: true; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
+            }
+        }
     }
 }
 
@@ -491,12 +550,10 @@ component LegendRow inherits HorizontalLayout {
                 background: @linear-gradient(90deg, Theme.fill-wash 0%, Theme.fill-wash.with-alpha(0) 100%);
             }
         }
-        if root.swatch == -1: Rectangle {
+        if root.swatch == -1: DashedTrack {
             y: (parent.height - 8px) / 2;
+            width: parent.width;
             height: 8px;
-            border-radius: 4px;
-            border-width: 1px;
-            border-color: Theme.rule-strong;
         }
         if root.swatch == -2: Rectangle {
             x: 14px;
@@ -668,6 +725,13 @@ export component AccountSection inherits Plate {
     property <bool> hl-placed: false;
     property <bool> hl-hover: false;
     property <bool> hl-flash: false;
+    // after a flash the highlight fades back over 620 ms, like a row
+    property <bool> hl-fade: false;
+    hl-fade-end := Timer {
+        interval: 650ms;
+        running: false;
+        triggered => { self.running = false; root.hl-fade = false; }
+    }
     property <bool> hl-on: root.section.switchable && root.section.active-id != "" && root.hl-placed;
     glide-end := Timer {
         interval: 600ms;
@@ -911,7 +975,10 @@ export component AccountSection inherits Plate {
                 opacity: root.hl-on ? 1 : 0;
                 animate y, height { duration: root.hl-glide ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                 animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-                animate background { duration: Motion.tint(root.hl-flash ? 0ms : 160ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                animate background {
+                    duration: Motion.tint(root.hl-flash ? 0ms : root.hl-fade ? 620ms : 160ms);
+                    easing: root.hl-fade ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1);
+                }
             }
             rows := VerticalLayout {
                 spacing: 0px;
@@ -964,6 +1031,10 @@ export component AccountSection inherits Plate {
                     }
                     changed flashing => {
                         if self.account.active {
+                            if !self.flashing {
+                                root.hl-fade = true;
+                                hl-fade-end.running = true;
+                            }
                             root.hl-flash = self.flashing;
                         }
                     }
@@ -1038,7 +1109,7 @@ component DashedRule inherits Rectangle {
     }
 }
 
-component AmountLine inherits VerticalLayout {
+export component AmountLine inherits VerticalLayout {
     in property <AmountView> amount;
     in property <bool> rule-above;
     spacing: 0px;
