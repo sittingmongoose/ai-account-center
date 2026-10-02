@@ -40,8 +40,13 @@ export {
     AxDaily, AxDay, AxCalendar, AxTick, AxShape, AxLabel, AxDot, AxFocusLegend, AxStopRow, AxStop, AxFocus,
     AxQuotaRow, AxQuotaGroup, AxAgendaRow
 } from "pages/analytics/ax-data.slint";
-// The Accounts & Settings view model (version 1): Rust fills the AcData global directly.
-export { AcData, AcAction, AcRow, AcProvider, AcAgPolicy, AcPolicy, AcUpdItem, AcUpdHost, AcSignin } from "pages/accounts/ac-data.slint";
+// The Accounts & Settings view model (version 2): Rust fills the AcData global directly.
+export {
+    AcData, AcAction, AcLine, AcRow, AcFlow, AcTrashRow, AcProvider, AcAgPolicy, AcPolicy, AcUpdItem, AcUpdHost,
+    AcDevice, AcNetwork, AcSignin
+} from "pages/accounts/ac-data.slint";
+// End-to-end probes (only with ?e2e): Rust forwards Probe.rect to bridge.js.
+export { Probe } from "components/probe.slint";
 export { SegItem } from "components/segmented.slint";
 
 // The faint cartographic grid behind the pages: 24 px minor and 96 px major lines.

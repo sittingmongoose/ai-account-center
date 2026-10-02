@@ -1,62 +1,41 @@
-// Accounts & Settings view model, version 1 (Daylight Atlas, c-daylight-atlas/app-accounts.js and app-auth.js).
+// Accounts & Settings view model, version 2 (Daylight Atlas, c-daylight-atlas/app-accounts.js and app-auth.js).
 // Pure functions from the public API DTOs to the JSON that src/accounts.rs writes into the AcData global
-// (ui/pages/accounts/ac-data.slint). Every label, every "coming" decision and every truthfulness rule lives
-// here and is covered by tests/accounts-view.test.mjs; Slint only lays out and animates it.
+// (ui/pages/accounts/ac-data.slint). Every label, every enabled or "coming" decision and every truthfulness rule
+// lives here and is covered by tests/accounts-view.test.mjs; Slint only lays out and animates it.
 //
-// Only the APIs that exist on the server today are live (see LIVE below). Every other action is drawn in
-// its approved place, dimmed, with a "coming" caption and a tip that says what it will do. The contracts
-// for those routes are CONTRACT-registry-lifecycle.md and CONTRACT-auth-devices.md; the status file
-// worktrees/status/W4.md lists each one. Nothing here ever shows an example value as real data.
+// What a control may do comes from the server: `providers[]` (signIn, capabilities) in the dashboard response,
+// and per account `actions` and `removeRefusal` in GET /api/accounts/registry. A control is "coming" only where
+// the server has no flow for it yet (`not_implemented`, or a route that does not exist on this server); any other
+// reason it is off is said in plain words. Nothing here ever shows an example value as real data.
 import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, planLabel, relative, intervalLabel, run, statusWord, duration } from './view-model.mjs';
 import { antigravityView } from './antigravity-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
+import { strength as passwordStrength } from './auth-view.mjs';
 
-export const ACCOUNTS_VIEW_VERSION = 1;
+export const ACCOUNTS_VIEW_VERSION = 2;
 
-/**
- * Which actions the server can do today. Everything false is drawn as "coming". When a route lands, flip its
- * entry here and add its handler in bridge.js (the client-bindings task does both).
- */
+/** Server routes the page binds; `true` once the route exists on the round-2 base (kept for the docs and tests). */
 export const LIVE = Object.freeze({
   activate: true,            // POST /api/codex/profiles/:name/activate, POST /api/antigravity/profiles/:id/activate
   openClaude: true,          // POST /api/claude/desktop-profiles/:id/open
   antigravityPolicy: true,   // PUT /api/antigravity/auto-switch (toggle, threshold, pool, cooldown)
   codexPolicy: true,         // PUT /api/codex/profiles/auto-switch
   refreshInterval: true,     // PUT /api/accounts/settings
-  add: false,                // POST /api/accounts/add
-  signInAgain: false,        // POST /api/accounts/:id/signin-again
-  replaceKey: false,         // PUT /api/accounts/:id/key
-  remove: false,             // POST /api/accounts/:id/remove
-  openApp: false,            // POST /api/accounts/:id/open (Cursor, Muse)
-  recheck: false,            // POST /api/accounts/:id/recheck
-  visibilityServer: false,   // PUT /api/accounts/visibility (until then: this browser only)
-  passwordChange: false,     // POST /api/auth/password
-  otherBrowsers: false,      // GET /api/auth/session, POST /api/auth/sessions/revoke-others
-  devices: false,            // GET /api/auth/devices, DELETE /api/auth/devices/:id, POST /api/auth/devices/revoke-all
+  add: true,                 // POST /api/accounts/add (per provider: providers[].capabilities.add)
+  signInAgain: true,         // POST /api/accounts/:id/signin-again
+  replaceKey: true,          // PUT /api/accounts/:id/key
+  remove: true,              // POST /api/accounts/:id/remove (confirmation token)
+  restore: true,             // POST /api/accounts/trash/:trashId/restore (confirmation token)
+  purgeNow: false,           // no route: the trash empties itself after 30 days
+  openApp: true,             // POST /api/accounts/:id/open (Cursor)
+  recheck: true,             // POST /api/accounts/:id/recheck
+  visibilityServer: true,    // PUT /api/accounts/visibility
+  passwordChange: true,      // POST /api/auth/password
+  otherBrowsers: true,       // GET /api/auth/session, POST /api/auth/sessions/revoke-others
+  devices: true,             // GET /api/auth/devices, DELETE /api/auth/devices/:id, POST /api/auth/devices/revoke-all
+  network: true,             // GET and PUT /api/auth/network
 });
-
-/** The fixed sentence a "coming" action shows on hover. */
-const COMING = 'Coming with the server update. ';
-const SOON = {
-  add: {
-    claude: `${COMING}Add account creates a new Claude desktop profile on Mac and Windows; you then sign in inside the app.`,
-    codex: `${COMING}Add account starts a device-code sign-in for a new Codex profile; you approve a short code in any browser.`,
-    antigravity: `${COMING}Add account runs the Antigravity CLI login on Ubuntu under supervision; you sign in to Google in a browser.`,
-  },
-  signInAgain: `${COMING}Sign in again runs the device-code login for this profile; its history stays. The active account cannot be signed in again until another one is active.`,
-  remove: {
-    claude: `${COMING}Remove moves this profile's Claude data to a 30-day trash on Mac and Windows.`,
-    codex: `${COMING}Remove deletes this saved Codex login. The active account and the saved default cannot be removed.`,
-    antigravity: `${COMING}Remove deletes this saved Antigravity login on Ubuntu. The active account cannot be removed.`,
-    apikey: `${COMING}Remove deletes the stored key from the dashboard host.`,
-    browser: `${COMING}Remove stops reading this account; the browser extension keeps its session.`,
-  },
-  replaceKey: `${COMING}Replace key stores a new key on the dashboard host, only over HTTPS or an encrypted tunnel, and checks it first.`,
-  addKey: `${COMING}Each key becomes its own account; the key is stored on the dashboard host and never shown again.`,
-  openApp: `${COMING}Sign in opens the app on that computer so you can sign in there; the dashboard then reads the session.`,
-  recheck: `${COMING}Re-check reads the session again now. Until then readings follow the refresh interval.`,
-  extension: `${COMING}The console session comes from the browser extension; Sign in opens the console so the extension can sync it.`,
-};
 
 /**
  * Per provider: how it signs in (the section's kind line and the rows' source column), its row action slots
@@ -70,9 +49,9 @@ export const ACCOUNT_KINDS = {
     how: 'Device-code sign-in: approve a short code in any browser.' },
   antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 2, actsMin: 160,
     how: 'The dashboard host runs and supervises the CLI login.' },
-  cursor: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Cursor desktop app', slots: 1, actsMin: 150,
+  cursor: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Cursor desktop app', slots: 2, actsMin: 150,
     how: 'Sign in inside the Cursor desktop app; the dashboard reads that session.' },
-  muse: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Muse Code app', slots: 1, actsMin: 150,
+  muse: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Muse Code app', slots: 2, actsMin: 150,
     how: 'Sign in inside the Muse Code app; the dashboard reads that session.' },
   'kimi-code': { kind: 'apikey', kindLabel: 'API key', icon: 'key', src: 'API key', slots: 2, actsMin: 156,
     how: 'Usage is read with an API key.' },
@@ -92,21 +71,63 @@ const validDate = value => typeof value === 'string' && Number.isFinite(Date.par
 const text = value => typeof value === 'string' ? value : '';
 const STALE_MS = 30 * 60_000;
 const dateTime = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+const clockFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const article = word => /^[aeiou]/i.test(word) ? 'an' : 'a';
 const isConsole = account => /console/i.test(text(account?.message)) || /^plan-opencode-go-console-/.test(text(account?.id));
+const providerLabel = id => PROVIDER_LABELS[id] || PROVIDER_REGISTRY.find(row => row.id === id)?.label || id;
 
 // ---------------------------------------------------------------- actions
-/** One fixed action slot. kind: switch | button | icon | quiet | empty. style: Button kinds. */
+/**
+ * One fixed action slot. kind: switch | button | icon | quiet | empty. style: Button kinds. `refused` draws the
+ * control dimmed but keeps it clickable: the click opens the reason under the row instead of calling the server.
+ * `probe` names the control for the end-to-end harness (it is only reported while the page runs with ?e2e).
+ */
 export function action(fields = {}) {
-  return { kind: 'button', act: '', value: '', label: '', icon: '', platform: '', style: 'default', enabled: false, coming: false, tip: '', span: 1, ...fields };
+  return { kind: 'button', act: '', value: '', label: '', icon: '', platform: '', style: 'default', enabled: false, coming: false, refused: false, busy: false, tip: '', probe: '', span: 1, ...fields };
 }
 const coming = (fields, tip) => action({ ...fields, enabled: false, coming: true, tip });
 const emptySlot = () => action({ kind: 'empty' });
-const removeSlot = (kind, provider) => coming({ kind: 'icon', act: 'remove', icon: 'trash', label: 'Remove', style: 'ghost' },
-  SOON.remove[provider] || SOON.remove[kind] || SOON.remove.apikey);
+
+/** The server's facts for one provider (`providers[]` in the dashboard response), or null on an older server. */
+function providerEntry(data, id) {
+  return Array.isArray(data?.providers) ? data.providers.find(entry => entry?.id === id) || null : null;
+}
+/**
+ * Whether a provider-level action is live, and if not, why. kind: add | signInAgain | replaceKey | remove | recheck.
+ * Returns { live, coming, reason }.
+ */
+export function gate(entry, kind, provider) {
+  if (!entry) return { live: false, coming: true, reason: 'This server does not list what this provider can do yet.' };
+  const caps = entry.capabilities || {};
+  const signIn = entry.signIn || {};
+  if (caps[kind] === true) return { live: true, coming: false, reason: '' };
+  if (kind === 'remove') return { live: false, coming: true, reason: `Removing ${providerLabel(provider)} accounts from the dashboard is not on this server yet.` };
+  if (kind === 'recheck') return { live: false, coming: true, reason: 'Re-check is not on this server yet; readings follow the refresh interval.' };
+  if (signIn.available === false && signIn.unavailableReason) {
+    const why = unavailableText(signIn.unavailableReason, provider);
+    if (why.text) return { live: false, coming: why.coming, reason: why.text };
+  }
+  if (kind === 'add') {
+    if (caps.multiAccount === false && finite(entry.accountCount) && entry.accountCount > 0) return { live: false, coming: false, reason: `${providerLabel(provider)} reads one account in this version.` };
+    if (finite(entry.accountCount) && entry.accountCount >= 16) return { live: false, coming: false, reason: `${providerLabel(provider)} already has the most accounts allowed.` };
+  }
+  return { live: false, coming: true, reason: 'Not on this server yet.' };
+}
+/** A control drawn from a gate: live (enabled), coming (dimmed with the caption) or off with its reason. */
+function gated(fields, g, liveTip = '') {
+  if (g.live) return action({ ...fields, enabled: true, tip: liveTip });
+  return action({ ...fields, enabled: false, coming: g.coming, tip: g.reason });
+}
 
 /** Where the account was read and how fresh it is ("sampled 1m ago"); the status word appears only for an exception. */
-function rowStatus(account, now) {
+function rowStatus(account, now, reg) {
+  if (reg?.lifecycle?.state === 'pending_sign_in' || account?.lifecycle?.state === 'pending_sign_in') {
+    return { status: 'Needs sign-in', sampled: 'waiting for the first reading', sampledTip: 'Sign in inside the app; the row fills in after its first reading' };
+  }
+  if (['signing_in', 'verifying'].includes(reg?.lifecycle?.state || account?.lifecycle?.state)) {
+    return { status: 'Signing in', sampled: 'sign-in running', sampledTip: 'A sign-in for this account is running' };
+  }
   const at = validDate(account.sampledAt) ? account.sampledAt : validDate(account.fetchedAt) ? account.fetchedAt : null;
   const normal = account.status === 'ok' || account.status === 'cached';
   const stale = !!at && now - Date.parse(at) > STALE_MS;
@@ -116,7 +137,7 @@ function rowStatus(account, now) {
     sampledTip: at ? `Last reading ${dateTime.format(new Date(at))}${account.status === 'cached' ? ', from the cache' : ''}` : 'No reading has arrived yet',
   };
 }
-function sourceLines(provider, account) {
+function sourceLines(provider, account, reg) {
   const def = ACCOUNT_KINDS[provider];
   if (provider === 'claude') {
     const platforms = Array.isArray(account.capabilities?.claudePlatforms) ? account.capabilities.claudePlatforms : [];
@@ -124,70 +145,383 @@ function sourceLines(provider, account) {
   }
   if (provider === 'opencode-go' && isConsole(account)) return ['Console session in a browser', 'Wallet and usage'];
   if (provider === 'qwen') return [def.src, 'by browser extension'];
+  const credential = reg?.credential;
+  if (credential?.kind === 'aac-key') {
+    return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || account.platform)}`];
+  }
   return [def.src, platformLabel(account.platform)];
 }
 
-function rowActions(provider, account, homeRow, canSwitch) {
+/** A Claude profile that is a computer's default desktop profile (its own app-data folder named "Claude"). */
+export function claudeDefaultProfile(profile) {
+  if (!profile || typeof profile !== 'object') return false;
+  const base = path => text(path).replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  return [profile.mac, profile.windows].some(launcher => launcher && (launcher.isDefault === true || base(launcher.profilePath) === 'Claude'));
+}
+
+/** The remove control for a row: live, refused (reason under the row on click), or coming. */
+function removeControl(provider, account, reg, entry, extra = {}) {
+  const fields = { kind: 'icon', act: 'remove', value: account.id, icon: 'trash', label: 'Remove', style: 'ghost', probe: `remove:${account.id}` };
+  // a refused control is clickable: it opens the reason under the row (act "refuse", value "<row id>\n<code>")
+  const refuse = code => action({ ...fields, act: 'refuse', value: `${account.id}\n${code}`, enabled: true, refused: true, tip: REFUSAL_TIP[code] || 'It cannot be removed now.' });
+  if (extra.protectedProfile) return refuse('account_protected');
+  const g = gate(entry, 'remove', provider);
+  if (!g.live) return action({ ...fields, enabled: false, coming: g.coming, tip: g.reason });
+  if (!reg) return action({ ...fields, enabled: false, tip: 'Checking whether it can be removed' });
+  if (reg.actions?.remove !== true) {
+    return coming(fields, `Removing this ${providerLabel(provider)} account from the dashboard is not on this server yet.`);
+  }
+  if (reg.removeRefusal) return refuse(reg.removeRefusal);
+  return action({ ...fields, enabled: true, tip: REMOVE_TIP[ACCOUNT_KINDS[provider].kind] || 'Remove' });
+}
+const REMOVE_TIP = {
+  desktop: "Remove moves this profile's Claude data to a 30-day trash on Mac and Windows.",
+  device: 'Remove deletes this saved Codex login.',
+  cli: 'Remove deletes this saved Antigravity login on Ubuntu.',
+  apikey: 'Remove deletes the stored key from the dashboard computer.',
+  browser: 'Remove stops reading this account; the browser extension keeps its session.',
+  app: 'Remove stops reading this account; the app keeps its session.',
+};
+const REFUSAL_TIP = {
+  account_active: 'This is the active account. Activate another account first.',
+  account_default: 'This is the default account. Make another account the default first.',
+  account_protected: "This is this computer's default Claude profile. It can't be removed here.",
+  last_account: 'This is the last account of this provider.',
+  activation_running: 'An account switch is running.',
+  signin_running: 'A sign-in for this account is running.',
+};
+
+function rowActions(provider, account, homeRow, canSwitch, ctx) {
   const def = ACCOUNT_KINDS[provider];
+  const entry = providerEntry(ctx.data, provider);
+  const reg = ctx.registry.get(account.id) || null;
   switch (def.kind) {
     case 'desktop': {
       const profile = homeRow?.profile || text(account.capabilities?.claudeProfileId);
+      const meta = (ctx.profiles || []).find(row => row?.id === profile) || null;
       const open = (target, label, platform) => {
         const can = target === 'mac' ? !!homeRow?.canMac : !!homeRow?.canWindows;
-        return action({ act: 'launch', value: `${profile}:${target}`, label, platform, enabled: LIVE.openClaude && can && !!profile,
-          tip: can ? `Open ${text(account.email) || 'this profile'} in its own Claude profile on ${label}` : `Open on ${label} is not set up for this profile` });
+        return action({ act: 'launch', value: `${profile}:${target}`, label, platform, enabled: LIVE.openClaude && can && !!profile, probe: `open-${target}:${account.id}`,
+          tip: can ? `Open ${text(account.email) || 'this profile'} in its own Claude profile on ${label}, to use it or sign in again` : `Open on ${label} is not set up for this profile` });
       };
-      return [open('mac', 'Mac', 'apple'), open('windows', 'Windows', 'windows'), removeSlot('desktop', provider)];
+      const protectedProfile = claudeDefaultProfile(meta) || reg?.removeRefusal === 'account_protected' || reg?.removeRefusal === 'account_default';
+      return [open('mac', 'Mac', 'apple'), open('windows', 'Windows', 'windows'), removeControl(provider, account, reg, entry, { protectedProfile })];
     }
-    case 'device':
+    case 'device': {
+      const g = gate(entry, 'signInAgain', provider);
+      const fields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
+      const again = homeRow?.active
+        ? action({ ...fields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the active account. Activate another account first, then sign in again.' })
+        : !g.live ? gated(fields, g)
+          : reg && reg.actions?.signInAgain === false ? action({ ...fields, enabled: false, tip: 'A sign-in is not possible for this account now.' })
+            : action({ ...fields, enabled: true, tip: 'Run the device-code login for this profile again; its history stays.' });
       return [
-        action({ kind: 'switch', act: 'activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '' }),
-        coming({ act: 'signin-again', label: 'Sign in again', icon: 'login' }, SOON.signInAgain),
-        removeSlot('device', provider),
+        action({ kind: 'switch', act: 'activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '', probe: `activate:${account.id}` }),
+        again,
+        removeControl(provider, account, reg, entry),
       ];
+    }
     case 'cli':
       return [
         canSwitch || homeRow?.active
-          ? action({ kind: 'switch', act: 'antigravity-activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '' })
+          ? action({ kind: 'switch', act: 'antigravity-activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '', probe: `activate:${account.id}` })
           : emptySlot(),
-        removeSlot('cli', provider),
+        removeControl(provider, account, reg, entry),
       ];
-    case 'apikey':
-      return [
-        isConsole(account)
-          ? coming({ act: 'signin', label: 'Sign in', icon: 'login' }, SOON.extension)
-          : coming({ act: 'replace-key', label: 'Replace key', icon: 'key', style: 'accent-line' }, SOON.replaceKey),
-        removeSlot('apikey', provider),
-      ];
-    case 'browser':
-      return [coming({ act: 'signin', label: 'Sign in', icon: 'login' }, SOON.extension), removeSlot('browser', provider)];
+    case 'apikey': {
+      if (isConsole(account)) {
+        const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };
+        const live = reg ? reg.actions?.signInAgain === true : false;
+        return [live ? action({ ...fields, enabled: true, tip: 'Open the OpenCode console in the browser with the extension and sign in there.' })
+          : action({ ...fields, enabled: false, tip: reg ? 'Signing in to the console wallet is not available here.' : 'Checking what this account can do' }),
+        removeControl(provider, account, reg, entry)];
+      }
+      const g = gate(entry, 'replaceKey', provider);
+      const fields = { act: 'replace-key', value: account.id, label: 'Replace key', icon: 'key', style: 'accent-line', probe: `replace-key:${account.id}` };
+      let replace;
+      if (!g.live) replace = gated(fields, g);
+      else if (!reg) replace = action({ ...fields, enabled: false, tip: 'Checking what this account can do' });
+      else if (reg.credential?.kind && reg.credential.kind !== 'aac-key') replace = action({ ...fields, enabled: false, tip: `This account reads a key another app saved on ${platformLabel(account.platform)}. Add a key here to manage it from the dashboard.` });
+      else if (reg.actions?.replaceKey !== true) replace = action({ ...fields, enabled: false, tip: 'Replacing this key is not possible now.' });
+      else replace = action({ ...fields, enabled: true, tip: 'Store a new key; it is checked first and the old one stays if it is refused.' });
+      return [replace, removeControl(provider, account, reg, entry)];
+    }
+    case 'browser': {
+      const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };
+      const g = gate(entry, 'signInAgain', provider);
+      const signin = g.live && (!reg || reg.actions?.signInAgain !== false)
+        ? action({ ...fields, enabled: !!reg, tip: 'Open the console in the browser with the extension and sign in there; then re-check.' })
+        : gated(fields, g.live ? { live: false, coming: false, reason: 'Signing in is not possible for this account now.' } : g);
+      return [signin, removeControl(provider, account, reg, entry)];
+    }
     case 'app':
-      return [action({ kind: 'quiet', label: 'Session from the app' })];
+      return [action({ kind: 'quiet', label: 'Session from the app' }), removeControl(provider, account, reg, entry)];
     default:
       return [];
   }
 }
 
-function footActions(provider, accounts) {
+function footActions(provider, accounts, ctx) {
   const def = ACCOUNT_KINDS[provider];
-  const label = PROVIDER_REGISTRY.find(row => row.id === provider)?.label || provider;
+  const entry = providerEntry(ctx.data, provider);
+  const label = providerLabel(provider);
+  const flowOpen = !!ctx.flows?.[provider];
+  const add = gate(entry, 'add', provider);
   switch (def.kind) {
     case 'desktop': case 'device': case 'cli':
-      return [coming({ act: 'add', label: 'Add account', icon: 'plus', style: 'primary' }, SOON.add[provider])];
-    case 'app':
-      return [coming({ act: 'open-app', label: 'Sign in', icon: 'login' }, SOON.openApp), coming({ act: 'recheck', label: 'Re-check', icon: 'refresh' }, SOON.recheck)];
-    case 'browser':
-      return [coming({ act: 'signin', label: 'Sign in', icon: 'globe' }, SOON.extension), coming({ act: 'recheck', label: 'Re-check', icon: 'refresh' }, SOON.recheck)];
+      return [gated({ act: 'add', value: provider, label: 'Add account', icon: 'plus', style: 'primary', probe: `add:${provider}`, enabled: !flowOpen }, add,
+        provider === 'claude' ? 'Create a new Claude desktop profile on Mac and Windows, then sign in inside the app.'
+          : provider === 'codex' ? 'Start a device-code sign-in for a new Codex profile; you approve a short code in any browser.'
+            : 'Run the Antigravity CLI login on Ubuntu under supervision.')];
+    case 'app': case 'browser': {
+      const first = accounts[0] || null;
+      const reg = first ? ctx.registry.get(first.id) : null;
+      const signInGate = first ? gate(entry, 'signInAgain', provider) : add;
+      const signin = gated({ act: 'session-signin', value: provider, label: 'Sign in', icon: def.kind === 'browser' ? 'globe' : 'login', probe: `session-signin:${provider}` }, signInGate,
+        def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
+      const recheckGate = first ? (reg ? (reg.actions?.recheck === true ? { live: true } : { live: false, coming: false, reason: 'Re-check is not available for this account.' }) : gate(entry, 'recheck', provider))
+        : { live: false, coming: false, reason: `Sign in first; there is no ${label} account to check yet.` };
+      const recheck = gated({ act: 'recheck', value: first?.id || provider, label: 'Re-check', icon: 'refresh', probe: `recheck:${provider}`, busy: ctx.busyAct === `recheck:${first?.id}` }, recheckGate, 'Read the session again now.');
+      return [signin, recheck];
+    }
     case 'apikey': {
       const hasKey = accounts.some(account => !isConsole(account));
-      const add = hasKey
-        ? coming({ act: 'add-key', label: `Add another ${label} key`, icon: 'plus', style: 'ghost' }, SOON.addKey)
-        : coming({ act: 'add-key', label: `Add ${article(label)} ${label} key`, icon: 'key', style: 'primary' }, SOON.addKey);
-      return provider === 'opencode-go' ? [coming({ act: 'recheck', label: 'Re-check', icon: 'refresh' }, SOON.recheck), add] : [add];
+      const fields = hasKey
+        ? { act: 'add-key', value: provider, label: `Add another ${label} key`, icon: 'plus', style: 'ghost', probe: `add-key:${provider}` }
+        : { act: 'add-key', value: provider, label: `Add ${article(label)} ${label} key`, icon: 'key', style: 'primary', probe: `add-key:${provider}` };
+      return [gated(fields, add, 'Each key becomes its own account; the key is stored on the dashboard computer and never shown again.')];
     }
     default:
       return [];
   }
+}
+
+// ---------------------------------------------------------------- the inline flows (add, sign in again, keys, guides)
+const STEPS = {
+  'job-add': ['Name the profile', 'Approve the code', 'Signed in'],
+  'job-again': ['Approve the code', 'Signed in'],
+  'claude-add': ['Name the profile', 'Create it', 'Sign in'],
+  'key-add': ['Paste the key', 'Check', 'Stored'],
+  'key-replace': ['Paste the key', 'Check', 'Stored'],
+  guide: ['Open', 'Sign in', 'Re-check'],
+};
+const btn = (act, value, label, fields = {}) => action({ act, value, label, enabled: true, probe: `${act}:${value}`, ...fields });
+const expiresLine = (iso, now) => validDate(iso) ? `Code expires at ${clockFmt.format(new Date(iso))}${Date.parse(iso) - now < 120_000 ? ' (soon)' : ''}` : '';
+
+/**
+ * The flow panel under a provider section. `f` is bridge.js's flow state:
+ * { type, step, provider, accountId?, email?, name?, job?, error?: {title, body}, result?, guide?, fallback?, busy? }
+ */
+export function flowView(provider, f, ctx = {}) {
+  const now = ctx.now ?? Date.now();
+  const closed = { open: false, key: '', title: '', body: '', steps: [], cur: 0, inputKind: '', inputLabel: '', inputPlaceholder: '', inputSeed: '', inputPassword: false, labelField: false,
+    codeShown: false, codeUrl: '', codeText: '', codeExpires: '', codeInput: false, waiting: '', done: '', error: '', errorBody: '', note: '', actions: [] };
+  if (!f) return closed;
+  const label = providerLabel(provider);
+  const v = { ...closed, open: true, key: `${f.type}:${f.accountId || ''}:${f.serial || 0}` };
+  const cancel = btn('flow-cancel', provider, 'Cancel', { style: 'ghost' });
+  const close = btn('flow-cancel', provider, 'Close', { style: 'ghost' });
+  const doneBtn = btn('flow-done', provider, 'Done', { style: 'default' });
+  const err = () => { if (f.error) { v.error = text(f.error.title); v.errorBody = text(f.error.body); } };
+  const trustNote = ctx.trustNote || '';
+  switch (f.type) {
+    case 'job-add': case 'job-again': {
+      v.steps = STEPS[f.type];
+      const again = f.type === 'job-again';
+      const job = f.job || null;
+      const who = again ? text(f.email) || 'this account' : text(f.name) || 'the new profile';
+      if (f.step === 'name') {
+        v.cur = 0;
+        v.title = `Add ${article(label)} ${label} account`;
+        v.body = "Name the profile. It keeps this account's sign-in apart from the others.";
+        Object.assign(v, { inputKind: 'name', inputLabel: 'Profile name', inputPlaceholder: 'codex-2', inputSeed: text(f.name) });
+        v.actions = [btn('flow-submit', provider, 'Continue', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        err();
+        return v;
+      }
+      if (f.step === 'starting' || !job) {
+        v.cur = again ? 0 : 1;
+        v.title = again ? `Sign in again as ${who}` : `Signing in ${who}`;
+        v.waiting = `Starting the ${label} sign-in on ${provider === 'muse' ? 'the Mac' : 'Ubuntu'}`;
+        v.actions = [cancel];
+        return v;
+      }
+      const state = job.state;
+      if (state === 'succeeded') {
+        v.cur = v.steps.length;
+        const email = text(job.result?.email);
+        v.done = again ? 'Signed in again' : `${text(job.profileName) || who} is signed in${email ? ` as ${email}` : ''}`;
+        v.body = again ? `${who} refreshes on the next cycle.` : `It joins the ${label} list as an inactive account; its first reading arrives with the next refresh.`;
+        v.actions = [doneBtn];
+        return v;
+      }
+      if (['failed', 'expired', 'cancelled'].includes(state)) {
+        v.cur = again ? 0 : 1;
+        v.title = state === 'cancelled' ? 'Sign-in cancelled' : 'The sign-in did not finish';
+        v.error = state === 'cancelled' ? 'Nothing was saved.' : jobErrorText(job);
+        v.actions = [btn('flow-retry', provider, 'Start again', { style: 'primary' }), close];
+        return v;
+      }
+      v.cur = again ? 0 : 1;
+      if (state === 'verifying') {
+        v.title = again ? `Sign in again as ${who}` : `Signing in ${who}`;
+        v.waiting = 'Approved. Saving the sign-in on the dashboard computer';
+        v.actions = [cancel];
+        return v;
+      }
+      const ver = job.verification;
+      v.title = job.kind === 'supervised-cli' ? 'Sign in with Google in a browser' : 'Approve the sign-in in any browser';
+      if (ver && text(ver.url)) {
+        v.codeShown = true;
+        v.codeUrl = text(ver.url);
+        v.codeText = text(ver.userCode);
+        v.codeExpires = expiresLine(ver.expiresAt, now);
+        v.body = job.kind === 'supervised-cli'
+          ? 'Open the sign-in page the CLI prepared, choose the account, then paste the code Google shows.'
+          : again ? 'Open the verification page and enter the code. The profile and its history stay as they are.'
+            : `Open the verification page, sign in to the account you want as ${who}, and enter this code.`;
+      } else {
+        v.body = 'The page and code are only shown on a trusted connection. Open this page on the dashboard computer, or turn on local network trust there.';
+      }
+      if (state === 'awaiting_code') {
+        Object.assign(v, { codeInput: true, inputKind: 'code', inputLabel: 'Code from the sign-in page', inputPlaceholder: 'Paste the code', inputSeed: '' });
+        v.actions = [btn('flow-submit', provider, 'Submit code', { style: 'primary', busy: !!f.busy, enabled: !f.busy }),
+          ...(v.codeUrl ? [btn('flow-open-url', provider, 'Open sign-in page', { icon: 'external' })] : []), cancel];
+      } else {
+        v.waiting = `Waiting for approval${job.kind === 'device-code' ? '' : ' in the browser'}`;
+        v.actions = [...(v.codeUrl ? [btn('flow-open-url', provider, 'Open verification page', { icon: 'external', style: 'primary' })] : []),
+          ...(v.codeText ? [btn('flow-copy', provider, 'Copy code', { icon: 'copy' })] : []), cancel];
+      }
+      v.note = trustNote;
+      err();
+      return v;
+    }
+    case 'claude-add': {
+      v.steps = STEPS[f.type];
+      if (f.step === 'name') {
+        v.title = 'Add a Claude account';
+        v.body = 'Each Claude account gets its own desktop profile on Mac and Windows, so several stay signed in side by side.';
+        Object.assign(v, { inputKind: 'name', inputLabel: 'Profile name', inputPlaceholder: 'work-2', inputSeed: text(f.name) });
+        v.actions = [btn('flow-submit', provider, 'Create profile', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        err();
+        return v;
+      }
+      if (f.step === 'creating') {
+        v.cur = 1;
+        v.title = `Creating ${text(f.name)}`;
+        v.waiting = 'Creating the profile and its launchers on Mac and Windows';
+        return v;
+      }
+      v.cur = 2;
+      v.done = `Profile ${text(f.name)} created on Mac and Windows`;
+      v.body = `Open Claude (${text(f.name)}) from Applications on the Mac or the Start menu on Windows and sign in there. The row says "Needs sign-in" until its first reading confirms the account.`;
+      v.actions = [doneBtn];
+      return v;
+    }
+    case 'key-add': case 'key-replace': {
+      v.steps = STEPS[f.type];
+      const replace = f.type === 'key-replace';
+      if (f.step === 'key') {
+        v.title = replace ? `Replace the ${label} API key` : f.second ? `Add another ${label} key` : `Add ${article(label)} ${label} API key`;
+        v.body = 'The key is stored on the dashboard computer and never shown again, here or anywhere else.';
+        Object.assign(v, { inputKind: 'key', inputLabel: 'API key', inputPlaceholder: 'Paste the key', inputPassword: true, labelField: !replace });
+        v.actions = [btn('flow-submit', provider, replace ? 'Replace key' : 'Save key', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        v.note = trustNote;
+        err();
+        return v;
+      }
+      if (f.step === 'checking') {
+        v.cur = 1;
+        v.title = 'Checking the key';
+        v.waiting = `Asking ${label} for usage with the new key`;
+        return v;
+      }
+      v.cur = 3;
+      const last4 = text(f.result?.account?.credential?.last4);
+      v.done = `${replace ? 'Key replaced' : 'Key stored'}${last4 ? `, ending in ${last4}` : ''}`;
+      v.body = f.result?.check === 'unverified'
+        ? `${label} could not be reached to check it, so it was kept; the row shows its readings after the next refresh.`
+        : 'Only the dashboard computer keeps it; this page no longer has it.';
+      v.actions = [doneBtn];
+      return v;
+    }
+    case 'guide': {
+      v.steps = STEPS.guide;
+      const g = f.guide || {};
+      v.title = `Sign in to ${label}`;
+      if (g.kind === 'open-app') {
+        const where = (Array.isArray(g.platforms) ? g.platforms : []).map(platformLabel).join(' or ') || 'its computer';
+        v.body = `Open ${label} on ${where} and sign in there, then re-check. The dashboard reads that session.`;
+        v.actions = [...(Array.isArray(g.platforms) ? g.platforms : []).filter(p => ['mac', 'windows'].includes(p)).map(p =>
+          btn('flow-open-app', `${provider}:${p}`, `Open on ${platformLabel(p)}`, { platform: p === 'mac' ? 'apple' : 'windows', busy: ctx.busyAct === `open:${provider}:${p}` }))];
+      } else {
+        const where = platformLabel(g.platform || (provider === 'qwen' ? 'windows' : 'mac'));
+        v.body = provider === 'qwen'
+          ? `On ${where}, open the Qwen console in the browser that has the AI Account Center extension and sign in there. The extension syncs the session; then re-check.`
+          : `On ${where}, open the console in the browser that has the AI Account Center extension and sign in there. The extension syncs the session; then re-check.`;
+      }
+      v.cur = f.checked ? 2 : 1;
+      v.actions.push(btn('flow-recheck', provider, 'Re-check', { icon: 'refresh', style: 'primary', busy: !!f.busy, enabled: !f.busy && !!f.accountId }));
+      v.actions.push(close);
+      if (f.found) { v.cur = 3; v.done = 'Session found'; v.body = 'Readings continue on the normal refresh interval.'; v.actions = [doneBtn]; }
+      err();
+      return v;
+    }
+    default:
+      return closed;
+  }
+}
+
+// ---------------------------------------------------------------- the line under a row (remove, refusals) and the trash
+/**
+ * `l` is bridge.js's line state for a row: { kind: 'asking'|'confirm'|'refused'|'removing', token?, effects?, code? }.
+ */
+export function lineView(rowId, label, l, ctx = {}) {
+  const none = { shown: false, kind: '', icon: '', lead: '', text: '', actions: [] };
+  if (!l) return none;
+  const keep = btn('line-cancel', rowId, 'Keep', { style: 'ghost' });
+  if (l.kind === 'refused') {
+    return { shown: true, kind: 'refuse', icon: 'alert', lead: label, text: REFUSAL_LINE[l.code] || 'cannot be removed now.', actions: [btn('line-cancel', rowId, 'OK')] };
+  }
+  if (l.kind === 'asking' || l.kind === 'removing') {
+    return { shown: true, kind: 'busy', icon: 'trash', lead: label, text: l.kind === 'removing' ? (ctx.restore ? 'Restoring…' : 'Removing…') : 'Checking what removing it does…', actions: [] };
+  }
+  const effects = (Array.isArray(l.effects) ? l.effects : []).filter(e => typeof e === 'string').join(' ');
+  const verb = ctx.restore ? 'Restore' : 'Remove';
+  return {
+    shown: true, kind: 'confirm', icon: ctx.restore ? 'rotate' : 'trash', lead: `${verb} ${label}?`,
+    text: effects || (ctx.restore ? 'It moves back from the trash.' : 'It stops being read here.'),
+    actions: [keep, btn(ctx.restore ? 'restore-commit' : 'remove-commit', rowId, verb, { style: ctx.restore ? 'accent-line' : 'danger-solid' })],
+  };
+}
+const REFUSAL_LINE = {
+  account_active: 'is the active account, so it cannot be removed. Activate another account first.',
+  account_active_signin: 'is the active account, so it cannot sign in again. Activate another account first, then sign in again.',
+  account_default: 'is the saved default. Make another account the default first.',
+  account_protected: "is this computer's default Claude profile. It can't be removed here.",
+  last_account: 'is the last account of this provider, so it stays.',
+  activation_running: 'cannot be removed while an account switch runs. Try again when it finishes.',
+  signin_running: 'cannot be removed while its sign-in runs. Finish or cancel the sign-in first.',
+  app_running: 'is open in Claude on one of the computers. Quit it there first.',
+  app_state_unknown: 'could not be checked: whether Claude is open is unknown. Try again later.',
+};
+
+function trashRows(entries, ctx, now) {
+  return (Array.isArray(entries) ? entries : []).filter(e => e && e.provider === 'claude').map(entry => {
+    const deleting = entry.state === 'deleting';
+    const when = validDate(entry.purgeAfter) ? dayFmt.format(new Date(entry.purgeAfter)) : '';
+    const restore = deleting
+      ? action({ act: 'restore', value: entry.trashId, label: 'Restore', icon: 'rotate', enabled: false, tip: 'It is being deleted for good.', probe: `restore:${entry.trashId}` })
+      : action({ act: 'restore', value: entry.trashId, label: 'Restore', icon: 'rotate', enabled: true, tip: 'Move its Claude data back on Mac and Windows and list it again.', probe: `restore:${entry.trashId}` });
+    const purge = coming({ act: 'purge', value: entry.trashId, label: 'Delete now', style: 'ghost', probe: `purge:${entry.trashId}` },
+      'Deleting from the trash before the 30 days is not on this server yet; the trash empties itself.');
+    return {
+      id: entry.trashId, label: text(entry.label) || 'Claude profile',
+      sub: deleting ? 'Deleting for good' : `${validDate(entry.trashedAt) ? `moved to the trash ${relative(entry.trashedAt, now)}` : 'in the trash'}${when ? ` · deleted for good ${when}` : ''}`,
+      actions: [restore, purge],
+      line: lineView(entry.trashId, text(entry.label) || 'this profile', ctx.lines?.[`trash:${entry.trashId}`], { restore: true }),
+    };
+  });
 }
 
 // ---------------------------------------------------------------- the Antigravity policy box and the policies
@@ -306,7 +640,7 @@ export function updateResultsView(job, now = Date.now()) {
   return { shown: !!job, running, headRuns, hosts };
 }
 
-// ---------------------------------------------------------------- connection and sign-in facts
+// ---------------------------------------------------------------- connection, the trusted local network and sign-in
 /** How this browser reaches the dashboard: https, loopback (this computer) or plain http on the network. */
 export function transportOf(protocol, hostname) {
   if (protocol === 'https:') return 'https';
@@ -319,74 +653,161 @@ const TRANSPORT_TEXT = {
   loopback: host => `This computer, ${host}`,
   http: host => `Plain HTTP to ${host}`,
 };
-/** The sign-in card's network note (the concept's wording on plain HTTP). */
-export function transportNote(transport) {
+export const TRUSTED_NOTE = 'Local network trusted. Passwords, keys and sign-in codes cross your home network without encryption.';
+/**
+ * The sign-in card's network note. `check` is GET /api/auth/check ({ secureTransport, trustedLocalNetwork,
+ * connection: { trusted } }); without it the note follows the address alone.
+ */
+export function transportNote(transport, check = null) {
   if (transport === 'https') return 'This address uses HTTPS, so the password is encrypted on its way to the dashboard.';
-  if (transport === 'loopback') return 'You are on the dashboard host itself, so the password never crosses the network.';
-  return 'This address is plain HTTP, so the password crosses your network unencrypted. Password changes and tray pairing need HTTPS or an encrypted tunnel.';
+  if (transport === 'loopback') return 'You are on the dashboard computer itself, so the password never crosses the network.';
+  if (check?.connection?.trusted === true) return TRUSTED_NOTE;
+  if (check?.trustedLocalNetwork === true) return 'This address is not on your trusted local network. Sign-in works, but password changes, keys and tray pairing stay off here.';
+  if (check && check.trustedLocalNetwork === false) return 'This address is plain HTTP and local network trust is off, so the password crosses your network unencrypted. Password changes, keys and tray pairing work once trust is turned on from the dashboard computer (Accounts & Settings, Dashboard sign-in).';
+  return 'This address is plain HTTP, so the password crosses your network unencrypted.';
 }
 
-function signinFacts(ctx) {
-  const now = ctx.now;
-  const hours = Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
+/** "This connection: 192.168.50.20, trusted local network" (GET /api/auth/network or /check). */
+export function networkView(net, check, transport, busyAct = '') {
+  const source = net || (check ? { trustLocalNetwork: check.trustedLocalNetwork === true, connection: check.connection, canTurnOn: transport === 'loopback' } : null);
+  if (!source) return { known: false, on: false, line: 'Not reported', note: '', act: '', actLabel: '', actEnabled: false, tip: '', busy: false };
+  const on = source.trustLocalNetwork === true;
+  const peer = text(source.connection?.peer) || 'unknown';
+  const here = source.canTurnOn === true || transport === 'loopback';
+  const line = source.connection?.trusted === true ? `This connection: ${peer}, trusted local network`
+    : here ? 'This connection: this computer'
+      : transport === 'https' ? `This connection: ${peer}, encrypted`
+        : `This connection: ${peer}, not trusted`;
+  const note = on ? TRUSTED_NOTE
+    : 'Local network trust is off. Password changes, keys, sign-in codes and tray pairing work only on the dashboard computer itself.';
+  if (on) return { known: true, on, line, note, act: 'network-off', actLabel: 'Turn off', actEnabled: true, tip: 'Stop trusting the local network; it can be turned on again only from the dashboard computer.', busy: busyAct === 'network' };
+  if (source.canTurnOn === true) return { known: true, on, line, note, act: 'network-on', actLabel: 'Turn on', actEnabled: true, tip: 'Trust plain HTTP from your home network and WireGuard addresses for passwords, keys and tray pairing.', busy: busyAct === 'network' };
+  return { known: true, on, line, note: `${note} Turn it on there, in this section.`, act: '', actLabel: '', actEnabled: false, tip: '', busy: false };
+}
+
+const DEVICE_PLATFORM = { mac: ['apple', 'Mac'], windows: ['windows', 'Windows'] };
+export function devicesView(devices, now) {
+  return (Array.isArray(devices) ? devices : []).filter(d => d && typeof d.id === 'string').map(d => {
+    const [glyph, where] = DEVICE_PLATFORM[d.platform] || ['', 'Unknown computer'];
+    const seen = validDate(d.lastSeenAt) ? `last seen ${relative(d.lastSeenAt, now)}${text(d.lastSeenAddress) ? ` from ${d.lastSeenAddress}` : ''}`
+      : validDate(d.pairedAt) ? `paired ${relative(d.pairedAt, now)}, not seen since` : 'not seen since pairing';
+    return {
+      id: d.id, name: text(d.name) || `${where} tray`, platform: glyph,
+      sub: `${where}${text(d.appVersion) ? ` · version ${d.appVersion}` : ''} · ${seen}`,
+      tip: validDate(d.pairedAt) ? `Paired ${dateTime.format(new Date(d.pairedAt))}${validDate(d.idleExpiresAt) ? `; signed out if unused until ${dayFmt.format(new Date(d.idleExpiresAt))}` : ''}` : '',
+      probe: `device:${d.id}`,
+    };
+  });
+}
+
+function signinFacts(ctx, now) {
+  const s = ctx.signin || {};
+  const session = s.session || null;
+  const hours = Number.isInteger(session?.sessionTimeoutHours) && session.sessionTimeoutHours > 0 ? session.sessionTimeoutHours
+    : Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
   const host = text(ctx.host) || 'this dashboard';
   const transport = ctx.transport || 'http';
-  const ends = finite(ctx.signedInAt) ? ctx.signedInAt + hours * 3_600_000 : null;
+  const ends = session && validDate(session.expiresAt) ? Date.parse(session.expiresAt)
+    : finite(ctx.signedInAt) ? ctx.signedInAt + hours * 3_600_000 : null;
+  const others = session && Number.isInteger(session.otherBrowsers) ? session.otherBrowsers : null;
+  const env = session?.managedBy === 'env';
+  const secure = session ? session.secureTransport === true : (ctx.check?.secureTransport === true);
+  const pw = s.pw || {};
+  const network = networkView(s.network, ctx.check, transport, s.busy);
+  const devices = devicesView(s.devices, now);
+  const pairedCount = devices.length;
+  const pwBlocked = env ? 'The password comes from environment variables on the dashboard computer, so it is changed there.'
+    : !secure ? (network.on
+      ? 'This connection is not on your trusted local network, so the password cannot be changed from here.'
+      : 'Password changes need a trusted connection. Turn on local network trust above from the dashboard computer, or change it there.')
+      : '';
   return {
-    username: text(ctx.username) || 'Not reported',
+    username: text(session?.username) || text(ctx.username) || 'Not reported',
     connection: TRANSPORT_TEXT[transport](host),
     session: ends && ends > now ? `ends in ${duration(ends - now)}` : `lasts ${hours} hours`,
     sessionSub: ends && ends > now ? `sessions last ${hours} hours` : '',
-    sessionTip: ends && ends > now ? `Signed in ${dateTime.format(new Date(ctx.signedInAt))}; the session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard last ${hours} hours from sign-in`,
-    otherTip: `${COMING}Other browsers lists the browsers signed in to this dashboard and signs them out with one click.`,
-    passwordTip: `${COMING}Change password checks the current password, needs HTTPS or an encrypted tunnel, and signs other browsers out. Until then run ai-account-center dashboard auth setup on the dashboard host, then sign in again on each tray.`,
-    devicesNote: 'No tray apps are paired yet. Today each tray signs in with the dashboard password it keeps, so a password change means signing in again on each tray.',
-    devicesTip: `${COMING}Each paired tray is listed here with its computer and when it last checked in, with Revoke. After a password change the page says "Mac tray and Windows tray stay signed in."`,
-    revokeAllTip: `${COMING}Sign out all devices signs out every tray and every other browser; this browser stays signed in.`,
-    pairingNote: [run('How pairing works.', true), run(" Each tray trades the password once, over HTTPS or an encrypted tunnel, for its own device token, so changing the password doesn't break it. A tray keeps its current sign-in until its token works. Revoke a tray to sign it out.")],
+    sessionTip: ends && ends > now ? `This session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard last ${hours} hours from sign-in`,
+    othersText: others === null ? 'Not reported' : others === 0 ? 'None signed in' : `${others} signed in`,
+    othersEnabled: others !== null && others > 0 && s.busy !== 'others',
+    othersBusy: s.busy === 'others',
+    othersTip: others === null ? 'The server did not report other browsers' : 'Sign out every other browser signed in to this dashboard; this one stays signed in.',
+    passwordWhen: session && validDate(session.passwordChangedAt) ? `changed ${dayFmt.format(new Date(session.passwordChangedAt))}` : session ? 'not changed here yet' : '',
+    passwordCan: !!session && !pwBlocked,
+    passwordNote: pwBlocked,
+    passwordOpen: pw.open === true && !pwBlocked,
+    passwordBusy: pw.busy === true,
+    passwordDone: pw.done === true,
+    passwordField: text(pw.field),
+    passwordError: text(pw.error),
+    passwordNonce: Number.isInteger(pw.nonce) ? pw.nonce : 0,
+    passwordOthers: others && others > 0 ? `(${others} signed in)` : '(none signed in)',
+    strength: { ...passwordStrength(''), matches: false, ...(pw.strength || {}) },
+    devices,
+    devicesNote: s.devicesError ? 'The paired-device list could not be read safely.'
+      : 'No tray apps are paired. A tray pairs itself the first time you sign in on it.',
+    devicesKnown: Array.isArray(s.devices),
+    revokeBusy: text(s.busy).startsWith('revoke:') ? text(s.busy).slice(7) : '',
+    revokeAllEnabled: (pairedCount > 0 || (others ?? 0) > 0) && s.busy !== 'all',
+    revokeAllBusy: s.busy === 'all',
+    signOutBusy: s.busy === 'logout',
+    network,
+    pairingNote: [run('How pairing works.', true), run(" Each tray trades the password once, over a trusted connection, for its own device token, so changing the password doesn't break it. A tray keeps its current sign-in until its token works. Revoke a tray to sign it out.")],
   };
 }
 function connectionFacts(ctx) {
   const transport = ctx.transport || 'http';
   const hours = Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
+  const trusted = ctx.signin?.network?.trustLocalNetwork === true || ctx.check?.trustedLocalNetwork === true;
   return [
     { label: 'Dashboard', value: text(ctx.origin) || 'Unknown', mono: true },
-    { label: 'Transport', value: transport === 'https' ? 'HTTPS' : transport === 'loopback' ? 'This computer only' : 'Plain HTTP on your network', mono: false },
-    { label: 'Tray sign-in', value: 'Each tray keeps the dashboard password; device tokens are coming', mono: false },
+    { label: 'Transport', value: transport === 'https' ? 'HTTPS' : transport === 'loopback' ? 'This computer only' : trusted ? 'Plain HTTP on your trusted local network' : 'Plain HTTP on your network' },
+    { label: 'Tray sign-in', value: 'Device tokens; each paired tray is listed under Dashboard sign-in', mono: false },
     { label: 'Sessions', value: `${hours} hours from sign-in`, mono: false },
   ];
 }
 
 // ---------------------------------------------------------------- the page
 /**
- * ctx: { now, profiles, platform, antigravityInventory, antigravityAuto, localHidden (Set), serverHidden (Set),
- *        refreshSeconds, refreshKnown, updateJob, username, host, origin, transport, sessionHours, signedInAt,
- *        serverVersion }
+ * ctx: { now, profiles, platform, antigravityInventory, antigravityAuto, refreshSeconds, refreshKnown, updateJob,
+ *        username, host, origin, transport, sessionHours, signedInAt, serverVersion, openProgress,
+ *        registry (GET /api/accounts/registry), flows ({provider: state}), lines ({rowId|trash:id: state}),
+ *        busyAct, check (GET /api/auth/check), signin ({ session, devices, network, pw, busy }) }
  */
 export function accountsViewModel(data, ctx = {}) {
   const now = ctx.now ?? Date.now();
-  const c = { ...ctx, now };
+  const registryAccounts = Array.isArray(ctx.registry?.accounts) ? ctx.registry.accounts : [];
+  const c = { ...ctx, now, data, registry: new Map(registryAccounts.map(account => [account.id, account])) };
   const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
-  const serverHidden = c.serverHidden instanceof Set ? c.serverHidden : new Set();
-  const localHidden = c.localHidden instanceof Set ? c.localHidden : new Set();
-  // Every provider's rows and switch state, even for a provider hidden on Home.
-  const unhidden = data ? { ...data, settings: { ...(data.settings || {}), hiddenProviders: [] } } : data;
+  const settings = data?.settings || {};
+  const serverHidden = new Set(Array.isArray(settings.hiddenProviders) ? settings.hiddenProviders : []);
+  const trayKnown = Array.isArray(settings.trayHiddenProviders);
+  const trayHidden = new Set(trayKnown ? settings.trayHiddenProviders : []);
+  const visibilityOk = settings.visibilityAvailable !== false;
+  // Every provider's rows and switch state, even for a provider or account hidden on Home.
+  const unhidden = data ? { ...data, settings: { ...settings, hiddenProviders: [], hiddenAccountIds: [] } } : data;
   const home = dashboardViewModel(unhidden, { ...c, refreshing: false });
   const homeRows = new Map(home.sections.flatMap(section => section.rows.map(row => [row.id, row])));
   const agAccounts = accounts.filter(account => account.provider === 'antigravity');
   const agSection = home.sections.find(section => section.id === 'antigravity');
   const ag = antigravityPolicy(data, c, agSection, agAccounts);
+  const trustNote = c.check?.connection?.trusted === true || c.signin?.network?.connection?.trusted === true ? TRUSTED_NOTE : '';
 
   const providers = PROVIDER_REGISTRY.map(entry => {
     const def = ACCOUNT_KINDS[entry.id];
+    const server = providerEntry(data, entry.id);
     const mine = accounts.filter(account => account.provider === entry.id);
+    // accounts the registry lists that the dashboard has no row for yet (a profile created a moment ago)
+    for (const reg of registryAccounts) if (reg.provider === entry.id && !mine.some(account => account.id === reg.id)) {
+      mine.push({ id: reg.id, provider: reg.provider, email: reg.email, label: reg.label, plan: null, platform: reg.platform, status: 'needs_sign_in', windows: [], capabilities: {}, lifecycle: reg.lifecycle });
+    }
     const section = home.sections.find(s => s.id === entry.id);
     const canSwitch = SWITCHABLE.includes(entry.id) && !!section?.canSwitch;
-    const hiddenServer = serverHidden.has(entry.id), hiddenLocal = localHidden.has(entry.id);
+    const hiddenServer = serverHidden.has(entry.id);
     const rows = mine.map(account => {
       const homeRow = homeRows.get(account.id);
-      const [src, srcSub] = sourceLines(entry.id, account);
-      const { status, sampled: sampledLine, sampledTip: sampledLineTip } = rowStatus(account, now);
+      const reg = c.registry.get(account.id) || null;
+      const [src, srcSub] = sourceLines(entry.id, account, reg);
+      const { status, sampled: sampledLine, sampledTip: sampledLineTip } = rowStatus(account, now, reg);
       // a Claude Open in progress (claude-open.mjs) takes the "sampled" line while it runs
       const opening = entry.id === 'claude' && c.openProgress instanceof Map ? c.openProgress.get(homeRow?.profile || text(account.capabilities?.claudeProfileId)) : null;
       const sampled = opening?.text || sampledLine;
@@ -394,29 +815,38 @@ export function accountsViewModel(data, ctx = {}) {
       const email = text(account.email) || text(account.label) || 'Account identity unavailable';
       const meta = [planLabel(text(account.plan)), text(account.label) && text(account.label) !== email ? text(account.label) : ''].filter(Boolean).join(' · ');
       const switchable = SWITCHABLE.includes(entry.id);
+      const line = c.lines?.[account.id];
       return {
         id: account.id, provider: entry.id, email, meta, srcInline: src, status, sampled, sampledTip, src, srcSub,
         active: switchable && !!homeRow?.active, activeLabel: homeRow?.activeLabel || '',
         canActivate: !!homeRow?.canActivate, activateKind: homeRow?.activateKind || '', profile: homeRow?.profile || '',
         activateHint: homeRow?.activateHint || '', confirm: !!homeRow?.confirm, confirmRuns: homeRow?.confirmRuns || [],
-        actions: rowActions(entry.id, account, homeRow, canSwitch),
+        actions: rowActions(entry.id, account, homeRow, canSwitch, c),
+        line: lineView(account.id, email, line),
+        gone: line?.kind === 'removing',
       };
     });
     const count = rows.length;
+    const addGate = gate(server, 'add', entry.id);
+    const needs = entry.id === 'antigravity' && !addGate.live ? `Needs setup: ${addGate.reason}` : '';
     return {
       id: entry.id, label: entry.longLabel, kindLabel: def.kindLabel, kindIcon: def.icon, count,
       countText: `${count} ${count === 1 ? 'account' : 'accounts'}`,
       column: COL_A.includes(entry.id) ? 'a' : 'b',
-      visible: !hiddenServer && !hiddenLocal,
-      // Shown under the toggle while hidden, so it is clear who else follows the choice.
-      hiddenNote: hiddenServer ? 'Hidden everywhere' : hiddenLocal ? 'Hidden in this browser' : '',
-      toggleEnabled: !hiddenServer || LIVE.visibilityServer,
-      toggleTip: hiddenServer && !LIVE.visibilityServer ? 'Hidden by the server setting; changing it from here is coming'
-        : 'Saved in this browser. The trays and other browsers follow once the server stores it (coming).',
+      visible: !hiddenServer,
+      hiddenNote: hiddenServer ? 'Hidden on the dashboard' : '',
+      toggleEnabled: visibilityOk && !c.busyAct?.startsWith?.('show:'),
+      toggleTip: visibilityOk ? 'Saved on the dashboard: every browser follows this choice.' : 'The saved choices could not be read safely, so changing them waits for the next refresh.',
+      trayVisible: trayKnown ? !trayHidden.has(entry.id) : true,
+      trayEnabled: trayKnown && visibilityOk && !c.busyAct?.startsWith?.('tray:'),
+      trayComing: !trayKnown,
+      trayTip: trayKnown ? 'Saved on the dashboard: the Mac and Windows trays follow this choice.' : 'Showing or hiding a provider in the trays is not on this server yet.',
       switchable: SWITCHABLE.includes(entry.id), canSwitch, slots: def.slots, actsMin: def.actsMin,
-      how: def.how, foot: footActions(entry.id, mine),
+      how: needs || def.how, needs: !!needs, foot: footActions(entry.id, mine, c),
       empty: count ? '' : `No ${entry.label} accounts yet.`,
       ag: entry.id === 'antigravity' && ag.shown,
+      flow: flowView(entry.id, c.flows?.[entry.id], { now, trustNote, busyAct: c.busyAct }),
+      trash: entry.id === 'claude' ? trashRows(ctx.registry?.trash, c, now) : [],
       rows,
     };
   });
@@ -428,7 +858,7 @@ export function accountsViewModel(data, ctx = {}) {
     policies: policies(data, home, ag),
     refresh: { seconds: Number.isInteger(c.refreshSeconds) ? c.refreshSeconds : 60, known: c.refreshKnown === true },
     update: updateResultsView(c.updateJob, now),
-    signin: signinFacts(c),
+    signin: signinFacts(c, now),
     connection: connectionFacts(c),
     about: { version: text(c.serverVersion) ? `Version ${c.serverVersion}` : 'Daylight Atlas dashboard' },
   };

@@ -74,3 +74,29 @@ test('a session that ended is told apart from one that ran out', () => {
   rememberSignIn(broken); forgetSignIn(broken);
   assert.equal(signedInAt(broken), null);
 });
+
+test('the sign-in page reads tries and the pause from the answer, falling back to the limiter headers', async () => {
+  const { triesFrom, retryFrom, loginFailure, setupFailure, expiredBanner: banner } = await import('../public/auth-view.mjs');
+  const headers = map => ({ get: name => map[name] ?? null });
+  assert.equal(triesFrom({ payload: { code: 'invalid_credentials', triesLeft: 3 }, headers: headers({ 'RateLimit-Remaining': '4' }) }), 3);
+  assert.equal(triesFrom({ payload: {}, headers: headers({ 'RateLimit-Remaining': '2' }) }), 2);
+  assert.equal(triesFrom({ payload: null, headers: headers({}) }), null);
+  assert.equal(retryFrom({ payload: { code: 'rate_limited', retryAfterSeconds: 812.4 }, headers: headers({ 'Retry-After': '900' }) }), 813);
+  assert.equal(retryFrom({ payload: {}, headers: headers({ 'Retry-After': '900' }) }), 900);
+  // a 500 is never a wrong password
+  assert.equal(loginFailure({ status: 500, payload: { error: 'Session error' } }), 'Sign-in failed on the dashboard. Try again.');
+  assert.equal(loginFailure({ network: true }), 'The dashboard did not answer. Check the connection and try again.');
+  // the revoked banner (sign out other browsers, a password change or sign out all devices)
+  assert.deepEqual(banner('revoked').title, 'Signed out from another browser');
+  // first-run refusals
+  const refusal = (code, extra = {}) => ({ status: 403, payload: { code, ...extra } });
+  assert.deepEqual(setupFailure(refusal('setup_code_invalid', { triesLeft: 2 })), ['code', "That setup code isn't right. It has 8 letters and digits. 2 tries left."]);
+  assert.equal(setupFailure(refusal('setup_code_required'))[0], 'code');
+  assert.match(setupFailure(refusal('secure_transport_required'), { trustedLocalNetwork: false })[1], /local network trust, which is off/);
+  assert.match(setupFailure(refusal('secure_transport_required'), { trustedLocalNetwork: true })[1], /not on your trusted local network/);
+  assert.doesNotMatch(setupFailure(refusal('secure_transport_required'), null)[1], /HTTPS|tunnel/);
+  assert.equal(setupFailure(refusal('invalid_username'))[0], 'user');
+  assert.match(setupFailure(refusal('weak_password', { reason: 'too_long' }))[1], /72 bytes/);
+  assert.match(setupFailure(refusal('managed_by_env'))[1], /environment variables/);
+  assert.match(setupFailure({ status: 500, payload: null })[1], /could not be created on the dashboard/);
+});

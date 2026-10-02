@@ -701,6 +701,20 @@ pub fn start_dashboard(width: f32, height: f32, scale_factor: f32) -> Result<(),
     let ax = ui.global::<AxData>();
     ax.on_action(|action, value| dispatch_action(action.as_str(), value.as_str()));
     // the chart boxes report their size; bridge.js lays the charts out in those pixels
+    // End-to-end probes (?e2e only): each probed control reports its window rectangle once per tick.
+    ui.global::<Probe>().on_rect(|id, x, y, w, h| {
+        dispatch_action(
+            "probe-rect",
+            &format!(
+                "{}|{}|{}|{}|{}",
+                id,
+                x.round(),
+                y.round(),
+                w.round(),
+                h.round()
+            ),
+        )
+    });
     ax.on_layout(|kind, width, height| {
         dispatch_action(
             "analytics-layout",
@@ -1066,6 +1080,25 @@ pub fn set_accounts(json: &str) -> Result<(), JsValue> {
     });
     redraw();
     result
+}
+
+/// The change-password form's strength hint (public/auth-view.mjs strength), set on its own per keystroke.
+#[wasm_bindgen]
+pub fn set_accounts_strength(json: &str) -> Result<(), JsValue> {
+    let mut result = Ok(());
+    with_ui(|ui| result = accounts::set_strength(ui, json));
+    result
+}
+
+/// End-to-end probes: turn them on and ask every probed control to report its rectangle once (bridge.js
+/// calls this only when the page runs with `?e2e`).
+#[wasm_bindgen]
+pub fn probe_tick() {
+    with_ui(|ui| {
+        let probe = ui.global::<Probe>();
+        probe.set_on(true);
+        probe.set_tick(probe.get_tick().wrapping_add(1));
+    });
 }
 
 /// "home" | "analytics" | "accounts"; the shell animates the change.

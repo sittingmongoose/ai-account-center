@@ -13,8 +13,11 @@ import { Toggle } from "../../components/toggle.slint";
 import { Segmented } from "../../components/segmented.slint";
 import { Plate } from "../../components/card.slint";
 import { Stepper, Runs, DashedRule } from "../home.slint";
-import { AcData, AcPolicy, AcUpdHost, AcUpdItem } from "ac-data.slint";
-import { ComingWord, TipArea, IconNote } from "ac-provider.slint";
+import { AcData, AcPolicy, AcUpdHost, AcUpdItem, AcDevice } from "ac-data.slint";
+import { ComingWord, TipArea, IconNote } from "ac-actions.slint";
+import { Field } from "../../components/field.slint";
+import { ProbeMark } from "../../components/probe.slint";
+import { StrengthMeter } from "../../shell/signin.slint";
 
 // A settings card: the title (and an optional quiet note or "coming" on its right), then its items.
 component SetGroup inherits Plate {
@@ -322,10 +325,208 @@ component UpdLine inherits VerticalLayout {
     }
 }
 
-// The Dashboard sign-in block (app-auth.js renderSettingsSection). Only what the server reports is shown as a
-// value; Change password, other browsers and paired trays wait for CONTRACT-auth-devices.md and say so.
+// A check box with its label (the concept's `.aa-check`): a 16 px box that fills with the accent and a check.
+component CheckLine inherits Rectangle {
+    in-out property <bool> checked: true;
+    in property <string> text;
+    in property <string> sub;
+    in property <bool> enabled: true;
+    in property <string> probe;
+    callback toggled(bool);
+    min-height: 22px;
+    preferred-width: row.preferred-width;
+    row := HorizontalLayout {
+        spacing: 9px;
+        alignment: start;
+        opacity: root.enabled ? 1 : 0.5;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: root.checked ? Theme.accent : Theme.rule-strong;
+                background: root.checked ? Theme.accent : Theme.paper;
+                animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                Icon { x: 1.5px; y: 1.5px; width: 13px; height: 13px; name: "check"; tint: Theme.accent-ink; opacity: root.checked ? 1 : 0; animate opacity { duration: Motion.on ? Motion.fast : 0ms; } }
+            }
+        }
+        Text { text: root.text; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; }
+        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.checked = !root.checked; root.toggled(root.checked); }
+    }
+    ProbeMark { x: 0px; y: 0px; width: 16px; height: root.height; id: root.probe; }
+}
+
+// A block that opens and closes by its height (ease-out in, in-out out); its content fades in a little after.
+component Collapse inherits Rectangle {
+    in property <bool> open;
+    property <length> natural: lay.preferred-height;
+    height: root.open ? root.natural : 0px;
+    animate height { duration: Motion.on ? (root.open ? Motion.med : 220ms) : 0ms; easing: root.open ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1); }
+    clip: true;
+    lay := VerticalLayout {
+        y: 0px;
+        height: root.natural;
+        opacity: root.open ? 1 : 0;
+        animate opacity { duration: Motion.on ? (root.open ? Motion.med : 160ms) : 0ms; delay: Motion.on && root.open ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        @children
+    }
+}
+
+// An inline confirmation (the concept's `.aa-confirm`): the alert icon, the question in bold and what follows,
+// then the confirm and cancel buttons.
+component ConfirmBlock inherits Rectangle {
+    in property <string> lead;
+    in property <string> text;
+    in property <string> confirm-label;
+    in property <string> probe;
+    in property <bool> busy;
+    callback confirmed();
+    callback cancelled();
+    min-height: lay.preferred-height;
+    preferred-height: lay.preferred-height;
+    border-radius: 10px;
+    background: Theme.paper-2;
+    border-width: 1px;
+    border-color: Theme.rule;
+    lay := VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 10px;
+        padding-bottom: 12px;
+        spacing: 10px;
+        Rectangle {
+            min-height: q.preferred-height;
+            preferred-height: q.preferred-height;
+            q := VerticalLayout {
+                padding-left: 25px;
+                StyledText {
+                    text: @markdown("**\{root.lead}** \{root.text}");
+                    default-color: Theme.ink-2;
+                    default-font-size: 12.5px;
+                }
+            }
+            Icon { x: 0px; y: 1px; width: 16px; height: 16px; name: "alert"; tint: Theme.warn-text; }
+        }
+        HorizontalLayout {
+            padding-left: 25px;
+            spacing: 8px;
+            alignment: start;
+            Button { small: true; kind: "danger-solid"; text: root.confirm-label; busy: root.busy; probe: root.probe; clicked => { root.confirmed(); } }
+            Button { small: true; kind: "ghost"; text: "Cancel"; enabled: !root.busy; probe: root.probe + ":cancel"; clicked => { root.cancelled(); } }
+        }
+    }
+}
+
+// One paired tray: its platform glyph, name, where and when it was last seen, and Revoke with its confirmation.
+component DeviceRow inherits VerticalLayout {
+    in property <AcDevice> device;
+    in property <bool> confirming;
+    in property <bool> busy;
+    in property <bool> revoking;
+    callback ask();
+    callback cancel();
+    callback revoke();
+    spacing: 0px;
+    TipArea {
+        owner: "device:" + root.device.id;
+        tip: root.device.tip;
+        min-height: 44px;
+        HorizontalLayout {
+            spacing: 10px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            // the platform glyph alone, in ink (the concept's .aa-plat: no box behind it)
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Rectangle {
+                    width: 22px;
+                    height: 18px;
+                    if root.device.platform != "": PlatformGlyph { x: 0px; y: 0.5px; width: 17px; height: 17px; platform: root.device.platform; tint: Theme.ink; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                spacing: 2px;
+                Text { text: root.device.name; font-size: 13.5px; font-weight: 600; color: Theme.ink; overflow: elide; min-height: 19px; vertical-alignment: center; }
+                Text { text: root.device.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; overflow: elide; min-height: 18px; vertical-alignment: center; }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Button { small: true; text: "Revoke"; enabled: !root.busy && !root.confirming; probe: "revoke:" + root.device.id; clicked => { root.ask(); } }
+            }
+        }
+    }
+    Collapse {
+        open: root.confirming;
+        HorizontalLayout {
+            padding-bottom: 8px;
+            ConfirmBlock {
+                lead: "Sign out the " + root.device.name + "?";
+                text: "It shows its pairing screen until someone signs in on it again.";
+                confirm-label: "Revoke";
+                probe: "revoke-do:" + root.device.id;
+                busy: root.revoking;
+                confirmed => { root.revoke(); }
+                cancelled => { root.cancel(); }
+            }
+        }
+    }
+}
+
+// The Dashboard sign-in block (app-auth.js renderSettingsSection), bound to the server: who is signed in, this
+// connection and the trusted local network, this session and the other browsers, the password change, the
+// paired trays with Revoke and Sign out all devices, and Sign out.
 component SigninGroup inherits SetGroup {
+    in property <bool> busy;
+    callback act(string, string);
     title: "Dashboard sign-in";
+
+    // the change-password form's fields stay here until they are submitted
+    property <string> pw-cur;
+    property <string> pw-new;
+    property <string> pw-conf;
+    property <bool> pw-others: true;
+    property <bool> pw-open: AcData.signin.password-open;
+    changed pw-open => {
+        if !self.pw-open {
+            root.pw-cur = "";
+            root.pw-new = "";
+            root.pw-conf = "";
+            root.pw-others = true;
+        }
+    }
+    // a refused change shakes the fields, as on the sign-in page
+    property <int> pw-nonce: AcData.signin.password-nonce;
+    property <duration> shake-start: 0ms;
+    property <bool> shaking: false;
+    changed pw-nonce => {
+        if Motion.on {
+            root.shake-start = animation-tick();
+            root.shaking = true;
+            shake-end.running = true;
+        }
+    }
+    shake-end := Timer { interval: 460ms; running: false; triggered => { self.running = false; root.shaking = false; } }
+    property <float> shake-p: root.shaking ? clamp((animation-tick() - root.shake-start) / 440ms, 0, 1) : 1;
+    property <length> shake-x: root.shaking ? 7px * pow(1 - root.shake-p, 2) * sin(root.shake-p * 4 * 360deg) : 0px;
+    function submit-password() {
+        root.act("pw-submit", root.pw-cur + "\n" + root.pw-new + "\n" + root.pw-conf + "\n" + (root.pw-others ? "1" : "0"));
+    }
+    property <string> revoke-id;
+    property <bool> all-open: false;
+    property <int> device-count: AcData.devices.length;
+    changed device-count => { root.revoke-id = ""; }
+
     SetItem {
         first: true;
         FactLine { label: "Signed in as"; value: AcData.signin.username; strong: true; }
@@ -343,18 +544,51 @@ component SigninGroup inherits SetGroup {
             spacing: 12px;
             Text { width: 112px; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
             HorizontalLayout {
-                spacing: 8px;
+                spacing: 10px;
                 alignment: start;
+                Text { text: AcData.signin.others-text; font-family: Type.tab; font-size: 13px; color: Theme.ink; vertical-alignment: center; }
                 TipArea {
                     owner: "others";
-                    tip: AcData.signin.other-tip;
+                    tip: AcData.signin.others-tip;
                     width: others-btn.preferred-width;
                     height: 28px;
-                    others-btn := Button { small: true; text: "Sign out other browsers"; enabled: false; }
+                    others-btn := Button {
+                        small: true;
+                        text: AcData.signin.others-busy ? "Signing out" : "Sign out other browsers";
+                        enabled: AcData.signin.others-enabled && !root.busy;
+                        busy: AcData.signin.others-busy;
+                        probe: "others-out";
+                        clicked => { root.act("others-out", ""); }
+                    }
                 }
-                ComingWord { }
             }
         }
+    }
+    Hairline { }
+    // this connection and the trusted local network (dashboard_network.trust_local_network)
+    SetItem {
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Local network"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+            Rectangle { horizontal-stretch: 1; }
+            if AcData.signin.network.act != "": TipArea {
+                owner: "network";
+                tip: AcData.signin.network.tip;
+                width: net-btn.preferred-width;
+                height: 28px;
+                net-btn := Button {
+                    small: true;
+                    kind: AcData.signin.network.on ? "default" : "accent-line";
+                    text: AcData.signin.network.act-label;
+                    enabled: AcData.signin.network.act-enabled && !root.busy;
+                    busy: AcData.signin.network.busy;
+                    probe: "network";
+                    clicked => { root.act(AcData.signin.network.act, ""); }
+                }
+            }
+        }
+        Text { text: AcData.signin.network.line; font-family: Type.tab; font-size: 13px; color: Theme.ink; wrap: word-wrap; }
+        IconNote { icon: AcData.signin.network.on ? "lock-open" : "lock"; text: AcData.signin.network.note; }
     }
     Hairline { }
     SetItem {
@@ -362,14 +596,110 @@ component SigninGroup inherits SetGroup {
             spacing: 8px;
             Text { text: "Password"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
             Rectangle { horizontal-stretch: 1; }
+            if AcData.signin.password-when != "": Text { text: AcData.signin.password-when; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
             TipArea {
                 owner: "password";
-                tip: AcData.signin.password-tip;
+                tip: AcData.signin.password-can ? "" : AcData.signin.password-note;
                 width: pw-btn.preferred-width;
                 height: 28px;
-                pw-btn := Button { small: true; text: "Change password"; enabled: false; }
+                pw-btn := Button {
+                    small: true;
+                    kind: AcData.signin.password-open ? "ghost" : "default";
+                    text: AcData.signin.password-open ? "Close" : "Change password";
+                    enabled: AcData.signin.password-can && !AcData.signin.password-busy;
+                    probe: "pw-toggle";
+                    clicked => { root.act("pw-toggle", ""); }
+                }
             }
-            ComingWord { }
+        }
+        if !AcData.signin.password-can && AcData.signin.password-note != "": IconNote { icon: "lock"; text: AcData.signin.password-note; }
+        Collapse {
+            open: AcData.signin.password-open;
+            Rectangle {
+                min-height: pw-form.preferred-height;
+                preferred-height: pw-form.preferred-height;
+                pw-form := VerticalLayout {
+                    x: root.shake-x;
+                    width: parent.width;
+                    spacing: 10px;
+                    padding-top: 2px;
+                    padding-bottom: 4px;
+                    Rectangle {
+                        min-height: f-cur.preferred-height;
+                        f-cur := Field {
+                            width: parent.width;
+                            label: "Current password";
+                            password: true;
+                            box-height: 36px;
+                            text <=> root.pw-cur;
+                            enabled: !AcData.signin.password-busy;
+                            bad: AcData.signin.password-field == "cur";
+                            accepted => { f-new.focus-input(); }
+                        }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "pw-cur"; }
+                    }
+                    if AcData.signin.password-field == "cur": Text { text: AcData.signin.password-error; font-size: Type.small; color: Theme.crit-text; wrap: word-wrap; }
+                    Rectangle {
+                        min-height: f-new.preferred-height;
+                        f-new := Field {
+                            width: parent.width;
+                            label: "New password";
+                            password: true;
+                            box-height: 36px;
+                            text <=> root.pw-new;
+                            enabled: !AcData.signin.password-busy;
+                            bad: AcData.signin.password-field == "new";
+                            edited(v) => { root.act("pw-typing", v + "\n" + root.pw-conf); }
+                            accepted => { f-conf.focus-input(); }
+                        }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "pw-new"; }
+                    }
+                    StrengthMeter { data: AcData.pw-strength; }
+                    if AcData.signin.password-field == "new": Text { text: AcData.signin.password-error; font-size: Type.small; color: Theme.crit-text; wrap: word-wrap; }
+                    Rectangle {
+                        min-height: f-conf.preferred-height;
+                        f-conf := Field {
+                            width: parent.width;
+                            label: "Confirm new password";
+                            password: true;
+                            box-height: 36px;
+                            aside: AcData.pw-strength.matches ? "Matches" : "";
+                            aside-good: AcData.pw-strength.matches;
+                            ok: AcData.pw-strength.matches;
+                            text <=> root.pw-conf;
+                            enabled: !AcData.signin.password-busy;
+                            bad: AcData.signin.password-field == "conf";
+                            edited(v) => { root.act("pw-typing", root.pw-new + "\n" + v); }
+                            accepted => { root.submit-password(); }
+                        }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "pw-conf"; }
+                    }
+                    if AcData.signin.password-field == "conf" || AcData.signin.password-field == "form": Text { text: AcData.signin.password-error; font-size: Type.small; color: Theme.crit-text; wrap: word-wrap; }
+                    CheckLine {
+                        checked <=> root.pw-others;
+                        text: "Also sign out other browsers";
+                        sub: AcData.signin.password-others;
+                        enabled: !AcData.signin.password-busy;
+                        probe: "pw-others";
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        padding-top: 2px;
+                        // idle, busy and done in one button: the label, a spinner, then a check
+                        Button {
+                            kind: AcData.signin.password-done ? "default" : "primary";
+                            icon: AcData.signin.password-done ? "check" : "";
+                            text: AcData.signin.password-done ? "Password changed" : AcData.signin.password-busy ? "Changing" : "Change password";
+                            busy: AcData.signin.password-busy;
+                            enabled: !AcData.signin.password-done;
+                            probe: "pw-submit";
+                            clicked => { root.submit-password(); }
+                        }
+                        Button { kind: "ghost"; text: "Cancel"; enabled: !AcData.signin.password-busy; probe: "pw-cancel"; clicked => { root.act("pw-toggle", ""); } }
+                    }
+                }
+            }
         }
     }
     Hairline { }
@@ -378,23 +708,46 @@ component SigninGroup inherits SetGroup {
             spacing: 8px;
             Text { text: "Paired tray apps"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
             Rectangle { horizontal-stretch: 1; }
-            TipArea {
-                owner: "devices";
-                tip: AcData.signin.devices-tip;
-                width: 50px;
-                height: 20px;
-                ComingWord { }
+            if AcData.devices.length > 0: Text { text: AcData.devices.length == 1 ? "1 paired" : AcData.devices.length + " paired"; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+        }
+        VerticalLayout {
+            spacing: 0px;
+            for d[i] in AcData.devices: VerticalLayout {
+                if i > 0: Hairline { }
+                DeviceRow {
+                    device: d;
+                    busy: root.busy;
+                    confirming: root.revoke-id == d.id;
+                    revoking: AcData.signin.revoke-busy == d.id;
+                    ask => { root.revoke-id = d.id; root.all-open = false; }
+                    cancel => { root.revoke-id = ""; }
+                    revoke => { root.act("device-revoke", d.id); }
+                }
             }
         }
-        IconNote { icon: "link"; text: AcData.signin.devices-note; }
+        if AcData.devices.length == 0: IconNote { icon: "link"; text: AcData.signin.devices-note; }
         HorizontalLayout {
             alignment: start;
-            TipArea {
-                owner: "revoke-all";
-                tip: AcData.signin.revoke-all-tip;
-                width: all-btn.preferred-width;
-                height: 28px;
-                all-btn := Button { small: true; kind: "danger-text"; icon: "logout"; text: "Sign out all devices"; enabled: false; }
+            Button {
+                small: true;
+                kind: "danger-text";
+                icon: "logout";
+                text: "Sign out all devices";
+                enabled: AcData.signin.revoke-all-enabled && !root.all-open && !root.busy;
+                probe: "all-ask";
+                clicked => { root.all-open = true; root.revoke-id = ""; }
+            }
+        }
+        Collapse {
+            open: root.all-open;
+            ConfirmBlock {
+                lead: "Sign out every tray and every other browser?";
+                text: "Each tray shows its pairing screen. This browser stays signed in.";
+                confirm-label: "Sign out all devices";
+                probe: "all-do";
+                busy: AcData.signin.revoke-all-busy;
+                confirmed => { root.act("devices-revoke-all", ""); root.all-open = false; }
+                cancelled => { root.all-open = false; }
             }
         }
     }
@@ -414,6 +767,18 @@ component SigninGroup inherits SetGroup {
                 }
             }
             Icon { x: 0px; y: 2px; width: 15px; height: 15px; name: "info"; tint: Theme.ink-3; }
+        }
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                small: true;
+                icon: "logout";
+                text: AcData.signin.sign-out-busy ? "Signing out" : "Sign out";
+                busy: AcData.signin.sign-out-busy;
+                enabled: !root.busy;
+                probe: "logout";
+                clicked => { root.act("logout", ""); }
+            }
         }
     }
 }
@@ -537,7 +902,7 @@ export component SettingsColumn inherits VerticalLayout {
     callback act(string, string);
     spacing: 16px;
     alignment: start;
-    SigninGroup { }
+    SigninGroup { busy: root.busy; act(k, v) => { root.act(k, v); } }
     if !root.two-col: VerticalLayout {
         spacing: 16px;
         SettingsGroup {

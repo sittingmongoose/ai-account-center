@@ -500,7 +500,9 @@ export function chromeView(data, { now = Date.now(), refreshing = false, interva
  */
 export function dashboardViewModel(data, ctx = {}) {
   const now = ctx.now ?? Date.now();
-  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  // Accounts hidden one by one (`settings.hiddenAccountIds`, saved on the server) leave Home like hidden providers.
+  const hiddenIds = new Set(Array.isArray(data?.settings?.hiddenAccountIds) ? data.settings.hiddenAccountIds : []);
+  const accounts = (Array.isArray(data?.accounts) ? data.accounts : []).filter(account => !hiddenIds.has(account?.id));
   const hidden = hiddenProviders(data);
   const of = provider => accounts.filter(account => account.provider === provider);
   const sections = [];

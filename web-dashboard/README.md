@@ -107,17 +107,25 @@ page as file:// or configure a cross-origin API URL.
   an exception, the last sample, how it signs in, and fixed, aligned action
   slots. Codex and Antigravity Activate, Claude Open on Mac or Windows, the
   Codex and Antigravity auto-switch policies, the refresh interval and the
-  appearance are live; Add account, Sign in again, Replace key, Remove, app
-  sign-in, Re-check, Change password, other browsers and paired trays are shown
-  in place as "coming" until their server routes exist. "Show on dashboard" is
-  saved in this browser until the server stores visibility. The settings column
-  holds the Dashboard sign-in block, Update apps results by computer, read-only
-  connection facts and About.
-- The sign-in page is the login screen: wrong passwords show the tries left from
-  the login limiter's headers, a pause shows its countdown from `Retry-After`, a
-  session that ran out says so, and first-run setup appears only when the server
-  reports setup mode (the in-page form only once the server offers it; otherwise
-  the setup command).
+  appearance are live, and so is every sign-in and sign-out control the server
+  offers: Add account (Codex device code with the page and code, a Claude
+  profile on Mac and Windows, an API key in a masked field that shows only its
+  last 4 afterwards), Sign in again, Replace key, Remove with a confirmation
+  (Claude into the 30-day trash, with Restore), guided app and browser
+  sign-ins with Re-check, and "Show on dashboard" saved on the server. What a
+  control may do comes from the server (`providers[]` and
+  `GET /api/accounts/registry`); "coming" marks only what the server has no
+  flow or route for yet. A computer's default Claude profile is never offered
+  for removal. The settings column holds the Dashboard sign-in block (password
+  change, other browsers, paired trays with Revoke and Sign out all devices,
+  the trusted local network with Turn off, Sign out), Update apps results by
+  computer, read-only connection facts and About.
+- The sign-in page is the login screen: wrong passwords show the tries left, a
+  pause shows its countdown from `retryAfterSeconds` or `Retry-After`, a session
+  that ran out or was signed out from another browser says so, the network note
+  follows the trusted local network (trusted, not on it, or trust off with plain
+  guidance), and first-run setup appears only when the server reports setup mode
+  (with the setup code when the server asks for one).
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
@@ -170,10 +178,13 @@ version 2 dashboard view models (sections, Fable, switchable providers, hidden
 providers) and the version 3 analytics model (rate mirror parity with
 `model-pricing.ts`, per-type cost reconciliation, unavailable activity and cost,
 ranges and local-time buckets, the provider filter, heatmap gaps, quota history,
-focus-chart label placement and the resets agenda), the version 1 Accounts &
-Settings model (registry sections, fixed slots, live versus coming actions,
-local visibility, Update apps results, the refresh scale) and the sign-in
-rules (strength hint, first-run checks, limiter headers, ended sessions).
+focus-chart label placement and the resets agenda), the version 2 Accounts &
+Settings model (registry sections, fixed slots, live, refused and coming actions,
+flows, lines under rows, the trash, server visibility, the sign-in block, Update
+apps results, the refresh scale), the Accounts & Settings controller against a
+fake server (every action's request and every error code's words) and the
+sign-in rules (strength hint, first-run checks, tries and pauses, ended and
+revoked sessions).
 
 Visual checks use the sanitized fixture preview in
 `~/PM-Experiments/ccs-accounts-20260930/worktrees/preview/` (see its README):

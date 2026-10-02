@@ -1,6 +1,7 @@
 // Switch with a spring thumb. A toggle that cannot act yet is drawn off and flat and says why on hover
 // (`disabled-reason`); it never shows ON for a state that is off.
 import { Theme, Motion, Type } from "../theme.slint";
+import { ProbeMark } from "probe.slint";
 
 export component Toggle inherits Rectangle {
     in-out property <bool> on: false;
@@ -8,6 +9,8 @@ export component Toggle inherits Rectangle {
     in property <string> label;
     in property <string> disabled-reason;
     in property <bool> small: false;
+    // names the toggle for the end-to-end harness (components/probe.slint)
+    in property <string> probe;
     callback toggled(bool);
 
     property <length> track-w: root.small ? 28px : 34px;
@@ -63,4 +66,5 @@ export component Toggle inherits Rectangle {
             }
         }
     }
+    ProbeMark { x: 0px; y: 0px; id: root.probe; width: root.track-w; height: root.height; }
 }

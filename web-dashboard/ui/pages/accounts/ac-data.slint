@@ -1,11 +1,12 @@
-// The Accounts & Settings view model (version 1, public/accounts-view.mjs `accountsViewModel`), written by
+// The Accounts & Settings view model (version 2, public/accounts-view.mjs `accountsViewModel`), written by
 // src/accounts.rs into the AcData global. Rows and their actions are persistent models updated in place by id,
 // so a switch moves the selected-row highlight instead of re-mounting the list.
-import { RunView, FactView } from "../../models.slint";
+import { RunView, FactView, StrengthView } from "../../models.slint";
 import { SegItem } from "../../components/segmented.slint";
 
 // One fixed action slot. kind: "switch" (Activate / Active), "button", "icon" (icon-only), "quiet" (a word),
-// "empty". A "coming" action is drawn dimmed and explains itself on hover.
+// "empty". A "coming" action is drawn dimmed and explains itself on hover; a "refused" one is drawn dimmed but
+// stays clickable, and the click opens its reason under the row. `probe` names it for the e2e harness.
 export struct AcAction {
     kind: string,
     act: string,
@@ -16,7 +17,21 @@ export struct AcAction {
     style: string,
     enabled: bool,
     coming: bool,
+    refused: bool,
+    busy: bool,
     tip: string,
+    probe: string,
+}
+
+// The line under a row: a remove or restore confirmation (kind "confirm"), a refusal ("refuse") or a request
+// in flight ("busy"). It opens and closes with its height.
+export struct AcLine {
+    shown: bool,
+    kind: string,
+    icon: string,
+    lead: string,
+    text: string,
+    actions: [AcAction],
 }
 
 export struct AcRow {
@@ -39,6 +54,48 @@ export struct AcRow {
     confirm: bool,
     confirm-runs: [RunView],
     actions: [AcAction],
+    line: AcLine,
+    // removing: the row fades while it keeps its place
+    gone: bool,
+}
+
+// The inline flow under a provider section (add an account, sign in again, store or replace a key, a guided
+// app or browser sign-in). `key` changes when a new flow starts, which resets its fields.
+export struct AcFlow {
+    open: bool,
+    key: string,
+    title: string,
+    body: string,
+    steps: [string],
+    cur: int,
+    // "name" | "key" | "code" | "": the one text field of this step
+    input-kind: string,
+    input-label: string,
+    input-placeholder: string,
+    input-seed: string,
+    input-password: bool,
+    // an optional label field beside a new key
+    label-field: bool,
+    code-shown: bool,
+    code-url: string,
+    code-text: string,
+    code-expires: string,
+    code-input: bool,
+    waiting: string,
+    done: string,
+    error: string,
+    error-body: string,
+    note: string,
+    actions: [AcAction],
+}
+
+// A Claude profile in the 30-day trash.
+export struct AcTrashRow {
+    id: string,
+    label: string,
+    sub: string,
+    actions: [AcAction],
+    line: AcLine,
 }
 
 export struct AcProvider {
@@ -52,15 +109,24 @@ export struct AcProvider {
     hidden-note: string,
     toggle-enabled: bool,
     toggle-tip: string,
+    tray-visible: bool,
+    tray-enabled: bool,
+    tray-coming: bool,
+    tray-tip: string,
     switchable: bool,
     can-switch: bool,
     slots: int,
     acts-min: length,
     how: string,
+    // the footer line is a "Needs setup" reason rather than the how-to
+    needs: bool,
     empty: string,
     ag: bool,
     foot: [AcAction],
+    foot-coming: bool,
     rows: [AcRow],
+    flow: AcFlow,
+    trash: [AcTrashRow],
 }
 
 // The Antigravity policy box under its rows.
@@ -116,17 +182,55 @@ export struct AcUpdHost {
     items: [AcUpdItem],
 }
 
+// One paired tray (GET /api/auth/devices).
+export struct AcDevice {
+    id: string,
+    name: string,
+    platform: string,
+    sub: string,
+    tip: string,
+}
+
+// The trusted local network state (GET /api/auth/network).
+export struct AcNetwork {
+    known: bool,
+    on: bool,
+    line: string,
+    note: string,
+    act: string,
+    act-label: string,
+    act-enabled: bool,
+    tip: string,
+    busy: bool,
+}
+
 export struct AcSignin {
     username: string,
     connection: string,
     session: string,
     session-sub: string,
     session-tip: string,
-    other-tip: string,
-    password-tip: string,
+    others-text: string,
+    others-enabled: bool,
+    others-busy: bool,
+    others-tip: string,
+    password-when: string,
+    password-can: bool,
+    password-note: string,
+    password-open: bool,
+    password-busy: bool,
+    password-done: bool,
+    password-field: string,
+    password-error: string,
+    password-nonce: int,
+    password-others: string,
     devices-note: string,
-    devices-tip: string,
-    revoke-all-tip: string,
+    devices-known: bool,
+    revoke-busy: string,
+    revoke-all-enabled: bool,
+    revoke-all-busy: bool,
+    sign-out-busy: bool,
+    network: AcNetwork,
 }
 
 export global AcData {
@@ -142,6 +246,9 @@ export global AcData {
     in-out property <[RunView]> update-head;
     in-out property <[AcUpdHost]> update-hosts;
     in-out property <AcSignin> signin;
+    in-out property <[AcDevice]> devices;
+    // the new password's strength while the change-password form is typed in (set on its own, per keystroke)
+    in-out property <StrengthView> pw-strength;
     in-out property <[RunView]> pairing-note;
     in-out property <[FactView]> connection;
     in-out property <string> about-version;

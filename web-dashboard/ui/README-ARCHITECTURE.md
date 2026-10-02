@@ -12,7 +12,9 @@ public/bridge.js          network, session, timers, URL state; the only code tha
 public/view-model.mjs     DTO -> view model v2 for Home, Details, header, Update apps (pure, tested)
 public/analytics-data.mjs DTO -> analytics view + analyticsSlintModel() v3 (pure, tested)
 public/analytics-usage.mjs, analytics-quota.mjs, model-rates.mjs   the Analytics page's numbers and chart geometry
-public/accounts-view.mjs  DTO -> Accounts & Settings view model v1 (pure, tested); LIVE lists what the server can do
+public/accounts-view.mjs  DTO -> Accounts & Settings view model v2 (pure, tested): flows, lines, trash, sign-in block
+public/accounts-controller.mjs  the Accounts & Settings state machine with injected I/O (tested with a fake server)
+public/account-actions.mjs  each action's request and each error code's words (pure, tested)
 public/auth-view.mjs      the sign-in page's words and rules: strength, setup checks, limiter headers (pure, tested)
 public/claude-open.mjs    Claude Open progress: the 202 poller (injected I/O) and the row's progress line (tested)
 public/*-data.mjs, *-confirmation.mjs, visible-usage.mjs   truthfulness and switching rules (tested)
@@ -40,7 +42,13 @@ reading in Slint, never add or average across accounts, never turn a missing val
   ("user\npassword"), `details` (account id), `details-closed`, `launch` ("profile:mac|windows"), `activate`
   (Codex profile), `antigravity-activate` (profile id), `automatic`, `threshold` ("95%"),
   `antigravity-automatic`, `antigravity-threshold`, `antigravity-pool`, `refresh-interval` ("1 min"),
-  `activation-confirm`, `activation-cancel`, `accounts-show` ("provider:show|hide"), `antigravity-cooldown`
+  `activation-confirm`, `activation-cancel`, `accounts-show` and `accounts-tray` ("provider:show|hide"),
+  the Accounts & Settings kinds owned by accounts-controller.mjs (`add`, `add-key`, `replace-key`, `signin-again`,
+  `signin`, `session-signin`, `recheck`, `remove`, `refuse` ("row\ncode"), `line-cancel`, `remove-commit`,
+  `restore`, `restore-commit`, `flow-submit` ("provider\nfield\nlabel"), `flow-cancel`, `flow-done`, `flow-retry`,
+  `flow-copy`, `flow-open-url`, `flow-open-app`, `flow-recheck`, `others-out`, `network-off`, `network-on`,
+  `pw-toggle`, `pw-typing`, `pw-submit`, `device-revoke`, `devices-revoke-all`), `probe-rect` (?e2e only),
+  `antigravity-cooldown`
   (seconds), `setup` ("user\npassword\nconfirm\ncode"), `setup-typing` ("password\nconfirm"), `auth-recheck`,
   `login-limit-over`, the Analytics kinds listed under Analytics v3,
   `analytics-metric-key` (quota-history key), and the older `analytics-provider|account|metric|account-id|
@@ -51,10 +59,11 @@ reading in Slint, never add or average across accounts, never turn a missing val
   `close_details`, `set_update_status(json)`, `show_activation_confirmation(json)`,
   `close_activation_confirmation`, `set_analytics(json)`, `set_analytics_head(json)`,
   `set_analytics_trend_paths(json)` (one morph frame), `set_analytics_loading`, `set_current_page`,
-  `set_refresh_interval`, `set_accounts(json)` (Accounts & Settings v1), `set_signin_strength(json)`.
+  `set_refresh_interval`, `set_accounts(json)` (Accounts & Settings v2), `set_accounts_strength(json)` (the
+  change-password strength, per keystroke), `set_signin_strength(json)`, `probe_tick()` (?e2e only).
 - **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs,
   and `ANALYTICS_VIEW_VERSION = 3` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
-  and `ACCOUNTS_VIEW_VERSION = 1` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
+  and `ACCOUNTS_VIEW_VERSION = 2` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
   a mismatch is refused, not half-rendered. Bump the pair together when its structs change shape.
 - **In-place updates**: lib.rs owns one `Rc<VecModel<T>>` per list (sections, cards, registry, toasts, Details
   meters/amounts/facts, processes, KPIs, quota groups) and a `Nested<T>` per nested list (a section's rows, a
@@ -156,9 +165,10 @@ the exact text from bridge.js; the donut sweeps and morphs, the gauge arc and it
 bars grow in sequence, rows of the quota history and the agenda rise in with a stagger. Nothing loops while
 idle; the recent-sessions skeleton shimmers twice on first view.
 
-### Accounts & Settings v1
+### Accounts & Settings v2
 
-The page (W4) is built like the concept's `app-accounts.js` and the Dashboard sign-in block of `app-auth.js`.
+The page (W4, bound to the server in B5W) is built like the concept's `app-accounts.js` and the Dashboard sign-in
+block of `app-auth.js`.
 `accountsViewModel(serverData, ctx)` (public/accounts-view.mjs) returns `{ version, colA, colB, ag, policies,
 refresh, update, signin, connection, about }`; src/accounts.rs writes it into the `AcData` global
 (ui/pages/accounts/ac-data.slint) with persistent models (sections, rows by id, each row's actions, footers,
@@ -173,19 +183,35 @@ policies, Update apps hosts and their lines).
   slot: `switch`, `button`, `icon`, `quiet`, `empty`). Switch state (active, `activeLabel`, `canActivate`, the
   inline confirm past the switch point) comes from the Home view model computed with no provider hidden, so a
   provider hidden on Home still switches here. The full row opens Details; nested actions never do.
-- **What is live**: `LIVE` in accounts-view.mjs. Activate (Codex, Antigravity), Claude Open on Mac or Windows, the
-  Codex and Antigravity policies (toggle, threshold, pool, cooldown through the existing PUT routes), the
-  refresh interval and the theme are live. Add account, Sign in again, Replace key, Remove, app Sign in,
-  Re-check, server-side visibility, Change password, other browsers and paired trays are drawn in their places,
-  dimmed, with a `coming` caption and a tip that says what they will do; worktrees/status/W4.md lists the
-  contracts. When a route lands: flip its `LIVE` entry and add its handler in bridge.js.
-- **Show on dashboard**: saved in this browser (`localStorage['aac-hidden-providers']`) until the server stores
-  visibility. bridge.js keeps the response as `serverData` and renders everything else from `data`, the same
-  response with this browser's hidden providers added to `settings.hiddenProviders`, so Home, Details and
-  Analytics honour it. A section hidden here says "Hidden in this browser"; one hidden by the server "Hidden
-  everywhere".
-- **Settings column**: Dashboard sign-in (signed in as, connection, this session from the stored sign-in time,
-  and the coming items), Settings (Light/Dark/Auto, the usage refresh slider: any whole number of seconds from 30
+- **What is live comes from the server**: a provider's `signIn` and `capabilities` (dashboard `providers[]`) and
+  each account's `actions` and `removeRefusal` (`GET /api/accounts/registry`) decide every control (`gate()` in
+  accounts-view.mjs). A control is drawn live, off with its reason in plain words (a trusted connection needed,
+  the CLI missing, one account only), "refused" (dimmed but clickable: the click opens the reason under the row,
+  act `refuse`), or "coming" only when the server has no flow or route for it yet (`not_implemented`, a tray
+  toggle before the server stores it, Delete now in the trash). A computer's default Claude profile (`isDefault`,
+  or a profile folder named exactly "Claude") is always refused, whatever the server reports.
+- **Flows** (`flowView`, ui/pages/accounts/ac-flow.slint): one panel under a section, opened by Add, Sign in
+  again, Replace key or a footer Sign in: the step bar, the title and body, one field (profile name, a masked API
+  key with an optional label, a pasted code), the verification page and code with Copy and Open, the waiting
+  spinner, success or the error in plain words, and its buttons. The panel's height eases open and between steps;
+  each step slides in 10 px and fades. A key or code stays in Slint until it is submitted, is sent once, and the
+  field is cleared at once. Sign-in jobs are polled every 2 s (accounts-controller.mjs).
+- **Lines under rows** (`lineView`, `RowLine`): a remove or restore confirmation with the server's effect
+  sentences and the one-use token, a refusal with its reason, or a request in flight; a removed row fades while
+  it keeps its place. The Claude trash lists each profile with Restore and when it is deleted for good.
+- **Show on dashboard / Show in tray**: saved on the server (`PUT /api/accounts/visibility`); every browser
+  follows. A choice an older build saved in this browser (`localStorage['aac-hidden-providers']`) moves to the
+  server once and is then cleared. Home honours `settings.hiddenProviders` and `settings.hiddenAccountIds`. Show in
+  tray is live once the dashboard response carries `settings.trayHiddenProviders`.
+- **E2E probes** (components/probe.slint): with `?e2e` in the address, bridge.js answers `probe_tick()` with
+  every probed control's window rectangle (`globalThis.__aacProbe`) and keeps the last views and toasts it handed
+  Slint, so a CDP harness can click real controls and check them by pixels. Without `?e2e` nothing is reported.
+- **Settings column**: Dashboard sign-in (signed in as, connection, this session and other browsers from
+  `GET /api/auth/session` with Sign out other browsers; the trusted local network line and note from
+  `GET /api/auth/network` with Turn off, and Turn on only on the dashboard computer; the password change with
+  its strength meter, "Also sign out other browsers" and a toast that names the paired trays that stay signed
+  in; paired trays from `GET /api/auth/devices` with Revoke and Sign out all devices, each with an inline
+  confirmation; Sign out), Settings (Light/Dark/Auto, the usage refresh slider: any whole number of seconds from 30
   to 3600 on a log scale that snaps within 3.5% of its marks, saved on release; the auto-switch policies in %
   used), Update apps results by computer (Mac, Windows, Ubuntu; "Waiting for its turn" and a running bar while a
   job runs), Connection (read only) and About with `AboutSlint`.
@@ -194,16 +220,20 @@ policies, Update apps hosts and their lines).
 
 The real login screen. bridge.js builds `AuthView` with the words from public/auth-view.mjs:
 - default, connecting (the scale bar sweeps), wrong (inline under the password, "N tries left before sign-in
-  pauses for 15 minutes" from `RateLimit-Remaining` and `RateLimit-Policy`; the fields shake), limited (from a 429:
-  "Try again in 15 minutes", the clock time from `Retry-After`, a mm:ss countdown and a draining bar; the rings
-  dim), expired (a stored sign-in time says whether the session ran out after its hours or ended early),
+  pauses for 15 minutes" from the answer's `triesLeft`, else `RateLimit-Remaining`; the fields shake), limited
+  (from a 429: "Try again in 15 minutes", the clock time from `retryAfterSeconds` or `Retry-After`, a mm:ss
+  countdown and a draining bar; the rings dim), expired (a stored sign-in time says whether the session ran out
+  after its hours or ended early; `signedOutReason: "revoked"` or a 401 `session_revoked` says "Signed out from
+  another browser"), a 500 from login is "Sign-in failed on the dashboard", never a wrong password,
   setup (only when `/api/auth/check` reports `accessMode: "setup"`), success (the button turns into a check, the
   bar fills with the Apex ramp, then the layer cross-fades into the dashboard load-in);
 - the first-run form (username, password with the strength meter, confirmation with "Matches", setup code) shows
   only when `GET /api/auth/setup` reports `setupCodeRequired`, the signal that comes with `POST /api/auth/setup`
   (CONTRACT-auth-devices section 4); until then the setup state shows the command that sets sign-in up on the
   server and a Check again button;
-- the network note says whether this address is plain HTTP, HTTPS or the dashboard host itself.
+- the network note follows `/api/auth/check`: HTTPS, the dashboard computer itself, "Local network trusted..."
+  (the trusted local network), not on the trusted network, or trust off with plain guidance to turn it on from
+  the dashboard computer; a first-run setup refused for the transport says the same in words.
 
 ### URL state
 

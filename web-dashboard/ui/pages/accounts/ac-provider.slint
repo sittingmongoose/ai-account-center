@@ -19,107 +19,11 @@ import { Segmented } from "../../components/segmented.slint";
 import { Plate } from "../../components/card.slint";
 import { Hover } from "../../components/hover-card.slint";
 import { SwitchSlot, ConfirmLine, Stepper, Runs } from "../home.slint";
-import { AcData, AcAction, AcRow, AcProvider, AcAgPolicy } from "ac-data.slint";
-
-// "coming": the concept's quiet mono caption (its "proposal" word), for an action whose server route has not
-// landed yet. No pill, no box.
-export component ComingWord inherits Text {
-    text: "coming";
-    font-family: Type.mono;
-    font-size: Type.caption;
-    letter-spacing: 0.33px;
-    color: Theme.ink-3;
-    vertical-alignment: center;
-}
-
-// A hover tip for whatever sits inside it, including a disabled control (which takes no pointer events itself).
-// A click on it is taken here, so a nested control never also opens the row's Details.
-export component TipArea inherits TouchArea {
-    in property <string> tip;
-    in property <string> owner;
-    changed has-hover => {
-        if self.has-hover {
-            Hover.tip(root.owner, self.absolute-position, self.width, self.height, root.tip);
-        } else {
-            Hover.leave(root.owner);
-        }
-    }
-}
-
-// A wrapped note with a leading 15 px icon. The text sits directly in a VerticalLayout so its wrapped height is
-// measured at its real width (a wrapping Text inside a HorizontalLayout reports one line); the icon is placed
-// beside it on the first line.
-export component IconNote inherits Rectangle {
-    in property <string> icon: "info";
-    in property <string> text;
-    in property <color> ink: Theme.ink-3;
-    in property <color> icon-ink: Theme.ink-3;
-    in property <length> size: 12.5px;
-    in property <length> gap: 9px;
-    min-height: lay.preferred-height;
-    preferred-height: lay.preferred-height;
-    lay := VerticalLayout {
-        padding-left: 15px + root.gap;
-        Text { text: root.text; font-size: root.size; color: root.ink; wrap: word-wrap; }
-    }
-    Icon { x: 0px; y: 2px; width: 15px; height: 15px; name: root.icon; tint: root.icon-ink; }
-}
-
-// One action: a button, an icon-only button or a quiet word. A "coming" action is dimmed and says on hover what
-// it will do.
-export component ActionControl inherits Rectangle {
-    in property <AcAction> data;
-    in property <string> owner;
-    in property <bool> busy;
-    in property <bool> align-end: true;
-    callback act(string, string);
-    out property <length> natural: root.data.kind == "button" ? btn.preferred-width
-        : root.data.kind == "icon" ? 28px
-        : root.data.kind == "quiet" ? quiet.preferred-width : 0px;
-    min-height: 28px;
-    tip := TipArea {
-        x: root.align-end ? root.width - root.natural : 0px;
-        y: (root.height - 28px) / 2;
-        width: root.natural;
-        height: 28px;
-        visible: root.data.kind == "button" || root.data.kind == "icon" || root.data.kind == "quiet";
-        owner: root.owner;
-        tip: root.data.tip;
-        btn := Button {
-            x: 0px;
-            y: 0px;
-            width: self.preferred-width;
-            visible: root.data.kind == "button";
-            small: true;
-            text: root.data.label;
-            icon: root.data.icon;
-            platform: root.data.platform;
-            kind: root.data.style == "" ? "default" : root.data.style;
-            enabled: root.data.enabled && !root.busy;
-            hint: root.data.tip;
-            clicked => { root.act(root.data.act, root.data.value); }
-        }
-        IconButton {
-            x: 0px;
-            y: 0px;
-            visible: root.data.kind == "icon";
-            small: true;
-            bare: true;
-            icon: root.data.icon;
-            enabled: root.data.enabled && !root.busy;
-            hint: root.data.label;
-            clicked => { root.act(root.data.act, root.data.value); }
-        }
-        quiet := Text {
-            x: 0px;
-            y: (parent.height - self.preferred-height) / 2;
-            visible: root.data.kind == "quiet";
-            text: root.data.label;
-            font-size: 12.5px;
-            color: Theme.ink-3;
-        }
-    }
-}
+import { ProbeMark } from "../../components/probe.slint";
+import { AcData, AcAction, AcRow, AcProvider, AcAgPolicy, AcTrashRow } from "ac-data.slint";
+import { ComingWord, TipArea, IconNote, ActionControl } from "ac-actions.slint";
+import { FlowPanel, RowLine } from "ac-flow.slint";
+export { ComingWord, TipArea, IconNote, ActionControl }
 
 // One account row: identity, status and last sample, source, then the fixed action slots.
 export component AcRowItem inherits Rectangle {
@@ -147,6 +51,9 @@ export component AcRowItem inherits Rectangle {
 
     body := VerticalLayout {
         spacing: 0px;
+        // removing: the row fades while it keeps its place, then the list settles
+        opacity: root.item.gone ? 0.35 : 1;
+        animate opacity { duration: Motion.on ? 260ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
         line := Rectangle {
             min-height: max(56px, row-layout.min-height);
             preferred-height: max(56px, row-layout.preferred-height);
@@ -257,6 +164,7 @@ export component AcRowItem inherits Rectangle {
                                     }
                                 }
                             }
+                            if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: sw.y; width: min(parent.width, sw.natural); height: sw.height; id: a.probe; }
                             ctl := ActionControl {
                                 width: parent.width;
                                 height: parent.height;
@@ -280,6 +188,63 @@ export component AcRowItem inherits Rectangle {
                 root.cancel-confirm();
                 root.act(root.item.activate-kind, root.item.profile);
             }
+        }
+        RowLine {
+            line: root.item.line;
+            owner: "line:" + root.item.id;
+            busy: root.busy;
+            act(kind, value) => { root.act(kind, value); }
+        }
+    }
+    ProbeMark { x: 0px; y: 0px; width: root.width; height: line.height; id: "row:" + root.item.id; }
+}
+
+// A Claude profile in the 30-day trash: its label, when it is deleted for good, Restore (and Delete now, which
+// waits for a server route), and its confirmation line.
+component TrashRowItem inherits Rectangle {
+    in property <AcTrashRow> item;
+    in property <bool> busy;
+    callback act(string, string);
+    min-height: body.min-height;
+    preferred-height: body.preferred-height;
+    body := VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            min-height: max(52px, lay.preferred-height);
+            Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
+            lay := HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    spacing: 1px;
+                    Text { min-height: 19.5px; vertical-alignment: center; text: root.item.label; font-size: Type.body; font-weight: 520; color: Theme.ink-2; overflow: elide; }
+                    Text { min-height: 17.5px; vertical-alignment: center; text: root.item.sub; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                }
+                for a[i] in root.item.actions: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    ActionControl {
+                        width: self.natural;
+                        align-end: false;
+                        data: a;
+                        owner: "trash:" + root.item.id + ":" + i;
+                        busy: root.busy;
+                        act(kind, value) => { root.act(kind, value); }
+                    }
+                }
+                if root.item.actions.length > 0 && root.item.actions[root.item.actions.length - 1].coming: VerticalLayout { alignment: center; ComingWord { } }
+            }
+        }
+        RowLine {
+            line: root.item.line;
+            owner: "trash-line:" + root.item.id;
+            busy: root.busy;
+            act(kind, value) => { root.act(kind, value); }
         }
     }
 }
@@ -454,7 +419,7 @@ component SectionFoot inherits Rectangle {
     in property <AcProvider> provider;
     in property <bool> busy;
     callback act(string, string);
-    property <bool> any-coming: root.provider.foot.length > 0;
+    property <bool> any-coming: root.provider.foot-coming;
     property <length> text-w: max(160px, root.width - 36px - 15px - 8px - 14px - btns.preferred-width);
     // the concept's .prov-foot: its 1 px rule, 11 px above and 13 px below the 28 px controls
     min-height: max(how.preferred-height, 28px) + 25px;
@@ -463,8 +428,8 @@ component SectionFoot inherits Rectangle {
     Icon {
         x: 18px;
         y: (root.height - max(how.preferred-height, 17px)) / 2 + 1px;
-        name: "info";
-        tint: Theme.ink-3;
+        name: root.provider.needs ? "alert" : "info";
+        tint: root.provider.needs ? Theme.warn-text : Theme.ink-3;
         width: 15px;
         height: 15px;
     }
@@ -474,7 +439,7 @@ component SectionFoot inherits Rectangle {
         width: root.text-w;
         text: root.provider.how;
         font-size: 12.5px;
-        color: Theme.ink-3;
+        color: root.provider.needs ? Theme.ink-2 : Theme.ink-3;
         wrap: word-wrap;
     }
     btns := HorizontalLayout {
@@ -528,9 +493,12 @@ export component ProviderSection inherits Plate {
         root.hl-placed = true;
     }
 
-    // "Show on dashboard" follows the model (a click assigns the toggle, which would end a plain binding)
+    // "Show on dashboard" and "Show in tray" follow the model (a click assigns the toggle, which would end a
+    // plain binding)
     property <bool> shown: root.provider.visible;
     changed shown => { show-toggle.on = self.shown; }
+    property <bool> tray-shown: root.provider.tray-visible;
+    changed tray-shown => { tray-toggle.on = self.tray-shown; }
 
     min-height: body.min-height;
     preferred-height: body.preferred-height;
@@ -588,20 +556,40 @@ export component ProviderSection inherits Plate {
                     owner: "show:" + root.provider.id;
                     tip: root.provider.toggle-tip;
                     height: 22px;
-                    width: show-toggle.preferred-width;
+                    width: max(show-toggle.preferred-width, tray-toggle.preferred-width);
                     show-toggle := Toggle {
                         y: (parent.height - self.height) / 2;
                         on: root.provider.visible;
                         enabled: root.provider.toggle-enabled;
                         label: "Show on dashboard";
+                        probe: "show:" + root.provider.id;
                         toggled(on) => { root.act("accounts-show", root.provider.id + ":" + (on ? "show" : "hide")); }
                     }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    TipArea {
+                        owner: "tray:" + root.provider.id;
+                        tip: root.provider.tray-tip;
+                        height: 22px;
+                        width: max(show-toggle.preferred-width, tray-toggle.preferred-width);
+                        tray-toggle := Toggle {
+                            y: (parent.height - self.height) / 2;
+                            on: root.provider.tray-visible;
+                            enabled: root.provider.tray-enabled;
+                            label: "Show in tray";
+                            probe: "tray:" + root.provider.id;
+                            toggled(on) => { root.act("accounts-tray", root.provider.id + ":" + (on ? "show" : "hide")); }
+                        }
+                    }
+                    if root.provider.tray-coming: ComingWord { }
                 }
                 if root.provider.hidden-note != "": Text {
                     text: root.provider.hidden-note;
                     font-size: Type.small;
                     color: Theme.ink-3;
-                    horizontal-alignment: right;
+                    horizontal-alignment: left;
                 }
             }
         }
@@ -676,6 +664,27 @@ export component ProviderSection inherits Plate {
                 color: Theme.ink-3;
             }
         }
+        if root.provider.trash.length > 0: VerticalLayout {
+            spacing: 0px;
+            Rectangle {
+                min-height: 34px;
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
+                HorizontalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 12px;
+                    padding-bottom: 6px;
+                    spacing: 8px;
+                    Caps { text: "IN THE TRASH"; horizontal-stretch: 0; }
+                    Text { text: "Restored within 30 days, then deleted for good"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                }
+            }
+            for t in root.provider.trash: TrashRowItem {
+                item: t;
+                busy: root.busy;
+                act(kind, value) => { root.act(kind, value); }
+            }
+        }
         if root.provider.ag: HorizontalLayout {
             padding-left: 18px;
             padding-right: 18px;
@@ -686,6 +695,12 @@ export component ProviderSection inherits Plate {
                 busy: root.busy;
                 act(kind, value) => { root.act(kind, value); }
             }
+        }
+        FlowPanel {
+            flow: root.provider.flow;
+            provider: root.provider.id;
+            busy: root.busy;
+            act(kind, value) => { root.act(kind, value); }
         }
         SectionFoot {
             provider: root.provider;
