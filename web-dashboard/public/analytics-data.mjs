@@ -177,8 +177,8 @@ export function activityView(activity = {}, range = {}, interval = 'Daily') {
   const listedTokens = models.reduce((sum, row) => sum + tokenTotal(row), 0);
   const largestCost = Math.max(0, ...models.filter(row => finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0).map(row => row.estimatedCostUsd));
   return {
-    activityTitle: 'Local CLI activity', activityIntervalValue: interval,
-    activityNote: [text(activity.message), 'Ubuntu Claude Code and Codex CLI logs only; UTC buckets. Input excludes cached tokens; output includes reasoning. Activity covers all accounts and cannot be attributed to an individual account. Every cost is an estimated API equivalent, not a subscription charge.', activity.status === 'cached' ? 'Cached activity data.' : '', dateLabel(activity.fetchedAt, 'Updated ')].filter(Boolean).join(' '),
+    activityTitle: 'CLI usage activity', activityIntervalValue: interval,
+    activityNote: [text(activity.message), 'Claude Code and Codex CLI logs; UTC buckets. Input excludes cached tokens; output includes reasoning. Activity covers all accounts and cannot be attributed to an individual account. Every cost is an estimated API equivalent, not a subscription charge.', activity.status === 'cached' ? 'Cached activity data.' : '', dateLabel(activity.fetchedAt, 'Updated ')].filter(Boolean).join(' '),
     activityHasData: available,
     activitySummaries: available ? [
       { label: 'Input tokens', value: axisNumber(totals.inputTokens), note: `${number(totals.inputTokens)} tokens · Actual uncached input` },
@@ -196,7 +196,7 @@ export function activityView(activity = {}, range = {}, interval = 'Daily') {
     activityChartStart: Number.isFinite(from) ? bucketLabel(from) : '', activityChartEnd: Number.isFinite(to) ? bucketLabel(to) : '',
     activityModelNote: `Top models reported by the collector (up to 30, ranked by estimated API cost). Token shares use the ${number(models.length)} listed models only; they are not a complete account or subscription distribution. Input, output and the two cache categories remain separate.`,
     activityModels: models.map(row => ({ label: row.model, provider: row.provider === 'claude' ? 'Claude' : 'Codex', input: number(row.inputTokens), output: number(row.outputTokens), cache: number(row.cacheCreationTokens + row.cacheReadTokens), cacheCreated: number(row.cacheCreationTokens), cacheRead: number(row.cacheReadTokens), total: number(tokenTotal(row)), cost: dollars(row.estimatedCostUsd), hasCost: finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0, costPercent: finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 && largestCost > 0 ? row.estimatedCostUsd / largestCost * 100 : 0, tokenPercent: listedTokens > 0 ? tokenTotal(row) / listedTokens * 100 : 0, share: listedTokens > 0 ? `${number(tokenTotal(row) / listedTokens * 100)}%` : '0%' })),
-    activityProviders: uniqueProviders.map(row => ({ key: row.provider, label: text(row.label) || row.provider, amount: `${number(tokenTotal(row.totals))} tokens · ${dollars(row.totals.estimatedCostUsd)} estimated API-equivalent cost`, reset: `${Number.isInteger(row.usageEvents) && row.usageEvents >= 0 ? number(row.usageEvents) : 'Unavailable'} parsed usage-log entries`, expiration: `${Number.isInteger(row.sessionCount) && row.sessionCount >= 0 ? number(row.sessionCount) : 'Unavailable'} sessions last active in range`, note: 'Ubuntu local CLI · all accounts' })),
+    activityProviders: uniqueProviders.map(row => ({ key: row.provider, label: text(row.label) || row.provider, amount: `${number(tokenTotal(row.totals))} tokens · ${dollars(row.totals.estimatedCostUsd)} estimated API-equivalent cost`, reset: `${Number.isInteger(row.usageEvents) && row.usageEvents >= 0 ? number(row.usageEvents) : 'Unavailable'} parsed usage-log entries`, expiration: `${Number.isInteger(row.sessionCount) && row.sessionCount >= 0 ? number(row.sessionCount) : 'Unavailable'} sessions last active in range`, note: 'CLI usage logs · all accounts' })),
   };
 }
 export function analyticsView(payload, { catalog = [], metricKey = '', activityInterval = 'Daily' } = {}, now = Date.now()) {
@@ -243,7 +243,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
     quotaCharts,
     // Legacy single-chart bindings are empty; all histories are rendered by quotaCharts.
     metrics: [], points: [], chartTitle: 'Account histories', chartNote: '', chartHasPoints: false,
-    ...activityView(accountId === 'all' ? payload?.activity : { ...payload?.activity, status: 'unavailable', totals: null, message: text(payload?.activity?.message) || 'Local CLI activity cannot be attributed to an individual account.' }, payload?.range, activityInterval),
+    ...activityView(accountId === 'all' ? payload?.activity : { ...payload?.activity, status: 'unavailable', totals: null, message: text(payload?.activity?.message) || 'CLI usage cannot be attributed to an individual account.' }, payload?.range, activityInterval),
     // The quota history (the former Headroom) is one row per account, grouped by provider.
     // quotaCharts above remain the per-window history data that a row's focus chart reads by key.
     version: ANALYTICS_VIEW_VERSION,

@@ -8,7 +8,7 @@ import { IconButton } from "../../components/icon-button.slint";
 import { Button } from "../../components/button.slint";
 import { Caps } from "../../components/text.slint";
 import { HoverShadow } from "../../components/card.slint";
-import { AxData, AxKpi, AxDay } from "ax-data.slint";
+import { AxData, AxKpi, AxDay, AxSrcCell } from "ax-data.slint";
 import { AxColor, AxNum, AxTip, AxSwatch, AxSeg, AxSegItem, AxInfo } from "ax-common.slint";
 
 // A popover body that rises 4 px and fades in when it opens.
@@ -52,6 +52,77 @@ component ScopeLines inherits VerticalLayout {
         // an explicit width, so the wrapped height is measured at the popover's width
         Text { text: line.text; width: 380px - 32px - 26px; font-size: 13px; color: Theme.ink-2; wrap: word-wrap; }
     }
+}
+
+// "Included usage": which tools' logs on which computers are in these numbers, and each source's state and
+// last scan (activity.sources). It names where the numbers come from; it never divides them.
+component SrcCell inherits Text {
+    in property <AxSrcCell> c;
+    text: root.c.text;
+    font-family: Type.tab;
+    font-size: 12px;
+    color: root.c.tone == "ok" ? Theme.ink-2 : root.c.tone == "cached" ? Theme.warn-text : root.c.tone == "unavailable" ? Theme.crit-text : Theme.ink-4;
+    vertical-alignment: center;
+    overflow: elide;
+    horizontal-stretch: 1;
+    min-width: 0px;
+    AxTip { tip: root.c.tip; }
+}
+component IncludedLines inherits VerticalLayout {
+    in property <length> body-w;
+    spacing: 0px;
+    Text { text: "Included usage"; font-size: 14px; font-weight: 640; color: Theme.ink; min-height: 20px; }
+    Rectangle { height: 6px; }
+    Text { text: AxData.included.line; width: root.body-w; font-size: 13px; color: Theme.ink-2; wrap: word-wrap; }
+    Rectangle { height: 12px; }
+    HorizontalLayout {
+        spacing: 10px;
+        min-height: 22px;
+        Rectangle { width: 96px; }
+        for h in AxData.included-hosts: Caps { text: h; horizontal-stretch: 1; min-width: 0px; }
+    }
+    for r in AxData.included-rows: VerticalLayout {
+        Rectangle { height: 1px; background: Theme.rule-2; }
+        HorizontalLayout {
+            spacing: 10px;
+            min-height: 28px;
+            Text { text: r.tool; width: 96px; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+            for c in r.cells: SrcCell { c: c; }
+        }
+    }
+    Rectangle { height: 1px; background: Theme.rule-2; }
+    Rectangle { height: 10px; }
+    Text { text: AxData.included.foot; width: root.body-w; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+}
+
+// The quiet text button that opens it, collapsed by default like the scope disclosure beside it.
+component IncludedButton inherits Rectangle {
+    in property <bool> open;
+    callback clicked();
+    height: 24px;
+    min-width: row.preferred-width;
+    preferred-width: row.preferred-width;
+    border-radius: 7px;
+    background: ta.has-hover || root.open ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
+    animate background { duration: Motion.tint(Motion.fast); }
+    row := HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 5px;
+        spacing: 4px;
+        Text { text: AxData.included.label; font-size: 13px; color: ta.has-hover || root.open ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                name: "chev-down";
+                width: 13px;
+                height: 13px;
+                tint: Theme.ink-3;
+                transform-rotation: root.open ? 180deg : 0deg;
+                animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            }
+        }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
 }
 
 // One day of the custom range picker.
@@ -251,6 +322,21 @@ export component AxHeader inherits Rectangle {
                             height: scope-body.preferred-height;
                             close-policy: close-on-click-outside;
                             scope-body := AxPopBody { width: 380px; height: self.preferred-height; ScopeLines { } }
+                        }
+                    }
+                    if AxData.included.shown: VerticalLayout {
+                        alignment: center;
+                        inc := IncludedButton {
+                            open: inc-pop.is-open;
+                            clicked => { inc-pop.show(); }
+                            inc-pop := PopupWindow {
+                                x: 0px;
+                                y: inc.height + 8px;
+                                width: 500px;
+                                height: inc-body.preferred-height;
+                                close-policy: close-on-click-outside;
+                                inc-body := AxPopBody { width: 500px; height: self.preferred-height; IncludedLines { body-w: 500px - 32px; } }
+                            }
                         }
                     }
                     Rectangle { horizontal-stretch: 1; }

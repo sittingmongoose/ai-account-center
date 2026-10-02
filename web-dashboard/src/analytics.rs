@@ -9,10 +9,10 @@
 use crate::sync::{Nested, sync_rows};
 use crate::{
     AnalyticsHeadView, AxAgendaRow, AxBar, AxBucket, AxCache, AxCalendar, AxCardText, AxDaily,
-    AxData, AxDay, AxDonut, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat, AxHeatCell, AxKpi,
-    AxLabel, AxLegendItem, AxModelRow, AxModelType, AxQuotaGroup, AxQuotaRow, AxScopeLine,
-    AxSessRow, AxShape, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend, AxTrendPaths,
-    AxXTick, AxYTick, Dashboard, RunView,
+    AxData, AxDay, AxDonut, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat, AxHeatCell,
+    AxIncluded, AxKpi, AxLabel, AxLegendItem, AxModelRow, AxModelType, AxQuotaGroup, AxQuotaRow,
+    AxScopeLine, AxSessRow, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick,
+    AxTokRow, AxTrend, AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
 };
 use serde_json::Value;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -181,6 +181,8 @@ fn model_row(v: &Value) -> AxModelRow {
         tok: s(v, "tok"),
         tok_tip: s(v, "tokTip"),
         cost: s(v, "cost"),
+        cost_na: b(v, "costNa"),
+        partial: b(v, "partial"),
         share: s(v, "share"),
         sub: s(v, "sub"),
         usage: s(v, "usage"),
@@ -490,6 +492,23 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         icon: s(l, "icon"),
         text: s(l, "text"),
     }));
+    // included usage: where the numbers come from (activity.sources), never a division of them
+    let inc = g(usage, "included");
+    ax.set_included(AxIncluded {
+        shown: b(inc, "shown"),
+        label: s(inc, "label"),
+        line: s(inc, "line"),
+        foot: s(inc, "foot"),
+    });
+    ax.set_included_hosts(strings(inc, "hosts"));
+    ax.set_included_rows(list(inc, "rows", |r| AxSrcRow {
+        tool: s(r, "tool"),
+        cells: list(r, "cells", |c| AxSrcCell {
+            text: s(c, "text"),
+            tone: s(c, "tone"),
+            tip: s(c, "tip"),
+        }),
+    }));
     sync_rows(
         &m.kpis,
         arr(usage, "kpis").iter().map(kpi).collect(),
@@ -549,6 +568,7 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         centre_label: s(donut, "centreLabel"),
         unit: s(donut, "unit"),
         empty: b(donut, "empty"),
+        empty_text: s(donut, "emptyText"),
     });
     sync_rows(
         &m.donut,

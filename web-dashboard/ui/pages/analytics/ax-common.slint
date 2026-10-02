@@ -47,11 +47,12 @@ export global AxColor {
         if k == "series-ink" { return series(p, shade).mix(Theme.ink, 0.62); }
         return Theme.ink-3;
     }
-    // one colour per model in its provider's family (the donut and its legend)
+    // one colour per model in its family (the donut and its legend): Claude Code, Codex, or the neutral family
+    // of models whose usage is not one provider's alone ("" provider)
     public pure function model(p: string, mix: float, other: bool) -> color {
         if other { return Theme.ink-4; }
-        if mix >= 0.999 { return Theme.provider-hue(p); }
-        return Theme.provider-hue(p).mix(Theme.paper, mix);
+        if mix >= 0.999 { return p == "" ? Theme.h-model : Theme.provider-hue(p); }
+        return (p == "" ? Theme.h-model : Theme.provider-hue(p)).mix(Theme.paper, mix);
     }
     // heatmap: an empty hour, the low end of the ramp, and a cell at sqrt-scaled intensity k
     out property <color> heat-zero: Theme.pick(Theme.heat-0, #1F2A35);
@@ -120,7 +121,8 @@ export component AxNum inherits Rectangle {
     in property <bool> pct: false;
     in property <float> unit-scale: 0.96;
     in property <bool> right: false;
-    in property <string> na: "Unavailable";
+    // the text shown without a value: the view model's own ("Unavailable" or "Not logged")
+    in property <string> na: root.text == "" ? "Unavailable" : root.text;
     in property <length> na-size: root.size;
 
     property <bool> mounted: !Motion.on;
