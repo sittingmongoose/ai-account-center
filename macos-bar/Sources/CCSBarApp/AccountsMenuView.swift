@@ -105,7 +105,7 @@ struct AccountsMenuView: View {
           .modifier(Entrance(index: 0, context: open))
           .background(GeometryReader { Color.clear.preference(key: HeaderHeightKey.self, value: $0.size.height) })
         ZStack(alignment: .top) {
-          if model.connection == nil && model.dashboard == nil {
+          if model.needsConnection {
             ConnectView(model: model)
               .opacity(state.settingsOpen ? 0 : 1)
               .allowsHitTesting(!state.settingsOpen)
@@ -176,7 +176,7 @@ struct AccountsMenuView: View {
 
   @ViewBuilder private func status(_ palette: TrayPalette) -> some View {
     Group {
-      if model.connection == nil && !model.isPreview {
+      if model.needsConnection {
         Text("Not connected")
       } else if model.isRefreshing && model.dashboard == nil {
         Text("Loading accounts")
@@ -306,11 +306,11 @@ struct AccountsMenuView: View {
       HStack(spacing: 8) {
         if let status = model.dashboard?.codexAutoSwitch {
           codexCluster(status, palette)
-        } else if model.connection == nil && !model.isPreview {
+        } else if model.needsConnection {
           Text("Usage appears after this Mac is connected").font(.system(size: 12)).foregroundStyle(palette.label2)
         }
         Spacer(minLength: 8)
-        if model.connection != nil || model.isPreview {
+        if !model.needsConnection {
           let openDashboard = { model.openDashboard() }
           Button(action: openDashboard) {
             HStack(spacing: 6) {
@@ -345,7 +345,7 @@ struct AccountsMenuView: View {
         .glassControl(circle: true, tint: state.settingsOpen ? palette.accent.opacity(0.28) : nil)
         .accessibilityAddTraits(state.settingsOpen ? .isSelected : [])
         .hoverHelp("Settings", id: "footer-settings", action: toggle)
-        if model.connection == nil && !model.isPreview {
+        if model.needsConnection {
           Button { NSApplication.shared.terminate(nil) } label: {
             Image(systemName: "power").font(.system(size: 14, weight: .medium))
               .frame(width: TrayMetrics.footerControl, height: TrayMetrics.footerControl).contentShape(Circle())

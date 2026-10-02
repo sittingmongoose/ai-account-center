@@ -106,6 +106,9 @@ final class PanelController: NSObject, NSWindowDelegate {
   func close() {
     guard let panel, panel.isVisible else { return }
     model.lastShown = model.currentReadings
+    // An unanswered switch confirmation ends with the panel, so background refresh resumes.
+    model.pendingCodexSwitch = nil
+    model.pendingAntigravitySwitch = nil
     removeDismissMonitors()
     statusItem.button?.highlight(false)
     if state.reduceMotion {

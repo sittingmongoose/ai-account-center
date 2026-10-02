@@ -47,6 +47,11 @@ final class AccountsViewModel: ObservableObject {
   private var client: AccountsClient?
   private var timer: Timer?
 
+  /// The first-run connect screen with no connection file and no network, for offline renders.
+  init(previewWithoutConnection: Bool) {
+    isPreview = true
+  }
+
   init(preview: AccountDashboard? = nil) {
     if let preview {
       isPreview = true
@@ -75,6 +80,9 @@ final class AccountsViewModel: ObservableObject {
   func menuBarReading(_ prefs: TrayPreferences) -> MenuBarReading? {
     MenuBarReading.make(dashboard: dashboard, source: prefs.menuBarSource, mode: prefs.menuBarMode)
   }
+
+  /// No saved connection and nothing to show: the panel offers the connect form.
+  var needsConnection: Bool { connection == nil && dashboard == nil }
 
   var hasPendingConfirmation: Bool { pendingCodexSwitch != nil || pendingAntigravitySwitch != nil }
 

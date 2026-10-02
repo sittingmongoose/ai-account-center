@@ -14,6 +14,7 @@ enum PreviewRenderer {
     var width: CGFloat = 760
     var wallpaper = true
     var details: String?
+    var connect = false
 
     init(_ arguments: [String]) {
       for argument in arguments {
@@ -23,6 +24,7 @@ enum PreviewRenderer {
         if argument == "--plain" { wallpaper = false }
         if argument.hasPrefix("--width="), let value = Double(argument.dropFirst(8)) { width = CGFloat(value) }
         if argument.hasPrefix("--details=") { details = String(argument.dropFirst(10)) }
+        if argument == "--connect" { connect = true }
       }
     }
   }
@@ -95,7 +97,30 @@ enum PreviewRenderer {
     return host
   }
 
+  private static func connectHost(options: Options) throws -> NSView {
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    let appearance = NSAppearance(named: options.appearance == "dark" ? .darkAqua : .aqua)
+    NSApplication.shared.appearance = appearance
+    let root = ConnectView(model: AccountsViewModel(previewWithoutConnection: true)).frame(width: options.width)
+      .background(PreviewGlass())
+      .environment(\.trayStaticRender, true)
+    let host = NSHostingView(rootView: root)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: options.width, height: 600), styleMask: .borderless,
+      backing: .buffered, defer: false)
+    window.appearance = appearance
+    window.contentView = host
+    window.setFrameOrigin(NSPoint(x: -30_000, y: -30_000))
+    window.orderFrontRegardless()
+    settle(host)
+    let size = host.fittingSize
+    window.setContentSize(size)
+    host.frame = NSRect(origin: .zero, size: size)
+    settle(host)
+    return host
+  }
+
   private static func settle(_ view: NSView) {
+    view.window?.makeFirstResponder(nil)
     for _ in 0..<4 {
       view.layoutSubtreeIfNeeded()
       RunLoop.main.run(until: Date().addingTimeInterval(0.08))
@@ -111,6 +136,10 @@ enum PreviewRenderer {
       let host: NSView
       if let id = options.details {
         host = try detailsHost(dashboard, accountID: id, options: options)
+      } else if options.connect {
+        // The first-run connect screen alone: inside the full panel its text fields move the content into
+        // window-server layers that an offscreen render cannot read.
+        host = try connectHost(options: options)
       } else {
         host = Self.host(dashboard, options: options).0
       }
