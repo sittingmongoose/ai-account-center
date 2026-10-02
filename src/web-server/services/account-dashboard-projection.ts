@@ -238,8 +238,23 @@ export function additionalFallback(
   };
 }
 
-/** Project only documented fields; added providers never acquire activation controls. */
-export function additionalAccounts(rows: DashboardAccount[]): DashboardAccount[] {
+/** Registry v2 limit per provider (CONTRACT-registry-lifecycle 3.1). */
+const MAX_ROWS_PER_PROVIDER = 16;
+const MAX_WALLET_ROWS = 4;
+
+/**
+ * Project only documented fields; added providers never acquire activation
+ * controls. Every account of a provider is kept (registry v2 allows several),
+ * in provider order and then in the order given, with duplicate ids dropped.
+ * A row's id must belong to its provider; any other id becomes the provider's
+ * `<provider>:usage` id. With the version 1 manifest (`registry` 'v1', the
+ * default) a provider that returned no row still gets its placeholder row, as
+ * before; with registry v2 a provider without accounts has no row.
+ */
+export function additionalAccounts(
+  rows: DashboardAccount[],
+  registry: 'v1' | 'v2' | 'v2-invalid' = 'v1'
+): DashboardAccount[] {
   const wallets = rows.filter(
     (row) =>
       row.provider === 'opencode-go' &&
@@ -266,7 +281,12 @@ export function additionalAccounts(rows: DashboardAccount[]): DashboardAccount[]
   ): DashboardAccount => {
     const fallback = additionalFallback(provider, providerLabel);
     return {
-      id: /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$/.test(row.id) ? row.id : fallback.id,
+      id:
+        typeof row.id === 'string' &&
+        /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,127}$/.test(row.id) &&
+        (row.id.startsWith(`${provider}:`) || wallets.includes(row))
+          ? row.id
+          : fallback.id,
       provider,
       providerLabel,
       label: text(row.label) ?? providerLabel,
@@ -285,20 +305,39 @@ export function additionalAccounts(rows: DashboardAccount[]): DashboardAccount[]
       capabilities: emptyCapabilities(),
     };
   };
-  const accounts = ADDITIONAL_PROVIDERS.map(([provider, providerLabel]) => {
-    const row = rows.find(
-      (candidate) =>
-        candidate.provider === provider && !candidate.id.startsWith('plan-opencode-go-console-')
-    );
-    return row
-      ? projected(row, provider, providerLabel)
-      : additionalFallback(provider, providerLabel);
-  });
+  const accounts: DashboardAccount[] = [];
+  const ids = new Set<string>();
+  for (const [provider, providerLabel] of ADDITIONAL_PROVIDERS) {
+    let count = 0;
+    for (const row of rows) {
+      if (count >= MAX_ROWS_PER_PROVIDER) break;
+      if (
+        row.provider !== provider ||
+        (typeof row.id === 'string' && row.id.startsWith('plan-opencode-go-console-'))
+      ) {
+        continue;
+      }
+      const account = projected(row, provider, providerLabel);
+      if (ids.has(account.id)) continue;
+      ids.add(account.id);
+      accounts.push(account);
+      count += 1;
+    }
+    if (count === 0 && registry !== 'v2') {
+      const fallback = additionalFallback(provider, providerLabel);
+      if (!ids.has(fallback.id)) {
+        ids.add(fallback.id);
+        accounts.push(fallback);
+      }
+    }
+  }
   // A console workspace has not been linked to the API key account. Preserve
   // its distinct identity rather than attaching a wallet to the primary card.
-  for (const wallet of wallets.slice(0, 4)) {
-    if (!accounts.some((account) => account.id === wallet.id))
+  for (const wallet of wallets.slice(0, MAX_WALLET_ROWS)) {
+    if (!ids.has(wallet.id)) {
+      ids.add(wallet.id);
       accounts.push(projected(wallet, 'opencode-go', 'OpenCode Go'));
+    }
   }
   return accounts;
 }

@@ -330,6 +330,11 @@ export function generateYamlWithComments(config: UnifiedConfig): string {
     lines.push('');
   }
 
+  if (config.dashboard_tls) {
+    const tls = yaml.dump({ dashboard_tls: config.dashboard_tls }, { indent: 2, lineWidth: -1 });
+    lines.push('# Dashboard TLS: secure transport (off by default)', tls.trim(), '');
+  }
+
   // Browser automation section
   if (config.browser) {
     lines.push('# ----------------------------------------------------------------------------');

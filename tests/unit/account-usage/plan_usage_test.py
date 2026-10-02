@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -588,6 +589,255 @@ class PlanUsageTests(unittest.TestCase):
         self.assertNotIn("home-private", gateway_header)
         self.assertIn("shared-private", home_header)
         self.assertIn("shared-private", gateway_header)
+
+
+
+class RegistryV2AccountTests(unittest.TestCase):
+    """Registry v2 account arguments: one named store per account, never a fallback."""
+
+    KEY_ID = "9f2c41d0"
+    SECRET = "zai-dashboard-key-private-0123"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name)
+        self.env = mock.patch.dict(os.environ, {"ZAI_API_KEY": "env-private-key"}, clear=True)
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.temp.cleanup()
+
+    def key_dir(self, mode=0o700):
+        directory = self.home / ".ccs" / "account-usage" / "keys"
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(mode)
+        return directory
+
+    def write_key(self, provider="zai", key_id=None, mode=0o600, stored_provider=None, **overrides):
+        key_id = key_id or self.KEY_ID
+        record = {"version": 1, "provider": provider, "keyId": key_id, "secret": self.SECRET,
+                  "fingerprint": common.key_fingerprint(self.SECRET), "last4": self.SECRET[-4:],
+                  "createdAt": "2026-10-02T07:00:00Z"}
+        record.update(overrides)
+        if stored_provider is not None:
+            record["provider"] = stored_provider
+        path = self.key_dir() / "{}-{}.json".format(provider, key_id)
+        path.write_text(json.dumps(record))
+        path.chmod(mode)
+        return path
+
+    def other_stores(self):
+        auth = self.home / ".local" / "share" / "opencode" / "auth.json"
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"zai": {"type": "api", "key": "opencode-private-key"}}))
+
+    def aac(self, key_id=None):
+        return {"kind": "aac-key", "keyId": key_id or self.KEY_ID}
+
+    def test_aac_key_reads_only_its_own_file(self):
+        self.other_stores()
+        self.write_key()
+        found = common.credentials("zai", self.home, self.aac())
+        self.assertEqual(found, [{"secret": self.SECRET, "source": "Dashboard key", "email": None, "expires": None}])
+        # Without a selection the existing first-working lookup is unchanged.
+        self.assertEqual(common.credentials("zai", self.home)[0]["secret"], "opencode-private-key")
+
+    def test_aac_key_collect_uses_the_key_and_carries_the_account_id(self):
+        self.other_stores()
+        self.write_key()
+        payload = {"success": True, "code": 200, "data": {"level": "pro", "limits": [
+            {"type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 10}]}}
+        client = FakeClient(payload, Exception("no reset packs"))
+        result = usage.collect("zai", "ubuntu", self.home, client, self.aac(), "zai:acct:9f2c41d0")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["id"], "zai:acct:9f2c41d0")
+        self.assertEqual(client.calls[0][1]["Authorization"], self.SECRET)
+        serialized = json.dumps(result)
+        for secret in (self.SECRET, "env-private-key", "opencode-private-key"):
+            self.assertNotIn(secret, serialized)
+
+    def test_missing_or_unsafe_key_never_falls_back_to_other_stores(self):
+        self.other_stores()
+        cases = {
+            "missing": lambda: self.key_dir(),
+            "group readable": lambda: self.write_key(mode=0o640),
+            "other readable": lambda: self.write_key(mode=0o604),
+            "open directory": lambda: (self.write_key(), self.key_dir(0o755)),
+            "wrong provider": lambda: self.write_key(stored_provider="kimi-code"),
+            "wrong key id": lambda: self.write_key(keyId="0000aaaa"),
+            "bad fingerprint": lambda: self.write_key(fingerprint="sha256:0000000000000000"),
+            "whitespace secret": lambda: self.write_key(secret="has space secret", fingerprint=common.key_fingerprint("has space secret")),
+            "short secret": lambda: self.write_key(secret="short", fingerprint=common.key_fingerprint("short")),
+            "unknown field": lambda: self.write_key(command="PRIVATE"),
+            "old version": lambda: self.write_key(version=2),
+        }
+        for name, prepare in cases.items():
+            with self.subTest(name):
+                keys = self.home / ".ccs" / "account-usage" / "keys"
+                if keys.exists():
+                    keys.chmod(0o700)
+                    for child in keys.iterdir():
+                        child.unlink()
+                prepare()
+                client = FakeClient()
+                self.assertEqual(common.credentials("zai", self.home, self.aac()), [])
+                result = usage.collect("zai", "ubuntu", self.home, client, self.aac(), "zai:acct:9f2c41d0")
+                self.assertEqual(result["status"], "unavailable")
+                self.assertEqual(result["message"], "The stored credential for this account could not be read.")
+                self.assertEqual(client.calls, [])
+
+    def test_symlinked_key_file_and_oversized_file_are_refused(self):
+        target = self.home / "elsewhere.json"
+        target.write_text(json.dumps({"version": 1, "provider": "zai", "keyId": self.KEY_ID, "secret": self.SECRET}))
+        target.chmod(0o600)
+        link = self.key_dir() / "zai-{}.json".format(self.KEY_ID)
+        link.symlink_to(target)
+        self.assertEqual(common.credentials("zai", self.home, self.aac()), [])
+        link.unlink()
+        self.write_key(createdAt="x" * 5000)
+        self.assertEqual(common.credentials("zai", self.home, self.aac()), [])
+
+    def test_key_selection_is_limited_to_key_providers_and_hex_ids(self):
+        self.write_key(provider="qwen")
+        self.assertEqual(common.credentials("qwen", self.home, self.aac()), [])
+        for key_id in ("../zai", "9F2C41D0", "9f2c41d", "9f2c41d0\n"):
+            self.assertIsNone(common.aac_key_credential("zai", key_id, self.home))
+
+    def write_capsule(self, name):
+        capsule = self.home / ".ccs" / "account-usage" / name
+        capsule.parent.mkdir(parents=True, exist_ok=True)
+        capsule.write_text(json.dumps({"cookieDPAPI": base64.b64encode(b"encrypted").decode(), "region": "intl"}))
+        return capsule
+
+    def test_browser_capsule_reads_only_the_named_capsule(self):
+        self.write_capsule("qwen-console-session.json")
+        self.write_capsule("qwen-console-session-0a1b2c3d.json")
+        auth = self.home / ".local" / "share" / "opencode" / "auth.json"
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"alibaba-token-plan": {"type": "api", "key": "sk-private"}}))
+        with mock.patch.object(common, "_windows_unprotect", return_value="session=private-cookie"):
+            named = common.credentials("qwen", self.home, {"kind": "browser-capsule", "capsuleId": "0a1b2c3d"})
+            default = common.credentials("qwen", self.home, {"kind": "browser-capsule", "capsuleId": "default"})
+            missing = common.credentials("qwen", self.home, {"kind": "browser-capsule", "capsuleId": "ffffffff"})
+            invalid = common.credentials("qwen", self.home, {"kind": "browser-capsule", "capsuleId": "../x"})
+        self.assertEqual(len(named), 1)
+        self.assertEqual(len(default), 1)
+        self.assertEqual(json.loads(named[0]["secret"])["cookie"], "session=private-cookie")
+        self.assertNotIn("token", json.loads(named[0]["secret"]))
+        self.assertEqual(missing, [])
+        self.assertEqual(invalid, [])
+
+    def run_main(self, *arguments):
+        environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home),
+                       "USERPROFILE": str(self.home), "PYTHONDONTWRITEBYTECODE": "1"}
+        return subprocess.run([sys.executable, str(HELPERS / "plan_usage.py"), *arguments],
+                              capture_output=True, text=True, timeout=20, env=environment)
+
+    def test_command_line_accepts_the_enumerated_arguments_and_echoes_the_account(self):
+        completed = self.run_main("--provider", "zai", "--platform", "ubuntu", "--account", "zai:acct:9f2c41d0",
+                                  "--credential", "aac-key", "--key-id", "9f2c41d0")
+        self.assertEqual(completed.returncode, 0)
+        result = json.loads(completed.stdout)
+        self.assertEqual((result["id"], result["status"]), ("zai:acct:9f2c41d0", "unavailable"))
+        legacy = self.run_main("--provider", "zai", "--platform", "ubuntu")
+        self.assertEqual(legacy.returncode, 0)
+        self.assertEqual(json.loads(legacy.stdout)["id"], "plan-zai-ubuntu")
+
+    def test_command_line_rejects_inconsistent_arguments_with_usage_status(self):
+        for arguments in (
+            ("--provider", "zai", "--credential", "aac-key", "--key-id", "9f2c41d0"),
+            ("--provider", "zai", "--account", "zai:acct:9f2c41d0", "--credential", "aac-key"),
+            ("--provider", "zai", "--account", "zai:acct:9f2c41d0", "--credential", "aac-key", "--key-id", "ZZ"),
+            ("--provider", "zai", "--account", "kimi-code:acct:9f2c41d0", "--credential", "aac-key", "--key-id", "9f2c41d0"),
+            ("--provider", "qwen", "--account", "qwen:acct:9f2c41d0", "--credential", "aac-key", "--key-id", "9f2c41d0"),
+            ("--provider", "zai", "--account", "zai:acct:9f2c41d0", "--credential", "browser-capsule", "--capsule-id", "default"),
+            ("--provider", "zai", "--account", "zai:usage", "--credential", "discover", "--key-id", "9f2c41d0"),
+            ("--provider", "zai", "--account", "zai:acct:9f2c41d0", "--credential", "config-home", "--home-id", "9f2c41d0"),
+            ("--provider", "zai", "--key-id", "9f2c41d0"),
+        ):
+            with self.subTest(arguments=arguments):
+                completed = self.run_main("--platform", "ubuntu", *arguments)
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(completed.stdout, "")
+
+    def test_windows_key_file_is_the_raw_dpapi_blob_of_the_json_record(self):
+        """Pins the `.dpapi` format the key store writer must produce (README "Key file format")."""
+        record = {"version": 1, "provider": "zai", "keyId": self.KEY_ID, "secret": self.SECRET,
+                  "fingerprint": common.key_fingerprint(self.SECRET)}
+        blob = b"\x01\x00\x00\x00\xd0\x8c\x9d\xdf raw CryptProtectData output"
+        path = self.key_dir() / "zai-{}.dpapi".format(self.KEY_ID)
+        path.write_bytes(blob)
+        path.chmod(0o600)
+        # A POSIX-format file beside it is never read on Windows.
+        self.write_key(secret="posix-file-secret-0123", fingerprint=common.key_fingerprint("posix-file-secret-0123"))
+        seen = []
+
+        def unprotect(ciphertext, entropy=None):
+            seen.append((ciphertext, entropy))
+            return json.dumps(record)
+
+        with mock.patch.object(common, "_windows_unprotect", side_effect=unprotect):
+            found = common.aac_key_credential("zai", self.KEY_ID, self.home, windows=True)
+        self.assertEqual(found, {"secret": self.SECRET, "source": "Dashboard key", "email": None, "expires": None})
+        # The file bytes go to DPAPI as they are: no base64, no JSON wrapper; the entropy is fixed.
+        self.assertEqual(seen, [(blob, b"AAC/account-key/v1")])
+        with mock.patch.object(common, "_windows_unprotect", return_value=None):
+            self.assertIsNone(common.aac_key_credential("zai", self.KEY_ID, self.home, windows=True))
+        path.unlink()
+        with mock.patch.object(common, "_windows_unprotect", side_effect=unprotect) as called:
+            self.assertIsNone(common.aac_key_credential("zai", self.KEY_ID, self.home, windows=True))
+            called.assert_not_called()
+
+
+class SharedCredentialKindFixtureTests(unittest.TestCase):
+    """One fixture pins which credential kinds each helper reads, for the server and the helpers."""
+
+    FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "account-usage" / "collected-credential-kinds.json"
+
+    class Parser:
+        def error(self, message):
+            raise ValueError(message)
+
+    def setUp(self):
+        self.fixture = json.loads(self.FIXTURE.read_text())
+
+    def namespace(self, provider, kind):
+        extra = {"aac-key": {"key_id": "9f2c41d0"}, "browser-capsule": {"capsule_id": "default"}}.get(kind, {})
+        account = "{}:usage".format(provider) if kind == "discover" else "{}:acct:9f2c41d0".format(provider)
+        values = {"provider": provider, "account": account, "credential": kind, "key_id": None, "capsule_id": None}
+        values.update(extra)
+        return mock.Mock(**values)
+
+    def test_plan_usage_accepts_exactly_the_fixture_kinds(self):
+        table = self.fixture["helpers"]["plan_usage.py"]
+        self.assertEqual(set(table), set(usage.PROVIDERS))
+        for provider, expected in table.items():
+            accepted = []
+            for kind in self.fixture["kinds"]:
+                try:
+                    usage.account_arguments(self.Parser(), self.namespace(provider, kind))
+                except ValueError:
+                    continue
+                accepted.append(kind)
+            with self.subTest(provider=provider):
+                self.assertEqual(accepted, expected)
+
+    def test_desktop_helper_takes_no_account_arguments(self):
+        table = self.fixture["helpers"]["desktop_usage.py"]
+        self.assertTrue(all(kinds == ["discover"] for kinds in table.values()))
+        with tempfile.TemporaryDirectory() as home:
+            environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": home, "USERPROFILE": home,
+                           "PYTHONDONTWRITEBYTECODE": "1"}
+            for provider in table:
+                with self.subTest(provider=provider):
+                    completed = subprocess.run(
+                        [sys.executable, str(HELPERS / "desktop_usage.py"), "--provider", provider, "--platform",
+                         "ubuntu", "--account", "{}:usage".format(provider), "--credential", "discover"],
+                        capture_output=True, text=True, timeout=20, env=environment)
+                    # Exit status 2 is reserved for usage errors (README); nothing was collected.
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertEqual(completed.stdout, "")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,17 @@ import type { LogErrorInfo } from './log-types';
  * only string and object values are redacted.
  */
 const SENSITIVE_KEY_PATTERN =
-  /^(authorization|proxy[_-]?authorization|cookie|set-cookie|password|password_hash|secret|client[_-]?secret|token|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|bearer|assertion|api[_-]?key|x[_-]?api[_-]?key|x[_-]?goog[_-]?api[_-]?key|management[_-]?key|copilot[_-]?token|cursor[_-]?session[_-]?key|oauth[_-]?code|auth[_-]?code)$/i;
+  /^(authorization|proxy[_-]?authorization|cookie|set-cookie|password|password_hash|secret|client[_-]?secret|token|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|bearer|assertion|api[_-]?key|x[_-]?api[_-]?key|x[_-]?goog[_-]?api[_-]?key|management[_-]?key|copilot[_-]?token|cursor[_-]?session[_-]?key|oauth[_-]?code|auth[_-]?code|current[_-]?password|new[_-]?password|device[_-]?token|setup[_-]?code|session[_-]?id|sid|token[_-]?sha256|prev[_-]?token[_-]?sha256)$/i;
+
+/**
+ * Keys redacted wherever these words appear in them (CONTRACT-auth-devices
+ * section 11): any password, secret or setup code, whatever the key is called.
+ */
+const SENSITIVE_KEY_CONTAINS_PATTERN = /(password|passwd|secret|setup[_-]?code)/i;
+
+function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEY_PATTERN.test(key) || SENSITIVE_KEY_CONTAINS_PATTERN.test(key);
+}
 
 /** CLI flags whose following argument should be redacted in argv arrays. */
 const SENSITIVE_ARGV_FLAG_PATTERN =
@@ -48,7 +58,7 @@ function maskAuthSchemeValue(value: string): string {
  * prefix plus an ample body to minimise false positives on ordinary prose.
  */
 const SECRET_TOKEN_PATTERN =
-  /(?:Bearer|Basic|Token)\s+\S{8,}|sk-ant-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{32,}|xox[bpoa]-[A-Za-z0-9-]{10,}|gh[opsu]_[A-Za-z0-9]{36,}|glpat-[A-Za-z0-9_-]{18,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret)(?:=|%3D)[A-Za-z0-9._~+/=-]{8,}/g;
+  /(?:Bearer|Basic|Token)\s+\S{8,}|aacd_[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{32,}|xox[bpoa]-[A-Za-z0-9-]{10,}|gh[opsu]_[A-Za-z0-9]{36,}|glpat-[A-Za-z0-9_-]{18,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret)(?:=|%3D)[A-Za-z0-9._~+/=-]{8,}/g;
 
 const URL_USERINFO_PATTERN = /([a-z][a-z\d+.-]*:\/\/)([^\s/@]+)@/gi;
 
@@ -98,9 +108,7 @@ function sanitizeValue(value: unknown, depth: number): unknown {
   if (typeof value === 'object') {
     const sanitized: Record<string, unknown> = {};
     for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
-      sanitized[key] = SENSITIVE_KEY_PATTERN.test(key)
-        ? '[redacted]'
-        : sanitizeValue(nestedValue, depth + 1);
+      sanitized[key] = isSensitiveKey(key) ? '[redacted]' : sanitizeValue(nestedValue, depth + 1);
     }
     return sanitized;
   }

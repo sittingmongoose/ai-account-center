@@ -46,6 +46,43 @@ errors carry a stable `code`.
 [App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
 jobs triggered explicitly, never from startup or routine polling.
 
+The dashboard response lists every supported provider in `providers[]` (labels,
+order, sign-in kind, live availability and capabilities) from one
+[server table](../../src/web-server/services/dashboard-provider-registry.ts), and marks
+each account `hidden` from the [visibility store](../../src/web-server/services/account-visibility.ts).
+`GET`/`PUT /api/accounts/visibility` read and replace that store; a saved change
+sends `{"type":"accounts-changed"}` to the signed-in `/ws` clients as a hint to re-read.
+
+The [lifecycle routes](../../src/web-server/routes/account-lifecycle-routes.ts) under
+`/api/accounts` add, sign in again, replace keys, remove, re-check, relabel, open
+Cursor, list the 30-day trash and restore from it. They need a signed-in browser
+session (a device token gets `device_scope`), the dashboard origin, JSON and a strict
+body; keys and device codes need a secure transport (HTTPS, a trusted local TLS proxy
+or a loopback tunnel, [`isSecureTransport`](../../src/web-server/middleware/secure-transport.ts)).
+Destructive actions take a one-use [confirmation token](../../src/web-server/services/account-confirmations.ts)
+bound to the session and to the reviewed state. Codex sign-ins run as in-memory
+[jobs](../../src/web-server/services/signin-jobs.ts) whose state is pushed to `/ws` as
+`{"type":"signin-job"}` to browser sessions only (without the code or email for sockets
+on a plain transport) and polled. Once the login is being installed, a cancel or the
+timeout no longer ends the job at once: the install checks the stop under the
+activation lock and the job ends cancelled only if nothing was saved.
+
+Dashboard sign-in ([auth routes](../../src/web-server/routes/auth-routes.ts)) keeps
+the username and password login for browsers and today's trays, and adds a password
+change, a first-run setup (free on loopback, a one-time code printed by the server for
+the LAN) and "sign out other browsers" through a session epoch in `~/.ccs/auth/state.json`.
+Trays pair once with the password and then use a revocable
+[device token](../../src/web-server/services/dashboard-device-store.ts) as
+`Authorization: Bearer`; only its SHA-256 is stored, it reaches only the tray routes
+([allowlist](../../src/web-server/middleware/api-request-guard.ts)), rotates every 30 days
+and expires after 90 days unused. Password, setup, pairing and rotation need a secure
+transport; `dashboard_tls` in config.yaml (a trusted local TLS proxy, an in-process HTTPS
+listener and the public origin) is off by default. Credentials set by environment
+variables are read-only. Wrong passwords are limited per address and per server
+([limits](../../src/web-server/routes/auth-rate-limits.ts)), keyed independently of the
+session id, and a confirmation token offered to one browser or tray is refused for any
+other caller.
+
 A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
 is tracked as an operation, and the profile list reports its progress as
 `openOperation` (counts and fixed sentences only). A request that sends

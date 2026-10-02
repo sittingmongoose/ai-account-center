@@ -452,9 +452,12 @@ describe('JSON error answers', () => {
     );
     expect(response.status).toBe(413);
     expect(response.headers['content-type']).toContain('application/json');
+    // Under /api/auth the answer also carries a stable code and no-store (CONTRACT-auth-devices 2).
     expect(JSON.parse(response.body.toString())).toEqual({
       error: 'Request body is too large.',
+      code: 'body_too_large',
     });
+    expect(response.headers['cache-control']).toBe('no-store');
     expect(response.body.toString()).not.toMatch(/PayloadTooLarge|\bat\s|node_modules/);
   });
 

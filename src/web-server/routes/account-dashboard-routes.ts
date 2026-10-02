@@ -1,19 +1,28 @@
 import type { Router } from 'express';
 import { createApiRouter } from './api-router';
-import { getAccountDashboard } from '../services/account-dashboard-service';
+import { authKind } from '../middleware/request-auth';
+import {
+  getAccountDashboard,
+  type AccountDashboardRequestContext,
+} from '../services/account-dashboard-service';
+import { isSecureTransport } from '../middleware/secure-transport';
 import type {
   AccountDashboard,
   ClaudeDashboardPlatform,
 } from '../services/account-dashboard-types';
 
 export interface AccountDashboardRouterDeps {
-  getDashboard?: (platform: ClaudeDashboardPlatform, refresh: boolean) => Promise<AccountDashboard>;
+  getDashboard?: (
+    platform: ClaudeDashboardPlatform,
+    refresh: boolean,
+    context: AccountDashboardRequestContext
+  ) => Promise<AccountDashboard>;
 }
 
 export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = {}): Router {
   const router = createApiRouter();
   router.get('/dashboard', async (req, res): Promise<void> => {
-    if (req.session?.authenticated !== true) {
+    if (authKind(req) === null) {
       res.status(401).json({ error: 'Authentication required' });
       return;
     }
@@ -29,7 +38,12 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
     }
     res.setHeader('Cache-Control', 'no-store');
     try {
-      res.json(await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true'));
+      res.json(
+        await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
+          // providers[].signIn: flows that carry a key or code need a secure transport.
+          secureTransport: isSecureTransport(req),
+        })
+      );
     } catch {
       res.status(500).json({ error: 'Account usage could not be read safely.' });
     }

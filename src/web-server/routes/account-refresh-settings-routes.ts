@@ -1,5 +1,6 @@
 import type { Router } from 'express';
 import { createApiRouter } from './api-router';
+import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { rescheduleAccountAnalyticsSampling } from '../services/account-analytics-service';
 import {
@@ -19,7 +20,7 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
   const router = createApiRouter();
   router.use('/settings', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
-    if (req.session?.authenticated !== true) {
+    if (authKind(req) !== 'session') {
       res.status(401).json({ error: 'Authentication required' });
       return;
     }

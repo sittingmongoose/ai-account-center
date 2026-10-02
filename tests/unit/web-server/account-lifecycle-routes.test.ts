@@ -1,0 +1,1020 @@
+/**
+ * The account lifecycle routes (CONTRACT-registry-lifecycle sections 1, 5, 6,
+ * 10 and 11): scope and guards, API keys, confirmation tokens, remove
+ * refusals, Codex jobs, guides, re-check, label, trash and jobs. Every store is
+ * in a temporary CCS folder; the collector, CLI and hosts are fakes.
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import express from 'express';
+import fs from 'fs';
+import http, { type Server } from 'http';
+import type { AddressInfo } from 'net';
+import os from 'os';
+import path from 'path';
+import { CodexProfileRegistry } from '../../../src/codex-auth/codex-profile-registry';
+import { invalidateCodexAuthProfilesCache } from '../../../src/codex-auth/codex-auth-dashboard-service';
+import { createAccountLifecycleRouter } from '../../../src/web-server/routes/account-lifecycle-routes';
+import { relabel } from '../../../src/web-server/services/account-lifecycle-extras';
+import { AccountConfirmationStore } from '../../../src/web-server/services/account-confirmations';
+import type {
+  AccountDashboard,
+  DashboardAccount,
+} from '../../../src/web-server/services/account-dashboard-types';
+import { keyStoreFor } from '../../../src/web-server/services/account-key-store';
+import type { LifecycleEnv } from '../../../src/web-server/services/account-lifecycle-env';
+import { lifecycleProviderFacts } from '../../../src/web-server/services/account-lifecycle-runtime';
+import type { AdditionalUsageSource } from '../../../src/web-server/services/additional-usage-transport';
+import { ClaudeAccountLifecycle } from '../../../src/web-server/services/claude-account-lifecycle';
+import type { ClaudeHostTransport } from '../../../src/web-server/services/claude-host-transport';
+import { CodexAccountLifecycle } from '../../../src/web-server/services/codex-account-lifecycle';
+import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
+import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
+
+const KEY = 'zai-TEST-key-0123456789-x7Qa';
+const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
+const closers: Array<() => Promise<void>> = [];
+let root: string;
+let ccsDir: string;
+let codexHome: string;
+
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-lifecycle-routes-'));
+  process.env.CCS_HOME = root;
+  ccsDir = path.join(root, '.ccs');
+  codexHome = path.join(root, 'native-codex');
+  fs.mkdirSync(ccsDir, { recursive: true });
+  fs.mkdirSync(codexHome);
+  fs.writeFileSync(
+    path.join(ccsDir, 'account-usage-sources.json'),
+    JSON.stringify({
+      version: 1,
+      sources: [
+        { provider: 'cursor', platform: 'mac', sshHost: 'jared-mac' },
+        { provider: 'qwen', platform: 'windows', sshHost: 'jared-windows' },
+        { provider: 'kimi-code', platform: 'mac', sshHost: 'jared-mac' },
+      ],
+    })
+  );
+  invalidateCodexAuthProfilesCache();
+});
+
+afterEach(async () => {
+  for (const close of closers.splice(0).reverse()) await close();
+  if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
+  invalidateCodexAuthProfilesCache();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+function idToken(email: string): string {
+  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return [part({ alg: 'none' }), part({ email }), 'sig'].join('.');
+}
+
+function codexProfile(name: string): void {
+  new CodexProfileRegistry().createProfile(name, {
+    created: new Date().toISOString(),
+    last_used: null,
+    email: `${name}@example.com`,
+  });
+  const dir = path.join(ccsDir, 'codex-instances', name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'auth.json'),
+    JSON.stringify({
+      tokens: { id_token: idToken(`${name}@example.com`), access_token: 'a', refresh_token: 'r' },
+    })
+  );
+}
+
+function activate(name: string): void {
+  fs.copyFileSync(
+    path.join(ccsDir, 'codex-instances', name, 'auth.json'),
+    path.join(codexHome, 'auth.json')
+  );
+  invalidateCodexAuthProfilesCache();
+}
+
+function row(id: string, extra: Partial<DashboardAccount> = {}): DashboardAccount {
+  const provider = (
+    id.startsWith('plan-') ? 'opencode-go' : id.split(':')[0]
+  ) as DashboardAccount['provider'];
+  return {
+    id,
+    provider,
+    providerLabel: provider,
+    label: provider,
+    email: null,
+    plan: null,
+    platform: 'ubuntu',
+    source: 'fixture',
+    status: 'ok',
+    message: null,
+    fetchedAt: null,
+    sampledAt: null,
+    isActive: false,
+    windows: [],
+    capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
+    lifecycle: { state: 'ready', jobId: null },
+    hidden: false,
+    ...extra,
+  };
+}
+
+interface Fixture {
+  base: string;
+  env: LifecycleEnv;
+  audits: Array<[string, Record<string, unknown>]>;
+  probes: AdditionalUsageSource[];
+  opened: string[];
+  changes: () => number;
+  setProbe: (status: DashboardAccount['status']) => void;
+  /** Hold every probe until the promise resolves (null: answer at once). */
+  setProbeGate: (gate: Promise<void> | null) => void;
+  advance: (ms: number) => void;
+  request: (
+    method: string,
+    route: string,
+    body?: unknown,
+    headers?: Record<string, string>
+  ) => Promise<{ status: number; headers: Headers; body: Record<string, unknown> }>;
+}
+
+async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixture> {
+  const audits: Array<[string, Record<string, unknown>]> = [];
+  const probes: AdditionalUsageSource[] = [];
+  const opened: string[] = [];
+  let changes = 0;
+  let probeStatus: DashboardAccount['status'] = 'ok';
+  let probeGate: Promise<void> | null = null;
+  let now = Date.parse('2026-10-02T08:00:00Z');
+  const runner = new SignInJobRunner({
+    spawn: () => ({
+      onData: () => undefined,
+      onExit: () => undefined,
+      write: () => false,
+      kill: () => undefined,
+    }),
+  });
+  const hosts: ClaudeHostTransport = {
+    create: async (host, input) => ({
+      launcherName: `Claude (${input.profileId})`,
+      launcherPath: `/fake/${host}/${input.profileId}`,
+      profilePath: `/fake/${host}/Claude-${input.profileId}`,
+      sshHost: input.sshHost,
+    }),
+    undoCreate: async () => undefined,
+    appState: async () => 'stopped',
+    trash: async () => 'moved',
+    restore: async () => undefined,
+    purge: async () => undefined,
+  };
+  const claudeEnabled = options.claudeEnabled === true;
+  const facts = (context: { secureTransport?: boolean }) =>
+    lifecycleProviderFacts(context, {
+      codexCliAvailable: () => true,
+      claudeEnabled: () => claudeEnabled,
+    });
+  const env: LifecycleEnv = {
+    ccsDir: () => ccsDir,
+    runner: () => runner,
+    codex: () => new CodexAccountLifecycle({ codexHome, codexCli: () => '/fake/codex', env: {} }),
+    claude: () =>
+      new ClaudeAccountLifecycle({
+        ccsDir: () => ccsDir,
+        transport: hosts,
+        enabled: claudeEnabled,
+        now: () => now,
+      }),
+    confirmations: (() => {
+      const store = new AccountConfirmationStore(() => now);
+      return () => store;
+    })(),
+    providerFacts: facts,
+    getDashboard: async (context): Promise<AccountDashboard> => {
+      const accounts = [
+        ...new CodexProfileRegistry().listProfiles().map((name) =>
+          row(`codex:${name}`, {
+            capabilities: { codexProfile: name, claudeProfileId: null, claudePlatforms: [] },
+          })
+        ),
+        row('claude:party', {
+          capabilities: { codexProfile: null, claudeProfileId: 'party', claudePlatforms: ['mac'] },
+        }),
+        row('zai:usage'),
+        row('cursor:usage', { platform: 'mac' }),
+        row('plan-opencode-go-console-mac-0123456789ab'),
+      ];
+      return {
+        schemaVersion: 1,
+        updatedAt: new Date(now).toISOString(),
+        providers: buildDashboardProviders(accounts, [], facts(context)),
+        accounts,
+        codexAutoSwitch: {
+          enabled: false,
+          thresholdPercent: 5,
+          thresholdUsedPercent: 95,
+          pollIntervalSeconds: 60,
+          outcome: 'disabled',
+          message: '',
+          activationInProgress: false,
+        },
+      };
+    },
+    probe: async (source) => {
+      probes.push(source);
+      if (probeGate) await probeGate;
+      return { ...row(source.account?.id ?? `${source.provider}:usage`), status: probeStatus };
+    },
+    refreshAdditional: async (id) => row(id, { status: 'cached' }),
+    replaceRow: () => undefined,
+    keyStore: (location) => keyStoreFor(location, { ccsDir }),
+    openCursor: async (host) => {
+      opened.push(host);
+    },
+    onChanged: () => {
+      changes += 1;
+    },
+    audit: (event, data) => audits.push([event, data]),
+    now: () => now,
+  };
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    const session = req.headers['x-test-session'];
+    if (typeof session === 'string' && session) {
+      Object.assign(req, { session: { authenticated: true }, sessionID: session });
+    }
+    if (req.headers['x-test-device'] === 'true') Object.assign(req, { auth: { kind: 'device' } });
+    next();
+  });
+  app.use('/api/accounts', createAccountLifecycleRouter({ env: () => env }));
+  app.use((_req, res) => res.status(404).json({ error: 'API endpoint was not found.' }));
+  const server: Server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return {
+    base,
+    env,
+    audits,
+    probes,
+    opened,
+    changes: () => changes,
+    setProbe: (status) => {
+      probeStatus = status;
+    },
+    setProbeGate: (gate) => {
+      probeGate = gate;
+    },
+    advance: (ms) => {
+      now += ms;
+    },
+    request: async (method, route, body, headers = {}) => {
+      const response = await fetch(`${base}/api/accounts${route}`, {
+        method,
+        headers: {
+          'x-test-session': 'a',
+          origin: base,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          ...headers,
+        },
+        body:
+          body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+      });
+      const text = await response.text();
+      return {
+        status: response.status,
+        headers: response.headers,
+        body: text ? (JSON.parse(text) as Record<string, unknown>) : {},
+      };
+    },
+  };
+}
+
+const PLAIN = { 'x-forwarded-for': '192.168.1.20' };
+
+function files(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { recursive: true }).map(String).sort();
+}
+
+describe('lifecycle route scope and guards', () => {
+  it('needs a browser session, the dashboard origin, JSON, a strict body and no query', async () => {
+    const f = await fixture();
+    const routes: Array<[string, string, unknown]> = [
+      ['GET', '/registry', undefined],
+      ['POST', '/add', { provider: 'zai', key: KEY }],
+      ['POST', '/zai:usage/signin-again', {}],
+      ['PUT', '/zai:usage/key', { key: KEY }],
+      ['POST', '/zai:usage/remove', {}],
+      ['POST', '/cursor:usage/open', { platform: 'mac' }],
+      ['POST', '/zai:usage/recheck', {}],
+      ['PATCH', '/zai:usage', { label: 'Work' }],
+      ['GET', '/trash', undefined],
+      ['POST', '/trash/tr_0123456789abcdef/restore', {}],
+      ['GET', '/signin-jobs/job_0123456789abcdef', undefined],
+      ['POST', '/signin-jobs/job_0123456789abcdef/cancel', {}],
+      ['POST', '/signin-jobs/job_0123456789abcdef/code', { code: 'x' }],
+    ];
+    for (const [method, route, body] of routes) {
+      const anonymous = await f.request(method, route, body, { 'x-test-session': '' });
+      expect([route, anonymous.status, anonymous.body.code]).toEqual([route, 401, 'auth_required']);
+      expect(anonymous.headers.get('cache-control')).toBe('no-store');
+      const device = await f.request(method, route, body, { 'x-test-device': 'true' });
+      expect([route, device.status, device.body.code]).toEqual([route, 403, 'device_scope']);
+      const query = await f.request(method, `${route}?PRIVATE=1`, body);
+      expect([route, query.status, query.body.code]).toEqual([route, 400, 'unexpected_query']);
+      if (method === 'GET') continue;
+      const foreign = await f.request(method, route, body, { origin: 'https://evil.example' });
+      expect([route, foreign.status, foreign.body.code]).toEqual([route, 403, 'origin_required']);
+      const text = await f.request(method, route, JSON.stringify(body), {
+        'content-type': 'text/plain',
+      });
+      expect([route, text.status, text.body.code]).toEqual([route, 415, 'json_required']);
+      const large = await f.request(method, route, { pad: 'x'.repeat(9000) });
+      expect([route, large.status, large.body.code]).toEqual([route, 400, 'invalid_body']);
+    }
+    expect(f.changes()).toBe(0);
+    expect(files(path.join(ccsDir, 'account-usage'))).toEqual([]);
+    expect(fs.existsSync(path.join(ccsDir, 'account-usage-accounts.json'))).toBe(false);
+  });
+
+  it('leaves other /api/accounts paths to the 404 and rejects malformed ids', async () => {
+    const f = await fixture();
+    // A bare PATCH could be any other path under /api/accounts.
+    expect((await f.request('PATCH', '/nope', {})).status).toBe(404);
+    // The action routes own their path shape: any malformed id there is 400, after the guard.
+    for (const [method, route] of [
+      ['POST', '/nope/remove'],
+      ['PUT', '/dashboard/key'],
+      ['POST', '/nope/signin-again'],
+      ['POST', '/nope/open'],
+      ['POST', '/nope/recheck'],
+      ['POST', '/codex:..%2f..%2fx/remove'],
+    ]) {
+      const malformed = await f.request(
+        method,
+        route,
+        route.endsWith('/open') ? { platform: 'mac' } : {}
+      );
+      expect([route, malformed.status, malformed.body.code]).toEqual([
+        route,
+        400,
+        'invalid_account',
+      ]);
+      const anonymous = await f.request(method, route, {}, { 'x-test-session': '' });
+      expect([route, anonymous.status]).toEqual([route, 401]);
+    }
+    const malformed = await f.request('POST', '/codex:..%2f..%2fx/remove', {});
+    expect([malformed.status, malformed.body.code]).toEqual([400, 'invalid_account']);
+    const unknown = await f.request('POST', '/zai:acct:00000000/remove', {});
+    expect([unknown.status, unknown.body.code]).toEqual([404, 'unknown_account']);
+    expect(JSON.stringify([malformed.body, unknown.body])).not.toContain('00000000');
+  });
+});
+
+describe('API keys', () => {
+  it('adds a key over a secure transport and returns only last4 and fingerprint', async () => {
+    const f = await fixture();
+    const v1 = fs.readFileSync(path.join(ccsDir, 'account-usage-sources.json'));
+    const response = await f.request('POST', '/add', { provider: 'zai', key: KEY, label: 'Work' });
+    expect(response.status).toBe(201);
+    const account = response.body.account as Record<string, unknown>;
+    expect(account).toMatchObject({
+      provider: 'zai',
+      label: 'Work',
+      platform: 'ubuntu',
+      credential: { kind: 'aac-key', last4: 'x7Qa', storedOn: 'ubuntu' },
+      actions: { replaceKey: true, remove: true, recheck: true, signInAgain: false },
+      removeRefusal: null,
+    });
+    expect(account.id).toMatch(/^zai:acct:[a-f0-9]{8}$/);
+    expect(response.body.check).toBe('ok');
+    const keyId = String(account.id).slice('zai:acct:'.length);
+    expect(f.probes).toEqual([
+      {
+        provider: 'zai',
+        platform: 'ubuntu',
+        account: { id: account.id, label: 'Work', credential: { kind: 'aac-key', keyId } },
+      },
+    ]);
+    const keyFile = path.join(ccsDir, 'account-usage', 'keys', `zai-${keyId}.json`);
+    expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
+    const registryText = fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'), 'utf8');
+    const registry = JSON.parse(registryText);
+    expect(registry.accounts.map((entry: { id: string }) => entry.id)).toContain('zai:usage');
+    expect(registry.accounts.map((entry: { id: string }) => entry.id)).toContain(account.id);
+    expect(fs.readFileSync(path.join(ccsDir, 'account-usage-sources.json'))).toEqual(v1);
+    for (const text of [JSON.stringify(response.body), registryText, JSON.stringify(f.audits)]) {
+      expect(text).not.toContain(KEY);
+    }
+    expect(JSON.stringify(f.audits)).not.toContain('sha256:');
+    expect(f.audits).toEqual([['accounts.add', { provider: 'zai', kind: 'api-key' }]]);
+    expect(f.changes()).toBe(1);
+    const duplicate = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    expect([duplicate.status, duplicate.body.code]).toEqual([409, 'duplicate_key']);
+  });
+
+  it('refuses a key over plain HTTP from the LAN before reading it', async () => {
+    const f = await fixture();
+    const response = await f.request('POST', '/add', { provider: 'zai', key: KEY }, PLAIN);
+    expect([response.status, response.body.code]).toEqual([403, 'secure_transport_required']);
+    expect(JSON.stringify(response.body)).not.toContain(KEY);
+    expect(files(path.join(ccsDir, 'account-usage'))).toEqual([]);
+    expect(f.probes).toEqual([]);
+  });
+
+  it('deletes a rejected key and its entry, keeps an unverified one', async () => {
+    const f = await fixture();
+    f.setProbe('needs_sign_in');
+    const rejected = await f.request('POST', '/add', { provider: 'opencode-go', key: KEY });
+    expect([rejected.status, rejected.body.code]).toEqual([422, 'key_rejected']);
+    expect(files(path.join(ccsDir, 'account-usage', 'keys'))).toEqual([]);
+    const registry = JSON.parse(
+      fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'), 'utf8')
+    );
+    expect(registry.accounts.some((entry: { id: string }) => entry.id.includes(':acct:'))).toBe(
+      false
+    );
+    f.setProbe('error');
+    const unverified = await f.request('POST', '/add', { provider: 'opencode-go', key: KEY });
+    expect([unverified.status, unverified.body.check]).toEqual([201, 'unverified']);
+  });
+
+  it('replaces a key only when the new one is not rejected, and only for AAC keys', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    const keyFile = path.join(ccsDir, 'account-usage', 'keys', `zai-${id.slice(9)}.json`);
+    const before = fs.readFileSync(keyFile, 'utf8');
+    f.setProbe('needs_sign_in');
+    const rejected = await f.request('PUT', `/${id}/key`, { key: 'zai-NEW-key-9999' });
+    expect([rejected.status, rejected.body.code]).toEqual([422, 'key_rejected']);
+    expect(fs.readFileSync(keyFile, 'utf8')).toBe(before);
+    expect(files(path.join(ccsDir, 'account-usage', 'keys'))).toEqual([path.basename(keyFile)]);
+    f.setProbe('ok');
+    const replaced = await f.request('PUT', `/${id}/key`, { key: 'zai-NEW-key-9999' });
+    expect(replaced.status).toBe(200);
+    expect(replaced.body).toMatchObject({
+      check: 'ok',
+      account: { credential: { last4: '9999' } },
+    });
+    expect(files(path.join(ccsDir, 'account-usage', 'keys'))).toEqual([path.basename(keyFile)]);
+    const discover = await f.request('PUT', '/zai:usage/key', { key: 'zai-NEW-key-9999' });
+    expect([discover.status, discover.body.code]).toEqual([409, 'not_aac_owned']);
+    const plain = await f.request('PUT', `/${id}/key`, { key: 'zai-NEW-key-9999' }, PLAIN);
+    expect([plain.status, plain.body.code]).toEqual([403, 'secure_transport_required']);
+  });
+});
+
+describe('remove with a confirmation token', () => {
+  it('prepares, commits once, and refuses a reused, foreign or stale token', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    const prepared = await f.request('POST', `/${id}/remove`, {});
+    expect(prepared.status).toBe(200);
+    const confirmation = prepared.body.confirmation as Record<string, unknown>;
+    expect(confirmation.effects).toEqual(['The stored key is deleted from Ubuntu.']);
+    expect(String(confirmation.token)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const foreign = await f.request(
+      'POST',
+      `/${id}/remove`,
+      { confirmationToken: confirmation.token },
+      { 'x-test-session': 'b' }
+    );
+    expect([foreign.status, foreign.body.code]).toEqual([409, 'confirmation_stale']);
+    // The foreign attempt used the token up.
+    const again = await f.request('POST', `/${id}/remove`, {
+      confirmationToken: confirmation.token,
+    });
+    expect([again.status, again.body.code]).toEqual([409, 'confirmation_stale']);
+    const fresh = (await f.request('POST', `/${id}/remove`, {})).body.confirmation as {
+      token: string;
+    };
+    const removed = await f.request('POST', `/${id}/remove`, { confirmationToken: fresh.token });
+    expect(removed.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+    expect(files(path.join(ccsDir, 'account-usage', 'keys'))).toEqual([]);
+    const second = await f.request('POST', `/${id}/remove`, { confirmationToken: fresh.token });
+    expect([second.status, second.body.code]).toEqual([409, 'confirmation_stale']);
+    expect(f.audits.at(-1)).toEqual([
+      'accounts.remove',
+      { provider: 'zai', kind: 'api-key', trashed: false },
+    ]);
+    const expired = (await f.request('POST', '/zai:usage/remove', {})).body.confirmation as {
+      token: string;
+    };
+    f.advance(121_000);
+    const late = await f.request('POST', '/zai:usage/remove', { confirmationToken: expired.token });
+    expect([late.status, late.body.code]).toEqual([409, 'confirmation_stale']);
+  });
+
+  it('refuses the active, default and last Codex profile at prepare and at commit', async () => {
+    const f = await fixture();
+    codexProfile('gmail');
+    const last = await f.request('POST', '/codex:gmail/remove', {});
+    expect([last.status, last.body.code]).toEqual([409, 'last_account']);
+    codexProfile('party');
+    codexProfile('spare');
+    new CodexProfileRegistry().setDefault('gmail');
+    activate('party');
+    for (const [name, code] of [
+      ['party', 'account_active'],
+      ['gmail', 'account_default'],
+    ]) {
+      const refused = await f.request('POST', `/codex:${name}/remove`, {});
+      expect([name, refused.status, refused.body.code]).toEqual([name, 409, code]);
+    }
+    const prepared = (await f.request('POST', '/codex:spare/remove', {})).body.confirmation as {
+      token: string;
+      effects: string[];
+    };
+    expect(prepared.effects[0]).toContain('Codex login');
+    activate('spare');
+    const commit = await f.request('POST', '/codex:spare/remove', {
+      confirmationToken: prepared.token,
+    });
+    expect([commit.status, commit.body.code]).toEqual([409, 'account_active']);
+    expect(new CodexProfileRegistry().listProfiles().sort()).toEqual(['gmail', 'party', 'spare']);
+    expect(f.audits.filter(([event]) => event === 'accounts.remove.refused')).toContainEqual([
+      'accounts.remove.refused',
+      { provider: 'codex', code: 'account_active' },
+    ]);
+    activate('party');
+    const ready = (await f.request('POST', '/codex:spare/remove', {})).body.confirmation as {
+      token: string;
+    };
+    // A state change between the two calls (another account activated) makes it stale.
+    activate('gmail');
+    const stale = await f.request('POST', '/codex:spare/remove', {
+      confirmationToken: ready.token,
+    });
+    expect([stale.status, stale.body.code]).toEqual([409, 'confirmation_stale']);
+    const token = (
+      (await f.request('POST', '/codex:spare/remove', {})).body.confirmation as { token: string }
+    ).token;
+    const done = await f.request('POST', '/codex:spare/remove', { confirmationToken: token });
+    expect(done.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+    expect(new CodexProfileRegistry().listProfiles().sort()).toEqual(['gmail', 'party']);
+  });
+
+  it('keeps Antigravity, wallets and Claude (while off) out of Remove', async () => {
+    const f = await fixture();
+    for (const id of ['antigravity:profile:party', 'plan-opencode-go-console-mac-0123456789ab']) {
+      const refused = await f.request('POST', `/${id}/remove`, {});
+      expect([id, refused.status, refused.body.code]).toEqual([id, 409, 'not_implemented']);
+    }
+  });
+});
+
+async function until(check: () => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function registryIds(): string[] {
+  return JSON.parse(
+    fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'), 'utf8')
+  ).accounts.map((entry: { id: string }) => entry.id);
+}
+
+describe('remove races and failures', () => {
+  it('serializes Remove behind a running Replace key: no key is ever written back', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    const keysDir = path.join(ccsDir, 'account-usage', 'keys');
+    const token = (
+      (await f.request('POST', `/${id}/remove`, {})).body.confirmation as {
+        token: string;
+      }
+    ).token;
+    let open: () => void = () => undefined;
+    f.setProbeGate(
+      new Promise<void>((resolve) => {
+        open = resolve;
+      })
+    );
+    const probesBefore = f.probes.length;
+    const replacing = f.request('PUT', `/${id}/key`, { key: 'zai-NEW-key-9999' });
+    await until(() => f.probes.length > probesBefore);
+    let removedAt = 0;
+    const removing = f
+      .request('POST', `/${id}/remove`, { confirmationToken: token })
+      .then((response) => {
+        removedAt = Date.now();
+        return response;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The remove waits in the provider's key queue while the probe runs.
+    expect(removedAt).toBe(0);
+    expect(registryIds()).toContain(id);
+    open();
+    f.setProbeGate(null);
+    const [replaced, removed] = await Promise.all([replacing, removing]);
+    expect(replaced.status).toBe(200);
+    expect(removed.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+    expect(files(keysDir)).toEqual([]);
+    expect(registryIds()).not.toContain(id);
+    // The other order: a Replace key queued behind a Remove finds no account and writes nothing.
+    const second = await f.request('POST', '/add', { provider: 'zai', key: 'zai-SECOND-key-0001' });
+    const secondId = String((second.body.account as { id: string }).id);
+    const secondToken = (
+      (await f.request('POST', `/${secondId}/remove`, {})).body.confirmation as { token: string }
+    ).token;
+    const [gone, late] = await Promise.all([
+      f.request('POST', `/${secondId}/remove`, { confirmationToken: secondToken }),
+      f.request('PUT', `/${secondId}/key`, { key: 'zai-THIRD-key-0002' }),
+    ]);
+    expect(gone.status).toBe(200);
+    expect([200, 404]).toContain(late.status);
+    expect(files(keysDir)).toEqual([]);
+    expect(registryIds()).not.toContain(secondId);
+  });
+
+  it('puts the entry back when the key cannot be deleted, so nothing changed', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    const before = registryIds();
+    const keysDir = path.join(ccsDir, 'account-usage', 'keys');
+    const keyFiles = files(keysDir);
+    const token = (
+      (await f.request('POST', `/${id}/remove`, {})).body.confirmation as {
+        token: string;
+      }
+    ).token;
+    const realStore = f.env.keyStore;
+    f.env.keyStore = (location) => {
+      const store = realStore(location);
+      return store
+        ? Object.assign(Object.create(Object.getPrototypeOf(store)), store, {
+            delete: async () => {
+              throw new Error('disk error at /private/path');
+            },
+          })
+        : null;
+    };
+    const failed = await f.request('POST', `/${id}/remove`, { confirmationToken: token });
+    expect([failed.status, failed.body.code]).toEqual([500, 'remove_failed']);
+    expect(JSON.stringify(failed.body)).not.toContain('/private/path');
+    expect(registryIds()).toEqual(before);
+    expect(files(keysDir)).toEqual(keyFiles);
+  });
+
+  it('refuses when a refusal check throws, at prepare and at commit', async () => {
+    const f = await fixture();
+    codexProfile('gmail');
+    codexProfile('party');
+    codexProfile('spare');
+    let broken = true;
+    f.env.codex = () =>
+      new CodexAccountLifecycle({
+        codexHome,
+        codexCli: () => '/fake/codex',
+        env: {},
+        activeProfile: async () => {
+          if (broken) throw new Error('summary unreadable');
+          return null;
+        },
+      });
+    const prepare = await f.request('POST', '/codex:spare/remove', {});
+    expect([prepare.status, prepare.body.code]).toEqual([500, 'remove_failed']);
+    broken = false;
+    const token = (
+      (await f.request('POST', '/codex:spare/remove', {})).body.confirmation as {
+        token: string;
+      }
+    ).token;
+    broken = true;
+    const commit = await f.request('POST', '/codex:spare/remove', { confirmationToken: token });
+    // At commit the fingerprint or the refusal check throws: either way nothing is removed.
+    expect(commit.status).toBe(500);
+    expect(new CodexProfileRegistry().listProfiles().sort()).toEqual(['gmail', 'party', 'spare']);
+    expect(f.audits).toContainEqual([
+      'accounts.remove.refused',
+      { provider: 'codex', code: 'remove_failed' },
+    ]);
+    expect(f.audits.some(([event]) => event === 'accounts.remove')).toBe(false);
+  });
+
+  it('answers too_many_accounts at the 64-account total', async () => {
+    const f = await fixture();
+    const entry = (provider: string, index: number, credential: Record<string, string>) => ({
+      id: `${provider}:acct:${String(index).padStart(8, '0')}`,
+      provider,
+      platform: 'ubuntu',
+      sshHost: null,
+      label: null,
+      credential,
+      createdAt: null,
+      createdBy: 'dashboard',
+    });
+    const hex = (index: number) => String(index).padStart(8, '0');
+    const accounts = [
+      ...Array.from({ length: 16 }, (_, i) =>
+        entry('kimi-code', i, { kind: 'aac-key', keyId: hex(i) })
+      ),
+      ...Array.from({ length: 16 }, (_, i) =>
+        entry('opencode-go', i, { kind: 'aac-key', keyId: hex(i) })
+      ),
+      ...Array.from({ length: 16 }, (_, i) =>
+        entry('muse', i, { kind: 'config-home', homeId: hex(i) })
+      ),
+      // zai stays one under its own limit of 16, so only the total of 64 is reached.
+      ...Array.from({ length: 15 }, (_, i) => entry('zai', i, { kind: 'aac-key', keyId: hex(i) })),
+      entry('antigravity', 0, { kind: 'antigravity-profile', profileId: 'party' }),
+    ];
+    fs.writeFileSync(
+      path.join(ccsDir, 'account-usage-accounts.json'),
+      JSON.stringify({ version: 2, accounts }),
+      { mode: 0o600 }
+    );
+    expect(registryIds()).toHaveLength(64);
+    const before = fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'));
+    const cursor = await f.request('POST', '/add', { provider: 'cursor' });
+    expect([cursor.status, cursor.body.code]).toEqual([409, 'too_many_accounts']);
+    const key = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    expect([key.status, key.body.code]).toEqual([409, 'too_many_accounts']);
+    expect(fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'))).toEqual(before);
+    expect(files(path.join(ccsDir, 'account-usage', 'keys'))).toEqual([]);
+  });
+
+  it('answers 404 when an account is removed between the label lookup and the write', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    // The lookup sees the account; the write sees the registry after a Remove committed.
+    const other = path.join(root, 'after-remove', '.ccs');
+    fs.mkdirSync(path.dirname(other), { recursive: true });
+    fs.cpSync(ccsDir, other, { recursive: true });
+    const registryFile = path.join(other, 'account-usage-accounts.json');
+    const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    registry.accounts = registry.accounts.filter((entry: { id: string }) => entry.id !== id);
+    fs.writeFileSync(registryFile, JSON.stringify(registry), { mode: 0o600 });
+    let calls = 0;
+    const env = { ...f.env, ccsDir: () => (calls++ === 0 ? ccsDir : other) };
+    await expect(
+      relabel(env, id, { label: 'Late' }, { secure: true, sessionKey: 'x' })
+    ).rejects.toMatchObject({ status: 404, code: 'unknown_account' });
+    expect(JSON.parse(fs.readFileSync(registryFile, 'utf8'))).toEqual(registry);
+  });
+});
+
+describe('sign-in and guides', () => {
+  it('starts a Codex device-code job and allows one per provider', async () => {
+    const f = await fixture();
+    codexProfile('gmail');
+    const started = await f.request('POST', '/add', { provider: 'codex', profileName: 'codex-4' });
+    expect(started.status).toBe(202);
+    const job = started.body.job as Record<string, unknown>;
+    expect(job).toMatchObject({
+      provider: 'codex',
+      kind: 'device-code',
+      mode: 'add',
+      state: 'starting',
+    });
+    const again = await f.request('POST', '/add', { provider: 'codex', profileName: 'codex-5' });
+    expect([again.status, again.body.code, again.body.jobId]).toEqual([409, 'job_running', job.id]);
+    const taken = await f.request('POST', '/add', { provider: 'codex', profileName: 'gmail' });
+    expect([taken.status, taken.body.code]).toEqual([409, 'id_in_use']);
+    const plain = await f.request(
+      'POST',
+      '/add',
+      { provider: 'codex', profileName: 'codex-6' },
+      PLAIN
+    );
+    expect(plain.status).toBe(403);
+    expect(plain.body).toMatchObject({
+      code: 'secure_transport_required',
+      fallback: { kind: 'terminal', host: 'ubuntu' },
+    });
+    const read = await f.request('GET', `/signin-jobs/${job.id}`);
+    expect(read.body).toMatchObject({ id: job.id, state: 'starting' });
+    const code = await f.request('POST', `/signin-jobs/${job.id}/code`, { code: 'abc' });
+    expect([code.status, code.body.code]).toEqual([409, 'code_not_expected']);
+    const malformed = await f.request('POST', `/signin-jobs/${job.id}/code`, { code: 'a b' });
+    expect([malformed.status, malformed.body.code]).toEqual([400, 'invalid_body']);
+    const cancelled = await f.request('POST', `/signin-jobs/${job.id}/cancel`, {});
+    expect(cancelled.body).toMatchObject({ state: 'cancelled' });
+    const restarted = await f.request('GET', '/signin-jobs/job_00000000000000ff');
+    expect(restarted.body).toMatchObject({ state: 'failed', error: { code: 'server_restarted' } });
+    expect((await f.request('GET', '/signin-jobs/not-a-job')).status).toBe(404);
+  });
+
+  it('refuses Sign in again on the live active Codex profile and guides the app providers', async () => {
+    const f = await fixture();
+    codexProfile('gmail');
+    codexProfile('party');
+    activate('party');
+    const active = await f.request('POST', '/codex:party/signin-again', {});
+    expect([active.status, active.body.code]).toEqual([409, 'account_active']);
+    const started = await f.request('POST', '/codex:gmail/signin-again', {});
+    expect(started.status).toBe(202);
+    expect(started.body.job).toMatchObject({ mode: 'signin-again', accountId: 'codex:gmail' });
+    expect((await f.request('POST', '/cursor:usage/signin-again', {})).body).toEqual({
+      guide: { kind: 'open-app', platforms: ['mac'] },
+    });
+    expect((await f.request('POST', '/qwen:usage/signin-again', {})).body).toEqual({
+      guide: { kind: 'browser-extension', platform: 'windows' },
+    });
+    expect(
+      (await f.request('POST', '/plan-opencode-go-console-mac-0123456789ab/signin-again', {})).body
+    ).toEqual({ guide: { kind: 'browser-extension', platform: 'mac' } });
+    const key = await f.request('POST', '/zai:usage/signin-again', {});
+    expect([key.status, key.body.code]).toEqual([409, 'use_replace_key']);
+    const muse = await f.request('POST', '/muse:usage/signin-again', {});
+    expect([muse.status, muse.body.code]).toEqual([409, 'not_implemented']);
+    const antigravity = await f.request('POST', '/add', {
+      provider: 'antigravity',
+      profileName: 'x',
+    });
+    expect([antigravity.status, antigravity.body.code]).toEqual([409, 'not_implemented']);
+    const command = await f.request('GET', '/signin-command?provider=antigravity&profile=party');
+    expect([command.status, command.body.code]).toEqual([409, 'not_implemented']);
+    const badCommand = await f.request('GET', '/signin-command?provider=codex&profile=party');
+    expect(badCommand.status).toBe(400);
+  });
+
+  it('adds Cursor or Qwen back only at zero accounts, on their configured host', async () => {
+    const f = await fixture();
+    const single = await f.request('POST', '/add', { provider: 'cursor' });
+    expect([single.status, single.body.code]).toEqual([409, 'single_account_provider']);
+    const token = (
+      (await f.request('POST', '/cursor:usage/remove', {})).body.confirmation as {
+        token: string;
+      }
+    ).token;
+    expect(
+      (await f.request('POST', '/cursor:usage/remove', { confirmationToken: token })).status
+    ).toBe(200);
+    const added = await f.request('POST', '/add', { provider: 'cursor' });
+    expect(added.status).toBe(201);
+    expect(added.body.account).toMatchObject({
+      id: 'cursor:usage',
+      platform: 'mac',
+      lifecycle: { state: 'pending_sign_in', jobId: null },
+      credential: { kind: 'discover' },
+    });
+    const registry = JSON.parse(
+      fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'), 'utf8')
+    );
+    expect(
+      registry.accounts.find((entry: { id: string }) => entry.id === 'cursor:usage')
+    ).toMatchObject({
+      platform: 'mac',
+      sshHost: 'jared-mac',
+      createdBy: null,
+    });
+  });
+});
+
+describe('registry, re-check, open, label and trash', () => {
+  it('lists providers, accounts with actions and refusals, jobs without codes on plain HTTP', async () => {
+    const f = await fixture();
+    codexProfile('gmail');
+    codexProfile('party');
+    new CodexProfileRegistry().setDefault('gmail');
+    activate('party');
+    await f.request('POST', '/codex:gmail/signin-again', {});
+    const secure = await f.request('GET', '/registry');
+    expect(secure.status).toBe(200);
+    expect((secure.body.providers as unknown[]).length).toBe(9);
+    const accounts = secure.body.accounts as Array<Record<string, unknown>>;
+    const byId = (id: string) => accounts.find((account) => account.id === id);
+    expect(byId('codex:party')).toMatchObject({
+      removeRefusal: 'account_active',
+      actions: { signInAgain: false, remove: true },
+    });
+    expect(byId('codex:gmail')).toMatchObject({ removeRefusal: 'account_default' });
+    expect(byId('zai:usage')).toMatchObject({
+      credential: { kind: 'discover' },
+      actions: { replaceKey: false, remove: true, recheck: true },
+    });
+    expect(byId('cursor:usage')).toMatchObject({ actions: { open: ['mac'], signInAgain: true } });
+    expect(byId('claude:party')).toMatchObject({ actions: { remove: false, open: ['mac'] } });
+    expect(byId('plan-opencode-go-console-mac-0123456789ab')).toMatchObject({
+      actions: { signInAgain: true, remove: false },
+    });
+    expect(secure.body.trash).toEqual([]);
+    expect((secure.body.jobs as unknown[]).length).toBe(1);
+    const plain = await f.request('GET', '/registry', undefined, PLAIN);
+    const providers = plain.body.providers as Array<{
+      id: string;
+      signIn: { unavailableReason: string };
+    }>;
+    expect(providers.find((entry) => entry.id === 'zai')?.signIn.unavailableReason).toBe(
+      'secure_transport_required'
+    );
+    expect((plain.body.jobs as Array<{ verification: unknown }>)[0].verification).toBeNull();
+  });
+
+  it('re-checks one account at most once per 10 s', async () => {
+    const f = await fixture();
+    const first = await f.request('POST', '/zai:usage/recheck', {});
+    expect(first.status).toBe(200);
+    expect(first.body.account).toMatchObject({ id: 'zai:usage', status: 'cached' });
+    const second = await f.request('POST', '/zai:usage/recheck', {});
+    expect([second.status, second.body.code]).toEqual([429, 'rate_limited']);
+    expect(second.headers.get('retry-after')).toBe('10');
+    f.advance(10_000);
+    expect((await f.request('POST', '/zai:usage/recheck', {})).status).toBe(200);
+    const codex = await f.request('POST', '/codex:nobody/recheck', {});
+    expect(codex.status).toBe(404);
+  });
+
+  it('opens Cursor on the Mac only, and relabels additional accounts', async () => {
+    const f = await fixture();
+    expect((await f.request('POST', '/cursor:usage/open', { platform: 'mac' })).body).toEqual({
+      opened: true,
+    });
+    expect(f.opened).toEqual(['jared-mac']);
+    const windows = await f.request('POST', '/cursor:usage/open', { platform: 'windows' });
+    expect([windows.status, windows.body.code]).toEqual([409, 'not_configured']);
+    const label = await f.request('PATCH', '/zai:usage', { label: 'Work' });
+    expect(label.body.account).toMatchObject({ id: 'zai:usage', label: 'Work' });
+    const bad = await f.request('PATCH', '/zai:usage', { label: 'bad\u202Elabel' });
+    expect([bad.status, bad.body.code]).toEqual([400, 'invalid_body']);
+    expect((await f.request('PATCH', '/zai:usage', { label: null })).body.account).toMatchObject({
+      label: 'zai',
+    });
+  });
+
+  it('keeps Claude add, remove and restore off until host steps are enabled', async () => {
+    const off = await fixture();
+    const add = await off.request('POST', '/add', { provider: 'claude', profileId: 'work2' });
+    expect([add.status, add.body.code]).toEqual([409, 'not_implemented']);
+    const restore = await off.request('POST', '/trash/tr_0123456789abcdef/restore', {});
+    expect([restore.status, restore.body.code]).toEqual([409, 'not_implemented']);
+  });
+
+  it('adds, removes into the trash and restores a Claude profile with fake hosts', async () => {
+    const f = await fixture({ claudeEnabled: true });
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'party',
+            email: 'party@example.com',
+            mac: {
+              launcherName: 'p',
+              launcherPath: '/a',
+              profilePath: '/fake/mac/Claude-party',
+              sshHost: 'jared-mac',
+            },
+            windows: {
+              launcherName: 'p',
+              profilePath: 'C:\\x\\Claude-party',
+              sshHost: 'jared-windows',
+            },
+          },
+        ],
+      })
+    );
+    const added = await f.request('POST', '/add', {
+      provider: 'claude',
+      profileId: 'work2',
+      label: 'Work 2',
+    });
+    expect(added.status).toBe(201);
+    expect(added.body).toMatchObject({
+      account: { id: 'claude:work2', label: 'Work 2', lifecycle: { state: 'pending_sign_in' } },
+      launchers: { mac: 'created', windows: 'created' },
+    });
+    const prepared = (await f.request('POST', '/claude:party/remove', {})).body.confirmation as {
+      token: string;
+      effects: string[];
+    };
+    expect(prepared.effects[0]).toContain('trash on Mac and Windows for 30 days');
+    const removed = await f.request('POST', '/claude:party/remove', {
+      confirmationToken: prepared.token,
+    });
+    expect(removed.body).toMatchObject({ removed: true, purgeAfter: '2026-11-01T08:00:00Z' });
+    const trashId = String(removed.body.trashId);
+    expect((await f.request('GET', '/trash')).body.entries).toEqual([
+      expect.objectContaining({
+        trashId,
+        provider: 'claude',
+        label: 'party@example.com',
+        state: 'trashed',
+      }),
+    ]);
+    const restorePrepared = (await f.request('POST', `/trash/${trashId}/restore`, {})).body
+      .confirmation as { token: string };
+    const restored = await f.request('POST', `/trash/${trashId}/restore`, {
+      confirmationToken: restorePrepared.token,
+    });
+    expect(restored.body).toEqual({ restored: true, accountId: 'claude:party' });
+    expect(f.audits.map(([event]) => event)).toEqual([
+      'accounts.add',
+      'accounts.remove',
+      'accounts.trash.restore',
+    ]);
+  });
+});

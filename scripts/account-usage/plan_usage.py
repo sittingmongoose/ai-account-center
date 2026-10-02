@@ -17,8 +17,8 @@ import time
 import urllib.parse
 import uuid
 
-from plan_common import (CollectionError, HttpClient, PROVIDERS, account, credentials,
-                         number, percent, plan_label, platform_name, reset_at, usage_window, utc_now)
+from plan_common import (CAPSULE_ID, KEY_ID, KEY_PROVIDERS, CollectionError, HttpClient, PROVIDERS, account,
+                         credentials, number, percent, plan_label, platform_name, reset_at, usage_window, utc_now)
 
 
 def _valid_windows(windows):
@@ -470,11 +470,15 @@ def fetch_qwen(client, secret):
     return usage, optional["subscription"], optional["quota-config"], optional["addon/list"]
 
 
-def collect(provider, platform, home=None, client=None):
+def collect(provider, platform, home=None, client=None, credential=None, account_id=None):
     result = account(provider, platform)
-    found = credentials(provider, home)
+    if account_id is not None:
+        result["id"] = account_id
+    found = credentials(provider, home, credential)
     if not found:
-        result["message"] = "No saved credential was found in this computer's existing account stores."
+        result["message"] = ("The stored credential for this account could not be read."
+                             if credential and credential.get("kind") != "discover" else
+                             "No saved credential was found in this computer's existing account stores.")
         return result
     selected = found[0]
     if provider == "qwen":
@@ -532,12 +536,41 @@ def collect(provider, platform, home=None, client=None):
     return result
 
 
+def account_arguments(parser, args):
+    """Registry v2 selection (CONTRACT-registry-lifecycle 3.1): ids only, never paths or secrets.
+
+    Returns (account_id, credential) or (None, None) for today's call. Any
+    inconsistent combination is a usage error (exit status 2).
+    """
+    given = (args.account, args.credential, args.key_id, args.capsule_id)
+    if all(value is None for value in given):
+        return None, None
+    account_id = re.compile(r"^{}:(?:usage|acct:[a-f0-9]{{8}})\Z".format(re.escape(args.provider)))
+    if args.account is None or args.credential is None or not account_id.match(args.account):
+        parser.error("--account and --credential name one account of this provider")
+    if args.credential == "discover" and args.key_id is None and args.capsule_id is None:
+        return args.account, {"kind": "discover"}
+    if (args.credential == "aac-key" and args.provider in KEY_PROVIDERS and args.capsule_id is None
+            and isinstance(args.key_id, str) and KEY_ID.match(args.key_id)):
+        return args.account, {"kind": "aac-key", "keyId": args.key_id}
+    if (args.credential == "browser-capsule" and args.provider == "qwen" and args.key_id is None
+            and isinstance(args.capsule_id, str) and CAPSULE_ID.match(args.capsule_id)):
+        return args.account, {"kind": "browser-capsule", "capsuleId": args.capsule_id}
+    parser.error("the credential arguments do not match this provider")
+    return None, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Read an existing coding-plan account's usage.")
     parser.add_argument("--provider", required=True, choices=tuple(PROVIDERS))
     parser.add_argument("--platform", choices=("ubuntu", "mac", "windows"), default=platform_name())
+    parser.add_argument("--account")
+    parser.add_argument("--credential", choices=("discover", "aac-key", "browser-capsule"))
+    parser.add_argument("--key-id")
+    parser.add_argument("--capsule-id")
     args = parser.parse_args()
-    result = collect(args.provider, args.platform)
+    account_id, credential = account_arguments(parser, args)
+    result = collect(args.provider, args.platform, credential=credential, account_id=account_id)
     print(json.dumps(result, ensure_ascii=True, separators=(",", ":"), allow_nan=False))
 
 

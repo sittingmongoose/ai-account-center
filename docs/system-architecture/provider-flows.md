@@ -26,8 +26,46 @@ its `ubuntu`, `mac` or `windows` platform, and optionally an already approved
 unsupported provider entries, and does not accept arbitrary commands or paths.
 Without a manifest the additional-provider sources default to local Ubuntu;
 absence of a local valid login is reported as unavailable. Consult the
-[source parser](../../src/web-server/services/additional-account-service.ts)
+[source parser](../../src/web-server/services/account-usage-manifest.ts)
 before changing an existing deployment.
+
+Registry v2, the private `account-usage-accounts.json` (0600, at most 64 KB),
+lists several accounts per additional provider (at most 16 each, 64 in all).
+When it exists and is valid it is the only source; when it exists but is unsafe
+or malformed, every additional provider reads "Account list could not be read
+safely" and the version 1 defaults are not used; when it is absent the version 1
+manifest is read exactly as before. The dashboard never writes version 1: the
+first lifecycle write copies the effective version 1 sources into v2 as
+`discover` entries with ids `<provider>:usage`, so an older package that only
+reads version 1 keeps working. Each account has its own cache and backoff. A
+`discover` account keeps today's collector call; any other credential kind adds
+only `--account <id> --credential <kind>` and `--key-id`, `--capsule-id` or
+`--home-id`, never a path, host or secret. A helper that rejects those arguments
+(an older helper) shows the account as unavailable with "Update the usage helper
+on <host>". See the [registry](../../src/web-server/services/account-registry-v2.ts).
+
+The display-only visibility file `account-visibility.json` (0600) holds
+`hiddenProviders` and `hiddenAccountIds`. Hidden accounts are still collected and
+still auto-switch candidates; the dashboard marks them `hidden` and lists every
+provider in `providers[]` with `visible`. An unreadable file is never treated as
+empty: the dashboard keeps the last good lists, sets `settings.visibilityAvailable`
+to false, and shows nothing hidden only when it has never read the file. Every
+private store refuses a folder that others can write.
+
+API keys added from the dashboard (Kimi Code, Z.ai, OpenCode Go) are kept by the
+[AAC key store](../../src/web-server/services/account-key-store.ts) in
+`account-usage/keys/<provider>-<keyId>.json` (0600 in a 0700 folder) on the host that
+collects them; another host is written by `scripts/account-usage/key_store.py` with
+the key on stdin only. The API returns only the last four characters and a
+fingerprint. A new key is checked once by the collector: a rejected key is deleted
+again, a network failure keeps it as unverified. Codex accounts are added or signed
+in again with `codex login --device-auth` in a private staging folder, never in the
+native `~/.codex`; the identity must be new (Add) or unchanged (Sign in again, which
+uses the workspace and person rules of `codex-activation-identity.ts` and a fresh read
+of the live login), and the active, default and last profiles cannot be removed. Key
+files that no account names are swept after an hour. Claude profile creation and
+removal into a 30-day trash are implemented against a host transport but stay off
+until the Windows launcher and the usage helper read profile ids from the inventory.
 
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
 the existing `platyr`, `gmail`, `party` and `me` profile IDs. The optional

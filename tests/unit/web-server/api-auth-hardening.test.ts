@@ -55,6 +55,7 @@ const ROUTES: ApiRoute[] = [
   { family: 'accounts', method: 'GET', path: '/api/accounts/dashboard', status: 200 },
   { family: 'accounts', method: 'GET', path: '/api/accounts/settings', status: 200 },
   { family: 'accounts', method: 'GET', path: '/api/accounts/analytics', status: 200 },
+  { family: 'accounts', method: 'GET', path: '/api/accounts/visibility', status: 200 },
   { family: 'app-updates', method: 'GET', path: '/api/app-updates/status', status: 200 },
   { family: 'claude', method: 'GET', path: '/api/claude/desktop-profiles', status: 200 },
   {
@@ -105,7 +106,13 @@ function caseVariants(canonical: string): string[] {
   ];
 }
 
-const VARIANT_CASES = ROUTES.flatMap((route) =>
+/** Lifecycle reads (CONTRACT-registry-lifecycle 6.1, 6.8); the registry reads the dashboard stub too. */
+const LIFECYCLE_ROUTES: ApiRoute[] = [
+  { family: 'accounts', method: 'GET', path: '/api/accounts/registry', status: 200 },
+  { family: 'accounts', method: 'GET', path: '/api/accounts/trash', status: 200 },
+];
+
+const VARIANT_CASES = [...ROUTES, ...LIFECYCLE_ROUTES].flatMap((route) =>
   caseVariants(route.path).map((variant) => ({ ...route, variant }))
 );
 
@@ -253,25 +260,37 @@ async function expectServerUp(): Promise<void> {
   expect(processFailures).toEqual([]);
 }
 
+/** Under /api/accounts the guard's 401 carries the contract code (CONTRACT-registry-lifecycle 1). */
+function unauthenticatedBody(family: string): Record<string, string> {
+  return family === 'accounts'
+    ? { error: 'Authentication required', code: 'auth_required' }
+    : { error: 'Authentication required' };
+}
+
 describe('F1: API session guard whatever the URL letter case', () => {
   it.each(VARIANT_CASES)(
     'rejects $method $variant without a session',
-    async ({ method, variant, query, body }) => {
+    async ({ family, method, variant, query, body }) => {
       const response = await send(method, `${variant}${query ?? ''}`, { body });
       expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: 'Authentication required' });
+      expect(await response.json()).toEqual(unauthenticatedBody(family));
+      expect(response.headers.get('cache-control')).toBe('no-store');
       expect(stubCalls()).toBe(0);
     }
   );
 
-  it.each(ROUTES)('rejects canonical $method $path without a session', async (route) => {
-    const response = await send(route.method, `${route.path}${route.query ?? ''}`, {
-      body: route.body,
-    });
-    expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'Authentication required' });
-    expect(stubCalls()).toBe(0);
-  });
+  it.each([...ROUTES, ...LIFECYCLE_ROUTES])(
+    'rejects canonical $method $path without a session',
+    async (route) => {
+      const response = await send(route.method, `${route.path}${route.query ?? ''}`, {
+        body: route.body,
+      });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(unauthenticatedBody(route.family));
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(stubCalls()).toBe(0);
+    }
+  );
 
   it('serves every canonical route unchanged with a session', async () => {
     const cookie = await signIn();
@@ -286,6 +305,14 @@ describe('F1: API session guard whatever the URL letter case', () => {
       });
     }
     expect(serviceStubs.every((stub) => stub.mock.calls.length === 1)).toBe(true);
+    for (const route of LIFECYCLE_ROUTES) {
+      const response = await send(route.method, route.path, { cookie });
+      expect({ path: route.path, status: response.status }).toEqual({
+        path: route.path,
+        status: route.status,
+      });
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
   });
 
   it('answers non-canonical casings with 404 and no data, even with a session', async () => {
@@ -376,7 +403,12 @@ describe('F2: malformed login requests stay inside the request', () => {
     // Same number of UTF-16 code units as the real username, more UTF-8 bytes.
     const response = await login({ username: 'é'.repeat(USERNAME.length), password: PASSWORD });
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'Invalid credentials' });
+    // CONTRACT-auth-devices section 10: a stable code and the tries left (additive).
+    expect(await response.json()).toEqual({
+      error: 'Invalid credentials',
+      code: 'invalid_credentials',
+      triesLeft: 4,
+    });
     await expectServerUp();
   });
 
@@ -387,7 +419,11 @@ describe('F2: malformed login requests stay inside the request', () => {
     expect(compare).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(401);
     const text = await response.text();
-    expect(JSON.parse(text)).toEqual({ error: 'Invalid credentials' });
+    expect(JSON.parse(text)).toEqual({
+      error: 'Invalid credentials',
+      code: 'invalid_credentials',
+      triesLeft: 4,
+    });
     expect(text).not.toContain('PRIVATE_BCRYPT_FAILURE');
     await expectServerUp();
   });

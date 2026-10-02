@@ -17,6 +17,7 @@ export type {
   CLIProxyAuthConfig,
   TokenRefreshSettings,
   DashboardAuthConfig,
+  DashboardTlsConfig,
 } from './auth';
 export { DEFAULT_DASHBOARD_AUTH_CONFIG } from './auth';
 

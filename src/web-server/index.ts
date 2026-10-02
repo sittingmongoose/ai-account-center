@@ -8,7 +8,9 @@
 
 import express from 'express';
 import http from 'http';
+import type https from 'https';
 import type { AddressInfo } from 'net';
+import type { Duplex } from 'stream';
 import path from 'path';
 import { WebSocketServer } from 'ws';
 import {
@@ -38,6 +40,19 @@ import { getInstalledAntigravityRuntimeFactory } from '../antigravity/production
 import { loadStaticUi, pageRouteHandler, precompressedStatic, uiStaticHeaders } from './static-ui';
 import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
+import { attachDashboardEventServer } from './dashboard-events';
+import { isSecureTransport } from './middleware/secure-transport';
+import {
+  configureDashboardTransport,
+  prepareFirstRunSetupCode,
+  sendAuthPathError,
+  startDashboardHttpsListener,
+} from './dashboard-auth-runtime';
+import { authKind } from './middleware/request-auth';
+import {
+  startAccountLifecycleMaintenance,
+  stopAccountLifecycleMaintenance,
+} from './services/account-lifecycle-runtime';
 
 export interface ServerOptions {
   port: number;
@@ -52,6 +67,8 @@ export interface ServerInstance {
   server: http.Server;
   wss: WebSocketServer;
   cleanup: () => void;
+  /** The optional in-process HTTPS listener (`dashboard_tls.https_listener`); null when off. */
+  httpsServer?: https.Server | null;
 }
 
 function getListenHost(options: ServerOptions): string {
@@ -92,6 +109,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const app = express();
   // Routes answer only to their canonical spelling; set before the first app.use.
   app.set('case sensitive routing', true);
+  // Trusted local TLS proxy (off unless dashboard_tls.trusted_proxy is set).
+  configureDashboardTransport(app);
   const server = http.createServer(app);
   const wss = new WebSocketServer({
     noServer: true,
@@ -104,16 +123,20 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.use(
     (
       err: Error & { status?: number; body?: string; type?: string },
-      _req: express.Request,
+      req: express.Request,
       res: express.Response,
       next: express.NextFunction
     ) => {
       if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+        if (sendAuthPathError(req, res, 400, 'invalid_json', 'Invalid JSON in request body'))
+          return;
         res.status(400).json({ error: 'Invalid JSON in request body' });
         return;
       }
       // body-parser's own 413 would otherwise reach Express's HTML error page.
       if (err.type === 'entity.too.large') {
+        if (sendAuthPathError(req, res, 413, 'body_too_large', 'Request body is too large.'))
+          return;
         res.status(413).json({ error: 'Request body is too large.' });
         return;
       }
@@ -139,6 +162,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       next();
       return;
     }
+    if (sendAuthPathError(req, res, 404, 'not_found', 'API endpoint was not found.')) return;
     res.status(404).json({ error: 'API endpoint was not found.' });
   });
 
@@ -179,7 +203,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     }
   );
 
-  server.on('upgrade', (request, socket, head) => {
+  const onUpgrade = (request: http.IncomingMessage, socket: Duplex, head: Buffer): void => {
     const pathname = getUpgradePathname(request.url);
     if (!pathname) {
       rejectWebSocketUpgrade(socket, 400, 'Invalid WebSocket upgrade request');
@@ -215,13 +239,26 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         });
       }
     );
-  });
+  };
+  server.on('upgrade', onUpgrade);
+  let httpsServer: https.Server | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   let antigravityRuntime: AntigravityRuntime | null = null;
+  // Account changes and sign-in jobs reach /ws clients as hints. A job goes only
+  // to browser sessions, and its code only to those that connected over a
+  // secure transport. The upgrade request carries the session (see above).
+  const detachDashboardEvents = attachDashboardEventServer(wss, {
+    isSecure: isSecureTransport,
+    authKind: (request) => authKind(request as express.Request),
+    sessionEpoch: (request) => (request as express.Request).session?.epoch ?? null,
+  });
 
   // Combined cleanup function
   const cleanup = () => {
+    httpsServer?.close();
+    detachDashboardEvents();
+    stopAccountLifecycleMaintenance();
     codexAutoSwitch.stop();
     antigravityRuntime?.stop();
     stopAccountAnalyticsSampling();
@@ -279,9 +316,19 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       }
       codexAutoSwitch.start();
       startAccountAnalyticsSampling();
+      // Staging folders of sign-ins from before a restart, and trash past 30 days.
+      startAccountLifecycleMaintenance();
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
-      resolve({ server, wss, cleanup });
+      // First run with sign-in on and no password: this run's one-time setup code.
+      void prepareFirstRunSetupCode();
+      // The optional HTTPS listener (dashboard_tls.https_listener, off by default).
+      void startDashboardHttpsListener(app, listenHost, onUpgrade)
+        .catch(() => null)
+        .then((started) => {
+          httpsServer = started;
+          resolve({ server, wss, cleanup, httpsServer: started });
+        });
     };
 
     try {

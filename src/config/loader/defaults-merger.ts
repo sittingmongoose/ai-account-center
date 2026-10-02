@@ -323,7 +323,12 @@ export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfi
       session_timeout_hours:
         partial.dashboard_auth?.session_timeout_hours ??
         DEFAULT_DASHBOARD_AUTH_CONFIG.session_timeout_hours,
+      ...(typeof partial.dashboard_auth?.password_changed_at === 'string'
+        ? { password_changed_at: partial.dashboard_auth.password_changed_at }
+        : {}),
     },
+    // Dashboard secure transport: passed through only when present (off by default).
+    ...(partial.dashboard_tls ? { dashboard_tls: partial.dashboard_tls } : {}),
     browser: canonicalizeBrowserConfig(partial.browser),
     // Image analysis config - enabled by default for CLIProxy providers
     image_analysis: canonicalizeImageAnalysisConfig({

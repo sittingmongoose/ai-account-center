@@ -14,11 +14,10 @@ import { exitWithError } from '../../errors';
 import { ExitCode } from '../../errors/exit-codes';
 import { resolveCodexProfileDir } from '../codex-profile-paths';
 import { decodeAccountIdentity } from '../codex-account-identity';
-import { decodeIdToken, hasStructurallyValidIdToken } from '../decode-id-token';
 import { acquireCodexActivationLock, getActivationCodexHome } from '../codex-activation-lock';
+import { CodexProfileRemovalError, removeCodexProfileUnderLock } from '../codex-profile-removal';
 import { parseArgs, rejectUnsupportedOptions, getProfileNameError } from './types';
 import type { CodexCommandContext } from './types';
-import type { CodexProfileMetadata } from '../types';
 
 export interface CodexRemoveOptions {
   /** Explicit native-home injection for tests; never inferred from CODEX_HOME. */
@@ -136,7 +135,9 @@ export async function handleRemoveCodex(
     } catch {
       throw new RemovalFailure('Another Codex account activation or removal is already running.');
     }
-    await _removeUnderLock(ctx, profileName, Boolean(force), codexHome);
+    await removeCodexProfileUnderLock(ctx.registry, profileName, codexHome, {
+      force: Boolean(force),
+    });
   } catch (error) {
     failure = error;
   } finally {
@@ -148,195 +149,10 @@ export async function handleRemoveCodex(
     }
   }
   if (failure) {
-    if (failure instanceof RemovalFailure) exitWithError(failure.message, failure.exitCode);
+    if (failure instanceof RemovalFailure || failure instanceof CodexProfileRemovalError)
+      exitWithError(failure.message, failure.exitCode);
     else exitWithError('Could not safely remove the Codex profile.', ExitCode.GENERAL_ERROR);
     return;
   }
   console.log(ok(`Profile removed: ${profileName}`));
-}
-
-async function _removeUnderLock(
-  ctx: CodexCommandContext,
-  profileName: string,
-  force: boolean,
-  codexHome: string
-): Promise<void> {
-  const { registry } = ctx;
-  // Fresh membership/default/metadata reads happen after acquiring activation
-  // lock and before taking registry's shorter write lock.
-  if (!registry.hasProfile(profileName)) {
-    throw new RemovalFailure(`Profile not found: ${profileName}`, ExitCode.PROFILE_ERROR);
-  }
-  const meta = registry.getProfile(profileName);
-  const originalDefault = registry.getDefault();
-  if (originalDefault === profileName && registry.listProfiles().length > 1 && !force) {
-    throw new RemovalFailure('Cannot remove default profile', ExitCode.PROFILE_ERROR);
-  }
-  const profileDir = resolveCodexProfileDir(profileName);
-  const authJsonPath = path.join(profileDir, 'auth.json');
-  const nativeAuthPath = path.join(codexHome, 'auth.json');
-  _assertInactiveSavedProfile(nativeAuthPath, authJsonPath);
-  if (!fs.existsSync(profileDir)) {
-    process.stderr.write(`[!] Profile dir was already missing; removing registry entry only.\n`);
-    try {
-      registry.removeProfile(profileName, { forceDefault: force });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new RemovalFailure(
-        `Profile registry update failed; profile dir was already missing.\n  ${msg}`
-      );
-    }
-    return;
-  }
-
-  const stagedDeleteDir = `${profileDir}.deleting.${process.pid}.${Math.random()
-    .toString(36)
-    .slice(2)}`;
-  const preservationDir = `${profileDir}.preserved.${process.pid}.${Math.random()
-    .toString(36)
-    .slice(2)}`;
-
-  try {
-    fs.renameSync(profileDir, stagedDeleteDir);
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'EACCES') {
-      throw new RemovalFailure('Permission denied');
-    }
-    throw err;
-  }
-
-  try {
-    await fs.promises.cp(stagedDeleteDir, preservationDir, { recursive: true, errorOnExist: true });
-  } catch (err) {
-    const restored = _restoreProfileDir(stagedDeleteDir, profileDir);
-    await _removePathBestEffort(preservationDir);
-    const preservedPath = restored ? profileDir : stagedDeleteDir;
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new RemovalFailure(
-      `Profile data delete preparation failed; profile data was preserved at ${preservedPath}.\n  ${msg}`
-    );
-  }
-
-  try {
-    // Native login/logout tools do not share our lock. Recheck after copying
-    // and restore the staged data if a fresh native identity now matches it.
-    _assertInactiveSavedProfile(nativeAuthPath, path.join(stagedDeleteDir, 'auth.json'));
-    registry.removeProfile(profileName, { forceDefault: force });
-  } catch (err) {
-    const restored = _restoreProfileDir(stagedDeleteDir, profileDir);
-    await _removePathBestEffort(preservationDir);
-    const preservedPath = restored ? profileDir : stagedDeleteDir;
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new RemovalFailure(
-      `Profile registry update failed; profile data was preserved at ${preservedPath}.\n  ${msg}`
-    );
-  }
-
-  try {
-    await fs.promises.rm(stagedDeleteDir, { recursive: true, force: true });
-    await fs.promises.rm(preservationDir, { recursive: true, force: true });
-  } catch (err) {
-    const restoreSource = fs.existsSync(preservationDir) ? preservationDir : stagedDeleteDir;
-    const restoredDir = _restoreProfileDir(restoreSource, profileDir);
-    const restoredRegistry = _restoreRegistryEntry(registry, profileName, meta, originalDefault);
-    if (restoredDir && restoreSource === preservationDir) {
-      await _removePathBestEffort(stagedDeleteDir);
-    }
-    const preservedPath = restoredDir ? profileDir : stagedDeleteDir;
-    const msg = err instanceof Error ? err.message : String(err);
-    const registryNote = restoredRegistry
-      ? 'Profile registry entry was restored.'
-      : 'Profile registry entry could not be restored automatically.';
-    throw new RemovalFailure(
-      `Profile data delete failed; profile data was preserved at ${preservedPath}. ${registryNote}\n  ${msg}`
-    );
-  }
-}
-
-async function _removePathBestEffort(targetPath: string): Promise<void> {
-  try {
-    await fs.promises.rm(targetPath, { recursive: true, force: true });
-  } catch {
-    // best-effort cleanup after data has already been preserved elsewhere
-  }
-}
-
-function _restoreRegistryEntry(
-  registry: CodexCommandContext['registry'],
-  profileName: string,
-  meta: CodexProfileMetadata,
-  originalDefault: string | null
-): boolean {
-  try {
-    if (registry.hasProfile(profileName)) {
-      registry.updateProfile(profileName, meta);
-    } else {
-      registry.createProfile(profileName, meta);
-    }
-    if (originalDefault === profileName) {
-      registry.setDefault(profileName);
-    }
-    return true;
-  } catch {
-    process.stderr.write(
-      `[!] Profile data delete failed and automatic registry restore failed for "${profileName}".\n`
-    );
-    return false;
-  }
-}
-
-function _restoreProfileDir(stagedDeleteDir: string, profileDir: string): boolean {
-  try {
-    if (fs.existsSync(stagedDeleteDir) && !fs.existsSync(profileDir)) {
-      fs.renameSync(stagedDeleteDir, profileDir);
-      return true;
-    }
-    return fs.existsSync(profileDir);
-  } catch {
-    process.stderr.write(
-      `[!] Registry update failed and automatic restore failed. Profile data remains at ${stagedDeleteDir}.\n`
-    );
-    return false;
-  }
-}
-
-/** No cache or registry metadata can establish the current native identity. */
-function _freshEmail(authPath: string, label: string): string | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(authPath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new RemovalFailure(`Could not read ${label} Codex login; profile retained.`);
-  }
-  try {
-    const parsed = JSON.parse(raw) as { tokens?: { id_token?: unknown } };
-    const token = parsed?.tokens?.id_token;
-    const email = typeof token === 'string' ? decodeIdToken(token).email : null;
-    if (typeof token !== 'string' || !hasStructurallyValidIdToken(token) || !email) {
-      throw new RemovalFailure(`Could not verify ${label} Codex login; profile retained.`);
-    }
-    return email;
-  } catch {
-    // JSON errors may contain credential fragments. Report only our own text.
-    throw new RemovalFailure(`Could not verify ${label} Codex login; profile retained.`);
-  }
-}
-
-function _assertInactiveSavedProfile(nativeAuthPath: string, profileAuthPath: string): void {
-  const liveEmail = _freshEmail(nativeAuthPath, 'the current native');
-  if (!liveEmail) return;
-  const targetEmail = _freshEmail(profileAuthPath, 'the saved profile');
-  if (!targetEmail) {
-    // A ghost entry's cached email is not fresh identity proof. Its deletion
-    // is permitted when there is no native login, not while identity is unknown.
-    throw new RemovalFailure('Could not verify the saved Codex login; profile retained.');
-  }
-  if (targetEmail === liveEmail) {
-    throw new RemovalFailure(
-      'Cannot remove a profile for the current Codex account. Activate another account first.',
-      ExitCode.PROFILE_ERROR
-    );
-  }
 }

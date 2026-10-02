@@ -97,6 +97,27 @@ export interface DashboardAuthConfig {
   password_hash: string;
   /** Session timeout in hours (default: 24) */
   session_timeout_hours?: number;
+  /** ISO time of the last password change made by the dashboard (CONTRACT-auth-devices 3) */
+  password_changed_at?: string;
+}
+
+/**
+ * Secure transport for the dashboard (CONTRACT-auth-devices section 2a). Every
+ * key is optional and the whole block is off by default: nothing here turns on
+ * a listener or trusts a proxy until it is set in config.yaml.
+ */
+export interface DashboardTlsConfig {
+  /** A local TLS proxy on loopback whose `X-Forwarded-Proto: https` is trusted */
+  trusted_proxy?: 'tailscale-serve' | 'loopback-https-proxy';
+  /** Optional in-process HTTPS listener */
+  https_listener?: {
+    enabled?: boolean;
+    port?: number;
+    cert_path?: string;
+    key_path?: string;
+  };
+  /** The secure address the page links to and the trays connect to */
+  public_origin?: string;
 }
 
 /**

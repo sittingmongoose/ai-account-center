@@ -182,6 +182,9 @@ describe('retained account dashboard API surface', () => {
     '/accounts/dashboard',
     '/accounts/settings',
     '/accounts/analytics',
+    '/accounts/visibility',
+    '/accounts/registry',
+    '/accounts/trash',
     '/app-updates/status',
     '/bar/auth',
   ])('protects remote GET /api%s before its handler runs', async (route) => {
@@ -191,7 +194,12 @@ describe('retained account dashboard API surface', () => {
       headers: { [BAR_AUTH_NONCE_HEADER]: '1234567890abcdef1234567890abcdef' },
     });
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'Authentication required' });
+    expect(await response.json()).toEqual(
+      route.startsWith('/accounts/')
+        ? { error: 'Authentication required', code: 'auth_required' }
+        : { error: 'Authentication required' }
+    );
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get(BAR_AUTH_TOKEN_HEADER)).toBeNull();
     expect(fs.existsSync(getBarAuthTokenPath())).toBe(false);
   });
@@ -297,6 +305,9 @@ describe('retained account dashboard API surface', () => {
       headers: { Cookie: cookie as string },
     });
     expect(loggedOut.status).toBe(401);
-    expect(await loggedOut.json()).toEqual({ error: 'Authentication required' });
+    expect(await loggedOut.json()).toEqual({
+      error: 'Authentication required',
+      code: 'auth_required',
+    });
   });
 });

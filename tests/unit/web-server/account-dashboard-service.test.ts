@@ -193,6 +193,10 @@ function deps(overrides: AccountDashboardDeps = {}): AccountDashboardDeps {
     invalidateClaudeCache: () => {},
     scope: () => 'fixture-scope',
     refreshIntervalSeconds: () => 60,
+    readVisibility: async () => ({
+      state: 'ok',
+      visibility: { hiddenProviders: [], hiddenAccountIds: [] },
+    }),
     ...overrides,
   };
 }
@@ -438,7 +442,12 @@ describe('consolidated account dashboard', () => {
         },
       })
     );
-    expect((await service.get()).settings).toEqual({ refreshIntervalSeconds: 120 });
+    expect((await service.get()).settings).toEqual({
+      refreshIntervalSeconds: 120,
+      hiddenProviders: [],
+      hiddenAccountIds: [],
+      visibilityAvailable: true,
+    });
     now += 60_000;
     await service.get();
     expect(calls).toBe(1);

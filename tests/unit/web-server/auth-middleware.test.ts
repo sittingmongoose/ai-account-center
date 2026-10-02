@@ -19,14 +19,22 @@ import {
   requireDashboardSession,
 } from '../../../src/web-server/middleware/auth-middleware';
 import { runWithScopedConfigDir } from '../../../src/utils/config-manager';
+import {
+  bumpSessionEpoch,
+  resetDashboardAuthStateForTests,
+} from '../../../src/web-server/services/dashboard-auth-state';
 
 describe('Dashboard Auth', () => {
   let tempDir = '';
   let originalDashboardAuthEnabled: string | undefined;
+  let originalCcsDir: string | undefined;
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-dashboard-auth-'));
     originalDashboardAuthEnabled = process.env.CCS_DASHBOARD_AUTH_ENABLED;
+    // The session-epoch check reads <CCS_DIR>/auth/state.json: keep it in the fixture.
+    originalCcsDir = process.env.CCS_DIR;
+    process.env.CCS_DIR = path.join(tempDir, '.ccs');
   });
 
   afterEach(() => {
@@ -35,6 +43,8 @@ describe('Dashboard Auth', () => {
     } else {
       process.env.CCS_DASHBOARD_AUTH_ENABLED = originalDashboardAuthEnabled;
     }
+    if (originalCcsDir === undefined) delete process.env.CCS_DIR;
+    else process.env.CCS_DIR = originalCcsDir;
 
     if (tempDir && fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -102,16 +112,33 @@ describe('Dashboard Auth', () => {
   function runGuard(
     guard: typeof authMiddleware,
     requestPath: string,
-    authenticated = false
-  ): { passed: boolean; status: number | null; body: unknown } {
-    const outcome = { passed: false, status: null as number | null, body: undefined as unknown };
+    authenticated = false,
+    method = 'GET'
+  ): {
+    passed: boolean;
+    status: number | null;
+    body: unknown;
+    headers: Record<string, string>;
+  } {
+    const outcome = {
+      passed: false,
+      status: null as number | null,
+      body: undefined as unknown,
+      headers: {} as Record<string, string>,
+    };
     const req = {
+      method,
       path: requestPath,
+      originalUrl: requestPath,
       session: { authenticated },
       socket: { remoteAddress: '127.0.0.1' },
       headers: { host: '127.0.0.1:3000' },
     };
     const res = {
+      setHeader(name: string, value: string) {
+        outcome.headers[name.toLowerCase()] = value;
+        return this;
+      },
       status(code: number) {
         outcome.status = code;
         return this;
@@ -145,27 +172,43 @@ describe('Dashboard Auth', () => {
       expect(runGuard(authMiddleware, '/api/codex/profiles').passed).toBe(true);
     });
 
-    it('keeps the public routes public in any letter case, exactly', () => {
+    it('keeps the public routes public in any letter case, as exact method and path pairs', () => {
       process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
-      for (const requestPath of [
-        '/api/auth/login',
-        '/api/auth/check',
-        '/api/auth/setup',
-        '/api/health',
-        '/api/health/',
-        '/API/AUTH/LOGIN',
-        '/Api/Health',
+      for (const [method, requestPath] of [
+        ['POST', '/api/auth/login'],
+        ['GET', '/api/auth/check'],
+        ['GET', '/api/auth/setup'],
+        ['POST', '/api/auth/setup'],
+        ['POST', '/api/auth/devices/pair'],
+        ['GET', '/api/health'],
+        ['HEAD', '/api/health'],
+        ['GET', '/api/health/'],
+        ['POST', '/API/AUTH/LOGIN'],
+        ['GET', '/Api/Health'],
       ]) {
-        expect({ requestPath, passed: runGuard(authMiddleware, requestPath).passed }).toEqual({
+        expect({
+          method,
           requestPath,
-          passed: true,
-        });
+          passed: runGuard(authMiddleware, requestPath, false, method).passed,
+        }).toEqual({ method, requestPath, passed: true });
       }
-      for (const requestPath of ['/api/auth/login-history', '/api/health/fix', '/api/auth']) {
-        expect({ requestPath, status: runGuard(authMiddleware, requestPath).status }).toEqual({
+      for (const [method, requestPath] of [
+        ['GET', '/api/auth/login-history'],
+        ['GET', '/api/health/fix'],
+        ['GET', '/api/auth'],
+        ['GET', '/api/auth/setupx'],
+        ['POST', '/api/auth/setupanything'],
+        ['GET', '/api/auth/devices'],
+        ['GET', '/api/auth/devices/pair'],
+        ['POST', '/api/auth/check'],
+        ['GET', '/api/auth/login'],
+        ['POST', '/api/health'],
+      ]) {
+        expect({
+          method,
           requestPath,
-          status: 401,
-        });
+          status: runGuard(authMiddleware, requestPath, false, method).status,
+        }).toEqual({ method, requestPath, status: 401 });
       }
     });
 
@@ -184,7 +227,13 @@ describe('Dashboard Auth', () => {
           passed: false,
           status: 401,
         });
-        expect(outcome.body).toEqual({ error: 'Authentication required' });
+        // Under /api/accounts the 401 carries the contract code; elsewhere the body is unchanged.
+        expect(outcome.body).toEqual(
+          requestPath.toLowerCase().startsWith('/api/accounts/')
+            ? { error: 'Authentication required', code: 'auth_required' }
+            : { error: 'Authentication required' }
+        );
+        expect(outcome.headers['cache-control']).toBe('no-store');
         expect(runGuard(authMiddleware, requestPath, true).passed).toBe(true);
       }
     });
@@ -200,13 +249,30 @@ describe('Dashboard Auth', () => {
   describe('apiAuthMiddleware (guard on the /api router)', () => {
     it('checks paths relative to the mount', () => {
       process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
-      for (const requestPath of ['/auth/login', '/auth/check', '/auth/setup', '/health']) {
-        expect(runGuard(apiAuthMiddleware, requestPath).passed).toBe(true);
+      for (const [method, requestPath] of [
+        ['POST', '/auth/login'],
+        ['GET', '/auth/check'],
+        ['GET', '/auth/setup'],
+        ['POST', '/auth/setup'],
+        ['POST', '/auth/devices/pair'],
+        ['GET', '/health'],
+      ]) {
+        expect(runGuard(apiAuthMiddleware, requestPath, false, method).passed).toBe(true);
       }
+      expect(runGuard(apiAuthMiddleware, '/auth/devices').status).toBe(401);
       for (const requestPath of ['/codex/profiles', '/CODEX/profiles', '/bar/auth', '/']) {
         expect(runGuard(apiAuthMiddleware, requestPath).status).toBe(401);
         expect(runGuard(apiAuthMiddleware, requestPath, true).passed).toBe(true);
       }
+      for (const requestPath of ['/accounts/visibility', '/Accounts/dashboard', '/accounts']) {
+        const outcome = runGuard(apiAuthMiddleware, requestPath);
+        expect(outcome.status).toBe(401);
+        expect(outcome.body).toEqual({ error: 'Authentication required', code: 'auth_required' });
+        expect(outcome.headers['cache-control']).toBe('no-store');
+      }
+      expect(runGuard(apiAuthMiddleware, '/accountsx').body).toEqual({
+        error: 'Authentication required',
+      });
     });
 
     it('passes every request when dashboard auth is disabled', () => {
@@ -349,6 +415,28 @@ describe('Dashboard Auth', () => {
       expect(isDashboardWebSocketOriginAllowed(request)).toBe(false);
       expect(isDashboardWebSocketUpgradeAllowed(request)).toBe(false);
       expect(getDashboardWebSocketRejectionStatus(request)).toBe(403);
+    });
+
+    it('refuses device tokens on /ws with 403 (CONTRACT-auth-devices 6)', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+      const request = makeUpgradeRequest('127.0.0.1', true, {
+        host: '127.0.0.1:3001',
+        origin: 'http://127.0.0.1:3001',
+        authorization: `Bearer aacd_${'A'.repeat(43)}`,
+      });
+      expect(isDashboardWebSocketUpgradeAllowed(request)).toBe(false);
+      expect(getDashboardWebSocketRejectionStatus(request)).toBe(403);
+    });
+
+    it('refuses a session from an older epoch with 401 (sign out other browsers)', async () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+      const headers = { host: '127.0.0.1:3001', origin: 'http://127.0.0.1:3001' };
+      const request = makeUpgradeRequest('127.0.0.1', true, headers);
+      expect(isDashboardWebSocketUpgradeAllowed(request)).toBe(true);
+      await bumpSessionEpoch();
+      expect(isDashboardWebSocketUpgradeAllowed(request)).toBe(false);
+      expect(getDashboardWebSocketRejectionStatus(request)).toBe(401);
+      resetDashboardAuthStateForTests();
     });
 
     it('blocks cross-site websocket origins even with an authenticated session', () => {
