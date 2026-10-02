@@ -44,6 +44,8 @@ export component MeterBar inherits Rectangle {
     in property <bool> compact: false;
     in property <bool> hot: false;
     in property <int> sev: 0;
+    // During the load-in sweep the fill colour follows the climbing value without a cross-fade.
+    in property <bool> instant-color: false;
 
     property <length> track-h: root.compact ? 7px : 10px;
     property <bool> over: root.has-value && root.target > 100;
@@ -75,7 +77,7 @@ export component MeterBar inherits Rectangle {
             height: parent.height;
             border-radius: parent.height / 2;
             background: Theme.sev-fill(root.sev);
-            animate background { duration: 400ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            animate background { duration: root.instant-color ? 0ms : 400ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
             Rectangle {
                 width: 100%;
                 height: 100%;
@@ -129,7 +131,15 @@ export component Meter inherits Rectangle {
 
     property <float> target: root.data.has-value ? root.data.value : 0;
     property <bool> swept: false;
-    property <float> anim: root.played ? root.target : 0;
+    // A meter created together with its data (first load, a new row) first renders at 0 and starts
+    // its sweep one frame later; otherwise it would appear at its final value without animating.
+    property <bool> mounted: !Motion.on;
+    mount := Timer {
+        interval: 16ms;
+        running: !root.mounted;
+        triggered => { self.running = false; root.mounted = true; }
+    }
+    property <float> anim: root.played && root.mounted ? root.target : 0;
     animate anim {
         duration: Motion.on ? Motion.meter : 0ms;
         delay: root.swept || !Motion.on ? 0ms : root.delay;
@@ -137,7 +147,7 @@ export component Meter inherits Rectangle {
     }
     sweep-done := Timer {
         interval: root.delay + Motion.meter + 40ms;
-        running: root.played && !root.swept;
+        running: root.played && root.mounted && !root.swept;
         triggered => { root.swept = true; self.running = false; }
     }
     property <bool> settled: !Motion.on || abs(root.anim - root.target) < 0.005;
@@ -175,7 +185,7 @@ export component Meter inherits Rectangle {
                 value: root.number;
                 size: root.value-size;
                 ink: Theme.sev-text(root.sev);
-                animate ink { duration: 400ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                animate ink { duration: root.swept ? 400ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
             }
             if root.data.has-value && root.show-unit && !root.compact && !root.inline: VerticalLayout {
                 alignment: end;
@@ -209,6 +219,7 @@ export component Meter inherits Rectangle {
             compact: root.compact;
             hot: root.hot || root.hovering;
             sev: root.sev;
+            instant-color: !root.swept;
         }
         if root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): Rectangle { height: 6px; }
         if root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): HorizontalLayout {

@@ -285,6 +285,8 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'navigate') { navigate(value); return; }
     if (action === 'navigate-dashboard') { navigate('home'); return; }
     if (action === 'navigate-analytics') { navigate('analytics'); return; }
+    // The former Accounts and Settings dialogs are now one page.
+    if (action === 'accounts' || action === 'settings') { navigate('accounts'); return; }
     if (action.startsWith('analytics-')) { if (authenticated) await analyticsAction(action, value); return; }
     if (action === 'theme') { saveTheme(value); return; }
     if (action === 'details') { renderDetails(value); return; }
