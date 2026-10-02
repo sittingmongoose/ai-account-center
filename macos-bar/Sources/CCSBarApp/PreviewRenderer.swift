@@ -45,7 +45,7 @@ enum PreviewRenderer {
     NSApplication.shared.appearance = appearance
     TrayFormat.referenceNow = AccountFormatting.date(dashboard.updatedAt)
     let model = AccountsViewModel(preview: dashboard)
-    let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard)
+    let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard, persist: false)
     let state = PanelState()
     state.staticRender = true
     state.previewReduceTransparency = options.reduceTransparency

@@ -62,8 +62,11 @@ dashboard, refresh and toggle Settings; the header menu offers Settings, About a
   app has already claimed the combination, Settings says so and the other ways still work.
 - The installer puts the app in `~/Applications`, which Spotlight and Launchpad index. New installer backups are kept
   in `.noindex` folders so search never offers an old copy.
-- The panel closes when you click outside it, switch apps or Spaces, press Escape (after Settings), or click the
-  menu-bar glyph again.
+- The panel closes when you click outside it, switch apps or Spaces, press Escape, or click the menu-bar glyph
+  again. Escape works from any field in the panel and closes the innermost thing first: an open Details, packs or info
+  popover, then Settings, then an unanswered switch confirmation, then the panel.
+- A shortcut needs the app running. If you quit it, open it again from Spotlight or Launchpad: that starts it and opens
+  the panel.
 
 ## Build, verify, package, install
 
@@ -79,6 +82,7 @@ export AAC_ASSETS_DIR="$PWD/Resources/Assets"            # unbundled runs read a
 .build/release/CCSBar --check-native-packs Tests/Fixtures/tray-concept-preview.json /tmp/packs.png
 .build/release/CCSBar --self-test Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/panel.png --dark [--settings]
+.build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/rt.png --dark --reduce-transparency
 python3 Scripts/migration_check.py
 ./Scripts/package_app.sh
 ./Scripts/install_user.sh --launch
@@ -87,11 +91,16 @@ python3 Scripts/migration_check.py
 - `--check-native-tooltips` checks every icon control's help tag, the full-row Details targets, that nested controls
   are never the row, and the Selected-row alignment within 0.5 pt.
 - `--self-test` opens the real glass panel from a fixture (no sign-in, no network): status item and reading, the open
-  shortcut, the glass panel under the menu bar, gear and Escape for Settings, relaunch reopen and Appearance. It shows
-  the panel on screen for a few seconds.
-- `--render-preview` draws the panel content offscreen (`--light`, `--dark`, `--settings`). System glass is composited
-  by the window server and never reaches an offscreen render, so previews bake a glass stand-in behind the real content
-  and pin "now" to the fixture's capture time.
+  shortcut, the glass panel under the menu bar, gear and Escape for Settings, relaunch reopen, Appearance, a reopen
+  during the close fade, full-row Details from the panel and Escape closing it first, the Carbon hot-key event
+  toggling the panel, Escape from a focused text field on the connect screen, idle CPU with the panel open and
+  closed, and memory over 24 open-close cycles. It shows the panel on screen for about half a minute and leaves no
+  preferences behind.
+- `--render-preview` draws the panel content offscreen (`--light`, `--dark`, `--settings`, `--details=<account id or
+  provider>`, `--connect`, and `--reduce-transparency` or `--increase-contrast`, which simulate those display settings in
+  the render only). System glass is composited by the window server and never reaches an offscreen render, so previews
+  bake a glass stand-in behind the real content and pin "now" to the fixture's capture time. Offscreen switches draw
+  in their inactive grey; the knob's side shows the state.
 
 ### Rename compatibility
 

@@ -22,19 +22,21 @@ enum TrayAppearance: String, CaseIterable, Identifiable {
 final class TrayPreferences: ObservableObject {
   static let shared = TrayPreferences()
   private let defaults: UserDefaults
+  /// False for the self-test: choices apply in memory and nothing is written to disk.
+  private let persist: Bool
 
   @Published var appearance: TrayAppearance {
-    didSet { defaults.set(appearance.rawValue, forKey: Keys.appearance); apply() }
+    didSet { if persist { defaults.set(appearance.rawValue, forKey: Keys.appearance) }; apply() }
   }
   @Published var menuBarSource: MenuBarSource {
-    didSet { defaults.set(menuBarSource.rawValue, forKey: Keys.menuBarSource) }
+    didSet { if persist { defaults.set(menuBarSource.rawValue, forKey: Keys.menuBarSource) } }
   }
   @Published var menuBarMode: MenuBarMode {
-    didSet { defaults.set(menuBarMode.rawValue, forKey: Keys.menuBarMode) }
+    didSet { if persist { defaults.set(menuBarMode.rawValue, forKey: Keys.menuBarMode) } }
   }
   /// The global Option-Command-A shortcut that opens the panel. On by default.
   @Published var openShortcutEnabled: Bool {
-    didSet { defaults.set(openShortcutEnabled, forKey: Keys.openShortcut) }
+    didSet { if persist { defaults.set(openShortcutEnabled, forKey: Keys.openShortcut) } }
   }
 
   enum Keys {
@@ -44,8 +46,9 @@ final class TrayPreferences: ObservableObject {
     static let openShortcut = "aac.tray.openShortcutEnabled"
   }
 
-  init(defaults: UserDefaults = .standard) {
+  init(defaults: UserDefaults = .standard, persist: Bool = true) {
     self.defaults = defaults
+    self.persist = persist
     appearance = TrayAppearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .auto
     menuBarSource = MenuBarSource(rawValue: defaults.string(forKey: Keys.menuBarSource) ?? "") ?? .codex
     menuBarMode = MenuBarMode(rawValue: defaults.string(forKey: Keys.menuBarMode) ?? "") ?? .left

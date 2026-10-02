@@ -14,10 +14,10 @@ enum PanelSelfTest {
       let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: Data(contentsOf: URL(fileURLWithPath: input)))
       let app = NSApplication.shared
       app.setActivationPolicy(.accessory)
+      // In-memory preferences: defaults only, and nothing is written to disk.
       let suite = "party.sittingmongoose.aac.selftest"
       let defaults = UserDefaults(suiteName: suite) ?? .standard
-      defaults.removePersistentDomain(forName: suite)
-      let prefs = TrayPreferences(defaults: defaults)
+      let prefs = TrayPreferences(defaults: defaults, persist: false)
       let delegate = AppDelegate()
       let controller = PanelController(model: AccountsViewModel(preview: dashboard), prefs: prefs)
       delegate.controller = controller
@@ -152,12 +152,9 @@ enum PanelSelfTest {
       NSStatusBar.system.removeStatusItem(controller.statusItem)
 
       // First run: Escape from a focused text field still closes the panel (the field editor would keep it).
-      let connectSuite = suite + ".connect"
-      let connectDefaults = UserDefaults(suiteName: connectSuite) ?? .standard
-      connectDefaults.removePersistentDomain(forName: connectSuite)
-      connectDefaults.set(false, forKey: TrayPreferences.Keys.openShortcut)
-      let connect = PanelController(model: AccountsViewModel(previewWithoutConnection: true),
-        prefs: TrayPreferences(defaults: connectDefaults))
+      let connectPrefs = TrayPreferences(defaults: defaults, persist: false)
+      connectPrefs.openShortcutEnabled = false
+      let connect = PanelController(model: AccountsViewModel(previewWithoutConnection: true), prefs: connectPrefs)
       connect.open()
       pump(1.0)
       let field = connect.panel?.contentView.flatMap { firstView(in: $0, of: NSTextField.self) { $0.isEditable } }
@@ -184,9 +181,6 @@ enum PanelSelfTest {
       connect.close()
       pump(0.4)
       NSStatusBar.system.removeStatusItem(connect.statusItem)
-      connectDefaults.removePersistentDomain(forName: connectSuite)
-
-      defaults.removePersistentDomain(forName: suite)
       let passed = steps.allSatisfy { $0["passed"] as? Bool == true }
       let result: [String: Any] = ["passed": passed, "steps": steps, "isolatedPreviewModel": true,
         "networkOrAccountActions": false, "desktopCaptureOrExternalAutomation": false]
