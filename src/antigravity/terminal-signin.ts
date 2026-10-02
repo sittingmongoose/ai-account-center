@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
+import tty from 'tty';
 import {
   ANTIGRAVITY_MAX_PROFILES,
   AntigravityAccountLifecycle,
@@ -88,7 +89,9 @@ export interface TerminalSignInDeps {
 
 function defaultIo(): TerminalSignInIo {
   return {
-    isInteractive: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
+    // isatty on the descriptors: creating process.stdin would open a reader
+    // on the terminal the CLI is about to own.
+    isInteractive: () => tty.isatty(0) && tty.isatty(1),
     write: (text) => {
       process.stdout.write(text);
     },

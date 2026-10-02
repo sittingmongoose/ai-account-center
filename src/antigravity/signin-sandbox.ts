@@ -138,7 +138,12 @@ export function prepareSignInStaging(ccsDir: string): SignInStaging {
   };
 }
 
-/** The exact bubblewrap argv; the native CLI gets no argument at all. */
+/**
+ * The exact bubblewrap argv; the native CLI gets no argument at all. The
+ * private /tmp comes first, so the binds after it stay visible even when a
+ * home or the CCS folder lives below /tmp; the bus config and the CLI are
+ * bound read-only by their own paths for the same reason.
+ */
 export function sandboxArgs(
   staging: SignInStaging,
   options: { realHome: string; nativeBinary: string; apparmorLeaf: string | null }
@@ -153,12 +158,18 @@ export function sandboxArgs(
     '--ro-bind',
     '/',
     '/',
+    '--tmpfs',
+    '/tmp',
+    '--ro-bind',
+    staging.busConfig,
+    staging.busConfig,
+    '--ro-bind',
+    options.nativeBinary,
+    options.nativeBinary,
     '--bind',
     staging.mask,
     realGemini,
     ...(options.apparmorLeaf ? ['--bind', options.apparmorLeaf, options.apparmorLeaf] : []),
-    '--tmpfs',
-    '/tmp',
     '--tmpfs',
     path.join(realGemini, 'antigravity-cli', 'log'),
     '--proc',
