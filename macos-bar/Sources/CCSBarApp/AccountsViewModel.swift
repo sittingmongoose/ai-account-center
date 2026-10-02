@@ -124,7 +124,8 @@ final class AccountsViewModel: ObservableObject {
   /// Signed out or not paired, the menu bar shows the template logo with no percentage (section 9).
   func menuBarReading(_ prefs: TrayPreferences) -> MenuBarReading? {
     guard !signIn.active || signIn.repair else { return nil }
-    return MenuBarReading.make(dashboard: dashboard, source: prefs.menuBarSource, mode: prefs.menuBarMode)
+    return MenuBarReading.make(dashboard: dashboard, provider: prefs.menuBarProvider, mode: prefs.menuBarMode,
+      claudeAccountID: prefs.menuBarClaudeAccountID)
   }
 
   /// The sign-in screen shows in place of the list.

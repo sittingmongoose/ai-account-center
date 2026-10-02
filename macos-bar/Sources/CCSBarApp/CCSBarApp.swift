@@ -16,6 +16,12 @@ enum CCSBarMain {
     if arguments.count == 4, arguments[1] == "--check-native-packs" {
       PreviewRenderer.checkNativePacks(input: arguments[2], output: arguments[3])
     }
+    if arguments.count == 3, arguments[1] == "--check-meter-geometry" {
+      PreviewRenderer.checkMeterGeometry(input: arguments[2])
+    }
+    if arguments.count == 2, arguments[1] == "--check-menu-bar-prefs" {
+      PreviewRenderer.checkMenuBarPrefs()
+    }
     if arguments.count == 3, arguments[1] == "--self-test" {
       PanelSelfTest.run(input: arguments[2])
     }

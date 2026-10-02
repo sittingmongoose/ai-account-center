@@ -51,8 +51,9 @@ and a footer that floats over the list (Codex auto-switch and threshold, Dashboa
 - **Details.** Clicking anywhere on an account or provider row opens its details popover (every window with its exact
   reset, balances and expiries, and Activate or Active). Nested buttons act on their own and never open details.
 - **Settings** opens inside the panel, sliding over the list: the gear toggles it, the glass X and Escape close it.
-  It holds Appearance (Light / Dark / Auto, stored on this Mac), the connection, what the menu bar shows (the active
-  Codex or Antigravity account, or the logo only; % left or % used), the open shortcut, Launch at login, read-only
+  It holds Appearance (Light / Dark / Auto, stored on this Mac), the connection, the Menu bar group (any provider in
+  the data, or Nothing for the icon alone; the Claude account; Used or Remaining of the account's 5-hour window, else
+  its weekly one; Codex and Antigravity follow the active account), the open shortcut, Launch at login, read-only
   facts from the dashboard and About. Connection reads "Paired as **Mac tray**, last synced ...", the computer and the
   saved address, and "This connection: <address>, trusted local network" (or "not trusted") from the dashboard's
   public `GET /api/auth/check`, read when Settings opens, so the owner can confirm once that the home VPN counts.
@@ -119,6 +120,8 @@ swift run ccs-bar-check                                  # offline core and cont
 export AAC_ASSETS_DIR="$PWD/Resources/Assets"            # unbundled runs read artwork from the source tree
 .build/release/CCSBar --check-native-tooltips Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --check-native-packs Tests/Fixtures/tray-concept-preview.json /tmp/packs.png
+.build/release/CCSBar --check-meter-geometry Tests/Fixtures/tray-concept-preview.json
+.build/release/CCSBar --check-menu-bar-prefs
 .build/release/CCSBar --self-test Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --toggle-test Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --check-signin                     # every sign-in state read back on screen, then every flow
@@ -131,7 +134,12 @@ python3 Scripts/migration_check.py
 ```
 
 - `--check-native-tooltips` checks every icon control's help tag, the full-row Details targets, that nested controls
-  are never the row, and the Selected-row alignment within 0.5 pt.
+  are never the row, and the Selected-row alignment within 0.5 pt at its expected x, with every slot's content fitting
+  the slot.
+- `--check-meter-geometry` checks every rendered meter against its own track's laid-out width: the fill is the reading
+  within 0.5 pt, ticks sit at 25/50/75, and the notch sits at the switch threshold.
+- `--check-menu-bar-prefs` checks the menu-bar pickers persist on this Mac, earlier stored values migrate, and fresh
+  defaults keep today's behaviour. It uses a throwaway suite and leaves no preferences behind.
 - `--self-test` opens the real glass panel from a fixture (no sign-in, no network): status item and reading, the open
   shortcut, the glass panel under the menu bar, gear and Escape for Settings, relaunch reopen, Appearance, a reopen
   during the close fade, full-row Details from the panel and Escape closing it first, the Carbon hot-key event

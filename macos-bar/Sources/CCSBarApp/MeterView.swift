@@ -31,8 +31,10 @@ struct CountingPercent: View, Animatable {
 }
 
 /// The 6 pt track with quarter ticks, the severity fill, an optional auto-switch notch and an
-/// overage end cap that grows into the meter's reserved gutter.
+/// overage end cap that grows into the meter's reserved gutter. Every horizontal measure derives from
+/// the track's actual laid-out width, so the meter stays accurate at any column width.
 struct MeterTrack: View {
+  let key: String
   let shown: Double?
   let severity: MeterSeverity
   var notch: Double? = nil
@@ -52,14 +54,19 @@ struct MeterTrack: View {
           Capsule().strokeBorder(palette.label4, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
         } else {
           Capsule().fill(hovered ? palette.trackHover : palette.track)
+          // Ticks and the notch sit on leading padding, not offset: offset is invisible to the
+          // alignment probes, while the pixels are identical either way.
           ForEach([0.25, 0.5, 0.75], id: \.self) { mark in
-            Rectangle().fill(palette.tick).frame(width: 1, height: 4).offset(x: width * mark)
+            Rectangle().fill(palette.tick).frame(width: 1, height: 4)
+              .alignmentProbe("meter|\(key)|tick\(Int(mark * 100))")
+              .padding(.leading, width * mark)
           }
           let colors = palette.fill(severity)
           Capsule()
             .fill(LinearGradient(colors: [colors.start, colors.end], startPoint: .leading, endPoint: .trailing))
             .frame(width: max(0, width * TrayMotion.fillFraction(shown)))
             .opacity((shown ?? 0) > 0 ? 1 : 0)
+            .alignmentProbe("meter|\(key)|fill")
           if let shown, shown > 100 {
             Capsule().fill(palette.over)
               .frame(width: min(8, width * (shown - 100) / 100) + 3)
@@ -69,10 +76,12 @@ struct MeterTrack: View {
         if let notch {
           RoundedRectangle(cornerRadius: 1).fill(palette.label)
             .frame(width: 2, height: 12)
-            .offset(x: width * min(100, max(0, notch)) / 100 - 1)
+            .alignmentProbe("meter|\(key)|notch")
             .opacity(notchOpacity)
+            .padding(.leading, width * min(100, max(0, notch)) / 100 - 1)
         }
       }
+      .alignmentProbe("meter|\(key)|track")
     }
     .frame(height: 6)
   }
@@ -110,7 +119,7 @@ struct MeterView: View {
       let severity = MeterSeverity.of(target)
       VStack(alignment: .leading, spacing: 0) {
         top(palette, severity)
-        MeterTrack(shown: target == nil ? nil : (shown ?? target), severity: severity, notch: target == nil ? nil : notch,
+        MeterTrack(key: key, shown: target == nil ? nil : (shown ?? target), severity: severity, notch: target == nil ? nil : notch,
           notchOpacity: notchOpacity, hovered: hovered, dashed: target == nil)
           .padding(.top, labelText == nil ? 6 : 5)
         if labelText != nil { foot(palette).padding(.top, 4) }
