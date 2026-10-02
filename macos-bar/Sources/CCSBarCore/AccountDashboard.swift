@@ -9,12 +9,17 @@ public struct AccountDashboard: Decodable, Sendable {
   /// Antigravity's own automatic-switching policy (thresholdUsedPercent is % USED). A missing or
   /// malformed value is ignored rather than failing the whole dashboard.
   public let antigravityAutoSwitch: AntigravityAutoSwitch?
-  /// Providers hidden in the dashboard's Accounts & Settings. Honoured when the DTO carries them,
-  /// either as a top-level `hiddenProviders` array or inside `settings`; empty otherwise.
+  /// Providers hidden on the dashboard ("Show on dashboard" off). The trays only report them: the dashboard and
+  /// the trays have independent switches (Jared, 2026-10-02), so this list hides nothing here.
   public let hiddenProviders: Set<String>
+  /// Providers hidden in the trays ("Show in tray" off): `providers[].trayVisible == false`, or a provider in
+  /// `settings.trayHiddenProviders`. A missing field means visible.
+  public let trayHiddenProviders: Set<String>
+  /// The dashboard's own provider order and labels, when it sends them (`providers[]`).
+  public let providers: [DashboardProvider]
 
   private enum CodingKeys: String, CodingKey {
-    case schemaVersion, updatedAt, accounts, codexAutoSwitch, settings, antigravityAutoSwitch, hiddenProviders
+    case schemaVersion, updatedAt, accounts, codexAutoSwitch, settings, antigravityAutoSwitch, hiddenProviders, providers
   }
 
   public init(from decoder: Decoder) throws {
@@ -28,12 +33,20 @@ public struct AccountDashboard: Decodable, Sendable {
     antigravityAutoSwitch = antigravity?.isValid == true ? antigravity : nil
     let topLevel = (try? container.decodeIfPresent([String].self, forKey: .hiddenProviders)) ?? nil
     hiddenProviders = Set((topLevel ?? []) + (settings?.hiddenProviders ?? []))
+    // One malformed provider entry never fails the dashboard: the list is read entry by entry.
+    let rawProviders = (try? container.decodeIfPresent([FailableProvider].self, forKey: .providers)) ?? nil
+    providers = (rawProviders ?? []).compactMap(\.value)
+    trayHiddenProviders = Set(providers.filter { $0.trayVisible == false }.map(\.id) + (settings?.trayHiddenProviders ?? []))
   }
 
-  /// Accounts the trays show: every account whose provider is not hidden on the dashboard.
+  /// Accounts the trays show: every account whose provider is shown in the tray and that is not hidden itself
+  /// (`accounts[].hidden`).
   public var visibleAccounts: [DashboardAccount] {
-    hiddenProviders.isEmpty ? accounts : accounts.filter { !hiddenProviders.contains($0.provider) }
+    accounts.filter { !trayHiddenProviders.contains($0.provider) && $0.hidden != true }
   }
+
+  /// Accounts hidden one by one in the dashboard (`accounts[].hidden`).
+  public var hiddenAccounts: [DashboardAccount] { accounts.filter { $0.hidden == true } }
 
   /// Codex Activate is offered for an inactive saved profile while no automatic switch is running.
   public func canActivateCodex(_ account: DashboardAccount) -> Bool {
@@ -51,17 +64,35 @@ public struct AccountDashboard: Decodable, Sendable {
 public struct AccountRefreshSettings: Decodable, Sendable {
   public let refreshIntervalSeconds: Int
   public let hiddenProviders: [String]?
+  public let trayHiddenProviders: [String]?
   public var validatedInterval: TimeInterval {
     TimeInterval((30...3600).contains(refreshIntervalSeconds) ? refreshIntervalSeconds : 60)
   }
 
-  private enum CodingKeys: String, CodingKey { case refreshIntervalSeconds, hiddenProviders }
+  private enum CodingKeys: String, CodingKey { case refreshIntervalSeconds, hiddenProviders, trayHiddenProviders }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     refreshIntervalSeconds = try container.decode(Int.self, forKey: .refreshIntervalSeconds)
     hiddenProviders = (try? container.decodeIfPresent([String].self, forKey: .hiddenProviders)) ?? nil
+    trayHiddenProviders = (try? container.decodeIfPresent([String].self, forKey: .trayHiddenProviders)) ?? nil
   }
+}
+
+/// One entry of the dashboard's `providers[]` (CLIENT API SHEET 4.4), only what the trays read.
+public struct DashboardProvider: Decodable, Sendable, Equatable {
+  public let id: String
+  public let label: String?
+  public let order: Int?
+  /// Shown on the dashboard. The trays do not follow it.
+  public let visible: Bool?
+  /// Shown in the trays; missing means shown.
+  public let trayVisible: Bool?
+}
+
+private struct FailableProvider: Decodable {
+  let value: DashboardProvider?
+  init(from decoder: Decoder) throws { value = try? DashboardProvider(from: decoder) }
 }
 
 /// Antigravity automatic switching as the dashboard reports it (Ubuntu only).
@@ -107,6 +138,8 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   public let isActive: Bool
   public let windows: [AccountQuotaWindow]
   public let capabilities: AccountCapabilities
+  /// Hidden one by one in the dashboard (`accounts[].hidden`): display only, so the trays leave it out.
+  public let hidden: Bool?
 
   public var identity: String { email ?? label }
   public var canOpenOnMac: Bool {
@@ -156,6 +189,8 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
   public let sampledAt: String?
   /// Antigravity quota pool this window belongs to, exactly as the adapter reported it.
   public let poolId: String?
+  /// F6 from the dashboard: present (always true) when `resetAt` has passed and the reading was sampled before it.
+  public let resetPassed: Bool?
   public var id: String { key }
 
   public var clampedUsedPercent: Double? {

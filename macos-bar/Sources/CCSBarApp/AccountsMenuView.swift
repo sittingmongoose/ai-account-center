@@ -130,7 +130,9 @@ struct AccountsMenuView: View {
   @State private var heights: (header: CGFloat, list: CGFloat, overlay: CGFloat, footer: CGFloat) = (0, 0, 0, 0)
   @State private var showAutoInfo = false
 
-  private var open: OpenContext { state.open }
+  /// After a sign-in hand-off the list uses the first-open entrance (every meter sweeps from 0); otherwise the
+  /// panel's own open.
+  private var open: OpenContext { model.listEntrance ?? state.open }
   private var detailHeight: CGFloat { min(560, max(260, state.maxHeight - 80)) }
 
   var body: some View {
@@ -141,12 +143,19 @@ struct AccountsMenuView: View {
           .background(GeometryReader { Color.clear.preference(key: HeaderHeightKey.self, value: $0.size.height) })
         ZStack(alignment: .top) {
           if model.needsConnection {
-            ConnectView(model: model)
+            // The sign-in screen replaces the list; the header and the footer stay. It leaves with a fade and an
+            // 8 pt lift while the list loads in underneath.
+            SignInView(model: model.signIn)
+              .offset(x: state.settingsOpen ? -28 : 0)
               .opacity(state.settingsOpen ? 0 : 1)
               .allowsHitTesting(!state.settingsOpen)
+              .transition(state.reduceMotion ? .opacity
+                : .asymmetric(insertion: .opacity, removal: .opacity.combined(with: .offset(y: -8))))
+              .zIndex(1)
           } else {
             PanelScroll {
               list(palette)
+                .id(model.listGeneration)
                 .background(GeometryReader { Color.clear.preference(key: ListHeightKey.self, value: $0.size.height) })
             }
             .scrollEdgeEffectStyle(.soft, for: .bottom)
@@ -211,8 +220,10 @@ struct AccountsMenuView: View {
 
   @ViewBuilder private func status(_ palette: TrayPalette) -> some View {
     Group {
-      if model.needsConnection {
-        Text("Not connected")
+      if let flash = model.statusFlash {
+        Text(flash)
+      } else if model.needsConnection {
+        Text(model.signIn.statusText)
       } else if model.isRefreshing && model.dashboard == nil {
         Text("Loading accounts")
       } else if model.isRefreshing {
@@ -233,18 +244,23 @@ struct AccountsMenuView: View {
   }
 
   private var statusHelp: String {
+    if model.needsConnection {
+      return model.signIn.repair ? "Re-pairing: the current device key keeps working until the new one is saved"
+        : "\(model.signIn.statusText): usage appears after this tray is paired"
+    }
     guard let dashboard = model.dashboard else { return "" }
     var text = "Updated \(TrayFormat.relative(AccountFormatting.date(dashboard.updatedAt))). Every reading is the dashboard's sample."
-    if !dashboard.hiddenProviders.isEmpty {
-      text += " Hidden on the dashboard: \(dashboard.hiddenProviders.sorted().map(ProviderMark.name).joined(separator: ", "))."
+    if !dashboard.trayHiddenProviders.isEmpty {
+      text += " Hidden in the tray: \(dashboard.trayHiddenProviders.sorted().map(ProviderMark.name).joined(separator: ", "))."
     }
     return text
   }
 
   // MARK: List
 
+  /// Every provider sits on its own platter, `sectionGap` apart, so the panel's glass divides them.
   private func list(_ palette: TrayPalette) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: TrayMetrics.sectionGap) {
       if let message = model.message {
         HStack(alignment: .top, spacing: 8) {
           Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(palette.warn)
@@ -266,15 +282,12 @@ struct AccountsMenuView: View {
         }
         let others = groups.filter { !sectionIDs.contains($0.id) }
         if !others.isEmpty {
-          VStack(spacing: 0) {
+          VStack(spacing: TrayMetrics.sectionGap) {
             ForEach(Array(others.enumerated()), id: \.element.id) { index, group in
-              if index > 0 {
-                Rectangle().fill(palette.separator).frame(height: 0.5).padding(.leading, 44).padding(.trailing, 8)
-              }
               ProviderRow(model: model, group: group, open: open, block: 4 + index, maxDetailHeight: detailHeight)
+                .sectionPlatter()
             }
           }
-          .groupPlatter()
           .modifier(Entrance(index: 4, context: open))
         }
         if dashboard.visibleAccounts.isEmpty {
@@ -295,8 +308,12 @@ struct AccountsMenuView: View {
   private func accountSection(_ accounts: [DashboardAccount], provider: String) -> some View {
     let layout = SectionLayout.make(provider, accounts: accounts)
     let activeID = accounts.first(where: \.isActive)?.id
-    return VStack(alignment: .leading, spacing: 4) {
+    // The header and its rows share one platter. The value animations sit outside the platter, as they did
+    // when it held only the rows, so it still grows with a switch confirmation; the header keeps its own
+    // unanimated update when the active account changes, as when it sat above the platter.
+    return VStack(alignment: .leading, spacing: 2) {
       SectionHeader(model: model, layout: layout, accounts: accounts)
+        .animation(nil, value: activeID)
       VStack(spacing: 0) {
         ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
           if index > 0 {
@@ -327,11 +344,11 @@ struct AccountsMenuView: View {
           }
         }
       }
-      .groupPlatter()
-      .animation(state.reduceMotion ? nil : .trayValue(duration: TrayMotion.platterDuration), value: activeID)
-      .animation(.trayValue(duration: 0.3), value: model.pendingCodexSwitch?.id)
-      .animation(.trayValue(duration: 0.3), value: model.pendingAntigravitySwitch?.id)
     }
+    .sectionPlatter()
+    .animation(state.reduceMotion ? nil : .trayValue(duration: TrayMotion.platterDuration), value: activeID)
+    .animation(.trayValue(duration: 0.3), value: model.pendingCodexSwitch?.id)
+    .animation(.trayValue(duration: 0.3), value: model.pendingAntigravitySwitch?.id)
   }
 
   // MARK: Footer
@@ -339,10 +356,11 @@ struct AccountsMenuView: View {
   @ViewBuilder private func footer(_ palette: TrayPalette) -> some View {
     GlassEffectContainer(spacing: 8) {
       HStack(spacing: 8) {
-        if let status = model.dashboard?.codexAutoSwitch {
+        if model.needsConnection {
+          Text(model.signIn.footNote).font(.system(size: 12)).foregroundStyle(palette.label2)
+            .contentTransition(.opacity)
+        } else if let status = model.dashboard?.codexAutoSwitch {
           codexCluster(status, palette)
-        } else if model.needsConnection {
-          Text("Usage appears after this Mac is connected").font(.system(size: 12)).foregroundStyle(palette.label2)
         }
         Spacer(minLength: 8)
         if !model.needsConnection {

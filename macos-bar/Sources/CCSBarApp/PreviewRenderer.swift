@@ -15,6 +15,8 @@ enum PreviewRenderer {
     var wallpaper = true
     var details: String?
     var connect = false
+    /// One sign-in state, rendered alone (`--signin=wrong-password`).
+    var signIn: String?
     /// Accessibility display settings, simulated in the render only (the Mac's own settings are untouched).
     var reduceTransparency = false
     var increaseContrast = false
@@ -27,7 +29,8 @@ enum PreviewRenderer {
         if argument == "--plain" { wallpaper = false }
         if argument.hasPrefix("--width="), let value = Double(argument.dropFirst(8)) { width = CGFloat(value) }
         if argument.hasPrefix("--details=") { details = String(argument.dropFirst(10)) }
-        if argument == "--connect" { connect = true }
+        if argument == "--connect" { connect = true; signIn = signIn ?? "first-run" }
+        if argument.hasPrefix("--signin=") { signIn = String(argument.dropFirst(9)) }
         if argument == "--reduce-transparency" { reduceTransparency = true }
         if argument == "--increase-contrast" { increaseContrast = true }
       }
@@ -45,6 +48,14 @@ enum PreviewRenderer {
     NSApplication.shared.appearance = appearance
     TrayFormat.referenceNow = AccountFormatting.date(dashboard.updatedAt)
     let model = AccountsViewModel(preview: dashboard)
+    if options.settings, let example = URL(string: "http://192.168.1.20:3000") {
+      // Settings shows Connection as a paired tray: an example key, never a saved one.
+      let check = try? JSONDecoder().decode(AuthCheck.self, from: Data("""
+        {"accessMode":"login","secureTransport":false,"trustedLocalNetwork":true,"connection":{"peer":"192.168.1.23","trusted":true}}
+        """.utf8))
+      model.previewPaired(BarConnection(baseURL: example, username: "owner", deviceId: "dev_0000000000000001",
+        deviceToken: "aacd_" + String(repeating: "x", count: 43), installId: UUID().uuidString, pairedAt: dashboard.updatedAt), check: check)
+    }
     let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard, persist: false)
     let state = PanelState()
     state.staticRender = true
@@ -104,17 +115,36 @@ enum PreviewRenderer {
     return host
   }
 
-  private static func connectHost(options: Options) throws -> NSView {
+  /// The sign-in screen alone, in one state: inside the full panel its text fields move the content into
+  /// window-server layers that an offscreen render cannot read.
+  private static func signInHost(options: Options) throws -> NSView {
+    guard let state = SignInState(rawValue: options.signIn ?? "first-run") else { throw BarClientError.decoding }
+    let model = AccountsViewModel(previewWithoutConnection: true)
+    let address = URL(string: ProcessInfo.processInfo.environment["AAC_PREVIEW_ADDRESS"] ?? "http://192.168.1.20:3000")
+    let note: SignedOutNote? = [.signedOut, .signedOutAll, .expired].contains(state)
+      ? SignedOutNote(reason: state == .expired ? "device_expired" : "device_revoked", at: ISO8601DateFormatter().string(from: Date()),
+        revokedReason: state == .signedOutAll ? "revoke-all" : state == .expired ? "expired" : "dashboard", revokedBy: "owner")
+      : nil
+    model.signIn.lastSyncedAt = Date().addingTimeInterval(-34 * 60)
+    // State 4's example is a public name (the reserved example.net), as in the concept.
+    let shown = state == .notLocal ? URL(string: "http://home.example.net:3000") : address
+    model.signIn.preview(state, verified: state == .firstRun ? nil : shown, username: state == .firstRun ? "" : "owner", note: note)
+    return try signInHost(model: model.signIn, appearance: options.appearance, width: options.width)
+  }
+
+  /// A live sign-in model, as it is right now (the end-to-end run renders the screens it reached).
+  static func signInHost(model: SignInModel, appearance: String, width: CGFloat = 760) throws -> NSView {
     NSApplication.shared.setActivationPolicy(.prohibited)
-    let appearance = NSAppearance(named: options.appearance == "dark" ? .darkAqua : .aqua)
-    NSApplication.shared.appearance = appearance
-    let root = ConnectView(model: AccountsViewModel(previewWithoutConnection: true)).frame(width: options.width)
+    let look = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+    NSApplication.shared.appearance = look
+    let root = SignInView(model: model).frame(width: width)
       .background(PreviewGlass())
       .environment(\.trayStaticRender, true)
+      .modifier(PreviewActiveControls(enabled: true))
     let host = NSHostingView(rootView: root)
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: options.width, height: 600), styleMask: .borderless,
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: SignInView.bodyHeight), styleMask: .borderless,
       backing: .buffered, defer: false)
-    window.appearance = appearance
+    window.appearance = look
     window.contentView = host
     window.setFrameOrigin(NSPoint(x: -30_000, y: -30_000))
     window.orderFrontRegardless()
@@ -124,6 +154,25 @@ enum PreviewRenderer {
     host.frame = NSRect(origin: .zero, size: size)
     settle(host)
     return host
+  }
+
+  /// Renders a view to a PNG over the baked glass (renders are checked, then deleted).
+  static func writePNG(_ host: NSView, to output: String) throws {
+    let rep = try snapshot(host)
+    guard let png = rep.representation(using: .png, properties: [:]) else { throw BarClientError.decoding }
+    try png.write(to: URL(fileURLWithPath: output), options: .atomic)
+  }
+
+  /// The text a render shows, read back with on-device text recognition.
+  static func recognizedText(_ host: NSView) throws -> [String] {
+    let rep = try snapshot(host)
+    guard let image = rep.cgImage else { return [] }
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.recognitionLanguages = ["en-US"]
+    request.usesLanguageCorrection = false
+    try VNImageRequestHandler(cgImage: image).perform([request])
+    return request.results?.compactMap { $0.topCandidates(1).first?.string } ?? []
   }
 
   private static func settle(_ view: NSView) {
@@ -143,10 +192,8 @@ enum PreviewRenderer {
       let host: NSView
       if let id = options.details {
         host = try detailsHost(dashboard, accountID: id, options: options)
-      } else if options.connect {
-        // The first-run connect screen alone: inside the full panel its text fields move the content into
-        // window-server layers that an offscreen render cannot read.
-        host = try connectHost(options: options)
+      } else if options.signIn != nil {
+        host = try signInHost(options: options)
       } else {
         host = Self.host(dashboard, options: options).0
       }
@@ -203,7 +250,7 @@ enum PreviewRenderer {
       NSGraphicsContext.restoreGraphicsState()
       guard let png = pixels.representation(using: .png, properties: [:]) else { throw BarClientError.decoding }
       try png.write(to: URL(fileURLWithPath: output), options: .atomic)
-      let flags = [options.settings ? "settings" : nil, options.reduceTransparency ? "reduce transparency" : nil,
+      let flags = [options.settings ? "settings" : nil, options.signIn.map { "sign-in \($0)" }, options.reduceTransparency ? "reduce transparency" : nil,
         options.increaseContrast ? "increase contrast" : nil].compactMap { $0 }
       print("Rendered isolated accounts preview (\(([options.appearance] + flags).joined(separator: ", ")), \(Int(size.width))x\(Int(size.height)) pt).")
       exit(0)

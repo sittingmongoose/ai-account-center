@@ -103,6 +103,10 @@ struct AccountRow: View {
   }
 
   private func meta(_ palette: TrayPalette) -> Text {
+    // A running Claude Open takes the row's secondary line, in the row's own secondary-text style, until it ends.
+    if account.provider == "claude", let progress = model.openProgress[account.id] {
+      return Text(verbatim: progress.text)
+    }
     if account.status == "needs_sign_in" {
       let needed = Text(verbatim: "Sign-in needed").foregroundColor(palette.warnText).fontWeight(.semibold)
       return Text("\(needed) · \(TrayFormat.platformName(account.platform))")
@@ -236,11 +240,14 @@ struct ClaudeOpenPair: View {
         HStack(spacing: 0) {
           ForEach(platforms, id: \.self) { platform in
             let name = platform == "mac" ? "Mac" : "Windows"
-            let enabled = model.busyAction == nil && !model.isRefreshing
+            let running = model.openProgress[account.id]
+            let enabled = model.busyAction == nil && !model.isRefreshing && running?.running != true
             let action = { model.openClaude(account, platform: platform) }
             Button(action: action) {
               ZStack {
-                if model.busyAction == "\(account.id)|\(platform)" { ProgressView().controlSize(.mini) }
+                if model.busyAction == "\(account.id)|\(platform)" || running?.running == true && running?.platform == platform {
+                  ProgressView().controlSize(.mini)
+                }
                 else { PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary) }
               }
               .frame(width: 29, height: 28)
@@ -290,8 +297,10 @@ struct SectionHeader: View {
           }
         }
       }
-      .padding(.leading, TrayMetrics.rowLeading + TrayMetrics.groupInset)
-      .padding(.trailing, TrayMetrics.rowTrailing + TrayMetrics.groupInset)
+      // Inside the section platter, which adds the 4 pt group inset: the captions stay over their meters.
+      .padding(.leading, TrayMetrics.rowLeading)
+      .padding(.trailing, TrayMetrics.rowTrailing)
+      .padding(.top, TrayMetrics.sectionHeaderTop)
       .frame(minHeight: 22)
     }
   }
@@ -307,7 +316,7 @@ struct SectionHeader: View {
 
   private func title(_ palette: TrayPalette) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 6) {
-      Text(ProviderMark.name(layout.provider)).font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label)
+      Text(ProviderMark.name(layout.provider)).font(.system(size: 14, weight: .semibold)).foregroundStyle(palette.label)
       Text("\(accounts.count)").font(.system(size: 12)).monospacedDigit().foregroundStyle(palette.label2)
       if layout.switchable { meta(palette) }
     }.lineLimit(1)

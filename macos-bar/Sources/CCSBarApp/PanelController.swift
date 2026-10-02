@@ -77,7 +77,10 @@ final class PanelController: NSObject, NSWindowDelegate {
     let size = label.fittingSize
     statusItem.length = ceil(size.width)
     label.frame = NSRect(x: 0, y: (button.bounds.height - size.height) / 2, width: ceil(size.width), height: size.height)
-    button.toolTip = model.menuBarReading(prefs).map { "AI Account Center · \($0.detail)" } ?? "AI Account Center"
+    // Signed out or not paired: the logo alone, and the help tag says so (section 9).
+    let signedOut = model.needsConnection && !model.signIn.repair
+    button.toolTip = model.menuBarReading(prefs).map { "AI Account Center · \($0.detail)" }
+      ?? (signedOut ? "AI Account Center · \(model.signIn.menuBarHelp)" : "AI Account Center")
   }
 
   @objc private func statusItemClicked(_ sender: Any?) { toggle() }
@@ -93,6 +96,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     model.pendingCodexSwitch = nil
     model.pendingAntigravitySwitch = nil
     state.settingsOpen = false
+    model.panelOpened()
     var context = OpenContext()
     context.firstOpen = !model.hasOpenedThisSession
     context.from = model.lastShown
@@ -153,11 +157,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
   }
 
-  /// Escape closes a popover first, then stops a running connection check (nothing is saved), then closes Settings,
-  /// then an unanswered switch confirmation, then the panel.
+  /// Escape closes a popover first, then stops a running address check or pair (nothing is saved, and a key the
+  /// dashboard already issued is revoked), then closes Settings, then an unanswered switch confirmation, then the panel.
   func cancel() {
     if popoverShown { state.popoverDismissal += 1 }
-    else if model.checkingConnection { model.cancelConnectionCheck() }
+    else if model.signIn.active && model.signIn.cancelRunning() {}
     else if state.settingsOpen { state.setSettings(false) }
     else if model.pendingCodexSwitch != nil { model.cancelCodexSwitch() }
     else if model.pendingAntigravitySwitch != nil { model.cancelAntigravitySwitch() }
@@ -244,9 +248,20 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   private func installDismissMonitors() {
     removeDismissMonitors()
-    // A click in another app or on the desktop closes the panel, like a menu.
-    if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] _ in
-      Task { @MainActor in self?.close() }
+    // A click in another app or on the desktop closes the panel, like a menu. A press on our own
+    // status-item button is not an outside click: the menu bar lives in another process, so this
+    // monitor sees the press before the button action runs. If it closed first, the action would see
+    // a closed panel and reopen it, and the icon could open the panel but never close it.
+    if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
+      let location = NSEvent.mouseLocation
+      let type = event.type
+      Task { @MainActor in
+        guard let self else { return }
+        let buttonActs = type == .leftMouseDown || type == .rightMouseDown
+        if !StatusItemClick.isOutsideClick(at: CGPoint(x: location.x, y: location.y),
+          buttonFrame: self.statusButtonFrame, buttonActs: buttonActs) { return }
+        self.close()
+      }
     }) { monitors.append(monitor) }
     // Escape in the panel (only while it is open; the monitor is removed with it).
     if let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
@@ -262,6 +277,14 @@ final class PanelController: NSObject, NSWindowDelegate {
       object: nil, queue: .main) { [weak self] _ in
       Task { @MainActor in self?.close() }
     })
+  }
+
+  /// Our status-item button's frame in screen coordinates (.zero when it has no window yet,
+  /// which dismisses as before).
+  private var statusButtonFrame: CGRect {
+    guard let button = statusItem.button, let window = button.window else { return .zero }
+    let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
+    return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
   }
 
   private func removeDismissMonitors() {

@@ -5,13 +5,16 @@ The macOS menu bar app in [AI Account Center](https://github.com/sittingmongoose
 and follows the AI Account Center tray design shared with the Windows tray: the same order, data rules and active-account indicator.
 
 The menu-bar panel is one macOS 27 Liquid Glass surface: a regular `NSGlassEffectView` (20 pt corners) under
-the status item, with content rows on translucent group platters and glass controls (SwiftUI `glassEffect`,
-`GlassEffectContainer`, `glassEffectUnion`, a materializing Settings close button). Under Reduce Transparency the
-system glass turns opaque and the panel's own fills switch to opaque system colours; Increase Contrast adds borders.
+the status item, with content on translucent platters and glass controls (SwiftUI `glassEffect`,
+`GlassEffectContainer`, `glassEffectUnion`, a materializing Settings close button). Every provider has its own
+platter (Claude, Codex and Antigravity hold their header and rows; each other provider holds its row), with a
+hairline edge and 12 pt of panel glass between platters, so the providers read as separate blocks over any
+wallpaper. Under Reduce Transparency the system glass turns opaque and the panel's own fills switch to opaque system
+colours; Increase Contrast adds borders.
 Text is the system font (SF Pro) with tabular digits, and every percent sign is part of its number's run.
 
 The layout and order are today's: header (Apex Soft mark, name, "9 of 9 reporting · cached · updated 3:15 PM", menu);
-Claude; Codex; Antigravity; the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go) as one group;
+Claude; Codex; Antigravity; the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go) in that order;
 and a footer that floats over the list (Codex auto-switch and threshold, Dashboard, Refresh, Settings).
 
 - **Usage is never invented.** A missing reading reads "Unavailable" (or "Not reported yet"), never 0. Values keep at
@@ -34,8 +37,10 @@ and a footer that floats over the list (Codex auto-switch and threshold, Dashboa
   confirmation listing them; only "Stop, switch, restart" sends the one-use token, once. With two accounts the section
   header carries Antigravity's own auto-switch and threshold (percent used); it can be turned on once the shared quota
   pool has been chosen in the dashboard.
-- **Hidden providers.** Providers hidden in the dashboard's Accounts & Settings are left out of the panel when the
-  dashboard DTO carries them (`hiddenProviders`, top level or inside `settings`); otherwise every provider shows.
+- **Hidden providers and accounts.** The tray follows the dashboard's "Show in tray" switch, which is independent of
+  "Show on dashboard": a provider with `providers[].trayVisible: false` (or listed in `settings.trayHiddenProviders`) is
+  left out of the panel, a missing field means visible, and a provider hidden only on the dashboard stays in the tray.
+  An account hidden one by one (`accounts[].hidden`) is left out too. Settings › From the dashboard lists both.
 - **Meters** are 6 pt tracks with quarter ticks, a severity fill (calm, warning from 80 %, critical from 95 %, and an
   overage cap above 100 %) and the auto-switch notch. Widths and numbers ease out and never pass the reading.
   Reported usage above 100 % stays in the text; only the bar is capped.
@@ -48,11 +53,40 @@ and a footer that floats over the list (Codex auto-switch and threshold, Dashboa
 - **Settings** opens inside the panel, sliding over the list: the gear toggles it, the glass X and Escape close it.
   It holds Appearance (Light / Dark / Auto, stored on this Mac), the connection, what the menu bar shows (the active
   Codex or Antigravity account, or the logo only; % left or % used), the open shortcut, Launch at login, read-only
-  facts from the dashboard and About.
+  facts from the dashboard and About. Connection reads "Paired as **Mac tray**, last synced ...", the computer and the
+  saved address, and "This connection: <address>, trusted local network" (or "not trusted") from the dashboard's
+  public `GET /api/auth/check`, read when Settings opens, so the owner can confirm once that the home VPN counts.
+  Re-pair opens the password step with Cancel; Disconnect asks inline first.
+- **Sign-in screen.** On first run, after a remote sign-out, during Re-pair and after Disconnect, a sign-in screen
+  replaces the list inside the same panel (the header and the footer stay; the body keeps one 736 pt height). It is
+  the dashboard's sign-in page at panel size: a form card as content on the glass (only its buttons are glass, with
+  one `.glassProminent` primary) and the atlas motif behind it (nine summit contours, the Apex mark, a scale bar).
+  Every state of the approved concept is built: first run (address, then password), the one-time setup code, pairing
+  in progress, "This address isn't on your local network", "Pairing is turned off for remote computers", wrong
+  password with tries left, rate limited with a countdown, unreachable and wrong address, securing this tray (the
+  upgrade from a stored password), signed out (revoked, Sign out all devices, not used for 90 days) and success with
+  the hand-off into the list. Motion: the entrance stagger, contours growing from the summit, the focus halo, the
+  7 pt decaying error shake, collapsible regions, the scale-bar sweep while busy, and a success hand-off in which the
+  list loads in with the first-open stagger and every meter sweeps from zero. Reduce Motion shows each state settled.
 
 Controls are limited to opening configured Claude profiles on Mac or Windows, safely activating native Codex and
 Antigravity profiles on the shared Ubuntu runtime, and the two automatic-switching policies. Footer controls open the
 dashboard, refresh and toggle Settings; the header menu offers Settings, About and Quit.
+
+Claude "Open on Mac" and "Open on Windows" both POST `/api/claude/desktop-profiles/:id/open` with
+`Prefer: respond-async`. A 200 is today's finished Open. A 202 turns into a read-poll of
+`GET /api/claude/desktop-profiles` once a second (every five seconds after two minutes, giving up after three), and
+the account row's secondary line shows the reported `openOperation` in its own style: "Copying history 3 of 18", then
+"Opening", then "Opened" ("Opened · copied 3 of 18" when a bounded copy opened Claude before every record was across;
+the next Open copies the rest). The profile id comes from the dashboard's own data (`capabilities.claudeProfileId`):
+the tray keeps no list of ids, and only checks that one is a plain identifier. `failed` and `blocked_uncertain` show the server's fixed sentence, or "History copy could
+not be confirmed. Claude was not opened.", which is also what a 409 `history_unconfirmed` says; three minutes without
+a terminal state says "Still working on the dashboard. Check again shortly." Those sentences go to the panel's warning
+banner, which is where every other error already shows. Both platform glyphs rest for the whole Open, so a second one
+never starts for the same account, and the POST is never repeated: not for a poll, not after an expired session, and
+never resumed after a restart. A read that fails while polling never ends the Open; the poll just tries again.
+`swift run ccs-bar-check` covers every one of these paths against mock transports, including the poll's exact cadence
+and deadline.
 
 ## Opening the panel
 
@@ -86,6 +120,9 @@ export AAC_ASSETS_DIR="$PWD/Resources/Assets"            # unbundled runs read a
 .build/release/CCSBar --check-native-tooltips Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --check-native-packs Tests/Fixtures/tray-concept-preview.json /tmp/packs.png
 .build/release/CCSBar --self-test Tests/Fixtures/tray-concept-preview.json
+.build/release/CCSBar --toggle-test Tests/Fixtures/tray-concept-preview.json
+.build/release/CCSBar --check-signin                     # every sign-in state read back on screen, then every flow
+.build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/signin.png --signin=wrong-password
 .build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/panel.png --dark [--settings]
 .build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/rt.png --dark --reduce-transparency
 python3 Scripts/migration_check.py
@@ -101,8 +138,23 @@ python3 Scripts/migration_check.py
   toggling the panel, Escape from a focused text field on the connect screen, idle CPU with the panel open and
   closed, and memory over 24 open-close cycles. It shows the panel on screen for about half a minute and leaves no
   preferences behind.
+- `--toggle-test` clicks the menu-bar icon with real synthetic mouse events from a fixture (no sign-in, no network):
+  open, close, open again, then click-outside closes, Escape closes, and the Carbon hot-key event toggles. It posts
+  its clicks through a `--click-at` helper child process and leaves no preferences behind.
+- `--check-signin` renders all 15 sign-in states in light and dark at 760 x 736 and reads each back with on-device text
+  recognition, then drives every flow (address refusals, pairing off, wrong password, pairing and hand-off, Re-pair and
+  Cancel, revoked, expired and Sign out all devices, Pair again, Disconnect, rate limit, setup code, the migration
+  from a stored password) through the real view models and `ConnectionSession` against an in-process fake dashboard.
+  No network, no real connection file, no screenshot.
+- `--e2e <sandbox address> <phase>` runs the same flows over real HTTP against a sandbox dashboard only (a port from
+  3901 to 3999, never 3000), with its tray state in `AAC_TRAY_STATE_DIR` (refused under `~/.ccs`) and the sandbox's test
+  login in `AAC_E2E_USER`, `AAC_E2E_PASSWORD` and `AAC_E2E_NEW_PASSWORD`. Phases: `trust-off`, `not-trusted`, `main`
+  (first pairing, bearer reads, a password change on the dashboard, revoke, Pair again, Re-pair, Re-pair cancelled
+  during the pair call, This connection, Disconnect), `migrate` (a fake version 1 password file) and `names` (run from
+  the packaged app's own binary against a dotted host name for the sandbox, such as `<lan address>.nip.io`: the
+  numeric-address message, before anything is sent and for a saved password connection).
 - `--render-preview` draws the panel content offscreen (`--light`, `--dark`, `--settings`, `--details=<account id or
-  provider>`, `--connect`, and `--reduce-transparency` or `--increase-contrast`, which simulate those display settings in
+  provider>`, `--signin=<state>`, and `--reduce-transparency` or `--increase-contrast`, which simulate those display settings in
   the render only). System glass is composited by the window server and never reaches an offscreen render, so previews
   bake a glass stand-in behind the real content and pin "now" to the fixture's capture time. Offscreen switches draw
   in their inactive grey; the knob's side shows the state.
@@ -115,18 +167,58 @@ python3 Scripts/migration_check.py
 
 ## Private connection
 
-Connection settings save `~/.ccs/bar/accounts-connection.json` in a private
-directory (0700) with file mode 0600. The file is not part of the source or app
-bundle. Its keys are `baseURL`, `username`, and `password`; configure them in
-Settings › Connection (or the first-run connect screen in the panel) or deploy the
-file privately. Connect and Change verify before they save: a temporary client signs in with the entered details
-and reads `GET /api/accounts/settings` with that session, and only then is the file written (same path, permissions
-and JSON, any other members kept) and the live client replaced. A wrong address, a rejected login, a timeout (15 s)
-or Cancel (or Escape) while it checks keeps the saved file and the live client, and the reason shows under the form.
-Device pairing waits for the dashboard's device-token routes. Existing saved connection files are preserved during app upgrades. The client signs in to
-`POST /api/auth/login`, retains cookies only in an ephemeral session, and sends
-the dashboard's exact Origin on mutations. It does not disable dashboard
-authentication. Failed login polling backs off for 15 minutes.
+The connection lives in `~/.ccs/bar/accounts-connection.json`, in a 0700 directory with file mode 0600, outside the
+source and app bundle; the tray refuses the file if any group or other permission bit is set. Every write creates its
+temporary file at 0600 in the same directory before anything is written to it, then renames it over the old one and
+reads it back. `AAC_TRAY_STATE_DIR` moves the whole state folder for checks and isolated end-to-end runs; the
+installed tray never sets it.
+
+**Version 2: a device key, never a password** (CONTRACT-auth-devices sections 5 to 9). The tray pairs once with
+`POST /api/auth/devices/pair` (username, password, the Mac's name, `platform: "mac"`, an install id it keeps, the app
+version), proves the new key with one `GET /api/auth/devices/me`, and only then saves
+`{ version: 2, baseURL, username, deviceId, deviceToken, installId, pairedAt }`; the password is dropped and never
+written. From then on every request carries `Authorization: Bearer <key>` and the tray never logs in; it calls only the
+dashboard's tray routes. A password change on the dashboard does nothing to the key, so the tray stays signed in.
+
+- **Plain HTTP addresses.** The app's App Transport Security allows local networking only (`NSAllowsLocalNetworking`,
+  no per-address exception), which on macOS 27.2 lets plain HTTP reach a numeric address (IPv4 or IPv6), a `.local`
+  name or a one-word name, and refuses every other host name before a request leaves the Mac. The address step
+  therefore asks for the dashboard's numeric address (such as `http://192.168.1.20:3000`) or its `.local` name when
+  given another name such as `dash.home.arpa`, and the Mac's own refusal is shown with that message, never as "Can't
+  reach that address".
+- **Trusted local network.** The dashboard stays on plain HTTP at its LAN address. Pairing works when its owner has
+  turned on "Trust this local network" and this Mac's address is in its trusted networks (the home network or the home
+  VPN). Before any password is sent, the tray resolves the address itself and refuses a public, CGNAT, link-local or
+  unknown one ("This address isn't on your local network"); then `GET /api/auth/check` decides between the password
+  step, "Pairing is turned off for remote computers" (`trustedLocalNetwork: false`) and the dashboard's own refusal
+  ("The dashboard sees this Mac at <address>").
+- **Verify before saving.** Address checks save nothing. Re-pair pairs under a new install id, because the dashboard
+  revokes an install id's old key the moment it pairs that id again. The working key and file therefore stay valid
+  until the new key has answered `devices/me` with 200 and is saved; only then is the old key revoked with itself
+  (`DELETE /api/auth/devices/me`, tried again by maintenance if the dashboard does not answer). A key the dashboard
+  issued that is never saved (no confirmation, a failed save, or Cancel or Escape while the pair call runs) is revoked
+  at once instead of being kept, and a failed save restores the file exactly. Attempts in one sign-in session share
+  one install id, so a retry replaces any key that could not be revoked; after a Cancel the next attempt takes a new
+  one.
+- **Migration from version 1.** A stored password is traded for a key by itself on launch ("Securing this tray"): the
+  version 1 file is copied to `accounts-connection.v1-rollback.json` (0600), version 2 replaces it, and the first 200
+  from `devices/me` deletes the copy. A 401 device code puts version 1 back; no answer keeps both and checks again on the
+  next poll, for at most 24 hours. A dashboard without pairing (404/405), one that refuses it (403, trust off) or no
+  answer keeps today's verified password login; the refresh path asks again after an hour, so turning on "Trust this
+  local network" later needs no restart. A key the dashboard refuses right after a migration puts version 1 back and
+  waits a day. A stored password the dashboard rejects opens the pairing screen with the username filled in.
+- **Rotation.** `devices/me` is read every six hours; once its `rotateAfter` has passed, the tray calls
+  `POST /api/auth/devices/me/rotate`, saves the new key before its first use and switches to it. A refusal keeps the
+  current key and waits an hour.
+- **Signed out.** A 401 `device_revoked`, `device_expired` or `invalid_token` deletes the key (the address, username and
+  install id stay), stops polling and shows "This tray was signed out" with the reason, and who and when if the
+  dashboard sends `revokedBy` and `revokedAt`. The menu bar shows the logo with no percentage and the help tag "Signed
+  out". Nothing retries on its own; a network error is never a sign-out. A 503 `auth_store_unavailable` keeps the key.
+- **Disconnect** calls `DELETE /api/auth/devices/me`, forgets the key and shows the first-run screen with
+  "Disconnected at ..." and the last address filled in.
+- **Older dashboards.** Without pairing, Connect falls back to today's version 1 login, verified before it is saved
+  (`POST /api/auth/login`, then `GET /api/accounts/settings` with that session; cookies only in an ephemeral session;
+  failed logins back off for 15 minutes).
 
 The accounts contract is `GET /api/accounts/dashboard?platform=mac&refresh=true`
 and schema version 1. Menu opening forces a server-backed refresh; background
