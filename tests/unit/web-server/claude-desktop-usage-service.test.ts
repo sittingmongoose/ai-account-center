@@ -198,7 +198,13 @@ describe('Claude desktop cached usage', () => {
     readHistory.mockImplementation(() => new Promise<string>((resolve) => releases.push(resolve)));
     const first = getClaudeDesktopUsage('mac');
     const second = getClaudeDesktopUsage('mac');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // One setTimeout(0) raced the manifest read when many test files share one
+    // process. Wait (bounded) for both reads, then settle once more so a third
+    // or fourth read from a broken coalescer would still be counted.
+    for (let tries = 0; readHistory.mock.calls.length < 2 && tries < 200; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(readHistory).toHaveBeenCalledTimes(2);
     expect(releases).toHaveLength(2);
     for (const release of releases) release(history([{ t: 1000, u: { fh: 4 } }]));
