@@ -36,8 +36,18 @@ public static class Motion
             completed?.Invoke(target, EventArgs.Empty);
             return;
         }
+        // A DoubleAnimation whose origin is NaN throws on its first tick on the render thread, which kills the
+        // process (the 2026-10-02 Settings crash): arrive directly instead. Only previously fatal cases land here.
+        var origin = from.HasValue && !double.IsNaN(from.Value) ? from : null;
+        if (origin is null && target is DependencyObject current && current.GetValue(property) is double nan && double.IsNaN(nan))
+        {
+            target.BeginAnimation(property, null);
+            current.SetValue(property, to);
+            completed?.Invoke(target, EventArgs.Empty);
+            return;
+        }
         var animation = new DoubleAnimation(to, Duration(milliseconds)) { EasingFunction = easing ?? Out, BeginTime = Delay(delay) };
-        if (from.HasValue) animation.From = from.Value;
+        if (origin.HasValue) animation.From = origin.Value;
         if (completed is not null) animation.Completed += completed;
         target.BeginAnimation(property, animation);
     }

@@ -133,6 +133,15 @@ public static class FixtureRender
             PressEscape(window);
             report.Checks[$"{name}_escape_then_hides_panel"] = !window.IsVisible;
 
+            // Animated Settings (the 2026-10-02 crash: the Appearance segmented thumb animated Width from
+            // NaN, which throws only with real motion on): a real gear click opens Settings, the theme
+            // segment switches (the thumb springs), the panel renders, and Escape closes it. Signed in and
+            // with two Antigravity accounts.
+            window.ApplyDashboardSample(Clone(fixture));
+            await SettingsAnimated(report, window, directory, name + "_settings_opens_animated_signed_in");
+            window.ApplyDashboardSample(Clone(twoAg));
+            await SettingsAnimated(report, window, directory, name + "_settings_opens_animated_two_antigravity");
+
             // The restyled notification-area menu (WinForms ContextMenuStrip with the Atlas renderer).
             report.Checks[$"{name}_tray_menu_styled"] = TrayMenu(Path.Combine(directory, $"tray-menu-{name}.png"));
 
@@ -155,6 +164,7 @@ public static class FixtureRender
             var overSignIn = signIn.SettingsOpen && signIn.Body.Children.IndexOf(signIn.SettingsLayer) > signIn.Body.Children.IndexOf(signIn.SignInLayer) && !signIn.SignInLayer.IsEnabled;
             PressEscape(signIn); await Settle(signIn);
             report.Checks[$"{name}_settings_opens_over_sign_in_and_returns"] = overSignIn && !signIn.SettingsOpen && signIn.SignInLayer.IsVisible && signIn.SignInLayer.IsEnabled && signIn.IsVisible;
+            await SettingsAnimated(report, signIn, directory, name + "_settings_opens_animated_sign_in");
             signIn.AllowClose = true; signIn.Close();
             window.AllowClose = true; window.Close();
         }
@@ -206,6 +216,68 @@ public static class FixtureRender
             report.Checks["platter_glides_without_overshoot"] = target > startY && ySamples.Max() <= target + 1e-6 && Math.Abs(shift.Y - target) < 0.5 && monotonic(ySamples, true) && ySamples.Distinct().Count() > 3;
         }
         finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }
+    }
+
+    /// <summary>Settings with real motion on, as on an interactive desktop (2026-10-02: opening Settings
+    /// killed the tray because the Appearance segmented thumb animated Width from NaN, which only throws when the
+    /// animation clock ticks). A real gear click opens Settings, the theme segment switches (the thumb springs),
+    /// the panel renders, and Escape closes it. Any dispatcher exception fails the check and is recorded by type
+    /// with the first line of its message (WPF animation errors name properties only, never data).</summary>
+    private static async Task SettingsAnimated(CheckReport report, MainWindow window, string directory, string key)
+    {
+        Motion.Enabled = true;
+        Exception? dispatchError = null;
+        void OnUnhandled(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs args)
+        { dispatchError ??= args.Exception; args.Handled = true; }
+        window.Dispatcher.UnhandledException += OnUnhandled;
+        try
+        {
+            try
+            {
+                window.ShowPanel();
+                await Settle(window);
+                Click(window.SettingsButton);
+                await Settle(window);
+                await Task.Delay(500);
+                await Settle(window);
+                var opened = window.SettingsOpen && window.SettingsButton.IsChecked == true;
+                var segmented = All(window.SettingsPanel).OfType<Segmented>().FirstOrDefault();
+                var previous = segmented?.Value;
+                if (segmented is not null) segmented.Select(segmented.Value == "dark" ? "light" : "dark", true);
+                await Settle(window);
+                await Task.Delay(600);
+                await Settle(window);
+                var switched = segmented is not null && previous is not null && segmented.Value != previous;
+                SavePng(window, Path.Combine(directory, $"settings-animated-{key}.png"));
+                var thumbPlaced = ThumbOnSelected(segmented, window);
+                PressEscape(window);
+                await Settle(window);
+                var closed = !window.SettingsOpen;
+                report.Checks[key] = dispatchError is null && opened && switched && thumbPlaced && closed;
+                report.Notes[key + "_parts"] = $"opened={opened} switched={switched} thumb={thumbPlaced} closed={closed} error={dispatchError is not null}";
+            }
+            catch (Exception error) { dispatchError ??= error; report.Checks[key] = false; }
+            if (dispatchError is not null)
+            {
+                var message = dispatchError.Message.Split('\n', '\r').FirstOrDefault(line => line.Length > 0) ?? "";
+                if (message.Length > 220) message = message[..220];
+                var inner = dispatchError.InnerException is null ? "" : " < " + dispatchError.InnerException.GetType().Name;
+                report.Notes[key + "_error"] = dispatchError.GetType().FullName + inner + ": " + message;
+            }
+        }
+        finally { window.Dispatcher.UnhandledException -= OnUnhandled; Motion.Enabled = false; }
+    }
+
+    /// <summary>The segmented thumb sits on a segment: as wide as its button, starting on its x.</summary>
+    private static bool ThumbOnSelected(Segmented? segmented, MainWindow window)
+    {
+        if (segmented is null) return false;
+        var thumb = All(segmented).OfType<Border>().FirstOrDefault();
+        if (thumb is null || thumb.ActualWidth <= 0) return false;
+        var thumbX = thumb.TranslatePoint(new Point(0, 0), window).X;
+        return All(segmented).OfType<Button>().Where(button => button.IsVisible)
+            .Any(button => Math.Abs(button.ActualWidth - thumb.ActualWidth) <= 1
+                && Math.Abs(button.TranslatePoint(new Point(0, 0), window).X - thumbX) <= 1);
     }
 
     /// <summary>Refreshes must not pile up theme handlers (hidden or shown), and an idle panel must not use the CPU:
