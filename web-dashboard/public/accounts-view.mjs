@@ -47,7 +47,7 @@ export const ACCOUNT_KINDS = {
     how: 'Each account is its own Claude desktop profile; open it on Mac or Windows to sign in.' },
   codex: { kind: 'device', kindLabel: 'Device-code sign-in', icon: 'code', src: 'Codex CLI device login', slots: 3, actsMin: 262,
     how: 'Device-code sign-in: approve a short code in any browser.' },
-  antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 2, actsMin: 160,
+  antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 3, actsMin: 262,
     how: 'The dashboard host runs and supervises the CLI login.' },
   cursor: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Cursor desktop app', slots: 2, actsMin: 150,
     how: 'Sign in inside the Cursor desktop app; the dashboard reads that session.' },
@@ -224,13 +224,19 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
         removeControl(provider, account, reg, entry),
       ];
     }
-    case 'cli':
+    case 'cli': {
+      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in', icon: 'login', probe: `signin-again:${account.id}` };
+      const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
+        : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
+          : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command.' });
       return [
         canSwitch || homeRow?.active
           ? action({ kind: 'switch', act: 'antigravity-activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '', probe: `activate:${account.id}` })
           : emptySlot(),
+        signin,
         removeControl(provider, account, reg, entry),
       ];
+    }
     case 'apikey': {
       if (isConsole(account)) {
         const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };

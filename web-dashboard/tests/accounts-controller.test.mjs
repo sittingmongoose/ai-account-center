@@ -356,6 +356,16 @@ test('a supervised sign-in sends the pasted code once', async () => {
   assert.match(wrong.ctl.state.flows.antigravity.error.title, /Not waiting for a code/);
 });
 
+test('Antigravity Sign in shows the terminal command the server answers', async () => {
+  const h = harness({ routes: {
+    'POST /api/accounts/antigravity%3Aprofile%3Aparty/signin-again': refusal(409, 'preflight_failed', { fallback: { kind: 'terminal', host: 'ubuntu', command: 'ai-account-center antigravity signin party' } }),
+    'GET /api/accounts/registry': { accounts: [] },
+  }, data: { accounts: [{ id: 'antigravity:profile:party', provider: 'antigravity' }], settings: {} } });
+  await h.ctl.handle('signin-again', 'antigravity:profile:party');
+  assert.equal(last(h.toasts).title, 'Sign in from a terminal');
+  assert.match(last(h.toasts).body, /ai-account-center antigravity signin party/);
+});
+
 test('API keys: add with a label, replace, and every refusal; the key never stays in the state', async () => {
   const account = { id: 'zai:acct:9f2c41d0', provider: 'zai', credential: { kind: 'aac-key', last4: 'x7Qa', fingerprint: 'sha256:0123', storedOn: 'ubuntu' } };
   const h = harness({ routes: { 'POST /api/accounts/add': { status: 201, payload: { account, check: 'ok' } }, 'GET /api/accounts/registry': { accounts: [], trash: [] } } });

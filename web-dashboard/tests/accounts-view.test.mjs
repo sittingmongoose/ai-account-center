@@ -546,7 +546,11 @@ test('Antigravity: one account shows no Activate slot, and the policy waits for 
   const r = row(vm, 'antigravity:one');
   assert.deepEqual(
     r.actions.map((a) => a.kind),
-    ['empty', 'icon']
+    ['empty', 'button', 'icon']
+  );
+  assert.deepEqual(
+    r.actions.map((a) => a.act || a.kind),
+    ['empty', 'signin-again', 'remove']
   );
   assert.equal(provider(vm, 'antigravity').ag, true);
   assert.equal(vm.ag.live, false);
@@ -575,6 +579,55 @@ test('Antigravity: one account shows no Activate slot, and the policy waits for 
   assert.equal(unknown.ag.known, false);
   assert.equal(unknown.ag.threshold, -1);
   assert.match(unknown.ag.noteStrong, /unavailable/);
+});
+
+test('Antigravity: Add, Sign in and Remove are served through the terminal fallback, never coming', () => {
+  const ag1 = account({
+    id: 'antigravity:profile:gmail',
+    provider: 'antigravity',
+    email: 'gmail@example.test',
+    capabilities: { antigravityProfileId: 'gmail' },
+  });
+  const ag2 = account({
+    id: 'antigravity:profile:party',
+    provider: 'antigravity',
+    email: 'party@example.test',
+    capabilities: { antigravityProfileId: 'party' },
+  });
+  const p = providers({
+    antigravity: {
+      signIn: { available: false, unavailableReason: 'preflight_failed' },
+      capabilities: { add: false, signInAgain: false, remove: true },
+    },
+  });
+  const r = registry([
+    reg('antigravity:profile:gmail', 'antigravity', {
+      actions: { signInAgain: true, remove: true },
+    }),
+    reg('antigravity:profile:party', 'antigravity', {
+      actions: { signInAgain: true, remove: true },
+    }),
+  ]);
+  const vm = accountsViewModel(data([ag1, ag2], { providers: p }), { now, registry: r });
+  const section = provider(vm, 'antigravity');
+  // Add is off with the terminal command, never coming; the footer reads Needs setup
+  assert.equal(section.foot[0].coming, false);
+  assert.equal(section.foot[0].enabled, false);
+  assert.match(section.foot[0].tip, /terminal on Ubuntu/);
+  assert.match(section.how, /^Needs setup: /);
+  for (const id of ['antigravity:profile:gmail', 'antigravity:profile:party']) {
+    const actions = row(vm, id).actions;
+    assert.deepEqual(
+      actions.map((a) => [a.act || a.kind, a.enabled, a.coming]),
+      [
+        ['antigravity-activate', false, false],
+        ['signin-again', true, false],
+        ['remove', true, false],
+      ]
+    );
+    assert.match(actions[1].tip, /terminal on Ubuntu/);
+  }
+  // Activate stays disabled here (no canActivate from the server): the live gate is untouched
 });
 
 test('API-key, browser and app providers: keys show their last 4, Replace key and Remove are live, sessions sign in and re-check', () => {
