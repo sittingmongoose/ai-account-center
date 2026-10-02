@@ -22,6 +22,9 @@ import urllib.request
 ORIGIN = "https://dev.meta.ai"
 CAPSULE_NAME = "muse-console-session.json"
 CACHE_NAME = "muse-console-usage.json"
+# Sidecar pin of the web user bound to the capsule (a hash of /api/auth/me
+# userId, never the id itself). Separate file: capsule and cache schemas stay.
+BINDING_NAME = "muse-console-binding.json"
 REFRESH_SECONDS = 300
 RATE_LIMIT_SECONDS = 600
 MAX_RETRY_SECONDS = 86400
@@ -210,32 +213,70 @@ def valid_team(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9]{1,32}", value) is not None
 
 
-def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=None, now=None, bound_team=None):
+def valid_hash(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def user_hash(me):
+    """SHA-256 of the portal's stable account id (auth/me userId), or None when unusable."""
+    value = me.get("userId") if isinstance(me, dict) else None
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if not isinstance(value, str) or not 0 < len(value) <= 128 or re.search(r"[\x00-\x20\x7f]", value):
+        return None
+    return hashlib.sha256(("muse-user:" + value).encode()).hexdigest()
+
+
+def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=None, now=None, bound_team=None,
+                bound_user=None, capsule_session=False, observed=None):
     """Read one team's subscription quota after binding the web session to the CLI account.
 
-    The portal email must equal the CLI email. When /api/auth/me answers without
-    a usable email (blank, missing or malformed, which proves no other account),
-    the only accepted binding is ``bound_team``: the team that an earlier
-    email-verified reading bound to this same email and plan (the private
-    capsule's teamId). The quota is that team's subscription quota, so the web
-    session must still be able to read that exact team, and its tier must still
-    equal the live CLI plan. A valid different email is always account_mismatch.
+    The portal email must equal the CLI email ("email" binding). A valid
+    different email, masked ones included, is always account_mismatch.
+
+    When /api/auth/me answers without a usable email (blank, missing or
+    malformed), the session may read only ``bound_team``, the private capsule's
+    team, which an earlier email-verified reading bound to this same email and
+    plan, and only when auth/me still names a web user (userId):
+    - "user": ``bound_user`` is the pinned hash of that user and must match;
+      another user is account_mismatch.
+    - "session": nothing is pinned yet (``bound_user`` None). Only the capsule's
+      own stored session qualifies (``capsule_session``), and it must list
+      exactly one team. Its user becomes the pin (see quota_sample).
+    Anything else, including an unreadable pin (any other ``bound_user``), is
+    identity_unavailable. The web session must still list that exact team and
+    its tier must equal the live CLI plan. A binding never reads another team.
+
+    ``observed``, when a dict, receives the binding mode and the user hash.
     """
     if not valid_email(expected_email) or not valid_plan(expected_plan):
         raise MuseError("account_mismatch")
+    if bound_team is not None and requested not in (None, bound_team):
+        # A capsule binding reads only its own team. A team switch is the
+        # email-verified path's job, so callers pass no binding for it.
+        raise MuseError("identity_unavailable")
     cookies = validate_cookies(cookies)
     client = client or PortalClient(cookies)
     me = client.get("/api/auth/me")
     actual = me.get("email") if isinstance(me, dict) else None
-    team_bound = False
+    user = user_hash(me)
     if valid_email(actual):
         if actual.strip().lower() != expected_email.strip().lower():
             raise MuseError("account_mismatch")
-    elif valid_team(bound_team) and requested in (None, bound_team):
-        requested, team_bound = bound_team, True
+        mode = "email"
+    elif not valid_team(bound_team) or user is None:
+        raise MuseError("identity_unavailable")
+    elif bound_user is None and capsule_session is True:
+        requested, mode = bound_team, "session"
+    elif valid_hash(bound_user):
+        if user != bound_user:
+            raise MuseError("account_mismatch")
+        requested, mode = bound_team, "user"
     else:
         raise MuseError("identity_unavailable")
     teams = team_rows(client.get("/api/portal/teams"))
+    if mode == "session" and len(teams) != 1:
+        raise MuseError("identity_unavailable")
     if requested is None:
         if len(teams) != 1:
             raise MuseError("choose_team", teams)
@@ -243,7 +284,7 @@ def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=N
     else:
         if not isinstance(requested, str) or requested not in {row["id"] for row in teams}:
             # Without an email, losing the verified team leaves the session unbound.
-            raise MuseError("identity_unavailable" if team_bound else "team_mismatch")
+            raise MuseError("team_mismatch" if mode == "email" else "identity_unavailable")
         selected = requested
     try:
         response = client.get("/api/portal/teams/" + selected + "/subscription-quota")
@@ -261,9 +302,11 @@ def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=N
         raise MuseError("invalid_response")
     # The portal labels as_of as its update time. Malformed or absent metadata
     # must not discard usable counters, and cached observations are never retimed.
-    observed = provider_as_of(quota.get("as_of"), now)
-    if observed is not None:
-        safe["as_of"] = observed
+    as_of = provider_as_of(quota.get("as_of"), now)
+    if as_of is not None:
+        safe["as_of"] = as_of
+    if isinstance(observed, dict):
+        observed.update(mode=mode, userHash=user)
     return selected, safe
 
 
@@ -373,6 +416,64 @@ def read_usage_state(root):
     return value
 
 
+def read_binding(root):
+    value = private_json(root, BINDING_NAME)
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {"schemaVersion", "email", "plan", "teamId", "userHash"}
+            or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+            or not valid_email(value["email"]) or not valid_plan(value["plan"])
+            or not valid_team(value["teamId"]) or not valid_hash(value["userHash"])):
+        raise MuseError("local_storage_error")
+    return value
+
+
+def pinned_user(root, email, plan, team):
+    """The pinned web user hash for this capsule binding.
+
+    None means nothing is pinned yet. False means a pin exists but is
+    unreadable or belongs to another email, plan or team, so the email-less
+    path stays closed until an email-verified reading pins this binding.
+    """
+    try:
+        value = read_binding(root)
+    except MuseError:
+        return False
+    if value is None:
+        return None
+    if value["email"].lower() != email.lower() or value["plan"] != plan or value["teamId"] != team:
+        return False
+    return value["userHash"]
+
+
+def session_values(cookies):
+    return sorted((row["name"], row["value"]) for row in cookies)
+
+
+def capsule_session(root, cookies, email, plan, team):
+    """True when ``cookies`` are exactly the session stored in the capsule for this binding."""
+    try:
+        stored, stored_team, stored_email, stored_plan = read_capsule(root)
+        presented = validate_cookies(cookies)
+    except MuseError:
+        return False
+    return (stored_team == team and stored_email.lower() == email.lower() and stored_plan == plan
+            and session_values(stored) == session_values(presented))
+
+
+def pin_user(root, email, plan, team, observed):
+    """Pin the web user after an email-verified reading or the capsule session's first one."""
+    if observed.get("mode") not in {"email", "session"} or not valid_hash(observed.get("userHash")):
+        return
+    try:
+        atomic_private_json(root, BINDING_NAME, {"schemaVersion": 1, "email": email, "plan": plan, "teamId": team,
+                                                 "userHash": observed["userHash"]})
+    except (MuseError, OSError):
+        # Best effort: the reading stands. The earlier pin, or none, stays, so
+        # the email-less path still admits only that user or the capsule session.
+        pass
+
+
 def matches(state, email, plan, team, access):
     return (state is not None and state["email"].lower() == email.lower() and state["plan"] == plan
             and (team is None or state["teamId"] == team) and state["credentialFingerprint"] == fingerprint(access))
@@ -405,16 +506,27 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
     """Persist successful observations and bounded retry state, never inferred quotas.
 
     ``bound_team`` is passed only by callers holding the private capsule binding
-    for this same email and plan; see fetch_quota.
+    for this same email and plan; see fetch_quota. The pinned web user and
+    whether ``cookies`` are the capsule's own session are read here, from
+    ``root``, never taken from the caller. A fresh sample carries ``binding``:
+    the mode fetch_quota verified ("email", "user" or "session").
     """
     from desktop_usage import normalize_muse
     from desktop_helpers import utc_now
     now = time.time() if now is None else now
     if not valid_email(expected_email) or not valid_plan(expected_plan):
         raise MuseError("account_mismatch")
+    if bound_team is not None and requested not in (None, bound_team):
+        raise MuseError("identity_unavailable")
     validate_cookies(cookies)
     with usage_lock(root):
         state = read_usage_state(root)
+        if (requested is not None and state is not None and state["teamId"] != requested
+                and matches(state, expected_email, expected_plan, None, access)
+                and state["lastError"] == "rate_limited" and state["nextRequestAt"] > now):
+            # A provider 429 limits this web session, not one team. Choosing
+            # another team waits too and keeps the first team's reading.
+            raise MuseError("rate_limited", retry_after=state["nextRequestAt"] - now)
         if not matches(state, expected_email, expected_plan, requested, access):
             state = None
         if state and state["nextRequestAt"] > now:
@@ -435,7 +547,13 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
         try:
             if identity_loader is not None:
                 identity_loader()
-            team, quota = fetch_quota(cookies, expected_email, expected_plan, requested, client, now=now, bound_team=bound_team)
+            binding = {"bound_team": bound_team}
+            if bound_team is not None:
+                binding.update(bound_user=pinned_user(root, expected_email, expected_plan, bound_team),
+                               capsule_session=capsule_session(root, cookies, expected_email, expected_plan, bound_team))
+            observed = {}
+            team, quota = fetch_quota(cookies, expected_email, expected_plan, requested, client, now=now,
+                                      observed=observed, **binding)
             if not normalize_muse({"subscription_quota": quota}):
                 raise MuseError("invalid_response")
             state = {"schemaVersion": 1, "email": expected_email, "plan": expected_plan, "teamId": team,
@@ -443,7 +561,8 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
                      "sampledAt": provider_sampled_at(quota, now) or utc_now(),
                      "nextRequestAt": now + REFRESH_SECONDS, "lastError": None}
             atomic_private_json(root, CACHE_NAME, state)
-            return state_sample(state, False)
+            pin_user(root, expected_email, expected_plan, team, observed)
+            return dict(state_sample(state, False), binding=observed.get("mode"))
         except MuseError as error:
             # Choosing a team has no quota request and no resolved cache key.
             resolved_team = requested or error.team_id
@@ -477,10 +596,11 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
 
 
 def write_capsule(root, cookies, team, email, plan):
-    # Invariant: team, email and plan come only from a sample that an
-    # email-verified portal reading produced (fresh, or the identity-bound cache
-    # it wrote). fetch_quota relies on this team binding when the portal omits
-    # the email, so never write a capsule from unverified claims.
+    # Invariant: the team, email and plan come from a CLI-bound sample, and the
+    # cookies are a session that a fresh reading verified by email or by the
+    # pinned web user (or the capsule's own session), or a pin guards them; see
+    # browser_reading. fetch_quota trusts this binding and this session when the
+    # portal omits the email, so never write a capsule from unverified claims.
     root = private_root(root)
     cookies = validate_cookies(cookies)
     if not isinstance(team, str) or not re.fullmatch(r"[0-9]{1,32}", team) or not valid_email(email) or not valid_plan(plan):
@@ -614,7 +734,14 @@ def restore_browser_sample(root, previous, now=None):
         return True
 
 
-def collect_browser(cookies, requested=None, root=None):
+def browser_reading(cookies, requested=None, root=None):
+    """Collect one browser-synced reading: (team, dashboard sample, capsule_ok).
+
+    capsule_ok says whether these cookies may replace the capsule's session: a
+    fresh reading verified them (email, pinned user, or the capsule session
+    itself), or the reading is cached and a pinned user guards the next fresh
+    one. A first team-bound reading through any other session never does.
+    """
     # The installed collector owns account identification. Browser-provided
     # email/plan claims are neither accepted nor trusted.
     import desktop_usage as usage
@@ -627,9 +754,11 @@ def collect_browser(cookies, requested=None, root=None):
     try:
         _, bound_team, bound_email, bound_plan = read_capsule(root)
         if credential.email and credential.email.lower() == bound_email.lower():
+            # The capsule binding reads only its own team. Choosing another
+            # team in the popup needs an email-verified reading.
             sample = quota_sample(root, cookies, bound_email, bound_plan, requested or bound_team, credential.access,
                                   identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan),
-                                  bound_team=bound_team)
+                                  bound_team=bound_team if requested in (None, bound_team) else None)
             if sample:
                 expected_email, plan = bound_email, bound_plan
     except MuseError as error:
@@ -650,4 +779,22 @@ def collect_browser(cookies, requested=None, root=None):
                   sampledAt=sample["sampledAt"], windows=usage.normalize_muse({"subscription_quota": sample["quota"]}))
     if not result["windows"]:
         raise MuseError("invalid_response")
+    if sample["cached"]:
+        capsule_ok = valid_hash(pinned_user(root, expected_email, plan, team))
+    else:
+        capsule_ok = sample.get("binding") in {"email", "user", "session"}
+    return team, result, capsule_ok
+
+
+def collect_browser(cookies, requested=None, root=None):
+    team, result, _ = browser_reading(cookies, requested, root)
+    return team, result
+
+
+def sync_browser(cookies, requested=None, root=None):
+    """Native-host museSync: collect, then keep the capsule only on a verified session."""
+    root = root if root is not None else Path.home() / ".ccs/account-usage"
+    team, result, capsule_ok = browser_reading(cookies, requested, root)
+    if capsule_ok:
+        write_capsule(root, cookies, team, result["email"], result["plan"])
     return team, result

@@ -174,7 +174,7 @@ describe('real Python Muse helper to Node cache boundary', () => {
     }
   );
 
-  it('serves a real reading when the portal omits the email but the capsule team is readable', async () => {
+  it('serves a real reading when the portal omits the email but the capsule session names its user', async () => {
     const helper = fixtures.blankPortalEmail;
     expect(helper.status).toBe('ok');
     expect(helper).not.toHaveProperty('failureCode');
@@ -185,11 +185,14 @@ describe('real Python Muse helper to Node cache boundary', () => {
     expect(account.plan).toBe('Muse Code High Usage');
     expect(account.sampledAt).toBe('2026-10-02T12:48:09.000Z');
     expect(account.message).toBeNull();
-    expect(account.windows.map((window) => [window.key, window.usedPercent])).toEqual([
-      ['window', 0],
-      ['weekly', 6.3],
-    ]);
+    expect(account.windows.map((window) => [window.key, window.label, window.usedPercent])).toEqual(
+      [
+        ['window', 'Current usage (5-hour)', 0],
+        ['weekly', 'Weekly limit', 6.3],
+      ]
+    );
     expect(JSON.stringify(account)).not.toContain('synthetic-fixture');
+    expect(JSON.stringify(account)).not.toContain('synthetic-user');
   });
 
   it('preserves native 429 cooldown and actual cached timestamps without public classification fields', async () => {

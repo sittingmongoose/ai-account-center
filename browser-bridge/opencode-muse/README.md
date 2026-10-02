@@ -52,14 +52,28 @@ The regular Muse collector and the browser bridge share an owner-only usage cach
 
 Since 2026-10-01 Muse can answer `/api/auth/me` with HTTP 200 and an empty
 `email`. An empty, missing or malformed email proves no other account, so it is
-not `account_mismatch`; a valid different email still is. In that case the
-only accepted binding is the team saved in the private capsule, which an
-earlier email-verified reading bound to the same CLI email and plan. The
-subscription quota belongs to that team, so the collector reads it only when
-the live CLI identity still matches the capsule's email and plan, the web
-session can still list that exact team, and the team's tier still equals the
-plan. It never selects or switches teams on this path. Anything else stays
-`identity_unavailable`.
+not `account_mismatch`; a valid different email still is, masked ones included.
+Team membership alone does not identify the web user, because another Muse
+account in the same team could be signed into the browser. So the email-less
+path binds on the web user that auth/me names (`userId`), stored only as a
+SHA-256 pin in the private sidecar `muse-console-binding.json` next to the
+capsule; the capsule and cache formats are unchanged.
+
+- Every email-verified reading pins its user for that email, plan and team.
+- With no pin yet, only the capsule's own stored session may read, and only
+  while it lists exactly one team; that first reading pins its user.
+- After that, any session of the pinned user may read, and another user is
+  `account_mismatch`.
+- In every case the collector reads only the capsule's team, the live CLI
+  identity must still match the capsule's email and plan, and the team's tier
+  must equal the plan. It never selects or switches teams on this path.
+- A browser Sync replaces the capsule's cookies only with a session a fresh
+  reading verified (email, pinned user, or the capsule session itself), or,
+  for a cached reading, while a pin guards the next fresh one.
+
+Anything else stays `identity_unavailable`, including auth/me without a
+`userId`. Choosing another team in the popup needs an email-verified reading.
+A provider 429 also holds back a team switch until its cooldown ends.
 
 The dashboard labels Muse windows with the official dev.meta.ai/usage card
 names: "Current usage (5-hour)" for the rolling window and "Weekly limit". The

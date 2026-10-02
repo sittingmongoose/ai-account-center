@@ -96,7 +96,7 @@ class CacheTests(unittest.TestCase):
                 calls.append(route)
                 if route == "/api/portal/teams":
                     return {"teams": [{"team_id": 43, "team_name": "sk-private"}]}
-                return {"email": "", "message": "sk-private"}
+                return {"email": "", "userId": "synthetic-user", "message": "sk-private"}
 
             client = Client()
             with patch.object(client, "get", side_effect=portal), \
@@ -112,6 +112,7 @@ class CacheTests(unittest.TestCase):
             self.assertNotIn("sk-private", json.dumps(result))
             request.assert_not_called()
             self.assertEqual(calls, ["/api/auth/me", "/api/portal/teams"])
+            self.assertFalse((root / muse.BINDING_NAME).exists())
 
     def test_collector_reads_the_capsule_team_when_the_portal_omits_the_email(self):
         # Live 2026-10-02 shape: HTTP 200 auth/me with "email": "", one team, a full quota.
@@ -155,32 +156,76 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(cached["sampledAt"], result["sampledAt"])
             state = muse.read_usage_state(root)
             self.assertEqual((state["teamId"], state["lastError"]), ("42", None))
-            self.assertNotIn("sk-private", json.dumps(result) + (root / muse.CACHE_NAME).read_text())
+            pin = muse.read_binding(root)
+            self.assertEqual(pin, {"schemaVersion": 1, "email": EMAIL, "plan": PLAN, "teamId": "42",
+                                   "userHash": muse.user_hash({"userId": "sk-private"})})
+            self.assertEqual((root / muse.BINDING_NAME).stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("sk-private", json.dumps(result) + (root / muse.CACHE_NAME).read_text()
+                             + (root / muse.BINDING_NAME).read_text())
 
     def test_browser_sync_reads_the_capsule_team_when_the_portal_omits_the_email(self):
         with tempfile.TemporaryDirectory() as root:
             muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+            teams = [[{"team_id": 42}, {"team_id": 43}]]
 
             def portal(route):
                 if route == "/api/auth/me":
-                    return {"email": ""}
+                    return {"email": "", "userId": "synthetic-user"}
                 if route == "/api/portal/teams":
-                    return {"teams": [{"team_id": 42}, {"team_id": 43}]}
+                    return {"teams": teams[0]}
                 return {"subscription_quota": QUOTA}
 
             with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(ACCESS, email=EMAIL)), \
                     patch("muse_console.verify_device_identity"), \
                     patch("muse_console.PortalClient.get", side_effect=portal), \
                     patch("desktop_usage.request_json") as native_request:
+                with self.assertRaises(muse.MuseError) as several:
+                    # Nothing pinned yet: the capsule session must list exactly one team.
+                    muse.collect_browser([COOKIE], root=root)
+                (Path(root) / muse.CACHE_NAME).unlink()
+                teams[0] = [{"team_id": 42}]
                 team, sample = muse.collect_browser([COOKIE], root=root)
                 (Path(root) / muse.CACHE_NAME).unlink()
                 with self.assertRaises(muse.MuseError) as error:
                     # Choosing another team in the popup has no verified binding without an email.
                     muse.collect_browser([COOKIE], requested="43", root=root)
+            self.assertEqual(several.exception.code, "identity_unavailable")
             self.assertEqual((team, sample["status"], sample["email"]), ("42", "ok", EMAIL))
             self.assertEqual([row["usedPercent"] for row in sample["windows"]], [0, 6])
             self.assertEqual(error.exception.code, "identity_unavailable")
             native_request.assert_not_called()
+
+    def test_a_binding_never_reaches_another_team_or_touches_the_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(), now=1000)
+            before = (Path(root) / muse.CACHE_NAME).read_bytes()
+            client = Client()
+            with self.assertRaises(muse.MuseError) as error:
+                muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "43", ACCESS, client, now=2000, bound_team="42")
+            self.assertEqual(error.exception.code, "identity_unavailable")
+            self.assertEqual(client.calls, [])
+            self.assertEqual((Path(root) / muse.CACHE_NAME).read_bytes(), before)
+
+    def test_choosing_another_team_waits_out_a_provider_429_and_keeps_the_first_reading(self):
+        with tempfile.TemporaryDirectory() as root:
+            first = muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(), now=1000)
+            muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS,
+                              Client(muse.MuseError("rate_limited", retry_after=1800)), now=1400)
+            before = (Path(root) / muse.CACHE_NAME).read_bytes()
+            client = Client()
+            with self.assertRaises(muse.MuseError) as error:
+                muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "43", ACCESS, client, now=1500)
+            self.assertEqual(error.exception.code, "rate_limited")
+            self.assertEqual(client.calls, [])
+            self.assertEqual((Path(root) / muse.CACHE_NAME).read_bytes(), before)
+            state = muse.read_usage_state(root)
+            self.assertEqual((state["teamId"], state["sampledAt"]), ("42", first["sampledAt"]))
+            # Once the cooldown is due, the switch is an ordinary email-verified request.
+            client = Client()
+            with self.assertRaises(muse.MuseError) as error:
+                muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "43", ACCESS, client, now=3200)
+            self.assertEqual(error.exception.code, "team_mismatch")
+            self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams"])
 
     def test_success_survives_cold_process_reload_with_original_sample_and_zero(self):
         with tempfile.TemporaryDirectory() as root:

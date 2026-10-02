@@ -25,9 +25,14 @@ QUOTA = {"tier": PLAN, "window_weighted_used": "0", "window_weighted_limit": "10
          "window_resets_at": None, "weekly_weighted_used": "60", "weekly_weighted_limit": "1000", "weekly_resets_at": 1790812800}
 
 
+USER = "synthetic-user-1"
+USER_HASH = muse.user_hash({"userId": USER})
+
+
 class FakeClient:
-    def __init__(self, email=EMAIL, teams=None, quota=None):
+    def __init__(self, email=EMAIL, teams=None, quota=None, user=USER):
         self.email = email
+        self.user = user
         self.teams = [{"team_id": 42, "team_name": "Personal"}] if teams is None else teams
         self.quota = QUOTA if quota is None else quota
         self.calls = []
@@ -35,10 +40,23 @@ class FakeClient:
     def get(self, route):
         self.calls.append(route)
         if route == "/api/auth/me":
-            return {"email": self.email, "secret": "sk-private"}
+            return {"email": self.email, "userId": self.user, "secret": "sk-private"}
         if route == "/api/portal/teams":
             return {"teams": self.teams}
         return {"subscription_quota": self.quota, "api_key": "sk-private"}
+
+
+class ShapeClient(FakeClient):
+    """Answers /api/auth/me with an exact payload."""
+    def __init__(self, me, **kwargs):
+        super().__init__(**kwargs)
+        self.me = me
+
+    def get(self, route):
+        if route == "/api/auth/me":
+            self.calls.append(route)
+            return self.me
+        return super().get(route)
 
 
 class CookieTests(unittest.TestCase):
@@ -89,52 +107,132 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, "identity_unavailable")
                 get.assert_called_once_with("/api/auth/me")
 
-    def test_blank_identity_reads_only_the_capsule_bound_team(self):
-        # Live 2026-10-02: HTTP 200 /api/auth/me with "email": "" for the signed-in session.
-        for requested in (None, "42"):
-            with self.subTest(requested=requested):
-                client = FakeClient(email="", teams=[{"team_id": 42, "team_name": "Personal"}])
-                team, quota = muse.fetch_quota([COOKIE], EMAIL, PLAN, requested, client, bound_team="42")
-                self.assertEqual(team, "42")
-                self.assertEqual(quota, QUOTA)
-                self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams",
-                                                "/api/portal/teams/42/subscription-quota"])
+    def test_email_less_auth_me_reads_only_the_bound_team_for_the_pinned_user(self):
+        # Live 2026-10-02: HTTP 200 /api/auth/me with "email": "" plus a userId.
+        # A missing key or a malformed value is the same case; it proves no other account.
+        shapes = ({"email": ""}, {}, {"email": None}, {"email": " "}, {"email": 42},
+                  {"email": "not-an-email"}, {"email": "bad\n@example.com"}, {"user": {"email": EMAIL}})
+        for shape in shapes:
+            for requested in (None, "42"):
+                with self.subTest(shape=shape, requested=requested):
+                    client = ShapeClient(dict(shape, userId=USER), teams=[{"team_id": 42}, {"team_id": 43}])
+                    observed = {}
+                    team, quota = muse.fetch_quota([COOKIE], EMAIL, PLAN, requested, client, bound_team="42",
+                                                   bound_user=USER_HASH, observed=observed)
+                    self.assertEqual((team, quota), ("42", QUOTA))
+                    self.assertEqual(observed, {"mode": "user", "userHash": USER_HASH})
+                    self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams",
+                                                    "/api/portal/teams/42/subscription-quota"])
+
+    def test_non_dict_or_userless_auth_me_is_never_bound(self):
+        for payload in (None, [], "email", {"email": ""}, {"email": "", "userId": ""}, {"email": "", "userId": True},
+                        {"email": "", "userId": "a b"}, {"email": "", "userId": "x" * 129}, {"email": "", "userId": {}}):
+            with self.subTest(payload=payload):
+                client = FakeClient()
+                with patch.object(client, "get", return_value=payload) as get:
+                    with self.assertRaises(muse.MuseError) as error:
+                        muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", bound_user=USER_HASH,
+                                         capsule_session=True)
+                self.assertEqual(error.exception.code, "identity_unavailable")
+                get.assert_called_once_with("/api/auth/me")
+
+    def test_user_hash_is_a_stable_digest_never_the_id(self):
+        self.assertEqual(muse.user_hash({"userId": 1234}), muse.user_hash({"userId": "1234"}))
+        self.assertNotEqual(muse.user_hash({"userId": "1234"}), muse.user_hash({"userId": "1235"}))
+        self.assertRegex(USER_HASH, r"^[0-9a-f]{64}$")
+        self.assertNotIn(USER, USER_HASH)
+
+    def test_another_web_user_is_account_mismatch_even_in_the_bound_team(self):
+        # The review's case: another Muse web account in the same team signed into the browser.
+        client = FakeClient(email="", user="someone-else")
+        with self.assertRaises(muse.MuseError) as error:
+            muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", bound_user=USER_HASH,
+                             capsule_session=True)
+        self.assertEqual(error.exception.code, "account_mismatch")
+        self.assertEqual(client.calls, ["/api/auth/me"])
+
+    def test_without_a_pin_only_the_capsule_session_with_one_team_is_bound(self):
+        observed = {}
+        client = FakeClient(email="")
+        team, _ = muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", capsule_session=True,
+                                   observed=observed)
+        self.assertEqual((team, observed), ("42", {"mode": "session", "userHash": USER_HASH}))
+        for teams in ([{"team_id": 42}, {"team_id": 43}], [{"team_id": 43}]):
+            with self.subTest(teams=teams):
+                client = FakeClient(email="", teams=teams)
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", capsule_session=True)
+                self.assertEqual(error.exception.code, "identity_unavailable")
+                self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams"])
+        # Any other browser session, or an unreadable or foreign pin, stops after auth/me.
+        for bound_user, session in ((None, False), (None, 1), (False, True), ("not-a-hash", True), ("A" * 64, True)):
+            with self.subTest(bound_user=bound_user, session=session):
+                client = FakeClient(email="")
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", bound_user=bound_user,
+                                     capsule_session=session)
+                self.assertEqual(error.exception.code, "identity_unavailable")
+                self.assertEqual(client.calls, ["/api/auth/me"])
 
     def test_blank_identity_never_chooses_or_switches_to_another_team(self):
         for teams in ([{"team_id": 43}], [{"team_id": 43}, {"team_id": 44}]):
             with self.subTest(teams=teams):
                 client = FakeClient(email="", teams=teams)
                 with self.assertRaises(muse.MuseError) as error:
-                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42")
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", bound_user=USER_HASH)
                 self.assertEqual(error.exception.code, "identity_unavailable")
                 self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams"])
-        client = FakeClient(email="", teams=[{"team_id": 42}, {"team_id": 43}])
-        with self.assertRaises(muse.MuseError) as error:
-            muse.fetch_quota([COOKIE], EMAIL, PLAN, "43", client, bound_team="42")
-        self.assertEqual(error.exception.code, "identity_unavailable")
-        self.assertEqual(client.calls, ["/api/auth/me"])
+
+    def test_a_binding_never_reads_another_team_and_stops_before_any_request(self):
+        for email in ("", EMAIL):
+            with self.subTest(email=email):
+                client = FakeClient(email=email, teams=[{"team_id": 42}, {"team_id": 43}])
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, "43", client, bound_team="42", bound_user=USER_HASH)
+                self.assertEqual(error.exception.code, "identity_unavailable")
+                self.assertEqual(client.calls, [])
 
     def test_blank_identity_without_a_valid_binding_stops_before_team_read(self):
         for bound in (None, "", 42, "abc", "4" * 33, True):
             with self.subTest(bound=bound):
                 client = FakeClient(email="")
                 with self.assertRaises(muse.MuseError) as error:
-                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team=bound)
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team=bound, bound_user=USER_HASH,
+                                     capsule_session=True)
                 self.assertEqual(error.exception.code, "identity_unavailable")
                 self.assertEqual(client.calls, ["/api/auth/me"])
 
     def test_valid_different_email_is_never_overridden_by_a_team_binding(self):
         client = FakeClient(email="other@example.com")
         with self.assertRaises(muse.MuseError) as error:
-            muse.fetch_quota([COOKIE], EMAIL, PLAN, "42", client, bound_team="42")
+            muse.fetch_quota([COOKIE], EMAIL, PLAN, "42", client, bound_team="42", bound_user=USER_HASH)
         self.assertEqual(error.exception.code, "account_mismatch")
         self.assertEqual(client.calls, ["/api/auth/me"])
 
+    def test_masked_email_is_a_different_account_on_purpose(self):
+        # Deliberate: a syntactically valid email that differs stays account_mismatch,
+        # even when the pinned web user matches. If Meta starts masking emails, this
+        # is the line to revisit (a masked email would then need the pinned user).
+        for masked in ("e***@example.com", "example@e***.com"):
+            with self.subTest(masked=masked):
+                client = FakeClient(email=masked)
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, "42", client, bound_team="42", bound_user=USER_HASH)
+                self.assertEqual(error.exception.code, "account_mismatch")
+                self.assertEqual(client.calls, ["/api/auth/me"])
+
     def test_team_bound_reading_still_requires_the_live_plan(self):
-        client = FakeClient(email="", quota=dict(QUOTA, tier="Other"))
-        with self.assertRaises(muse.MuseError) as error:
-            muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42")
-        self.assertEqual(error.exception.code, "plan_mismatch")
+        for binding in ({"bound_user": USER_HASH}, {"capsule_session": True}):
+            with self.subTest(binding=binding):
+                client = FakeClient(email="", quota=dict(QUOTA, tier="Other"))
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", **binding)
+                self.assertEqual(error.exception.code, "plan_mismatch")
+
+    def test_email_verified_reading_reports_its_binding(self):
+        observed = {}
+        muse.fetch_quota([COOKIE], EMAIL, PLAN, client=FakeClient(), observed=observed)
+        self.assertEqual(observed, {"mode": "email", "userHash": USER_HASH})
 
     def test_multiple_teams_need_explicit_choice(self):
         client = FakeClient(teams=[{"team_id": 42, "team_name": "First"}, {"team_id": 43, "team_name": "Second"}])
@@ -199,6 +297,15 @@ class CapsuleTests(unittest.TestCase):
 
 
 class CollectionTests(unittest.TestCase):
+    def setUp(self):
+        # Hermetic: no real Muse credential and no network, even if a patch below misses.
+        for target, options in (("desktop_usage.muse_credentials", {"return_value": None}),
+                                ("desktop_usage.request_json", {"side_effect": AssertionError("network")}),
+                                ("muse_console.PortalClient.get", {"side_effect": AssertionError("network")})):
+            patcher = patch(target, **options)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     @patch("muse_console.read_capsule", return_value=([COOKIE], "42", EMAIL, PLAN))
     @patch("muse_console.quota_sample", return_value={"teamId": "42", "quota": QUOTA, "sampledAt": "2026-10-01T00:00:00Z", "cached": False, "message": None})
     @patch("desktop_usage.request_json", return_value={"user_email": EMAIL, "subs_tier_name": PLAN, "is_subs_active": True, "api_key": "sk-private"})
@@ -222,7 +329,7 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
         self.assertIn("differs", result["message"])
 
-    @patch("muse_console.collect_browser", return_value=("42", {"email": EMAIL, "plan": PLAN, "windows": []}))
+    @patch("muse_console.browser_reading", return_value=("42", {"email": EMAIL, "plan": PLAN, "windows": []}, True))
     @patch("muse_console.write_capsule")
     def test_combined_host_has_distinct_muse_action(self, writer, collector):
         response = host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], "teamId": None}, "/unused")
@@ -230,12 +337,19 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(response["teamId"], "42")
         writer.assert_called_once_with("/unused", [COOKIE], "42", EMAIL, PLAN)
 
+    @patch("muse_console.browser_reading", return_value=("42", {"email": EMAIL, "plan": PLAN, "windows": []}, False))
+    @patch("muse_console.write_capsule")
+    def test_host_keeps_the_capsule_when_the_reading_did_not_verify_the_session(self, writer, collector):
+        response = host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], "teamId": None}, "/unused")
+        self.assertTrue(response["ok"])
+        writer.assert_not_called()
+
     def test_native_action_rejects_unknown_paths_and_identity_claims(self):
         for extra in ({"url": "https://evil.example"}, {"email": EMAIL}, {"plan": PLAN}):
             with self.assertRaises(muse.MuseError):
                 host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], **extra}, "/unused")
 
-    @patch("muse_console.collect_browser", return_value=("42", {"email": EMAIL, "plan": PLAN, "windows": [], "status": "cached"}))
+    @patch("muse_console.browser_reading", return_value=("42", {"email": EMAIL, "plan": PLAN, "windows": [], "status": "cached"}, True))
     @patch("muse_console.write_capsule")
     @patch("muse_console.restore_browser_sample", return_value=True)
     def test_distinct_normal_native_protocol_restores_before_cached_collection(self, restore, writer, collector):
@@ -251,6 +365,144 @@ class CollectionTests(unittest.TestCase):
             host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], "teamId": "43", "previousSample": {"teamId": "42", "sample": {}}}, "/unused")
         restore.assert_not_called()
 
+
+
+class EmailLessSyncTests(unittest.TestCase):
+    """Blank portal email, end to end through the native host with real private files.
+
+    The capsule's own session pins its web user on the first reading. After
+    that, only that user's sessions are read, and only verified sessions reach
+    the capsule. Fake portal: each session cookie value belongs to one user.
+    """
+    ACCESS = "dca:synthetic-private"
+    USERS = {"synthetic-web-session": "user-a", "synthetic-rotated-session": "user-a",
+             "synthetic-other-session": "user-b"}
+    ROTATED = dict(COOKIE, value="synthetic-rotated-session")
+    OTHER = dict(COOKIE, value="synthetic-other-session")
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name)
+        self.root = self.home / ".ccs/account-usage"
+        self.root.mkdir(parents=True, mode=0o700)
+        muse.write_capsule(self.root, [COOKIE], "42", EMAIL, PLAN)
+        self.clock, self.teams, self.email, self.calls = [1790863200.0], [42], "", []
+        for target, options in (
+                ("desktop_usage.muse_credentials", {"return_value": helpers.Credential(self.ACCESS, email=EMAIL)}),
+                ("muse_console.verify_device_identity", {}),
+                ("desktop_usage.request_json", {"return_value": {"user_email": EMAIL, "subs_tier_name": PLAN,
+                                                                 "is_subs_active": True}}),
+                ("muse_console.PortalClient.get", {"autospec": True, "side_effect": self.portal}),
+                ("muse_console.time.time", {"side_effect": lambda: self.clock[0]})):
+            patcher = patch(target, **options)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def portal(self, client, route):
+        session = client.header.split("=", 1)[1]
+        self.calls.append((session, route))
+        if route == "/api/auth/me":
+            me = {"email": self.email, "displayName": "Synthetic"}
+            return dict(me, userId=self.USERS[session]) if self.USERS.get(session) else me
+        if route == "/api/portal/teams":
+            return {"teams": [{"team_id": team} for team in self.teams]}
+        return {"subscription_quota": QUOTA}
+
+    def dashboard(self):
+        result = helpers.account("muse", "mac")
+        usage.fetch_muse(helpers.Credential(self.ACCESS, email=EMAIL), result, self.home)
+        return result
+
+    def sync(self, cookie):
+        return host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [cookie], "teamId": None},
+                                   self.root)
+
+    def capsule_session(self):
+        return muse.read_capsule(self.root)[0][0]["value"]
+
+    def later(self):
+        self.clock[0] += muse.REFRESH_SECONDS + 1
+
+    def test_first_reading_through_the_capsule_session_pins_its_user(self):
+        result = self.dashboard()
+        self.assertEqual(result["status"], "ok")
+        pin = muse.read_binding(self.root)
+        self.assertEqual((pin["teamId"], pin["userHash"]), ("42", muse.user_hash({"userId": "user-a"})))
+        self.assertNotIn("user-a", (self.root / muse.BINDING_NAME).read_text())
+
+    def test_without_a_pin_another_browser_session_is_refused_and_the_capsule_kept(self):
+        before = (self.root / muse.CAPSULE_NAME).read_bytes()
+        with self.assertRaises(muse.MuseError) as error:
+            self.sync(self.ROTATED)
+        self.assertEqual(error.exception.code, "identity_unavailable")
+        self.assertEqual((self.root / muse.CAPSULE_NAME).read_bytes(), before)
+        self.assertIsNone(muse.read_binding(self.root))
+
+    def test_without_a_pin_the_capsule_session_must_list_one_team(self):
+        self.teams = [42, 43]
+        self.assertEqual(self.dashboard()["failureCode"], "identity_unavailable")
+        self.assertIsNone(muse.read_binding(self.root))
+
+    def test_pinned_users_rotated_session_replaces_the_capsule(self):
+        self.dashboard()
+        self.later()
+        self.teams = [42, 43]  # Once pinned, membership in more teams is fine; only team 42 is read.
+        response = self.sync(self.ROTATED)
+        self.assertEqual((response["teamId"], response["sample"]["status"]), ("42", "ok"))
+        self.assertEqual(self.capsule_session(), "synthetic-rotated-session")
+        self.assertEqual(self.calls[-1], ("synthetic-rotated-session", "/api/portal/teams/42/subscription-quota"))
+
+    def test_another_web_user_in_the_same_team_never_reaches_the_dashboard_or_the_capsule(self):
+        self.dashboard()
+        self.later()
+        with self.assertRaises(muse.MuseError) as error:
+            self.sync(self.OTHER)
+        self.assertEqual(error.exception.code, "account_mismatch")
+        self.assertEqual(self.capsule_session(), "synthetic-web-session")
+        self.assertNotIn(("synthetic-other-session", "/api/portal/teams"), self.calls)
+        self.assertIsNone(muse.read_usage_state(self.root)["quota"])
+        self.later()
+        self.assertEqual(self.dashboard()["status"], "ok")
+
+    def test_an_unreadable_or_foreign_pin_closes_the_email_less_path(self):
+        for content, mode in (("{not json", 0o600), ('{"schemaVersion": 1}', 0o600), (None, 0o644), ("foreign", 0o600)):
+            with self.subTest(content=content, mode=mode):
+                path = self.root / muse.BINDING_NAME
+                path.unlink(missing_ok=True)
+                (self.root / muse.CACHE_NAME).unlink(missing_ok=True)
+                if content == "foreign":
+                    muse.atomic_private_json(self.root, muse.BINDING_NAME, {"schemaVersion": 1, "email": EMAIL, "plan": PLAN,
+                                             "teamId": "43", "userHash": muse.user_hash({"userId": "user-a"})})
+                else:
+                    path.write_text(content or json.dumps({"schemaVersion": 1, "email": EMAIL, "plan": PLAN, "teamId": "42",
+                                                            "userHash": muse.user_hash({"userId": "user-a"})}))
+                    os.chmod(path, mode)
+                self.assertEqual(self.dashboard()["failureCode"], "identity_unavailable")
+
+    def test_email_verified_popup_team_switch_still_works_and_moves_the_pin(self):
+        self.email, self.teams = EMAIL, [42, 43]
+        response = host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [self.ROTATED],
+                                        "teamId": "43"}, self.root)
+        self.assertEqual((response["teamId"], response["sample"]["status"]), ("43", "ok"))
+        self.assertEqual(muse.read_capsule(self.root)[1:], ("43", EMAIL, PLAN))
+        self.assertEqual(muse.read_binding(self.root)["teamId"], "43")
+
+    def test_a_cached_sync_replaces_the_capsule_only_under_a_pin(self):
+        self.email = EMAIL
+        self.USERS = {}  # An email-verified reading without a userId pins nothing.
+        self.dashboard()
+        self.assertIsNone(muse.read_binding(self.root))
+        response = self.sync(self.ROTATED)
+        self.assertEqual(response["sample"]["status"], "cached")
+        self.assertEqual(self.capsule_session(), "synthetic-web-session")
+        self.later()
+        self.USERS = EmailLessSyncTests.USERS
+        self.dashboard()  # Email-verified with a userId: pins user-a.
+        self.assertIsNotNone(muse.read_binding(self.root))
+        response = self.sync(self.ROTATED)
+        self.assertEqual(response["sample"]["status"], "cached")
+        self.assertEqual(self.capsule_session(), "synthetic-rotated-session")
 
 
 class OfficialDisplayTests(unittest.TestCase):

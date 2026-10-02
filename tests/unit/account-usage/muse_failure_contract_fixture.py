@@ -80,14 +80,15 @@ def scenario(code, retain_native=False):
 
 
 def blank_portal_email():
-    """Real fetch_quota: HTTP 200 auth/me without an email, read through the capsule's team."""
+    """Real fetch_quota: HTTP 200 auth/me without an email but with a userId (the live shape),
+    read through the capsule's own session and team, which pins that user."""
     with tempfile.TemporaryDirectory(prefix="muse-contract-") as folder:
         home = Path(folder)
         (home / ".ccs/account-usage").mkdir(parents=True, mode=0o700)
 
         def portal(_client, route):
             if route == "/api/auth/me":
-                return {"displayName": "Synthetic", "email": ""}
+                return {"displayName": "Synthetic", "email": "", "userId": "synthetic-user"}
             if route == "/api/portal/teams":
                 return {"teams": [{"team_id": 42, "team_name": "Personal"}]}
             return {"subscription_quota": dict(QUOTA, as_of=1790945289)}
