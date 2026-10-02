@@ -30,6 +30,7 @@ struct AccountDetailsPopover: View {
 struct AccountDetailsBody: View {
   @ObservedObject var model: AccountsViewModel
   let account: DashboardAccount
+  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     withPalette { palette in
@@ -79,16 +80,20 @@ struct AccountDetailsBody: View {
             if account.isActive {
               ActiveLabel(platform: account.platform)
             } else if account.provider == "codex" && account.canActivate {
+              // Details closes on Activate, so a switch confirmation under the row is never hidden behind it.
               ActivateButton(title: "Activate", busy: model.busyAction == account.id,
-                enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation,
+                enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation
+                  && model.dashboard?.canActivateCodex(account) == true,
                 help: "Make \(account.identity) the active Codex account on Ubuntu", id: "details-activate-\(account.id)") {
                 model.activate(account)
+                dismiss()
               }
-            } else if account.provider == "antigravity" && account.canActivateAntigravity {
+            } else if account.provider == "antigravity" && model.dashboard?.canActivateAntigravity(account) == true {
               ActivateButton(title: "Activate", busy: model.busyAction == account.id,
                 enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation,
                 help: "Make \(account.identity) the active Antigravity account on Ubuntu", id: "details-activate-\(account.id)") {
                 model.activateAntigravity(account)
+                dismiss()
               }
             }
           }
@@ -211,6 +216,7 @@ struct ProviderRow: View {
           identifier: "provider-row-\(group.id)", onHover: { value in withAnimation(.easeOut(duration: 0.14)) { hovered = value } }) {
           showDetails = true
         }
+        .dismissedByPanel($showDetails)
         .popover(isPresented: $showDetails, arrowEdge: .trailing) {
           AccountDetailsPopover(model: model, accounts: group.accounts, maxHeight: maxDetailHeight)
         }
@@ -263,6 +269,7 @@ struct QwenPacksButton: View {
       .buttonStyle(.plain)
       .glassControl(.rounded(14))
       .hoverHelp("Every Qwen credit pack, with what is left and when it expires", id: "qwen-packs", action: action)
+      .dismissedByPanel($showPacks)
       .popover(isPresented: $showPacks, arrowEdge: .bottom) {
         QwenPacksPopover(packs: packs, showAccount: showAccount, maxHeight: maxHeight)
       }

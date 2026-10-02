@@ -34,6 +34,18 @@ public struct AccountDashboard: Decodable, Sendable {
   public var visibleAccounts: [DashboardAccount] {
     hiddenProviders.isEmpty ? accounts : accounts.filter { !hiddenProviders.contains($0.provider) }
   }
+
+  /// Codex Activate is offered for an inactive saved profile while no automatic switch is running.
+  public func canActivateCodex(_ account: DashboardAccount) -> Bool {
+    account.canActivate && !codexAutoSwitch.activationInProgress
+  }
+
+  /// Antigravity Activate needs a second account to switch to, a runtime-verified Ubuntu profile and no
+  /// activation already running, manual or automatic.
+  public func canActivateAntigravity(_ account: DashboardAccount) -> Bool {
+    account.canActivateAntigravity && antigravityAutoSwitch?.activationInProgress != true
+      && visibleAccounts.filter { $0.provider == "antigravity" }.count >= 2
+  }
 }
 
 public struct AccountRefreshSettings: Decodable, Sendable {

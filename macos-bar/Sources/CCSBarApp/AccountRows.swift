@@ -85,6 +85,7 @@ struct AccountRow: View {
           identifier: "account-row-\(account.id)", onHover: { value in withAnimation(.easeOut(duration: 0.14)) { hovered = value } }) {
           showDetails = true
         }
+        .dismissedByPanel($showDetails)
         .popover(isPresented: $showDetails, arrowEdge: .trailing) {
           AccountDetailsPopover(model: model, accounts: [account], maxHeight: maxDetailHeight)
         }
@@ -173,9 +174,11 @@ struct AccountRow: View {
         ActiveLabel(platform: account.platform, draw: open.activeAtOpen["codex"] != nil && open.activeAtOpen["codex"] != account.id,
           probe: "slot|active-\(account.id)")
       } else if account.canActivate {
+        let switching = model.dashboard?.codexAutoSwitch.activationInProgress == true
         ActivateButton(title: "Activate", busy: model.busyAction == account.id,
-          enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation,
-          help: "Make \(account.identity) the active Codex account on Ubuntu", id: "activate-\(account.id)") {
+          enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation && !switching,
+          help: switching ? "Codex is switching accounts automatically. Activate again when it finishes."
+            : "Make \(account.identity) the active Codex account on Ubuntu", id: "activate-\(account.id)") {
           model.activate(account)
         }
       }
@@ -195,10 +198,12 @@ struct AccountRow: View {
     } else if sectionAccounts.count < 2 {
       if !anyActive { NotReportedLabel() }
     } else if account.canActivateAntigravity {
+      let switching = model.dashboard?.antigravityAutoSwitch?.activationInProgress == true
       ActivateButton(title: "Activate", busy: model.busyAction == account.id,
         enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation
-          && model.dashboard?.antigravityAutoSwitch?.activationInProgress != true,
-        help: "Make \(account.identity) the active Antigravity account on Ubuntu", id: "activate-\(account.id)") {
+          && model.dashboard?.canActivateAntigravity(account) == true,
+        help: switching ? "Antigravity is already switching accounts on Ubuntu. Activate again when it finishes."
+          : "Make \(account.identity) the active Antigravity account on Ubuntu", id: "activate-\(account.id)") {
         model.activateAntigravity(account)
       }
     } else {
@@ -221,7 +226,7 @@ struct ClaudeOpenPair: View {
     if !platforms.isEmpty && staticRender {
       HStack(spacing: 0) {
         ForEach(platforms, id: \.self) { platform in
-          PlatformGlyph(platform: platform, size: 13).foregroundStyle(.primary)
+          PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary)
             .frame(width: 29, height: 28)
             .hoverHelp("Open \(account.identity) in Claude on \(platform == "mac" ? "Mac" : "Windows")", id: "claude-\(platform)-\(account.id)")
         }
@@ -236,7 +241,7 @@ struct ClaudeOpenPair: View {
             Button(action: action) {
               ZStack {
                 if model.busyAction == "\(account.id)|\(platform)" { ProgressView().controlSize(.mini) }
-                else { PlatformGlyph(platform: platform, size: 13).foregroundStyle(.primary) }
+                else { PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary) }
               }
               .frame(width: 29, height: 28)
               .contentShape(Capsule())
@@ -347,7 +352,8 @@ struct AntigravityAutoControls: View {
             ? "Switch Antigravity accounts on Ubuntu automatically when the active one reaches the threshold"
             : "Choose the shared quota pool in the dashboard first; then automatic switching can start here",
           id: "antigravity-auto-switch")
-        ThresholdMenu(value: status?.thresholdUsedPercent ?? 95, enabled: status != nil && model.busyAction == nil,
+        ThresholdMenu(value: status?.thresholdUsedPercent ?? 95,
+          enabled: status != nil && model.busyAction == nil && !model.isRefreshing,
           id: "antigravity-threshold") { model.setAntigravityThreshold(usedPercent: $0) }
       }
       .padding(.leading, 10).padding(.trailing, 4).frame(height: 30)

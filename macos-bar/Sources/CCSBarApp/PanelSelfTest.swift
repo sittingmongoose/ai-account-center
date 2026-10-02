@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 import CCSBarCore
 
 /// A live, app-owned check of the real panel window from a sanitized fixture: no sign-in, no network,
 /// no account action, no desktop capture. It opens the panel the ways a person can (status item,
-/// relaunch, shortcut toggle), toggles Settings with the gear and closes it with Escape, then quits.
+/// relaunch, shortcut toggle), toggles Settings with the gear and closes it with Escape, opens Details,
+/// measures the process while idle, then checks Escape from a focused text field on the connect screen.
 @MainActor
 enum PanelSelfTest {
   static func run(input: String) -> Never {
@@ -55,10 +57,7 @@ enum PanelSelfTest {
       record("gear closes Settings again", !controller.state.settingsOpen && panel?.isVisible == true)
       // Escape as a real key event through the panel's responder chain (SwiftUI first, then the panel).
       func escape() {
-        guard let panel, let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil,
-          characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) else { return }
-        panel.sendEvent(event)
+        if let panel { Self.escape(to: panel, viaApp: false) }
       }
       controller.state.setSettings(true)
       pump(0.5)
@@ -92,8 +91,100 @@ enum PanelSelfTest {
         && appearances["light"]?.contains("Dark") == false, ["panelAppearances": appearances])
       record("menu-bar item keeps the menu bar's appearance", menuBarBefore == menuBarAfter,
         ["before": menuBarBefore, "after": menuBarAfter])
+
+      // A reopen during the close fade must win: the fade's completion may not order the panel out.
       controller.close()
+      controller.open()
+      pump(0.6)
+      record("reopening during the close fade keeps the panel open", panel?.isVisible == true
+        && controller.isOpen && (panel?.alphaValue ?? 0) > 0.99, ["alpha": Double(panel?.alphaValue ?? 0)])
+      pump(0.8)
+
+      // Full-row Details from the nonactivating panel, then Escape: Details closes first, the panel stays.
+      let before = Set(app.windows.map { ObjectIdentifier($0) })
+      let row = panel?.contentView.flatMap { firstView(in: $0, of: DetailsRowButton.self) }
+      row?.performClick(nil)
+      pump(0.8)
+      let popovers = app.windows.filter { $0.isVisible && !before.contains(ObjectIdentifier($0)) && $0 !== panel }
+      record("a full-row click opens Details from the nonactivating panel", row != nil && !popovers.isEmpty,
+        ["row": row?.identifier?.rawValue ?? "", "newWindows": popovers.map { String(describing: type(of: $0)) },
+         "keyWindowIsPopover": app.keyWindow.map { win in popovers.contains { $0 === win } } ?? false])
+      if let target = app.keyWindow ?? panel { Self.escape(to: target, viaApp: true) }
+      pump(0.6)
+      record("Escape closes Details first and keeps the panel open",
+        popovers.allSatisfy { !$0.isVisible } && panel?.isVisible == true,
+        ["popoversStillVisible": popovers.filter(\.isVisible).count])
+      if popovers.contains(where: \.isVisible) { popovers.forEach { $0.orderOut(nil) } }
+
+      // Idle cost: nothing may loop while the panel sits open or closed.
+      controller.open()
+      pump(2.5)
+      let openIdle = idleCPU(seconds: 5)
+      record("idle with the panel open stays under 2% CPU", openIdle < 2,
+        ["cpuPercent": openIdle, "footprintMB": footprintMB()])
+      controller.close()
+      pump(1.0)
+      let closedIdle = idleCPU(seconds: 5)
+      record("idle with the panel closed stays under 0.5% CPU", closedIdle < 0.5, ["cpuPercent": closedIdle])
+      // Each cycle runs in its own autorelease pool, as each event does inside the app's run loop.
+      func cycles(_ count: Int) {
+        for _ in 0..<count {
+          autoreleasepool { controller.open(); pump(0.4) }
+          autoreleasepool { controller.close(); pump(0.3) }
+        }
+        autoreleasepool { pump(1.0) }
+      }
+      cycles(4)
+      let footprints = [footprintMB()] + (0..<3).map { _ in cycles(8); return footprintMB() }
+      let growth = (footprints.last ?? 0) - (footprints.first ?? 0)
+      record("24 more open-close cycles hold memory steady (under 10 MB growth)", growth < 10,
+        ["footprintMBEvery8Cycles": footprints, "growthMB": (growth * 10).rounded() / 10])
+
+      // The Carbon hot-key event (what Option-Command-A delivers) reaches the handler and toggles the panel.
+      sendHotKeyPressed()
+      pump(0.8)
+      let openedByKey = panel?.isVisible == true
+      sendHotKeyPressed()
+      pump(0.8)
+      record("the Option-Command-A hot-key event toggles the panel open and closed",
+        openedByKey && panel?.isVisible == false)
+      controller.hotKey?.unregister()
+      NSStatusBar.system.removeStatusItem(controller.statusItem)
+
+      // First run: Escape from a focused text field still closes the panel (the field editor would keep it).
+      let connectSuite = suite + ".connect"
+      let connectDefaults = UserDefaults(suiteName: connectSuite) ?? .standard
+      connectDefaults.removePersistentDomain(forName: connectSuite)
+      connectDefaults.set(false, forKey: TrayPreferences.Keys.openShortcut)
+      let connect = PanelController(model: AccountsViewModel(previewWithoutConnection: true),
+        prefs: TrayPreferences(defaults: connectDefaults))
+      connect.open()
+      pump(1.0)
+      let field = connect.panel?.contentView.flatMap { firstView(in: $0, of: NSTextField.self) { $0.isEditable } }
+      if let field { connect.panel?.makeFirstResponder(field) }
+      pump(0.3)
+      let focused = connect.panel?.firstResponder is NSTextView
+      if let target = connect.panel { Self.escape(to: target, viaApp: true) }
+      pump(0.6)
+      record("Escape in a focused text field closes the panel", field != nil && focused && connect.panel?.isVisible == false,
+        ["fieldFound": field != nil, "fieldFocused": focused])
+      connect.open()
+      pump(1.0)
+      if let field = connect.panel?.contentView.flatMap({ firstView(in: $0, of: NSTextField.self) { $0.isEditable } }) {
+        connect.panel?.makeFirstResponder(field)
+      }
+      pump(0.3)
+      connect.state.setSettings(true)
+      pump(0.6)
+      let cleared = !(connect.panel?.firstResponder is NSTextView)
+      if let target = connect.panel { Self.escape(to: target, viaApp: true) }
+      pump(0.6)
+      record("Settings takes focus from the covered field, and Escape then closes Settings only",
+        cleared && !connect.state.settingsOpen && connect.panel?.isVisible == true)
+      connect.close()
       pump(0.4)
+      NSStatusBar.system.removeStatusItem(connect.statusItem)
+      connectDefaults.removePersistentDomain(forName: connectSuite)
 
       defaults.removePersistentDomain(forName: suite)
       let passed = steps.allSatisfy { $0["passed"] as? Bool == true }
@@ -105,5 +196,60 @@ enum PanelSelfTest {
       fputs("Panel self-test failed to start.\n", stderr)
       exit(1)
     }
+  }
+
+  /// Escape as a real key event: straight to the window's responder chain, or through the application
+  /// (its local event monitors first), the way a key press arrives.
+  private static func escape(to window: NSWindow, viaApp: Bool) {
+    guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+      characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) else { return }
+    if viaApp { NSApplication.shared.sendEvent(event) } else { window.sendEvent(event) }
+  }
+
+  private static func firstView<T: NSView>(in root: NSView, of type: T.Type, where match: (T) -> Bool = { _ in true }) -> T? {
+    if let view = root as? T, !view.isHiddenOrHasHiddenAncestor, match(view) { return view }
+    for child in root.subviews { if let found = firstView(in: child, of: type, where: match) { return found } }
+    return nil
+  }
+
+  /// The event Carbon delivers for a registered hot key, sent to the application target.
+  private static func sendHotKeyPressed() {
+    var event: EventRef?
+    guard CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyPressed), 0,
+      EventAttributes(kEventAttributeNone), &event) == noErr, let event else { return }
+    var id = EventHotKeyID(signature: GlobalHotKey.signature, id: 1)
+    SetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+      MemoryLayout<EventHotKeyID>.size, &id)
+    SendEventToEventTarget(event, GetApplicationEventTarget())
+    ReleaseEvent(event)
+  }
+
+  private static func cpuSeconds() -> Double {
+    var usage = rusage()
+    getrusage(RUSAGE_SELF, &usage)
+    func seconds(_ time: timeval) -> Double { Double(time.tv_sec) + Double(time.tv_usec) / 1_000_000 }
+    return seconds(usage.ru_utime) + seconds(usage.ru_stime)
+  }
+
+  /// CPU percent of one core used by this process while the run loop idles for `seconds`.
+  private static func idleCPU(seconds: Double) -> Double {
+    let start = cpuSeconds(), clock = Date()
+    RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    let elapsed = Date().timeIntervalSince(clock)
+    return ((cpuSeconds() - start) / max(0.001, elapsed) * 1000).rounded() / 10
+  }
+
+  /// The process's physical footprint (what Activity Monitor calls Memory), in MB.
+  private static func footprintMB() -> Double {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) { pointer in
+      pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+      }
+    }
+    guard result == KERN_SUCCESS else { return -1 }
+    return (Double(info.phys_footprint) / 1_048_576 * 10).rounded() / 10
   }
 }

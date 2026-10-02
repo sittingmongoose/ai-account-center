@@ -170,7 +170,7 @@ final class AccountsViewModel: ObservableObject {
   // MARK: Codex
 
   func activate(_ account: DashboardAccount) {
-    guard let profile = account.capabilities.codexProfile, account.canActivate else { return }
+    guard let profile = account.capabilities.codexProfile, dashboard?.canActivateCodex(account) == true else { return }
     activateCodex(id: account.id, profile: profile, identity: account.identity)
   }
 
@@ -208,9 +208,8 @@ final class AccountsViewModel: ObservableObject {
   // MARK: Antigravity (Ubuntu runtime, the routes from 9cf75fbe)
 
   func activateAntigravity(_ account: DashboardAccount) {
-    guard let profile = account.antigravityProfile, account.canActivateAntigravity,
-      dashboard?.antigravityAutoSwitch?.activationInProgress != true else { return }
-    runAntigravity(id: account.id, profile: profile, identity: account.identity, token: nil)
+    guard let profile = account.antigravityProfile, dashboard?.canActivateAntigravity(account) == true else { return }
+    runAntigravity(id: account.id, profile: profile, identity: account.identity, offer: nil)
   }
 
   func cancelAntigravitySwitch() { pendingAntigravitySwitch = nil }
@@ -221,25 +220,49 @@ final class AccountsViewModel: ObservableObject {
       message = "This Antigravity confirmation expired. Activate again to review the running programs."
       return
     }
-    runAntigravity(id: offer.accountID, profile: offer.profile, identity: offer.identity, token: offer.confirmation.token)
+    runAntigravity(id: offer.accountID, profile: offer.profile, identity: offer.identity, offer: offer.confirmation)
   }
 
-  private func runAntigravity(id: String, profile: String, identity: String, token: String?) {
+  static let antigravityApprovalFailed = "The Antigravity switch could not complete. Click Activate again to review the running programs."
+
+  /// One Antigravity attempt. A reviewed approval is sent once: a fresh offer that comes back from it is
+  /// never adopted (it needs a new review), and an account other than the reviewed one is reported, as
+  /// the dashboard does. Any finished attempt refreshes, because the server may have changed state.
+  private func runAntigravity(id: String, profile: String, identity: String, offer approval: AntigravitySwitchConfirmation?) {
     guard busyAction == nil, !hasPendingConfirmation, !isRefreshing, let client else { return }
     busyAction = id
     Task {
       var succeeded = false
       do {
-        if let token { try await client.confirmAntigravity(profile: profile, confirmationToken: token) }
-        else { try await client.activateAntigravity(profile: profile) }
-        message = nil
-        succeeded = true
-      } catch BarClientError.antigravityConfirmation(let offer) where token == nil {
-        pendingAntigravitySwitch = PendingAntigravitySwitch(accountID: id, profile: profile, identity: identity, confirmation: offer)
-        message = nil
+        if let approval {
+          let result = try await client.confirmAntigravity(profile: profile, confirmationToken: approval.token)
+          if let email = result.email, email.lowercased() != approval.email.lowercased() {
+            message = Self.antigravityApprovalFailed
+          } else {
+            message = nil
+            succeeded = true
+          }
+        } else {
+          try await client.activateAntigravity(profile: profile)
+          message = nil
+          succeeded = true
+        }
+      } catch BarClientError.antigravityConfirmation(let offer) {
+        if approval == nil {
+          pendingAntigravitySwitch = PendingAntigravitySwitch(accountID: id, profile: profile, identity: identity, confirmation: offer)
+          message = nil
+        } else {
+          message = Self.antigravityApprovalFailed
+        }
       } catch { message = error.localizedDescription }
       busyAction = nil
-      if succeeded { await refresh(force: true) }
+      // A consumed approval may have changed the Ubuntu runtime even when it failed; show the truth, but
+      // keep the failure text that a successful refresh would otherwise clear.
+      if pendingAntigravitySwitch == nil && (succeeded || approval != nil) {
+        let note = message
+        await refresh(force: succeeded)
+        if let note { message = note }
+      }
     }
   }
 

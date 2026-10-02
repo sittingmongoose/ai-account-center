@@ -1256,6 +1256,43 @@ private func checkDashboardAdditions() throws {
     "Antigravity Activate needs an inactive account, a safe profile id and the Ubuntu host")
   try expect(dashboard.providerGroups.map(\.id) == ["claude", "codex", "antigravity", "cursor", "kimi-code"],
     "Tray order must place Antigravity after Codex, then the other providers")
+  try expect(dashboard.canActivateAntigravity(byID["agy-b"]!) && !dashboard.canActivateAntigravity(byID["agy-a"]!)
+    && !dashboard.canActivateAntigravity(byID["agy-d"]!),
+    "The dashboard-level Antigravity guard keeps the account-level rules")
+
+  // Activation guards: nothing is offered while an activation is already running, and Antigravity needs
+  // a second account to switch to.
+  var guarded = object
+  var guardedAccounts = guarded["accounts"] as! [[String: Any]]
+  guardedAccounts.append(account("codex-b", "codex"))
+  guarded["accounts"] = guardedAccounts
+  var codexStatus = guarded["codexAutoSwitch"] as! [String: Any]
+  codexStatus["activationInProgress"] = true
+  guarded["codexAutoSwitch"] = codexStatus
+  var agyStatus = guarded["antigravityAutoSwitch"] as! [String: Any]
+  agyStatus["activationInProgress"] = true
+  guarded["antigravityAutoSwitch"] = agyStatus
+  let busy = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: guarded))
+  let busyByID = Dictionary(uniqueKeysWithValues: busy.accounts.map { ($0.id, $0) })
+  try expect(busyByID["codex-b"]!.canActivate && !busy.canActivateCodex(busyByID["codex-b"]!)
+    && !busy.canActivateAntigravity(busyByID["agy-b"]!),
+    "Activate must wait while a Codex or Antigravity activation is already running")
+  codexStatus["activationInProgress"] = false
+  guarded["codexAutoSwitch"] = codexStatus
+  guarded["accounts"] = guardedAccounts.filter { !["agy-a", "agy-c", "agy-d"].contains($0["id"] as! String) }
+  agyStatus["activationInProgress"] = false
+  guarded["antigravityAutoSwitch"] = agyStatus
+  let single = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: guarded))
+  let singleByID = Dictionary(uniqueKeysWithValues: single.accounts.map { ($0.id, $0) })
+  try expect(single.canActivateCodex(singleByID["codex-b"]!) && singleByID["agy-b"]!.canActivateAntigravity
+    && !single.canActivateAntigravity(singleByID["agy-b"]!),
+    "A lone Antigravity account has nothing to switch to")
+  var hiddenAgy = guarded
+  hiddenAgy["accounts"] = guardedAccounts
+  hiddenAgy["hiddenProviders"] = ["antigravity"]
+  let hiddenSection = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hiddenAgy))
+  try expect(!hiddenSection.canActivateAntigravity(hiddenSection.accounts.first { $0.id == "agy-b" }!),
+    "A provider hidden on the dashboard offers no switching in the tray")
 
   var malformed = object
   malformed["antigravityAutoSwitch"] = ["enabled": "yes", "thresholdUsedPercent": 400]
@@ -1471,7 +1508,7 @@ do {
   try await checkAntigravityClient()
   print("PASS Antigravity activation, one-use confirmation, fixed guidance, and % used automatic settings")
   try checkDashboardAdditions()
-  print("PASS Antigravity policy and capabilities, tray order, and dashboard-hidden providers")
+  print("PASS Antigravity policy and capabilities, activation guards, tray order, and dashboard-hidden providers")
   try checkTrayPresentation()
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
   print("AI Account Center core checks passed (offline; no real credentials or network)")

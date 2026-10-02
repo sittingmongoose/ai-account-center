@@ -80,7 +80,8 @@ struct SettingsPanelView: View {
             card {
               row(title: "Open shortcut", sub: "Option-Command-A opens or closes this panel from any app. Opening AI Account Center again from Spotlight, Launchpad or Finder also opens it.") {
                 HStack(spacing: 8) {
-                  ShortcutKeys(keys: ["⌥", "⌘", "A"]).opacity(prefs.openShortcutEnabled ? 1 : 0.45)
+                  ShortcutKeys(keys: [.symbol("option"), .symbol("command"), .letter("A")])
+                    .opacity(prefs.openShortcutEnabled ? 1 : 0.45)
                   Toggle("Open shortcut", isOn: $prefs.openShortcutEnabled).labelsHidden().toggleStyle(.switch)
                     .tint(palette.accent).controlSize(.small)
                 }
@@ -280,16 +281,23 @@ struct SettingsPanelView: View {
   }
 }
 
-/// Key caps for the open shortcut.
+/// Key caps for the open shortcut. Modifier keys are SF Symbols (option, command), never text glyphs.
 struct ShortcutKeys: View {
-  let keys: [String]
+  enum Key: Hashable { case symbol(String), letter(String) }
+  let keys: [Key]
   var body: some View {
     withPalette { palette in
       HStack(spacing: 3) {
         ForEach(keys, id: \.self) { key in
-          Text(key).font(.system(size: 12, weight: .medium)).foregroundStyle(palette.label)
-            .frame(minWidth: 20, minHeight: 20)
-            .background(palette.controlInner, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+          Group {
+            switch key {
+            case .symbol(let name): Image(systemName: name).font(.system(size: 11, weight: .medium))
+            case .letter(let text): Text(verbatim: text).font(.system(size: 12, weight: .medium))
+            }
+          }
+          .foregroundStyle(palette.label)
+          .frame(minWidth: 20, minHeight: 20)
+          .background(palette.controlInner, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
         }
       }
       .accessibilityElement(children: .ignore)

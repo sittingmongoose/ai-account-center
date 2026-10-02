@@ -10,11 +10,16 @@ final class PanelState: ObservableObject {
   @Published var openGeneration = 0
   @Published var desiredHeight: CGFloat = 0
   @Published var shortcutProblem: String?
+  /// Bumped to close every popover the panel shows (Escape closes Details before anything else).
+  @Published var popoverDismissal = 0
   var scrollToAbout = false
   var open = OpenContext()
   var panelWidth: CGFloat = 760
   var maxHeight: CGFloat = 900
   var staticRender = false
+  /// Offline renders only: simulate Reduce Transparency and Increase Contrast without touching the Mac's settings.
+  var previewReduceTransparency = false
+  var previewIncreaseContrast = false
   var reduceMotion: Bool { staticRender || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
   func setSettings(_ open: Bool) {
@@ -54,7 +59,25 @@ struct PanelRootView: View {
       .id(state.openGeneration)
       .background { if state.staticRender { PreviewGlass() } }
       .environment(\.trayStaticRender, state.staticRender)
+      .environment(\.trayPopoverDismissal, state.popoverDismissal)
       .modifier(PreviewActiveControls(enabled: state.staticRender))
+      .modifier(PreviewAccessibility(reduceTransparency: state.previewReduceTransparency,
+        increaseContrast: state.previewIncreaseContrast))
+  }
+}
+
+/// Offline renders only: the display accommodations as the system would report them.
+struct PreviewAccessibility: ViewModifier {
+  let reduceTransparency: Bool
+  let increaseContrast: Bool
+  func body(content: Content) -> some View {
+    if reduceTransparency || increaseContrast {
+      content
+        .environment(\._accessibilityReduceTransparency, reduceTransparency)
+        .environment(\._colorSchemeContrast, increaseContrast ? .increased : .standard)
+    } else {
+      content
+    }
   }
 }
 
@@ -71,7 +94,19 @@ struct PreviewActiveControls: ViewModifier {
 /// window server and never reaches an offscreen render.
 struct PreviewGlass: View {
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   var body: some View {
+    if reduceTransparency {
+      // System glass turns opaque under Reduce Transparency: the concept's solid panel (--lg-solid).
+      RoundedRectangle(cornerRadius: TrayMetrics.panelRadius, style: .continuous)
+        .fill(scheme == .dark ? Color(.sRGB, red: 0x23 / 255, green: 0x24 / 255, blue: 0x28 / 255)
+          : Color(.sRGB, red: 0xEC / 255, green: 0xED / 255, blue: 0xF0 / 255))
+    } else {
+      glass
+    }
+  }
+
+  @ViewBuilder private var glass: some View {
     let colors: [Color] = scheme == .dark
       ? [Color(.sRGB, red: 0.20, green: 0.15, blue: 0.27), Color(.sRGB, red: 0.19, green: 0.14, blue: 0.22),
          Color(.sRGB, red: 0.23, green: 0.15, blue: 0.19)]
@@ -375,6 +410,7 @@ struct AccountsMenuView: View {
       }
       .buttonStyle(.plain)
       .hoverHelp("How Codex auto-switch works", id: "codex-auto-info", action: info)
+      .dismissedByPanel($showAutoInfo)
       .popover(isPresented: $showAutoInfo, arrowEdge: .top) {
         VStack(alignment: .leading, spacing: 8) {
           Text("Codex automatic switching").font(.system(size: 13, weight: .semibold))
@@ -401,11 +437,13 @@ struct ActivePlatter: View {
     let palette = TrayPalette(scheme, reduceTransparency: reduceTransparency, increasedContrast: contrast == .increased)
     let dark = scheme == .dark
     let shape = ConcentricRectangle()
+    // Strokes are clipped to the shape, so half of each line shows: 0.5 pt normally, 1 pt under Reduce
+    // Transparency and Increase Contrast, as in the concept.
     ZStack {
       if reduceTransparency {
         shape.fill(Color(nsColor: .controlBackgroundColor))
-        shape.fill(palette.accent.opacity(dark ? 0.30 : 0.22))
-        shape.stroke(palette.accent.opacity(0.6), lineWidth: 2)
+        shape.fill(palette.accent.opacity(dark ? 0.24 : 0.18))
+        shape.stroke(palette.accent.opacity(contrast == .increased ? 1 : 0.6), lineWidth: 2)
       } else {
         shape.fill(Color.white.opacity(dark ? 0.03 : 0.5))
         shape.fill(palette.accent.opacity(dark ? 0.24 : 0.18))

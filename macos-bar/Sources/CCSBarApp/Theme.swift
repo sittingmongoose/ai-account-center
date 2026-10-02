@@ -157,6 +157,7 @@ struct GlassControl: ViewModifier {
   var tint: Color? = nil
   @Environment(\.trayStaticRender) private var staticRender
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   func body(content: Content) -> some View {
     switch shape {
@@ -167,7 +168,15 @@ struct GlassControl: ViewModifier {
   }
 
   @ViewBuilder private func apply<S: Shape>(_ content: Content, _ shape: S) -> some View {
-    if staticRender {
+    if staticRender && reduceTransparency {
+      // What system glass shows under Reduce Transparency: a solid control (--lg-solid-ctl) with an edge.
+      let dark = scheme == .dark
+      content
+        .background(shape.fill(tint ?? .clear))
+        .background(shape.fill(dark ? Color(.sRGB, red: 0x3A / 255, green: 0x3B / 255, blue: 0x40 / 255) : .white))
+        .overlay(shape.stroke(dark ? Color(.sRGB, red: 0xEB / 255, green: 0xEB / 255, blue: 0xF5 / 255, opacity: 0.34)
+          : Color(.sRGB, red: 0x1C / 255, green: 0x1C / 255, blue: 0x24 / 255, opacity: 0.38), lineWidth: 0.5))
+    } else if staticRender {
       let dark = scheme == .dark
       content
         .background(shape.fill(Color.white.opacity(dark ? 0.11 : 0.52)))
@@ -195,6 +204,28 @@ extension Animation {
     let c = TrayMotion.valueCurve
     return .timingCurve(c.x1, c.y1, c.x2, c.y2, duration: duration)
   }
+}
+
+/// The panel's request to close its popovers: Details, the Qwen packs and the auto-switch info.
+private struct PopoverDismissalKey: EnvironmentKey { static let defaultValue = 0 }
+extension EnvironmentValues {
+  var trayPopoverDismissal: Int {
+    get { self[PopoverDismissalKey.self] }
+    set { self[PopoverDismissalKey.self] = newValue }
+  }
+}
+
+private struct DismissedByPanel: ViewModifier {
+  @Binding var isPresented: Bool
+  @Environment(\.trayPopoverDismissal) private var dismissal
+  func body(content: Content) -> some View {
+    content.onChange(of: dismissal) { _, _ in if isPresented { isPresented = false } }
+  }
+}
+
+extension View {
+  /// Closes this view's popover when the panel asks (Escape with a popover showing).
+  func dismissedByPanel(_ isPresented: Binding<Bool>) -> some View { modifier(DismissedByPanel(isPresented: isPresented)) }
 }
 
 /// Lets the preview renderer and Reduce Motion show the settled state without animation.

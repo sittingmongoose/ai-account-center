@@ -15,6 +15,9 @@ enum PreviewRenderer {
     var wallpaper = true
     var details: String?
     var connect = false
+    /// Accessibility display settings, simulated in the render only (the Mac's own settings are untouched).
+    var reduceTransparency = false
+    var increaseContrast = false
 
     init(_ arguments: [String]) {
       for argument in arguments {
@@ -25,6 +28,8 @@ enum PreviewRenderer {
         if argument.hasPrefix("--width="), let value = Double(argument.dropFirst(8)) { width = CGFloat(value) }
         if argument.hasPrefix("--details=") { details = String(argument.dropFirst(10)) }
         if argument == "--connect" { connect = true }
+        if argument == "--reduce-transparency" { reduceTransparency = true }
+        if argument == "--increase-contrast" { increaseContrast = true }
       }
     }
   }
@@ -43,6 +48,8 @@ enum PreviewRenderer {
     let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard)
     let state = PanelState()
     state.staticRender = true
+    state.previewReduceTransparency = options.reduceTransparency
+    state.previewIncreaseContrast = options.increaseContrast
     state.panelWidth = options.width
     state.maxHeight = 4000
     var context = OpenContext()
@@ -168,8 +175,14 @@ enum PreviewRenderer {
       shadow.shadowBlurRadius = 30
       shadow.shadowOffset = NSSize(width: 0, height: -14)
       shadow.set()
-      (dark ? NSColor(srgbRed: 28 / 255, green: 28 / 255, blue: 32 / 255, alpha: 0.86)
-        : NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 252 / 255, alpha: 0.88)).setFill()
+      // Reduce Transparency turns system glass opaque: the concept's solid panel (--lg-solid).
+      if options.reduceTransparency {
+        (dark ? NSColor(srgbRed: 0x23 / 255, green: 0x24 / 255, blue: 0x28 / 255, alpha: 1)
+          : NSColor(srgbRed: 0xEC / 255, green: 0xED / 255, blue: 0xF0 / 255, alpha: 1)).setFill()
+      } else {
+        (dark ? NSColor(srgbRed: 28 / 255, green: 28 / 255, blue: 32 / 255, alpha: 0.86)
+          : NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 252 / 255, alpha: 0.88)).setFill()
+      }
       path.fill()
       NSGraphicsContext.restoreGraphicsState()
       NSColor.black.withAlphaComponent(dark ? 0.55 : 0.14).setStroke()
@@ -190,7 +203,9 @@ enum PreviewRenderer {
       NSGraphicsContext.restoreGraphicsState()
       guard let png = pixels.representation(using: .png, properties: [:]) else { throw BarClientError.decoding }
       try png.write(to: URL(fileURLWithPath: output), options: .atomic)
-      print("Rendered isolated accounts preview (\(options.appearance)\(options.settings ? ", settings" : ""), \(Int(size.width))x\(Int(size.height)) pt).")
+      let flags = [options.settings ? "settings" : nil, options.reduceTransparency ? "reduce transparency" : nil,
+        options.increaseContrast ? "increase contrast" : nil].compactMap { $0 }
+      print("Rendered isolated accounts preview (\(([options.appearance] + flags).joined(separator: ", ")), \(Int(size.width))x\(Int(size.height)) pt).")
       exit(0)
     } catch {
       fputs("Unable to render the accounts preview.\n", stderr)

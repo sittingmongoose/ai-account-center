@@ -11,8 +11,10 @@ struct CheckCircle: View {
 
   var body: some View {
     withPalette { palette in
+      // The disc fills its frame, so its visible left edge is the frame's: it lands exactly on the Activate
+      // capsule's left edge in the rows above and below (an inset disc sat 0.7 pt to the right).
       ZStack {
-        Circle().fill(palette.accent).padding(size * 0.04)
+        Circle().fill(palette.accent)
         CheckShape().trim(from: 0, to: progress)
           .stroke(palette.accentInk, style: StrokeStyle(lineWidth: size * 0.105, lineCap: .round, lineJoin: .round))
       }

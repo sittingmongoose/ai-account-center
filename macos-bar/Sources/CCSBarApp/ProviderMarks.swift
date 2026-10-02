@@ -38,10 +38,11 @@ struct ProviderMark: View {
   var size: CGFloat = 20
   @Environment(\.colorScheme) private var scheme
 
-  /// Optical scales measured by the marks pipeline (sources.json), so one box looks equal across providers.
+  /// Optical scales from the marks pipeline (AAC_MARK_META in marks.js), so one box looks equal across
+  /// providers. Kimi Code is 0.9 for its app icon with the plate (sources.json's 0.97 measures the bare mark).
   static let scale: [String: CGFloat] = [
     "claude": 0.93, "codex": 0.95, "antigravity": 0.97, "cursor": 0.89, "muse": 1.0,
-    "kimi-code": 0.97, "qwen": 0.93, "zai": 0.92, "opencode-go": 0.84,
+    "kimi-code": 0.9, "qwen": 0.93, "zai": 0.92, "opencode-go": 0.84,
   ]
 
   var body: some View {

@@ -41,6 +41,9 @@ final class PanelController: NSObject, NSWindowDelegate {
       DispatchQueue.main.async { self?.layoutPanel() }
     }.store(in: &cancellables)
     state.$settingsOpen.removeDuplicates().sink { [weak self] open in
+      // Focus never stays in a field that Settings now covers (or that leaves with Settings), so typing
+      // cannot land in a hidden field and Escape always reaches the panel.
+      self?.panel?.makeFirstResponder(nil)
       if open { self?.panel?.makeKey() }
     }.store(in: &cancellables)
     model.objectWillChange.merge(with: prefs.objectWillChange).sink { [weak self] _ in
@@ -48,7 +51,12 @@ final class PanelController: NSObject, NSWindowDelegate {
     }.store(in: &cancellables)
   }
 
-  var isOpen: Bool { panel?.isVisible == true }
+  /// True while the close fade runs: a reopen during the fade cancels it, and the fade's completion then
+  /// leaves the panel alone.
+  private var closing = false
+  private var closeGeneration = 0
+
+  var isOpen: Bool { panel?.isVisible == true && !closing }
 
   private func configureStatusItem() {
     guard let button = statusItem.button else { return }
@@ -80,6 +88,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   func open() {
     let panel = self.panel ?? makePanel()
+    closing = false
+    closeGeneration += 1
     model.pendingCodexSwitch = nil
     model.pendingAntigravitySwitch = nil
     state.settingsOpen = false
@@ -96,6 +106,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     model.hasOpenedThisSession = true
     state.openGeneration += 1
     layoutPanel()
+    // A zero-length animation replaces a close fade that may still be running.
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0
+      panel.animator().alphaValue = 1
+    }
     panel.alphaValue = 1
     panel.makeKeyAndOrderFront(nil)
     statusItem.button?.highlight(true)
@@ -104,7 +119,7 @@ final class PanelController: NSObject, NSWindowDelegate {
   }
 
   func close() {
-    guard let panel, panel.isVisible else { return }
+    guard let panel, panel.isVisible, !closing else { return }
     model.lastShown = model.currentReadings
     // An unanswered switch confirmation ends with the panel, so background refresh resumes.
     model.pendingCodexSwitch = nil
@@ -114,11 +129,15 @@ final class PanelController: NSObject, NSWindowDelegate {
     if state.reduceMotion {
       panel.orderOut(nil)
     } else {
+      closing = true
+      let generation = closeGeneration
       NSAnimationContext.runAnimationGroup({ context in
         context.duration = 0.12
         panel.animator().alphaValue = 0
-      }, completionHandler: { [weak panel] in
+      }, completionHandler: { [weak self, weak panel] in
         Task { @MainActor in
+          guard let self, self.closeGeneration == generation else { return }
+          self.closing = false
           panel?.orderOut(nil)
           panel?.alphaValue = 1
         }
@@ -126,9 +145,33 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
   }
 
-  /// Escape closes Settings first, then the panel.
+  /// A Details, packs or info popover is showing. From the nonactivating panel it never becomes the key
+  /// window, so its own Escape handling never runs; the panel closes it instead.
+  var popoverShown: Bool {
+    NSApplication.shared.windows.contains { window in
+      window !== panel && window.isVisible && String(describing: type(of: window)).contains("Popover")
+    }
+  }
+
+  /// Escape closes a popover first, then Settings, then an unanswered switch confirmation, then the panel.
   func cancel() {
-    if state.settingsOpen { state.setSettings(false) } else { close() }
+    if popoverShown { state.popoverDismissal += 1 }
+    else if state.settingsOpen { state.setSettings(false) }
+    else if model.pendingCodexSwitch != nil { model.cancelCodexSwitch() }
+    else if model.pendingAntigravitySwitch != nil { model.cancelAntigravitySwitch() }
+    else { close() }
+  }
+
+  /// Escape pressed in the panel, whatever has focus: a focused text field would otherwise swallow it
+  /// (the field editor turns Escape into completion). Popovers and menus are other windows and keep
+  /// their own Escape; text still being composed in an input method keeps it too.
+  func handlePanelEscape(_ event: NSEvent) -> Bool {
+    guard let panel, event.window === panel, event.keyCode == 53,
+      event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.function, .numericPad, .capsLock]).isEmpty
+    else { return false }
+    if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
+    cancel()
+    return true
   }
 
   private func makePanel() -> TrayPanel {
@@ -202,6 +245,10 @@ final class PanelController: NSObject, NSWindowDelegate {
     // A click in another app or on the desktop closes the panel, like a menu.
     if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] _ in
       Task { @MainActor in self?.close() }
+    }) { monitors.append(monitor) }
+    // Escape in the panel (only while it is open; the monitor is removed with it).
+    if let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
+      MainActor.assumeIsolated { self?.handlePanelEscape(event) == true } ? nil : event
     }) { monitors.append(monitor) }
     observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
       object: nil, queue: .main) { [weak self] note in
