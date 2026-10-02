@@ -139,6 +139,7 @@ async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, 
   const direction = DIRECTIONS[profileId];
   if (!direction || direction[1] !== targetPlatform) return {status: 'skipped', reason: 'unsupported_direction', createdCount: 0};
   const sourcePlatform = direction[0];
+  let confirmedCount = 0;
   const skipped = reason => ({status: 'skipped', reason, createdCount: 0});
   try {
     validatePolicy(policy);
@@ -162,31 +163,54 @@ async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, 
     validateSnapshot(sourceAgain, profileId, sourcePlatform, policy);
     if (!nativeGuardVerified(sourceAgain, sourcePlatform)) return skipped('native_guard_unverified');
     if (sourceAgain.revision !== source.revision) return skipped('source_changed');
+    let batchTarget = target;
     const guard = async () => {
       if (await adapters.isTargetClosed(profileId, targetPlatform) !== true) reject('target_opened');
-      if (await adapters.targetProtectedStateUnchanged?.(target) !== true) reject('target_state_changed');
+      if (await adapters.targetProtectedStateUnchanged?.(batchTarget) !== true) reject('target_state_changed');
     };
-    await guard();
-    let result;
-    try { result = await adapters.appendCreateOnly({profileId, targetPlatform, target, records: plan.records, closedGuard: guard}); }
-    catch {
-      // A lost append receipt is not proof that the remote writer did nothing.
-      // Preserve unknown partial metadata/snapshots; never automatically retry.
-      return {status: 'refused', reason: 'create_only_transaction_unconfirmed', createdCount: 0, recoveryRequired: true};
+    // Each transaction retains the existing complete guard checks and its
+    // existing 25-second Node / 30-second SSH deadlines. The service does not
+    // cache identity, closed-state, native, protected or registry verification.
+    // Confirmed batches are preserved; an unknown reply stops before any next
+    // batch, and the existing owned pending marker still holds ordinary Open.
+    if (target.records.length + plan.records.length > 200) return skipped('registry_invalid');
+    const authorized = [...target.records];
+    for (const record of plan.records) {
+      await guard();
+      let result;
+      try { result = await adapters.appendCreateOnly({profileId, targetPlatform, target: batchTarget, records: [record], totalCount: plan.records.length, confirmedCount, closedGuard: guard}); }
+      catch {
+        return {status: 'refused', reason: 'create_only_transaction_unconfirmed', createdCount: confirmedCount, recoveryRequired: true};
+      }
+      if (result?.status !== 'created_metadata' || result.createdCount !== 1 || result.protectedBytesUnchanged !== true) return {
+        status: 'refused', reason: 'create_only_transaction_refused', createdCount: confirmedCount,
+        recoveryRequired: result?.recoveryRequired === true || result?.status === 'refused_replacement_preserved' ||
+          (result?.status !== 'refused_rolled_back' && !(result?.status === 'refused' && result?.ownedFilesRolledBack === true && result?.recoveryRequired === false)),
+        createdCountBeforeRefusal: Number.isInteger(result?.createdCountBeforeRefusal) && result.createdCountBeforeRefusal >= 0 && result.createdCountBeforeRefusal <= 1 ? result.createdCountBeforeRefusal : 0,
+      };
+      confirmedCount++;
+      authorized.push({...record, sha256: sha(record.bytes)});
+      if (confirmedCount === plan.records.length) break;
+      const current = await adapters.readTarget(profileId, targetPlatform);
+      validateSnapshot(current, profileId, targetPlatform, policy);
+      if (!nativeGuardVerified(current, targetPlatform)) reject('target_state_changed');
+      if (current.noPendingInput !== true || current.noScheduledWork !== true || current.protectedSnapshotStable !== true ||
+          JSON.stringify(current.protectedSnapshot) !== JSON.stringify(target.protectedSnapshot)) reject('target_state_changed');
+      if (current.records.length !== authorized.length) reject('target_state_changed');
+      const allowed = new Map(authorized.map(row => [row.name, row.bytes]));
+      for (const row of current.records) if (!allowed.get(row.name)?.equals(row.bytes)) reject('target_state_changed');
+      // Original rows and only the exact confirmed neutral candidate bytes
+      // become the next baseline. No arbitrary current row is trusted.
+      batchTarget = current;
     }
-    if (result?.status !== 'created_metadata' || result.createdCount !== plan.records.length || result.protectedBytesUnchanged !== true) return {
-      status: 'refused', reason: 'create_only_transaction_refused', createdCount: 0,
-      recoveryRequired: result?.recoveryRequired === true || result?.status === 'refused_replacement_preserved' ||
-        (result?.status !== 'refused_rolled_back' && !(result?.status === 'refused' && result?.ownedFilesRolledBack === true && result?.recoveryRequired === false)),
-      createdCountBeforeRefusal: Number.isInteger(result?.createdCountBeforeRefusal) && result.createdCountBeforeRefusal >= 0 && result.createdCountBeforeRefusal <= 200 ? result.createdCountBeforeRefusal : 0,
-    };
-    return {status: 'synchronized', createdCount: result.createdCount, ...publicCounts,
+    return {status: 'synchronized', createdCount: confirmedCount, ...publicCounts,
       originalIdsPreserved: true, explicitNativeConfirmationRequired: true,
       resumedSessions: 0, copiedTranscripts: 0};
   } catch (error) {
     // Adapter/provider/path errors may contain secrets. Only our fixed known
     // reason tokens leave this boundary; no raw error or stack is returned.
-    return skipped(error instanceof Refused && SAFE_REASONS.has(error.reason) ? error.reason : 'unavailable');
+    const reason = error instanceof Refused && SAFE_REASONS.has(error.reason) ? error.reason : 'unavailable';
+    return confirmedCount > 0 ? {status: 'refused', reason, createdCount: confirmedCount, recoveryRequired: false} : skipped(reason);
   }
 }
 

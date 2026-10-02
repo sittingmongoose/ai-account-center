@@ -234,8 +234,8 @@ function wireSnapshot(value: unknown): unknown {
 
 /** Progress callbacks for the Open progress view; counts only, never record contents. */
 export interface ClaudeHistorySyncObserver {
-  /** The create-only append is about to run for this many history records. */
-  copying?: (totalCount: number) => void;
+  /** Whole missing-record plan and records confirmed before the next append. */
+  copying?: (totalCount: number, confirmedCount?: number) => void;
 }
 
 /** An observer can never change or fail the copy transaction it watches. */
@@ -335,8 +335,23 @@ export async function synchronizeClaudeHistoryBeforeOpen(
           }
           try {
             marker.assertBound();
-            const totalCount = Array.isArray(payload.records) ? payload.records.length : null;
-            if (totalCount !== null) notifyObserver(() => observer.copying?.(totalCount));
+            const batchCount = Array.isArray(payload.records) ? payload.records.length : null;
+            const totalCount = payload.totalCount ?? batchCount;
+            const confirmedCount = payload.confirmedCount ?? 0;
+            // Counts describe the whole neutral plan, never just this batch.
+            // Invalid observer metadata is ignored; it cannot affect mutation.
+            if (
+              batchCount !== null &&
+              Number.isSafeInteger(totalCount) &&
+              Number.isSafeInteger(confirmedCount) &&
+              typeof totalCount === 'number' &&
+              typeof confirmedCount === 'number' &&
+              totalCount >= batchCount &&
+              totalCount <= 200 &&
+              confirmedCount >= 0 &&
+              confirmedCount + batchCount <= totalCount
+            )
+              notifyObserver(() => observer.copying?.(totalCount, confirmedCount));
             const result = await call(platform, 'append', {
               expectedTarget: wireSnapshot(payload.target),
               records: (wireSnapshot({ records: payload.records }) as { records: unknown }).records,

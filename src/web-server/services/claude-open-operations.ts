@@ -186,9 +186,16 @@ export class ClaudeOpenOperations {
       }
     };
     const observer: ClaudeOpenObserver = {
-      copying: (totalCount) => update({ state: 'copying', totalCount, confirmedCount: 0 }),
+      copying: (totalCount, confirmedCount = 0) =>
+        update({ state: 'copying', totalCount, confirmedCount }),
       synchronized: ({ status, createdCount }) => {
-        if (status === 'synchronized' && entry.operation.totalCount !== null)
+        if (
+          ['synchronized', 'refused'].includes(status) &&
+          entry.operation.totalCount !== null &&
+          Number.isSafeInteger(createdCount) &&
+          createdCount >= 0 &&
+          createdCount <= entry.operation.totalCount
+        )
           update({ confirmedCount: createdCount });
       },
       opening: () => update({ state: 'opening' }),
