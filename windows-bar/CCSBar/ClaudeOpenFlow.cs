@@ -112,6 +112,8 @@ public static class ClaudeOpenFlow
                 // A read that fails never ends the Open: the server keeps the operation and the POST is never
                 // replayed, so the poll simply tries again until the deadline.
                 try { profiles = await client.ClaudeDesktopProfiles(); }
+                // A signed-out device key ends the poll (the tray shows its signed-out screen); anything else retries.
+                catch (DeviceSignedOutException) { throw; }
                 catch { continue; }
                 var operation = profiles.Where(candidate => candidate.Id == profile).Select(candidate => candidate.OpenOperation)
                     .FirstOrDefault(candidate => candidate is not null && candidate.Platform == platform

@@ -139,6 +139,59 @@
     </Setter.Value>
    </Setter>
   </Style>
+  <!-- Sign-in screen inputs: the field box, halo and eye button are drawn around them in code (SignInView). -->
+  <Style x:Key="BareInput" TargetType="Control">
+   <Setter Property="Background" Value="Transparent" />
+   <Setter Property="Foreground" Value="{DynamicResource Ink}" />
+   <Setter Property="BorderThickness" Value="0" />
+   <Setter Property="FontSize" Value="13.5" />
+   <Setter Property="Padding" Value="11,0" />
+   <Setter Property="VerticalContentAlignment" Value="Center" />
+   <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="Control">
+      <!-- The text box applies its Padding inside the content host itself, so the host takes no margin here. -->
+      <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden" />
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+  </Style>
+  <Style x:Key="BareTextBox" TargetType="TextBox" BasedOn="{StaticResource BareInput}"><Setter Property="CaretBrush" Value="{DynamicResource Ink}" /></Style>
+  <Style x:Key="BarePasswordBox" TargetType="PasswordBox" BasedOn="{StaticResource BareInput}"><Setter Property="CaretBrush" Value="{DynamicResource Ink}" /></Style>
+  <!-- The sign-in primary: its plate brush is set in code (accent, the calm success fill, or rested); hover darkens it
+       with an ink layer and a press scales it. Its three label layers are the content (SignInView). -->
+  <Style x:Key="SignInPrimaryButton" TargetType="Button">
+   <Setter Property="Foreground" Value="{DynamicResource AccentInk}" />
+   <Setter Property="Background" Value="{DynamicResource Accent}" />
+   <Setter Property="Height" Value="36" />
+   <Setter Property="FontSize" Value="13.5" />
+   <Setter Property="FontWeight" Value="SemiBold" />
+   <Setter Property="Cursor" Value="Hand" />
+   <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="Button">
+      <Grid x:Name="Root" RenderTransformOrigin="0.5,0.5" SnapsToDevicePixels="True" ClipToBounds="True">
+       <Grid.RenderTransform><ScaleTransform x:Name="Scale" /></Grid.RenderTransform>
+       <Border x:Name="Plate" Background="{TemplateBinding Background}" CornerRadius="4" />
+       <Border x:Name="Hover" Background="{DynamicResource Ink}" CornerRadius="4" Opacity="0" />
+       <Border x:Name="Ring" BorderBrush="{DynamicResource AccentText}" BorderThickness="2" CornerRadius="4" Opacity="0" />
+       <ContentPresenter Margin="10,0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" RecognizesAccessKey="False" />
+      </Grid>
+      <ControlTemplate.Triggers>
+       <MultiTrigger>
+        <MultiTrigger.Conditions><Condition Property="IsMouseOver" Value="True" /><Condition Property="IsEnabled" Value="True" /></MultiTrigger.Conditions>
+        <MultiTrigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hover" Storyboard.TargetProperty="Opacity" To="0.12" Duration="0:0:0.14" /></Storyboard></BeginStoryboard></MultiTrigger.EnterActions>
+        <MultiTrigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hover" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.14" /></Storyboard></BeginStoryboard></MultiTrigger.ExitActions>
+       </MultiTrigger>
+       <Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource PressIn}" /></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource PressOut}" /></Trigger.ExitActions></Trigger>
+       <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Ring" Property="Opacity" Value="0.55" /></Trigger>
+      </ControlTemplate.Triggers>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+  </Style>
   <Style TargetType="TextBox" BasedOn="{StaticResource AtlasInput}"><Setter Property="CaretBrush" Value="{DynamicResource Ink}" /></Style>
   <Style TargetType="PasswordBox" BasedOn="{StaticResource AtlasInput}"><Setter Property="CaretBrush" Value="{DynamicResource Ink}" /></Style>
  </Application.Resources>

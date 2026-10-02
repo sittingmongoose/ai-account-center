@@ -28,12 +28,10 @@
      </ScrollViewer>
      <Border x:Name="Fade" Height="34" VerticalAlignment="Bottom" IsHitTestVisible="False" Opacity="0" />
     </Grid>
-    <!-- Settings draws above the sign-in screen, so the gear works there too; X and Escape return to it. -->
+    <!-- The sign-in screen (SignInView, built in code): the card, the graticule and the atlas motif. Settings draws
+         above it, so the gear works there too; X and Escape return to it. -->
     <Grid x:Name="SignInLayer" Visibility="Collapsed" Background="{DynamicResource Panel}">
-     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-      <ScrollViewer.Resources><Style TargetType="ScrollBar" BasedOn="{StaticResource ThinScrollBar}" /></ScrollViewer.Resources>
-      <StackPanel x:Name="SignInPanel" Width="440" VerticalAlignment="Center" Margin="0,18,0,18" />
-     </ScrollViewer>
+     <Grid.RenderTransform><TranslateTransform x:Name="SignInShift" /></Grid.RenderTransform>
     </Grid>
     <Grid x:Name="SettingsLayer" Visibility="Collapsed" Background="{DynamicResource Panel}">
      <Grid.RenderTransform><TranslateTransform x:Name="SettingsShift" /></Grid.RenderTransform>
@@ -51,6 +49,7 @@
       <Button x:Name="DashboardButton" Style="{StaticResource AtlasButton}" Height="30" Margin="0,0,8,0" Click="DashboardClicked" />
       <Button x:Name="RefreshButton" Style="{StaticResource IconButton}" Width="30" Height="30" Margin="0,0,8,0" Click="RefreshClicked" />
       <ToggleButton x:Name="SettingsButton" Style="{StaticResource GearButton}" Click="SettingsClicked" />
+      <Button x:Name="QuitButton" Style="{StaticResource IconButton}" Width="30" Height="30" Margin="8,0,0,0" Visibility="Collapsed" Click="QuitClicked" />
      </StackPanel>
     </Grid>
    </Border>

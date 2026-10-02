@@ -8,39 +8,132 @@ using System.Text.Json.Serialization;
 
 namespace CCSBar;
 
+/// <summary>
+/// The stored dashboard connection (DPAPI, <see cref="SecureStore"/>). Version 1 (no "version" key) holds the dashboard
+/// username and password and signs in with a cookie. Version 2 (CONTRACT-auth-devices section 8) holds a paired device
+/// key instead and no password; a version 2 file without a key is what a remote sign-out or Disconnect leaves behind:
+/// the address and username stay, so the sign-in screen can say why and fill them in.
+/// </summary>
 public sealed class ConnectionSettings
 {
-    public string BaseURL { get; set; } = "http://192.168.50.179:3000";
+    public int? Version { get; set; }
+    /// <summary>Empty on a new tray: the first-run screen starts with an empty address (placeholder http://).</summary>
+    public string BaseURL { get; set; } = "";
     public string Username { get; set; } = "";
-    public string Password { get; set; } = "";
-    /// <summary>Any other members the stored connection holds (for example a device token from a later pairing). They
-    /// are written back exactly as they were when Change saves a new address or login.</summary>
+    /// <summary>Version 1 only. A paired tray never stores the password.</summary>
+    public string? Password { get; set; }
+    public string? DeviceId { get; set; }
+    public string? DeviceToken { get; set; }
+    public string? InstallId { get; set; }
+    public string? PairedAt { get; set; }
+    /// <summary>When the device key should be rotated (section 7); refreshed from pair, rotate and devices/me.</summary>
+    public string? RotateAfter { get; set; }
+    /// <summary>Why a version 2 file has no key: device_revoked, device_expired, invalid_token or disconnected.</summary>
+    public string? SignedOutReason { get; set; }
+    public string? SignedOutAt { get; set; }
+    /// <summary>Who and when, when the dashboard's 401 says so (a later server); the screen falls back to its own words.</summary>
+    public string? RevokedBy { get; set; }
+    /// <summary>Any other members the stored connection holds. They are written back exactly as they were.</summary>
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 
-    public Uri Validate()
+    [JsonIgnore] public bool IsPaired => !string.IsNullOrEmpty(DeviceToken);
+    [JsonIgnore] public bool HasPassword => !string.IsNullOrEmpty(Password);
+    /// <summary>A version 2 file whose key was removed (signed out remotely, or Disconnect): nothing to sign in with.</summary>
+    [JsonIgnore] public bool IsSignedOut => !IsPaired && !HasPassword;
+
+    /// <summary>The origin, checked: http or https, no user info, path, query or fragment; plain HTTP only to a local
+    /// network address or a local name (the address is resolved and checked again before anything is sent).</summary>
+    public Uri ValidateAddress()
     {
         if (!Uri.TryCreate(BaseURL.Trim(), UriKind.Absolute, out var uri) ||
             uri.Scheme is not ("http" or "https") ||
             !string.IsNullOrEmpty(uri.UserInfo) || uri.AbsolutePath != "/" ||
             !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
             throw new ArgumentException("Enter the dashboard's http or https origin, without a path.");
-        if (uri.Scheme == "http" && !IsPrivateHost(uri.Host))
+        if (uri.Scheme == "http" && !LocalNetwork.IsLocalHostName(uri.Host))
             throw new ArgumentException("HTTP is supported for local network dashboards. Use HTTPS for other servers.");
+        return uri;
+    }
+
+    /// <summary>A connection the tray can use: a device key, or (version 1) a username and password.</summary>
+    public Uri Validate()
+    {
+        var uri = ValidateAddress();
+        if (IsPaired)
+        {
+            if (!DeviceTokenFormat.IsToken(DeviceToken)) throw new ArgumentException("The stored device key is not valid. Pair again.");
+            return uri;
+        }
         if (string.IsNullOrWhiteSpace(Username) || string.IsNullOrEmpty(Password))
             throw new ArgumentException("Enter your dashboard username and password.");
         return uri;
     }
 
-    private static bool IsPrivateHost(string host)
+    /// <summary>A stored file the tray can read: a usable connection, or a signed-out version 2 file.</summary>
+    public void ValidateStored()
     {
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return true;
-        if (!IPAddress.TryParse(host, out var address)) return false;
+        if (IsSignedOut) { ValidateAddress(); if (Version != 2) throw new ArgumentException("The stored connection is incomplete."); return; }
+        Validate();
+    }
+
+    /// <summary>Two addresses name the same dashboard (scheme, host and port), however they were typed.</summary>
+    public static bool SameOrigin(string? a, string? b) =>
+        Uri.TryCreate((a ?? "").Trim(), UriKind.Absolute, out var x) && Uri.TryCreate((b ?? "").Trim(), UriKind.Absolute, out var y)
+        && string.Equals(x.GetLeftPart(UriPartial.Authority), y.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>The device key's shape: "aacd_" and 43 base64url characters (CONTRACT-auth-devices section 5).</summary>
+public static class DeviceTokenFormat
+{
+    private static readonly System.Text.RegularExpressions.Regex Shape = new("^aacd_[A-Za-z0-9_-]{43}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    public static bool IsToken(string? token) => token is not null && Shape.IsMatch(token);
+}
+
+/// <summary>
+/// What counts as this tray's local network: 10/8, 172.16/12, 192.168/16, 127/8, fc00::/7 and ::1, with IPv4-mapped
+/// IPv6 normalized first. Public, CGNAT (100.64/10), link-local and unknown addresses are not local, matching the
+/// dashboard's default trusted networks (section 2a, rule 4) and the trays concept's state 4.
+/// </summary>
+public static class LocalNetwork
+{
+    public static bool IsLocalAddress(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
         if (IPAddress.IsLoopback(address)) return true;
-        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
-            return address.IsIPv6LinkLocal || (address.GetAddressBytes()[0] & 0xfe) == 0xfc;
         var bytes = address.GetAddressBytes();
-        return bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) ||
-               (bytes[0] == 192 && bytes[1] == 168) || (bytes[0] == 169 && bytes[1] == 254);
+        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6) return (bytes[0] & 0xfe) == 0xfc;
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;
+        return bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) || (bytes[0] == 192 && bytes[1] == 168);
+    }
+
+    /// <summary>An address literal on the local network, or a local name: localhost, a single label, or a name under
+    /// .local, .lan, .home.arpa or .internal. Any other name is checked by resolving it (<see cref="ResolvesLocally"/>).</summary>
+    public static bool IsLocalHostName(string host)
+    {
+        var name = host.Trim().TrimStart('[').TrimEnd(']').TrimEnd('.');
+        if (name.Length == 0) return false;
+        if (IPAddress.TryParse(name, out var address)) return IsLocalAddress(address);
+        if (name.Equals("localhost", StringComparison.OrdinalIgnoreCase) || !name.Contains('.')) return true;
+        var lower = name.ToLowerInvariant();
+        return lower.EndsWith(".local", StringComparison.Ordinal) || lower.EndsWith(".lan", StringComparison.Ordinal)
+            || lower.EndsWith(".home.arpa", StringComparison.Ordinal) || lower.EndsWith(".internal", StringComparison.Ordinal);
+    }
+
+    /// <summary>Every address the host resolves to is local. An address literal is not looked up. Null when the name
+    /// could not be resolved (treated as unreachable), so nothing is ever sent to a public address over plain HTTP.</summary>
+    public static async System.Threading.Tasks.Task<bool?> ResolvesLocally(string host, TimeSpan timeout)
+    {
+        var name = host.Trim().TrimStart('[').TrimEnd(']');
+        if (IPAddress.TryParse(name, out var literal)) return IsLocalAddress(literal);
+        try
+        {
+            var lookup = Dns.GetHostAddressesAsync(name);
+            if (await System.Threading.Tasks.Task.WhenAny(lookup, System.Threading.Tasks.Task.Delay(timeout)) != lookup) return null;
+            var addresses = await lookup;
+            if (addresses.Length == 0) return null;
+            return Array.TrueForAll(addresses, IsLocalAddress);
+        }
+        catch { return null; }
     }
 }
 
@@ -52,16 +145,47 @@ public sealed class AccountDashboard
     public AutoSwitchStatus CodexAutoSwitch { get; set; } = new();
     public AntigravityAutoStatus? AntigravityAutoSwitch { get; set; }
     public AccountRefreshSettings? Settings { get; set; }
-    /// <summary>Providers hidden in the dashboard's Accounts and Settings, when the server reports them (top level or in settings).</summary>
-    public List<string>? HiddenProviders { get; set; }
-    [JsonIgnore] public bool ReportsHidden => HiddenProviders is not null || Settings?.HiddenProviders is not null;
-    [JsonIgnore] public IReadOnlySet<string> Hidden => new HashSet<string>((HiddenProviders ?? Settings?.HiddenProviders ?? new List<string>()).Where(Formatting.IsSafeId), StringComparer.Ordinal);
+    /// <summary>The dashboard's provider list (B3a): label, order, and the "Show on dashboard" and "Show in tray" switches.</summary>
+    public List<DashboardProvider>? Providers { get; set; }
+
+    /// <summary>Whether the server reports the trays' own visibility ("Show in tray"): providers[].trayVisible or
+    /// settings.trayHiddenProviders. Older servers report neither, and every provider then shows.</summary>
+    [JsonIgnore] public bool ReportsTrayVisibility => Providers?.Exists(provider => provider.TrayVisible is not null) == true || Settings?.TrayHiddenProviders is not null;
+
+    /// <summary>Providers hidden in the trays: only "Show in tray" counts (providers[].trayVisible false, or listed in
+    /// settings.trayHiddenProviders). "Show on dashboard" (providers[].visible, settings.hiddenProviders) is the
+    /// dashboard's own switch and never hides anything here.</summary>
+    [JsonIgnore] public IReadOnlySet<string> Hidden => new HashSet<string>(
+        (Providers ?? new List<DashboardProvider>()).Where(provider => provider.TrayVisible == false).Select(provider => provider.Id)
+            .Concat(Settings?.TrayHiddenProviders ?? new List<string>()).Where(Formatting.IsSafeId), StringComparer.Ordinal);
+
+    /// <summary>Providers hidden on the dashboard (read only, for Settings' facts).</summary>
+    [JsonIgnore] public IReadOnlySet<string> HiddenOnDashboard => new HashSet<string>(
+        (Providers ?? new List<DashboardProvider>()).Where(provider => provider.Visible == false).Select(provider => provider.Id)
+            .Concat(Settings?.HiddenProviders ?? new List<string>()).Where(Formatting.IsSafeId), StringComparer.Ordinal);
+
+    /// <summary>The accounts this tray shows: an account hidden by the server (accounts[].trayHidden when a server sends
+    /// it, else accounts[].hidden from the dashboard's per-account switch) is left out.</summary>
+    [JsonIgnore] public IEnumerable<DashboardAccount> ShownAccounts => Accounts.Where(account => !account.HiddenInTray);
+}
+
+/// <summary>One providers[] entry of GET /api/accounts/dashboard (CLIENT API SHEET 4.4).</summary>
+public sealed class DashboardProvider
+{
+    public string Id { get; set; } = "";
+    public string? Label { get; set; }
+    public int? Order { get; set; }
+    public bool? Visible { get; set; }
+    /// <summary>"Show in tray"; missing means shown.</summary>
+    public bool? TrayVisible { get; set; }
 }
 
 public sealed class AccountRefreshSettings
 {
     public int RefreshIntervalSeconds { get; set; } = 60;
     public List<string>? HiddenProviders { get; set; }
+    public List<string>? TrayHiddenProviders { get; set; }
+    public List<string>? HiddenAccountIds { get; set; }
     public int ValidatedInterval => RefreshIntervalSeconds is >= 30 and <= 3600 ? RefreshIntervalSeconds : 60;
 }
 
@@ -80,9 +204,14 @@ public sealed class DashboardAccount
     public string? FetchedAt { get; set; }
     public string? SampledAt { get; set; }
     public bool IsActive { get; set; }
+    /// <summary>Hidden by the dashboard's per-account switch (settings.hiddenAccountIds); display only, filtered here.</summary>
+    public bool Hidden { get; set; }
+    /// <summary>A tray-only switch, if a later server sends one; it then wins over <see cref="Hidden"/>.</summary>
+    public bool? TrayHidden { get; set; }
     public List<QuotaWindow> Windows { get; set; } = new();
     public AccountCapabilities Capabilities { get; set; } = new();
     [JsonIgnore] public bool HasUsableUsage => Windows.Exists(window => window.HasUsableUsage);
+    [JsonIgnore] public bool HiddenInTray => TrayHidden ?? Hidden;
 }
 
 public sealed class QuotaWindow
@@ -103,6 +232,8 @@ public sealed class QuotaWindow
     public string? ExpiresAt { get; set; }
     public bool Unlimited { get; set; }
     public bool? Enabled { get; set; }
+    /// <summary>F6 from the server (MISC): the reset has passed and the reading predates it. Only ever true when sent.</summary>
+    public bool? ResetPassed { get; set; }
     [JsonIgnore] public double? DisplayPercent => UsedPercent is double used
         ? double.IsFinite(used) && used >= 0 ? used : null
         : RemainingPercent is >= 0 and <= 100 ? 100 - RemainingPercent : null;
@@ -394,7 +525,10 @@ public static class Formatting
     public static DateTimeOffset? PendingReset(DashboardAccount account, QuotaWindow window)
     {
         if (window.Unlimited || window.Enabled == false || window.Kind is "balance" or "extra_usage" or "spend") return null;
-        if (!DateTimeOffset.TryParse(window.ResetAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var reset) || reset > Now()) return null;
+        if (!DateTimeOffset.TryParse(window.ResetAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var reset)) return null;
+        // The server's own mark (MISC's resetPassed) is honoured even when this computer's clock is behind it.
+        if (window.ResetPassed == true) return reset;
+        if (reset > Now()) return null;
         var sampled = window.SampledAt ?? account.SampledAt;
         return DateTimeOffset.TryParse(sampled, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) && at >= reset ? null : reset;
     }
@@ -429,11 +563,11 @@ public static class Formatting
     public static string PercentWith(double value, int decimals) => value.ToString("F" + decimals, CultureInfo.CurrentCulture) + "%";
 
     /// <summary>Notification-area tooltip (max 127 characters): the active Codex account's weekly % left.</summary>
-    public static string TrayTooltip(AccountDashboard? dashboard, bool stale = false, bool configured = true)
+    public static string TrayTooltip(AccountDashboard? dashboard, bool stale = false, bool configured = true, string? signInState = null)
     {
         const string name = "AI Account Center";
-        if (!configured) return name + " · not connected";
-        var active = dashboard?.Accounts.FirstOrDefault(account => account.Provider == "codex" && account.IsActive);
+        if (!configured) return name + " · " + (string.IsNullOrEmpty(signInState) ? "Not paired" : signInState);
+        var active = dashboard is null || dashboard.Hidden.Contains("codex") ? null : dashboard.ShownAccounts.FirstOrDefault(account => account.Provider == "codex" && account.IsActive);
         var weekly = active is null ? null : CodexPrimaryWindows(active).FirstOrDefault(window => window.Key == "seven_day");
         string text = name;
         if (active is not null && weekly is not null && PendingReset(active, weekly) is not null)

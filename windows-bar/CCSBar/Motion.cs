@@ -17,6 +17,8 @@ public static class Motion
     public static readonly IEasingFunction Out = Freeze(new CubicEase { EasingMode = EasingMode.EaseOut });
     public static readonly IEasingFunction In = Freeze(new CubicEase { EasingMode = EasingMode.EaseIn });
     public static readonly IEasingFunction InOut = Freeze(new CubicEase { EasingMode = EasingMode.EaseInOut });
+    /// <summary>Constant speed: the rate-limit drain bar.</summary>
+    public static readonly IEasingFunction Linear = Freeze(new PowerEase { Power = 1, EasingMode = EasingMode.EaseIn });
     /// <summary>Controls only (toggle knob, segmented thumb, gear): a small overshoot. Never on a value.</summary>
     public static readonly IEasingFunction Spring = Freeze(new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.45 });
 

@@ -95,11 +95,16 @@ public static class FixtureRender
 
             // Hidden providers are honoured; an unknown provider still renders, with the neutral mark.
             var hidden = Clone(fixture);
-            hidden.HiddenProviders = new() { "kimi-code" };
+            // "Show in tray" off for Kimi Code hides it; "Show on dashboard" off for Muse does not; a hidden account is left out.
+            hidden.Settings ??= new AccountRefreshSettings();
+            hidden.Settings.TrayHiddenProviders = new() { "kimi-code" };
+            hidden.Providers = new() { new DashboardProvider { Id = "muse", Visible = false, TrayVisible = true } };
+            hidden.Accounts.First(account => account.Id == "claude:example-4").Hidden = true;
             hidden.Accounts.Add(new DashboardAccount { Id = "newcode:example-1", Provider = "newcode", ProviderLabel = "New Code", Label = "New Code account", Email = "newcode-1@example.com", Platform = "ubuntu", Status = "cached", SampledAt = hidden.UpdatedAt, Windows = new() { new QuotaWindow { Key = "weekly", Label = "Weekly", UsedPercent = 42, WindowMinutes = 10080, Kind = "rate_limit" } } });
             window.ApplyDashboardSample(hidden);
             await Settle(window);
             report.Checks[$"{name}_hidden_provider_closes_up"] = FindUid(window.ContentPanel, "provider:kimi-code") is null && FindUid(window.ContentPanel, "provider:muse") is not null;
+            report.Checks[$"{name}_hidden_account_is_left_out"] = FindUid(window.ContentPanel, "row:claude:example-4") is null && FindUid(window.ContentPanel, "row:claude:example-1") is not null;
             report.Checks[$"{name}_unknown_provider_renders"] = FindUid(window.ContentPanel, "provider:newcode") is not null;
             report.Checks[$"{name}_status_counts_visible_providers"] = window.StatusText.Text.StartsWith("9 of 9", StringComparison.Ordinal);
 
@@ -144,6 +149,8 @@ public static class FixtureRender
             await Settle(hiddenFirst);
             report.Checks[$"{name}_platter_placed_after_hidden_sample"] = PlatterOn(hiddenFirst, "codex", "row:codex:example-2", measures, name + "_hidden");
             hiddenFirst.AllowClose = true; hiddenFirst.Close();
+
+            await SignInStates(report, measures, directory, name);
 
             // First run: the sign-in screen.
             var signIn = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
@@ -337,6 +344,79 @@ public static class FixtureRender
             report.Checks["refresh_timer_flips_a_window_when_its_reset_passes"] = shownBefore && keptReading && flipped.Target is null && flipped.DrawnUnavailable && flipped.ValueShown.StartsWith("Reset ", StringComparison.Ordinal) && !flipped.ValueClipped;
         }
         finally { Formatting.Now = saved; window.AllowClose = true; window.Close(); }
+    }
+
+    /// <summary>The fifteen sign-in states (TSIGN-C), each shown directly in the real panel: the expected title, the
+    /// card inside the sign-in area and clear of the footer, no text cut off, the primary's label centred, and the regions
+    /// each state opens. One PNG per state for review.</summary>
+    private static async Task SignInStates(CheckReport report, Dictionary<string, double> measures, string directory, string name)
+    {
+        var expected = new (SignInState State, string Title, string[] Open, bool Repair)[]
+        {
+            (SignInState.FirstRun, "Connect this PC", new[] { "addr", "acts" }, false),
+            (SignInState.Password, "Sign in to pair", new[] { "creds", "device", "acts" }, false),
+            (SignInState.SetupCode, "Set up sign-in", new[] { "creds", "setup", "acts" }, false),
+            (SignInState.Pairing, "Pairing this PC", new[] { "steps", "acts" }, false),
+            (SignInState.NotLocal, "This address isn't on your local network", new[] { "addr", "guide", "acts" }, false),
+            (SignInState.PairingOff, "Pairing is turned off for remote computers", new[] { "acts" }, false),
+            (SignInState.WrongPassword, "Sign in to pair", new[] { "creds", "device", "acts" }, false),
+            (SignInState.RateLimited, "Sign in to pair", new[] { "banner", "creds", "device", "acts" }, false),
+            (SignInState.Unreachable, "Can't reach that address", new[] { "addr", "acts" }, false),
+            (SignInState.WrongAddress, "That isn't a dashboard address", new[] { "addr", "acts" }, false),
+            (SignInState.Securing, "Securing this tray", new[] { "steps" }, false),
+            (SignInState.SignedOut, "This tray was signed out", new[] { "creds", "device", "acts" }, false),
+            (SignInState.SignedOutAll, "This tray was signed out", new[] { "creds", "device", "acts" }, false),
+            (SignInState.Expired, "This tray was signed out", new[] { "creds", "device", "acts" }, false),
+            (SignInState.Success, "Paired", new[] { "steps", "acts" }, false),
+            (SignInState.Password, "Sign in to re-pair", new[] { "banner", "creds", "device", "acts" }, true),
+            (SignInState.Unreachable, "Can't reach that address", new[] { "banner", "addr", "acts" }, true),
+        };
+        var regions = new[] { "banner", "addr", "guide", "creds", "setup", "device", "steps", "acts" };
+        foreach (var (state, title, open, repair) in expected)
+        {
+            var tag = $"{name}_signin_{state.ToString().ToLowerInvariant()}{(repair ? "_repair" : "")}";
+            var window = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
+            try
+            {
+                window.Show();
+                window.PresetSignInForCheck(state, repair);
+                await Settle(window);
+                var view = window.SignIn;
+                SavePng(window, Path.Combine(directory, tag + ".png"));
+                var area = view.TranslatePoint(new Point(0, 0), window);
+                var card = view.Card.TranslatePoint(new Point(0, 0), window);
+                var cardBottom = card.Y + view.Card.ActualHeight;
+                var areaBottom = area.Y + view.ActualHeight;
+                measures[tag + "_card_top"] = card.Y - area.Y; measures[tag + "_card_room_below"] = areaBottom - cardBottom;
+                report.Checks[tag + "_title"] = view.TitleText == title;
+                report.Checks[tag + "_card_inside_area_and_clear_of_footer"] = card.Y >= area.Y && cardBottom <= areaBottom && cardBottom <= window.Footer.TranslatePoint(new Point(0, 0), window).Y;
+                report.Checks[tag + "_regions"] = regions.All(region => view.RegionOpen(region) == open.Contains(region));
+                report.Checks[tag + "_no_text_cut_off"] = NoClippedText(view.Card);
+                var label = All(view.PrimaryButton).OfType<TextBlock>().FirstOrDefault(block => block.IsVisible && block.Opacity > 0.5 && block.Text.Length > 0);
+                if (view.RegionOpen("acts") && label is not null && label.ActualWidth > 0)
+                {
+                    var buttonMid = view.PrimaryButton.TranslatePoint(new Point(view.PrimaryButton.ActualWidth / 2, 0), window).X;
+                    var parent = (FrameworkElement)VisualTreeHelper.GetParent(label);
+                    var labelMid = parent.TranslatePoint(new Point(parent.ActualWidth / 2, 0), window).X;
+                    report.Checks[tag + "_primary_label_centred"] = Math.Abs(buttonMid - labelMid) <= 1;
+                }
+                report.Notes[tag + "_status"] = window.StatusText.Text;
+            }
+            catch (Exception error) { report.Checks[tag + "_rendered"] = false; report.Notes[tag] = error.GetType().Name + ": " + error.Message; }
+            finally { window.AllowClose = true; window.Close(); }
+        }
+    }
+
+    /// <summary>No single-line text in the element is wider than its own box (wrapped text is laid out to fit).</summary>
+    private static bool NoClippedText(FrameworkElement root)
+    {
+        foreach (var block in All(root).OfType<TextBlock>().Where(block => block.IsVisible && block.ActualWidth > 0 && block.TextWrapping == TextWrapping.NoWrap && block.Text.Length > 0))
+        {
+            var typeface = new Typeface(block.FontFamily, block.FontStyle, block.FontWeight, block.FontStretch);
+            var width = new FormattedText(block.Text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, block.FontSize, Brushes.Black, VisualTreeHelper.GetDpi(block).PixelsPerDip).WidthIncludingTrailingWhitespace;
+            if (block.TextTrimming == TextTrimming.None && width > block.ActualWidth + 0.75) return false;
+        }
+        return true;
     }
 
     private static bool TrayMenu(string path)

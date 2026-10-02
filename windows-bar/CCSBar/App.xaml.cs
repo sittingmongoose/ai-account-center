@@ -44,16 +44,25 @@ public partial class App : System.Windows.Application
             var args = e.Args;
             if (args.Length > 0 && args[0] == "--configure-stdin")
             {
+                // { baseURL, username, password }: pairs at once and stores only the device key; when the dashboard
+                // cannot pair this computer (no pairing yet, not trusted, not reachable) it stores version 1 as before.
                 var input = await Console.In.ReadToEndAsync();
                 if (input.Length > 16_384) throw new ArgumentException("Connection input is too large.");
                 var settings = JsonSerializer.Deserialize<ConnectionSettings>(input, Formatting.Json) ?? throw new ArgumentException("Invalid connection settings.");
-                SecureStore.Save(settings);
-                Console.WriteLine("Dashboard connection stored with current-user DPAPI.");
+                var paired = await Pairing.ConfigureAsync(settings, SecureStore.SettingsPath);
+                Console.WriteLine(paired ? "Dashboard connection paired; the device key is stored with current-user DPAPI." : "Dashboard connection stored with current-user DPAPI.");
                 Shutdown(0); return;
             }
             preferences = Preferences.Load();
             Theme.Apply(preferences.Mode, animate: false);
             RegisterTheme();
+            if (args.Length > 2 && args[0] == "--e2e")
+            {
+                // A live end-to-end step against a sandbox dashboard (scripts/E2E.ps1), with AAC_TRAY_STATE_DIR set.
+                var report = await E2E.Run(args[1], args[2]);
+                WriteReport(Path.Combine(args[2], "e2e-" + args[1] + ".json"), report);
+                Shutdown(report.Passed ? 0 : 1); return;
+            }
             if (args.Length > 1 && args[0] is "--check" or "--check-live")
             {
                 var report = args[0] == "--check-live" ? await Checks.Live() : await Checks.Run();
@@ -121,6 +130,8 @@ public partial class App : System.Windows.Application
             {
                 if (background) await window.Refresh(false);
                 else await window.OpenPopup();
+                // A stored version 1 password is traded for a device key once, by itself (contract section 8).
+                try { await window.MigrateIfDue(); } catch (Exception error) { Trace("migration skipped: " + error.GetType().Name); }
             }
             else await window.OpenPopup();
         }
@@ -144,8 +155,8 @@ public partial class App : System.Windows.Application
         tray.RefreshRequested += () => Dispatcher.BeginInvoke(new Action(async () => await window.OpenPopup()));
         tray.SettingsRequested += () => Dispatcher.BeginInvoke(new Action(async () => await window.OpenPopup(settings: true)));
         tray.QuitRequested += () => Dispatcher.BeginInvoke(new Action(Quit));
-        window.SampleChanged += () => tray?.SetTooltip(Formatting.TrayTooltip(window.Dashboard, window.IsStale, window.IsConfigured));
-        tray.SetTooltip(Formatting.TrayTooltip(window.Dashboard, false, window.IsConfigured));
+        window.SampleChanged += () => tray?.SetTooltip(Formatting.TrayTooltip(window.Dashboard, window.IsStale, window.IsConfigured && window.SignInStatus is null, window.SignInStatus));
+        tray.SetTooltip(Formatting.TrayTooltip(window.Dashboard, false, window.IsConfigured, window.SignInStatus));
         SetWindowIcon(window);
     }
 

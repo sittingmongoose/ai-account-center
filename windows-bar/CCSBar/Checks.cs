@@ -25,7 +25,7 @@ public sealed class CheckReport
     public bool ReadOnly { get; set; } = true;
 }
 
-public static class Checks
+public static partial class Checks
 {
     public static async Task<CheckReport> Run()
     {
@@ -94,7 +94,7 @@ public static class Checks
         report.Checks["cached_window_missing_sample_time_stays_unknown"] = Formatting.WindowSample(new QuotaWindow { Status = "cached" }.SampledAt) == "Sample time unavailable" && Formatting.WindowSample("invalid") == "Sample time unavailable";
         report.Checks["profile_path_and_uri_injection_rejected"] = !Formatting.IsSafeProfile("../gmail") && !Formatting.IsSafeProfile("gmail?x=1") && !Formatting.IsSafeClaudeProfile("gmail/../../") && !Formatting.IsSafeClaudeProfile("me?x=1") && !Formatting.IsSafeClaudeProfile("") && !Formatting.IsSafeClaudeProfile(null) && !Formatting.IsSafeClaudeProfile("-leading") && !Formatting.IsSafeClaudeProfile(new string('a', 65));
         // No allowlist: any id the dashboard reports is launched when it is URI and path safe.
-        report.Checks["claude_launch_ids_follow_the_data"] = new[] { "platyr", "gmail", "party", "me", "claude-example-1", "work_2" }.All(Formatting.IsSafeClaudeProfile);
+        report.Checks["claude_launch_ids_follow_the_data"] = new[] { "fixture-a", "fixture-b", "me", "claude-example-1", "work_2" }.All(Formatting.IsSafeClaudeProfile);
         NewBehaviourChecks(report);
         report.Checks["connection_with_path_rejected"] = RejectConnection("http://127.0.0.1:3000/account");
         report.Checks["cleartext_remote_connection_rejected"] = RejectConnection("http://example.com");
@@ -105,6 +105,7 @@ public static class Checks
         ResetPendingChecks(report);
         await SignInChangeChecks(report);
         await ClaudeOpenChecks(report);
+        await PairingChecks(report);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
@@ -224,7 +225,7 @@ public static class Checks
                 }
                 else
                 {
-                    valid &= request.HttpMethod == "POST" && path is "/api/codex/profiles/gmail/activate" or "/api/claude/desktop-profiles/platyr/open";
+                    valid &= request.HttpMethod == "POST" && path is "/api/codex/profiles/gmail/activate" or "/api/claude/desktop-profiles/fixture-a/open";
                     payload = new { success = true };
                 }
                 var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, Formatting.Json);
@@ -239,7 +240,7 @@ public static class Checks
             valid &= !(await client.SetAutoSwitch(false)).Enabled;
             var configured = await client.SetAutoSwitch(false, 10);
             valid &= !configured.Enabled && configured.ThresholdPercent == 10;
-            await client.Activate("gmail"); await client.OpenClaude("platyr", "mac");
+            await client.Activate("gmail"); await client.OpenClaude("fixture-a", "mac");
             valid &= await CodexSwitchFlow.Run("party", async token => { await client.Activate("party", token); }, confirmation => Task.FromResult(confirmation.Processes[0].Label == "Fixture Codex desktop"));
             bool authRejected = false;
             try { await client.Activate("party", "fixture-session-changed"); }
@@ -267,10 +268,17 @@ public static class Checks
         report.Checks["max_plan_detection_for_fable"] = new[] { "max", "Max", "max_5x", "Max 20x", "claude_max" }.All(Formatting.IsMaxPlan) && !new[] { "pro", "maximum", "", null }.Any(Formatting.IsMaxPlan);
         var mixed = new[] { "zai", "newcode", "codex", "claude", "antigravity", "zai" }.Select(provider => new DashboardAccount { Provider = provider }).ToArray();
         report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
-        var hiddenTop = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"hiddenProviders\":[\"kimi-code\",\"../x\"]}", Formatting.Json)!;
-        var hiddenNested = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"qwen\"]}}", Formatting.Json)!;
+        // The trays honour only "Show in tray" (providers[].trayVisible, settings.trayHiddenProviders); "Show on
+        // dashboard" (providers[].visible, settings.hiddenProviders) never hides anything here.
+        var trayHidden = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"providers\":[{\"id\":\"kimi-code\",\"visible\":true,\"trayVisible\":false},{\"id\":\"qwen\",\"visible\":false,\"trayVisible\":true},{\"id\":\"zai\",\"visible\":false},{\"id\":\"../x\",\"trayVisible\":false}]}", Formatting.Json)!;
+        var trayHiddenNested = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"muse\"],\"trayHiddenProviders\":[\"qwen\"]}}", Formatting.Json)!;
+        var dashboardOnly = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"muse\"]},\"providers\":[{\"id\":\"muse\",\"visible\":false}]}", Formatting.Json)!;
         var hiddenNone = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{}}", Formatting.Json)!;
-        report.Checks["hidden_providers_honoured_when_present"] = hiddenTop.Hidden.SetEquals(new[] { "kimi-code" }) && hiddenNested.Hidden.SetEquals(new[] { "qwen" }) && hiddenNone.Hidden.Count == 0 && !hiddenNone.ReportsHidden && hiddenTop.ReportsHidden;
+        report.Checks["tray_visibility_follows_show_in_tray_only"] = trayHidden.Hidden.SetEquals(new[] { "kimi-code" }) && trayHiddenNested.Hidden.SetEquals(new[] { "qwen" })
+            && dashboardOnly.Hidden.Count == 0 && dashboardOnly.HiddenOnDashboard.SetEquals(new[] { "muse" }) && !dashboardOnly.ReportsTrayVisibility
+            && hiddenNone.Hidden.Count == 0 && !hiddenNone.ReportsTrayVisibility && trayHidden.ReportsTrayVisibility && trayHiddenNested.ReportsTrayVisibility;
+        var accountsHidden = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"codexAutoSwitch\":{},\"accounts\":[{\"id\":\"codex:a\",\"provider\":\"codex\",\"hidden\":true},{\"id\":\"codex:b\",\"provider\":\"codex\"},{\"id\":\"claude:c\",\"provider\":\"claude\",\"hidden\":true,\"trayHidden\":false}]}", Formatting.Json)!;
+        report.Checks["hidden_accounts_from_the_server_are_left_out"] = accountsHidden.ShownAccounts.Select(account => account.Id).SequenceEqual(new[] { "codex:b", "claude:c" });
         var antigravity = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"isActive\":true,\"capabilities\":{\"antigravityProfileId\":\"a\",\"antigravityHostIds\":[\"ubuntu\"],\"antigravityCanActivate\":true}}],\"codexAutoSwitch\":{},\"antigravityAutoSwitch\":{\"enabled\":true,\"thresholdUsedPercent\":90,\"activationInProgress\":false}}", Formatting.Json)!;
         report.Checks["antigravity_dto_decoded"] = antigravity.Accounts[0].Capabilities.AntigravityProfileId == "a" && antigravity.Accounts[0].Capabilities.AntigravityCanActivate && antigravity.AntigravityAutoSwitch?.ThresholdUsedPercent == 90 && antigravity.AntigravityAutoSwitch.Enabled;
         var proposal = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!;
@@ -289,7 +297,7 @@ public static class Checks
         var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", Capabilities = new AccountCapabilities { CodexProfile = "b" }, Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
         var tooltip = Formatting.TrayTooltip(dashboard);
         report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex: codex-2, 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
-            && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · not connected" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
+            && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · Not paired" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
             && Formatting.TrayTooltip(new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = new string('x', 200) + "@example.com", Windows = { new QuotaWindow { Key = "seven_day", UsedPercent = 1 } } } } }).Length <= 127;
         report.Checks["value_easing_never_overshoots"] = Motion.NeverOvershoots(Motion.Out) && Motion.NeverOvershoots(Motion.InOut) && !Motion.NeverOvershoots(Motion.Spring);
         report.Checks["severity_ramp_matches_dashboard"] = Theme.Severity(79.99) == "calm" && Theme.Severity(80) == "warn" && Theme.Severity(95) == "crit" && Theme.Severity(100) == "crit" && Theme.Severity(100.01) == "over" && Theme.Severity(null) == "na" && Theme.Severity(double.NaN) == "na";
@@ -380,6 +388,11 @@ public static class Checks
             report.Checks["reset_pending_reads_window_sample_before_account_sample"] = Formatting.PendingReset(older, Window(past, "2026-10-02T11:45:00Z")) is null && Formatting.PendingReset(newer, Window(past, "2026-10-02T10:30:00Z")) == resetAt;
             report.Checks["reset_pending_leaves_amounts_unlimited_and_disabled"] = Formatting.PendingReset(older, new QuotaWindow { Key = "credits", Kind = "balance", Remaining = 4, ResetAt = past }) is null
                 && Formatting.PendingReset(older, new QuotaWindow { Key = "x", Unlimited = true, ResetAt = past }) is null && Formatting.PendingReset(older, new QuotaWindow { Key = "y", Enabled = false, ResetAt = past }) is null;
+            // The server's own mark (MISC's resetPassed) is honoured even when this computer's clock is behind the reset.
+            var serverMarked = Window(future); serverMarked.ResetPassed = true;
+            report.Checks["reset_pending_honours_the_servers_reset_passed"] = Formatting.PendingReset(newer, serverMarked) == DateTimeOffset.Parse(future, System.Globalization.CultureInfo.InvariantCulture)
+                && JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"five_hour\",\"usedPercent\":12,\"resetAt\":\"2026-10-02T11:00:00Z\",\"resetPassed\":true}", Formatting.Json)!.ResetPassed == true
+                && Formatting.PendingReset(older, new QuotaWindow { Key = "credits", Kind = "balance", Remaining = 4, ResetAt = past, ResetPassed = true }) is null;
             var forms = Formatting.PendingForms(resetAt);
             report.Checks["reset_pending_text_names_the_reset_and_no_number"] = forms[0] == Formatting.ResetAt(resetAt) + " · new reading pending" && forms[0].StartsWith("Reset at ", StringComparison.Ordinal)
                 && forms.All(form => !form.Contains('%')) && Formatting.ResetPendingLong(resetAt).EndsWith(" · new reading pending", StringComparison.Ordinal);
@@ -476,9 +489,9 @@ public static class Checks
                 && !File.Exists(firstRunStore) && fresh.ClientForCheck is null && fresh.ConnectionForCheck is null;
             var firstOk = await fresh.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
             report.Checks["first_run_success_saves_the_verified_connection"] = firstOk is null && SecureStore.Load(firstRunStore) is { Password: "fixture-new" } && fresh.ClientForCheck is not null;
-            // Other stored members (a device token from a later pairing) survive a verified Change exactly.
+            // Other stored members (fields a later version may add) survive a verified Change exactly.
             var withToken = Path.Combine(folder, "with-token", "connection.dpapi");
-            using (var token = JsonDocument.Parse("{\"deviceToken\":\"fixture-device-token\",\"pairedAt\":1}"))
+            using (var token = JsonDocument.Parse("{\"futureSetting\":\"kept\",\"futureCount\":1}"))
                 SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-old", Extra = token.RootElement.EnumerateObject().ToDictionary(item => item.Name, item => item.Value.Clone()) }, withToken);
             var paired = third = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
             paired.UseConnectionStoreForCheck(withToken);
@@ -486,8 +499,8 @@ public static class Checks
             var pairedOk = await paired.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
             var reloaded = SecureStore.Load(withToken);
             report.Checks["sign_in_change_keeps_other_stored_members_exactly"] = pairedFailed is not null && pairedOk is null && reloaded is { Password: "fixture-new" }
-                && reloaded.Extra?["deviceToken"].GetString() == "fixture-device-token" && reloaded.Extra?["pairedAt"].GetInt32() == 1
-                && SecureStore.StoredKeysForCheck(withToken).OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(new[] { "baseURL", "deviceToken", "pairedAt", "password", "username" });
+                && reloaded.Extra?["futureSetting"].GetString() == "kept" && reloaded.Extra?["futureCount"].GetInt32() == 1
+                && SecureStore.StoredKeysForCheck(withToken).OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(new[] { "baseURL", "futureCount", "futureSetting", "password", "username" });
             report.Checks["sign_in_requests_reach_only_the_loopback_fixtures"] = fixture.Requests.Count > 0 && fixture.Unexpected == 0;
         }
         catch (Exception error)
