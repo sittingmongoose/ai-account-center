@@ -3,7 +3,15 @@ import { describe, expect, test } from 'bun:test';
 import { ROOT_COMMAND_CATALOG, getPublicRootCommands } from '../../../src/commands/command-catalog';
 import { ROOT_COMMAND_ROUTES } from '../../../src/commands/root-command-router';
 
-const RETAINED_COMMANDS = ['bar', 'codex-auth', 'config', 'dashboard', 'help', 'version'];
+const RETAINED_COMMANDS = [
+  'antigravity',
+  'bar',
+  'codex-auth',
+  'config',
+  'dashboard',
+  'help',
+  'version',
+];
 const RETIRED_COMMANDS = [
   'api',
   'auth',

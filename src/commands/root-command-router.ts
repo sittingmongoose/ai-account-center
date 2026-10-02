@@ -63,6 +63,13 @@ export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
     },
   },
   {
+    name: 'antigravity',
+    handle: async (args) => {
+      const { handleAntigravityCommand } = await import('./antigravity-command');
+      process.exitCode = await handleAntigravityCommand(args);
+    },
+  },
+  {
     name: 'bar',
     handle: async (args) => {
       const { handleBarCommand } = await import('./bar');
@@ -124,6 +131,9 @@ export async function requiresRuntimeServices(args: string[]): Promise<boolean> 
         'import-default',
       ].includes(subcommand) && !rest.some((arg) => ['--help', '-h'].includes(arg))
     );
+  }
+  if (command === 'antigravity') {
+    return subcommand === 'signin' && !rest.some((arg) => ['--help', '-h'].includes(arg));
   }
   if (command === 'bar') {
     return (

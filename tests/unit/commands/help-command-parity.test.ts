@@ -8,8 +8,17 @@ import {
 import * as configHelp from '../../../src/commands/config-command-options';
 import * as codexAuthHelp from '../../../src/codex-auth/codex-auth-help';
 import * as barHelp from '../../../src/commands/bar/help-subcommand';
+import * as antigravityCommand from '../../../src/commands/antigravity-command';
 
-const RETAINED_COMMANDS = ['dashboard', 'config', 'codex-auth', 'bar', 'help', 'version'];
+const RETAINED_COMMANDS = [
+  'dashboard',
+  'config',
+  'codex-auth',
+  'antigravity',
+  'bar',
+  'help',
+  'version',
+];
 const RETIRED_TARGETS = [
   'profiles',
   'providers',
@@ -121,6 +130,26 @@ describe('retained help surface', () => {
     } finally {
       showHelp.mockRestore();
     }
+  });
+
+  test('antigravity help prints the sign-in command without starting anything', async () => {
+    const lines: string[] = [];
+    await handleHelpRoute(['antigravity'], (line) => lines.push(line));
+    expect(lines.join('\n')).toContain('ai-account-center antigravity signin <profile>');
+    expect(await antigravityCommand.handleAntigravityCommand(['help'], () => {})).toBe(0);
+    const errors: string[] = [];
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['login'], (l) => errors.push(l))
+    ).toBe(1);
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['signin'], (l) => errors.push(l))
+    ).toBe(1);
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['signin', '--force'], (l) =>
+        errors.push(l)
+      )
+    ).toBe(1);
+    expect(errors.length).toBe(3);
   });
 
   test('bar help delegates to menu bar help without launching it', async () => {

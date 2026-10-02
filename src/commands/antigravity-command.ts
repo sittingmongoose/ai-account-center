@@ -1,0 +1,55 @@
+import os from 'os';
+import { getCcsDir } from '../utils/config-manager';
+
+type Writer = (line: string) => void;
+
+export function printAntigravityHelp(writeLine: Writer = console.log): void {
+  writeLine('AI Account Center Antigravity profiles');
+  writeLine('');
+  writeLine('Usage');
+  writeLine('  ai-account-center antigravity signin <profile>');
+  writeLine('');
+  writeLine('Commands');
+  writeLine('  signin <profile>   Add a new saved profile, or sign in again to a saved one');
+  writeLine('');
+  writeLine('Notes');
+  writeLine('  Runs on Ubuntu in an interactive terminal (over SSH is fine). The official');
+  writeLine('  Antigravity CLI starts in a private sign-in home: choose Google OAuth, open the');
+  writeLine('  link in a browser, sign in to the Google account for this profile and paste');
+  writeLine('  the code back. The live Antigravity login, history and settings are not');
+  writeLine('  touched. Sign in again keeps the same Google account and is refused for the');
+  writeLine('  live login. Switch accounts and remove profiles in the dashboard.');
+}
+
+/** `ai-account-center antigravity ...`; returns the exit code. */
+export async function handleAntigravityCommand(
+  args: string[],
+  writeLine: Writer = console.log
+): Promise<number> {
+  if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
+    printAntigravityHelp(writeLine);
+    return 0;
+  }
+  if (args[0] !== 'signin') {
+    writeLine(
+      `[X] Unknown antigravity command: ${args[0]}. Run: ai-account-center antigravity help`
+    );
+    return 1;
+  }
+  if (args.length !== 2 || args[1].startsWith('-')) {
+    writeLine('[X] Usage: ai-account-center antigravity signin <profile>');
+    return 1;
+  }
+  const [{ AntigravityAccountLifecycle }, { runAntigravityTerminalSignIn }] = await Promise.all([
+    import('../antigravity/account-lifecycle'),
+    import('../antigravity/terminal-signin'),
+  ]);
+  const ccsDir = getCcsDir();
+  const realHome = os.homedir();
+  return runAntigravityTerminalSignIn(args[1], {
+    ccsDir,
+    realHome,
+    env: process.env,
+    lifecycle: new AntigravityAccountLifecycle({ ccsDir: () => ccsDir, home: () => realHome }),
+  });
+}
