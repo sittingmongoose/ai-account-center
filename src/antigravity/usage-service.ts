@@ -7,6 +7,7 @@ import type {
   AntigravityUsageSample,
 } from './usage-contract';
 import {
+  IDENTITY_UNBOUND_MESSAGE,
   displayText,
   email,
   poolWindow,
@@ -153,7 +154,10 @@ export class AntigravityUsageService {
       ) {
         invalidateLastGood = true;
         result.status = 'error';
-        result.message = 'Antigravity usage could not be bound to this saved account.';
+        // The one failure that says this saved account may not be the account
+        // it claims: clients stop offering it as a switch target.
+        result.statusReason = 'identity_unbound';
+        result.message = IDENTITY_UNBOUND_MESSAGE;
       } else {
         result.plan = displayText(sample.plan, 80) ?? result.plan;
         if (

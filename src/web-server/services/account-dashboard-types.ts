@@ -14,6 +14,13 @@ export type DashboardProvider =
 export type DashboardPlatform = 'ubuntu' | 'mac' | 'windows';
 export type ClaudeDashboardPlatform = 'mac' | 'windows';
 export type DashboardAccountStatus = 'ok' | 'cached' | 'unavailable' | 'error' | 'needs_sign_in';
+/**
+ * Why a row has its status, when one precise reason matters to clients.
+ * `identity_unbound`: an Antigravity reading could not be bound to the saved
+ * account it was taken for (another identity, another credential revision or
+ * no email), so the row is `error` and is not a switch target.
+ */
+export type DashboardAccountStatusReason = 'identity_unbound';
 
 export interface DashboardAccountWindow {
   key: string;
@@ -62,6 +69,8 @@ export interface DashboardAccount {
   platform: DashboardPlatform;
   source: string;
   status: DashboardAccountStatus;
+  /** Present only with a precise reason; absent otherwise. */
+  statusReason?: DashboardAccountStatusReason;
   message: string | null;
   fetchedAt: string | null;
   sampledAt: string | null;

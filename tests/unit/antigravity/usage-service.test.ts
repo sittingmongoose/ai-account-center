@@ -267,7 +267,41 @@ describe('Antigravity account-specific usage cache', () => {
     }));
     const result = (await f.service.getAccounts({ refresh: true }))[0];
     expect(result.status).toBe('error');
+    expect(result.statusReason).toBe('identity_unbound');
     expect(result.windows).toEqual([]);
+  });
+
+  it('names identity_unbound for each binding failure and for no other failed reading', async () => {
+    const unbound: Array<(row: AntigravityUsageProfile) => AntigravityUsageSample> = [
+      (row) => ({ ...sample(row), identityKey: 'other-identity' }),
+      (row) => ({ ...sample(row), credentialRevision: 'other-revision' }),
+      (row) => ({ ...sample(row), profileId: 'someone-else' }),
+      (row) => ({ ...sample(row), email: 'other@example.com' }),
+      (row) => ({ ...sample(row), email: null }),
+    ];
+    for (const answer of unbound) {
+      const f = fixture([profile('gmail')]);
+      f.handle(async (row) => answer(row));
+      const result = (await f.service.getAccounts())[0];
+      expect(result).toMatchObject({ status: 'error', statusReason: 'identity_unbound' });
+      expect(result.message).toBe('Antigravity usage could not be matched to this saved account.');
+    }
+    const other: Array<(row: AntigravityUsageProfile) => Promise<AntigravityUsageSample>> = [
+      async () => {
+        throw new Error('offline');
+      },
+      async (row) => ({ ...sample(row), status: 'error' }),
+      async (row) => ({ ...sample(row), status: 'unavailable', email: null }),
+      async (row) => ({ ...sample(row), status: 'needs_sign_in' }),
+      async (row) => ({ ...sample(row), windows: [] }),
+    ];
+    for (const answer of other) {
+      const f = fixture([profile('gmail')]);
+      f.handle(answer);
+      const result = (await f.service.getAccounts())[0];
+      expect(result.status).not.toBe('ok');
+      expect('statusReason' in result).toBe(false);
+    }
   });
 
   it('invalidates quota when the private saved credential revision changes', async () => {
