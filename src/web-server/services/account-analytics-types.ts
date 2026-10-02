@@ -65,6 +65,11 @@ export interface AccountAnalyticsActivityTotals {
   cacheReadTokens: number;
   estimatedCostUsd: number;
   /**
+   * USD of `estimatedCostUsd` priced only at the unknown-model fallback rate: tokens with no
+   * logged cost and no listed rate. Clients show that part as not logged, never as a cost.
+   */
+  fallbackCostUsd?: number;
+  /**
    * Estimated USD per token type from list rates. Null when any contributing
    * model has no usable rate; never a zero standing in for unknown.
    */

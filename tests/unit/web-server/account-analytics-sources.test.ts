@@ -8,7 +8,14 @@ const NOW = Date.parse('2026-10-02T00:00:00Z');
 
 function workerResult(
   model: string,
-  tokens: { input: number; output: number; read: number; write: number; cost: number }
+  tokens: {
+    input: number;
+    output: number;
+    read: number;
+    write: number;
+    cost: number;
+    fallback?: number;
+  }
 ): UsageWorkerResult {
   return {
     daily: [],
@@ -23,6 +30,7 @@ function workerResult(
         cacheReadTokens: tokens.read,
         cost: tokens.cost,
         totalCost: tokens.cost,
+        ...(tokens.fallback !== undefined && { fallbackCost: tokens.fallback }),
         modelsUsed: [model],
         modelBreakdowns: [
           {
@@ -32,6 +40,7 @@ function workerResult(
             cacheCreationTokens: tokens.write,
             cacheReadTokens: tokens.read,
             cost: tokens.cost,
+            ...(tokens.fallback !== undefined && { fallbackCost: tokens.fallback }),
           },
         ],
         requestCount: 3,
@@ -78,6 +87,7 @@ function service() {
         read: 0,
         write: 0,
         cost: 2,
+        fallback: 1.5,
       });
     },
     remote: async () => ({
@@ -145,6 +155,15 @@ describe('analytics activity across sources', () => {
     expect(unknown?.rates?.source).toBe('fallback');
     expect(unknown?.costByType).toBeNull();
     expect(activity.totals?.costByType).toBeNull();
+    // The fallback-priced part travels with every total, so the page shows it as not logged.
+    expect(unknown?.fallbackCostUsd).toBe(1.5);
+    expect(activity.totals?.fallbackCostUsd).toBe(1.5);
+    expect(activity.providers.find((row) => row.provider === 'omp')?.totals.fallbackCostUsd).toBe(
+      1.5
+    );
+    expect(activity.byHour.find((row) => row.provider === 'omp')?.fallbackCostUsd).toBe(1.5);
+    const known = activity.models.find((row) => row.model === 'claude-model-a');
+    expect(known?.fallbackCostUsd).toBe(0);
   });
 
   it('lists every source state with fixed entries for missing tools', async () => {

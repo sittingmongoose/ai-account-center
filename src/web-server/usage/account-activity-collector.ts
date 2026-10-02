@@ -16,7 +16,7 @@ import {
 } from './omp-native-usage-collector';
 import { museSessionIdForFile, parseMuseUsageLine } from './muse-native-usage-collector';
 import { queryLocalZcodeUsage } from './zcode-native-usage-collector';
-import { getModelPricing, type ModelPricing } from '../model-pricing';
+import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
 import type { ModelBreakdown } from './types';
 import type { UsageWorkerRequest, UsageWorkerResult } from './worker-client';
@@ -254,7 +254,7 @@ export function aggregateRows(
   }
   const hours = new Map<string, Bucket>();
   const sessions = new Map<string, Bucket>();
-  const pricing = new Map<string, ModelPricing>();
+  const pricing = new Map<string, ModelPricingResolution>();
   const blankBucket = (): Bucket => ({
     models: new Map(),
     loggedCost: new Map(),
@@ -312,19 +312,22 @@ export function aggregateRows(
     const modelBreakdowns = [...bucket.models.values()];
     for (const model of modelBreakdowns) {
       const key = `${model.provider ?? ''}\0${model.modelName}`;
-      let rates = pricing.get(key);
-      if (!rates) {
-        rates = getModelPricing(model.modelName, { provider: model.provider });
-        pricing.set(key, rates);
+      let resolved = pricing.get(key);
+      if (!resolved) {
+        resolved = getModelPricingWithSource(model.modelName, { provider: model.provider });
+        pricing.set(key, resolved);
       }
+      const rates = resolved.pricing;
       // Logged OMP cost wins where present; the rest prices at list rates.
       const unlogged = bucket.unlogged.get(key) ?? { input: 0, output: 0, write: 0, read: 0 };
-      model.cost =
-        (bucket.loggedCost.get(key) ?? 0) +
+      const listed =
         (unlogged.input / 1_000_000) * rates.inputPerMillion +
         (unlogged.output / 1_000_000) * rates.outputPerMillion +
         (unlogged.write / 1_000_000) * rates.cacheCreationPerMillion +
         (unlogged.read / 1_000_000) * rates.cacheReadPerMillion;
+      model.cost = (bucket.loggedCost.get(key) ?? 0) + listed;
+      // The part priced only at the unknown-model fallback: no logged cost and no listed rate.
+      model.fallbackCost = resolved.source === 'fallback' ? listed : 0;
     }
     modelBreakdowns.sort((left, right) => right.cost - left.cost);
     return {
@@ -335,6 +338,7 @@ export function aggregateRows(
       cacheReadTokens: modelBreakdowns.reduce((sum, item) => sum + item.cacheReadTokens, 0),
       cost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
       totalCost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
+      fallbackCost: modelBreakdowns.reduce((sum, item) => sum + (item.fallbackCost ?? 0), 0),
       modelsUsed: getModelsUsed(modelBreakdowns),
       modelBreakdowns,
     };

@@ -145,5 +145,26 @@ describe('omp and muse account activity', () => {
     // Unknown-model fallback rates: 3/15/3.75/0.3 $/M.
     const expected = (1000 / 1e6) * 3 + (200 / 1e6) * 15 + (400 / 1e6) * 3.75 + (3000 / 1e6) * 0.3;
     expect(breakdown.cost).toBeCloseTo(expected, 9);
+    // The fallback-priced part is reported, so clients can show it as not logged.
+    expect(breakdown.fallbackCost).toBeCloseTo(expected, 9);
+    expect(data.hourly[0].fallbackCost).toBeCloseTo(expected, 9);
+  });
+
+  it('reports no fallback part for logged OMP cost, even without a listed rate', async () => {
+    const sessions = path.join(root, 'omp', 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessions, '2026-10-01T15-00_uuid.jsonl'),
+      `${ompLine('no-such-model-xyz', 0.25)}\n${ompLine('no-such-model-xyz', 0, '2026-10-01T14:20:00Z').replace('"m1"', '"m2"')}\n`
+    );
+    const data = await collectOmp([sessions]);
+    const logged = data.hourly.find((hour) => hour.hour === '2026-10-01 15:00');
+    const unpriced = data.hourly.find((hour) => hour.hour === '2026-10-01 14:00');
+    const unlogged = (1000 / 1e6) * 3 + (200 / 1e6) * 15 + (400 / 1e6) * 3.75 + (3000 / 1e6) * 0.3;
+    expect(logged?.cost).toBeCloseTo(0.25, 9);
+    expect(logged?.fallbackCost).toBe(0);
+    expect(logged?.modelBreakdowns[0].fallbackCost).toBe(0);
+    expect(unpriced?.cost).toBeCloseTo(unlogged, 9);
+    expect(unpriced?.fallbackCost).toBeCloseTo(unlogged, 9);
   });
 });

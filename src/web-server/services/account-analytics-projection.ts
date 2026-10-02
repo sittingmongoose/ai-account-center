@@ -53,11 +53,12 @@ const FIELDS = [
   'cacheCreationTokens',
   'cacheReadTokens',
   'estimatedCostUsd',
+  'fallbackCostUsd',
 ] as const;
 
 type Provider = AccountAnalyticsActivityProvider;
 type TotalField = (typeof FIELDS)[number];
-type TokenField = Exclude<TotalField, 'estimatedCostUsd'>;
+type TokenField = Exclude<TotalField, 'estimatedCostUsd' | 'fallbackCostUsd'>;
 const TOKEN_FIELDS: readonly TokenField[] = [
   'inputTokens',
   'outputTokens',
@@ -107,6 +108,7 @@ function totals(value: {
   cacheReadTokens: number;
   cost?: number;
   totalCost?: number;
+  fallbackCost?: number;
 }): Record<TotalField, number> {
   return {
     inputTokens: finite(value.inputTokens),
@@ -114,6 +116,7 @@ function totals(value: {
     cacheCreationTokens: finite(value.cacheCreationTokens),
     cacheReadTokens: finite(value.cacheReadTokens),
     estimatedCostUsd: finite(value.totalCost ?? value.cost),
+    fallbackCostUsd: finite(value.fallbackCost),
   };
 }
 
@@ -128,6 +131,7 @@ function accumulator(): Accumulator {
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
     estimatedCostUsd: 0,
+    fallbackCostUsd: 0,
     input: 0,
     output: 0,
     cacheWrite: 0,
@@ -163,6 +167,7 @@ function publish(value: Accumulator): AccountAnalyticsActivityTotals {
     cacheCreationTokens: value.cacheCreationTokens,
     cacheReadTokens: value.cacheReadTokens,
     estimatedCostUsd: value.estimatedCostUsd,
+    fallbackCostUsd: nanoDollars(value.fallbackCostUsd),
   };
   if (!value.partsKnown) return { ...base, costByType: null, costByTypeReconciled: false };
   const sum = value.input + value.output + value.cacheWrite + value.cacheRead;
@@ -245,6 +250,7 @@ function priceBreakdowns(
           ),
           cacheReadTokens: Math.max(0, rowValues.cacheReadTokens - covered.cacheReadTokens),
           estimatedCostUsd: Math.max(0, rowValues.estimatedCostUsd - covered.estimatedCostUsd),
+          fallbackCostUsd: Math.max(0, rowValues.fallbackCostUsd - covered.fallbackCostUsd),
         }
       : null,
     models,
