@@ -21,6 +21,11 @@ import { createLogger } from '../services/logging';
 import { ConfigError } from '../errors/error-types';
 import { decodeAccountIdentity } from './codex-account-identity';
 import { hasStructurallyValidIdToken } from './decode-id-token';
+import {
+  decodeCodexActivationIdentity,
+  matchesCodexActivationIdentity,
+  type CodexActivationIdentity,
+} from './codex-activation-identity';
 import { getCodexAuthRegistryPath, getCodexInstancesDir } from './codex-profile-paths';
 import { CODEX_PROFILE_SCHEMA_VERSION } from './types';
 import { CodexProfileRegistry } from './codex-profile-registry';
@@ -232,6 +237,45 @@ function resolveActive(registry: CodexProfileData): CodexAuthActiveProfile | nul
   return null;
 }
 
+// ── Live login resolution ───────────────────────────────────────────────────
+
+/** Private workspace and principal binding of an auth.json; never returned. */
+function readActivationBinding(authJsonPath: string): CodexActivationIdentity | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(authJsonPath, 'utf8')) as {
+      tokens?: { id_token?: unknown; account_id?: unknown };
+    };
+    const token = parsed?.tokens?.id_token;
+    return typeof token === 'string'
+      ? decodeCodexActivationIdentity(token, parsed.tokens?.account_id)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Name the saved profile that holds the live login. Like activation itself, this
+ * matches the workspace and principal from the id_token claims; the email is shown,
+ * never used to choose between profiles, so a personal and a workspace login with
+ * one email stay apart. Of several saved copies of one login, the most recently
+ * activated is named. A live login without a readable binding names no profile.
+ */
+function resolveActivatedName(
+  liveAuthPath: string,
+  profiles: CodexAuthProfileEntry[]
+): string | null {
+  const live = readActivationBinding(liveAuthPath);
+  if (!live) return null;
+  let best: CodexAuthProfileEntry | null = null;
+  for (const profile of profiles) {
+    const saved = readActivationBinding(path.join(profile.codexHome, 'auth.json'));
+    if (!saved || !matchesCodexActivationIdentity(live, saved)) continue;
+    if (!best || (profile.lastUsed ?? '') > (best.lastUsed ?? '')) best = profile;
+  }
+  return best?.name ?? null;
+}
+
 // ── Core builder ────────────────────────────────────────────────────────────
 
 async function buildSummary(codexHome: string): Promise<CodexAuthProfilesSummary> {
@@ -246,10 +290,11 @@ async function buildSummary(codexHome: string): Promise<CodexAuthProfilesSummary
     }
   );
 
-  const liveIdentity = decodeAccountIdentity(path.join(codexHome, 'auth.json'));
+  const liveAuthPath = path.join(codexHome, 'auth.json');
+  const liveIdentity = decodeAccountIdentity(liveAuthPath);
   const activated: CodexAuthActivatedProfile | null = liveIdentity.email
     ? {
-        name: profiles.find((profile) => profile.email === liveIdentity.email)?.name ?? null,
+        name: resolveActivatedName(liveAuthPath, profiles),
         email: liveIdentity.email,
         plan: liveIdentity.plan_type ?? null,
         codexHome,
