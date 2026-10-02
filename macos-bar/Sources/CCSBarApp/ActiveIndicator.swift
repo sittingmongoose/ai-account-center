@@ -83,11 +83,13 @@ struct NotReportedLabel: View {
   }
 }
 
-/// A text-only glass capsule whose label sits 24 pt from each edge.
+/// A text-only glass capsule whose label sits 24 pt from each edge. The longer "Finish setup"
+/// label uses compact 12 pt insets so it still fits the 100 pt action slot.
 struct ActivateButton: View {
   let title: String
   var busy = false
   var enabled = true
+  var compact = false
   let help: String
   let id: String
   let action: () -> Void
@@ -100,7 +102,7 @@ struct ActivateButton: View {
           Text(title).font(.system(size: 12.5, weight: .medium)).foregroundStyle(enabled ? palette.label : palette.label3)
             .alignmentProbe("slot|\(id)|label")
         }
-        .padding(.horizontal, busy ? 12 : TrayMetrics.activateInset)
+        .padding(.horizontal, busy || compact ? 12 : TrayMetrics.activateInset)
         .frame(height: 26)
         .contentShape(Capsule())
       }

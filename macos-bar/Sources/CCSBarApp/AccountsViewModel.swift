@@ -88,7 +88,8 @@ final class AccountsViewModel: ObservableObject {
   }
 
   func menuBarReading(_ prefs: TrayPreferences) -> MenuBarReading? {
-    MenuBarReading.make(dashboard: dashboard, source: prefs.menuBarSource, mode: prefs.menuBarMode)
+    MenuBarReading.make(dashboard: dashboard, provider: prefs.menuBarProvider, mode: prefs.menuBarMode,
+      claudeAccountID: prefs.menuBarClaudeAccountID)
   }
 
   /// No saved connection and nothing to show: the panel offers the connect form.

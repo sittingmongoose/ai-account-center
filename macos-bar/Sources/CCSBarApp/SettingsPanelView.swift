@@ -60,21 +60,36 @@ struct SettingsPanelView: View {
             }
             connectionCard(palette)
             card {
-              row(title: "Menu bar shows", sub: menuBarPreview) {
-                HStack(spacing: 8) {
-                  Picker("Menu bar account", selection: $prefs.menuBarSource) {
-                    Text("Active Codex account").tag(MenuBarSource.codex)
-                    Text("Active Antigravity account").tag(MenuBarSource.antigravity)
-                    Text("Logo only").tag(MenuBarSource.none)
+              Text("Menu bar").font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label).padding(.bottom, 8)
+              row(title: "Show", sub: menuBarPreview) {
+                Picker("Menu bar provider", selection: $prefs.menuBarProvider) {
+                  ForEach(menuBarProviders, id: \.self) { provider in
+                    Text(MenuBarReading.providerName(provider)).tag(provider)
+                  }
+                  Text("Nothing").tag(MenuBarReading.nothingProvider)
+                }
+                .pickerStyle(.menu).labelsHidden().fixedSize()
+              }
+              if prefs.menuBarProvider == "claude", !claudeAccounts.isEmpty {
+                row(title: "Claude account", sub: "Claude has no active account, so pick the one to show.") {
+                  Picker("Claude account", selection: Binding(
+                    get: { prefs.menuBarClaudeAccountID ?? claudeAccounts.first?.id ?? "" },
+                    set: { prefs.menuBarClaudeAccountID = $0 }
+                  )) {
+                    ForEach(claudeAccounts) { account in
+                      Text(account.identity).tag(account.id)
+                    }
                   }
                   .pickerStyle(.menu).labelsHidden().fixedSize()
-                  Picker("Menu bar value", selection: $prefs.menuBarMode) {
-                    Text("% left").tag(MenuBarMode.left)
-                    Text("% used").tag(MenuBarMode.used)
-                  }
-                  .pickerStyle(.segmented).labelsHidden().fixedSize()
-                  .disabled(prefs.menuBarSource == .none)
                 }
+              }
+              row(title: "Value", sub: "The account's 5-hour window, or its weekly window when no 5-hour window is reported.") {
+                Picker("Menu bar value", selection: $prefs.menuBarMode) {
+                  Text("Used").tag(MenuBarMode.used)
+                  Text("Remaining").tag(MenuBarMode.remaining)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .disabled(prefs.menuBarProvider == MenuBarReading.nothingProvider)
               }
             }
             card {
@@ -155,10 +170,29 @@ struct SettingsPanelView: View {
     }
   }
 
+  /// Every provider present in the data, in tray order. A stored choice that is no longer reported
+  /// stays listed until it is re-picked, so the picker never shows a blank selection.
+  private var menuBarProviders: [String] {
+    var providers = (model.dashboard?.providerGroups ?? []).map(\.id)
+    if !providers.contains(prefs.menuBarProvider) && prefs.menuBarProvider != MenuBarReading.nothingProvider {
+      providers.append(prefs.menuBarProvider)
+    }
+    return providers
+  }
+
+  private var claudeAccounts: [DashboardAccount] {
+    model.dashboard?.visibleAccounts.filter { $0.provider == "claude" } ?? []
+  }
+
   private var menuBarPreview: String {
-    if prefs.menuBarSource == .none { return "The Apex glyph only." }
-    if let reading = model.menuBarReading(prefs) { return "Now \(reading.detail)" }
-    return "No active \(prefs.menuBarSource == .codex ? "Codex" : "Antigravity") account reported · logo only"
+    if prefs.menuBarProvider == MenuBarReading.nothingProvider { return "The Apex glyph only." }
+    if let reading = model.menuBarReading(prefs) { return "Now \(reading.detail)." }
+    switch prefs.menuBarProvider {
+    case "codex", "antigravity":
+      return "No active \(MenuBarReading.providerName(prefs.menuBarProvider)) account reported · logo only"
+    default:
+      return "No 5-hour or weekly reading reported · logo only"
+    }
   }
 
   @ViewBuilder private func connectionCard(_ palette: TrayPalette) -> some View {

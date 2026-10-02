@@ -1389,16 +1389,18 @@ private func checkTrayPresentation() throws {
     ]),
   ]
   let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
-  let left = MenuBarReading.make(dashboard: dashboard, source: .codex, mode: .left)
-  try expect(left?.text == "\(TrayFormat.number(59.5))%" && left?.detail.hasPrefix("codex-2 5-hour:") == true,
-    "The menu bar must show the active Codex account's tightest canonical window as % left")
-  try expect(MenuBarReading.make(dashboard: dashboard, source: .codex, mode: .used)?.value == 40.5,
+  let remaining = MenuBarReading.make(dashboard: dashboard, provider: "codex", mode: .remaining)
+  try expect(remaining?.text == "\(TrayFormat.number(59.5))%" && remaining?.detail == "Codex · codex-2 · 5-hour remaining",
+    "The menu bar must show the active Codex account's 5-hour window as % remaining")
+  try expect(MenuBarReading.make(dashboard: dashboard, provider: "codex", mode: .used)?.value == 40.5,
     "% used must show the reading itself")
-  let agy = MenuBarReading.make(dashboard: dashboard, source: .antigravity, mode: .used)
-  try expect(agy?.value == 18 && agy?.detail.contains("Claude and GPT weekly") == true,
-    "Antigravity's menu-bar reading must use its reported columns, including a remaining-only window")
-  try expect(MenuBarReading.make(dashboard: dashboard, source: .none, mode: .left) == nil,
-    "Logo only must show no percentage")
+  let agy = MenuBarReading.make(dashboard: dashboard, provider: "antigravity", mode: .used)
+  try expect(agy?.value == 0 && agy?.detail == "Antigravity · antigravity-1 · 5-hour used",
+    "Antigravity's menu-bar reading must use its 5-hour window, zero included")
+  try expect(MenuBarReading.make(dashboard: dashboard, provider: "cursor", mode: .used) == nil,
+    "A provider with no 5-hour or weekly window shows the icon alone")
+  try expect(MenuBarReading.make(dashboard: dashboard, provider: MenuBarReading.nothingProvider, mode: .remaining) == nil,
+    "Nothing must show no percentage")
   try expect(TrayColumns.antigravity(dashboard.accounts.filter { $0.provider == "antigravity" }).map(\.key)
     == ["gemini-5h", "gemini-weekly", "3p-weekly"], "Antigravity columns must follow the reported buckets in concept order")
   let cursor = dashboard.accounts.first { $0.provider == "cursor" }!
@@ -1678,12 +1680,138 @@ private func checkResetPending() throws {
   TrayFormat.referenceNow = now
   let pending = try dashboard(sampledAt: older, resetAt: past)
   let fresh = try dashboard(sampledAt: newer, resetAt: past)
-  try expect(MenuBarReading.make(dashboard: pending, source: .codex, mode: .left) == nil
-    && MenuBarReading.make(dashboard: fresh, source: .codex, mode: .left)?.text == "\(TrayFormat.number(90.75))%",
+  try expect(MenuBarReading.make(dashboard: pending, provider: "codex", mode: .remaining) == nil
+    && MenuBarReading.make(dashboard: fresh, provider: "codex", mode: .remaining)?.text == "\(TrayFormat.number(90.75))%",
     "The menu bar hides a weekly reading from before its reset and shows a newer one")
   let soon = try dashboard(sampledAt: older, resetAt: "2026-10-02T12:00:30Z")
   try expect(soon.pendingResetKeys(now: now).isEmpty && soon.pendingResetKeys(now: now.addingTimeInterval(60)) == ["codex:a|seven_day"],
     "A window flips to pending when its reset passes while the panel is open")
+}
+
+private func checkMenuBarSelection() throws {
+  func window(_ key: String, _ label: String, _ values: [String: Any] = [:]) -> [String: Any] {
+    var result: [String: Any] = [
+      "key": key, "label": label, "usedPercent": NSNull(), "remainingPercent": NSNull(), "resetAt": NSNull(),
+      "windowMinutes": NSNull(), "used": NSNull(), "limit": NSNull(), "unit": NSNull(),
+    ]
+    for (name, value) in values { result[name] = value }
+    return result
+  }
+  let original = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  let prototype = (original["accounts"] as! [[String: Any]])[0]
+  func account(_ id: String, _ provider: String, email: String, windows: [[String: Any]], active: Bool = false) -> [String: Any] {
+    var value = prototype
+    value["id"] = id
+    value["provider"] = provider
+    value["email"] = email
+    value["windows"] = windows
+    value["isActive"] = active
+    return value
+  }
+  func dashboard(codexActive: String, agyActive: String) throws -> AccountDashboard {
+    var object = original
+    object["accounts"] = [
+      account("codex-a", "codex", email: "codex-a@example.invalid", windows: [
+        window("five_hour", "5h", ["usedPercent": 40]), window("seven_day", "week", ["usedPercent": 10]),
+      ], active: codexActive == "codex-a"),
+      account("codex-b", "codex", email: "codex-b@example.invalid", windows: [
+        window("five_hour", "5h", ["usedPercent": 70]), window("seven_day", "week", ["usedPercent": 20]),
+      ], active: codexActive == "codex-b"),
+      account("claude-a", "claude", email: "claude-a@example.invalid", windows: [
+        window("five_hour", "Five-hour usage", ["usedPercent": 12]),
+        window("seven_day", "Weekly usage", ["usedPercent": 34]),
+      ]),
+      account("claude-b", "claude", email: "claude-b@example.invalid", windows: [
+        window("seven_day", "Weekly usage", ["usedPercent": 78]),
+      ]),
+      account("agy-a", "antigravity", email: "agy-a@example.invalid", windows: [
+        window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 5, "windowMinutes": 300]),
+      ], active: agyActive == "agy-a"),
+      account("agy-b", "antigravity", email: "agy-b@example.invalid", windows: [
+        window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 60, "windowMinutes": 300]),
+      ], active: agyActive == "agy-b"),
+      account("cursor-a", "cursor", email: "cursor-a@example.invalid", windows: [
+        window("seven_day", "Weekly", ["usedPercent": 25, "windowMinutes": 10080]),
+      ]),
+      account("cursor-b", "cursor", email: "cursor-b@example.invalid", windows: [
+        window("seven_day", "Weekly", ["usedPercent": 50, "windowMinutes": 10080]),
+      ]),
+      account("qwen-a", "qwen", email: "qwen-a@example.invalid", windows: [
+        window("five_hour", "Five-hour", ["usedPercent": 60, "windowMinutes": 300]),
+      ]),
+      account("zai-a", "zai", email: "zai-a@example.invalid", windows: [
+        window("five_hour", "Five-hour", ["usedPercent": 120, "windowMinutes": 300]),
+      ]),
+      account("opencode-a", "opencode-go", email: "opencode-a@example.invalid", windows: [
+        window("monthly", "Monthly", ["usedPercent": 27, "windowMinutes": 43200]),
+      ]),
+    ]
+    return try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let first = try dashboard(codexActive: "codex-a", agyActive: "agy-a")
+  // Codex and Antigravity follow the active account; other providers use the single or first account.
+  try expect(MenuBarReading.make(dashboard: first, provider: "codex", mode: .used)?.value == 40
+    && MenuBarReading.make(dashboard: first, provider: "codex", mode: .used)?.detail == "Codex · codex-a · 5-hour used",
+    "Codex must show the active account's 5-hour window and name it in the tooltip")
+  let flipped = try dashboard(codexActive: "codex-b", agyActive: "agy-b")
+  try expect(MenuBarReading.make(dashboard: flipped, provider: "codex", mode: .used)?.value == 70
+    && MenuBarReading.make(dashboard: flipped, provider: "antigravity", mode: .used)?.value == 60,
+    "The reading must follow the newly active Codex and Antigravity accounts")
+  try expect(MenuBarReading.make(dashboard: first, provider: "antigravity", mode: .used)?.value == 5,
+    "Antigravity must show its active account")
+  try expect(MenuBarReading.make(dashboard: first, provider: "cursor", mode: .used)?.value == 25,
+    "A provider with several accounts shows the first one")
+  try expect(MenuBarReading.make(dashboard: first, provider: "qwen", mode: .used)?.value == 60,
+    "A provider with one account shows it")
+  // The 5-hour window wins when reported, else the weekly one; Claude shows the picked account.
+  try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-a")?.value == 12
+    && MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")?.value == 78
+    && MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")?.detail
+    == "Claude · claude-b · Weekly used",
+    "Claude shows the picked account: its 5-hour window, else its weekly one")
+  try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used)?.value == 12,
+    "With no Claude account picked, the first Claude account shows")
+  try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "gone")?.value == 12,
+    "A picked Claude account that is no longer reported falls back to the first one")
+  // Used versus remaining arithmetic, with remaining floored at zero past 100%.
+  try expect(MenuBarReading.make(dashboard: first, provider: "codex", mode: .remaining)?.value == 60
+    && MenuBarReading.make(dashboard: first, provider: "codex", mode: .remaining)?.text == "60%",
+    "Remaining must read 100 minus used")
+  try expect(MenuBarReading.make(dashboard: first, provider: "zai", mode: .used)?.value == 120
+    && MenuBarReading.make(dashboard: first, provider: "zai", mode: .remaining)?.value == 0,
+    "Past 100%, used shows the real value and remaining floors at zero")
+  // Nothing, unknown providers, missing windows and missing dashboards show the icon alone.
+  try expect(MenuBarReading.make(dashboard: first, provider: MenuBarReading.nothingProvider, mode: .used) == nil
+    && MenuBarReading.make(dashboard: first, provider: "nope", mode: .used) == nil
+    && MenuBarReading.make(dashboard: first, provider: "opencode-go", mode: .used) == nil
+    && MenuBarReading.make(dashboard: nil, provider: "codex", mode: .used) == nil,
+    "Nothing, unknown providers, no 5-hour or weekly window and no dashboard show no number")
+
+  // A reset-pending or unavailable 5-hour window hides the number: no 0%, no weekly fallback.
+  let saved = TrayFormat.referenceNow
+  defer { TrayFormat.referenceNow = saved }
+  TrayFormat.referenceNow = ISO8601DateFormatter().date(from: "2026-10-02T12:00:00Z")!
+  var pendingObject = original
+  pendingObject["accounts"] = [
+    account("codex-p", "codex", email: "codex-p@example.invalid", windows: [
+      window("five_hour", "5h", ["usedPercent": 40, "resetAt": "2026-10-02T11:00:00Z"]),
+      window("seven_day", "week", ["usedPercent": 10, "resetAt": "2026-10-09T11:00:00Z"]),
+    ], active: true),
+  ]
+  let pendingDashboard = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: pendingObject))
+  try expect(MenuBarReading.make(dashboard: pendingDashboard, provider: "codex", mode: .used) == nil,
+    "A reset-pending 5-hour window shows the icon alone, never 0% or the weekly fallback")
+  var unavailableObject = original
+  unavailableObject["accounts"] = [
+    account("codex-u", "codex", email: "codex-u@example.invalid", windows: [
+      window("five_hour", "5h", ["resetAt": "2026-10-09T11:00:00Z"]),
+    ], active: true),
+  ]
+  let unavailableDashboard = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: unavailableObject))
+  try expect(MenuBarReading.make(dashboard: unavailableDashboard, provider: "codex", mode: .used) == nil,
+    "A 5-hour window with no reading shows the icon alone, never 0%")
 }
 
 private func checkStatusItemToggle() throws {
@@ -1769,6 +1897,8 @@ do {
   print("PASS Antigravity policy and capabilities, activation guards, tray order, and dashboard-hidden providers")
   try checkTrayPresentation()
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
+  try checkMenuBarSelection()
+  print("PASS menu-bar provider, account, window and value selection with pending hiding the number")
   try await checkConnectionChange()
   print("PASS sign-in and Change verify before saving: wrong address, wrong login, cancel, timeout, success, first run")
   try checkResetPending()

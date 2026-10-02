@@ -25,8 +25,6 @@ struct SectionLayout {
   var identity: CGFloat { provider == "antigravity" ? TrayMetrics.antigravityIdentityColumn : TrayMetrics.identityColumn }
   var gap: CGFloat { provider == "antigravity" ? TrayMetrics.antigravityColumnGap : TrayMetrics.columnGap }
   var slot: CGFloat { provider == "claude" ? TrayMetrics.claudeSlot : TrayMetrics.switchSlot }
-  /// The tail column absorbs the gap difference so every slot ends on the same line.
-  var tail: CGFloat { TrayMetrics.tail + (TrayMetrics.columnGap - gap) }
   var switchable: Bool { provider != "claude" }
 
   static func make(_ provider: String, accounts: [DashboardAccount]) -> SectionLayout {
@@ -70,11 +68,16 @@ struct AccountRow: View {
           }
         }
         actions(palette).frame(width: layout.slot, alignment: layout.provider == "claude" ? .trailing : .leading)
-        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(palette.label3)
-          .opacity(hovered || showDetails ? 1 : 0).offset(x: hovered || showDetails ? 0 : -3)
-          .frame(width: layout.tail)
       }
       .padding(.leading, TrayMetrics.rowLeading).padding(.trailing, TrayMetrics.rowTrailing).padding(.vertical, 6)
+      // The disclosure chevron floats over the row's trailing padding instead of reserving a column:
+      // it overhangs the row by 6 pt into the platter and list padding, so its glyph stays inside the
+      // platter while the slot content ends 8.5 pt before the row's edge.
+      .overlay(alignment: .trailing) {
+        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(palette.label3)
+          .frame(width: 14)
+          .opacity(hovered || showDetails ? 1 : 0).offset(x: (hovered || showDetails ? 0 : -3) + 6)
+      }
       .frame(minHeight: 45)
       .background {
         ConcentricRectangle().fill(hovered && !isActive ? palette.rowHover : .clear)
@@ -193,7 +196,7 @@ struct AccountRow: View {
       ActiveLabel(platform: account.platform, draw: open.activeAtOpen["antigravity"] != nil && open.activeAtOpen["antigravity"] != account.id,
         probe: "slot|active-\(account.id)")
     } else if account.status == "needs_sign_in" {
-      ActivateButton(title: "Finish setup", help: "Finish the supervised login in the dashboard's Accounts and Settings",
+      ActivateButton(title: "Finish setup", compact: true, help: "Finish the supervised login in the dashboard's Accounts and Settings",
         id: "finish-setup-\(account.id)") { model.openDashboard() }
     } else if sectionAccounts.count < 2 {
       if !anyActive { NotReportedLabel() }
@@ -214,45 +217,43 @@ struct AccountRow: View {
   }
 }
 
-/// Open on Mac / Open on Windows: two glass circles joined into one capsule.
+/// Open on Mac / Open on Windows: two visually separate glass buttons with a clear gap. Behaviour,
+/// tooltips and the in-button progress spinner are unchanged; only the joined capsule is gone.
 struct ClaudeOpenPair: View {
   @ObservedObject var model: AccountsViewModel
   let account: DashboardAccount
-  @Namespace private var glass
   @Environment(\.trayStaticRender) private var staticRender
 
   var body: some View {
     let platforms = account.capabilities.claudeProfileId == nil ? [] : account.capabilities.claudePlatforms.filter { ["mac", "windows"].contains($0) }
     if !platforms.isEmpty && staticRender {
-      HStack(spacing: 0) {
+      HStack(spacing: TrayMetrics.openPairGap) {
         ForEach(platforms, id: \.self) { platform in
           PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary)
-            .frame(width: 29, height: 28)
+            .frame(width: TrayMetrics.openButton, height: TrayMetrics.openButton)
+            .glassControl(circle: true)
             .hoverHelp("Open \(account.identity) in Claude on \(platform == "mac" ? "Mac" : "Windows")", id: "claude-\(platform)-\(account.id)")
         }
-      }.padding(.horizontal, 1).glassControl()
+      }
     } else if !platforms.isEmpty {
-      GlassEffectContainer(spacing: 6) {
-        HStack(spacing: 0) {
-          ForEach(platforms, id: \.self) { platform in
-            let name = platform == "mac" ? "Mac" : "Windows"
-            let enabled = model.busyAction == nil && !model.isRefreshing
-            let action = { model.openClaude(account, platform: platform) }
-            Button(action: action) {
-              ZStack {
-                if model.busyAction == "\(account.id)|\(platform)" { ProgressView().controlSize(.mini) }
-                else { PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary) }
-              }
-              .frame(width: 29, height: 28)
-              .contentShape(Capsule())
+      HStack(spacing: TrayMetrics.openPairGap) {
+        ForEach(platforms, id: \.self) { platform in
+          let name = platform == "mac" ? "Mac" : "Windows"
+          let enabled = model.busyAction == nil && !model.isRefreshing
+          let action = { model.openClaude(account, platform: platform) }
+          Button(action: action) {
+            ZStack {
+              if model.busyAction == "\(account.id)|\(platform)" { ProgressView().controlSize(.mini) }
+              else { PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary) }
             }
-            .buttonStyle(.plain)
-            .disabled(!enabled)
-            .glassEffect(.regular.interactive(), in: Capsule())
-            .glassEffectUnion(id: "open-\(account.id)", namespace: glass)
-            .hoverHelp("Open \(account.identity) in Claude on \(name)", id: "claude-\(platform)-\(account.id)",
-              action: enabled ? action : nil)
+            .frame(width: TrayMetrics.openButton, height: TrayMetrics.openButton)
+            .contentShape(Circle())
           }
+          .buttonStyle(.plain)
+          .disabled(!enabled)
+          .glassEffect(.regular.interactive(), in: Circle())
+          .hoverHelp("Open \(account.identity) in Claude on \(name)", id: "claude-\(platform)-\(account.id)",
+            action: enabled ? action : nil)
         }
       }
     }
@@ -304,7 +305,6 @@ struct SectionHeader: View {
         .lineLimit(1).minimumScaleFactor(0.85).frame(maxWidth: .infinity, alignment: .leading)
     }
     Color.clear.frame(width: layout.slot, height: 1)
-    Color.clear.frame(width: layout.tail, height: 1)
   }
 
   private func title(_ palette: TrayPalette) -> some View {

@@ -28,8 +28,19 @@ final class TrayPreferences: ObservableObject {
   @Published var appearance: TrayAppearance {
     didSet { if persist { defaults.set(appearance.rawValue, forKey: Keys.appearance) }; apply() }
   }
-  @Published var menuBarSource: MenuBarSource {
-    didSet { if persist { defaults.set(menuBarSource.rawValue, forKey: Keys.menuBarSource) } }
+  /// The menu-bar provider: a provider id, or "none" for the icon alone. Stored under the earlier
+  /// menuBarSource key, whose "codex"/"antigravity"/"none" values carry over unchanged.
+  @Published var menuBarProvider: String {
+    didSet { if persist { defaults.set(menuBarProvider, forKey: Keys.menuBarSource) } }
+  }
+  /// The Claude account the menu bar shows (Claude has no active account). Nil means the first one.
+  @Published var menuBarClaudeAccountID: String? {
+    didSet {
+      if persist {
+        if let id = menuBarClaudeAccountID, !id.isEmpty { defaults.set(id, forKey: Keys.menuBarClaudeAccount) }
+        else { defaults.removeObject(forKey: Keys.menuBarClaudeAccount) }
+      }
+    }
   }
   @Published var menuBarMode: MenuBarMode {
     didSet { if persist { defaults.set(menuBarMode.rawValue, forKey: Keys.menuBarMode) } }
@@ -42,6 +53,7 @@ final class TrayPreferences: ObservableObject {
   enum Keys {
     static let appearance = "aac.tray.appearance"
     static let menuBarSource = "aac.tray.menuBarSource"
+    static let menuBarClaudeAccount = "aac.tray.menuBarClaudeAccount"
     static let menuBarMode = "aac.tray.menuBarMode"
     static let openShortcut = "aac.tray.openShortcutEnabled"
   }
@@ -50,8 +62,11 @@ final class TrayPreferences: ObservableObject {
     self.defaults = defaults
     self.persist = persist
     appearance = TrayAppearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .auto
-    menuBarSource = MenuBarSource(rawValue: defaults.string(forKey: Keys.menuBarSource) ?? "") ?? .codex
-    menuBarMode = MenuBarMode(rawValue: defaults.string(forKey: Keys.menuBarMode) ?? "") ?? .left
+    let storedProvider = defaults.string(forKey: Keys.menuBarSource) ?? ""
+    menuBarProvider = storedProvider.isEmpty ? "codex" : storedProvider
+    let storedClaude = defaults.string(forKey: Keys.menuBarClaudeAccount)
+    menuBarClaudeAccountID = storedClaude?.isEmpty == false ? storedClaude : nil
+    menuBarMode = MenuBarMode(rawValue: defaults.string(forKey: Keys.menuBarMode) ?? "") ?? .remaining
     openShortcutEnabled = defaults.object(forKey: Keys.openShortcut) as? Bool ?? true
   }
 

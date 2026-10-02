@@ -17,10 +17,13 @@ enum TrayMetrics {
   static let antigravityIdentityColumn: CGFloat = 180
   static let columnGap: CGFloat = 13
   static let antigravityColumnGap: CGFloat = 11
-  /// Codex and Antigravity share one fixed action slot; Claude's Open pair ends on the same line.
-  static let switchSlot: CGFloat = 108
-  static let claudeSlot: CGFloat = 62
-  static let tail: CGFloat = 14
+  /// Codex and Antigravity share one fixed action slot, trailing-anchored: the Activate capsule
+  /// (97.5 pt) plus a little room, so every slot ends on the same line in every section.
+  static let switchSlot: CGFloat = 100
+  /// Claude's Open pair: two 28 pt buttons with an 8 pt gap, trailing-anchored like the switch slot.
+  static let claudeSlot: CGFloat = 64
+  static let openButton: CGFloat = 28
+  static let openPairGap: CGFloat = 8
   /// The Activate capsule's label inset: the 18 pt check plus its 6 pt gap, so "Active" lines up.
   static let check: CGFloat = 18
   static let checkGap: CGFloat = 6

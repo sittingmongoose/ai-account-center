@@ -304,7 +304,10 @@ enum PreviewRenderer {
         return !(target is DetailsRowButton)
       }
       // Selected-row alignment: in every switchable section, the check's left edge must sit on the Activate
-      // capsule's left edge and "Active" on the "Activate" label's x, within 0.5 pt.
+      // capsule's left edge and "Active" on the "Activate" label's x, within 0.5 pt, at the slot's
+      // trailing-anchored position: list padding 8, platter inset 4, row trailing 6, then the slot.
+      let expectedIconX = host.bounds.width - 8 - TrayMetrics.groupInset - TrayMetrics.rowTrailing - TrayMetrics.switchSlot
+      let expectedLabelX = expectedIconX + TrayMetrics.activateInset
       var alignment: [[String: Any]] = []
       var alignmentPassed = true
       for provider in ["codex", "antigravity"] {
@@ -316,11 +319,22 @@ enum PreviewRenderer {
         }
         let icons = edges("icon"), labels = edges("label")
         let subs = ids.compactMap { AlignmentProbe.frames["slot|active-\($0)|sub"]?.minX }
+        func widths(_ part: String) -> [CGFloat] {
+          ids.compactMap { id in
+            AlignmentProbe.frames["slot|activate-\(id)|\(part)"]?.width ?? AlignmentProbe.frames["slot|active-\(id)|\(part)"]?.width
+          }
+        }
+        let slotWidths = widths("icon")
         let spread = { (values: [CGFloat]) -> CGFloat in (values.max() ?? 0) - (values.min() ?? 0) }
-        let ok = icons.count >= 2 ? spread(icons) <= 0.5 && spread(labels + subs) <= 0.5 : true
+        let absolute = icons.allSatisfy { abs($0 - expectedIconX) <= 0.5 }
+          && (labels + subs).allSatisfy { abs($0 - expectedLabelX) <= 0.5 }
+        let fits = slotWidths.allSatisfy { $0 <= TrayMetrics.switchSlot + 0.5 }
+        let ok = (icons.count >= 2 ? spread(icons) <= 0.5 && spread(labels + subs) <= 0.5 : true) && absolute && fits
         alignmentPassed = alignmentPassed && ok
         alignment.append(["section": provider, "slots": icons.count, "iconLeftEdges": icons.map { Double($0) },
-          "labelLeftEdges": labels.map { Double($0) }, "secondaryLeftEdges": subs.map { Double($0) }, "passed": ok])
+          "labelLeftEdges": labels.map { Double($0) }, "secondaryLeftEdges": subs.map { Double($0) },
+          "iconWidths": slotWidths.map { Double($0) }, "expectedIconX": Double(expectedIconX),
+          "expectedLabelX": Double(expectedLabelX), "passed": ok])
       }
       let passed = missingHelp.isEmpty && labelled && rowCountsPassed && geometryPassed && fullRowPassed && nestedPassed && alignmentPassed
       let result: [String: Any] = [
@@ -379,5 +393,142 @@ enum PreviewRenderer {
       window.orderOut(nil)
       exit(passed ? 0 : 1)
     } catch { fputs("Native pack interaction inspection failed.\n", stderr); exit(1) }
+  }
+
+  /// Every rendered meter against its own track's laid-out width: a reading of X% fills exactly X% of
+  /// the track (±0.5 pt) starting at the track's edge, ticks sit at 25/50/75, and the notch sits at the
+  /// switch threshold. Meters with no reading render no fill and no notch.
+  static func checkMeterGeometry(input: String) -> Never {
+    do {
+      let dashboard = try loadFixture(input)
+      let hosted = host(dashboard, options: Options([]))
+      defer { hosted.2.orderOut(nil) }
+      var failures: [String] = []
+      var meters = 0, fills = 0, notches = 0, ticks = 0
+      var trackWidths: [Double] = []
+      var maxFillError = 0.0, maxTickError = 0.0, maxNotchError = 0.0
+      let byID = Dictionary(uniqueKeysWithValues: dashboard.visibleAccounts.map { ($0.id, $0) })
+      let antigravityCount = dashboard.visibleAccounts.filter { $0.provider == "antigravity" }.count
+      for id in AlignmentProbe.frames.keys.sorted() where id.hasPrefix("meter|") && id.hasSuffix("|track") {
+        guard let track = AlignmentProbe.frames[id] else { continue }
+        // Meter keys join account and window ids with "|", as the pending-reset keys do.
+        let key = String(id.dropFirst("meter|".count).dropLast("|track".count))
+        let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let account = byID[parts[0]] else {
+          failures.append("\(key): no such account in the fixture"); continue
+        }
+        meters += 1
+        trackWidths.append(Double(track.width))
+        let fill = AlignmentProbe.frames["meter|\(key)|fill"]
+        let notchFrame = AlignmentProbe.frames["meter|\(key)|notch"]
+        guard let window = account.visibleWindows.first(where: { $0.key == parts[1] }) else {
+          // Only the "Not reported yet" Fable cell renders a meter with no window behind it.
+          if parts[1] == "seven_day_fable" && account.provider == "claude" && fill == nil && notchFrame == nil { continue }
+          failures.append("\(key): no such window on \(account.id)"); continue
+        }
+        let target: Double? = account.pendingReset(window) == nil ? window.meterUsedPercent : nil
+        guard let target else {
+          if fill != nil { failures.append("\(key): no reading but a fill rendered") }
+          if notchFrame != nil { failures.append("\(key): no reading but a notch rendered") }
+          continue
+        }
+        guard let fill else { failures.append("\(key): reading \(target)% but no fill rendered"); continue }
+        fills += 1
+        let expectedFill = track.width * TrayMotion.fillFraction(target)
+        let fillError = abs(fill.width - expectedFill)
+        maxFillError = max(maxFillError, fillError)
+        if fillError > 0.5 { failures.append("\(key): fill \(fill.width) pt, expected \(expectedFill) for \(target)%") }
+        if abs(fill.minX - track.minX) > 0.5 {
+          failures.append("\(key): fill starts at \(fill.minX), the track at \(track.minX)")
+        }
+        for mark in [25, 50, 75] {
+          guard let tick = AlignmentProbe.frames["meter|\(key)|tick\(mark)"] else {
+            failures.append("\(key): tick \(mark) missing"); continue
+          }
+          ticks += 1
+          let tickError = abs(tick.minX - (track.minX + track.width * Double(mark) / 100))
+          maxTickError = max(maxTickError, tickError)
+          if tickError > 0.5 { failures.append("\(key): tick \(mark) off by \(tickError) pt") }
+        }
+        // The notch: every Codex cell, and Antigravity cells on the chosen pool with 2+ accounts.
+        let expectedNotch: Double? = {
+          if account.provider == "codex" { return 100 - dashboard.codexAutoSwitch.thresholdPercent }
+          if account.provider == "antigravity", antigravityCount >= 2,
+            let status = dashboard.antigravityAutoSwitch, let pool = status.requestedPoolId, window.poolId == pool {
+            return Double(status.thresholdUsedPercent)
+          }
+          return nil
+        }()
+        if let expectedNotch {
+          guard let notchFrame else { failures.append("\(key): notch missing"); continue }
+          notches += 1
+          let notchError = abs((notchFrame.midX - track.minX) - track.width * min(100, max(0, expectedNotch)) / 100)
+          maxNotchError = max(maxNotchError, notchError)
+          if notchError > 0.5 { failures.append("\(key): notch off by \(notchError) pt") }
+        } else if notchFrame != nil {
+          failures.append("\(key): unexpected notch rendered")
+        }
+      }
+      // A fixture with no meters (amounts only) passes vacuously; the counts say what was covered.
+      let passed = failures.isEmpty
+      let result: [String: Any] = ["passed": passed, "meters": meters, "fills": fills, "notches": notches,
+        "ticks": ticks, "trackWidthMin": trackWidths.min() ?? 0, "trackWidthMax": trackWidths.max() ?? 0,
+        "maxFillErrorPt": maxFillError, "maxTickErrorPt": maxTickError, "maxNotchErrorPt": maxNotchError,
+        "failures": failures, "hiddenAppOwnedInspection": true,
+        "desktopCaptureOrAutomation": false, "accountActionsInvoked": false]
+      print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
+      exit(passed ? 0 : 1)
+    } catch { fputs("Meter geometry inspection failed.\n", stderr); exit(1) }
+  }
+
+  /// The menu-bar pickers round-trip through this Mac's own defaults: provider, Claude account and
+  /// value persist, clearing the Claude choice removes its key, fresh defaults keep today's behaviour
+  /// (Codex, remaining), and earlier stored values migrate to the new choices.
+  static func checkMenuBarPrefs() -> Never {
+    do {
+      let suite = "party.sittingmongoose.aac.menubartest"
+      guard let defaults = UserDefaults(suiteName: suite) else { throw BarClientError.decoding }
+      defaults.removePersistentDomain(forName: suite)
+      var failures: [String] = []
+      func check(_ ok: Bool, _ message: String) { if !ok { failures.append(message) } }
+      var prefs = TrayPreferences(defaults: defaults, persist: true)
+      check(prefs.menuBarProvider == "codex", "default provider must be codex, got \(prefs.menuBarProvider)")
+      check(prefs.menuBarMode == .remaining, "default value must be remaining")
+      check(prefs.menuBarClaudeAccountID == nil, "default Claude account must be none")
+      defaults.set("antigravity", forKey: TrayPreferences.Keys.menuBarSource)
+      defaults.set("left", forKey: TrayPreferences.Keys.menuBarMode)
+      prefs = TrayPreferences(defaults: defaults, persist: true)
+      check(prefs.menuBarProvider == "antigravity", "a stored provider must carry over")
+      check(prefs.menuBarMode == .remaining, "a stored % left must read as remaining")
+      prefs.menuBarProvider = "claude"
+      prefs.menuBarClaudeAccountID = "claude:example-2"
+      prefs.menuBarMode = .used
+      prefs = TrayPreferences(defaults: defaults, persist: true)
+      check(prefs.menuBarProvider == "claude", "the Show picker must persist")
+      check(prefs.menuBarClaudeAccountID == "claude:example-2", "the Claude account picker must persist")
+      check(prefs.menuBarMode == .used, "the Value picker must persist")
+      prefs.menuBarClaudeAccountID = nil
+      prefs = TrayPreferences(defaults: defaults, persist: true)
+      check(prefs.menuBarClaudeAccountID == nil, "clearing the Claude account must read back nil")
+      check(defaults.string(forKey: TrayPreferences.Keys.menuBarClaudeAccount) == nil,
+        "clearing the Claude account must remove its key")
+      defaults.removePersistentDomain(forName: suite)
+      // cfprefsd flushes asynchronously and can materialize an empty husk seconds after exit, so
+      // settle here: keep removing the file until it stays gone past the flush window.
+      let plist = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Preferences/\(suite).plist")
+      let start = Date()
+      while Date().timeIntervalSince(start) < 20 {
+        if !FileManager.default.fileExists(atPath: plist.path), Date().timeIntervalSince(start) > 10 { break }
+        try? FileManager.default.removeItem(at: plist)
+        Thread.sleep(forTimeInterval: 0.5)
+      }
+      check(!FileManager.default.fileExists(atPath: plist.path), "the throwaway suite's plist must be gone")
+      let passed = failures.isEmpty
+      let result: [String: Any] = ["passed": passed, "failures": failures,
+        "testPreferencesRemoved": true, "realPreferencesUntouched": true]
+      print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
+      exit(passed ? 0 : 1)
+    } catch { fputs("Menu-bar preference inspection failed.\n", stderr); exit(1) }
   }
 }

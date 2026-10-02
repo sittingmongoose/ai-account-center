@@ -197,36 +197,56 @@ public struct TrayStatusSummary: Sendable, Equatable {
   }
 }
 
-public enum MenuBarSource: String, CaseIterable, Sendable { case codex, antigravity, none }
-public enum MenuBarMode: String, CaseIterable, Sendable { case left, used }
+/// What the number means: % used, or % remaining (100 - used). Stored as "left"/"used" from the
+/// earlier "% left" wording; the Settings labels read Used and Remaining.
+public enum MenuBarMode: String, CaseIterable, Sendable { case remaining = "left", used = "used" }
 
-/// What the menu bar shows next to the Apex glyph: the chosen active account's tightest meter.
+/// What the menu bar shows next to the Apex glyph: one account's 5-hour window, or its weekly window
+/// when no 5-hour window is reported.
 public struct MenuBarReading: Sendable, Equatable {
   public let value: Double
   public let text: String
-  /// For the tooltip, e.g. "codex-2 weekly: 91% left".
+  /// For the tooltip, e.g. "Codex · codex-2 · Weekly used".
   public let detail: String
+  /// The provider choice that shows the icon alone, with no number.
+  public static let nothingProvider = "none"
 
-  public static func make(dashboard: AccountDashboard?, source: MenuBarSource, mode: MenuBarMode) -> MenuBarReading? {
-    guard let dashboard, source != .none else { return nil }
-    let provider = source == .codex ? "codex" : "antigravity"
-    guard let account = dashboard.visibleAccounts.first(where: { $0.provider == provider && $0.isActive }) else { return nil }
-    let windows: [AccountQuotaWindow]
-    if provider == "codex" {
-      windows = account.compactWindows
-    } else {
-      let keys = TrayColumns.antigravity([account]).map(\.key)
-      windows = account.visibleWindows.filter { keys.contains($0.key) }
+  /// User-facing provider names, the same table the panel's provider marks use.
+  public static func providerName(_ provider: String) -> String {
+    [
+      "claude": "Claude", "codex": "Codex", "antigravity": "Antigravity", "cursor": "Cursor", "muse": "Muse Code",
+      "kimi-code": "Kimi Code", "qwen": "Qwen Token Plan", "zai": "Z.ai Coding Plan", "opencode-go": "OpenCode Go",
+    ][provider] ?? provider
+  }
+
+  /// - `provider`: a provider id, or "none" for the icon alone. Codex and Antigravity follow the ACTIVE
+  ///   account automatically; Claude uses `claudeAccountID` (Claude has no active account), or its first
+  ///   account when none is picked; any other provider uses its single account, or the first of several.
+  /// - The window is the account's 5-hour window when reported, otherwise its weekly window.
+  /// - A reset-pending (F6) or unavailable reading is nil: the icon with no number, never 0%.
+  public static func make(dashboard: AccountDashboard?, provider: String, mode: MenuBarMode,
+    claudeAccountID: String? = nil) -> MenuBarReading? {
+    guard let dashboard, provider != nothingProvider else { return nil }
+    let accounts = dashboard.visibleAccounts.filter { $0.provider == provider }
+    let account: DashboardAccount?
+    switch provider {
+    case "claude":
+      account = claudeAccountID.flatMap { id in accounts.first { $0.id == id } } ?? accounts.first
+    case "codex", "antigravity":
+      account = accounts.first { $0.isActive }
+    default:
+      account = accounts.first
     }
-    // A reading from before its window's reset is not shown here either (F6).
-    let readings = windows.filter { account.pendingReset($0) == nil }.compactMap { window in window.meterUsedPercent.map { (window, $0) } }
-    guard let tightest = readings.max(by: { $0.1 < $1.1 }) else { return nil }
-    let value = mode == .left ? max(0, 100 - tightest.1) : tightest.1
+    guard let account else { return nil }
+    let fiveHour = account.fiveHourWindow
+    guard let window = fiveHour ?? account.weeklyWindow else { return nil }
+    guard account.pendingReset(window) == nil, let used = window.meterUsedPercent else { return nil }
+    let value = mode == .used ? used : max(0, 100 - used)
     let text = "\(TrayFormat.number(value))%"
     let who = account.identity.split(separator: "@").first.map(String.init) ?? account.identity
-    let label = TrayColumns.shortLabel(provider: provider, tightest.0)
-    let span = ["Weekly": "weekly", "Monthly": "monthly"][label] ?? label
-    return MenuBarReading(value: value, text: text, detail: "\(who) \(span): \(text) \(mode == .left ? "left" : "used")")
+    let span = window.key == fiveHour?.key ? "5-hour" : "Weekly"
+    return MenuBarReading(value: value, text: text,
+      detail: "\(providerName(provider)) · \(who) · \(span) \(mode == .used ? "used" : "remaining")")
   }
 }
 
