@@ -32,7 +32,7 @@ component QuotaRow inherits Rectangle {
     callback opened(string);
     height: 40px;
     background: ta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0);
-    animate background { duration: 180ms; }
+    animate background { duration: Motion.tint(180ms); }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.opened(root.item.key); }

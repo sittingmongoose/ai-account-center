@@ -26,7 +26,7 @@ export component Field inherits VerticalLayout {
         border-width: 1px;
         border-color: root.bad ? Theme.crit : input.has-focus ? Theme.accent : hover.has-hover ? Theme.rule-strong : Theme.rule;
         background: root.enabled ? Theme.paper : Theme.paper-2;
-        animate border-color { duration: Motion.fast; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        animate border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
         // focus halo: a wider faint ring (no inset shadows, no blur filters)
         Rectangle {
             x: -3px;
@@ -36,7 +36,7 @@ export component Field inherits VerticalLayout {
             border-radius: 12px;
             border-width: 3px;
             border-color: (root.bad ? Theme.crit : Theme.accent).with-alpha(input.has-focus ? 0.18 : 0);
-            animate border-color { duration: Motion.fast; }
+            animate border-color { duration: Motion.tint(Motion.fast); }
         }
         hover := TouchArea {
             mouse-cursor: MouseCursor.text;

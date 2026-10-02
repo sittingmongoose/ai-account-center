@@ -33,7 +33,7 @@ component SegButton inherits Rectangle {
         Text {
             text: root.item.label;
             color: root.fg;
-            animate color { duration: 200ms; }
+            animate color { duration: Motion.tint(200ms); }
             font-family: root.mono ? Type.mono : Type.sans;
             font-size: root.mono ? 11.5px : 12.5px;
             font-weight: 560;

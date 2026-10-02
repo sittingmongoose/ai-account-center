@@ -29,7 +29,7 @@ export component Toggle inherits Rectangle {
         height: root.track-h;
         border-radius: root.track-h / 2;
         background: !root.enabled ? Theme.track : root.shown-on ? Theme.accent : Theme.rule-strong;
-        animate background { duration: 200ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        animate background { duration: Motion.tint(200ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
         Rectangle {
             x: root.shown-on ? root.track-w - root.thumb - 2px : 2px;
             y: 2px;

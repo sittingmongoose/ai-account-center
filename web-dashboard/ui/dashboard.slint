@@ -95,7 +95,7 @@ component UpdateButton inherits Rectangle {
     clip: true;
     border-color: root.mode == "run" ? Theme.accent.mix(Theme.rule, 0.4) : root.mode == "done" ? Theme.calm.mix(Theme.rule, 0.45) : ta.has-hover ? Theme.rule-strong : Theme.rule;
     background: root.mode == "run" ? Theme.accent-soft : ta.has-hover ? Theme.paper-2 : Theme.paper;
-    animate background, border-color { duration: Motion.fast; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
     transform-scale: ta.pressed && root.mode == "idle" ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; }
     property <color> fg: root.mode == "run" ? Theme.accent-text : root.mode == "done" ? Theme.good-text : Theme.ink;
@@ -498,7 +498,10 @@ export component Dashboard inherits Window {
     // ---------- theme cross-fade (globals cannot animate) ----------
     property <float> theme-mix: Theme.dark ? 1 : 0;
     animate theme-mix { duration: Motion.on ? Motion.theme : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-    changed theme-mix => { Theme.mix = self.theme-mix; }
+    changed theme-mix => {
+        Motion.theme-shift = self.theme-mix > 0.001 && self.theme-mix < 0.999;
+        Theme.mix = self.theme-mix;
+    }
     property <bool> dark: Theme.dark;
     changed dark => { Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light; }
     init => {

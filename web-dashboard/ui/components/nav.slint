@@ -34,7 +34,7 @@ component NavItem inherits Rectangle {
         Text {
             text: root.text;
             color: root.fg;
-            animate color { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            animate color { duration: Motion.tint(Motion.on ? Motion.med : 0ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
             font-size: Type.body;
             font-weight: 560;
             vertical-alignment: center;

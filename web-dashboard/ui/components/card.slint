@@ -6,7 +6,7 @@ import { Theme, Motion } from "../theme.slint";
 export component Plate inherits Rectangle {
     in property <bool> flash: false;
     background: root.flash ? Theme.flash : Theme.paper;
-    animate background { duration: 600ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    animate background { duration: Motion.tint(600ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     border-radius: Theme.r-plate;
     border-width: 1px;
     border-color: Theme.rule;
@@ -39,12 +39,12 @@ export component Card inherits Rectangle {
         border-width: 1px;
         border-color: root.selected ? Theme.sel-line : root.hovered && root.clickable ? Theme.rule-strong : Theme.rule;
         background: root.flash ? Theme.flash : root.selected ? Theme.sel-fill : Theme.paper;
-        animate background { duration: 600ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-        animate border-color { duration: Motion.fast; }
+        animate background { duration: Motion.tint(600ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate border-color { duration: Motion.tint(Motion.fast); }
         drop-shadow-color: root.hovered && root.clickable ? Theme.shadow-2 : Theme.shadow-1;
         drop-shadow-blur: root.hovered && root.clickable ? 28px : 3px;
         drop-shadow-offset-y: root.hovered && root.clickable ? 12px : 1px;
-        animate drop-shadow-blur, drop-shadow-offset-y, drop-shadow-color { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate drop-shadow-blur, drop-shadow-offset-y, drop-shadow-color { duration: Motion.tint(Motion.on ? Motion.med : 0ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         // The body is a child of the TouchArea so hovering a nested meter or button keeps the card lifted.
         ta := TouchArea {
             enabled: root.clickable;

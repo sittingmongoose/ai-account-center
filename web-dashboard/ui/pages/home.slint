@@ -129,7 +129,7 @@ export component AccountRow inherits Rectangle {
     background: root.account.active && root.section.switchable ? Theme.row-hover.with-alpha(0)
         : root.selected ? Theme.row-sel
         : root.hovered ? Theme.row-hover : Theme.row-hover.with-alpha(0);
-    animate background { duration: 180ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    animate background { duration: Motion.tint(180ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
 
     ta := TouchArea {
         mouse-cursor: pointer;

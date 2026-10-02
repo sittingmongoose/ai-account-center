@@ -20,7 +20,7 @@ export component Select inherits Rectangle {
     border-color: ta.has-hover || pop.is-open ? Theme.rule-strong : Theme.rule;
     background: pop.is-open ? Theme.paper-3 : ta.has-hover ? Theme.paper-2 : Theme.paper;
     opacity: root.enabled ? 1 : 0.45;
-    animate background, border-color { duration: Motion.fast; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
     transform-scale: ta.pressed ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; }
 

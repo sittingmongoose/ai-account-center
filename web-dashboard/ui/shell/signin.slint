@@ -55,7 +55,7 @@ component Motif inherits Rectangle {
             fill: transparent;
             stroke: root.success ? (ring.idx ? Theme.accent.mix(Theme.rule-strong, 0.52) : Theme.accent.mix(Theme.grid-strong, 0.3)) : (ring.idx ? Theme.rule-strong : Theme.grid-strong);
             stroke-width: ring.idx ? 1.35px : 1px;
-            animate stroke { duration: Motion.slow; }
+            animate stroke { duration: Motion.tint(Motion.slow); }
         }
         if ring.label != "": Text {
             x: ring.lx * root.k * 1px - self.preferred-width / 2;
@@ -285,7 +285,7 @@ export component SignInLayer inherits Rectangle {
                         height: 44px;
                         border-radius: 10px;
                         background: root.success ? Theme.calm : !root.can-submit && !root.busy ? Theme.accent.mix(Theme.paper, 0.45) : sb-ta.has-hover ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
-                        animate background { duration: Motion.fast; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                        animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
                         transform-scale: sb-ta.pressed && root.can-submit ? 0.98 : 1;
                         animate transform-scale { duration: Motion.fast; }
                         HorizontalLayout {

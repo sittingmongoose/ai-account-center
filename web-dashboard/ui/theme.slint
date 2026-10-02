@@ -28,6 +28,13 @@ export global Motion {
     // Headless screenshots and prefers-reduced-motion set this; every duration that reads `Motion.on` collapses.
     in-out property <bool> reduced: false;
     out property <bool> on: !reduced;
+    // True while the theme cross-fades. Colour animations on elements read `Motion.tint(duration)`, which
+    // is 0 ms during the cross-fade, so every colour follows `Theme.mix` in step instead of lagging behind
+    // it with its own hover or flash animation.
+    in-out property <bool> theme-shift: false;
+    public pure function tint(d: duration) -> duration {
+        return theme-shift || reduced ? 0ms : d;
+    }
 }
 
 export global Type {
