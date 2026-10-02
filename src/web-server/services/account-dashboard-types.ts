@@ -1,3 +1,4 @@
+import type { AntigravityAutoSwitchStatus } from '../../antigravity/auto-switch/types';
 /** Public account-only contract shared by the dashboard and native clients. */
 export type DashboardProvider =
   | 'codex'
@@ -32,6 +33,10 @@ export interface DashboardAccountWindow {
   /** Retained optional quota rows keep their original observation time. */
   status?: 'cached';
   sampledAt?: string;
+  poolId?: string;
+  poolIdSource?: 'provider-id' | 'provider-bucket-membership';
+  poolLabel?: string;
+  modelIds?: string[];
 }
 
 export interface DashboardAccount {
@@ -53,6 +58,9 @@ export interface DashboardAccount {
     codexProfile: string | null;
     claudeProfileId: string | null;
     claudePlatforms: ClaudeDashboardPlatform[];
+    antigravityProfileId?: string;
+    antigravityHostIds?: Array<'ubuntu'>;
+    antigravityCanActivate?: boolean;
   };
 }
 
@@ -61,6 +69,7 @@ export interface AccountDashboard {
   updatedAt: string;
   settings?: { refreshIntervalSeconds: number };
   accounts: DashboardAccount[];
+  antigravityAutoSwitch?: AntigravityAutoSwitchStatus;
   codexAutoSwitch: {
     enabled: boolean;
     thresholdPercent: number;

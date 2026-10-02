@@ -24,6 +24,7 @@ import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
 import accountAnalyticsRoutes from './account-analytics-routes';
 import appUpdateRoutes from './app-update-routes';
 import codexRoutes from './codex-routes';
+import antigravityRoutes from './antigravity-routes';
 import authRoutes from './auth-routes';
 import claudeDesktopRoutes from './claude-desktop-routes';
 import barRoutes from './bar-routes';
@@ -87,6 +88,7 @@ apiRoutes.use('/app-updates', appUpdateRoutes);
 apiRoutes.use('/auth', authRoutes);
 apiRoutes.use('/claude', claudeDesktopRoutes);
 apiRoutes.use('/codex', codexRoutes);
+apiRoutes.use('/antigravity', antigravityRoutes);
 apiRoutes.use('/bar', barRoutes);
 
 // Public process liveness compatibility; no configuration details or repair actions.

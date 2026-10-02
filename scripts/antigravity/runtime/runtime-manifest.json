@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "path": "THIRD_PARTY.md",
+      "sha256": "aae01f928c663bc07ce0749ed715e15779e176de32915901aed1e00203c36605"
+    },
+    {
+      "path": "foreground_launcher.py",
+      "sha256": "69c973f014c50b5c4561b7577fde01a99b00c9d0b4f0c06b23084003b83cda5c"
+    },
+    {
+      "path": "linux_process_guard.py",
+      "sha256": "8c6d981f77f9dd8d88ad56ed56982ca8ca67247d8ff3505cad72bee6f7719431"
+    },
+    {
+      "path": "native_header.py",
+      "sha256": "015eda31b55df35a71b6ed3ab436aa9d33f180614699ea903247267a73c4b1e7"
+    },
+    {
+      "path": "native_header_graphics.py",
+      "sha256": "75f54e4d0c555d2db24c0750b8a5c24167c6e2f88bd79b86645e5c7a03a0810e"
+    },
+    {
+      "path": "native_status_attestor.py",
+      "sha256": "bd1d992e1c232129b440831c97eac8d7d19159a8f5d1e278d1a7fddf95fab76e"
+    },
+    {
+      "path": "native_status_config.py",
+      "sha256": "69266492feb40d92c6739c9b1ec9be85c746869021c3c952b97617587f14734a"
+    },
+    {
+      "path": "native_status_hook.py",
+      "sha256": "8058ff4d98d6464e46a53165f36fcae131b256e8d43d172c3fdd2229e4a94b58"
+    },
+    {
+      "path": "native_status_identity_worker.py",
+      "sha256": "5da73f1011275069497bcbeb1973035579b328d362c894e5e12061e14bc526df"
+    },
+    {
+      "path": "native_status_inbox.py",
+      "sha256": "7f5949a9759c1c93844e15a8a871a1457afede542b3dd1b1a1d77c99092389e0"
+    },
+    {
+      "path": "native_status_spawn_retention.py",
+      "sha256": "8b5e6019d511a9c97a67a0b83ec045e7880c0efbda794df0971b4c3c3539a6d9"
+    },
+    {
+      "path": "release.json",
+      "sha256": "a3974e2192a6c29cf61cfc05f9cc031e196f249c2c49c34533ab71f08d57fc42"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "b972c138fe7afc737cf9fcfa66430313fc1dbd40bb9024f92bbf092e38311f3f"
+    },
+    {
+      "path": "resident_broker.py",
+      "sha256": "a5184f0b858e888b510888635e637988d603a0da19d59e759c7d046494e41978"
+    },
+    {
+      "path": "resident_main.py",
+      "sha256": "a993ca8c2e1d711de4eac0c2f786017b750e1219ab59c7801e049ab76b41f65c"
+    },
+    {
+      "path": "runtime_continuity.py",
+      "sha256": "95b228340bb3ebf962e9b59f445a5061bc3a8c591a7bf4bd1173d3b7f752f2b7"
+    },
+    {
+      "path": "ubuntu_runtime_factory.py",
+      "sha256": "613665437ca0bd43d5e921add6d55dd2e92a0b5ec9b6f1acb9be8713b8fb7c8f"
+    }
+  ]
+}

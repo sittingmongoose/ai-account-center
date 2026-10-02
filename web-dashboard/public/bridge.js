@@ -1,6 +1,8 @@
 import init, { start_dashboard, resize_dashboard, set_dashboard, set_session, set_message, set_theme, show_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_current_page, set_refresh_interval } from './pkg/ccs_account_dashboard.js';
 import { dashboardView, allDetailWindows, PROVIDERS } from './accounts-data.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
+import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
+import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
 import { analyticsView, analyticsChoiceId } from './analytics-data.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
 
@@ -9,6 +11,8 @@ let busy = false;
 let noticeMessage = '';
 let data = null;
 let profiles = [];
+let antigravityInventory = null;
+let antigravityAuto = null;
 let updateJob = null;
 let refreshing = null;
 let refreshGeneration = 0;
@@ -35,7 +39,9 @@ async function request(path, options = {}) {
   return payload;
 }
 const mutation = (path, body, method = 'POST') => request(path, { method, body: JSON.stringify(body) });
-function render() { set_dashboard(JSON.stringify(dashboardView(data, profiles, platform))); }
+function antigravityModel() { return antigravityView(data, antigravityInventory, antigravityAuto); }
+function render() { set_dashboard(JSON.stringify({ ...dashboardView(data, profiles, platform), ...antigravityModel() })); }
+function pendingActivation() { return activationConfirmation.hasPending() || antigravityConfirmation.hasPending(); }
 const activationConfirmation = createActivationConfirmation({
   activate: (target, body) => mutation(`/api/codex/profiles/${encodeURIComponent(target)}/activate`, body),
   prompt: confirmation => show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` })),
@@ -52,19 +58,39 @@ const activationConfirmation = createActivationConfirmation({
   error: message => notice(message),
 });
 
+
+const antigravityConfirmation = createAntigravityConfirmation({
+  activate: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/activate`, body),
+  confirm: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/confirm`, body),
+  prompt: confirmation => show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` })),
+  close: close_activation_confirmation,
+  busy: inProgress => { busy = inProgress; set_message(noticeMessage, inProgress); },
+  success: async result => {
+    // Selection/running proof comes from the next inventory, never an optimistic UI guess.
+    notice(`Antigravity activation completed on Ubuntu: ${result?.email || 'selected login'}. Refreshing native identity proof…`);
+    antigravityInventory = null; render();
+    await refresh(true);
+  },
+  error: message => notice(message),
+});
+
 async function refresh(force = false) {
   if (!authenticated) return;
   if (refreshing && !force) return refreshing;
   const generation = ++refreshGeneration;
   const operation = (async () => {
     try {
-      const [next, inventory] = await Promise.all([
+      const [next, inventory, antigravityProfiles, antigravityStatus] = await Promise.all([
         request(`/api/accounts/dashboard?platform=${platform}&refresh=${force}`),
         request('/api/claude/desktop-profiles').catch(() => ({ profiles })),
+        request('/api/antigravity/profiles').catch(() => null),
+        request('/api/antigravity/auto-switch').catch(() => null),
       ]);
       if (generation !== refreshGeneration || !authenticated) return;
       if (next?.schemaVersion !== 1 || !Array.isArray(next.accounts)) throw new Error('Unsupported account dashboard response.');
       data = next; if (Number.isInteger(next.settings?.refreshIntervalSeconds)) applyRefreshInterval(next.settings.refreshIntervalSeconds); profiles = Array.isArray(inventory?.profiles) ? inventory.profiles : profiles;
+      antigravityInventory = antigravityProfiles;
+      antigravityAuto = validAntigravityAuto(antigravityStatus) ? antigravityStatus : validAntigravityAuto(next.antigravityAutoSwitch) ? next.antigravityAutoSwitch : null;
       render(); notice();
     } catch (error) { if (generation === refreshGeneration && authenticated) notice(`${error.message} Last received samples remain visible.`); }
   })();
@@ -123,7 +149,7 @@ function applyRefreshInterval(seconds, confirmed = true) {
   refreshSettingsKnown = confirmed;
   set_refresh_interval(seconds, confirmed);
   if (usageTimer) clearInterval(usageTimer);
-  usageTimer = setInterval(() => { if (authenticated && !busy && !activationConfirmation.hasPending()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(); } }, seconds * 1000);
+  usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(); } }, seconds * 1000);
 }
 async function loadSettings() {
   try { const result = await request('/api/accounts/settings'); applyRefreshInterval(result?.refreshIntervalSeconds); } catch {}
@@ -140,7 +166,11 @@ function details(id) {
   const account = data?.accounts?.find(row => row.id === id);
   const provider = PROVIDERS.find(row => row[0] === id);
   const related = provider ? data?.accounts?.filter(row => row.provider === id) || [] : account ? [account] : [];
-  const note = related.map(row => [row.email || row.label, row.plan, row.source, row.message].filter(Boolean).join(' · ')).join('\n') || 'No usable account data was returned.';
+  const note = related.map(row => {
+    const native = row.provider === 'antigravity' ? antigravityModel().antigravityAccounts.find(account => account.id === row.id) : null;
+    return native ? [row.email || row.label, row.plan, native.status, native.note].filter(Boolean).join(' · ')
+      : [row.email || row.label, row.plan, row.source, row.message].filter(Boolean).join(' · ');
+  }).join('\n') || 'No usable account data was returned.';
   show_details(account?.email || account?.label || provider?.[1] || 'Account usage', note, JSON.stringify(allDetailWindows(data, id)));
 }
 function updateDescription(job) {
@@ -156,8 +186,8 @@ async function updateStatus() {
 }
 window.ccsDashboardAction = async (action, value) => {
   try {
-    if (action === 'activation-cancel') { if (activationConfirmation.cancel()) notice('Account switch canceled. Running Codex programs were left unchanged.'); return; }
-    if (action === 'activation-confirm') { if (authenticated) await activationConfirmation.confirm(); return; }
+    if (action === 'activation-cancel') { const agy = antigravityConfirmation.hasPending(); if ((agy ? antigravityConfirmation : activationConfirmation).cancel()) notice(`Account switch canceled. Running ${agy ? 'Antigravity' : 'Codex'} programs were left unchanged.`); return; }
+    if (action === 'activation-confirm') { if (authenticated) await (antigravityConfirmation.hasPending() ? antigravityConfirmation : activationConfirmation).confirm(); return; }
     if (action === 'navigate-dashboard') { currentPage = 'dashboard'; return; }
     if (action === 'navigate-analytics') { currentPage = 'analytics'; if (authenticated) await refreshAnalytics(); return; }
     if (action.startsWith('analytics-')) { if (authenticated) await analyticsAction(action, value); return; }
@@ -178,8 +208,8 @@ ${updateJob ? updateDescription(updateJob) : 'No app update has run.'}`, JSON.st
       await mutation('/api/auth/login', { username, password });
       value = ''; authenticated = true; busy = false; set_session(true, false, false, ''); await refresh(true); return;
     }
-    if (!authenticated || busy || activationConfirmation.hasPending()) return;
-    if (action === 'logout') { await mutation('/api/auth/logout', {}); analyticsGeneration++; analyticsPayload = null; analyticsModel = null; authenticated = false; data = null; profiles = []; refreshGeneration++; render(); set_session(false, false, false, ''); return; }
+    if (!authenticated || busy || pendingActivation()) return;
+    if (action === 'logout') { await mutation('/api/auth/logout', {}); analyticsGeneration++; analyticsPayload = null; analyticsModel = null; authenticated = false; data = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; render(); set_session(false, false, false, ''); return; }
     if (action === 'refresh') { notice('Refreshing account usage…', true); await refresh(true); await refreshAnalytics(true); return; }
     if (action === 'launch') {
       const [id, target] = value.split(':');
@@ -199,6 +229,22 @@ ${updateJob ? updateDescription(updateJob) : 'No app update has run.'}`, JSON.st
       if (!account || account.isActive) return;
       notice('Checking running Codex programs before activation…', true);
       await activationConfirmation.begin(value); return;
+    }
+    if (action === 'antigravity-activate') {
+      const account = antigravityModel().antigravityAccounts.find(row => row.profile === value);
+      if (!account?.canActivate) { render(); notice('Ubuntu activation is unavailable until this login and the native runtime are verified.'); return; }
+      refreshGeneration++;
+      notice('Checking running Antigravity programs on Ubuntu before activation…', true);
+      await antigravityConfirmation.begin(value); return;
+    }
+    if (['antigravity-automatic', 'antigravity-threshold', 'antigravity-pool'].includes(action)) {
+      const patch = antigravitySettingsPatch(antigravityModel(), action, value);
+      if (!patch) { render(); notice('Antigravity controls require verified Ubuntu support and a fresh reported quota pool.'); return; }
+      refreshGeneration++;
+      notice('Saving Antigravity automatic switching for Ubuntu…', true);
+      const status = await mutation('/api/antigravity/auto-switch', patch, 'PUT');
+      if (!validAntigravityAuto(status)) throw new Error('Automatic switching settings could not be confirmed. Refresh before trying again.');
+      antigravityAuto = status; render(); notice(); return;
     }
     if (action === 'automatic') {
       refreshGeneration++;
@@ -226,7 +272,7 @@ ${updateJob ? updateDescription(updateJob) : 'No app update has run.'}`, JSON.st
       const result = await mutation('/api/app-updates/start', {}); updateJob = result.job;
       set_update_status(updateDescription(updateJob), true); notice(); return;
     }
-  } catch (error) { if (data && (action === 'threshold' || action === 'automatic')) render(); if (action === 'refresh-interval') set_refresh_interval(refreshIntervalSeconds, refreshSettingsKnown); notice(error?.message || 'Unable to complete the action.'); if (!authenticated) set_session(false, false, false, error?.message || 'Sign-in failed.'); }
+  } catch (error) { if (data && (action === 'threshold' || action === 'automatic' || action.startsWith('antigravity-'))) render(); if (action === 'refresh-interval') set_refresh_interval(refreshIntervalSeconds, refreshSettingsKnown); notice(error?.message || 'Unable to complete the action.'); if (!authenticated) set_session(false, false, false, error?.message || 'Sign-in failed.'); }
 };
 
 try {
@@ -241,7 +287,7 @@ try {
   document.querySelector('#loading').hidden = true;
   await checkSession();
   applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
-  setInterval(() => activationConfirmation.expire(), 1_000);
+  setInterval(() => { activationConfirmation.expire(); antigravityConfirmation.expire(); }, 1_000);
   setInterval(() => { if (authenticated && updateJob?.state === 'running') void updateStatus(); }, 3_000);
 } catch (error) {
   const status = document.querySelector('#loading');

@@ -75,6 +75,38 @@ impl From<AccountDto> for AccountView {
 }
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+struct AntigravityDto {
+    id: String,
+    profile: String,
+    email: String,
+    plan: String,
+    status: String,
+    selected: bool,
+    runtime_verified: bool,
+    can_activate: bool,
+    five: UsageDto,
+    weekly: UsageDto,
+    note: String,
+}
+impl From<AntigravityDto> for AntigravityRowView {
+    fn from(v: AntigravityDto) -> Self {
+        Self {
+            id: v.id.into(),
+            profile: v.profile.into(),
+            email: v.email.into(),
+            plan: v.plan.into(),
+            status: v.status.into(),
+            selected: v.selected,
+            runtime_verified: v.runtime_verified,
+            can_activate: v.can_activate,
+            five: v.five.into(),
+            weekly: v.weekly.into(),
+            note: v.note.into(),
+        }
+    }
+}
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 struct ProviderDto {
     id: String,
     name: String,
@@ -110,6 +142,18 @@ struct Snapshot {
     claude: Vec<AccountDto>,
     codex: Vec<AccountDto>,
     providers: Vec<ProviderDto>,
+    antigravity_accounts: Vec<AntigravityDto>,
+    antigravity_auto_known: bool,
+    antigravity_auto_enabled: bool,
+    antigravity_auto_available: bool,
+    antigravity_settings_available: bool,
+    antigravity_pool_available: bool,
+    antigravity_threshold_label: String,
+    antigravity_pool_options: Vec<String>,
+    antigravity_pool_label: String,
+    antigravity_preview: String,
+    antigravity_auto_setting: String,
+    antigravity_auto_message: String,
     auto_enabled: bool,
     auto_available: bool,
     auto_setting: String,
@@ -161,6 +205,29 @@ pub fn set_dashboard(json: &str) -> Result<(), JsValue> {
             ui.set_providers(model(
                 v.providers.into_iter().map(ProviderView::from).collect(),
             ));
+            ui.set_antigravity_accounts(model(
+                v.antigravity_accounts
+                    .into_iter()
+                    .map(AntigravityRowView::from)
+                    .collect(),
+            ));
+            ui.set_antigravity_auto_known(v.antigravity_auto_known);
+            ui.set_antigravity_auto_enabled(v.antigravity_auto_enabled);
+            ui.set_antigravity_auto_available(v.antigravity_auto_available);
+            ui.set_antigravity_settings_available(v.antigravity_settings_available);
+            ui.set_antigravity_pool_available(v.antigravity_pool_available);
+            ui.set_antigravity_threshold_label(v.antigravity_threshold_label.into());
+            // ComboBox models reset their selected values: apply choices before confirmed label.
+            ui.set_antigravity_pool_options(model(
+                v.antigravity_pool_options
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect(),
+            ));
+            ui.set_antigravity_pool_label(v.antigravity_pool_label.into());
+            ui.set_antigravity_preview(v.antigravity_preview.into());
+            ui.set_antigravity_auto_setting(v.antigravity_auto_setting.into());
+            ui.set_antigravity_auto_message(v.antigravity_auto_message.into());
             ui.set_active_codex_email(v.active_codex_email.into());
             ui.set_auto_enabled(v.auto_enabled);
             ui.set_auto_available(v.auto_available);
@@ -238,6 +305,7 @@ struct ProcessDto {
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct ConfirmationDto {
+    product: String,
     target_profile: String,
     warning: String,
     expires_at: String,
@@ -252,6 +320,14 @@ pub fn show_activation_confirmation(json: &str) -> Result<(), JsValue> {
         .map_err(|_| JsValue::from_str("Invalid activation confirmation"))?;
     UI.with(|slot| {
         if let Some(ui) = slot.borrow().as_ref() {
+            ui.set_confirmation_product(
+                if v.product == "Antigravity" {
+                    "Antigravity"
+                } else {
+                    "Codex"
+                }
+                .into(),
+            );
             ui.set_details_open(false);
             ui.set_confirmation_target(v.target_profile.into());
             ui.set_confirmation_warning(v.warning.into());

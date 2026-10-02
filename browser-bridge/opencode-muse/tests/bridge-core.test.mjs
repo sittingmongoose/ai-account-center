@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {filterCookies, projectSample, safeCode, workspaceFromURL} from '../extension/bridge-core.mjs';
+import {filterCookies, projectSample, safeCode, workspaceFromURL, safeMuseCode, MUSE_ERROR_MESSAGES} from '../extension/bridge-core.mjs';
 const cookie = {name: '__Host-console_session', value: 'synthetic-private', domain: 'opencode.ai', path: '/', secure: true, hostOnly: true, expirationDate: 2000000000};
 const sample = {id: 'plan-opencode-go-console-mac-123456abcdef', provider: 'opencode-go', platform: 'mac', status: 'ok', fetchedAt: '2026-10-01T04:00:00Z', sampledAt: '2026-10-01T04:00:00Z', windows: [{key: 'zen-balance', label: 'SECRET', kind: 'balance', remaining: -1.25, unit: 'USD', expiresAt: null}]};
+test('missing Muse identity has fixed truthful copy and rejects upstream secret text', () => {
+  assert.equal(safeMuseCode('identity_unavailable'), 'identity_unavailable');
+  assert.doesNotMatch(MUSE_ERROR_MESSAGES.identity_unavailable, /differs|expired|sign.in/i);
+  assert.match(MUSE_ERROR_MESSAGES.identity_unavailable, /not returning.*account email/);
+  assert.equal(safeMuseCode('identity_unavailable:sk-private'), 'error');
+  assert.equal(safeMuseCode({code: 'identity_unavailable'}), 'error');
+});
 test('only the exact signed-in host and workspace URL is accepted', () => {
   assert.equal(workspaceFromURL('https://opencode.ai/console/org_EXAMPLE/billing'), 'org_EXAMPLE');
   assert.equal(workspaceFromURL('https://opencode.ai/workspace/wrk_EXAMPLE/go'), 'wrk_EXAMPLE');

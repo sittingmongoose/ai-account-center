@@ -37,7 +37,12 @@ def _candidates(name, platform):
         paths = [home / ".local/bin" / name, home / ".bun/bin" / name, pathlib.Path("/opt/homebrew/bin") / name, pathlib.Path("/usr/local/bin") / name]
     found = shutil.which(name)
     if found:
-        paths.insert(0, pathlib.Path(found))
+        located = pathlib.Path(found)
+        managed = home / '.local/share/ai-account-center/antigravity-runtime/bin/agy'
+        # Process census/update must name the native executable, never the PATH
+        # launcher shim; native version/help/update controls remain pass-through.
+        if not (name == 'agy' and platform == 'ubuntu' and located == managed):
+            paths.insert(0, located)
     return paths
 
 
@@ -112,6 +117,19 @@ def update_cli(install, deadline):
     try:
         if not before:
             raise UpdateFailure("version_unknown")
+        descriptor = pathlib.Path.home() / '.ccs/antigravity-switching/runtime-installation.json'
+        if install.app_id == 'antigravity-cli' and install.platform == 'ubuntu' and (descriptor.exists() or descriptor.is_symlink()):
+            # The same account lock and proved resident PTY coordinator owns
+            # managed updates. Never move this session into a replacement tmux.
+            bridge = pathlib.Path(__file__).parents[2] / 'dist/antigravity/managed-update-command.js'
+            if not bridge.is_file(): raise UpdateFailure('unsupported')
+            seconds = max(30, min(300, int(deadline - time.monotonic())))
+            payload = json.loads(command([shutil.which('node') or '/usr/bin/node', bridge],
+                timeout=seconds, capture=True))
+            if (type(payload) is not dict or payload.get('appId') != 'antigravity-cli' or
+                    payload.get('platform') != 'ubuntu' or payload.get('status') not in
+                    {'current', 'updated', 'failed', 'restart_failed'}): raise UpdateFailure()
+            return payload
         processes = scan(install.platform)
         # Linux Codex's shared daemon needs the existing startup-lock and idle
         # protocol, not an idle TUI/PTY restart. It is handled by the fixed bridge.

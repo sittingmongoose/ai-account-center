@@ -310,7 +310,10 @@ controls have been checked; these interaction checks do not establish pixel
 layout on every display. Browser DPI fixtures need matching browser and context
 scaling; see the [dashboard validation guide](web-dashboard/README.md#validation).
 Antigravity account switching is not enabled in this checkpoint;
-preserving an actual native conversation through switching still requires
+its disabled Ubuntu runtime, setup/rollback and update limits are documented in
+[the Antigravity runtime guide](docs/antigravity-runtime.md).
+
+Preserving an actual native conversation through switching still requires
 verification. Vendor update/restart checks use controlled fixtures and do not
 establish that every installed vendor app has undergone a live update.
 The [test guide](tests/README.md) and [maintainer docs](docs/README.md) describe

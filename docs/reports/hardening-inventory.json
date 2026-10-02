@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1079,
-    "filesAffected": 107,
+    "totalOccurrences": 1157,
+    "filesAffected": 111,
     "hotpathOccurrences": 504,
     "hotpathFilesAffected": 62,
     "topHotpathFiles": [
@@ -266,6 +266,42 @@
         "markers": []
       },
       {
+        "file": "src/antigravity/auto-switch/store.ts",
+        "count": 25,
+        "calls": [
+          "closeSync",
+          "fstatSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readFileSync",
+          "realpathSync",
+          "renameSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/antigravity/registry.ts",
+        "count": 25,
+        "calls": [
+          "closeSync",
+          "existsSync",
+          "fstatSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "rmdirSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/management/shared-manager/migrations.ts",
         "count": 25,
         "calls": [
@@ -295,43 +331,12 @@
           "writeFileSync"
         ],
         "markers": []
-      },
-      {
-        "file": "src/codex-auth/codex-activation-runtime.ts",
-        "count": 21,
-        "calls": [
-          "closeSync",
-          "fstatSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "readlinkSync",
-          "readSync",
-          "statSync",
-          "unlinkSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/auth/resume-lane-diagnostics.ts",
-        "count": 19,
-        "calls": [
-          "closeSync",
-          "fstatSync",
-          "lstatSync",
-          "openSync",
-          "readdirSync",
-          "realpathSync"
-        ],
-        "markers": []
       }
     ]
   },
   "legacyShim": {
-    "totalMarkers": 223,
-    "filesAffected": 78,
+    "totalMarkers": 225,
+    "filesAffected": 80,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -511,12 +516,18 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 249,
+      "totalThrows": 361,
       "typedThrows": 103,
       "plainThrows": 70,
-      "otherThrows": 76,
-      "adoptionRatio": 0.4137,
+      "otherThrows": 188,
+      "adoptionRatio": 0.2853,
       "topSubdomainsByThrows": [
+        {
+          "subdomain": "antigravity",
+          "count": 104,
+          "typed": 0,
+          "plain": 0
+        },
         {
           "subdomain": "codex-auth",
           "count": 95,
@@ -525,7 +536,7 @@
         },
         {
           "subdomain": "web-server",
-          "count": 58,
+          "count": 66,
           "typed": 40,
           "plain": 10
         },
@@ -570,12 +581,6 @@
           "count": 3,
           "typed": 1,
           "plain": 2
-        },
-        {
-          "subdomain": "cliproxy",
-          "count": 2,
-          "typed": 2,
-          "plain": 0
         }
       ]
     },
@@ -593,9 +598,10 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 23,
-      "totalSourceFiles": 313,
-      "coverageRatio": 0.0735,
+      "totalSourceFiles": 338,
+      "coverageRatio": 0.068,
       "subdomainsWithZeroCreateLogger": [
+        "antigravity",
         "api",
         "bin",
         "channels",
@@ -619,7 +625,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 59,
+          "count": 60,
           "withLogger": 2
         },
         {
@@ -648,6 +654,11 @@
           "withLogger": 9
         },
         {
+          "subdomain": "antigravity",
+          "count": 24,
+          "withLogger": 0
+        },
+        {
           "subdomain": "management",
           "count": 19,
           "withLogger": 1
@@ -661,11 +672,6 @@
           "subdomain": "services",
           "count": 10,
           "withLogger": 1
-        },
-        {
-          "subdomain": "types",
-          "count": 8,
-          "withLogger": 0
         }
       ]
     },
@@ -738,7 +744,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 31,
+      "countOver400": 34,
       "countOver600": 13,
       "topOver400": [
         {

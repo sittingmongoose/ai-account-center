@@ -60,6 +60,49 @@ def concurrent_reader(root, counter, identities, results):
 
 
 class CacheTests(unittest.TestCase):
+    def test_blank_portal_identity_clears_previous_quota_and_preserves_cold_backoff(self):
+        with tempfile.TemporaryDirectory() as root:
+            muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(), now=1000)
+            client = Client()
+            with patch.object(client, "get", return_value={"email": "", "secret": "sk-private"}) as get:
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, client, now=1400)
+            self.assertEqual(error.exception.code, "identity_unavailable")
+            get.assert_called_once_with("/api/auth/me")
+            importlib.reload(muse)
+            state = muse.read_usage_state(root)
+            self.assertIsNone(state["quota"])
+            self.assertIsNone(state["sampledAt"])
+            self.assertEqual(state["lastError"], "identity_unavailable")
+            self.assertEqual(state["nextRequestAt"], 1700)
+            client = Client()
+            with self.assertRaises(muse.MuseError) as error:
+                muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, client, now=1699)
+            self.assertEqual(error.exception.code, "identity_unavailable")
+            self.assertEqual(client.calls, [])
+            self.assertNotIn("sk-private", (Path(root) / muse.CACHE_NAME).read_text())
+
+    def test_collector_forwards_fixed_missing_identity_code_without_quota_or_key_mint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root = home / ".ccs/account-usage"
+            root.mkdir(parents=True, mode=0o700)
+            muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+            client = Client()
+            with patch.object(client, "get", return_value={"email": "", "message": "sk-private"}) as get, \
+                    patch.object(muse, "PortalClient", return_value=client), \
+                    patch.object(muse, "verify_device_identity"), patch.object(usage, "request_json") as request:
+                result = helpers.account("muse", "mac")
+                usage.fetch_muse(helpers.Credential(ACCESS, email=EMAIL), result, home)
+            self.assertEqual(result["status"], "unavailable")
+            self.assertEqual(result["failureCode"], "identity_unavailable")
+            self.assertEqual(result["windows"], [])
+            self.assertIsNone(result["sampledAt"])
+            self.assertEqual(result["message"], muse.ERROR_MESSAGES["identity_unavailable"])
+            self.assertNotIn("sk-private", json.dumps(result))
+            request.assert_not_called()
+            get.assert_called_once_with("/api/auth/me")
+
     def test_success_survives_cold_process_reload_with_original_sample_and_zero(self):
         with tempfile.TemporaryDirectory() as root:
             first = muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(), now=1000)

@@ -27,12 +27,21 @@ import {
   stopAccountAnalyticsSampling,
 } from './services/account-analytics-service';
 import { ConfigError } from '../errors/error-types';
+import {
+  configureAntigravityRuntimeFactory,
+  getAntigravityRuntime,
+  type AntigravityRuntimeFactory,
+} from '../antigravity/runtime-service';
+import type { AntigravityRuntime } from '../antigravity/runtime-composition';
+import { getInstalledAntigravityRuntimeFactory } from '../antigravity/production-runtime';
 
 export interface ServerOptions {
   port: number;
   host?: string;
   staticDir?: string;
   dev?: boolean;
+  /** Explicit verified Ubuntu driver composition; omission keeps the legacy usage-only source. */
+  antigravityRuntimeFactory?: AntigravityRuntimeFactory;
 }
 
 export interface ServerInstance {
@@ -148,10 +157,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   });
 
   const codexAutoSwitch = getCodexAutoSwitchService();
+  let antigravityRuntime: AntigravityRuntime | null = null;
 
   // Combined cleanup function
   const cleanup = () => {
     codexAutoSwitch.stop();
+    antigravityRuntime?.stop();
     stopAccountAnalyticsSampling();
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
     shutdownUsageAggregator();
@@ -191,6 +202,20 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         port: options.port,
         dev: Boolean(options.dev),
       });
+      const antigravityFactory =
+        options.antigravityRuntimeFactory ?? getInstalledAntigravityRuntimeFactory();
+      if (antigravityFactory) {
+        try {
+          configureAntigravityRuntimeFactory(antigravityFactory);
+          antigravityRuntime = getAntigravityRuntime();
+          antigravityRuntime?.start();
+        } catch {
+          logger.error(
+            'antigravity.runtime_unavailable',
+            'Antigravity switching could not initialize safely'
+          );
+        }
+      }
       codexAutoSwitch.start();
       startAccountAnalyticsSampling();
       // Usage cache loads on-demand when Analytics page is visited

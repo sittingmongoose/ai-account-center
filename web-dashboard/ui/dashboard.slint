@@ -10,6 +10,10 @@ export struct AccountView {
     active: bool, can-mac: bool, can-windows: bool, five: UsageView,
     weekly: UsageView, fable: UsageView, show-fable: bool, windows: [UsageView], note: string,
 }
+export struct AntigravityRowView {
+    id: string, profile: string, email: string, plan: string, status: string,
+    selected: bool, runtime-verified: bool, can-activate: bool, five: UsageView, weekly: UsageView, note: string,
+}
 export struct ProcessView { label: string, pid: string, role: string }
 export struct ProviderView {
     id: string, name: string, glyph: string, identity: string, plan: string,
@@ -179,6 +183,61 @@ component ProviderCard inherits Rectangle {
     if root.data.windows.length == 0: Text { x: 16px; y: 80px; width: parent.width - 32px; text: root.data.note == "" ? "Usage unavailable" : root.data.note; wrap: word-wrap; color: Colors.muted; font-size: 11px; }
     Text { x: 16px; y: parent.height - 17px; width: parent.width - 32px; height: 10px; text: root.data.source; color: Colors.muted; font-size: 8px; overflow: elide; }
 }
+component AntigravityCard inherits Rectangle {
+    in property <[AntigravityRowView]> accounts;
+    in property <bool> busy;
+    in property <bool> auto-known;
+    in property <bool> auto-enabled;
+    in property <bool> auto-available;
+    in property <bool> settings-available;
+    in property <bool> pool-available;
+    in-out property <string> threshold-label;
+    in-out property <string> pool-label;
+    in property <[string]> pool-options;
+    in property <string> preview;
+    in property <string> auto-setting;
+    in property <string> auto-message;
+    callback action(string, string);
+    border-radius: 11px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
+    Image { x: 16px; y: 15px; width: 26px; height: 26px; source: @image-url("../public/assets/provider-antigravity.png"); }
+    Text { x: 49px; y: 15px; width: parent.width - 90px; height: 18px; text: "Antigravity · Ubuntu"; color: Colors.text; font-size: 13px; font-weight: 700; overflow: elide; }
+    ActionButton { x: parent.width - 34px; y: 14px; width: 21px; height: 22px; text: "···"; hint: "All Antigravity accounts, model quotas, reset times and source details"; pressed => { root.action("details", "antigravity"); } }
+    Text { x: 16px; y: 39px; width: parent.width - 32px; height: 13px; text: root.preview; color: Colors.muted; font-size: 9px; overflow: elide; }
+    ScrollView { x: 10px; y: 53px; width: parent.width - 20px; height: 140px; content-height: max(140px, root.accounts.length * 70px);
+        for account[index] in root.accounts: Rectangle { x: 0px; y: index * 70px; width: parent.width - 8px; height: 67px; border-radius: 6px;
+            background: account.selected ? Colors.track : Colors.inset;
+            Text { x: 7px; y: 4px; width: parent.width - 116px; height: 14px; text: account.email; font-size: 11px; font-weight: account.selected ? 700 : 400; color: Colors.text; overflow: elide;
+                Tooltip { text: @markdown("\{account.email + " · " + account.plan + " · " + account.status + " · " + account.note}"); }
+            }
+            Text { x: 7px; y: 19px; width: parent.width - 116px; height: 12px; text: account.status; font-size: 9px; color: account.selected ? Colors.blue : Colors.muted; overflow: elide; }
+            ActionButton { x: parent.width - 100px; y: 4px; width: 69px; height: 23px; text: account.selected ? "✓ Selected" : "Activate"; primary: !account.selected; enabled: account.can-activate && !root.busy; hint: account.selected ? "Verified selected Ubuntu login; running identity is shown separately" : "Activate " + account.email + " on Ubuntu; review any running processes before stopping"; pressed => { root.action("antigravity-activate", account.profile); } }
+            ActionButton { x: parent.width - 27px; y: 4px; width: 20px; height: 23px; text: "···"; hint: "All actual quotas, reset times and source details for " + account.email; pressed => { root.action("details", account.id); } }
+            Rectangle { x: 7px; y: 33px; width: (parent.width - 21px) / 2; height: 31px;
+                Text { x: 0px; y: 0px; width: parent.width; height: 12px; text: "5h · " + (account.five.has-percent ? account.five.amount : "Unavailable"); color: Colors.text; font-size: 9px; overflow: elide; }
+                Rectangle { x: 0px; y: 15px; width: parent.width; height: 4px; border-radius: 2px; background: Colors.track;
+                    if account.five.has-percent: Rectangle { x: 0px; y: 0px; width: parent.width * clamp(account.five.percent, 0, 100) / 100; height: 4px; border-radius: 2px; background: Colors.blue; }
+                }
+                Text { x: 0px; y: 22px; width: parent.width; height: 11px; text: account.five.has-percent ? account.five.reset : ""; font-size: 9px; color: Colors.muted; overflow: elide; }
+                Tooltip { text: @markdown("\{account.five.label + " · " + account.five.amount + " · " + account.five.reset + " · " + account.five.meta}"); }
+            }
+            Rectangle { x: (parent.width + 7px) / 2; y: 33px; width: (parent.width - 21px) / 2; height: 31px;
+                Text { x: 0px; y: 0px; width: parent.width; height: 12px; text: "Week · " + (account.weekly.has-percent ? account.weekly.amount : "Unavailable"); color: Colors.text; font-size: 9px; overflow: elide; }
+                Rectangle { x: 0px; y: 15px; width: parent.width; height: 4px; border-radius: 2px; background: Colors.track;
+                    if account.weekly.has-percent: Rectangle { x: 0px; y: 0px; width: parent.width * clamp(account.weekly.percent, 0, 100) / 100; height: 4px; border-radius: 2px; background: Colors.blue; }
+                }
+                Text { x: 0px; y: 22px; width: parent.width; height: 11px; text: account.weekly.has-percent ? account.weekly.reset : ""; font-size: 9px; color: Colors.muted; overflow: elide; }
+                Tooltip { text: @markdown("\{account.weekly.label + " · " + account.weekly.amount + " · " + account.weekly.reset + " · " + account.weekly.meta}"); }
+            }
+        }
+        if root.accounts.length == 0: Text { x: 6px; y: 10px; width: parent.width - 12px; height: 80px; text: "Ubuntu profiles unavailable. Existing usage is available in Details. Controls require verified native support."; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
+    }
+    ActionButton { x: 16px; y: 199px; width: 85px; height: 24px; text: !root.auto-known ? "Auto: —" : root.auto-enabled ? "Auto: On" : "Auto: Off"; primary: root.auto-enabled; enabled: root.auto-available && !root.busy; hint: root.auto-message + " · Automatic switching waits for an idle Ubuntu runtime and never accepts a manual stop approval."; pressed => { root.action("antigravity-automatic", root.auto-enabled ? "false" : "true"); } }
+    Text { x: 110px; y: 204px; width: 35px; height: 14px; text: "Used"; color: Colors.muted; font-size: 9px; }
+    ComboBox { x: 146px; y: 197px; width: parent.width - 162px; height: 27px; model: ["75%", "80%", "85%", "90%", "95%", "99%"]; current-value <=> root.threshold-label; enabled: root.settings-available && !root.busy; selected(value) => { root.action("antigravity-threshold", value); } }
+    ComboBox { x: 16px; y: 231px; width: parent.width - 32px; height: 25px; model: root.pool-options; current-value <=> root.pool-label; enabled: root.pool-available && !root.busy; selected(value) => { root.action("antigravity-pool", value); }
+        Tooltip { text: @markdown("\{"Exact reported quota group shared by both accounts; fresh quotas and native identity are rechecked on every decision. " + root.auto-setting + " · " + root.auto-message}"); }
+    }
+}
 export component Dashboard inherits Window {
     title: "AI Account Center";
     preferred-width: 1500px; preferred-height: 950px;
@@ -206,10 +265,23 @@ export component Dashboard inherits Window {
     in-out property <[AccountView]> claude;
     in-out property <[AccountView]> codex;
     in-out property <[ProviderView]> providers;
+    in-out property <[AntigravityRowView]> antigravity-accounts;
+    in-out property <bool> antigravity-auto-known: false;
+    in-out property <bool> antigravity-auto-enabled: false;
+    in-out property <bool> antigravity-auto-available: false;
+    in-out property <bool> antigravity-settings-available: false;
+    in-out property <bool> antigravity-pool-available: false;
+    in-out property <string> antigravity-threshold-label: "—";
+    in-out property <[string]> antigravity-pool-options;
+    in-out property <string> antigravity-pool-label: "Choose quota pool";
+    in-out property <string> antigravity-preview;
+    in-out property <string> antigravity-auto-setting;
+    in-out property <string> antigravity-auto-message;
     in-out property <bool> details-open: false;
     in-out property <string> details-title;
     in-out property <string> details-note;
     in-out property <[UsageView]> details-windows;
+    in-out property <string> confirmation-product: "Codex";
     in-out property <bool> confirmation-open: false;
     in-out property <bool> confirmation-busy: false;
     in-out property <bool> confirmation-valid: false;
@@ -320,12 +392,21 @@ export component Dashboard inherits Window {
                 automatic(enabled) => { root.action("automatic", enabled ? "true" : "false"); }
                 threshold(value) => { root.action("threshold", value); }
             }
-            for provider[index] in root.providers: ProviderCard {
+            for provider[index] in root.providers: Rectangle {
                 x: root.columns == 4 && index >= 4 ? (index - 4) * ((parent.width + 14px) / 3) : mod(index, root.columns) * ((parent.width + 14px) / root.columns);
                 y: root.top-height + 14px + floor(index / root.columns) * (root.provider-height + 14px);
                 width: root.columns == 4 && index >= 4 ? (parent.width - 28px) / 3 : (parent.width - (root.columns - 1) * 14px) / root.columns;
-                height: root.provider-height; data: provider;
-                details(id) => { root.action("details", id); }
+                height: root.provider-height;
+                if provider.id != "antigravity" || root.antigravity-accounts.length == 0: ProviderCard { x: 0px; y: 0px; width: parent.width; height: parent.height; data: provider;
+                    details(id) => { root.action("details", id); }
+                }
+                if provider.id == "antigravity" && root.antigravity-accounts.length > 0: AntigravityCard { x: 0px; y: 0px; width: parent.width; height: parent.height;
+                    accounts: root.antigravity-accounts; busy: root.busy; auto-known: root.antigravity-auto-known; auto-enabled: root.antigravity-auto-enabled;
+                    auto-available: root.antigravity-auto-available; settings-available: root.antigravity-settings-available; pool-available: root.antigravity-pool-available;
+                    threshold-label <=> root.antigravity-threshold-label; pool-label <=> root.antigravity-pool-label; pool-options: root.antigravity-pool-options;
+                    preview: root.antigravity-preview; auto-setting: root.antigravity-auto-setting; auto-message: root.antigravity-auto-message;
+                    action(action, value) => { root.action(action, value); }
+                }
             }
             Text { x: 0px; y: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 8px; width: parent.width; text: root.message == "" ? root.auto-message : root.message; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
             Text { x: 0px; y: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 32px; width: parent.width; text: root.update-message; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
@@ -396,7 +477,7 @@ export component Dashboard inherits Window {
             x: max(12px, (parent.width - 610px) / 2); y: max(68px, (parent.height - 490px) / 2);
             width: min(610px, parent.width - 24px); height: min(490px, parent.height - 82px);
             border-radius: 12px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
-            Text { x: 24px; y: 22px; width: parent.width - 48px; text: "Another Codex process is running"; color: Colors.text; font-size: 20px; font-weight: 700; wrap: word-wrap; }
+            Text { x: 24px; y: 22px; width: parent.width - 48px; text: "Another " + root.confirmation-product + " process is running"; color: Colors.text; font-size: 20px; font-weight: 700; wrap: word-wrap; }
             Text { x: 24px; y: 57px; width: parent.width - 48px; text: "Switch to " + root.confirmation-target + "?"; color: Colors.blue; font-size: 12px; }
             Text { x: 24px; y: 83px; width: parent.width - 48px; height: 63px; text: root.confirmation-warning; color: Colors.muted; font-size: 12px; wrap: word-wrap; }
             Rectangle { x: 24px; y: 151px; width: parent.width - 48px; height: max(80px, parent.height - 300px); border-radius: 8px; border-width: 1px; border-color: Colors.border; background: Colors.inset;
@@ -408,10 +489,10 @@ export component Dashboard inherits Window {
                 }
             }
             Text { x: 24px; y: parent.height - 132px; width: parent.width - 48px; height: 16px; text: root.confirmation-expires; color: Colors.muted; font-size: 10px; }
-            Text { x: 24px; y: parent.height - 108px; width: parent.width - 48px; height: 43px; text: root.confirmation-busy ? "Stopping the listed processes and restarting Codex…" : root.confirmation-error; color: root.confirmation-error != "" ? #ee9a7b : Colors.muted; font-size: 11px; wrap: word-wrap; }
+            Text { x: 24px; y: parent.height - 108px; width: parent.width - 48px; height: 43px; text: root.confirmation-busy ? "Stopping the listed processes and restoring " + root.confirmation-product + "…" : root.confirmation-error; color: root.confirmation-error != "" ? #ee9a7b : Colors.muted; font-size: 11px; wrap: word-wrap; }
             HorizontalLayout { x: parent.width - 278px; y: parent.height - 51px; width: 254px; height: 31px; spacing: 12px;
-                ActionButton { text: "Cancel"; enabled: !root.confirmation-busy; hint: "Cancel; keep all Codex processes and accounts unchanged"; pressed => { root.action("activation-cancel", ""); } }
-                ActionButton { width: 160px; text: "Yes, stop and restart"; primary: true; enabled: root.confirmation-valid && !root.confirmation-busy; hint: "Stop the listed processes and switch the Codex account"; pressed => { root.action("activation-confirm", ""); } }
+                ActionButton { text: "Cancel"; enabled: !root.confirmation-busy; hint: "Cancel; keep all " + root.confirmation-product + " processes and accounts unchanged"; pressed => { root.action("activation-cancel", ""); } }
+                ActionButton { width: 160px; text: "Yes, stop and restart"; primary: true; enabled: root.confirmation-valid && !root.confirmation-busy; hint: "Stop the listed processes and switch the " + root.confirmation-product + " account"; pressed => { root.action("activation-confirm", ""); } }
             }
         }
     }

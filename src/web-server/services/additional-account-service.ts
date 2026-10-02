@@ -470,7 +470,9 @@ export class AdditionalAccountService {
     return copy(cache.result ?? unavailable(source), true);
   }
 
-  async get(opts: { refresh?: boolean } = {}): Promise<DashboardAccount[]> {
+  async get(
+    opts: { refresh?: boolean; excludeAntigravity?: boolean } = {}
+  ): Promise<DashboardAccount[]> {
     const config = await this.loadManifest();
     if (config.fingerprint !== this.fingerprint) {
       this.fingerprint = config.fingerprint;
@@ -482,7 +484,11 @@ export class AdditionalAccountService {
       );
     }
     return Promise.all(
-      config.sources.map((source) => this.getSource(source, opts.refresh === true))
+      config.sources
+        .filter(
+          (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
+        )
+        .map((source) => this.getSource(source, opts.refresh === true))
     );
   }
 }
@@ -490,7 +496,7 @@ export class AdditionalAccountService {
 const services = new Map<string, AdditionalAccountService>();
 
 export function getAdditionalDashboardAccounts(
-  opts: { refresh?: boolean } = {}
+  opts: { refresh?: boolean; excludeAntigravity?: boolean } = {}
 ): Promise<DashboardAccount[]> {
   const scope = path.resolve(getCcsDir());
   let service = services.get(scope);

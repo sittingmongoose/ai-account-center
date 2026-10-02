@@ -73,29 +73,34 @@ describe('Claude desktop transport', () => {
     expect(command).not.toContain('credentials');
   });
 
-  it('starts only the fixed same-user limited interactive Windows task', async () => {
-    const exec = mockSsh();
-    await openClaudeWindowsLauncher(windows, 'gmail');
-    const [binary, args] = exec.mock.calls[0]!;
-    expect(binary).toBe('ssh');
-    expect(args).toContain('example-windows');
-    const command = (args as string[]).at(-1)!;
-    const script = Buffer.from(command.split(' ').at(-1)!, 'base64').toString('utf16le');
-    expect(script).toContain("Get-ScheduledTask -TaskPath '\\' -TaskName 'ccs-claude-gmail'");
-    expect(script).toContain('$taskSid -ne $currentSid');
-    expect(script).toContain("LogonType -notin @('Interactive', 'InteractiveToken')");
-    expect(script).toContain("RunLevel -ne 'Limited'");
-    expect(script).toContain("'CCS-Claude', 'ccs-claude.exe'");
-    expect(script).toContain("'ccs-claude://launch/gmail'");
-    expect(script).toContain('Start-ScheduledTask -InputObject $task');
-    for (const forbidden of [
-      'Start-Process',
-      'Register-ScheduledTask',
-      'password',
-      windows.profilePath,
-    ])
-      expect(script).not.toContain(forbidden);
-  });
+  it.each(['gmail', 'platyr', 'party', 'me'])(
+    'starts only the fixed same-user limited interactive Windows task for %s',
+    async (id) => {
+      const exec = mockSsh();
+      await openClaudeWindowsLauncher(windows, id);
+      const [binary, args] = exec.mock.calls[0]!;
+      expect(binary).toBe('ssh');
+      expect(args).toContain('example-windows');
+      const command = (args as string[]).at(-1)!;
+      const script = Buffer.from(command.split(' ').at(-1)!, 'base64').toString('utf16le');
+      expect(script).toContain(
+        "Get-ScheduledTask -TaskPath '\\' -TaskName 'ccs-claude-" + id + "'"
+      );
+      expect(script).toContain('$taskSid -ne $currentSid');
+      expect(script).toContain("LogonType -notin @('Interactive', 'InteractiveToken')");
+      expect(script).toContain("RunLevel -ne 'Limited'");
+      expect(script).toContain("'CCS-Claude', 'ccs-claude.exe'");
+      expect(script).toContain("'ccs-claude://launch/" + id + "'");
+      expect(script).toContain('Start-ScheduledTask -InputObject $task');
+      for (const forbidden of [
+        'Start-Process',
+        'Register-ScheduledTask',
+        'password',
+        windows.profilePath,
+      ])
+        expect(script).not.toContain(forbidden);
+    }
+  );
 
   it.each(['work', 'gmail;anything', "gmail'", '../gmail', 'GMAIL'])(
     'rejects non-allowlisted Windows profile %s before SSH',

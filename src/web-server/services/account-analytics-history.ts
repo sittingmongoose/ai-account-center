@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { ValidationError } from '../../errors/error-types';
+import { displayText, safePoolId } from '../../antigravity/usage-normalization';
 import type {
   DashboardAccount,
   DashboardAccountStatus,
@@ -87,6 +88,25 @@ export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
     ...(typeof value.unlimited === 'boolean' ? { unlimited: value.unlimited } : {}),
     ...(typeof value.enabled === 'boolean' ? { enabled: value.enabled } : {}),
     ...(cachedSampledAt ? { status: 'cached' as const, sampledAt: cachedSampledAt } : {}),
+    ...(safePoolId(value.poolId) ? { poolId: value.poolId } : {}),
+    ...(value.poolIdSource === 'provider-id' || value.poolIdSource === 'provider-bucket-membership'
+      ? { poolIdSource: value.poolIdSource }
+      : {}),
+    ...(displayText(value.poolLabel, 80)
+      ? { poolLabel: displayText(value.poolLabel, 80) as string }
+      : {}),
+    ...(Array.isArray(value.modelIds)
+      ? {
+          modelIds: value.modelIds
+            .slice(0, 64)
+            .filter(
+              (model): model is string =>
+                typeof model === 'string' &&
+                /^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,159}$/.test(model) &&
+                displayText(model, 160) !== null
+            ),
+        }
+      : {}),
   };
 }
 
@@ -97,7 +117,11 @@ export function accountAnalyticsIdentity(account: DashboardAccount): string {
 }
 
 export function analyticsWindowIdentity(window: DashboardAccountWindow): string {
-  return JSON.stringify([window.key, window.kind ?? null, window.unit]);
+  const identity: Array<string | null> = [window.key, window.kind ?? null, window.unit];
+  // Explicit reported pool membership prevents a changed group from inheriting
+  // another group's series. Existing non-pool history keys remain compatible.
+  if (window.poolId) identity.push(window.poolId);
+  return JSON.stringify(identity);
 }
 
 function sourcePlatform(account: DashboardAccount): DashboardPlatform {

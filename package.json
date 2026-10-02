@@ -64,7 +64,8 @@
     "assets/screenshots/ai-account-center-dashboard.png",
     "assets/screenshots/ai-account-center-analytics.png",
     "assets/screenshots/README.md",
-    "LICENSE"
+    "LICENSE",
+    "docs/antigravity-runtime.md"
   ],
   "engines": {
     "node": ">=18.0.0",

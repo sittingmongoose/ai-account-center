@@ -4,6 +4,15 @@ import {
 } from '../../codex-auth/codex-auth-dashboard-service';
 import { getCcsDir } from '../../utils/config-manager';
 import {
+  getAntigravityAccounts,
+  getCachedAntigravityAccounts,
+  hasAntigravityProfiles,
+  readSelectedAntigravityProfileId,
+  getAntigravityAutoSwitchStatus,
+} from '../../antigravity/runtime-service';
+import { publicDashboardAccount } from '../../antigravity/usage-normalization';
+import type { AntigravityDashboardAccount } from '../../antigravity/usage-contract';
+import {
   getCachedCodexProfileQuotaRows,
   getCodexProfileQuotaRows,
 } from '../usage/native-quota-collector';
@@ -58,6 +67,11 @@ export interface AccountDashboardDeps {
   getAdditionalAccounts?: () => Promise<DashboardAccount[]>;
   getOptionalWalletAccounts?: (refresh: boolean) => Promise<DashboardAccount[]>;
   getAutoSwitchStatus?: () => AccountDashboard['codexAutoSwitch'];
+  hasAntigravityProfiles?: () => boolean;
+  getAntigravityAccounts?: (refresh: boolean) => Promise<AntigravityDashboardAccount[]>;
+  getCachedAntigravityAccounts?: () => AntigravityDashboardAccount[];
+  readSelectedAntigravityProfileId?: () => Promise<string | null>;
+  getAntigravityAutoSwitchStatus?: () => NonNullable<AccountDashboard['antigravityAutoSwitch']>;
   invalidateClaudeCache?: () => void;
   now?: () => number;
   responseBudgetMs?: number;
@@ -75,6 +89,7 @@ interface DashboardState {
   codex: DashboardAccount[];
   claude: DashboardAccount[];
   additional: DashboardAccount[];
+  antigravity: DashboardAccount[];
 }
 
 export class AccountDashboardService {
@@ -233,6 +248,9 @@ export class AccountDashboardService {
     refresh: boolean
   ): Promise<DashboardAccount[]> {
     const generation = ++state.generation;
+    const registeredAntigravity = (
+      this.deps.hasAntigravityProfiles ?? (() => hasAntigravityProfiles(scope))
+    )();
     if (refresh) (this.deps.invalidateClaudeCache ?? invalidateClaudeDesktopUsageCache)();
     const parts = [
       ['codex', this.collectCodex(scope, refresh), () => this.cachedCodex(scope)],
@@ -253,7 +271,12 @@ export class AccountDashboardService {
             if (this.deps.getAdditionalAccounts && !this.deps.getOptionalWalletAccounts)
               return this.deps.getAdditionalAccounts();
             const primary = (
-              this.deps.getAdditionalAccounts ?? (() => getAdditionalDashboardAccounts({ refresh }))
+              this.deps.getAdditionalAccounts ??
+              (() =>
+                getAdditionalDashboardAccounts({
+                  refresh,
+                  excludeAntigravity: registeredAntigravity,
+                }))
             )().then((accounts) => {
               // The optional wallet must never delay the seven existing usage rows.
               if (state.generation === generation) state.additional = additionalAccounts(accounts);
@@ -267,6 +290,26 @@ export class AccountDashboardService {
           })
           .then(additionalAccounts),
         () => ADDITIONAL_PROVIDERS.map(([provider, label]) => additionalFallback(provider, label)),
+      ],
+      [
+        'antigravity',
+        registeredAntigravity
+          ? Promise.resolve()
+              .then(() =>
+                (
+                  this.deps.getAntigravityAccounts ??
+                  ((force) => getAntigravityAccounts(force, scope))
+                )(refresh)
+              )
+              .then((accounts) => accounts.map(publicDashboardAccount))
+          : Promise.resolve([]),
+        () =>
+          registeredAntigravity
+            ? (
+                this.deps.getCachedAntigravityAccounts ??
+                (() => getCachedAntigravityAccounts(scope))
+              )().map(publicDashboardAccount)
+            : [],
       ],
     ] as const;
     await Promise.all(
@@ -284,7 +327,7 @@ export class AccountDashboardService {
       })
     );
     state.fetchedAt = (this.deps.now ?? Date.now)();
-    return [...state.codex, ...state.claude, ...state.additional];
+    return [...state.codex, ...state.claude, ...state.additional, ...state.antigravity];
   }
 
   async get(platform: ClaudeDashboardPlatform = 'mac', refresh = false): Promise<AccountDashboard> {
@@ -302,6 +345,7 @@ export class AccountDashboardService {
         codex: [],
         claude: [],
         additional: [],
+        antigravity: [],
       };
       this.states.set(key, state);
       while (this.states.size > MAX_SCOPES) {
@@ -328,12 +372,64 @@ export class AccountDashboardService {
     if (state.pending) await state.pending;
     // Account switches invalidate the native summary by live auth file signature.
     // Refresh this inexpensive identity even when quota samples are still cached.
-    const summary = await this.bounded(
-      Promise.resolve().then(() => (this.deps.getCodexSummary ?? getCodexAuthProfilesSummary)()),
-      () => null,
-      Math.max(0, (this.deps.responseBudgetMs ?? 2500) - (Date.now() - startedAt))
+    const registeredAntigravity = (
+      this.deps.hasAntigravityProfiles ?? (() => hasAntigravityProfiles(scope))
+    )();
+    const remainingBudget = Math.max(
+      0,
+      (this.deps.responseBudgetMs ?? 2500) - (Date.now() - startedAt)
     );
-    const accounts = [...state.codex, ...state.claude, ...state.additional];
+    const [summary, selectedAntigravityProfileId] = await Promise.all([
+      this.bounded(
+        Promise.resolve().then(() => (this.deps.getCodexSummary ?? getCodexAuthProfilesSummary)()),
+        () => null,
+        remainingBudget
+      ),
+      registeredAntigravity
+        ? this.bounded(
+            Promise.resolve().then(() =>
+              (
+                this.deps.readSelectedAntigravityProfileId ??
+                (() => readSelectedAntigravityProfileId(scope))
+              )()
+            ),
+            () => null,
+            remainingBudget
+          )
+        : Promise.resolve(null),
+    ]);
+    // Validate saved credential revisions on every response, including dashboard
+    // cache hits. This synchronous cache projection never starts a provider call.
+    if (registeredAntigravity) {
+      const previous = state.antigravity;
+      state.antigravity = (
+        this.deps.getCachedAntigravityAccounts ?? (() => getCachedAntigravityAccounts(scope))
+      )().map((account) => {
+        const current = publicDashboardAccount(account);
+        const retained = previous.find((candidate) => candidate.id === current.id);
+        return {
+          ...current,
+          capabilities: {
+            ...current.capabilities,
+            antigravityCanActivate:
+              (current.status === 'ok' || current.status === 'cached') &&
+              current.capabilities.antigravityHostIds?.includes('ubuntu') === true &&
+              retained?.email === current.email &&
+              retained?.capabilities.antigravityProfileId ===
+                current.capabilities.antigravityProfileId &&
+              retained?.capabilities.antigravityCanActivate === true,
+          },
+        };
+      });
+    }
+    const accounts = [
+      ...state.codex,
+      ...state.claude,
+      ...state.additional.filter(
+        (account) => !(registeredAntigravity && account.provider === 'antigravity')
+      ),
+      ...(registeredAntigravity ? state.antigravity : []),
+    ];
     return {
       schemaVersion: 1,
       updatedAt: new Date((this.deps.now ?? Date.now)()).toISOString(),
@@ -361,11 +457,18 @@ export class AccountDashboardService {
             ...current,
             status: usedCache && current.status === 'ok' ? 'cached' : current.status,
             isActive:
-              current.provider === 'codex' &&
-              summary?.activated?.name === current.capabilities.codexProfile,
+              current.provider === 'codex'
+                ? summary?.activated?.name === current.capabilities.codexProfile
+                : current.provider === 'antigravity' &&
+                  registeredAntigravity &&
+                  selectedAntigravityProfileId !== null &&
+                  selectedAntigravityProfileId === current.capabilities.antigravityProfileId,
           },
         ];
       }),
+      antigravityAutoSwitch: (
+        this.deps.getAntigravityAutoSwitchStatus ?? getAntigravityAutoSwitchStatus
+      )(),
       codexAutoSwitch: (
         this.deps.getAutoSwitchStatus ?? (() => getCodexAutoSwitchService().getStatus())
       )(),

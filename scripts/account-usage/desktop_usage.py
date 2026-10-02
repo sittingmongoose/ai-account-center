@@ -353,16 +353,34 @@ def antigravity_oauth_client(home=None):
             raw = handle.read(4097)
             if len(raw) > 4096:
                 raise OSError()
-        value = json.loads(raw)
-        if (not isinstance(value, dict) or set(value) != {"schemaVersion", "clientId", "clientSecret"}
-                or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1):
+        def unique_pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value:
+                    raise ValueError()
+                value[key] = item
+            return value
+
+        def invalid_constant(_):
+            raise ValueError()
+
+        value = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+        if not isinstance(value, dict):
+            raise ValueError()
+        if set(value) == {"schemaVersion", "clientId", "clientSecret"}:
+            schema_version = value["schemaVersion"]
+        elif set(value) == {"schema", "clientId", "clientSecret"}:
+            schema_version = value["schema"]
+        else:
+            raise ValueError()
+        if type(schema_version) is not int or schema_version != 1:
             raise ValueError()
         client_id, app_value = value["clientId"], value["clientSecret"]
         if (not isinstance(client_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,256}\.apps\.googleusercontent\.com", client_id)
                 or not isinstance(app_value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", app_value)):
             raise ValueError()
         return client_id, app_value
-    except (OSError, ValueError, UnicodeError):
+    except (OSError, ValueError, UnicodeError, RecursionError):
         raise UsageError("unavailable", failure) from None
 
 

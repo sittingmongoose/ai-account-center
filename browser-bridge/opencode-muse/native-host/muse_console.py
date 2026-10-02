@@ -36,6 +36,7 @@ ERROR_MESSAGES = {
     "no_browser_cookie": "No existing Muse web sign-in was found. Open dev.meta.ai in this browser and sync Muse again.",
     "needs_sign_in": "The existing Muse web session expired. Open dev.meta.ai in this browser and sync Muse again.",
     "account_mismatch": "The Muse web account differs from the signed-in Muse CLI account.",
+    "identity_unavailable": "Muse is not returning the signed-in web account email right now. Usage will refresh automatically when it is available.",
     "plan_mismatch": "The selected web team's subscription differs from the Muse CLI subscription.",
     "choose_team": "This Muse account has several teams. Select the team that owns your coding subscription.",
     "team_mismatch": "The selected Muse team is not available to this signed-in account.",
@@ -212,7 +213,9 @@ def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=N
     client = client or PortalClient(cookies)
     me = client.get("/api/auth/me")
     actual = me.get("email") if isinstance(me, dict) else None
-    if not valid_email(actual) or actual.strip().lower() != expected_email.strip().lower():
+    if not valid_email(actual):
+        raise MuseError("identity_unavailable")
+    if actual.strip().lower() != expected_email.strip().lower():
         raise MuseError("account_mismatch")
     teams = team_rows(client.get("/api/portal/teams"))
     if requested is None:

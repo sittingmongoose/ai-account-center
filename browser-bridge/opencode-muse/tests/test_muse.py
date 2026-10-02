@@ -77,6 +77,17 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "account_mismatch")
         self.assertEqual(client.calls, ["/api/auth/me"])
 
+    def test_missing_blank_or_malformed_identity_is_not_a_proven_different_account(self):
+        for payload in ({}, {"email": ""}, {"email": None}, {"email": " "}, {"email": 42},
+                        {"email": "not-an-email"}, {"email": "bad\n@example.com"}, {"user": {"email": EMAIL}}):
+            with self.subTest(payload=payload):
+                client = FakeClient()
+                with patch.object(client, "get", return_value=payload) as get:
+                    with self.assertRaises(muse.MuseError) as error:
+                        muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client)
+                self.assertEqual(error.exception.code, "identity_unavailable")
+                get.assert_called_once_with("/api/auth/me")
+
     def test_multiple_teams_need_explicit_choice(self):
         client = FakeClient(teams=[{"team_id": 42, "team_name": "First"}, {"team_id": 43, "team_name": "Second"}])
         with self.assertRaises(muse.MuseError) as error:

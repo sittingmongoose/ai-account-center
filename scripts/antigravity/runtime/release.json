@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "nativeActivationReleased": false,
+  "nativeVersion": "1.2.14",
+  "nativeSha256": "0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029",
+  "nativeProofReceiptSha256": null,
+  "parser": { "pyte": "0.8.2", "wcwidth": "0.9.1" }
+}

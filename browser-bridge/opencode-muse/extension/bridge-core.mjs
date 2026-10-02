@@ -85,6 +85,7 @@ export const MUSE_ERROR_MESSAGES = Object.freeze({
   no_browser_cookie: 'No Muse web sign-in was found. Open dev.meta.ai in this browser and sync again.',
   needs_sign_in: 'The Muse web session expired. Open dev.meta.ai in this browser and sync again.',
   account_mismatch: 'The Muse web account differs from the signed-in Muse CLI account.',
+  identity_unavailable: 'Muse is not returning the signed-in web account email right now. Usage will refresh automatically when it is available.',
   plan_mismatch: 'The selected web team has a different subscription from the Muse CLI account.',
   choose_team: 'Select the team that owns your Muse coding subscription, then sync again.',
   team_mismatch: 'The selected Muse team is not available to this account.',

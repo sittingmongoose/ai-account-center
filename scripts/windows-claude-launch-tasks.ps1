@@ -74,6 +74,33 @@ function Get-HelperTarget([string]$AccountId) {
     }
 }
 
+function Get-ResolvedLaunchPlan([string]$AccountId) {
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $helper
+    $start.Arguments = '--describe "ccs-claude://launch/' + $AccountId + '"'
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            throw 'The Claude helper launch-plan validation timed out.'
+        }
+        $text = $output.GetAwaiter().GetResult()
+        $errorText = $errors.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0 -or $errorText.Length -ne 0 -or $text.Length -gt 8192) {
+            throw 'The Claude helper rejected the saved profile launch plan.'
+        }
+        return $text | ConvertFrom-Json
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Get-PrincipalSid([string]$UserId) {
     if ($UserId -match '^S-1-') { return $UserId }
     try {
@@ -95,22 +122,34 @@ try {
                 throw 'The default Claude helper mapping differs from the expected app ID.'
             }
         } else {
-            if ([IO.Path]::GetExtension($target) -ine '.lnk' -or
-                [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($target)) -ine
-                    [IO.Path]::GetFullPath($desktop) -or
-                -not (Test-Path -LiteralPath $target -PathType Leaf)) {
-                throw 'A named Claude helper mapping is not an existing desktop shortcut.'
-            }
-            $link = $shell.CreateShortcut($target)
-            try {
-                $profile = Join-Path $env:APPDATA ('Claude-' + $id)
-                $expectedArguments = '--user-data-dir="' + $profile + '"'
-                if ($link.TargetPath -ine $claudeExecutable -or
-                    $link.Arguments -cne $expectedArguments) {
-                    throw 'A named Claude shortcut does not select the expected app and profile.'
+            $profile = Join-Path $env:APPDATA ('Claude-' + $id)
+            $expectedArguments = '--user-data-dir="' + $profile + '"'
+            if ([IO.Path]::GetExtension($target) -ieq '.lnk') {
+                if ([IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($target)) -ine
+                        [IO.Path]::GetFullPath($desktop) -or
+                    -not (Test-Path -LiteralPath $target -PathType Leaf)) {
+                    throw 'A legacy named Claude mapping is not an existing desktop shortcut.'
                 }
-            } finally {
-                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($link)
+                $link = $shell.CreateShortcut($target)
+                try {
+                    if ($link.TargetPath -ine $claudeExecutable -or
+                        $link.Arguments -cne $expectedArguments) {
+                        throw 'A legacy Claude shortcut does not select the current app and saved profile.'
+                    }
+                } finally {
+                    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($link)
+                }
+            } else {
+                $resolved = Get-ResolvedLaunchPlan $id
+                if ($target -ine $claudeExecutable -or
+                    $resolved.schema -ne 1 -or $resolved.profileId -cne $id -or
+                    $resolved.executable -ine $claudeExecutable -or
+                    $resolved.arguments -cne $expectedArguments -or
+                    $resolved.profilePath -ine $profile -or
+                    $null -ne $resolved.defaultAppTarget -or
+                    -not (Test-Path -LiteralPath $profile -PathType Container)) {
+                    throw 'The Claude helper does not select the current app and exact saved profile.'
+                }
             }
         }
 
