@@ -15,6 +15,9 @@ public sealed class CheckReport
     public string CheckedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public bool Passed { get; set; }
     public Dictionary<string, bool> Checks { get; set; } = new();
+    public Dictionary<string, double> Measurements { get; set; } = new();
+    /// <summary>Exception types from offline checks only (fixtures, never connection data).</summary>
+    public Dictionary<string, string> Notes { get; set; } = new();
     public int? Accounts { get; set; }
     public Dictionary<string, int>? Providers { get; set; }
     public bool? AutoSwitchEnabled { get; set; }
@@ -88,8 +91,10 @@ public static class Checks
         var cachedWindow = JsonSerializer.Deserialize<QuotaWindow>("{\"kind\":\"balance\",\"remaining\":42.75,\"status\":\"cached\",\"sampledAt\":\"2026-09-28T13:00:00Z\"}", Formatting.Json)!;
         report.Checks["retained_window_cache_decodes_original_sample_timestamp"] = cachedWindow.Status == "cached" && cachedWindow.SampledAt == "2026-09-28T13:00:00Z" && cachedWindow.Remaining == 42.75;
         report.Checks["cached_window_missing_sample_time_stays_unknown"] = Formatting.WindowSample(new QuotaWindow { Status = "cached" }.SampledAt) == "Sample time unavailable" && Formatting.WindowSample("invalid") == "Sample time unavailable";
-        report.Checks["profile_path_and_uri_injection_rejected"] = !Formatting.IsSafeProfile("../gmail") && !Formatting.IsSafeProfile("gmail?x=1") && !Formatting.IsWindowsClaudeProfile("gmail/../../") && !Formatting.IsWindowsClaudeProfile("arbitrary");
-        report.Checks["four_windows_launch_ids_allowed"] = new[] { "platyr", "gmail", "party", "me" }.All(Formatting.IsWindowsClaudeProfile);
+        report.Checks["profile_path_and_uri_injection_rejected"] = !Formatting.IsSafeProfile("../gmail") && !Formatting.IsSafeProfile("gmail?x=1") && !Formatting.IsSafeClaudeProfile("gmail/../../") && !Formatting.IsSafeClaudeProfile("me?x=1") && !Formatting.IsSafeClaudeProfile("") && !Formatting.IsSafeClaudeProfile(null) && !Formatting.IsSafeClaudeProfile("-leading") && !Formatting.IsSafeClaudeProfile(new string('a', 65));
+        // No allowlist: any id the dashboard reports is launched when it is URI and path safe.
+        report.Checks["claude_launch_ids_follow_the_data"] = new[] { "platyr", "gmail", "party", "me", "claude-example-1", "work_2" }.All(Formatting.IsSafeClaudeProfile);
+        NewBehaviourChecks(report);
         report.Checks["connection_with_path_rejected"] = RejectConnection("http://127.0.0.1:3000/account");
         report.Checks["cleartext_remote_connection_rejected"] = RejectConnection("http://example.com");
         report.Checks["dpapi_round_trip"] = SecureStore.CheckRoundTrip(Encoding.UTF8.GetBytes("test-only-secret-value"));
@@ -112,9 +117,10 @@ public static class Checks
             var dashboard = await client.Dashboard(false);
             report.Checks["schema_v1"] = dashboard.SchemaVersion == 1;
             report.Checks["account_inventory_present"] = dashboard.Accounts.Count > 0;
-            report.Checks["only_requested_providers"] = dashboard.Accounts.All(a => a.Provider is "codex" or "claude" or "antigravity" or "muse" or "cursor" or "kimi-code" or "qwen" or "zai" or "opencode-go");
+            report.Checks["provider_ids_are_safe"] = dashboard.Accounts.All(a => Formatting.IsSafeId(a.Provider));
             report.Checks["safe_codex_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.CodexProfile is not null).All(a => a.Provider == "codex" && Formatting.IsSafeProfile(a.Capabilities.CodexProfile));
-            report.Checks["safe_claude_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.ClaudeProfileId is not null).All(a => a.Provider == "claude" && Formatting.IsWindowsClaudeProfile(a.Capabilities.ClaudeProfileId));
+            report.Checks["safe_claude_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.ClaudeProfileId is not null).All(a => a.Provider == "claude" && Formatting.IsSafeClaudeProfile(a.Capabilities.ClaudeProfileId));
+            report.Checks["safe_antigravity_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.AntigravityProfileId is not null).All(a => a.Provider == "antigravity" && Formatting.IsSafeId(a.Capabilities.AntigravityProfileId));
             report.Accounts = dashboard.Accounts.Count;
             report.Providers = dashboard.Accounts.GroupBy(a => a.Provider).ToDictionary(g => g.Key, g => g.Count());
             report.AutoSwitchEnabled = dashboard.CodexAutoSwitch.Enabled;
@@ -141,7 +147,7 @@ public static class Checks
         var valid = true;
         var loop = Task.Run(async () =>
         {
-            for (int i = 0; i < 10; i++)
+            for (int i = 0; i < 13; i++)
             {
                 var context = await listener.GetContextAsync();
                 var request = context.Request;
@@ -191,6 +197,27 @@ public static class Checks
                         else { valid &= token.GetString() == "fixture-confirmation-token"; payload = new { success = true }; }
                     }
                 }
+                else if (path == "/api/antigravity/auto-switch")
+                {
+                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    valid &= request.HttpMethod == "PUT" && request.ContentType?.StartsWith("application/json", StringComparison.Ordinal) == true
+                        && json.RootElement.EnumerateObject().Count() == 1 && !json.RootElement.GetProperty("enabled").GetBoolean();
+                    payload = new { enabled = false, thresholdUsedPercent = 95, pollIntervalSeconds = 60, outcome = "disabled", message = "Off", activationInProgress = false };
+                }
+                else if (path == "/api/antigravity/profiles/example-2/activate")
+                {
+                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    valid &= request.HttpMethod == "POST" && json.RootElement.EnumerateObject().Count() == 1 && json.RootElement.GetProperty("hostId").GetString() == "ubuntu";
+                    context.Response.StatusCode = 409;
+                    payload = new { status = "confirmation-required", profileId = "example-2", hostId = "ubuntu", reason = "running-processes", confirmation = AntigravityProposal() };
+                }
+                else if (path == "/api/antigravity/profiles/example-2/confirm")
+                {
+                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    valid &= request.HttpMethod == "POST" && json.RootElement.EnumerateObject().Count() == 2 && json.RootElement.GetProperty("hostId").GetString() == "ubuntu"
+                        && json.RootElement.GetProperty("confirmationToken").GetString() == "fixture_antigravity_token_0001";
+                    payload = new { status = "active", profileId = "example-2", hostId = "ubuntu" };
+                }
                 else
                 {
                     valid &= request.HttpMethod == "POST" && path is "/api/codex/profiles/gmail/activate" or "/api/claude/desktop-profiles/platyr/open";
@@ -214,11 +241,90 @@ public static class Checks
             try { await client.Activate("party", "fixture-session-changed"); }
             catch (InvalidOperationException error) { authRejected = error.Message.Contains("session changed"); }
             valid &= authRejected;
+            valid &= !(await client.SetAntigravityAutoSwitch(enabled: false)).Enabled;
+            int antigravityApprovals = 0;
+            valid &= await AntigravitySwitchFlow.Run("example-2", async token => { await client.ActivateAntigravity("example-2", token); }, confirmation => { antigravityApprovals++; return Task.FromResult(confirmation.Processes.Count == 1 && confirmation.Processes[0].Label == "Antigravity CLI"); });
+            valid &= antigravityApprovals == 1;
             await loop.WaitAsync(TimeSpan.FromSeconds(10));
         }
         catch { valid = false; }
         finally { listener.Stop(); }
         return valid;
+    }
+
+    private static object AntigravityProposal() => new
+    {
+        token = "fixture_antigravity_token_0001", expiresAt = DateTimeOffset.UtcNow.AddMinutes(1).ToString("O"), profileId = "example-2", hostId = "ubuntu",
+        email = "antigravity-2@example.com", warning = "Fixture only.", processes = new[] { new { pid = 4321, role = "cli", label = "Antigravity CLI" } },
+    };
+
+    private static void NewBehaviourChecks(CheckReport report)
+    {
+        report.Checks["max_plan_detection_for_fable"] = new[] { "max", "Max", "max_5x", "Max 20x", "claude_max" }.All(Formatting.IsMaxPlan) && !new[] { "pro", "maximum", "", null }.Any(Formatting.IsMaxPlan);
+        var mixed = new[] { "zai", "newcode", "codex", "claude", "antigravity", "zai" }.Select(provider => new DashboardAccount { Provider = provider }).ToArray();
+        report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
+        var hiddenTop = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"hiddenProviders\":[\"kimi-code\",\"../x\"]}", Formatting.Json)!;
+        var hiddenNested = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"qwen\"]}}", Formatting.Json)!;
+        var hiddenNone = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{}}", Formatting.Json)!;
+        report.Checks["hidden_providers_honoured_when_present"] = hiddenTop.Hidden.SetEquals(new[] { "kimi-code" }) && hiddenNested.Hidden.SetEquals(new[] { "qwen" }) && hiddenNone.Hidden.Count == 0 && !hiddenNone.ReportsHidden && hiddenTop.ReportsHidden;
+        var antigravity = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"isActive\":true,\"capabilities\":{\"antigravityProfileId\":\"a\",\"antigravityHostIds\":[\"ubuntu\"],\"antigravityCanActivate\":true}}],\"codexAutoSwitch\":{},\"antigravityAutoSwitch\":{\"enabled\":true,\"thresholdUsedPercent\":90,\"activationInProgress\":false}}", Formatting.Json)!;
+        report.Checks["antigravity_dto_decoded"] = antigravity.Accounts[0].Capabilities.AntigravityProfileId == "a" && antigravity.Accounts[0].Capabilities.AntigravityCanActivate && antigravity.AntigravityAutoSwitch?.ThresholdUsedPercent == 90 && antigravity.AntigravityAutoSwitch.Enabled;
+        var proposal = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!;
+        var badToken = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!; badToken.Token = "short";
+        var otherHost = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!; otherHost.HostId = "mac";
+        report.Checks["antigravity_confirmation_validated"] = proposal.IsValidFor("example-2") && !proposal.IsValidFor("example-1") && !badToken.IsValidFor("example-2") && !otherHost.IsValidFor("example-2") && !proposal.Expired;
+        int calls = 0; bool tokenSent = false;
+        var cancelled = AntigravitySwitchFlow.Run("example-2", token => { calls++; tokenSent |= token is not null; throw new AntigravityConfirmationRequiredException(proposal); }, _ => Task.FromResult(false)).GetAwaiter().GetResult();
+        report.Checks["antigravity_cancel_never_posts_token"] = !cancelled && calls == 1 && !tokenSent;
+        report.Checks["antigravity_errors_use_fixed_public_messages"] =
+            DashboardClient.AntigravityError(HttpStatusCode.Conflict, "busy", "activation-running") == "Another Antigravity switch is already running. Wait for it to finish."
+            && DashboardClient.AntigravityError(HttpStatusCode.Conflict, "stale-confirmation", null).StartsWith("The running Antigravity programs", StringComparison.Ordinal)
+            && DashboardClient.AntigravityError(HttpStatusCode.BadRequest, "invalid-profile", null) == "The selected Antigravity account has no valid saved login."
+            && DashboardClient.AntigravityError(HttpStatusCode.InternalServerError, "recovery-required", null).Contains("needs recovery", StringComparison.Ordinal)
+            && !DashboardClient.AntigravityError(HttpStatusCode.Conflict, "FIXTURE_ONLY_PRIVATE", "token=fixture").Contains("FIXTURE", StringComparison.Ordinal);
+        var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", Capabilities = new AccountCapabilities { CodexProfile = "b" }, Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
+        var tooltip = Formatting.TrayTooltip(dashboard);
+        report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex codex-2: 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
+            && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · not connected" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
+            && Formatting.TrayTooltip(new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = new string('x', 200) + "@example.com", Windows = { new QuotaWindow { Key = "seven_day", UsedPercent = 1 } } } } }).Length <= 127;
+        report.Checks["value_easing_never_overshoots"] = Motion.NeverOvershoots(Motion.Out) && Motion.NeverOvershoots(Motion.InOut) && !Motion.NeverOvershoots(Motion.Spring);
+        report.Checks["severity_ramp_matches_dashboard"] = Theme.Severity(79.99) == "calm" && Theme.Severity(80) == "warn" && Theme.Severity(95) == "crit" && Theme.Severity(100) == "crit" && Theme.Severity(100.01) == "over" && Theme.Severity(null) == "na" && Theme.Severity(double.NaN) == "na";
+        var dot = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+        report.Checks["percent_is_one_run_two_decimals_max"] = Formatting.Percent(0.0886) == "0" + dot + "09%" && Formatting.Percent(9) == "9%" && Formatting.Percent(25.06101624978289) == "25" + dot + "06%" && Formatting.PercentWith(91, Formatting.Decimals(91)) == "91%";
+        var saved = Formatting.Now;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-10-01T15:00:00Z");
+            Formatting.Now = () => now;
+            report.Checks["reset_short_forms"] = Formatting.ResetShort("2026-10-08T05:00:00Z") == "6d 14h" && Formatting.ResetShort("2026-10-01T20:15:00Z") == Formatting.Clock(DateTimeOffset.Parse("2026-10-01T20:15:00Z")) && Formatting.ResetShort("2026-10-01T14:00:00Z") == "due" && Formatting.ResetShort(null) == ""
+                && Formatting.Relative("2026-10-01T14:59:21Z") == "39s ago" && Formatting.Relative("2026-10-01T14:59:58Z") == "just now";
+        }
+        finally { Formatting.Now = saved; }
+        var temporary = Path.Combine(Path.GetTempPath(), "aac-preferences-check-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            new Preferences { Theme = "dark", Hotkey = false }.Save(temporary);
+            var loaded = Preferences.Load(temporary);
+            File.WriteAllText(temporary, "{\"theme\":\"neon\"}");
+            report.Checks["preferences_round_trip_and_reject_unknown_theme"] = loaded.Mode == ThemeMode.Dark && !loaded.Hotkey && Preferences.Load(temporary).Mode == ThemeMode.Auto && Preferences.Load(temporary + ".missing").Hotkey;
+        }
+        finally { File.Delete(temporary); }
+        bool icons = true;
+        foreach (var data in Icons.Lucide.Values.Concat(Icons.Platform.Values.Select(item => item.Path)).Append(Icons.ApexInk).Append(Icons.ApexMeter))
+        {
+            try { icons &= !Icons.Geometry(data).Bounds.IsEmpty; } catch { icons = false; }
+        }
+        report.Checks["vector_icons_parse"] = icons;
+        report.Checks["tabular_instrument_sans_embedded"] = FixtureRender.FontResolves();
+        try
+        {
+            using var light = TrayIcon.LoadIcon(true, 16); using var dark = TrayIcon.LoadIcon(false, 32);
+            report.Checks["apex_tray_icons_load_light_and_dark"] = light.Width == 16 && dark.Width == 32;
+        }
+        catch (Exception error) { report.Checks["apex_tray_icons_load_light_and_dark"] = false; report.Notes["apex_tray_icons"] = error.GetType().Name + ": " + error.Message; }
+        report.Checks["menu_font_is_instrument_sans"] = PrivateFonts.Family.Name == "Instrument Sans";
+        var fixture = FixtureRender.LoadFixture(out _);
+        report.Checks["fixture_is_sanitized"] = fixture.Accounts.Count > 0 && fixture.Accounts.All(account => account.Email is null || account.Email.EndsWith("@example.com", StringComparison.Ordinal));
     }
 
     private static CodexSwitchConfirmation Proposal() => new()

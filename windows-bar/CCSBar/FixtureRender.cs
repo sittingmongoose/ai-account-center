@@ -1,0 +1,265 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+
+namespace CCSBar;
+
+/// <summary>
+/// Offline render checks (--render-fixture DIR): the real panel drawn from the bundled sanitized fixture
+/// (example.com identities, captured 2026-10-01) in Light and Dark, with Settings, an expanded row and a switch.
+/// Measures the selected-row alignment rule: every check and "Active" must land on the Activate button's left edge
+/// and label x within 0.5 px, before and after a switch. Never connects anywhere and never changes an account.
+/// </summary>
+public static class FixtureRender
+{
+    private sealed class FixtureFile { public string CapturedAt { get; set; } = ""; public AccountDashboard Dashboard { get; set; } = new(); }
+
+    public static AccountDashboard LoadFixture(out DateTimeOffset capturedAt)
+    {
+        using var stream = typeof(FixtureRender).Assembly.GetManifestResourceStream("CCSBar.Fixtures.dashboard.json") ?? throw new InvalidOperationException("Fixture missing.");
+        var file = JsonSerializer.Deserialize<FixtureFile>(stream, Formatting.Json) ?? throw new InvalidOperationException("Fixture unreadable.");
+        capturedAt = DateTimeOffset.Parse(file.CapturedAt, CultureInfo.InvariantCulture);
+        return file.Dashboard;
+    }
+
+    private static AccountDashboard Clone(AccountDashboard dashboard) =>
+        JsonSerializer.Deserialize<AccountDashboard>(JsonSerializer.Serialize(dashboard, Formatting.Json), Formatting.Json)!;
+
+    /// <summary>One theme per process: RenderTargetBitmap keeps a brush's first colour on its own channel, so a
+    /// Light and a Dark capture in one process would not show the retinted brushes (the live window does).</summary>
+    public static async Task<CheckReport> Run(App app, string directory, string? only = null)
+    {
+        var report = new CheckReport();
+        var measures = new Dictionary<string, double>();
+        Directory.CreateDirectory(directory);
+        Motion.Enabled = false;
+        var fixture = LoadFixture(out var capturedAt);
+        Formatting.Now = () => capturedAt.AddSeconds(5);
+        foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark }.Where(mode => only is null || mode.ToString().Equals(only, StringComparison.OrdinalIgnoreCase)))
+        {
+            var name = mode == ThemeMode.Light ? "light" : "dark";
+            Theme.Apply(mode, animate: false);
+            var window = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
+            window.UseFixtureConnection();
+            window.Show();
+            measures[name + "_theme_is_dark"] = Theme.IsDark ? 1 : 0;
+            window.ApplyDashboardSample(Clone(fixture));
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"panel-{name}.png"));
+            report.Checks[$"{name}_codex_active_aligned_before_switch"] = Aligned(window, "codex", measures, name + "_before");
+            report.Checks[$"{name}_antigravity_slot_on_codex_slot_line"] = SlotLine(window, measures, name);
+            report.Checks[$"{name}_platter_on_active_row"] = PlatterOn(window, "codex", "row:codex:example-2", measures, name + "_before");
+            report.Checks[$"{name}_fable_on_max_only"] = Fable(window);
+            report.Checks[$"{name}_provider_order_today"] = Order(window, new[] { "section:claude", "section:codex", "section:antigravity", "provider:cursor", "provider:muse", "provider:kimi-code", "provider:qwen", "provider:zai", "provider:opencode-go" });
+            report.Checks[$"{name}_tabular_instrument_sans_resolves"] = FontResolves();
+
+            // Switch: codex-3 becomes active; the platter moves to it and the alignment still holds.
+            var switched = Clone(fixture);
+            foreach (var account in switched.Accounts.Where(account => account.Provider == "codex")) account.IsActive = account.Id == "codex:example-3";
+            window.ApplyDashboardSample(switched);
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"panel-{name}-switched.png"));
+            report.Checks[$"{name}_codex_active_aligned_after_switch"] = Aligned(window, "codex", measures, name + "_after");
+            report.Checks[$"{name}_platter_follows_switch"] = PlatterOn(window, "codex", "row:codex:example-3", measures, name + "_after");
+
+            // Two signed-in Antigravity accounts, the second one active: Antigravity uses the same slot and indicator.
+            var twoAg = Clone(fixture);
+            var first = twoAg.Accounts.First(account => account.Provider == "antigravity");
+            first.Capabilities.AntigravityProfileId = "example-1"; first.Capabilities.AntigravityCanActivate = true; first.Capabilities.AntigravityHostIds = new() { "ubuntu" };
+            var second = Clone(new AccountDashboard { Accounts = { first } }).Accounts[0];
+            second.Id = "antigravity:example-2"; second.Email = "antigravity-2@example.com"; second.Label = "Antigravity account 2"; second.IsActive = true; second.Capabilities.AntigravityProfileId = "example-2";
+            twoAg.Accounts.Insert(twoAg.Accounts.IndexOf(first) + 1, second);
+            twoAg.AntigravityAutoSwitch = new AntigravityAutoStatus { Enabled = true, ThresholdUsedPercent = 95, PollIntervalSeconds = 60 };
+            window.ApplyDashboardSample(twoAg);
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-two.png"));
+            report.Checks[$"{name}_antigravity_active_aligned"] = Aligned(window, "antigravity", measures, name + "_ag") && SameLine(measures, name + "_ag_button", name + "_before_button");
+            report.Checks[$"{name}_antigravity_platter_on_active_row"] = PlatterOn(window, "antigravity", "row:antigravity:example-2", measures, name + "_ag");
+
+            // Hidden providers are honoured; an unknown provider still renders, with the neutral mark.
+            var hidden = Clone(fixture);
+            hidden.HiddenProviders = new() { "kimi-code" };
+            hidden.Accounts.Add(new DashboardAccount { Id = "newcode:example-1", Provider = "newcode", ProviderLabel = "New Code", Label = "New Code account", Email = "newcode-1@example.com", Platform = "ubuntu", Status = "cached", SampledAt = hidden.UpdatedAt, Windows = new() { new QuotaWindow { Key = "weekly", Label = "Weekly", UsedPercent = 42, WindowMinutes = 10080, Kind = "rate_limit" } } });
+            window.ApplyDashboardSample(hidden);
+            await Settle(window);
+            report.Checks[$"{name}_hidden_provider_closes_up"] = FindUid(window.ContentPanel, "provider:kimi-code") is null && FindUid(window.ContentPanel, "provider:muse") is not null;
+            report.Checks[$"{name}_unknown_provider_renders"] = FindUid(window.ContentPanel, "provider:newcode") is not null;
+            report.Checks[$"{name}_status_counts_visible_providers"] = window.StatusText.Text.StartsWith("9 of 9", StringComparison.Ordinal);
+
+            // Details: full-row expansion under Claude 1.
+            window.ApplyDashboardSample(Clone(fixture));
+            window.ToggleDetailsForCheck("claude:example-1");
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"panel-{name}-details.png"));
+            report.Checks[$"{name}_row_click_opens_details"] = FindUid(window.ContentPanel, "details") is not null;
+            window.ToggleDetailsForCheck("claude:example-1");
+
+            // Settings: opens in the panel with an X; the gear is pressed; Escape closes it, a second Escape hides.
+            window.OpenSettings();
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"settings-{name}.png"));
+            report.Checks[$"{name}_settings_in_panel_with_x"] = window.SettingsOpen && window.SettingsButton.IsChecked == true && FindUid(window.SettingsPanel, "settings-close") is not null;
+            PressEscape(window);
+            await Settle(window);
+            report.Checks[$"{name}_escape_closes_settings"] = !window.SettingsOpen && window.SettingsButton.IsChecked == false;
+            window.OpenSettings(); window.CloseSettings();
+            report.Checks[$"{name}_gear_toggles_settings"] = !window.SettingsOpen;
+            PressEscape(window);
+            report.Checks[$"{name}_escape_then_hides_panel"] = !window.IsVisible;
+
+            // First run: the sign-in screen.
+            var signIn = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
+            signIn.Show(); signIn.ShowSignIn(firstRun: true);
+            await Settle(signIn);
+            SavePng(signIn, Path.Combine(directory, $"signin-{name}.png"));
+            signIn.AllowClose = true; signIn.Close();
+            window.AllowClose = true; window.Close();
+        }
+        report.Checks["tray_tooltip_reports_active_codex_weekly_left"] = Formatting.TrayTooltip(fixture) == "AI Account Center · Codex codex-2: 91% weekly left";
+        foreach (var (key, value) in measures) report.Measurements[key] = Math.Round(value, 3);
+        report.Passed = report.Checks.Values.All(value => value);
+        return report;
+    }
+
+    private static async Task Settle(Window window)
+    {
+        window.UpdateLayout();
+        await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+        await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+        window.UpdateLayout();
+        await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+    }
+
+    public static void SavePng(FrameworkElement element, string path, double scale = 2)
+    {
+        var width = (int)Math.Ceiling(element.ActualWidth * scale);
+        var height = (int)Math.Ceiling(element.ActualHeight * scale);
+        var bitmap = new RenderTargetBitmap(width, height, 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+        var visual = new DrawingVisual();
+        using (var context = visual.RenderOpen())
+        {
+            context.DrawRectangle(new SolidColorBrush(Color.FromRgb(0xD9, 0xDF, 0xE5)), null, new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+            context.DrawRectangle(new VisualBrush(element), null, new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+        }
+        bitmap.Render(visual);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        using var output = File.Create(path);
+        encoder.Save(output);
+    }
+
+    private static void PressEscape(Window window)
+    {
+        var source = PresentationSource.FromVisual(window);
+        if (source is null) return;
+        window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+    }
+
+    public static FrameworkElement? FindUid(DependencyObject parent, string uid)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<FrameworkElement>())
+        {
+            if (child.Uid == uid) return child;
+            var nested = FindUid(child, uid);
+            if (nested is not null) return nested;
+        }
+        return null;
+    }
+
+    private static IEnumerable<FrameworkElement> All(DependencyObject parent)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<FrameworkElement>())
+        {
+            yield return child;
+            foreach (var nested in All(child)) yield return nested;
+        }
+    }
+
+    private static double X(FrameworkElement element, Window window) => element.TranslatePoint(new Point(0, 0), window).X;
+
+    /// <summary>Check-circle left = Activate left, "Active" left = "Activate" label left, within 0.5 px.</summary>
+    private static bool Aligned(MainWindow window, string provider, Dictionary<string, double> measures, string tag)
+    {
+        var section = FindUid(window.ContentPanel, "section:" + provider);
+        if (section is null) return false;
+        var buttons = All(section).OfType<Button>().Where(button => button.Uid == "mutation:activate" && button.IsVisible).ToArray();
+        var actives = All(section).Where(element => element.Uid == "active-label" && element.IsVisible).ToArray();
+        if (buttons.Length == 0 || actives.Length != 1) return false;
+        var active = actives[0];
+        var check = All(active).First(element => element.Uid == "active-check");
+        var text = All(active).OfType<TextBlock>().First(element => element.Uid == "active-text");
+        bool ok = true;
+        foreach (var button in buttons)
+        {
+            var label = (TextBlock)button.Content;
+            var buttonLeft = X(button, window); var labelLeft = X(label, window);
+            ok &= Math.Abs(X(check, window) - buttonLeft) <= 0.5 && Math.Abs(X(text, window) - labelLeft) <= 0.5;
+            measures[tag + "_button"] = buttonLeft; measures[tag + "_label"] = labelLeft;
+        }
+        measures[tag + "_check"] = X(check, window); measures[tag + "_active_text"] = X(text, window);
+        return ok;
+    }
+
+    private static bool SameLine(Dictionary<string, double> measures, string a, string b) => measures.TryGetValue(a, out var x) && measures.TryGetValue(b, out var y) && Math.Abs(x - y) <= 0.5;
+
+    /// <summary>Antigravity's slot (Not reported ring) starts on the Codex slot line.</summary>
+    private static bool SlotLine(MainWindow window, Dictionary<string, double> measures, string name)
+    {
+        var section = FindUid(window.ContentPanel, "section:antigravity");
+        var codexButton = All(FindUid(window.ContentPanel, "section:codex")!).OfType<Button>().FirstOrDefault(button => button.Uid == "mutation:activate");
+        if (section is null || codexButton is null) return false;
+        var ring = All(section).OfType<System.Windows.Shapes.Ellipse>().FirstOrDefault();
+        if (ring is null) return false;
+        measures[name + "_ag_ring"] = X(ring, window);
+        return Math.Abs(X(ring, window) - X(codexButton, window)) <= 0.5;
+    }
+
+    private static bool PlatterOn(MainWindow window, string provider, string rowUid, Dictionary<string, double> measures, string tag)
+    {
+        var row = FindUid(window.ContentPanel, rowUid);
+        var platter = window.PlatterFor(provider);
+        if (row is null || platter is null || platter.Opacity < 0.99) return false;
+        var rowY = row.TranslatePoint(new Point(0, 0), window).Y;
+        var platterY = platter.TranslatePoint(new Point(0, 0), window).Y;
+        measures[tag + "_row_y"] = rowY; measures[tag + "_platter_y"] = platterY;
+        return Math.Abs(rowY - platterY) <= 0.5 && Math.Abs(row.ActualHeight - platter.ActualHeight) <= 0.5;
+    }
+
+    private static bool Fable(MainWindow window)
+    {
+        var max = new[] { "claude:example-1", "claude:example-3", "claude:example-4" };
+        var meters = All(window.ContentPanel).OfType<Meter>().ToArray();
+        return max.All(id => meters.Any(meter => meter.Key == id + "|fable" && meter.Target == 0))
+            && meters.All(meter => meter.Key != "claude:example-2|fable");
+    }
+
+    private static bool Order(MainWindow window, string[] expected)
+    {
+        var uids = window.ContentPanel.Children.OfType<FrameworkElement>().Select(element => element.Uid).Where(uid => uid.Length > 0).ToArray();
+        return uids.SequenceEqual(expected);
+    }
+
+    public static bool FontResolves()
+    {
+        bool ok = true;
+        foreach (var (family, weight, stretch) in new[] { (Theme.Sans, FontWeights.Normal, FontStretches.Normal), (Theme.Sans, FontWeights.Medium, FontStretches.Normal), (Theme.Sans, FontWeights.SemiBold, FontStretches.Normal), (Theme.Sans, FontWeights.Bold, FontStretches.Normal), (Theme.Numerals, FontWeights.SemiBold, FontStretches.Normal) })
+        {
+            var typeface = new Typeface(family, FontStyles.Normal, weight, stretch);
+            if (!typeface.TryGetGlyphTypeface(out var glyphs)) { ok = false; continue; }
+            var name = glyphs.Win32FamilyNames.Values.FirstOrDefault() ?? "";
+            ok &= name.StartsWith("Instrument Sans", StringComparison.Ordinal) && glyphs.Weight == weight;
+            var advances = "0123456789%".Select(c => glyphs.AdvanceWidths[glyphs.CharacterToGlyphMap[c]]).Distinct().Count();
+            ok &= advances == 1;
+        }
+        return ok;
+    }
+}

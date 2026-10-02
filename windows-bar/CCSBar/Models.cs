@@ -47,12 +47,18 @@ public sealed class AccountDashboard
     public string UpdatedAt { get; set; } = "";
     public List<DashboardAccount> Accounts { get; set; } = new();
     public AutoSwitchStatus CodexAutoSwitch { get; set; } = new();
+    public AntigravityAutoStatus? AntigravityAutoSwitch { get; set; }
     public AccountRefreshSettings? Settings { get; set; }
+    /// <summary>Providers hidden in the dashboard's Accounts and Settings, when the server reports them (top level or in settings).</summary>
+    public List<string>? HiddenProviders { get; set; }
+    [JsonIgnore] public bool ReportsHidden => HiddenProviders is not null || Settings?.HiddenProviders is not null;
+    [JsonIgnore] public IReadOnlySet<string> Hidden => new HashSet<string>((HiddenProviders ?? Settings?.HiddenProviders ?? new List<string>()).Where(Formatting.IsSafeId), StringComparer.Ordinal);
 }
 
 public sealed class AccountRefreshSettings
 {
     public int RefreshIntervalSeconds { get; set; } = 60;
+    public List<string>? HiddenProviders { get; set; }
     public int ValidatedInterval => RefreshIntervalSeconds is >= 30 and <= 3600 ? RefreshIntervalSeconds : 60;
 }
 
@@ -107,6 +113,22 @@ public sealed class AccountCapabilities
     public string? CodexProfile { get; set; }
     public string? ClaudeProfileId { get; set; }
     public List<string> ClaudePlatforms { get; set; } = new();
+    public string? AntigravityProfileId { get; set; }
+    public List<string>? AntigravityHostIds { get; set; }
+    public bool AntigravityCanActivate { get; set; }
+}
+
+/// <summary>Antigravity's own automatic switching (thresholdUsedPercent is % USED, unlike Codex).</summary>
+public sealed class AntigravityAutoStatus
+{
+    public bool Enabled { get; set; }
+    public double ThresholdUsedPercent { get; set; } = 95;
+    public int PollIntervalSeconds { get; set; } = 60;
+    public string Outcome { get; set; } = "";
+    public string Message { get; set; } = "";
+    public bool ActivationInProgress { get; set; }
+    public string? LastCheckedAt { get; set; }
+    public string? LastSwitchedAt { get; set; }
 }
 
 public sealed class AutoSwitchStatus
@@ -176,14 +198,13 @@ public static class Formatting
     public static QuotaWindow[] VisibleWindows(DashboardAccount account) => account.Windows.Where(window =>
     {
         var key = Normalize(window.Key); var label = Normalize(window.Label);
-        if (account.Provider == "claude" && window.Key == "seven_day_fable"
-            && (!(account.Plan ?? "").StartsWith("max", StringComparison.OrdinalIgnoreCase) || window.DisplayPercent is null)) return false;
+        if (account.Provider == "claude" && IsFable(window) && (!IsMaxPlan(account.Plan) || window.DisplayPercent is null)) return false;
         if (account.Provider == "codex")
         {
             if (IsChatPass(window.Key) || IsChatPass(window.Label)) return false;
+            // No Codex 5-hour cell unless one is reported: decided from the data, not from profile names.
             bool fiveHour = window.WindowMinutes == 300 || key is "fivehour" or "5h" or "fivehours";
-            bool proProfile = account.Capabilities.CodexProfile is "gmail" or "party";
-            if (fiveHour && proProfile && !window.HasUsableUsage && !DateTimeOffset.TryParse(window.ResetAt, out _)) return false;
+            if (fiveHour && !window.HasUsableUsage && !DateTimeOffset.TryParse(window.ResetAt, out _)) return false;
         }
         if (account.Provider == "qwen" && (key is "subscription" or "plansubscription" || label == "plansubscription")) return false;
         if (account.Provider == "zai" && (key.Contains("pack", StringComparison.Ordinal) || label.Contains("pack", StringComparison.Ordinal)))
@@ -241,5 +262,101 @@ public static class Formatting
         return true;
     }
 
-    public static bool IsWindowsClaudeProfile(string? id) => id is "platyr" or "gmail" or "party" or "me";
+    /// <summary>A Claude desktop profile id from the dashboard data. No allowlist: any id the server reports is used
+    /// when it is URI and path safe ([A-Za-z0-9_-], 1-64), so ccs-claude://launch/{id} cannot be injected.</summary>
+    public static bool IsSafeClaudeProfile(string? id) => IsSafeProfile(id);
+
+    /// <summary>Server-reported ids (providers, Antigravity profiles): [A-Za-z0-9][A-Za-z0-9_-]{0,63}.</summary>
+    public static bool IsSafeId(string? id) => IsSafeProfile(id);
+
+    /// <summary>Claude Max plans ("max", "max_5x", "Max 20x"); Fable is shown only for these.</summary>
+    public static bool IsMaxPlan(string? plan) => System.Text.RegularExpressions.Regex.IsMatch(
+        (plan ?? "").Replace('_', ' ').Replace('-', ' ').Trim(), @"(?:^|\s)max(?:\s*(?:5|20)\s*x)?(?:$|\s)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    public static bool IsFable(QuotaWindow window) => window.Key == "seven_day_fable" || window.Label.Contains("Fable", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Claude, Codex and Antigravity first, then the known usage providers, then any other provider the
+    /// server reports, in the order it first appears. Nothing is filtered out by name.</summary>
+    public static readonly string[] PreferredOrder = { "claude", "codex", "antigravity", "cursor", "muse", "kimi-code", "qwen", "zai", "opencode-go" };
+
+    public static string[] ProviderOrder(IEnumerable<DashboardAccount> accounts)
+    {
+        var seen = accounts.Select(account => account.Provider).Where(provider => !string.IsNullOrWhiteSpace(provider)).Distinct(StringComparer.Ordinal).ToList();
+        return PreferredOrder.Where(seen.Contains).Concat(seen.Where(provider => !PreferredOrder.Contains(provider))).ToArray();
+    }
+
+    public static string ProviderName(string provider, string? reported = null) => provider switch
+    {
+        "claude" => "Claude", "codex" => "Codex", "antigravity" => "Antigravity", "cursor" => "Cursor", "muse" => "Muse Code",
+        "kimi-code" => "Kimi Code", "qwen" => "Qwen Token Plan", "zai" => "Z.ai Coding Plan", "opencode-go" => "OpenCode Go",
+        _ => string.IsNullOrWhiteSpace(reported) ? provider : reported!
+    };
+
+    public static string PlanLabel(string? plan) => string.IsNullOrWhiteSpace(plan) ? "" : plan.Length <= 5 ? char.ToUpperInvariant(plan[0]) + plan[1..] : plan;
+    public static string PlatformName(string? platform) => platform switch { "mac" => "Mac", "windows" => "Windows", "ubuntu" => "Ubuntu", "linux" => "Linux", null or "" => "", _ => char.ToUpperInvariant(platform[0]) + platform[1..] };
+
+    /// <summary>Clock for relative times; fixture renders pin it to the fixture's capture time.</summary>
+    public static Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
+
+    public static string Duration(TimeSpan span)
+    {
+        if (span < TimeSpan.Zero) span = TimeSpan.Zero;
+        if (span.TotalDays >= 1) return $"{(int)span.TotalDays}d {span.Hours}h";
+        if (span.TotalHours >= 1) return $"{(int)span.TotalHours}h {span.Minutes}m";
+        if (span.TotalMinutes >= 1) return $"{(int)span.TotalMinutes}m";
+        return $"{Math.Max(1, (int)span.TotalSeconds)}s";
+    }
+
+    public static string Relative(string? timestamp)
+    {
+        if (!DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)) return "";
+        var age = Now() - at;
+        return age < TimeSpan.FromSeconds(10) ? "just now" : Duration(age) + " ago";
+    }
+
+    public static string Clock(DateTimeOffset at) => at.ToLocalTime().ToString("h:mm tt", CultureInfo.CurrentCulture);
+
+    /// <summary>Row form: a countdown, or the clock time once the reset is under 24 hours away; "due" once passed.</summary>
+    public static string ResetShort(string? timestamp)
+    {
+        if (!DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var reset)) return "";
+        var left = reset - Now();
+        if (left <= TimeSpan.Zero) return "due";
+        return left < TimeSpan.FromDays(1) ? Clock(reset) : Duration(left);
+    }
+
+    /// <summary>Details form: "Resets Thu, Oct 8, 8:00 AM · 6d 20h".</summary>
+    public static string ResetLong(string? timestamp)
+    {
+        if (!DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var reset)) return "No reset reported";
+        var left = reset - Now();
+        return "Resets " + reset.ToLocalTime().ToString("ddd, MMM d, h:mm tt", CultureInfo.CurrentCulture) + " · " + (left <= TimeSpan.Zero ? "due" : Duration(left));
+    }
+
+    /// <summary>At most two decimals, trailing zeros dropped; "%" is part of the same text run.</summary>
+    public static string Percent(double value) => value.ToString(value == Math.Round(value) ? "0" : "0.##", CultureInfo.CurrentCulture) + "%";
+    public static int Decimals(double value)
+    {
+        var rounded = Math.Round(value, 2);
+        return rounded == Math.Round(rounded) ? 0 : Math.Round(rounded, 1) == rounded ? 1 : 2;
+    }
+    public static string PercentWith(double value, int decimals) => value.ToString("F" + decimals, CultureInfo.CurrentCulture) + "%";
+
+    /// <summary>Notification-area tooltip (max 127 characters): the active Codex account's weekly % left.</summary>
+    public static string TrayTooltip(AccountDashboard? dashboard, bool stale = false, bool configured = true)
+    {
+        const string name = "AI Account Center";
+        if (!configured) return name + " · not connected";
+        var active = dashboard?.Accounts.FirstOrDefault(account => account.Provider == "codex" && account.IsActive);
+        var weekly = active is null ? null : CodexPrimaryWindows(active).FirstOrDefault(window => window.Key == "seven_day");
+        string text = name;
+        if (active is not null && weekly?.DisplayPercent is double used)
+        {
+            var left = Math.Max(0, 100 - used);
+            var who = (active.Email ?? active.Label).Split('@')[0];
+            text = $"{name} · Codex {who}: {PercentWith(left, Decimals(left))} weekly left";
+        }
+        if (stale) text += " · last sample";
+        return text.Length <= 127 ? text : text[..126] + "…";
+    }
 }
