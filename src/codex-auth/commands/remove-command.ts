@@ -16,6 +16,11 @@ import { resolveCodexProfileDir } from '../codex-profile-paths';
 import { decodeAccountIdentity } from '../codex-account-identity';
 import { decodeIdToken, hasStructurallyValidIdToken } from '../decode-id-token';
 import { acquireCodexActivationLock, getActivationCodexHome } from '../codex-activation-lock';
+import {
+  decodeCodexActivationIdentity,
+  matchesCodexActivationIdentity,
+  type CodexActivationIdentity,
+} from '../codex-activation-identity';
 import { parseArgs, rejectUnsupportedOptions, getProfileNameError } from './types';
 import type { CodexCommandContext } from './types';
 import type { CodexProfileMetadata } from '../types';
@@ -301,8 +306,15 @@ function _restoreProfileDir(stagedDeleteDir: string, profileDir: string): boolea
   }
 }
 
+/** A fresh read of one auth.json: its email, and its workspace and principal binding. */
+interface FreshLogin {
+  email: string;
+  /** Null when the token carries no readable workspace binding; never printed. */
+  binding: CodexActivationIdentity | null;
+}
+
 /** No cache or registry metadata can establish the current native identity. */
-function _freshEmail(authPath: string, label: string): string | null {
+function _freshLogin(authPath: string, label: string): FreshLogin | null {
   let raw: string;
   try {
     raw = fs.readFileSync(authPath, 'utf8');
@@ -311,29 +323,43 @@ function _freshEmail(authPath: string, label: string): string | null {
     throw new RemovalFailure(`Could not read ${label} Codex login; profile retained.`);
   }
   try {
-    const parsed = JSON.parse(raw) as { tokens?: { id_token?: unknown } };
+    const parsed = JSON.parse(raw) as { tokens?: { id_token?: unknown; account_id?: unknown } };
     const token = parsed?.tokens?.id_token;
     const email = typeof token === 'string' ? decodeIdToken(token).email : null;
     if (typeof token !== 'string' || !hasStructurallyValidIdToken(token) || !email) {
       throw new RemovalFailure(`Could not verify ${label} Codex login; profile retained.`);
     }
-    return email;
+    return { email, binding: decodeCodexActivationIdentity(token, parsed.tokens?.account_id) };
   } catch {
     // JSON errors may contain credential fragments. Report only our own text.
     throw new RemovalFailure(`Could not verify ${label} Codex login; profile retained.`);
   }
 }
 
+/**
+ * Whether a saved login is the live one. Like activation, this matches the workspace
+ * and principal, so a personal and a workspace login under one email stay apart. A
+ * match either way refuses, so a legacy copy of the live principal stays protected.
+ * Only when either side has no readable binding does the email alone decide.
+ */
+function _isLiveLogin(live: FreshLogin, saved: FreshLogin): boolean {
+  if (!live.binding || !saved.binding) return live.email === saved.email;
+  return (
+    matchesCodexActivationIdentity(live.binding, saved.binding) ||
+    matchesCodexActivationIdentity(saved.binding, live.binding)
+  );
+}
+
 function _assertInactiveSavedProfile(nativeAuthPath: string, profileAuthPath: string): void {
-  const liveEmail = _freshEmail(nativeAuthPath, 'the current native');
-  if (!liveEmail) return;
-  const targetEmail = _freshEmail(profileAuthPath, 'the saved profile');
-  if (!targetEmail) {
+  const live = _freshLogin(nativeAuthPath, 'the current native');
+  if (!live) return;
+  const target = _freshLogin(profileAuthPath, 'the saved profile');
+  if (!target) {
     // A ghost entry's cached email is not fresh identity proof. Its deletion
     // is permitted when there is no native login, not while identity is unknown.
     throw new RemovalFailure('Could not verify the saved Codex login; profile retained.');
   }
-  if (targetEmail === liveEmail) {
+  if (_isLiveLogin(live, target)) {
     throw new RemovalFailure(
       'Cannot remove a profile for the current Codex account. Activate another account first.',
       ExitCode.PROFILE_ERROR

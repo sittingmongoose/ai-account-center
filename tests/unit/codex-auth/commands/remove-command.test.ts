@@ -665,6 +665,117 @@ describe('handleRemoveCodex — native shared-login protection', () => {
   });
 });
 
+/** A synthetic auth.json bound to one workspace and, optionally, one principal. */
+function boundAuth(identity: { accountId: string; userId?: string; email?: string }): Buffer {
+  const header = Buffer.from('{"alg":"none"}').toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({
+      email: identity.email ?? 'shared@example.test',
+      'https://api.openai.com/auth': {
+        chatgpt_account_id: identity.accountId,
+        ...(identity.userId ? { chatgpt_user_id: identity.userId } : {}),
+      },
+    })
+  ).toString('base64url');
+  return Buffer.from(
+    JSON.stringify({
+      tokens: {
+        id_token: `${header}.${payload}.fakesig`,
+        access_token: 'synthetic-access',
+        refresh_token: 'synthetic-refresh',
+        account_id: identity.accountId,
+      },
+    })
+  );
+}
+
+/** Run a removal that must succeed; a refusal fails the test instead of exiting the runner. */
+async function removed(operation: () => Promise<void>): Promise<void> {
+  const errors: string[] = [];
+  const originalExit = process.exit;
+  const originalError = console.error;
+  process.exit = (code?: number) => {
+    throw new Error(`removal exited ${code ?? 0}: ${errors.join(' ')}`);
+  };
+  console.error = (...args: unknown[]) => errors.push(args.join(' '));
+  try {
+    await operation();
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+  }
+}
+
+describe('handleRemoveCodex — live login matched by workspace and principal', () => {
+  const personal = { accountId: 'personal', userId: 'same-user' };
+  const workspace = { accountId: 'workspace', userId: 'same-user' };
+
+  it('removes the inactive login of a personal and a workspace pair under one email', async () => {
+    const { handleRemoveCodex } = await import(
+      '../../../../src/codex-auth/commands/remove-command'
+    );
+    const ctx = await makeCtx('personal', 'workspace');
+    fs.writeFileSync(savedAuth('personal'), boundAuth(personal));
+    fs.writeFileSync(savedAuth('workspace'), boundAuth(workspace));
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), boundAuth(workspace));
+    await removed(() => handleRemoveCodex(ctx, ['personal', '--yes'], { codexHome }));
+    expect(ctx.registry.hasProfile('personal')).toBe(false);
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(boundAuth(workspace));
+    // The live workspace login itself stays protected.
+    const message = await removalFailure(() =>
+      handleRemoveCodex(ctx, ['workspace', '--yes', '--force'], { codexHome })
+    );
+    expect(message).toContain('current Codex account');
+    expect(message).not.toContain('same-user');
+    expect(ctx.registry.hasProfile('workspace')).toBe(true);
+    expect(fs.readFileSync(savedAuth('workspace'))).toEqual(boundAuth(workspace));
+  });
+
+  it('retains a saved copy of the live principal after its display email changed', async () => {
+    const { handleRemoveCodex } = await import(
+      '../../../../src/codex-auth/commands/remove-command'
+    );
+    const ctx = await makeCtx('primary', 'renamed');
+    fs.writeFileSync(savedAuth('renamed'), boundAuth({ ...workspace, email: 'old@example.test' }));
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), boundAuth(workspace));
+    await removalFailure(() => handleRemoveCodex(ctx, ['renamed', '--yes'], { codexHome }));
+    expect(ctx.registry.hasProfile('renamed')).toBe(true);
+  });
+
+  it('retains a legacy saved copy of the live workspace and email without a principal', async () => {
+    const { handleRemoveCodex } = await import(
+      '../../../../src/codex-auth/commands/remove-command'
+    );
+    const ctx = await makeCtx('primary', 'legacy');
+    fs.writeFileSync(savedAuth('legacy'), boundAuth({ accountId: 'workspace' }));
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), boundAuth(workspace));
+    await removalFailure(() => handleRemoveCodex(ctx, ['legacy', '--yes'], { codexHome }));
+    expect(ctx.registry.hasProfile('legacy')).toBe(true);
+  });
+
+  it('falls back to the email when a login carries no readable workspace binding', async () => {
+    const { handleRemoveCodex } = await import(
+      '../../../../src/codex-auth/commands/remove-command'
+    );
+    const ctx = await makeCtx('primary', 'unbound', 'other');
+    // A JWT without the workspace claim still yields an email, but no binding.
+    const header = Buffer.from('{"alg":"none"}').toString('base64url');
+    const unbound = (email: string) =>
+      JSON.stringify({
+        tokens: {
+          id_token: `${header}.${Buffer.from(JSON.stringify({ email })).toString('base64url')}.sig`,
+        },
+      });
+    fs.writeFileSync(savedAuth('unbound'), unbound('shared@example.test'));
+    fs.writeFileSync(savedAuth('other'), unbound('other@example.test'));
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), boundAuth(workspace));
+    await removalFailure(() => handleRemoveCodex(ctx, ['unbound', '--yes'], { codexHome }));
+    expect(ctx.registry.hasProfile('unbound')).toBe(true);
+    await removed(() => handleRemoveCodex(ctx, ['other', '--yes'], { codexHome }));
+    expect(ctx.registry.hasProfile('other')).toBe(false);
+  });
+});
+
 describe('handleRemoveCodex — lock wait and real exit', () => {
   for (const change of ['membership', 'identity'] as const) {
     it(`revalidates target ${change} after waiting for an activation lock`, async () => {
