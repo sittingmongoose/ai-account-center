@@ -121,23 +121,23 @@ public partial class MainWindow
         SettingsPanel.Children.Add(SettingCard(Row("Start with Windows", startup is null ? "The logon task is created by the installer." : "Opens in the notification area when you sign in.", startupControl)));
 
         // Keyboard shortcut: optional global hotkey.
-        var hotkeyState = HotkeyState?.Invoke();
         var hotkeyToggle = new ToggleSwitch(preferences.Hotkey, "");
         var hotkeySub = Ui.Text("", 12, "Ink3", wrap: true);
-        void PaintHotkey(bool? registered)
+        void PaintHotkey(string? state)
         {
             hotkeySub.Inlines.Clear();
             hotkeySub.Inlines.Add(new Run(Hotkey.Display) { FontWeight = FontWeights.SemiBold, Foreground = Theme.Brush("Ink2") });
-            if (preferences.Hotkey && registered == false) hotkeySub.Inlines.Add(new Run(" is in use by another app, so it is not set.") { Foreground = Theme.Brush("WarnText") });
+            if (state == "in-use") hotkeySub.Inlines.Add(new Run(" is in use by another app, so it is not set.") { Foreground = Theme.Brush("WarnText") });
+            else if (state == "unavailable") hotkeySub.Inlines.Add(new Run(" could not be set in this Windows session.") { Foreground = Theme.Brush("WarnText") });
             else hotkeySub.Inlines.Add(new Run(" opens or hides this panel from anywhere. If AI Account Center is not running, open it from the Start menu or the desktop shortcut."));
         }
-        PaintHotkey(hotkeyState);
+        PaintHotkey(HotkeyState?.Invoke());
         hotkeyToggle.Toggled += requested =>
         {
             preferences.Hotkey = requested; preferences.Save();
-            var registered = SetHotkey?.Invoke(requested);
+            var state = SetHotkey?.Invoke(requested);
             hotkeyToggle.SetOn(requested);
-            PaintHotkey(registered);
+            PaintHotkey(state);
         };
         var shortcutText = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         shortcutText.Children.Add(Ui.Text("Keyboard shortcut", 13, "Ink", FontWeights.SemiBold));

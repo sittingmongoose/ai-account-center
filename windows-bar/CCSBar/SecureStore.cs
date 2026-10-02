@@ -12,7 +12,9 @@ namespace CCSBar;
 public static class SecureStore
 {
     // Intentional compatibility: branding never rewrites the existing private store or DPAPI purpose.
-    public static readonly string StateDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CCS Bar");
+    // AAC_TRAY_STATE_DIR (an absolute path) isolates test runs, such as the single-instance check, from the real store.
+    public static readonly string StateDirectory = Environment.GetEnvironmentVariable("AAC_TRAY_STATE_DIR") is { Length: > 0 } isolated && Path.IsPathFullyQualified(isolated)
+        ? isolated : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CCS Bar");
     public static readonly string SettingsPath = Path.Combine(StateDirectory, "connection.dpapi");
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("CCSBar/dashboard-connection/v1");
 

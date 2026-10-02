@@ -125,9 +125,53 @@ public static class FixtureRender
             window.AllowClose = true; window.Close();
         }
         report.Checks["tray_tooltip_reports_active_codex_weekly_left"] = Formatting.TrayTooltip(fixture) == "AI Account Center · Codex codex-2: 91% weekly left";
+        if (only is null || only.Equals("light", StringComparison.OrdinalIgnoreCase)) await MotionChecks(report, fixture, measures);
         foreach (var (key, value) in measures) report.Measurements[key] = Math.Round(value, 3);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
+    }
+
+    /// <summary>Runs real animations and samples them every frame: a meter moving 9% to 63% and the platter gliding
+    /// to a new row must ease out and never pass their targets.</summary>
+    private static async Task MotionChecks(CheckReport report, AccountDashboard fixture, Dictionary<string, double> measures)
+    {
+        Motion.Enabled = true;
+        Theme.Apply(ThemeMode.Light, animate: false);
+        var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
+        try
+        {
+            window.UseFixtureConnection();
+            window.Show();
+            window.ApplyDashboardSample(Clone(fixture));
+            await Settle(window);
+            await Task.Delay(1200);
+            var meter = All(window.ContentPanel).OfType<Meter>().First(candidate => candidate.Key == "codex:example-2|week");
+            var startShown = meter.Shown;
+            var changed = Clone(fixture);
+            foreach (var account in changed.Accounts.Where(account => account.Provider == "codex")) account.IsActive = account.Id == "codex:example-3";
+            changed.Accounts.First(account => account.Id == "codex:example-2").Windows.First(window => window.Key == "seven_day").UsedPercent = 63;
+            var platter = window.PlatterFor("codex")!;
+            var shift = (TranslateTransform)platter.RenderTransform;
+            var startY = shift.Y;
+            window.ApplyDashboardSample(changed);
+            await Settle(window);
+            var target = FindUid(window.ContentPanel, "row:codex:example-3")!.TranslatePoint(new Point(0, 0), (UIElement)platter.Parent).Y;
+            var shownSamples = new List<double>(); var ySamples = new List<double>();
+            var started = DateTime.UtcNow;
+            while ((DateTime.UtcNow - started).TotalMilliseconds < 1400)
+            {
+                shownSamples.Add(meter.Shown); ySamples.Add(shift.Y);
+                await Task.Delay(16);
+                await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+            }
+            bool monotonic(List<double> values, bool rising) { for (int i = 1; i < values.Count; i++) if (rising ? values[i] + 1e-6 < values[i - 1] : values[i] - 1e-6 > values[i - 1]) return false; return true; }
+            measures["motion_meter_from"] = startShown; measures["motion_meter_max"] = shownSamples.Max(); measures["motion_meter_final"] = meter.Shown; measures["motion_meter_samples"] = shownSamples.Count;
+            measures["motion_meter_distinct_frames"] = shownSamples.Distinct().Count();
+            measures["motion_platter_from"] = startY; measures["motion_platter_target"] = target; measures["motion_platter_max"] = ySamples.Max(); measures["motion_platter_final"] = shift.Y;
+            report.Checks["meter_eases_to_value_without_overshoot"] = Math.Abs(startShown - 9) < 0.01 && shownSamples.Max() <= 63 + 1e-6 && Math.Abs(meter.Shown - 63) < 0.01 && monotonic(shownSamples, true) && shownSamples.Distinct().Count() > 3;
+            report.Checks["platter_glides_without_overshoot"] = target > startY && ySamples.Max() <= target + 1e-6 && Math.Abs(shift.Y - target) < 0.5 && monotonic(ySamples, true) && ySamples.Distinct().Count() > 3;
+        }
+        finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }
     }
 
     private static async Task Settle(Window window)

@@ -205,7 +205,7 @@ public sealed class Meter : Grid
         track.ClipToBounds = false;
         track.SizeChanged += (_, _) => Paint();
         var clock = Icons.Icon("clock", 12, Theme.Brush("Ink3"));
-        clock.Margin = new Thickness(0, 1, 4, 0);
+        clock.Margin = new Thickness(0, 1, 3, 0);
         reset.Children.Add(clock); reset.Children.Add(resetText);
         var top = new Grid { Height = kind == MeterKind.Compact ? 17 : 16 };
         if (kind == MeterKind.Compact)
@@ -216,7 +216,7 @@ public sealed class Meter : Grid
             value.FontSize = 15; value.HorizontalAlignment = HorizontalAlignment.Left;
             top.Children.Add(value);
             resetText.TextTrimming = TextTrimming.CharacterEllipsis;
-            Grid.SetColumn(reset, 1); reset.HorizontalAlignment = HorizontalAlignment.Right; reset.Margin = new Thickness(6, 0, 0, 0); top.Children.Add(reset);
+            Grid.SetColumn(reset, 1); reset.HorizontalAlignment = HorizontalAlignment.Right; reset.Margin = new Thickness(5, 0, 0, 0); top.Children.Add(reset);
         }
         else
         {

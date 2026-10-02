@@ -32,7 +32,8 @@ function Assert-AiAccountCenterTaskSnapshot($Snapshot, [string]$UserSid, [string
         throw 'An existing tray task conflicts with the expected current-user definition.'
     }
     $action = @($Snapshot.Actions)[0]
-    if ($action.Execute -notin $AllowedExecutables -or -not [string]::IsNullOrEmpty([string]$action.Arguments) -or
+    # The logon task starts the tray hidden with exactly "--background"; older installs have no arguments.
+    if ($action.Execute -notin $AllowedExecutables -or [string]$action.Arguments -notin @('', '--background') -or
         $action.WorkingDirectory -ine [IO.Path]::GetDirectoryName($action.Execute)) {
         throw 'An existing tray task has an unapproved executable or action.'
     }

@@ -33,3 +33,12 @@ $report = Join-Path $evidence $(if ($Live) { 'live-check.json' } else { 'checks.
 & $dotnetCommand $dll $mode $report
 if ($LASTEXITCODE -ne 0) { throw "AI Account Center verification failed. See $report" }
 Get-Content -LiteralPath $report
+if (-not $Live) {
+    # Offline render checks from the bundled sanitized fixture (one theme per process) and the installer checks.
+    foreach ($theme in @('light', 'dark')) {
+        & $dotnetCommand $dll --render-fixture (Join-Path $evidence 'render') $theme
+        if ($LASTEXITCODE -ne 0) { throw "AI Account Center $theme render checks failed. See $(Join-Path $evidence 'render')" }
+    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-InstallScripts.ps1') | Set-Content -LiteralPath (Join-Path $evidence 'install-script-checks.json')
+    if ($LASTEXITCODE -ne 0) { throw "Installer script checks failed. See $(Join-Path $evidence 'install-script-checks.json')" }
+}

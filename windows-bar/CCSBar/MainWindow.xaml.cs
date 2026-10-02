@@ -48,8 +48,9 @@ public partial class MainWindow : Window
     /// <summary>Raised after every new sample or connection change (the tray tooltip follows it).</summary>
     public event Action? SampleChanged;
     /// <summary>Wired by App: the global hotkey's state and toggle, and Quit.</summary>
-    internal Func<bool?>? HotkeyState;
-    internal Func<bool, bool>? SetHotkey;
+    /// <summary>"registered", "in-use" (another app owns it), "unavailable" or "off".</summary>
+    internal Func<string>? HotkeyState;
+    internal Func<bool, string>? SetHotkey;
     internal Action? QuitRequested;
     internal bool AllowClose { get; set; }
     public bool IsConfigured => client is not null;
@@ -124,6 +125,7 @@ public partial class MainWindow : Window
         PositionPopup();
         if (!wasVisible) { Show(); PlayOpen(); }
         Activate();
+        App.Trace("panel shown, visible=" + IsVisible);
         if (settings && !settingsVisible) OpenSettings();
         if (!signInVisible) await Refresh(true);
     }
@@ -139,6 +141,7 @@ public partial class MainWindow : Window
     public void HidePopup()
     {
         if (!IsVisible) return;
+        App.Trace("panel hidden");
         openPopup?.SetCurrentValue(Popup.IsOpenProperty, false);
         if (settingsVisible) CloseSettings(animate: false);
         foreach (var (key, meter) in meters) shownAtHide[key] = meter.Target;
@@ -645,7 +648,7 @@ public partial class MainWindow : Window
     private FrameworkElement RowShell(FrameworkElement content, string id, bool separator, bool active, Action click, string tooltip, int meterColumns)
     {
         var root = new Grid { Background = Brushes.Transparent, Cursor = Cursors.Hand, Uid = "row:" + id, MinHeight = 45 };
-        var hover = new Border { CornerRadius = new CornerRadius(8), Background = Theme.Brush(active ? "ActiveHover" : "RowHover"), Opacity = 0, Margin = active ? new Thickness(4, 0, 4, 0) : new Thickness(0) };
+        var hover = new Border { CornerRadius = new CornerRadius(8), Background = Theme.Brush(active ? "ActiveHover" : "RowHover"), Opacity = expanded.Contains(id) ? 1 : 0, Margin = active ? new Thickness(4, 0, 4, 0) : new Thickness(0) };
         var press = new Border { CornerRadius = new CornerRadius(8), Background = Theme.Brush("RowPress"), Opacity = 0, Margin = hover.Margin };
         root.Children.Add(hover); root.Children.Add(press);
         if (separator) root.Children.Add(new Border { Height = 1, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(46, 0, 12, 0), Background = Theme.Brush("Rule2"), IsHitTestVisible = false });
@@ -669,8 +672,7 @@ public partial class MainWindow : Window
         root.MouseLeave += (_, _) =>
         {
             pressed = false; Motion.To(press, OpacityProperty, 0, Motion.Fast);
-            Motion.To(hover, OpacityProperty, 0, Motion.Fast);
-            if (!expanded.Contains(id)) { Motion.To(chevron, OpacityProperty, 0, 160); Motion.To(slide, TranslateTransform.XProperty, -3, 220); }
+            if (!expanded.Contains(id)) { Motion.To(hover, OpacityProperty, 0, Motion.Fast); Motion.To(chevron, OpacityProperty, 0, 160); Motion.To(slide, TranslateTransform.XProperty, -3, 220); }
             foreach (var meter in FindMeters(content)) meter.SetHover(false);
         };
         root.MouseLeftButtonDown += (_, e) => { pressed = true; Motion.To(press, OpacityProperty, 1, 80); };
@@ -681,6 +683,7 @@ public partial class MainWindow : Window
             pressed = false; e.Handled = true;
             Motion.To(turn, RotateTransform.AngleProperty, expanded.Contains(id) ? 0 : 90, 220);
             click();
+            if (!expanded.Contains(id) && !root.IsMouseOver) Motion.To(hover, OpacityProperty, 0, Motion.Fast);
         };
         System.Windows.Automation.AutomationProperties.SetName(root, tooltip);
         return root;

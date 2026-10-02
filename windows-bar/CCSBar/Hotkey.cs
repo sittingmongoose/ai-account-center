@@ -8,8 +8,8 @@ using System.Windows.Interop;
 namespace CCSBar;
 
 /// <summary>
-/// Optional global shortcut (Ctrl+Alt+A) that opens or hides the panel while the tray runs. Registered on a
-/// message-only window, so it works with the panel hidden. When another app already owns the combination,
+/// Optional global shortcut (Ctrl+Alt+A) that opens or hides the panel while the tray runs. Registered on a hidden
+/// tool window, so it works with the panel hidden. When another app already owns the combination,
 /// registration fails and Settings says so; nothing is overridden.
 /// </summary>
 public sealed class Hotkey : IDisposable
@@ -19,14 +19,19 @@ public sealed class Hotkey : IDisposable
     private const uint ModAlt = 0x1, ModControl = 0x2, ModNoRepeat = 0x4000, KeyA = 0x41;
     private HwndSource? source;
     public bool Registered { get; private set; }
+    /// <summary>The Win32 error of the last failed registration (1409: another app owns the combination).</summary>
+    public int LastError { get; private set; }
+    public bool InUseElsewhere => !Registered && LastError == 1409;
     public event Action? Pressed;
 
     public bool Register()
     {
         if (Registered) return true;
-        source ??= new HwndSource(new HwndSourceParameters("AI Account Center hotkey") { ParentWindow = new IntPtr(-3), WindowStyle = 0 });
+        // A hidden top-level tool window (never shown): it receives WM_HOTKEY while the panel is hidden.
+        source ??= new HwndSource(new HwndSourceParameters("AI Account Center hotkey") { WindowStyle = unchecked((int)0x80000000), ExtendedWindowStyle = 0x80, Width = 0, Height = 0, PositionX = -32000, PositionY = -32000 });
         source.AddHook(Hook);
         Registered = RegisterHotKey(source.Handle, Id, ModControl | ModAlt | ModNoRepeat, KeyA);
+        LastError = Registered ? 0 : Marshal.GetLastWin32Error();
         if (!Registered) source.RemoveHook(Hook);
         return Registered;
     }

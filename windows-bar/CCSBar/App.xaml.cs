@@ -99,14 +99,19 @@ public partial class App : System.Windows.Application
                 AllowSetForegroundWindow(-1);
                 showRequest.Set(); Shutdown(0); return;
             }
+            Trace("instance owner");
             var background = args.Contains("--background");
             var window = new MainWindow(preferences); MainWindow = window;
             window.QuitRequested = Quit;
+            Trace("window created");
             CreateTray(window);
+            Trace("tray created");
             CreateHotkey(window);
+            Trace("hotkey " + (hotkey?.Registered == true ? "registered" : preferences.Hotkey ? "not registered, error " + hotkey?.LastError : "off"));
             SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             showListener = ThreadPool.RegisterWaitForSingleObject(showRequest,
-                (_, _) => Dispatcher.BeginInvoke(new Action(async () => await window.OpenPopup())), null, Timeout.Infinite, false);
+                (_, _) => Dispatcher.BeginInvoke(new Action(async () => { Trace("show request"); await window.OpenPopup(); })), null, Timeout.Infinite, false);
+            Trace("listening");
             if (window.IsConfigured)
             {
                 if (background) await window.Refresh(false);
@@ -114,8 +119,9 @@ public partial class App : System.Windows.Application
             }
             else await window.OpenPopup();
         }
-        catch
+        catch (Exception failure)
         {
+            Trace("startup failed: " + failure.GetType().Name);
             // Never log exception bodies: connection credentials and account identities stay private.
             if (e.Args.Length > 0 && e.Args[0].StartsWith("--", StringComparison.Ordinal) && e.Args[0] != "--background") { Shutdown(1); return; }
             Directory.CreateDirectory(SecureStore.StateDirectory);
@@ -143,11 +149,12 @@ public partial class App : System.Windows.Application
         hotkey = new Hotkey();
         hotkey.Pressed += () => Dispatcher.BeginInvoke(new Action(async () => await window.TogglePopup()));
         if (preferences.Hotkey) hotkey.Register();
-        window.HotkeyState = () => preferences.Hotkey ? hotkey.Registered : null;
+        string State() => !preferences.Hotkey ? "off" : hotkey.Registered ? "registered" : hotkey.InUseElsewhere ? "in-use" : "unavailable";
+        window.HotkeyState = State;
         window.SetHotkey = on =>
         {
-            if (on) return hotkey.Register();
-            hotkey.Unregister(); return false;
+            if (on) hotkey.Register(); else hotkey.Unregister();
+            return State();
         };
     }
 
@@ -195,4 +202,13 @@ public partial class App : System.Windows.Application
     }
 
     [DllImport("user32.dll")] private static extern bool AllowSetForegroundWindow(int processId);
+
+    /// <summary>Milestones only (never data or credentials), written when AAC_TRAY_TRACE names a file; used by the
+    /// isolated reopen check to tell a missing signal from a window that could not be shown.</summary>
+    internal static void Trace(string milestone)
+    {
+        var file = Environment.GetEnvironmentVariable("AAC_TRAY_TRACE");
+        if (string.IsNullOrEmpty(file) || !Path.IsPathFullyQualified(file)) return;
+        try { File.AppendAllText(file, DateTimeOffset.UtcNow.ToString("HH:mm:ss.fff") + " " + milestone + Environment.NewLine); } catch { }
+    }
 }
