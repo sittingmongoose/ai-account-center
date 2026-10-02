@@ -94,11 +94,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/aggregator.ts` | 782 |
 | `src/web-server/usage/native-quota-collector.ts` | 768 |
 | `src/auth/profile-detector.ts` | 767 |
-| `src/web-server/usage/account-activity-collector.ts` | 710 |
+| `src/web-server/usage/account-activity-collector.ts` | 716 |
 | `src/web-server/services/account-analytics-activity.ts` | 672 |
 | `src/web-server/services/account-dashboard-service.ts` | 637 |
 | `src/web-server/services/additional-account-service.ts` | 636 |
 | `src/cliproxy/services/usage-compatibility-transformer.ts` | 632 |
-| `src/web-server/services/account-analytics-projection.ts` | 623 |
+| `src/web-server/services/account-analytics-projection.ts` | 629 |
 | `src/cliproxy/services/stats-fetcher.ts` | 614 |
 

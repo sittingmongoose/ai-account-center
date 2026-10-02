@@ -777,7 +777,7 @@
         },
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 710
+          "loc": 716
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
@@ -797,7 +797,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 623
+          "loc": 629
         },
         {
           "file": "src/cliproxy/services/stats-fetcher.ts",
