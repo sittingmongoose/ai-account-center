@@ -66,7 +66,7 @@ export const LIFECYCLE_MESSAGES: Readonly<Record<string, string>> = Object.freez
   code_not_expected: 'This sign-in is not waiting for a code.',
   unknown_trash: 'That trash entry was not found.',
   tool_missing: 'The sign-in tool is not installed on the dashboard computer.',
-  preflight_failed: 'The isolated sign-in check did not pass.',
+  preflight_failed: 'Sign in to this provider from a terminal on Ubuntu with the command shown.',
   isolation_unproven: 'A second account for this provider is not supported yet.',
   extension_update_required: 'This needs an update of the browser extension.',
   secure_transport_required:
@@ -83,7 +83,7 @@ export type ResolvedAccount =
       entry: RegistryAccount;
       mode: 'v1' | 'v2';
     }
-  | { kind: 'antigravity'; id: string; provider: 'antigravity' }
+  | { kind: 'antigravity'; id: string; provider: 'antigravity'; profileId: string }
   | { kind: 'wallet'; id: string; provider: 'opencode-go' };
 
 export interface AdditionalEntries {
@@ -108,6 +108,8 @@ export interface AccountLookup {
   ccsDir: string;
   codexHasProfile: (name: string) => boolean;
   findClaude: (id: string) => Promise<ClaudeProfileRecord | null>;
+  /** When given, an Antigravity id must name a saved profile (else 404). */
+  antigravityHasProfile?: (profileId: string) => boolean;
 }
 
 export async function resolveAccount(id: string, lookup: AccountLookup): Promise<ResolvedAccount> {
@@ -125,7 +127,10 @@ export async function resolveAccount(id: string, lookup: AccountLookup): Promise
     if (profile) return { kind: 'claude', id, provider, profile };
   }
   if (provider === 'antigravity' && rest[0] === 'profile' && rest.length === 2) {
-    return { kind: 'antigravity', id, provider };
+    if (!lookup.antigravityHasProfile || lookup.antigravityHasProfile(rest[1])) {
+      return { kind: 'antigravity', id, provider, profileId: rest[1] };
+    }
+    throw new LifecycleHttpError(404, 'unknown_account');
   }
   if ((ADDITIONAL_PROVIDERS as readonly string[]).includes(provider)) {
     const additional = provider as AdditionalProvider;

@@ -11,6 +11,7 @@ import type { LifecycleContext, LifecycleEnv } from './account-lifecycle-env';
 import { isAccountLabel, type RegistryAccount } from './account-registry-v2';
 import { redactSignInJob } from './account-lifecycle-runtime';
 import { SignInJobConflict, type SignInFlowSpec, type SignInJob } from './signin-jobs';
+import { antigravitySignInCommand } from '../../antigravity/account-lifecycle';
 
 /** Shared checks and views of the lifecycle actions. */
 export const CODEX_TERMINAL = {
@@ -18,6 +19,15 @@ export const CODEX_TERMINAL = {
   host: 'ubuntu' as const,
   command: 'ai-account-center codex-auth login <profile-name>',
 };
+
+/** The terminal sign-in for one Antigravity profile (contract 6.6, terminal fallback). */
+export function antigravityTerminal(profileId: string): {
+  kind: 'terminal';
+  host: 'ubuntu';
+  command: string;
+} {
+  return { kind: 'terminal', host: 'ubuntu', command: antigravitySignInCommand(profileId) };
+}
 
 export function invalid(): LifecycleHttpError {
   return new LifecycleHttpError(400, 'invalid_body');

@@ -34,6 +34,7 @@ import {
 import { ClaudeLifecycleError } from './claude-account-lifecycle';
 import { CLAUDE_PROFILE_ID } from './claude-account-stores';
 import { parseSourceManifest, readSourceManifestFile } from './account-usage-manifest';
+import { addAntigravity, antigravitySignInAgain } from './account-lifecycle-antigravity';
 import {
   CODEX_TERMINAL,
   entryView,
@@ -74,6 +75,10 @@ export async function addAccount(
 ): Promise<LifecycleResult> {
   const provider = body.provider;
   if (!isDashboardProviderId(provider)) throw invalid();
+  // Antigravity signs in from a terminal: no credential or code crosses HTTP.
+  if (provider === 'antigravity' && env.antigravity) {
+    return addAntigravity(env, env.antigravity(), body, context);
+  }
   const kind = signInState(env, provider, context.secure).kind;
   // Rule 5 before any credential in the body is read.
   if (kind === 'api-key' || kind === 'device-code' || kind === 'supervised-cli') {
@@ -361,6 +366,9 @@ export async function signInAgain(
     if (running) throw new LifecycleHttpError(409, 'job_running', { jobId: running.id });
     const job = startJob(env, codex.signInAgainFlow(account.name));
     return { status: 202, body: { job: jobBody(job, context) } };
+  }
+  if (account.kind === 'antigravity' && env.antigravity) {
+    return antigravitySignInAgain(env, env.antigravity(), account.profileId, context);
   }
   return { status: 200, body: { guide: guideFor(account) } };
 }

@@ -19,6 +19,7 @@ import {
 } from './account-lifecycle-accounts';
 import {
   auditLifecycle,
+  getAntigravityLifecycle,
   getClaudeLifecycle,
   getCodexLifecycle,
   getSignInJobRunner,
@@ -27,6 +28,7 @@ import {
 } from './account-lifecycle-runtime';
 import { probeAdditionalSource, refreshAdditionalAccount } from './additional-account-service';
 import type { AdditionalUsageSource } from './additional-usage-transport';
+import type { AntigravityAccountLifecycle } from '../../antigravity/account-lifecycle';
 import type { ClaudeAccountLifecycle } from './claude-account-lifecycle';
 import { runClaudeHostOverSsh } from './claude-host-transport';
 import type { CodexAccountLifecycle } from './codex-account-lifecycle';
@@ -43,6 +45,8 @@ export interface LifecycleEnv {
   runner: () => SignInJobRunner;
   codex: () => CodexAccountLifecycle;
   claude: () => ClaudeAccountLifecycle;
+  /** Antigravity saved profiles; without it Antigravity actions answer not_implemented. */
+  antigravity?: () => AntigravityAccountLifecycle;
   confirmations: () => AccountConfirmationStore;
   providerFacts: (context: { secureTransport?: boolean }) => ProviderRegistryFacts;
   getDashboard: (context: { secureTransport?: boolean }) => Promise<AccountDashboard>;
@@ -93,6 +97,7 @@ export function defaultLifecycleEnv(): LifecycleEnv {
     runner: getSignInJobRunner,
     codex: getCodexLifecycle,
     claude: getClaudeLifecycle,
+    antigravity: getAntigravityLifecycle,
     confirmations: getAccountConfirmations,
     providerFacts: (context) => lifecycleProviderFacts(context),
     getDashboard: (context) => getAccountDashboard('mac', false, context),
@@ -124,6 +129,17 @@ export function resolveIn(env: LifecycleEnv, id: string): Promise<ResolvedAccoun
         .claude()
         .findProfile(claudeId)
         .catch(() => null),
+    ...(env.antigravity
+      ? {
+          antigravityHasProfile: (profileId: string) => {
+            try {
+              return env.antigravity?.().hasProfile(profileId) === true;
+            } catch {
+              return false;
+            }
+          },
+        }
+      : {}),
   });
 }
 
@@ -134,7 +150,7 @@ export async function providerAccountCount(
 ): Promise<number> {
   if (provider === 'codex') return env.codex().registry().listProfiles().length;
   if (provider === 'claude') return env.claude().count();
-  if (provider === 'antigravity') return 0;
+  if (provider === 'antigravity') return env.antigravity?.().profileCount() ?? 0;
   const { entries } = await readAdditionalEntries(env.ccsDir());
   return entries.filter((entry) => entry.provider === provider).length;
 }

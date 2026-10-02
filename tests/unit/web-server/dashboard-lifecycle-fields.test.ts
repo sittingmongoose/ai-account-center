@@ -88,6 +88,7 @@ function deps(
       lifecycleProviderFacts(context, {
         codexCliAvailable: () => true,
         claudeEnabled: () => false,
+        antigravityFlow: () => 'preflight_failed',
       }),
     accountJobStates: () => new Map(),
     listClaudePending: async () => [],
@@ -121,10 +122,18 @@ describe('lifecycle provider facts', () => {
       signInAgain: true,
       openApp: ['mac', 'windows'],
     });
-    for (const id of ['muse', 'antigravity']) {
-      expect(entry(id)?.signIn.unavailableReason).toBe('not_implemented');
-    }
-    expect(entry('antigravity')?.capabilities.remove).toBe(false);
+    expect(entry('muse')?.signIn.unavailableReason).toBe('not_implemented');
+    // Antigravity signs in from a terminal: the UI shows the command (contract 6.2).
+    expect(entry('antigravity')?.signIn).toMatchObject({
+      kind: 'supervised-cli',
+      available: false,
+      unavailableReason: 'preflight_failed',
+    });
+    expect(entry('antigravity')?.capabilities).toMatchObject({
+      add: false,
+      remove: true,
+      recheck: false,
+    });
     expect(entry('cursor')?.capabilities).toMatchObject({ openApp: ['mac'], recheck: true });
 
     const plain = await new AccountDashboardService(deps()).get('mac', false, {
