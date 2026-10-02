@@ -150,9 +150,10 @@ public static class Ui
 
 public enum MeterKind { Compact, Labeled, Detail }
 
-/// <summary>What a meter shows. Value is % used; null is "unavailable", never zero.</summary>
+/// <summary>What a meter shows. Value is % used; null is "unavailable", never zero. NaFallbacks are shorter forms of
+/// NaText that a narrow compact cell may use instead, longest first (a reset whose new reading is pending).</summary>
 public sealed record MeterSpec(double? Value, string Tooltip, string? Label = null, string? Reset = null, bool ResetSoon = false, string? Amount = null,
-    double? Notch = null, double NotchOpacity = 1, string NaText = "Unavailable", string? Caption = null, string[]? ResetFallbacks = null);
+    double? Notch = null, double NotchOpacity = 1, string NaText = "Unavailable", string? Caption = null, string[]? ResetFallbacks = null, string[]? NaFallbacks = null);
 
 /// <summary>
 /// The dashboard meter scaled to the tray: tabular SemiCondensed value with "%" in the same run, reset with a clock,
@@ -193,6 +194,15 @@ public sealed class Meter : Grid
     private string severity = "calm";
     private MeterSpec spec = new(null, "");
     private readonly Grid top;
+    /// <summary>The text in the value slot when there is no number: NaText, or the shorter form that fits.</summary>
+    private string naShown = "Unavailable";
+    /// <summary>The value slot's text and whether the track is drawn as unavailable (render checks).</summary>
+    internal string ValueShown => value.Text;
+    internal bool DrawnUnavailable => naOutline.Visibility == Visibility.Visible && fillHost.Visibility != Visibility.Visible;
+    internal bool ValueClipped => new FormattedText(value.Text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+        new Typeface(value.FontFamily, value.FontStyle, value.FontWeight, value.FontStretch), value.FontSize, Brushes.Black, VisualTreeHelper.GetDpi(this).PixelsPerDip).WidthIncludingTrailingWhitespace > ActualWidth + 0.5;
+    internal string LongResetShown => longReset.Text;
+    internal string TooltipText => spec.Tooltip;
 
     public Meter(string key, MeterKind kind)
     {
@@ -230,7 +240,8 @@ public sealed class Meter : Grid
             // Explicit, so FitReset measures the face on screen even while a reused meter is between rows.
             resetText.FontFamily = Theme.Sans;
             Grid.SetColumn(reset, 1); reset.HorizontalAlignment = HorizontalAlignment.Right; reset.Margin = new Thickness(5, 0, 0, 0); top.Children.Add(reset);
-            top.SizeChanged += (_, _) => FitReset();
+            top.SizeChanged += (_, _) => { FitReset(); FitNa(); };
+            SizeChanged += (_, _) => FitNa();
         }
         else
         {
@@ -283,9 +294,12 @@ public sealed class Meter : Grid
         {
             BeginAnimation(ShownProperty, null);
             Target = null; Shown = 0;
-            value.Text = next.NaText; value.FontFamily = Theme.Sans; value.FontWeight = FontWeights.Medium; value.FontSize = 12; value.Foreground = Theme.Brush("Ink3");
+            naShown = next.NaText;
+            value.Text = naShown; value.FontFamily = Theme.Sans; value.FontWeight = FontWeights.Medium; value.FontSize = 12; value.Foreground = Theme.Brush("Ink3");
             trackPlate.Background = Brushes.Transparent; naOutline.Visibility = Visibility.Visible; ticks.Visibility = Visibility.Collapsed; fillHost.Visibility = Visibility.Collapsed;
+            over.Visibility = Visibility.Collapsed;
             severity = "na"; Paint();
+            FitNa();
             return;
         }
         value.FontFamily = Theme.Numerals; value.FontWeight = FontWeights.SemiBold; value.FontSize = Kind == MeterKind.Compact ? 15 : 14;
@@ -327,6 +341,23 @@ public sealed class Meter : Grid
         resetText.Text = forms.FirstOrDefault(form => Width(form, resetText) <= available + 0.5) ?? forms[^1];
     }
 
+    /// <summary>Compact meters with no number: the longest of NaText and its shorter forms that fits the cell, so a
+    /// pending reset reads "Reset at 5:15 AM · new reading pending" where there is room and "Reset at 5:15 AM" where
+    /// there is not. The tooltip keeps the whole sentence.</summary>
+    private void FitNa()
+    {
+        // The cell's width is the meter's own: a value line wider than its slot is arranged at its full width and
+        // clipped, so the top line's ActualWidth can report the text's width instead of the cell's.
+        var available = ActualWidth;
+        if (Kind != MeterKind.Compact || severity != "na" || spec.NaFallbacks is not { Length: > 0 } shorter || available <= 0) return;
+        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        double Width(string text) => new FormattedText(text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            new Typeface(value.FontFamily, value.FontStyle, value.FontWeight, value.FontStretch), value.FontSize, Brushes.Black, dpi).WidthIncludingTrailingWhitespace;
+        var forms = new[] { spec.NaText }.Concat(shorter);
+        naShown = forms.FirstOrDefault(form => Width(form) <= available + 0.5) ?? shorter[^1];
+        value.Text = naShown;
+    }
+
     /// <summary>Hover feedback from the row: the track brightens.</summary>
     public void SetHover(bool hover) { if (severity != "na") trackPlate.Background = Theme.Brush(hover ? "TrackHover" : "Track"); }
 
@@ -336,7 +367,7 @@ public sealed class Meter : Grid
     private void Paint()
     {
         var width = track.ActualWidth;
-        if (severity == "na") { value.Text = spec.NaText; return; }
+        if (severity == "na") { value.Text = naShown; return; }
         var shown = Shown;
         value.Text = Formatting.PercentWith(shown, decimals);
         if (width <= 0) return;

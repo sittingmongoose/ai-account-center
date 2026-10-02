@@ -33,7 +33,11 @@ unknown ("Unavailable", never 0), nothing is summed or averaged across accounts,
 decimals (the raw values keep their precision). Codex Chat pass windows, Qwen subscription metadata, empty Z.ai pack
 summaries and an unreported Codex 5-hour window are not shown. Retained (cached) readings keep their original sample
 time in the tooltip and details. A compact meter's reset takes the longest form that fits beside its value ("5:15 AM",
-then "5h 15m", then "5h"); the exact time is always in its tooltip. Providers listed in `hiddenProviders` (top level, or in `settings`) are left out
+then "5h 15m", then "5h"); the exact time is always in its tooltip. Once a window's `resetAt` has passed, a reading
+sampled before it (the window's own `sampledAt`, else the account's; or no sample time at all) is not shown: the meter
+is drawn as unavailable with no number and reads "Reset at 5:15 AM · new reading pending" (shorter forms in a narrow
+cell, "Pending" beside a label), never 0%. The refresh timer re-checks this on every tick, so a window flips when its
+reset passes while the panel is open. Providers listed in `hiddenProviders` (top level, or in `settings`) are left out
 when the dashboard reports them; until then Settings says the server does not report them. Provider ids, Codex profiles,
 Claude profile ids and Antigravity profile ids come from the data and are accepted only when they are URI and path
 safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
@@ -67,6 +71,13 @@ and X or Escape return to it. It holds Appearance (Light / Dark / Auto), Connect
 in, the dashboard address and Change), Start with Windows (the installer's logon task), Keyboard shortcut, read-only
 facts from the dashboard (refresh interval, Codex and Antigravity auto-switch, hidden providers, address) and About
 (version, third-party notices, Quit).
+
+Sign-in and Change verify before they save. Connect builds a temporary client from the entered address and login,
+signs in (`POST /api/auth/login`) and reads `GET /api/accounts/settings` with that session. Only when both work is the
+connection written to the DPAPI store (same file, entropy and JSON, with any other stored members kept as they were)
+and the running client replaced. A wrong address,
+a rejected login, a timeout (15 s) or Cancel (or Escape) while it checks keeps the saved connection and the running
+client as they were, and the reason shows under the form.
 
 ## Reopening the tray
 
@@ -104,8 +115,9 @@ Builds are self-contained for Windows x64. Build and Check use an explicit `-Dot
 `dotnet` on PATH with a .NET 8 SDK, then the legacy private SDK at `%LOCALAPPDATA%\CCS Bar\build\dotnet\dotnet.exe`.
 Build's `-OutputDirectory` and Check's `-PublishDirectory` and `-ReportDirectory` support isolated verification.
 
-`Check.ps1` runs, offline: the check suite (formatting, data rules, injection, DPAPI, the authenticated HTTP fixture
-for the Codex and Antigravity routes, fonts, icons, easing), the render checks for Light and Dark, and
+`Check.ps1` runs, offline and against an isolated state folder: the check suite (formatting, data rules, injection,
+DPAPI, the authenticated HTTP fixture for the Codex and Antigravity routes, sign-in and Change against loopback
+fixtures with a temporary store, the reset-pending rule, fonts, icons, easing), the render checks for Light and Dark, and
 `Test-InstallScripts.ps1` (the installer parses; the task guard accepts only the two approved logon actions).
 `-Live` reads your configured dashboard instead. `scripts/Test-SingleInstance.ps1 -PublishDirectory <dir>` checks the
 reopen behaviour against an isolated state folder.

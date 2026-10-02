@@ -44,6 +44,13 @@ public partial class MainWindow : Window
     private string? statusFlash;
     private Popup? openPopup;
     private readonly RotateTransform refreshTurn = new(), gearTurn = new();
+    /// <summary>The sign-in check in progress, if any; Cancel and Escape cancel it.</summary>
+    private System.Threading.CancellationTokenSource? connectionCheck;
+    /// <summary>Bumped when a verified connection replaces the client, so a sample still in flight from the old
+    /// client is dropped instead of shown.</summary>
+    private int connectionGeneration;
+    /// <summary>The windows drawn as "new reading pending" (F6), so the timer redraws only when one flips.</summary>
+    private string pendingResets = "";
 
     /// <summary>Raised after every new sample or connection change (the tray tooltip follows it).</summary>
     public event Action? SampleChanged;
@@ -84,7 +91,7 @@ public partial class MainWindow : Window
         Deactivated += (_, _) => { if (!confirmationVisible && !popupOpen && !signInVisible) HidePopup(); };
         PreviewKeyDown += OnPreviewKeyDown;
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
-        timer.Tick += async (_, _) => await Refresh(false);
+        timer.Tick += async (_, _) => { ReevaluateResets(); await Refresh(false); };
         if (loadConnection)
         {
             timer.Start();
@@ -105,6 +112,15 @@ public partial class MainWindow : Window
     {
         connection = new ConnectionSettings { BaseURL = "http://127.0.0.1:3000", Username = "fixture", Password = "fixture-only" };
         client = new DashboardClient(connection);
+        timer.Stop(); RenderFooter();
+    }
+    /// <summary>Checks only: a connection read from an isolated fixture store, which a verified Change replaces.</summary>
+    internal void UseConnectionStoreForCheck(string path)
+    {
+        ConnectionStorePath = path;
+        connection = SecureStore.Load(path);
+        client?.Dispose();
+        client = connection is null ? null : new DashboardClient(connection);
         timer.Stop(); RenderFooter();
     }
     internal void ToggleDetailsForCheck(string id) => ToggleDetails(id);
@@ -213,6 +229,7 @@ public partial class MainWindow : Window
         e.Handled = true;
         if (openPopup is { IsOpen: true }) { openPopup.IsOpen = false; return; }
         if (settingsVisible) { CloseSettings(); return; }
+        if (connectionCheck is not null) { CancelConnectionCheck(); return; }
         if (signInVisible && client is not null) { CloseSignIn(); return; }
         HidePopup();
     }
@@ -226,15 +243,23 @@ public partial class MainWindow : Window
         busy = true; SetRefreshing(true); DisableMutations();
         statusFlash = dashboard is null ? "Loading accounts" : "Refreshing usage";
         UpdateStatus();
-        try { ApplyDashboardSample(await client.Dashboard(force)); }
-        catch (Exception error)
+        var generation = connectionGeneration;
+        try
+        {
+            var sample = await client.Dashboard(force);
+            if (generation == connectionGeneration) ApplyDashboardSample(sample);
+        }
+        catch (Exception error) when (generation == connectionGeneration)
         {
             lastFailure = DateTimeOffset.UtcNow;
             statusFlash = DisplayError(error);
             if (dashboard is null) RenderEmpty("Usage is unavailable", "Check the dashboard connection in Settings, or try Refresh.");
             else MarkStale();
         }
+        catch (Exception) { /* The old connection's request, replaced by a verified Change while it ran. */ }
         finally { FinishRequest(); }
+        // A Change landed while this sample was in flight: read the new connection now.
+        if (generation != connectionGeneration) await Refresh(true);
     }
 
     /// <summary>Shows a sample. Used by Refresh and by the offline fixture renderer.</summary>
@@ -302,6 +327,7 @@ public partial class MainWindow : Window
     private void RenderDashboard()
     {
         if (dashboard is null) return;
+        pendingResets = PendingResets(dashboard);
         var offset = ContentScroll.VerticalOffset;
         foreach (var meter in meters.Values) Ui.Detach(meter);
         foreach (var platter in platters.Values) Ui.Detach(platter);
@@ -319,6 +345,20 @@ public partial class MainWindow : Window
         RenderFooter();
         if (busy || staleSample) DisableMutations();
         Dispatcher.BeginInvoke(new Action(() => { ContentScroll.ScrollToVerticalOffset(offset); PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>Every window now drawn as "new reading pending" (F6), as one comparable string.</summary>
+    private static string PendingResets(AccountDashboard sample) => string.Join("\n", sample.Accounts.SelectMany(account =>
+        account.Windows.Where(window => Formatting.PendingReset(account, window) is not null).Select(window => account.Id + "|" + window.Key)));
+
+    /// <summary>The refresh timer's first step (F6): a window whose reset passes while the panel is open turns into
+    /// "Reset at ... · new reading pending" on this tick, even when the refresh after it is skipped or fails. Nothing
+    /// is redrawn unless a window changed state.</summary>
+    internal void ReevaluateResets()
+    {
+        if (dashboard is null || PendingResets(dashboard) == pendingResets) return;
+        RenderDashboard();
+        SampleChanged?.Invoke();
     }
 
     private void RenderEmpty(string title, string message)
@@ -568,11 +608,30 @@ public partial class MainWindow : Window
 
     private static MeterSpec CompactSpec(DashboardAccount account, QuotaWindow window, double? notch, double notchOpacity)
     {
+        if (Formatting.PendingReset(account, window) is DateTimeOffset reset) return PendingSpec(account, window, reset, MeterKind.Compact);
         var used = window.Unlimited || window.Enabled == false ? null : window.DisplayPercent;
         var na = window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable";
         // A retained (cached) window keeps its sample time in the tooltip; the compact row stays one line.
         return new MeterSpec(used, MeterTip(account, window, notch), Reset: Formatting.ResetShort(window.ResetAt), ResetSoon: ResetSoon(window.ResetAt), Notch: notch, NotchOpacity: notchOpacity, NaText: na,
             ResetFallbacks: Formatting.ResetFallbacks(window.ResetAt));
+    }
+
+    /// <summary>F6: a reading from before its window's reset. No number, no fill, no notch and no amount: the meter is
+    /// drawn as unavailable with "Reset at ... · new reading pending" (compact cells fit the longest form that fits;
+    /// labelled and detail meters say "Pending" beside the label and give the reset under the track).</summary>
+    private static MeterSpec PendingSpec(DashboardAccount account, QuotaWindow window, DateTimeOffset reset, MeterKind kind, string? label = null)
+    {
+        var parts = new List<string> { Formatting.WindowLabel(account, window), Formatting.ResetPendingLong(reset), "The last reading was taken before this reset, so it is not shown" };
+        var sampled = window.SampledAt ?? account.SampledAt;
+        parts.Add(sampled is null ? "Sample time unavailable" : Formatting.WindowSample(sampled));
+        var tip = string.Join(" · ", parts);
+        var forms = Formatting.PendingForms(reset);
+        return kind switch
+        {
+            MeterKind.Compact => new MeterSpec(null, tip, NaText: forms[0], NaFallbacks: forms[1..]),
+            MeterKind.Labeled => new MeterSpec(null, tip, Label: label, Reset: Formatting.ResetAt(reset), NaText: "Pending"),
+            _ => new MeterSpec(null, tip, Label: label, Reset: Formatting.ResetPendingLong(reset), NaText: "Pending"),
+        };
     }
 
     private static bool ResetSoon(string? reset) => DateTimeOffset.TryParse(reset, out var at) && at - Formatting.Now() < TimeSpan.FromHours(2) && at > Formatting.Now();
@@ -825,7 +884,9 @@ public partial class MainWindow : Window
         {
             var window = windows[i];
             var used = window.Unlimited || window.Enabled == false ? null : window.DisplayPercent;
-            var meter = ShowMeter(representative.Id + "|" + window.Key, MeterKind.Labeled, new MeterSpec(used, MeterTip(representative, window, null), Label: ShortLabel(provider, window),
+            var meter = ShowMeter(representative.Id + "|" + window.Key, MeterKind.Labeled, Formatting.PendingReset(representative, window) is DateTimeOffset pending
+                ? PendingSpec(representative, window, pending, MeterKind.Labeled, ShortLabel(provider, window))
+                : new MeterSpec(used, MeterTip(representative, window, null), Label: ShortLabel(provider, window),
                 Reset: window.ResetAt is null ? null : Formatting.ResetShort(window.ResetAt), ResetSoon: ResetSoon(window.ResetAt),
                 Amount: qwen || windows.Length == 1 ? AmountText(window) : null, NaText: window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable"));
             Grid.SetColumn(meter, 4 + 2 * i); grid.Children.Add(meter);
@@ -1030,7 +1091,9 @@ public partial class MainWindow : Window
                 var used = window.Unlimited || window.Enabled == false ? null : window.DisplayPercent;
                 var reset = window.ResetAt is null ? "No reset reported" : Formatting.ResetLong(window.ResetAt);
                 if (window.Status == "cached") reset += " · cached " + Formatting.Relative(window.SampledAt);
-                var meter = ShowMeter("detail:" + account.Id + "|" + window.Key, MeterKind.Detail, new MeterSpec(used, MeterTip(account, window, null), Label: Formatting.WindowLabel(account, window), Reset: reset, Amount: AmountText(window),
+                var meter = ShowMeter("detail:" + account.Id + "|" + window.Key, MeterKind.Detail, Formatting.PendingReset(account, window) is DateTimeOffset pending
+                    ? PendingSpec(account, window, pending, MeterKind.Detail, Formatting.WindowLabel(account, window))
+                    : new MeterSpec(used, MeterTip(account, window, null), Label: Formatting.WindowLabel(account, window), Reset: reset, Amount: AmountText(window),
                     NaText: window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable"));
                 meter.Margin = new Thickness(0, i >= 2 ? 12 : 0, 8, 0);
                 Grid.SetRow(meter, i / 2); Grid.SetColumn(meter, i % 2 == 0 ? 0 : 2); grid.Children.Add(meter);

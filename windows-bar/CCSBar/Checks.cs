@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CCSBar;
@@ -101,6 +102,8 @@ public static class Checks
         await PublicErrorChecks(report);
         await ConfirmationChecks(report);
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
+        ResetPendingChecks(report);
+        await SignInChangeChecks(report);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
@@ -353,6 +356,258 @@ public static class Checks
         report.Checks["menu_font_is_instrument_sans"] = PrivateFonts.Family.Name == "Instrument Sans";
         var fixture = FixtureRender.LoadFixture(out _);
         report.Checks["fixture_is_sanitized"] = fixture.Accounts.Count > 0 && fixture.Accounts.All(account => account.Email is null || account.Email.EndsWith("@example.com", StringComparison.Ordinal));
+    }
+
+    /// <summary>F6: after a window's reset, a reading sampled before it is not shown (no number, no fill, never 0%).</summary>
+    private static void ResetPendingChecks(CheckReport report)
+    {
+        var saved = Formatting.Now;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-10-02T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+            Formatting.Now = () => now;
+            const string past = "2026-10-02T11:00:00Z", future = "2026-10-02T15:00:00Z";
+            static QuotaWindow Window(string reset, string? sampled = null) => new() { Key = "five_hour", Label = "5h", Kind = "rate_limit", WindowMinutes = 300, UsedPercent = 37, ResetAt = reset, SampledAt = sampled };
+            var older = new DashboardAccount { Provider = "claude", Plan = "max", SampledAt = "2026-10-02T10:00:00Z" };
+            var newer = new DashboardAccount { Provider = "claude", Plan = "max", SampledAt = "2026-10-02T11:30:00Z" };
+            var unknown = new DashboardAccount { Provider = "claude", Plan = "max" };
+            var resetAt = DateTimeOffset.Parse(past, System.Globalization.CultureInfo.InvariantCulture);
+            report.Checks["reset_passed_with_older_sample_is_pending"] = Formatting.PendingReset(older, Window(past)) == resetAt;
+            report.Checks["reset_passed_with_newer_sample_shows_normally"] = Formatting.PendingReset(newer, Window(past)) is null;
+            report.Checks["reset_in_future_shows_normally"] = Formatting.PendingReset(older, Window(future)) is null && Formatting.PendingReset(unknown, Window(future)) is null;
+            report.Checks["reset_passed_with_unknown_sample_is_pending"] = Formatting.PendingReset(unknown, Window(past)) == resetAt && Formatting.PendingReset(unknown, Window(past, "not-a-time")) == resetAt;
+            report.Checks["reset_pending_reads_window_sample_before_account_sample"] = Formatting.PendingReset(older, Window(past, "2026-10-02T11:45:00Z")) is null && Formatting.PendingReset(newer, Window(past, "2026-10-02T10:30:00Z")) == resetAt;
+            report.Checks["reset_pending_leaves_amounts_unlimited_and_disabled"] = Formatting.PendingReset(older, new QuotaWindow { Key = "credits", Kind = "balance", Remaining = 4, ResetAt = past }) is null
+                && Formatting.PendingReset(older, new QuotaWindow { Key = "x", Unlimited = true, ResetAt = past }) is null && Formatting.PendingReset(older, new QuotaWindow { Key = "y", Enabled = false, ResetAt = past }) is null;
+            var forms = Formatting.PendingForms(resetAt);
+            report.Checks["reset_pending_text_names_the_reset_and_no_number"] = forms[0] == Formatting.ResetAt(resetAt) + " · new reading pending" && forms[0].StartsWith("Reset at ", StringComparison.Ordinal)
+                && forms.All(form => !form.Contains('%')) && Formatting.ResetPendingLong(resetAt).EndsWith(" · new reading pending", StringComparison.Ordinal);
+            report.Notes["reset_pending_text"] = forms[0];
+            var codex = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", SampledAt = "2026-10-02T10:00:00Z", Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080, ResetAt = past } } } } };
+            var pendingTip = Formatting.TrayTooltip(codex);
+            codex.Accounts[0].SampledAt = "2026-10-02T11:30:00Z";
+            report.Checks["tray_tooltip_hides_weekly_percent_after_its_reset"] = pendingTip == "AI Account Center · Codex: codex-2, weekly reset, new reading pending" && Formatting.TrayTooltip(codex) == "AI Account Center · Codex: codex-2, 90.75% weekly left";
+        }
+        finally { Formatting.Now = saved; }
+    }
+
+    /// <summary>
+    /// Sign-in and Change verify before they save. Every case runs the tray's own Change path
+    /// (<see cref="MainWindow.SubmitConnection"/>) against loopback fixture servers, with the connection stored in an
+    /// isolated temporary folder, never the tray's real store. Each failure must leave the stored file's bytes and
+    /// the running client exactly as they were; success must replace both, through the same DPAPI writer.
+    /// </summary>
+    private static async Task SignInChangeChecks(CheckReport report)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "aac-signin-check-" + Guid.NewGuid().ToString("N"));
+        var store = Path.Combine(folder, "connection.dpapi");
+        var firstRunStore = Path.Combine(folder, "first-run", "connection.dpapi");
+        var real = Path.GetFullPath(SecureStore.StateDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var isolated = !Path.GetFullPath(store).StartsWith(real, StringComparison.OrdinalIgnoreCase) && !Path.GetFullPath(firstRunStore).StartsWith(real, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(Path.GetFullPath(store), Path.GetFullPath(SecureStore.SettingsPath), StringComparison.OrdinalIgnoreCase);
+        report.Checks["sign_in_checks_use_an_isolated_store"] = isolated;
+        if (!isolated) return; // never risk the tray's real connection
+        using var fixture = new SignInFixture();
+        using var elsewhere = new NotDashboardFixture();
+        MainWindow? window = null, first = null, third = null;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-old" }, store);
+            var panel = window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            panel.UseConnectionStoreForCheck(store);
+            var bytes = File.ReadAllBytes(store);
+            var liveClient = panel.ClientForCheck; var liveConnection = panel.ConnectionForCheck;
+            bool Unchanged() => liveClient is not null && File.ReadAllBytes(store).AsSpan().SequenceEqual(bytes) && ReferenceEquals(panel.ClientForCheck, liveClient)
+                && ReferenceEquals(panel.ConnectionForCheck, liveConnection) && !Directory.EnumerateFiles(folder, "*.tmp-*", SearchOption.AllDirectories).Any() && !panel.CheckingConnection;
+
+            var refused = await panel.SubmitConnection(ClosedLoopbackOrigin(), "fixture", "fixture-new");
+            report.Notes["sign_in_wrong_address_message"] = refused ?? "";
+            report.Checks["sign_in_wrong_address_keeps_saved_connection_and_client"] = refused == "Could not reach a dashboard at that address. The saved connection was not changed." && Unchanged();
+            var wrongServer = await panel.SubmitConnection(elsewhere.Origin, "fixture", "fixture-new");
+            report.Checks["sign_in_address_that_is_not_the_dashboard_keeps_saved_connection"] = wrongServer == "That address answered, but not as an AI Account Center dashboard. The saved connection was not changed." && Unchanged();
+
+            var rejected = await panel.SubmitConnection(fixture.Origin, "fixture", "wrong-password");
+            report.Notes["sign_in_wrong_login_message"] = rejected ?? "";
+            report.Checks["sign_in_wrong_login_keeps_saved_connection_and_client"] = rejected == "The dashboard did not accept that username and password. The saved connection was not changed." && Unchanged() && fixture.SettingsReads == 0;
+
+            // Cancel while the server is still answering the login: the same call the Cancel button and Escape make.
+            fixture.ArmSlowLogin();
+            var slow = panel.SubmitConnection(fixture.Origin, "fixture-slow", "fixture-new");
+            var arrived = await Task.WhenAny(fixture.SlowLoginArrived, Task.Delay(10000)) == fixture.SlowLoginArrived;
+            var checking = panel.CheckingConnection;
+            panel.CancelConnectionCheck();
+            var cancelled = await slow;
+            report.Notes["sign_in_cancel_message"] = cancelled ?? "";
+            report.Checks["sign_in_cancel_mid_check_keeps_saved_connection_and_client"] = arrived && checking && cancelled == "Connection check cancelled. The saved connection was not changed." && Unchanged();
+
+            fixture.ArmSlowLogin();
+            panel.ConnectionCheckTimeout = TimeSpan.FromMilliseconds(500);
+            var late = await panel.SubmitConnection(fixture.Origin, "fixture-slow", "fixture-new");
+            panel.ConnectionCheckTimeout = TimeSpan.FromSeconds(15);
+            report.Checks["sign_in_timeout_keeps_saved_connection_and_client"] = late == "The dashboard took too long to answer. The saved connection was not changed." && Unchanged();
+
+            var invalid = await panel.SubmitConnection("http://127.0.0.1:3000/account", "fixture", "fixture-new");
+            report.Checks["sign_in_invalid_address_never_contacts_or_saves"] = invalid is not null && Unchanged();
+
+            var before = fixture.Requests.Count;
+            var ok = await panel.SubmitConnection(fixture.Origin, " fixture ", "fixture-new");
+            var saved = SecureStore.Load(store);
+            var sequence = fixture.Requests.Skip(before).ToArray();
+            report.Checks["sign_in_success_logs_in_then_reads_with_the_session"] = sequence.SequenceEqual(new[] { "POST /api/auth/login 200", "GET /api/accounts/settings 200" });
+            report.Checks["sign_in_success_replaces_saved_connection_and_client"] = ok is null && !File.ReadAllBytes(store).AsSpan().SequenceEqual(bytes)
+                && saved is { Username: "fixture", Password: "fixture-new" } && saved.BaseURL == fixture.Origin
+                && panel.ClientForCheck is { } replaced && !ReferenceEquals(replaced, liveClient) && replaced.BaseURL == new Uri(fixture.Origin + "/")
+                && panel.ConnectionForCheck is { Password: "fixture-new" } && !Directory.EnumerateFiles(folder, "*.tmp-*", SearchOption.AllDirectories).Any();
+            report.Checks["sign_in_success_keeps_the_dpapi_json_shape"] = SecureStore.StoredKeysForCheck(store).SequenceEqual(new[] { "baseURL", "username", "password" });
+
+            var verifiedClient = panel.ClientForCheck;
+            var blank = await panel.SubmitConnection(fixture.Origin, "fixture", "");
+            report.Checks["sign_in_blank_password_rechecks_the_saved_password"] = blank is null && SecureStore.Load(store)?.Password == "fixture-new" && !ReferenceEquals(panel.ClientForCheck, verifiedClient);
+
+            // First run: nothing stored yet. A failure saves nothing and leaves no client; success saves and connects.
+            var fresh = first = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            fresh.UseConnectionStoreForCheck(firstRunStore);
+            var firstRejected = await fresh.SubmitConnection(fixture.Origin, "fixture", "wrong-password");
+            var firstRefused = await fresh.SubmitConnection(ClosedLoopbackOrigin(), "fixture", "fixture-new");
+            report.Checks["first_run_failure_saves_nothing"] = firstRejected == "The dashboard did not accept that username and password. Nothing was saved."
+                && firstRefused == "Could not reach a dashboard at that address. Nothing was saved."
+                && !File.Exists(firstRunStore) && fresh.ClientForCheck is null && fresh.ConnectionForCheck is null;
+            var firstOk = await fresh.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
+            report.Checks["first_run_success_saves_the_verified_connection"] = firstOk is null && SecureStore.Load(firstRunStore) is { Password: "fixture-new" } && fresh.ClientForCheck is not null;
+            // Other stored members (a device token from a later pairing) survive a verified Change exactly.
+            var withToken = Path.Combine(folder, "with-token", "connection.dpapi");
+            using (var token = JsonDocument.Parse("{\"deviceToken\":\"fixture-device-token\",\"pairedAt\":1}"))
+                SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-old", Extra = token.RootElement.EnumerateObject().ToDictionary(item => item.Name, item => item.Value.Clone()) }, withToken);
+            var paired = third = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            paired.UseConnectionStoreForCheck(withToken);
+            var pairedFailed = await paired.SubmitConnection(fixture.Origin, "fixture", "wrong-password");
+            var pairedOk = await paired.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
+            var reloaded = SecureStore.Load(withToken);
+            report.Checks["sign_in_change_keeps_other_stored_members_exactly"] = pairedFailed is not null && pairedOk is null && reloaded is { Password: "fixture-new" }
+                && reloaded.Extra?["deviceToken"].GetString() == "fixture-device-token" && reloaded.Extra?["pairedAt"].GetInt32() == 1
+                && SecureStore.StoredKeysForCheck(withToken).OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(new[] { "baseURL", "deviceToken", "pairedAt", "password", "username" });
+            report.Checks["sign_in_requests_reach_only_the_loopback_fixtures"] = fixture.Requests.Count > 0 && fixture.Unexpected == 0;
+        }
+        catch (Exception error)
+        {
+            report.Checks["sign_in_change_checks_completed"] = false;
+            report.Notes["sign_in_change_checks"] = error.GetType().Name + ": " + error.Message;
+        }
+        finally
+        {
+            foreach (var shown in new[] { window, first, third }) if (shown is not null) { shown.AllowClose = true; shown.Close(); }
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
+    private static string ClosedLoopbackOrigin()
+    {
+        var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+        var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+        return $"http://127.0.0.1:{port}";
+    }
+
+    /// <summary>A loopback stand-in for the dashboard's sign-in: POST /api/auth/login accepts only fixture/fixture-new
+    /// and sets an HttpOnly session cookie; GET /api/accounts/settings needs that cookie. "fixture-slow" logins are
+    /// held open until the check cancels or times out.</summary>
+    private sealed class SignInFixture : IDisposable
+    {
+        private readonly HttpListener listener = new();
+        private readonly CancellationTokenSource stop = new();
+        private TaskCompletionSource slowArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string Origin { get; }
+        public List<string> Requests { get; } = new();
+        public int SettingsReads, Unexpected;
+        public Task SlowLoginArrived => slowArrived.Task;
+
+        public SignInFixture()
+        {
+            var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+            var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+            Origin = $"http://127.0.0.1:{port}";
+            listener.Prefixes.Add(Origin + "/"); listener.Start();
+            _ = Task.Run(Loop);
+        }
+
+        public void ArmSlowLogin() => slowArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private async Task Loop()
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                HttpListenerContext context;
+                try { context = await listener.GetContextAsync(); } catch { return; }
+                _ = Task.Run(() => Handle(context));
+            }
+        }
+
+        private async Task Handle(HttpListenerContext context)
+        {
+            try
+            {
+                var request = context.Request; var path = request.Url!.AbsolutePath;
+                int status; object payload;
+                if (request.HttpMethod == "POST" && path == "/api/auth/login")
+                {
+                    using var reader = new StreamReader(request.InputStream);
+                    using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    var username = json.RootElement.GetProperty("username").GetString();
+                    var password = json.RootElement.GetProperty("password").GetString();
+                    if (username == "fixture-slow") { slowArrived.TrySetResult(); await Task.Delay(Timeout.Infinite, stop.Token); return; }
+                    if (username == "fixture" && password == "fixture-new")
+                    {
+                        context.Response.SetCookie(new Cookie("fixture-session", "yes", "/") { HttpOnly = true });
+                        status = 200; payload = new { success = true, username };
+                    }
+                    else { status = 401; payload = new { error = "Invalid credentials" }; }
+                }
+                else if (request.HttpMethod == "GET" && path == "/api/accounts/settings")
+                {
+                    Interlocked.Increment(ref SettingsReads);
+                    if (request.Cookies["fixture-session"]?.Value == "yes") { status = 200; payload = new { refreshIntervalSeconds = 60 }; }
+                    else { status = 401; payload = new { error = "Authentication required" }; }
+                }
+                else { Interlocked.Increment(ref Unexpected); status = 404; payload = new { error = "Not found" }; }
+                lock (Requests) Requests.Add($"{request.HttpMethod} {path} {status}");
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, Formatting.Json);
+                context.Response.StatusCode = status; context.Response.ContentType = "application/json"; context.Response.ContentLength64 = bytes.Length;
+                await context.Response.OutputStream.WriteAsync(bytes); context.Response.Close();
+            }
+            catch { try { context.Response.Abort(); } catch { } }
+        }
+
+        public void Dispose() { stop.Cancel(); try { listener.Stop(); listener.Close(); } catch { } }
+    }
+
+    /// <summary>A loopback server that is not the dashboard: every path is a 404 web page.</summary>
+    private sealed class NotDashboardFixture : IDisposable
+    {
+        private readonly HttpListener listener = new();
+        public string Origin { get; }
+        public NotDashboardFixture()
+        {
+            var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+            var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+            Origin = $"http://127.0.0.1:{port}";
+            listener.Prefixes.Add(Origin + "/"); listener.Start();
+            _ = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    HttpListenerContext context;
+                    try { context = await listener.GetContextAsync(); } catch { return; }
+                    try
+                    {
+                        var bytes = Encoding.UTF8.GetBytes("<html><body>Not found</body></html>");
+                        context.Response.StatusCode = 404; context.Response.ContentType = "text/html"; context.Response.ContentLength64 = bytes.Length;
+                        await context.Response.OutputStream.WriteAsync(bytes); context.Response.Close();
+                    }
+                    catch { }
+                }
+            });
+        }
+        public void Dispose() { try { listener.Stop(); listener.Close(); } catch { } }
     }
 
     private static CodexSwitchConfirmation Proposal() => new()

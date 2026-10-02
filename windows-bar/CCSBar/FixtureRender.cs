@@ -159,7 +159,7 @@ public static class FixtureRender
             window.AllowClose = true; window.Close();
         }
         report.Checks["tray_tooltip_reports_active_codex_weekly_left"] = Formatting.TrayTooltip(fixture) == "AI Account Center · Codex: codex-2, 91% weekly left";
-        if (only is null || only.Equals("light", StringComparison.OrdinalIgnoreCase)) { await MotionChecks(report, fixture, measures); await RuntimeChecks(report, fixture, measures); }
+        if (only is null || only.Equals("light", StringComparison.OrdinalIgnoreCase)) { await MotionChecks(report, fixture, measures); await RuntimeChecks(report, fixture, measures); await ResetPendingRender(report, fixture, capturedAt, directory); }
         foreach (var (key, value) in measures) report.Measurements[key] = Math.Round(value, 3);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
@@ -262,6 +262,81 @@ public static class FixtureRender
             report.Checks["idle_panel_uses_no_cpu"] = shownIdle < 1.5 && hiddenIdle < 1.5;
         }
         finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }
+    }
+
+    /// <summary>F6 in the real panel. A Claude window whose reset passed after its sample shows "Reset at ... · new
+    /// reading pending" with the unavailable (dashed) track and no number; a reading taken after its reset and a reset
+    /// still ahead show normally; a provider card and Details say "Pending" with the reset; and the refresh timer's
+    /// first step flips a window whose reset passes while the panel is open.</summary>
+    private static async Task ResetPendingRender(CheckReport report, AccountDashboard fixture, DateTimeOffset capturedAt, string directory)
+    {
+        var saved = Formatting.Now;
+        Motion.Enabled = false;
+        Theme.Apply(ThemeMode.Light, animate: false);
+        var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
+        try
+        {
+            window.UseFixtureConnection();
+            window.Show();
+            var sample = Clone(fixture);
+            var one = sample.Accounts.First(account => account.Id == "claude:example-1");
+            one.SampledAt = capturedAt.AddHours(-2).ToString("O");
+            var week = one.Windows.First(item => item.Key == "seven_day");
+            week.ResetAt = capturedAt.AddHours(-1).ToString("O");            // passed after the sample: pending
+            var fable = one.Windows.First(item => item.Key == "seven_day_fable");
+            fable.ResetAt = capturedAt.AddHours(-3).ToString("O");           // passed before the sample: the reading stands
+            var two = sample.Accounts.First(account => account.Id == "claude:example-2");
+            var twoWeek = two.Windows.First(item => item.Key == "seven_day"); // still ahead: the reading stands
+            var codexTwo = sample.Accounts.First(account => account.Id == "codex:example-2");
+            codexTwo.SampledAt = capturedAt.AddHours(-2).ToString("O");
+            codexTwo.Windows.First(item => item.Key == "seven_day").ResetAt = capturedAt.AddHours(-1).ToString("O");
+            var kimi = sample.Accounts.First(account => account.Provider == "kimi-code");
+            kimi.SampledAt = capturedAt.AddMinutes(-30).ToString("O");
+            var kimiWindow = kimi.Windows.First(item => item.Key == "5h");
+            kimiWindow.ResetAt = capturedAt.AddMinutes(-10).ToString("O");
+            window.ApplyDashboardSample(sample);
+            await Settle(window);
+            Meter Find(string key) => All(window.ContentPanel).OfType<Meter>().First(meter => meter.Key == key);
+            var pending = Find("claude:example-1|week");
+            report.Notes["reset_pending_compact_text"] = pending.ValueShown;
+            report.Checks["reset_pending_meter_has_no_number_no_fill_never_zero"] = pending.Target is null && pending.DrawnUnavailable && pending.ValueShown.StartsWith("Reset ", StringComparison.Ordinal) && !pending.ValueClipped
+                && !pending.ValueShown.Contains('%') && pending.ResetShown.Length == 0 && pending.TooltipText.Contains("new reading pending", StringComparison.Ordinal);
+            var codexPending = Find("codex:example-2|week");
+            report.Notes["reset_pending_codex_text"] = codexPending.ValueShown;
+            report.Checks["reset_pending_codex_cell_whole_without_number_or_notch"] = codexPending.Target is null && codexPending.DrawnUnavailable && codexPending.ValueShown.StartsWith("Reset ", StringComparison.Ordinal) && !codexPending.ValueClipped
+                && !All(codexPending).Any(element => element is Border { Width: 2, Height: 12 } notch && notch.IsVisible);
+            var before = Find("claude:example-1|fable");
+            report.Checks["reset_passed_before_the_sample_shows_the_reading"] = before.Target == fable.UsedPercent && !before.DrawnUnavailable && before.ValueShown.EndsWith("%", StringComparison.Ordinal);
+            var ahead = Find("claude:example-2|week");
+            report.Checks["reset_still_ahead_shows_the_reading"] = ahead.Target == twoWeek.UsedPercent && !ahead.DrawnUnavailable;
+            var card = Find(kimi.Id + "|5h");
+            report.Notes["reset_pending_card_reset"] = card.ResetShown;
+            report.Checks["reset_pending_provider_card_says_pending_with_the_reset"] = card.Target is null && card.DrawnUnavailable && card.ValueShown == "Pending" && card.ResetShown.StartsWith("Reset at ", StringComparison.Ordinal);
+            window.ToggleDetailsForCheck("claude:example-1");
+            await Settle(window);
+            var detail = Find("detail:claude:example-1|seven_day");
+            report.Notes["reset_pending_detail_text"] = detail.LongResetShown;
+            report.Checks["reset_pending_details_say_pending_with_the_reset"] = detail.Target is null && detail.DrawnUnavailable && detail.ValueShown == "Pending" && detail.LongResetShown.EndsWith(" · new reading pending", StringComparison.Ordinal);
+            SavePng(window, Path.Combine(directory, "reset-pending-light.png"));
+            window.ToggleDetailsForCheck("claude:example-1");
+
+            // The panel stays open while a reset passes: the timer's first step redraws only that window.
+            Formatting.Now = () => capturedAt.AddSeconds(5);
+            var soon = Clone(fixture);
+            soon.Accounts.First(account => account.Id == "claude:example-2").Windows.First(item => item.Key == "seven_day").ResetAt = capturedAt.AddSeconds(35).ToString("O");
+            window.ApplyDashboardSample(soon);
+            await Settle(window);
+            var shownBefore = Find("claude:example-2|week").Target is double;
+            window.ReevaluateResets();
+            var keptReading = Find("claude:example-2|week").Target is double;
+            Formatting.Now = () => capturedAt.AddSeconds(65);
+            window.ReevaluateResets();
+            await Settle(window);
+            var flipped = Find("claude:example-2|week");
+            report.Notes["reset_flip_text"] = flipped.ValueShown;
+            report.Checks["refresh_timer_flips_a_window_when_its_reset_passes"] = shownBefore && keptReading && flipped.Target is null && flipped.DrawnUnavailable && flipped.ValueShown.StartsWith("Reset ", StringComparison.Ordinal) && !flipped.ValueClipped;
+        }
+        finally { Formatting.Now = saved; window.AllowClose = true; window.Close(); }
     }
 
     private static bool TrayMenu(string path)

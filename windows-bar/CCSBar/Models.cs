@@ -13,6 +13,9 @@ public sealed class ConnectionSettings
     public string BaseURL { get; set; } = "http://192.168.50.179:3000";
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
+    /// <summary>Any other members the stored connection holds (for example a device token from a later pairing). They
+    /// are written back exactly as they were when Change saves a new address or login.</summary>
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 
     public Uri Validate()
     {
@@ -344,6 +347,40 @@ public static class Formatting
         return "Resets " + reset.ToLocalTime().ToString("ddd, MMM d, h:mm tt", CultureInfo.CurrentCulture) + " · " + (left <= TimeSpan.Zero ? "due" : Duration(left));
     }
 
+    /// <summary>
+    /// F6: once a window's reset has passed, a reading sampled before it no longer describes the window. Returns the
+    /// reset time when <c>resetAt</c> is in the past and the reading was sampled before it, or when its sample time is
+    /// unknown; the tray then shows "Reset at ... · new reading pending" with no number and no fill, never 0%.
+    /// The sample time is the window's own (a retained window) or else the account's. Null when the reading stands.
+    /// </summary>
+    public static DateTimeOffset? PendingReset(DashboardAccount account, QuotaWindow window)
+    {
+        if (window.Unlimited || window.Enabled == false || window.Kind is "balance" or "extra_usage" or "spend") return null;
+        if (!DateTimeOffset.TryParse(window.ResetAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var reset) || reset > Now()) return null;
+        var sampled = window.SampledAt ?? account.SampledAt;
+        return DateTimeOffset.TryParse(sampled, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) && at >= reset ? null : reset;
+    }
+
+    /// <summary>"Reset at 5:15 AM" today, "Reset at Oct 1, 11:00 PM" on another day.</summary>
+    public static string ResetAt(DateTimeOffset reset) => "Reset at " + ResetWhen(reset);
+
+    private static string ResetWhen(DateTimeOffset reset)
+    {
+        var local = reset.ToLocalTime();
+        return local.Date == Now().ToLocalTime().Date ? Clock(reset) : local.ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture);
+    }
+
+    /// <summary>Details and tooltips: "Reset at Thu, Oct 1, 11:00 PM · new reading pending".</summary>
+    public static string ResetPendingLong(DateTimeOffset reset) => "Reset at " + reset.ToLocalTime().ToString("ddd, MMM d, h:mm tt", CultureInfo.CurrentCulture) + " · new reading pending";
+
+    /// <summary>Compact cells, longest first: the whole sentence, then shorter forms for a narrow cell. The tooltip
+    /// always has the whole sentence.</summary>
+    public static string[] PendingForms(DateTimeOffset reset)
+    {
+        var when = ResetWhen(reset);
+        return new[] { $"Reset at {when} · new reading pending", $"Reset at {when} · pending", $"Reset {when} · pending", $"Reset at {when}", "New reading pending", "Pending" };
+    }
+
     /// <summary>At most two decimals, trailing zeros dropped; "%" is part of the same text run.</summary>
     public static string Percent(double value) => value.ToString(value == Math.Round(value) ? "0" : "0.##", CultureInfo.CurrentCulture) + "%";
     public static int Decimals(double value)
@@ -361,7 +398,9 @@ public static class Formatting
         var active = dashboard?.Accounts.FirstOrDefault(account => account.Provider == "codex" && account.IsActive);
         var weekly = active is null ? null : CodexPrimaryWindows(active).FirstOrDefault(window => window.Key == "seven_day");
         string text = name;
-        if (active is not null && weekly?.DisplayPercent is double used)
+        if (active is not null && weekly is not null && PendingReset(active, weekly) is not null)
+            text = $"{name} · Codex: {(active.Email ?? active.Label).Split('@')[0]}, weekly reset, new reading pending";
+        else if (active is not null && weekly?.DisplayPercent is double used)
         {
             var left = Math.Max(0, 100 - used);
             var who = (active.Email ?? active.Label).Split('@')[0];

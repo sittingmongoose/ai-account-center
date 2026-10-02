@@ -91,17 +91,65 @@ public sealed class DashboardClient : IDisposable
         return await Decode<T>(second, confirmationProfile, requestKind);
     }
 
-    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body)
+    /// <summary>
+    /// Sign-in and Change: proves the entered address and login before anything is saved. One login (no retry and
+    /// no failure backoff), then GET /api/accounts/settings, a small read that always needs the session and answers
+    /// with the dashboard's refresh settings. A rejected login, an address that does not answer as the dashboard, or
+    /// the time limit throws <see cref="ConnectionCheckException"/> with fixed client text; Cancel throws
+    /// <see cref="OperationCanceledException"/>. Server strings never reach the screen.
+    /// </summary>
+    public async Task Verify(TimeSpan timeout, CancellationToken cancel)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        limit.CancelAfter(timeout);
+        try
+        {
+            using (var login = await Send(HttpMethod.Post, "api/auth/login", new { username = settings.Username, password = settings.Password }, limit.Token))
+                if (!login.IsSuccessStatusCode) throw new ConnectionCheckException(LoginFailure(login.StatusCode));
+            using var read = await Send(HttpMethod.Get, "api/accounts/settings", null, limit.Token);
+            if (read.StatusCode == HttpStatusCode.Unauthorized) throw new ConnectionCheckException("The dashboard accepted the sign-in but did not keep the session. Try again.");
+            if (!read.IsSuccessStatusCode || !IsRefreshSettings(await read.Content.ReadAsStringAsync(limit.Token)))
+                throw new ConnectionCheckException(NotTheDashboard);
+            lastLoginAttempt = DateTimeOffset.MinValue;
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { throw new ConnectionCheckException("The dashboard took too long to answer."); }
+        catch (HttpRequestException) { throw new ConnectionCheckException("Could not reach a dashboard at that address."); }
+    }
+
+    private const string NotTheDashboard = "That address answered, but not as an AI Account Center dashboard.";
+
+    internal static string LoginFailure(HttpStatusCode status) => status switch
+    {
+        HttpStatusCode.Unauthorized => "The dashboard did not accept that username and password.",
+        HttpStatusCode.TooManyRequests => "The dashboard is limiting sign-in attempts. Wait 15 minutes, then try again.",
+        HttpStatusCode.BadRequest => "The dashboard rejected this sign-in. Check that its password sign-in is set up.",
+        HttpStatusCode.Forbidden => "The dashboard rejected a sign-in from this address. Check the address.",
+        HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed => NotTheDashboard,
+        _ when (int)status is >= 300 and < 400 => NotTheDashboard,
+        _ => "The dashboard could not check this sign-in. Try again."
+    };
+
+    private static bool IsRefreshSettings(string body)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            return json.RootElement.ValueKind == JsonValueKind.Object && json.RootElement.TryGetProperty("refreshIntervalSeconds", out var interval) && interval.ValueKind == JsonValueKind.Number;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body, CancellationToken cancel = default)
     {
         var request = new HttpRequestMessage(method, path);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body, Formatting.Json), Encoding.UTF8, "application/json");
-        return SendAndDispose(request);
+        return SendAndDispose(request, cancel);
     }
 
-    private async Task<HttpResponseMessage> SendAndDispose(HttpRequestMessage request)
+    private async Task<HttpResponseMessage> SendAndDispose(HttpRequestMessage request, CancellationToken cancel)
     {
         // These small JSON responses are buffered so HttpClient's timeout covers the body.
-        using (request) return await http.SendAsync(request, HttpCompletionOption.ResponseContentRead);
+        using (request) return await http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancel);
     }
 
     private async Task Login()
@@ -259,4 +307,10 @@ public sealed class DashboardClient : IDisposable
     }
 
     public void Dispose() { http.Dispose(); loginGate.Dispose(); }
+}
+
+/// <summary>A connection check that failed before anything was saved; the message is fixed client text.</summary>
+public sealed class ConnectionCheckException : Exception
+{
+    public ConnectionCheckException(string message) : base(message) { }
 }

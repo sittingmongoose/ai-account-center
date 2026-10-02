@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -252,9 +254,12 @@ public partial class MainWindow
 
     // ------------------------------------------------------------------ sign-in
 
-    /// <summary>First run (or Change): the dashboard address, username and password, stored with DPAPI.</summary>
+    /// <summary>First run (or Change): the dashboard address, username and password. Connect checks them against
+    /// the dashboard first and saves them with DPAPI only once they work (<see cref="SubmitConnection"/>).</summary>
     public void ShowSignIn(bool firstRun)
     {
+        // A Change opened again over a running check (Settings slides over the sign-in screen) starts over.
+        CancelConnectionCheck();
         signInVisible = true;
         SignInPanel.Children.Clear();
         var top = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 14) };
@@ -274,45 +279,106 @@ public partial class MainWindow
         ((TextBox)url.Input).TextChanged += (_, _) => UpdateHttp(); UpdateHttp();
         SignInPanel.Children.Add(url.Element); SignInPanel.Children.Add(user.Element); SignInPanel.Children.Add(password.Element);
         SignInPanel.Children.Add(http);
-        SignInPanel.Children.Add(Note("shield", "Saved with Windows data protection for your user. Provider credentials stay on the AI Account Center server."));
-        var error = Ui.Text("", 12, "CritText", wrap: true); error.Margin = new Thickness(0, 8, 0, 0); error.MinHeight = 15;
+        SignInPanel.Children.Add(Note("shield", "Saved with Windows data protection for your user once the dashboard accepts it. Provider credentials stay on the AI Account Center server."));
+        var error = Ui.Text("", 12, "CritText", wrap: true); error.Margin = new Thickness(0, 8, 0, 0); error.MinHeight = 15; error.Uid = "sign-in-error";
         SignInPanel.Children.Add(error);
         var actions = new Grid { Margin = new Thickness(0, 10, 0, 0) };
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
         actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
-        var connect = Ui.Button(firstRun ? "Connect" : "Save and connect", "AtlasPrimaryButton"); connect.Height = 34; connect.IsDefault = true;
-        if (client is not null)
-        {
-            var cancel = Ui.Button("Cancel"); cancel.Height = 34; cancel.Click += (_, _) => CloseSignIn();
-            actions.Children.Add(cancel);
-            Grid.SetColumn(connect, 2);
-        }
-        else Grid.SetColumnSpan(connect, 3);
+        var connectLabel = firstRun ? "Connect" : "Save and connect";
+        var connect = Ui.Button(connectLabel, "AtlasPrimaryButton"); connect.Height = 34; connect.IsDefault = true; connect.Uid = "sign-in-connect";
+        // Cancel stops a running check (the saved connection stays as it was); otherwise it closes a Change.
+        // On first run there is nothing to go back to, so it shows only while a check runs.
+        var cancel = Ui.Button("Cancel"); cancel.Height = 34; cancel.Uid = "sign-in-cancel";
+        cancel.Click += (_, _) => { if (CheckingConnection) CancelConnectionCheck(); else if (client is not null) CloseSignIn(); };
+        actions.Children.Add(cancel);
         actions.Children.Add(connect);
+        void Layout(bool checking)
+        {
+            var showCancel = client is not null || checking;
+            cancel.Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed;
+            Grid.SetColumn(connect, showCancel ? 2 : 0); Grid.SetColumnSpan(connect, showCancel ? 1 : 3);
+            connect.Content = checking ? "Checking the connection" : connectLabel;
+            connect.IsEnabled = !checking;
+            url.Input.IsEnabled = user.Input.IsEnabled = password.Input.IsEnabled = !checking;
+        }
+        Layout(false);
         SignInPanel.Children.Add(actions);
         connect.Click += async (_, _) =>
         {
-            if (busy) return;
-            try
-            {
-                var secret = ((PasswordBox)password.Input).Password;
-                var candidate = new ConnectionSettings { BaseURL = ((TextBox)url.Input).Text.Trim(), Username = ((TextBox)user.Input).Text.Trim(), Password = secret.Length > 0 ? secret : connection?.Password ?? "" };
-                candidate.Validate();
-                SecureStore.Save(candidate);
-                connection = candidate; client?.Dispose(); client = new DashboardClient(candidate);
-                ((PasswordBox)password.Input).Clear();
-                dashboard = null; staleSample = false; lastFailure = DateTimeOffset.MinValue;
-                CloseSignIn();
-                RenderFooter(); UpdateStatus(); SampleChanged?.Invoke();
-                await Refresh(true);
-            }
-            catch (Exception failure) { error.Text = DisplayError(failure); }
+            if (CheckingConnection) return;
+            error.Text = "";
+            Layout(true);
+            var failure = await SubmitConnection(((TextBox)url.Input).Text, ((TextBox)user.Input).Text, ((PasswordBox)password.Input).Password);
+            Layout(false);
+            if (failure is not null) { error.Text = failure; return; }
+            ((PasswordBox)password.Input).Clear();
+            CloseSignIn();
+            RenderFooter(); UpdateStatus(); SampleChanged?.Invoke();
+            await Refresh(true);
         };
         SignInLayer.Visibility = Visibility.Visible;
         SignInLayer.Opacity = 0; Motion.To(SignInLayer, OpacityProperty, 1, 260);
         RenderFooter(); UpdateStatus();
         Dispatcher.BeginInvoke(new Action(() => (string.IsNullOrEmpty(((TextBox)url.Input).Text) ? url.Input : string.IsNullOrEmpty(((TextBox)user.Input).Text) ? user.Input : password.Input).Focus()), System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    /// <summary>Where a verified connection is saved: the DPAPI store (<see cref="SecureStore.SettingsPath"/>), or a
+    /// fixture file in an isolated folder for the checks.</summary>
+    internal string ConnectionStorePath { get; set; } = SecureStore.SettingsPath;
+    /// <summary>How long a connection check may take before it counts as a failure.</summary>
+    internal TimeSpan ConnectionCheckTimeout { get; set; } = TimeSpan.FromSeconds(15);
+    internal bool CheckingConnection => connectionCheck is not null;
+    internal DashboardClient? ClientForCheck => client;
+    internal ConnectionSettings? ConnectionForCheck => connection;
+
+    /// <summary>Cancel, or Escape: stops a running connection check. Nothing is saved and the running client stays.</summary>
+    internal void CancelConnectionCheck() => connectionCheck?.Cancel();
+
+    /// <summary>
+    /// Sign-in and Change: verify, then save. A temporary client built from the entered address and login signs in
+    /// and reads the dashboard (<see cref="DashboardClient.Verify"/>). Only when that works is the connection written
+    /// through the existing DPAPI writer (same path, entropy and JSON) and the live client replaced by the verified
+    /// one. A wrong address, a rejected login, a timeout or Cancel leaves the stored file and the running client
+    /// exactly as they were. Returns null on success, or the message to show under the form.
+    /// </summary>
+    internal async Task<string?> SubmitConnection(string address, string username, string password)
+    {
+        if (connectionCheck is not null) return "A connection check is already running.";
+        var unchanged = connection is null ? "Nothing was saved." : "The saved connection was not changed.";
+        ConnectionSettings candidate;
+        try
+        {
+            // A blank password keeps the saved one: it is checked again with the new address and username.
+            candidate = new ConnectionSettings { BaseURL = address.Trim(), Username = username.Trim(), Password = password.Length > 0 ? password : connection?.Password ?? "", Extra = connection?.Extra };
+            candidate.Validate();
+        }
+        catch (ArgumentException invalid) { return invalid.Message; }
+        using var check = new CancellationTokenSource();
+        connectionCheck = check;
+        DashboardClient? verified = new DashboardClient(candidate);
+        try
+        {
+            await verified.Verify(ConnectionCheckTimeout, check.Token);
+            check.Token.ThrowIfCancellationRequested();
+            try { SecureStore.Save(candidate, ConnectionStorePath); }
+            catch (Exception) { return "Windows could not save the connection. " + unchanged; }
+            var previous = client;
+            connection = candidate; client = verified; verified = null;
+            connectionGeneration++;
+            dashboard = null; staleSample = false; lastFailure = DateTimeOffset.MinValue; statusFlash = null;
+            previous?.Dispose();
+            return null;
+        }
+        catch (ConnectionCheckException failure) { return failure.Message + " " + unchanged; }
+        catch (OperationCanceledException) { return "Connection check cancelled. " + unchanged; }
+        catch (Exception) { return "The connection could not be checked. " + unchanged; }
+        finally
+        {
+            verified?.Dispose();
+            connectionCheck = null;
+        }
     }
 
     private void CloseSignIn()
