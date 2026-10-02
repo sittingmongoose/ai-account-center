@@ -567,6 +567,38 @@ describe('Retry-After + backoff + circuit breaker', () => {
     expect(second?.cached).toBe(true);
     expect(deps.networkCount()).toBe(1);
   });
+
+  it('a terminal non-retryable failure (403) cools the profile down instead of re-polling', async () => {
+    const t0 = 2_000_000;
+    const clock = { now: t0 };
+    const deps = makeDeps({
+      clock,
+      fetch: async () => ({
+        success: false,
+        windows: [],
+        planType: null,
+        lastUpdated: clock.now,
+        httpStatus: 403,
+        retryable: false,
+        error: 'forbidden',
+      }),
+    });
+
+    const first = await rowFor('work', deps);
+    expect(first?.quotaStatus).toBe('unsupported');
+    expect(deps.networkCount()).toBe(1);
+
+    // Forced, so the parked-row TTL cannot hide the call: only the cooldown
+    // (at least the 1 s backoff base) keeps the dead endpoint from being hit.
+    clock.now = t0 + 500;
+    await rowFor('work', deps, true);
+    expect(deps.networkCount()).toBe(1);
+
+    // Past every single-call cooldown the profile is checked once more.
+    clock.now = t0 + MAX_COOLDOWN_JUMP;
+    await rowFor('work', deps);
+    expect(deps.networkCount()).toBe(2);
+  });
 });
 
 describe('stale-on-fail', () => {
@@ -713,13 +745,23 @@ describe('default profile resolution from the saved registry', () => {
   function withRegistryHome(
     profilesYaml: string[],
     accounts: Record<string, { paused?: boolean }>,
-    run: () => Promise<void>
+    run: () => Promise<void>,
+    opts: { bareLogin?: boolean } = {}
   ): Promise<void> {
     const originalCcsHome = process.env.CCS_HOME;
     const originalHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-default-profile-'));
     process.env.CCS_HOME = tempHome;
     process.env.HOME = tempHome;
+    if (opts.bareLogin) {
+      // The bare ~/.codex login, under the fixture HOME only.
+      const codexDir = path.join(tempHome, '.codex');
+      fs.mkdirSync(codexDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(codexDir, 'auth.json'),
+        JSON.stringify({ tokens: { access_token: 'fixture-bare', account_id: 'bare-workspace' } })
+      );
+    }
     const ccsDir = path.join(tempHome, '.ccs');
     const cliproxyDir = path.join(ccsDir, 'cliproxy');
     fs.mkdirSync(path.join(cliproxyDir, 'auth'), { recursive: true });
@@ -803,21 +845,40 @@ describe('default profile resolution from the saved registry', () => {
     );
   });
 
+  const allPausedRegistry = [
+    'version: "1.0"',
+    'default: paused',
+    'profiles:',
+    ...profileYaml('paused', '2026-01-01T00:00:00.000Z'),
+    '',
+  ];
+
   it('resolves no default when every saved profile is paused and no bare login exists', async () => {
     await withRegistryHome(
-      [
-        'version: "1.0"',
-        'default: paused',
-        'profiles:',
-        ...profileYaml('paused', '2026-01-01T00:00:00.000Z'),
-        '',
-      ],
+      allPausedRegistry,
       { 'paused-codex@example.com': { paused: true } },
       async () => {
-        const rows = await getCodexProfileQuotaRows(['paused'], registryDeps());
-        expect(rows).toHaveLength(1);
-        expect(rows[0].is_default).toBe(false);
+        expect(fs.existsSync(path.join(os.homedir(), '.codex', 'auth.json'))).toBe(false);
+        const rows = await getCodexProfileQuotaRows(['paused', 'default'], registryDeps());
+        expect(rows.map((row) => row.profile)).toEqual(['default', 'paused']);
+        expect(rows.find((row) => row.profile === 'paused')?.is_default).toBe(false);
+        // Without a bare login, the bare 'default' row is not the default either.
+        expect(rows.find((row) => row.profile === 'default')?.is_default).toBe(false);
       }
+    );
+  });
+
+  it('falls back to the bare login as default when every saved profile is paused', async () => {
+    await withRegistryHome(
+      allPausedRegistry,
+      { 'paused-codex@example.com': { paused: true } },
+      async () => {
+        const rows = await getCodexProfileQuotaRows(['paused', 'default'], registryDeps());
+        expect(rows.map((row) => row.profile)).toEqual(['default', 'paused']);
+        expect(rows.find((row) => row.profile === 'default')?.is_default).toBe(true);
+        expect(rows.find((row) => row.profile === 'paused')?.is_default).toBe(false);
+      },
+      { bareLogin: true }
     );
   });
 });
@@ -1025,6 +1086,60 @@ describe('saved native Codex dashboard quota', () => {
         expect(absent[0].quotaWindows).toBeUndefined();
         expect(absent[0].needsReauth).toBe(true);
         expect(calls).toBe(2);
+      });
+    } finally {
+      global.fetch = originalFetch;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('discards the cache when auth.json is rewritten with the same access token', async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-auth-rewrite-'));
+    const originalFetch = global.fetch;
+    const workspaces: Array<string | null> = [];
+    try {
+      const authPath = saveAuth(tempHome, 'fake-same', 'old-workspace');
+      global.fetch = (async (_input, init) => {
+        const workspace = new Headers(init?.headers).get('ChatGPT-Account-Id');
+        workspaces.push(workspace);
+        return new Response(
+          JSON.stringify({
+            rate_limit: {
+              primary_window: {
+                used_percent: workspace === 'old-workspace' ? 25 : 75,
+                reset_after_seconds: 3600,
+              },
+            },
+          })
+        );
+      }) as typeof fetch;
+      const deps: NativeQuotaDeps = { defaultCodexProfile: () => 'gmail' };
+      await runWithScopedCcsHome(tempHome, async () => {
+        await getCodexProfileQuotaRows(['gmail'], deps);
+        expect(workspaces).toEqual(['old-workspace']);
+
+        // Same access token, different workspace: the new workspace is fetched.
+        saveAuth(tempHome, 'fake-same', 'new-workspace');
+        expect(getCachedCodexProfileQuotaRows(['gmail'])).toEqual([]);
+        const moved = await getCodexProfileQuotaRows(['gmail'], deps);
+        expect(moved[0].quotaWindows?.[0].usedPercent).toBe(75);
+        expect(workspaces).toEqual(['old-workspace', 'new-workspace']);
+
+        // Same access token and workspace, but the saved file changed (here the
+        // refresh token): the file digest, not the token, decides cache reuse.
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            tokens: {
+              access_token: 'fake-same',
+              account_id: 'new-workspace',
+              refresh_token: 'fixture-refresh',
+            },
+          })
+        );
+        expect(getCachedCodexProfileQuotaRows(['gmail'])).toEqual([]);
+        await getCodexProfileQuotaRows(['gmail'], deps);
+        expect(workspaces).toEqual(['old-workspace', 'new-workspace', 'new-workspace']);
       });
     } finally {
       global.fetch = originalFetch;
