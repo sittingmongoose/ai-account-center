@@ -45,6 +45,16 @@ export component AcRowItem inherits Rectangle {
     out property <bool> hovered: ta.has-hover;
     out property <length> line-height: line.height;
     property <bool> is-active: root.item.active && root.provider.switchable;
+    // the row's own Show on dashboard and Show in tray follow the model (a click assigns the toggle, which would
+    // end a plain binding); a save that ends, saved or refused, draws the saved state again
+    property <bool> shown-dash: root.item.shown-dash;
+    changed shown-dash => { dash-toggle.on = self.shown-dash; }
+    property <bool> shown-tray: root.item.shown-tray;
+    changed shown-tray => { tray-toggle.on = self.shown-tray; }
+    property <bool> dash-enabled: root.item.dash-enabled;
+    changed dash-enabled => { dash-toggle.on = root.item.shown-dash; }
+    property <bool> tray-enabled: root.item.tray-acct-enabled;
+    changed tray-enabled => { tray-toggle.on = root.item.shown-tray; }
 
     min-height: body.min-height;
     preferred-height: body.preferred-height;
@@ -81,6 +91,9 @@ export component AcRowItem inherits Rectangle {
                         horizontal-stretch: 1.3;
                         min-width: 180px;
                         spacing: 1px;
+                        // hidden from the dashboard: the identity dims like a hidden provider's rows
+                        opacity: root.item.shown-dash ? 1 : 0.55;
+                        animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
                         Text {
                             min-height: 19.5px;
                             vertical-alignment: center;
@@ -130,6 +143,43 @@ export component AcRowItem inherits Rectangle {
                         spacing: 0px;
                         Text { min-height: 18px; vertical-alignment: center; text: root.item.src; font-size: 12.5px; color: Theme.ink-2; overflow: elide; }
                         Text { min-height: 17.5px; vertical-alignment: center; text: root.item.src-sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                    }
+                    // Show on dashboard and Show in tray for this account, side by side in one column: two
+                    // independent switches (each saves only its own list)
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        spacing: 3px;
+                        TipArea {
+                            owner: "acct-show:" + root.item.id;
+                            tip: root.item.dash-tip;
+                            height: 18px;
+                            width: max(dash-toggle.preferred-width, tray-toggle.preferred-width);
+                            dash-toggle := Toggle {
+                                y: (parent.height - self.height) / 2;
+                                small: true;
+                                on: root.item.shown-dash;
+                                enabled: root.item.dash-enabled;
+                                label: "Dashboard";
+                                probe: "acct-show:" + root.item.id;
+                                toggled(on) => { root.act("account-show", root.item.id + "|" + (on ? "show" : "hide")); }
+                            }
+                        }
+                        TipArea {
+                            owner: "acct-tray:" + root.item.id;
+                            tip: root.item.tray-acct-tip;
+                            height: 18px;
+                            width: max(dash-toggle.preferred-width, tray-toggle.preferred-width);
+                            tray-toggle := Toggle {
+                                y: (parent.height - self.height) / 2;
+                                small: true;
+                                on: root.item.shown-tray;
+                                enabled: root.item.tray-acct-enabled;
+                                label: "Tray";
+                                probe: "acct-tray:" + root.item.id;
+                                toggled(on) => { root.act("account-tray", root.item.id + "|" + (on ? "show" : "hide")); }
+                            }
+                        }
                     }
                     acts := HorizontalLayout {
                         width: root.acts-w;

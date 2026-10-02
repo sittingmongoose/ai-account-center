@@ -84,6 +84,51 @@ test('Show on dashboard and Show in tray save on the server and update the page 
   assert.equal(old.sent.length, 0);
 });
 
+test("one account's Show on dashboard and Show in tray are independent and reach all four combinations", async () => {
+  const saved = { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [], trayHiddenAccountIds: [] };
+  const id = 'codex:party';
+  const h = harness({
+    routes: { 'PUT /api/accounts/visibility': body => ({ ...Object.assign(saved, body) }) },
+    data: {
+      schemaVersion: 1,
+      accounts: [{ id, provider: 'codex', email: 'party@example.test', hidden: false, trayHidden: false }, { id: 'codex:other', provider: 'codex', hidden: false, trayHidden: false }],
+      providers: [{ id: 'codex', visible: true, trayVisible: true }],
+      settings: { ...saved },
+    },
+  });
+  const flags = () => { const a = h.dashboard.accounts.find(row => row.id === id); return [a.hidden, a.trayHidden]; };
+  // each switch sends only its own list, so the other choice is never part of the request
+  assert.equal(await h.ctl.handle('account-show', `${id}|hide`), true);
+  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/visibility', body: { hiddenAccountIds: [id] } });
+  assert.deepEqual(flags(), [true, false]);
+  assert.equal(last(h.toasts).title, 'party@example.test hidden from the dashboard');
+  await h.ctl.handle('account-tray', `${id}|hide`);
+  assert.deepEqual(last(h.sent).body, { trayHiddenAccountIds: [id] });
+  assert.deepEqual(flags(), [true, true]);
+  assert.equal(last(h.toasts).title, 'party@example.test hidden from the trays');
+  await h.ctl.handle('account-show', `${id}|show`);
+  assert.deepEqual(last(h.sent).body, { hiddenAccountIds: [] });
+  assert.deepEqual(flags(), [false, true]);
+  await h.ctl.handle('account-tray', `${id}|show`);
+  assert.deepEqual(last(h.sent).body, { trayHiddenAccountIds: [] });
+  assert.deepEqual(flags(), [false, false]);
+  // the other account and both provider switches were never touched
+  const other = h.dashboard.accounts.find(row => row.id === 'codex:other');
+  assert.deepEqual([other.hidden, other.trayHidden], [false, false]);
+  assert.deepEqual([h.dashboard.providers[0].visible, h.dashboard.providers[0].trayVisible], [true, true]);
+  assert.deepEqual(h.sent.map(r => Object.keys(r.body)), [['hiddenAccountIds'], ['trayHiddenAccountIds'], ['hiddenAccountIds'], ['trayHiddenAccountIds']]);
+  // a malformed id or mode sends nothing; a server without the tray list has no tray switch to save
+  await h.ctl.handle('account-show', 'not an id|hide');
+  await h.ctl.handle('account-tray', `${id}|maybe`);
+  assert.equal(h.sent.length, 4);
+  const old = harness({ data: { schemaVersion: 1, accounts: [{ id, provider: 'codex' }], providers: [], settings: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] } } });
+  await old.ctl.handle('account-tray', `${id}|hide`);
+  assert.equal(old.sent.length, 0);
+  // both are changes: a pending account switch holds them
+  assert.equal(MUTATING_ACTIONS.has('account-show'), true);
+  assert.equal(MUTATING_ACTIONS.has('account-tray'), true);
+});
+
 test('visibility saves run one at a time, each from the lists the save before it left; the toggles wait for them', async () => {
   const saved = { hiddenProviders: [], hiddenAccountIds: ['codex:x'], trayHiddenProviders: [] };
   const gates = [];

@@ -57,6 +57,13 @@ export struct AcRow {
     line: AcLine,
     // removing: the row fades while it keeps its place
     gone: bool,
+    // this account's own switches, independent of each other: Show on dashboard and Show in tray
+    shown-dash: bool,
+    shown-tray: bool,
+    dash-enabled: bool,
+    tray-acct-enabled: bool,
+    dash-tip: string,
+    tray-acct-tip: string,
 }
 
 // The inline flow under a provider section (add an account, sign in again, store or replace a key, a guided

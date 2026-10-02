@@ -222,6 +222,12 @@ policies, Update apps hosts and their lines).
   from the lists the one before saved, and the toggles wait on `visPending`, not on the shared busy slot. A choice an older build saved in this browser (`localStorage['aac-hidden-providers']`) moves to the
   server once and is then cleared. Home honours `settings.hiddenProviders` and `settings.hiddenAccountIds`. Show in
   tray is live once the dashboard response carries `settings.trayHiddenProviders`.
+- **One account's Dashboard / Tray switches** (`accountSwitches`, the small toggle pair beside each row's actions):
+  "Dashboard" reads and saves only `settings.hiddenAccountIds` (action `account-show`), "Tray" only
+  `settings.trayHiddenAccountIds` (action `account-tray`), so the two never change each other and all four
+  combinations exist. A row hidden from the dashboard stays listed here with its identity dimmed. Both wait on
+  `visPending` (`acct-show:` / `acct-tray:`) and redraw the saved state when a save ends, saved or refused. The
+  trays follow only `providers[].trayVisible` and `accounts[].trayHidden`.
 - **E2E probes** (components/probe.slint): with `?e2e` in the address, bridge.js answers `probe_tick()` with
   every probed control's window rectangle (`globalThis.__aacProbe`) and keeps the last views and toasts it handed
   Slint, so a CDP harness can click real controls and check them by pixels. Without `?e2e` nothing is reported.

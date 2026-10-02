@@ -118,7 +118,9 @@ page as file:// or configure a cross-origin API URL.
   profile on Mac and Windows, an API key in a masked field that shows only its
   last 4 afterwards), Sign in again, Replace key, Remove with a confirmation
   (Claude into the 30-day trash, with Restore), guided app and browser
-  sign-ins with Re-check, and "Show on dashboard" saved on the server. What a
+  sign-ins with Re-check, and "Show on dashboard" and "Show in tray" saved on
+  the server, per provider and per account (each account's two switches are
+  independent, so it can be shown in both, on one only, or in neither). What a
   control may do comes from the server (`providers[]` and
   `GET /api/accounts/registry`); "coming" marks only what the server has no
   flow or route for yet. A computer's default Claude profile is never offered

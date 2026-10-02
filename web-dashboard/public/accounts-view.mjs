@@ -783,6 +783,29 @@ function connectionFacts(ctx) {
   ];
 }
 
+// ---------------------------------------------------------------- one account's Show on dashboard / Show in tray
+/**
+ * The two switches on an account row. They are independent: "Show on dashboard" reads only
+ * `settings.hiddenAccountIds` and "Show in tray" only `settings.trayHiddenAccountIds`, so all four combinations
+ * (shown in both, hidden only from the dashboard, hidden only from the tray, hidden from both) are drawn as saved.
+ * A server without the tray list draws "Show in tray" off and flat with its reason.
+ */
+export function accountSwitches(id, { idsKnown, hiddenIds, trayIdsKnown, trayHiddenIds, visibilityOk, visWaiting }) {
+  const shownDash = !hiddenIds.has(id);
+  const shownTray = trayIdsKnown ? !trayHiddenIds.has(id) : true;
+  return {
+    shownDash,
+    shownTray,
+    dashEnabled: idsKnown && visibilityOk && !visWaiting('acct-show:'),
+    trayAcctEnabled: trayIdsKnown && visibilityOk && !visWaiting('acct-tray:'),
+    dashTip: !visibilityOk ? 'The saved choices could not be read safely, so changing them waits for the next refresh.'
+      : shownDash ? 'Shown on the dashboard. The trays keep their own switch.' : 'Hidden from the dashboard. The trays keep their own switch.',
+    trayAcctTip: !trayIdsKnown ? 'Hiding one account in the trays is not on this server yet.'
+      : !visibilityOk ? 'The saved choices could not be read safely, so changing them waits for the next refresh.'
+      : shownTray ? 'Shown in the Mac and Windows trays. The dashboard keeps its own switch.' : 'Hidden from the Mac and Windows trays. The dashboard keeps its own switch.',
+  };
+}
+
 // ---------------------------------------------------------------- the page
 /**
  * ctx: { now, profiles, platform, antigravityInventory, antigravityAuto, refreshSeconds, refreshKnown, updateJob,
@@ -800,6 +823,11 @@ export function accountsViewModel(data, ctx = {}) {
   const serverHidden = new Set(Array.isArray(settings.hiddenProviders) ? settings.hiddenProviders : []);
   const trayKnown = Array.isArray(settings.trayHiddenProviders);
   const trayHidden = new Set(trayKnown ? settings.trayHiddenProviders : []);
+  // each account's own switches: the dashboard list and the tray list, read separately and never mixed
+  const idsKnown = Array.isArray(settings.hiddenAccountIds);
+  const hiddenIds = new Set(idsKnown ? settings.hiddenAccountIds : []);
+  const trayIdsKnown = Array.isArray(settings.trayHiddenAccountIds);
+  const trayHiddenIds = new Set(trayIdsKnown ? settings.trayHiddenAccountIds : []);
   const visibilityOk = settings.visibilityAvailable !== false;
   // Every provider's rows and switch state, even for a provider or account hidden on Home.
   const unhidden = data ? { ...data, settings: { ...settings, hiddenProviders: [], hiddenAccountIds: [] } } : data;
@@ -844,6 +872,7 @@ export function accountsViewModel(data, ctx = {}) {
         actions: rowActions(entry.id, account, homeRow, canSwitch, c),
         line: lineView(account.id, email, line),
         gone: line?.kind === 'removing',
+        ...accountSwitches(account.id, { idsKnown, hiddenIds, trayIdsKnown, trayHiddenIds, visibilityOk, visWaiting }),
       };
     });
     const count = rows.length;

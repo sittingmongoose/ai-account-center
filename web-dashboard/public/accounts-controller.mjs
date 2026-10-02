@@ -35,7 +35,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
  * sign-in) stay live.
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([
-  'accounts-show', 'accounts-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
+  'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
   'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all',
 ]));
@@ -51,7 +51,8 @@ export function createAccountsController(deps) {
     flows: {},
     lines: {},
     busyAct: '',
-    // "Show on dashboard" and "Show in tray" saves queued or in flight: 'show:<provider>' and 'tray:<provider>'
+    // "Show on dashboard" and "Show in tray" saves queued or in flight: 'show:<provider>' and 'tray:<provider>',
+    // and one account's own switches: 'acct-show:<id>' and 'acct-tray:<id>'
     visPending: [],
     signin: { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' },
   };
@@ -143,13 +144,17 @@ export function createAccountsController(deps) {
     if (Array.isArray(saved.hiddenProviders)) settings.hiddenProviders = saved.hiddenProviders;
     if (Array.isArray(saved.hiddenAccountIds)) settings.hiddenAccountIds = saved.hiddenAccountIds;
     if (Array.isArray(saved.trayHiddenProviders)) settings.trayHiddenProviders = saved.trayHiddenProviders;
+    if (Array.isArray(saved.trayHiddenAccountIds)) settings.trayHiddenAccountIds = saved.trayHiddenAccountIds;
     const hidden = new Set(settings.hiddenProviders || []);
     const tray = new Set(settings.trayHiddenProviders || []);
     const hiddenIds = new Set(settings.hiddenAccountIds || []);
+    const trayIds = new Set(settings.trayHiddenAccountIds || []);
+    const trayKnown = Array.isArray(settings.trayHiddenProviders) || Array.isArray(settings.trayHiddenAccountIds);
     setData({
       ...current, settings,
       providers: Array.isArray(current.providers) ? current.providers.map(p => ({ ...p, visible: !hidden.has(p.id), ...('trayVisible' in p || Array.isArray(settings.trayHiddenProviders) ? { trayVisible: !tray.has(p.id) } : {}) })) : current.providers,
-      accounts: Array.isArray(current.accounts) ? current.accounts.map(a => ({ ...a, hidden: hidden.has(a.provider) || hiddenIds.has(a.id) })) : current.accounts,
+      // `hidden` follows only the dashboard lists and `trayHidden` only the tray lists
+      accounts: Array.isArray(current.accounts) ? current.accounts.map(a => ({ ...a, hidden: hidden.has(a.provider) || hiddenIds.has(a.id), ...('trayHidden' in a || trayKnown ? { trayHidden: tray.has(a.provider) || trayIds.has(a.id) } : {}) })) : current.accounts,
     });
   }
   /** Runs one visibility save after the ones before it; the chain itself never rejects. */
@@ -194,6 +199,39 @@ export function createAccountsController(deps) {
         applyVisibility(payload);
         toast('info', show ? `${label(provider)} shown in the trays` : `${label(provider)} hidden from the trays`, 'Saved on the dashboard: the Mac and Windows trays follow on their next refresh.');
       } catch (error) { fail(error, { provider }); }
+    });
+  }
+  /** An account id the server accepts in a visibility list (account-visibility.ts). */
+  const ACCOUNT_ID = /^(?:[a-z0-9][a-z0-9-]{0,31}(?::[A-Za-z0-9@._+-]{1,128}){1,2}|plan-opencode-go-console-mac-[a-f0-9]{12})$/;
+  /** One account's "Show on dashboard": only `hiddenAccountIds` is sent, so its tray switch is never touched. */
+  function setAccountShown(id, show) {
+    const settings = data()?.settings;
+    if (!ACCOUNT_ID.test(id) || !Array.isArray(settings?.hiddenAccountIds)) return;
+    return queueVisibility(`acct-show:${id}`, async () => {
+      const current = data()?.settings?.hiddenAccountIds;
+      if (!Array.isArray(current)) return;
+      const next = new Set(current);
+      if (show) next.delete(id); else next.add(id);
+      try {
+        const { payload } = await call(requests.accountVisibility([...next]));
+        applyVisibility(payload);
+        toast('info', show ? `${nameOf(id)} shown on the dashboard` : `${nameOf(id)} hidden from the dashboard`, 'Saved on the dashboard: every browser follows this choice. The trays keep their own switch.');
+      } catch (error) { fail(error, { provider: providerOf(id) }); }
+    });
+  }
+  /** One account's "Show in tray": only `trayHiddenAccountIds` is sent, so its dashboard switch is never touched. */
+  function setAccountTrayShown(id, show) {
+    if (!ACCOUNT_ID.test(id) || !Array.isArray(data()?.settings?.trayHiddenAccountIds)) return;
+    return queueVisibility(`acct-tray:${id}`, async () => {
+      const current = data()?.settings?.trayHiddenAccountIds;
+      if (!Array.isArray(current)) return;
+      const next = new Set(current);
+      if (show) next.delete(id); else next.add(id);
+      try {
+        const { payload } = await call(requests.trayAccountVisibility([...next]));
+        applyVisibility(payload);
+        toast('info', show ? `${nameOf(id)} shown in the trays` : `${nameOf(id)} hidden from the trays`, 'Saved on the dashboard: the Mac and Windows trays follow on their next refresh. The dashboard keeps its own switch.');
+      } catch (error) { fail(error, { provider: providerOf(id) }); }
     });
   }
   /**
@@ -561,6 +599,9 @@ export function createAccountsController(deps) {
     switch (action) {
       case 'accounts-show': { const [p, mode] = v.split(':'); if (mode === 'show' || mode === 'hide') await setShown(p, mode === 'show'); return true; }
       case 'accounts-tray': { const [p, mode] = v.split(':'); if (mode === 'show' || mode === 'hide') await setTrayShown(p, mode === 'show'); return true; }
+      // one account: "<account id>|show" or "<account id>|hide" (ids hold ':' but never '|')
+      case 'account-show': { const [id, mode] = v.split('|'); if (mode === 'show' || mode === 'hide') await setAccountShown(id, mode === 'show'); return true; }
+      case 'account-tray': { const [id, mode] = v.split('|'); if (mode === 'show' || mode === 'hide') await setAccountTrayShown(id, mode === 'show'); return true; }
       case 'add': await begin(v); return true;
       case 'add-key': if (KEY_PROVIDERS.includes(v)) addKey(v); return true;
       case 'replace-key': { const p = providerOf(v); if (KEY_PROVIDERS.includes(p)) setFlow(p, { type: 'key-replace', step: 'key', accountId: v }); return true; }

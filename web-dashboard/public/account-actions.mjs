@@ -26,6 +26,9 @@ export const requests = Object.freeze({
   // only the list that changed: the server merges a partial body, so a list another browser saved is kept
   visibility: hiddenProviders => ({ method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: [...hiddenProviders] } }),
   trayVisibility: trayHiddenProviders => ({ method: 'PUT', path: '/api/accounts/visibility', body: { trayHiddenProviders: [...trayHiddenProviders] } }),
+  // one account's own switches: each sends only its own list, so the dashboard and tray choices never touch
+  accountVisibility: hiddenAccountIds => ({ method: 'PUT', path: '/api/accounts/visibility', body: { hiddenAccountIds: [...hiddenAccountIds] } }),
+  trayAccountVisibility: trayHiddenAccountIds => ({ method: 'PUT', path: '/api/accounts/visibility', body: { trayHiddenAccountIds: [...trayHiddenAccountIds] } }),
   addCodex: profileName => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'codex', profileName } }),
   addClaude: (profileId, name) => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId, ...(name ? { label: name } : {}) } }),
   addKey: (provider, key, name) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, key, ...(name ? { label: name } : {}) } }),

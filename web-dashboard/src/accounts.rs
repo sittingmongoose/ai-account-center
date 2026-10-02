@@ -245,6 +245,12 @@ fn provider(m: &mut AccountsModels, v: &Value, live: &mut Live) -> AcProvider {
             actions,
             line: row_line,
             gone: b(r, "gone"),
+            shown_dash: b(r, "shownDash"),
+            shown_tray: b(r, "shownTray"),
+            dash_enabled: b(r, "dashEnabled"),
+            tray_acct_enabled: b(r, "trayAcctEnabled"),
+            dash_tip: s(r, "dashTip"),
+            tray_acct_tip: s(r, "trayAcctTip"),
         });
     }
     let mut trash = Vec::new();

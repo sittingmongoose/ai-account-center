@@ -478,3 +478,37 @@ test('the refresh slider is a log scale from 30 s to 60 min that snaps to its ma
   assert.ok(between > 300 && between < 600 && Number.isInteger(between));
   assert.equal(refreshPosition(5), 0);
 });
+
+test("each account row draws its own Show on dashboard and Show in tray, independently, in all four combinations", () => {
+  const ids = ['codex:both', 'codex:dash-only', 'codex:tray-only', 'codex:neither'];
+  const accounts = ids.map(id => account({ id, label: id.split(':')[1], email: `${id.split(':')[1]}@example.test`, capabilities: { codexProfile: id.split(':')[1], claudeProfileId: null, claudePlatforms: [] } }));
+  const settings = { refreshIntervalSeconds: 60, hiddenProviders: [], trayHiddenProviders: [], hiddenAccountIds: ['codex:dash-only', 'codex:neither'], trayHiddenAccountIds: ['codex:tray-only', 'codex:neither'], visibilityAvailable: true };
+  const vm = accountsViewModel(data(accounts, { providers: providers(), settings }), { now });
+  // [shown on the dashboard, shown in the tray]
+  assert.deepEqual(ids.map(id => [row(vm, id).shownDash, row(vm, id).shownTray]), [[true, true], [false, true], [true, false], [false, false]]);
+  assert.ok(ids.every(id => row(vm, id).dashEnabled && row(vm, id).trayAcctEnabled));
+  assert.match(row(vm, 'codex:dash-only').dashTip, /Hidden from the dashboard\. The trays keep their own switch\./);
+  assert.match(row(vm, 'codex:dash-only').trayAcctTip, /^Shown in the Mac and Windows trays/);
+  assert.match(row(vm, 'codex:tray-only').trayAcctTip, /^Hidden from the Mac and Windows trays/);
+  // every row stays listed on Accounts & Settings, and the provider switches do not move
+  assert.equal(provider(vm, 'codex').rows.length, 4);
+  assert.deepEqual([provider(vm, 'codex').visible, provider(vm, 'codex').trayVisible], [true, true]);
+  // a provider hidden in the tray leaves every account's own tray switch as saved (and the reverse)
+  const trayProv = accountsViewModel(data(accounts, { providers: providers(), settings: { ...settings, trayHiddenProviders: ['codex'], hiddenProviders: [] } }), { now });
+  assert.deepEqual(ids.map(id => row(trayProv, id).shownTray), [true, true, false, false]);
+  assert.equal(provider(trayProv, 'codex').trayVisible, false);
+  // a save in flight holds only that kind of switch
+  const waiting = accountsViewModel(data(accounts, { providers: providers(), settings }), { now, visPending: ['acct-show:codex:both'] });
+  assert.deepEqual([row(waiting, 'codex:both').dashEnabled, row(waiting, 'codex:both').trayAcctEnabled, provider(waiting, 'codex').toggleEnabled], [false, true, true]);
+  const trayWaiting = accountsViewModel(data(accounts, { providers: providers(), settings }), { now, visPending: ['acct-tray:codex:both'] });
+  assert.deepEqual([row(trayWaiting, 'codex:both').dashEnabled, row(trayWaiting, 'codex:both').trayAcctEnabled], [true, false]);
+  // a server without the tray account list: the tray switch is drawn on and flat, with its reason
+  const { trayHiddenAccountIds, ...older } = settings;
+  const old = accountsViewModel(data(accounts, { providers: providers(), settings: older }), { now });
+  assert.deepEqual([row(old, 'codex:tray-only').shownTray, row(old, 'codex:tray-only').trayAcctEnabled], [true, false]);
+  assert.equal(row(old, 'codex:tray-only').trayAcctTip, 'Hiding one account in the trays is not on this server yet.');
+  assert.ok(trayHiddenAccountIds.length === 2);
+  // the saved lists could not be read: both wait for the next refresh
+  const unread = accountsViewModel(data(accounts, { providers: providers(), settings: { ...settings, visibilityAvailable: false } }), { now });
+  assert.deepEqual([row(unread, 'codex:both').dashEnabled, row(unread, 'codex:both').trayAcctEnabled], [false, false]);
+});
