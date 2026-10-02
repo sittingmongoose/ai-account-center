@@ -82,7 +82,7 @@ function deps(
     hasAntigravityProfiles: () => false,
     readVisibility: async () => ({
       state: 'ok',
-      visibility: { hiddenProviders: [], hiddenAccountIds: [] },
+      visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
     }),
     providerFacts: (context) =>
       lifecycleProviderFacts(context, {

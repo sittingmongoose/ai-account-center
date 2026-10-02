@@ -211,7 +211,7 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
       return {
         schemaVersion: 1,
         updatedAt: new Date(now).toISOString(),
-        providers: buildDashboardProviders(accounts, [], facts(context)),
+        providers: buildDashboardProviders(accounts, [], [], facts(context)),
         accounts,
         codexAutoSwitch: {
           enabled: false,

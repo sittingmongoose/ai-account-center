@@ -1,7 +1,9 @@
 /**
  * PUT /api/accounts/visibility through the real startServer() stack: session,
- * origin and JSON guards, the private file under the temporary CCS dir, and the
- * accounts-changed hint on /ws. Temporary CCS_HOME only; data services stubbed.
+ * origin and JSON guards, the private file under the temporary CCS dir, the
+ * accounts-changed hint on /ws, and the tray visibility fields in what a
+ * device-scope dashboard read receives. Temporary CCS_HOME only; background
+ * collectors stubbed.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import bcrypt from 'bcrypt';
@@ -115,19 +117,68 @@ describe('account visibility on the real server', () => {
       socket.once('message', (data) => resolve(String(data)))
     );
     const body = { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:lexxmariah'] };
+    const saved = { ...body, trayHiddenProviders: [] };
     const response = await fetch(`${base}/api/accounts/visibility`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Origin: base, Cookie: cookie },
       body: JSON.stringify(body),
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(body);
+    // The old two-key body is a partial update: the answer carries the untouched tray list.
+    expect(await response.json()).toEqual(saved);
     expect(await message).toBe('{"type":"accounts-changed"}');
     const file = path.join(home, '.ccs', 'account-visibility.json');
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     const read = await fetch(`${base}/api/accounts/visibility`, { headers: { Cookie: cookie } });
-    expect(await read.json()).toEqual(body);
+    expect(await read.json()).toEqual(saved);
   });
+
+  it('gives a device-scope dashboard read the tray visibility fields', async () => {
+    const cookie = await signIn();
+    // Save the tray list alone; the other lists stay as they are.
+    const put = await fetch(`${base}/api/accounts/visibility`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Origin: base, Cookie: cookie },
+      body: JSON.stringify({ trayHiddenProviders: ['qwen'] }),
+    });
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({
+      hiddenProviders: [],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['qwen'],
+    });
+    // Pair a tray and read the dashboard DTO with its device token.
+    const pair = await fetch(`${base}/api/auth/devices/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: USERNAME,
+        password: PASSWORD,
+        deviceName: 'fixture-tray',
+        platform: 'mac',
+      }),
+    });
+    expect(pair.status).toBe(201);
+    const paired = (await pair.json()) as { token: string };
+    const dashboard = await fetch(`${base}/api/accounts/dashboard`, {
+      headers: { Authorization: `Bearer ${paired.token}` },
+    });
+    expect(dashboard.status).toBe(200);
+    const dto = (await dashboard.json()) as {
+      settings?: { hiddenProviders?: string[]; trayHiddenProviders?: string[] };
+      providers?: Array<{ id: string; visible: boolean; trayVisible: boolean }>;
+    };
+    expect(dto.settings?.trayHiddenProviders).toEqual(['qwen']);
+    expect(dto.settings?.hiddenProviders).toEqual([]);
+    const byId = new Map((dto.providers ?? []).map((entry) => [entry.id, entry]));
+    expect(byId.get('qwen')).toMatchObject({ visible: true, trayVisible: false });
+    expect(byId.get('zai')).toMatchObject({ visible: true, trayVisible: true });
+    expect(
+      (dto.providers ?? []).every(
+        (entry) => typeof entry.visible === 'boolean' && typeof entry.trayVisible === 'boolean'
+      )
+    ).toBe(true);
+  }, 20_000);
 
   // The 415 case is in account-visibility.test.ts: under bun, an unread text/plain
   // body on this stack keeps the test server from closing.

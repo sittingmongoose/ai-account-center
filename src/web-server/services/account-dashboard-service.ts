@@ -599,11 +599,13 @@ export class AccountDashboardService {
         refreshIntervalSeconds,
         hiddenProviders: [...visibility.hiddenProviders],
         hiddenAccountIds: [...visibility.hiddenAccountIds],
+        trayHiddenProviders: [...visibility.trayHiddenProviders],
         visibilityAvailable: visibility.available,
       },
       providers: buildDashboardProviders(
         rows,
         visibility.hiddenProviders,
+        visibility.trayHiddenProviders,
         (this.deps.providerFacts ?? lifecycleProviderFacts)(context)
       ),
       accounts: rows,

@@ -108,7 +108,11 @@ describe.skipIf(!posix)('private store folder', () => {
     expect(await readAccountRegistry(dir)).toEqual({ state: 'invalid' });
     expect(await readAccountVisibility(dir)).toEqual({ state: 'unavailable' });
     await expect(
-      writeAccountVisibility(dir, { hiddenProviders: ['zai'], hiddenAccountIds: [] })
+      writeAccountVisibility(dir, {
+        hiddenProviders: ['zai'],
+        hiddenAccountIds: [],
+        trayHiddenProviders: [],
+      })
     ).rejects.toThrow();
     await expect(updateAccountRegistry(dir, (registry) => registry)).rejects.toThrow();
     expect(fs.readdirSync(dir)).toEqual([]);
