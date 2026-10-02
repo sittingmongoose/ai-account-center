@@ -51,8 +51,8 @@ export const ACCOUNT_KINDS = {
     how: 'The dashboard host runs and supervises the CLI login.' },
   cursor: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Cursor desktop app', slots: 2, actsMin: 150,
     how: 'Sign in inside the Cursor desktop app; the dashboard reads that session.' },
-  muse: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Muse Code app', slots: 2, actsMin: 150,
-    how: 'Sign in inside the Muse Code app; the dashboard reads that session.' },
+  muse: { kind: 'app', kindLabel: 'Device-code sign-in', icon: 'app-window', src: 'Muse Code session', slots: 2, actsMin: 150,
+    how: 'Device-code sign-in on the Mac; then Sync in the Brave extension for quota.' },
   'kimi-code': { kind: 'apikey', kindLabel: 'API key', icon: 'key', src: 'API key', slots: 2, actsMin: 156,
     how: 'Usage is read with an API key.' },
   qwen: { kind: 'browser', kindLabel: 'Console session by browser extension', icon: 'globe', src: 'Console session', slots: 2, actsMin: 156,
@@ -281,7 +281,8 @@ function footActions(provider, accounts, ctx) {
       const reg = first ? ctx.registry.get(first.id) : null;
       const signInGate = first ? gate(entry, 'signInAgain', provider) : add;
       const signin = gated({ act: 'session-signin', value: provider, label: 'Sign in', icon: def.kind === 'browser' ? 'globe' : 'login', probe: `session-signin:${provider}` }, signInGate,
-        def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
+        provider === 'muse' ? 'Start a device-code sign-in on the Mac; approve a code in any browser, then Sync in the Brave extension.'
+          : def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
       const recheckGate = first ? (reg ? (reg.actions?.recheck === true ? { live: true } : { live: false, coming: false, reason: 'Re-check is not available for this account.' }) : gate(entry, 'recheck', provider))
         : { live: false, coming: false, reason: `Sign in first; there is no ${label} account to check yet.` };
       const recheck = gated({ act: 'recheck', value: first?.id || provider, label: 'Re-check', icon: 'refresh', probe: `recheck:${provider}`, busy: ctx.busyAct === `recheck:${first?.id}` }, recheckGate, 'Read the session again now.');

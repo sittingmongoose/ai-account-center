@@ -104,7 +104,11 @@ export async function registryListing(
     const entry = entries.find((candidate) => candidate.id === row.id);
     if (entry) {
       const view = entryView(entry, await keyInfo(env, entry), canReplace(entry.provider), row);
-      if (entry.provider === 'muse') view.actions.signInAgain = false;
+      if (entry.provider === 'muse') {
+        view.actions.signInAgain =
+          env.muse !== undefined &&
+          signInState(env, 'muse', context.secure).unavailableReason === null;
+      }
       view.removeRefusal = running ? 'signin_running' : null;
       accounts.push(view);
       continue;

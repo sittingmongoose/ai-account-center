@@ -9,6 +9,7 @@ import { sweepOrphanKeys } from './account-key-sweep';
 import { ClaudeAccountLifecycle } from './claude-account-lifecycle';
 import { SshClaudeHostTransport } from './claude-host-transport';
 import { CodexAccountLifecycle } from './codex-account-lifecycle';
+import { MuseAccountLifecycle, museSignInEnabled } from './muse-account-lifecycle';
 import type { ProviderRegistryFacts } from './dashboard-provider-registry';
 import type { DashboardSignInUnavailableReason } from './account-dashboard-types';
 import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './signin-jobs';
@@ -29,6 +30,12 @@ import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './sig
  * that process only: the supervised dry run, or a sandbox whose ssh aliases
  * reach fake hosts. Nothing else turns them on; any other value leaves them off.
  * A computer's default Claude profile is refused (`account_protected`) either way.
+ *
+ * Muse Code Sign in again is built fully but unverified (the Mac `muse login`
+ * output was never observed live). It stays off by default; `CCS_MUSE_SIGNIN=on`
+ * turns it on for that process only, after the live verification step in
+ * status/MUSE-LIFECYCLE.md. While off, Muse Sign in again answers 409
+ * `not_implemented`.
  */
 export const CLAUDE_HOST_LIFECYCLE_ENABLED = false;
 export function claudeHostLifecycleEnabled(
@@ -92,6 +99,7 @@ let runner: SignInJobRunner | null = null;
 let codex: CodexAccountLifecycle | null = null;
 let claude: ClaudeAccountLifecycle | null = null;
 let antigravity: AntigravityAccountLifecycle | null = null;
+let muse: MuseAccountLifecycle | null = null;
 
 /** A runner wired like the server's: the /ws push, the audit line and the accounts-changed hint. */
 export function createSignInJobRunner(
@@ -139,6 +147,11 @@ export function getAntigravityLifecycle(): AntigravityAccountLifecycle {
   return antigravity;
 }
 
+export function getMuseLifecycle(): MuseAccountLifecycle {
+  muse ??= new MuseAccountLifecycle({ enabled: museSignInEnabled() });
+  return muse;
+}
+
 /**
  * Antigravity sign-in runs in the user's terminal on Ubuntu
  * (`ai-account-center antigravity signin <profile>`): the official CLI's
@@ -160,6 +173,8 @@ export interface LifecycleFactsSources {
   claudeEnabled: () => boolean;
   /** Antigravity's flow reason; the default checks the installed CLI. */
   antigravityFlow?: () => DashboardSignInUnavailableReason;
+  /** Muse Sign in again; off by default until its Mac output is verified live. */
+  museEnabled?: () => boolean;
 }
 
 /** What the lifecycle routes can do now, for `providers[]` (contract section 2). */
@@ -171,14 +186,14 @@ export function lifecycleProviderFacts(
   }
 ): ProviderRegistryFacts {
   const claudeEnabled = sources.claudeEnabled();
+  const museEnabled = (sources.museEnabled ?? (() => getMuseLifecycle().enabled))();
   return {
     lifecycleRoutes: true,
     secureTransport: context.secureTransport === true,
     flows: {
       ...(sources.codexCliAvailable() ? {} : { codex: 'tool_missing' as const }),
       ...(claudeEnabled ? {} : { claude: 'not_implemented' as const }),
-      // Muse's Mac CLI path and device-code output are not verified.
-      muse: 'not_implemented',
+      ...(museEnabled ? {} : { muse: 'not_implemented' as const }),
       antigravity: (sources.antigravityFlow ?? antigravitySignInFlow)(),
     },
     remove: { claude: claudeEnabled },

@@ -547,6 +547,17 @@ test('guided sign-ins: Qwen and Cursor open their guide, add their one account f
   assert.equal(last(muse.toasts).title, 'Not on this server yet');
 });
 
+test('Muse Sign in opens a device-code job on the Mac once the server offers it', async () => {
+  const job = { id: 'job_muse1', provider: 'muse', kind: 'device-code', mode: 'signin-again', accountId: 'muse:usage', platform: 'mac', state: 'starting', verification: null };
+  const h = harness({ routes: {
+    'POST /api/accounts/muse%3Ausage/signin-again': { status: 202, payload: { job } },
+    'GET /api/accounts/registry': { accounts: [] },
+  }, data: { accounts: [{ id: 'muse:usage', provider: 'muse', email: 'muse-user@example.test' }], settings: {} } });
+  await h.ctl.handle('session-signin', 'muse');
+  assert.equal(h.ctl.state.flows.muse.type, 'job-again');
+  assert.equal(h.ctl.state.flows.muse.job.id, 'job_muse1');
+});
+
 test('the Dashboard sign-in block: other browsers, network trust, devices and sign out all devices', async () => {
   const session = { username: 'owner', otherBrowsers: 2, managedBy: 'config', secureTransport: true };
   const devices = [{ id: 'dev_0123456789abcdef', name: 'Mac tray', platform: 'mac' }, { id: 'dev_fedcba9876543210', name: 'Windows tray', platform: 'windows' }];

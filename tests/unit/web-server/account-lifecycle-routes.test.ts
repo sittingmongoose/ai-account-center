@@ -27,6 +27,7 @@ import type { AdditionalUsageSource } from '../../../src/web-server/services/add
 import { ClaudeAccountLifecycle } from '../../../src/web-server/services/claude-account-lifecycle';
 import type { ClaudeHostTransport } from '../../../src/web-server/services/claude-host-transport';
 import { CodexAccountLifecycle } from '../../../src/web-server/services/codex-account-lifecycle';
+import { MuseAccountLifecycle } from '../../../src/web-server/services/muse-account-lifecycle';
 import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
 import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
 import { setLocalNetworkTrustResolver } from '../../../src/web-server/middleware/secure-transport';
@@ -204,7 +205,11 @@ interface Fixture {
 }
 
 async function fixture(
-  options: { claudeEnabled?: boolean; antigravityFlow?: 'preflight_failed' | 'tool_missing' } = {}
+  options: {
+    claudeEnabled?: boolean;
+    antigravityFlow?: 'preflight_failed' | 'tool_missing';
+    museEnabled?: boolean;
+  } = {}
 ): Promise<Fixture> {
   const audits: Array<[string, Record<string, unknown>]> = [];
   const probes: AdditionalUsageSource[] = [];
@@ -235,11 +240,13 @@ async function fixture(
     purge: async () => undefined,
   };
   const claudeEnabled = options.claudeEnabled === true;
+  const museEnabled = options.museEnabled === true;
   const facts = (context: { secureTransport?: boolean }) =>
     lifecycleProviderFacts(context, {
       codexCliAvailable: () => true,
       claudeEnabled: () => claudeEnabled,
       antigravityFlow: () => options.antigravityFlow ?? 'preflight_failed',
+      museEnabled: () => museEnabled,
     });
   const antigravity = new AntigravityAccountLifecycle({
     ccsDir: () => ccsDir,
@@ -262,6 +269,7 @@ async function fixture(
         now: () => now,
       }),
     antigravity: () => antigravity,
+    muse: () => new MuseAccountLifecycle({ enabled: museEnabled }),
     confirmations: (() => {
       const store = new AccountConfirmationStore(() => now);
       return () => store;
@@ -279,6 +287,7 @@ async function fixture(
         }),
         row('zai:usage'),
         row('cursor:usage', { platform: 'mac' }),
+        row('muse:usage', { platform: 'mac' }),
         row('plan-opencode-go-console-mac-0123456789ab'),
         ...antigravity.listProfiles().map((profile) =>
           row(`antigravity:profile:${profile.id}`, {
@@ -1147,6 +1156,39 @@ describe('sign-in and guides', () => {
     expect(badCommand.status).toBe(400);
   });
 
+  it('serves Muse Sign in again as a device-code job only with CCS_MUSE_SIGNIN=on', async () => {
+    fs.writeFileSync(
+      path.join(ccsDir, 'account-usage-sources.json'),
+      JSON.stringify({
+        version: 1,
+        sources: [{ provider: 'muse', platform: 'mac', sshHost: 'jared-mac' }],
+      })
+    );
+    const off = await fixture();
+    const refused = await off.request('POST', '/muse:usage/signin-again', {});
+    expect([refused.status, refused.body.code]).toEqual([409, 'not_implemented']);
+    const on = await fixture({ museEnabled: true });
+    const started = await on.request('POST', '/muse:usage/signin-again', {});
+    expect(started.status).toBe(202);
+    expect(started.body.job).toMatchObject({
+      provider: 'muse',
+      kind: 'device-code',
+      mode: 'signin-again',
+      accountId: 'muse:usage',
+      platform: 'mac',
+      state: 'starting',
+    });
+    const again = await on.request('POST', '/muse:usage/signin-again', {});
+    expect([again.status, again.body.code, again.body.jobId]).toEqual([
+      409,
+      'job_running',
+      (started.body.job as { id: string }).id,
+    ]);
+    const plain = await on.request('POST', '/muse:usage/signin-again', {}, PLAIN);
+    expect([plain.status, plain.body.code]).toEqual([403, 'secure_transport_required']);
+    expect(plain.body.fallback).toEqual({ kind: 'terminal', host: 'mac', command: 'muse login' });
+  });
+
   it('adds Cursor or Qwen back only at zero accounts, on their configured host', async () => {
     const f = await fixture();
     const single = await f.request('POST', '/add', { provider: 'cursor' });
@@ -1203,6 +1245,18 @@ describe('registry, re-check, open, label and trash', () => {
       actions: { replaceKey: false, remove: true, recheck: true },
     });
     expect(byId('cursor:usage')).toMatchObject({ actions: { open: ['mac'], signInAgain: true } });
+    expect(byId('muse:usage')).toMatchObject({ actions: { signInAgain: false, recheck: true } });
+    const museOn = await fixture({ museEnabled: true });
+    const museRegistry = await museOn.request('GET', '/registry');
+    const museAccounts = museRegistry.body.accounts as Array<Record<string, unknown>>;
+    expect(museAccounts.find((account) => account.id === 'muse:usage')).toMatchObject({
+      actions: { signInAgain: true, recheck: true },
+    });
+    expect(
+      (museRegistry.body.providers as Array<{ id: string; signIn: { available: boolean } }>).find(
+        (entry) => entry.id === 'muse'
+      )?.signIn.available
+    ).toBe(true);
     expect(byId('claude:party')).toMatchObject({ actions: { remove: false, open: ['mac'] } });
     expect(byId('plan-opencode-go-console-mac-0123456789ab')).toMatchObject({
       actions: { signInAgain: true, remove: true },

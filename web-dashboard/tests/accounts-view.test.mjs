@@ -711,10 +711,48 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
     ]
   );
   assert.match(muse.foot[1].tip, /Sign in first/);
+  assert.equal(muse.kindLabel, 'Device-code sign-in');
   assert.deepEqual(
     provider(vm, 'opencode-go').foot.map((a) => a.label),
     ['Add another OpenCode Go key']
   );
+});
+
+test('Muse Sign in is live with a device code on the Mac once the server offers it', () => {
+  const now = Date.now();
+  const museAccount = account({
+    id: 'muse:usage',
+    provider: 'muse',
+    email: 'muse-user@example.test',
+    platform: 'mac',
+  });
+  const r = registry([
+    reg('muse:usage', 'muse', {
+      credential: { kind: 'discover' },
+      actions: { signInAgain: true, remove: false, recheck: true },
+    }),
+  ]);
+  const vm = accountsViewModel(
+    data([museAccount], {
+      providers: providers({
+        muse: {
+          signIn: { available: true, unavailableReason: null },
+          capabilities: { signInAgain: true, add: false },
+        },
+      }),
+    }),
+    { now, registry: r }
+  );
+  const muse = provider(vm, 'muse');
+  assert.equal(muse.how, 'Device-code sign-in on the Mac; then Sync in the Brave extension for quota.');
+  assert.deepEqual(
+    muse.foot.map((a) => [a.act, a.enabled, a.coming]),
+    [
+      ['session-signin', true, false],
+      ['recheck', true, false],
+    ]
+  );
+  assert.match(muse.foot[0].tip, /device-code sign-in on the Mac.*Sync in the Brave extension/);
 });
 
 test('"Show on dashboard" and "Show in tray" are saved on the server; the tray toggle waits for its route', () => {
