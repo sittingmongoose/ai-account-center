@@ -32,10 +32,10 @@ import {
 import { ConfigError } from '../errors/error-types';
 import {
   configureAntigravityRuntimeFactory,
-  getAntigravityRuntime,
+  startAntigravityRuntime,
+  stopAntigravityRuntime,
   type AntigravityRuntimeFactory,
 } from '../antigravity/runtime-service';
-import type { AntigravityRuntime } from '../antigravity/runtime-composition';
 import { getInstalledAntigravityRuntimeFactory } from '../antigravity/production-runtime';
 import { loadStaticUi, pageRouteHandler, precompressedStatic, uiStaticHeaders } from './static-ui';
 import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
@@ -244,7 +244,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let httpsServer: https.Server | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
-  let antigravityRuntime: AntigravityRuntime | null = null;
   // Account changes and sign-in jobs reach /ws clients as hints. A job goes only
   // to browser sessions, and its code only to those that connected over a
   // secure transport. The upgrade request carries the session (see above).
@@ -260,7 +259,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     detachDashboardEvents();
     stopAccountLifecycleMaintenance();
     codexAutoSwitch.stop();
-    antigravityRuntime?.stop();
+    stopAntigravityRuntime();
     stopAccountAnalyticsSampling();
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
     shutdownUsageAggregator();
@@ -305,8 +304,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       if (antigravityFactory) {
         try {
           configureAntigravityRuntimeFactory(antigravityFactory);
-          antigravityRuntime = getAntigravityRuntime();
-          antigravityRuntime?.start();
+          startAntigravityRuntime();
         } catch {
           logger.error(
             'antigravity.runtime_unavailable',
