@@ -69,8 +69,9 @@ removal into a 30-day trash are implemented against a host transport but stay of
 until the Windows launcher and the usage helper read profile ids from the inventory;
 `CCS_CLAUDE_HOST_LIFECYCLE=on` in the server's environment turns them on for that
 process only (a supervised dry run, or a sandbox with fake hosts). A computer's
-default Claude profile (a launcher marked `isDefault`) is never removed from the
-dashboard: Remove answers 409 `account_protected` whether the host steps are on or off.
+default Claude profile (a launcher marked `isDefault`, or one whose data folder is the
+app's own `Claude` folder, in any case) is never removed from the dashboard: Remove
+answers 409 `account_protected` whether the host steps are on or off.
 
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
 the existing `platyr`, `gmail`, `party` and `me` profile IDs. The optional

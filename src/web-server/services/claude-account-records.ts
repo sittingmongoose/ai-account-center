@@ -48,6 +48,30 @@ function hostLauncher(value: unknown): ClaudeHostLauncher | null {
   );
 }
 
+/**
+ * True for the Claude desktop app's own data folder on a computer (`.../Application Support/Claude` on the
+ * Mac, `%APPDATA%\Claude` on Windows): the last part of the path, split on `/` and `\`, is `Claude`. Both
+ * hosts' file systems ignore case by default, so `claude` names the same folder.
+ */
+export function isDefaultClaudeDataFolder(profilePath: unknown): boolean {
+  if (typeof profilePath !== 'string') return false;
+  const last =
+    profilePath
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop() ?? '';
+  return last.toLowerCase() === 'claude';
+}
+
+/**
+ * A launcher that is a computer's default Claude profile: the inventory marks it `isDefault`, or its data
+ * folder is the app's own (the same rule as the dashboard's `claudeDefaultProfile`), so an entry that lost
+ * its flag is still never removed.
+ */
+function isDefaultLauncher(raw: Record<string, unknown> | undefined | null): boolean {
+  return !!raw && (raw.isDefault === true || isDefaultClaudeDataFolder(raw.profilePath));
+}
+
 export function inventoryRecord(entry: Record<string, unknown>): ClaudeProfileRecord | null {
   if (typeof entry.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(entry.id)) return null;
   const hosts: Partial<Record<ClaudeHost, ClaudeHostLauncher>> = {};
@@ -56,7 +80,7 @@ export function inventoryRecord(entry: Record<string, unknown>): ClaudeProfileRe
   for (const host of CLAUDE_HOSTS) {
     const raw = entry[host] as Record<string, unknown> | undefined;
     if (!raw) continue;
-    if (raw.isDefault === true) isDefault = true;
+    if (isDefaultLauncher(raw)) isDefault = true;
     const launcher = hostLauncher(raw);
     if (launcher) hosts[host] = launcher;
     else incomplete = true;
@@ -81,7 +105,10 @@ export function pendingRecord(profile: PendingClaudeProfile): ClaudeProfileRecor
     label: profile.label ?? profile.id,
     email: null,
     hosts: { mac: profile.mac, windows: profile.windows },
-    isDefault: false,
+    // a pending profile is never the app's own folder; if one ever names it, it is protected all the same
+    isDefault:
+      isDefaultClaudeDataFolder(profile.mac.profilePath) ||
+      isDefaultClaudeDataFolder(profile.windows.profilePath),
     incomplete: false,
     entry: { ...profile },
   };
