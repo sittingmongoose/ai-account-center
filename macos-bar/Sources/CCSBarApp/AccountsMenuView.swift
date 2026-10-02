@@ -243,8 +243,9 @@ struct AccountsMenuView: View {
 
   // MARK: List
 
+  /// Every provider sits on its own platter, `sectionGap` apart, so the panel's glass divides them.
   private func list(_ palette: TrayPalette) -> some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: TrayMetrics.sectionGap) {
       if let message = model.message {
         HStack(alignment: .top, spacing: 8) {
           Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(palette.warn)
@@ -266,15 +267,12 @@ struct AccountsMenuView: View {
         }
         let others = groups.filter { !sectionIDs.contains($0.id) }
         if !others.isEmpty {
-          VStack(spacing: 0) {
+          VStack(spacing: TrayMetrics.sectionGap) {
             ForEach(Array(others.enumerated()), id: \.element.id) { index, group in
-              if index > 0 {
-                Rectangle().fill(palette.separator).frame(height: 0.5).padding(.leading, 44).padding(.trailing, 8)
-              }
               ProviderRow(model: model, group: group, open: open, block: 4 + index, maxDetailHeight: detailHeight)
+                .sectionPlatter()
             }
           }
-          .groupPlatter()
           .modifier(Entrance(index: 4, context: open))
         }
         if dashboard.visibleAccounts.isEmpty {
@@ -295,8 +293,12 @@ struct AccountsMenuView: View {
   private func accountSection(_ accounts: [DashboardAccount], provider: String) -> some View {
     let layout = SectionLayout.make(provider, accounts: accounts)
     let activeID = accounts.first(where: \.isActive)?.id
-    return VStack(alignment: .leading, spacing: 4) {
+    // The header and its rows share one platter. The value animations sit outside the platter, as they did
+    // when it held only the rows, so it still grows with a switch confirmation; the header keeps its own
+    // unanimated update when the active account changes, as when it sat above the platter.
+    return VStack(alignment: .leading, spacing: 2) {
       SectionHeader(model: model, layout: layout, accounts: accounts)
+        .animation(nil, value: activeID)
       VStack(spacing: 0) {
         ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
           if index > 0 {
@@ -327,11 +329,11 @@ struct AccountsMenuView: View {
           }
         }
       }
-      .groupPlatter()
-      .animation(state.reduceMotion ? nil : .trayValue(duration: TrayMotion.platterDuration), value: activeID)
-      .animation(.trayValue(duration: 0.3), value: model.pendingCodexSwitch?.id)
-      .animation(.trayValue(duration: 0.3), value: model.pendingAntigravitySwitch?.id)
     }
+    .sectionPlatter()
+    .animation(state.reduceMotion ? nil : .trayValue(duration: TrayMotion.platterDuration), value: activeID)
+    .animation(.trayValue(duration: 0.3), value: model.pendingCodexSwitch?.id)
+    .animation(.trayValue(duration: 0.3), value: model.pendingAntigravitySwitch?.id)
   }
 
   // MARK: Footer

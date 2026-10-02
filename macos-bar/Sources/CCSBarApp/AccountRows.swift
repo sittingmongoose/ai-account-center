@@ -290,8 +290,10 @@ struct SectionHeader: View {
           }
         }
       }
-      .padding(.leading, TrayMetrics.rowLeading + TrayMetrics.groupInset)
-      .padding(.trailing, TrayMetrics.rowTrailing + TrayMetrics.groupInset)
+      // Inside the section platter, which adds the 4 pt group inset: the captions stay over their meters.
+      .padding(.leading, TrayMetrics.rowLeading)
+      .padding(.trailing, TrayMetrics.rowTrailing)
+      .padding(.top, TrayMetrics.sectionHeaderTop)
       .frame(minHeight: 22)
     }
   }
@@ -307,7 +309,7 @@ struct SectionHeader: View {
 
   private func title(_ palette: TrayPalette) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 6) {
-      Text(ProviderMark.name(layout.provider)).font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label)
+      Text(ProviderMark.name(layout.provider)).font(.system(size: 14, weight: .semibold)).foregroundStyle(palette.label)
       Text("\(accounts.count)").font(.system(size: 12)).monospacedDigit().foregroundStyle(palette.label2)
       if layout.switchable { meta(palette) }
     }.lineLimit(1)
