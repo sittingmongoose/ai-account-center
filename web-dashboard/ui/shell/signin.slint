@@ -14,6 +14,7 @@ import { Icon } from "../components/icon.slint";
 import { AppLogo } from "../components/logo.slint";
 import { Field } from "../components/field.slint";
 import { Reveal } from "../components/reveal.slint";
+import { ProbeMark } from "../components/probe.slint";
 
 struct Ring { d: string, idx: bool, label: string, lx: float, ly: float }
 
@@ -190,7 +191,7 @@ component SignInGrid inherits Rectangle {
 
 // The password strength meter of the first-run form: one bar with quarter ticks; the fill eases to its width
 // (never past it) and takes the severity colour of its level.
-component StrengthMeter inherits VerticalLayout {
+export component StrengthMeter inherits VerticalLayout {
     in property <StrengthView> data;
     spacing: 6px;
     Rectangle {
@@ -395,6 +396,7 @@ export component SignInLayer inherits Rectangle {
 
                         // the banner: session ended, rate limited, or set up on the server (no tinted box, no side bar)
                         banner-box := Rectangle {
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.has-banner ? "signin-banner" : ""; }
                             property <length> natural: banner.preferred-height;
                             height: root.has-banner ? self.natural : 0px;
                             animate height { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
@@ -436,14 +438,21 @@ export component SignInLayer inherits Rectangle {
                                         horizontal-stretch: 0;
                                         alignment: start;
                                         spacing: 5px;
-                                        Text {
-                                            text: root.mmss(root.left);
-                                            font-family: Type.tab;
-                                            font-size: 26px;
-                                            font-weight: 640;
-                                            letter-spacing: -0.4px;
-                                            color: Theme.warn-text;
-                                            horizontal-alignment: right;
+                                        Rectangle {
+                                            min-width: countdown.preferred-width;
+                                            preferred-width: countdown.preferred-width;
+                                            min-height: countdown.preferred-height;
+                                            countdown := Text {
+                                                width: parent.width;
+                                                text: root.mmss(root.left);
+                                                font-family: Type.tab;
+                                                font-size: 26px;
+                                                font-weight: 640;
+                                                letter-spacing: -0.4px;
+                                                color: Theme.warn-text;
+                                                horizontal-alignment: right;
+                                            }
+                                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-countdown"; }
                                         }
                                         Text { text: "left"; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: right; }
                                     }
@@ -480,27 +489,41 @@ export component SignInLayer inherits Rectangle {
                             width: parent.width;
                             height: parent.height;
                             spacing: root.short ? 10px : 14px;
-                            user := Field {
-                                label: "Username";
-                                aside: root.setup ? "letters, numbers, - and _" : "";
-                                text <=> root.username;
-                                enabled: root.can-submit || root.wrong;
-                                bad: root.setup && root.auth.field == "user";
-                                box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
-                                accepted => { pass.focus-input(); }
+                            Rectangle {
+                                min-height: user.preferred-height;
+                                user := Field {
+                                    width: parent.width;
+                                    label: "Username";
+                                    aside: root.setup ? "letters, numbers, - and _" : "";
+                                    text <=> root.username;
+                                    enabled: root.can-submit || root.wrong;
+                                    bad: root.setup && root.auth.field == "user";
+                                    box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                    accepted => { pass.focus-input(); }
+                                }
+                                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-user"; }
                             }
-                            pass := Field {
-                                label: "Password";
-                                password: true;
-                                text <=> root.password;
-                                enabled: root.can-submit || root.wrong;
-                                bad: root.wrong || (root.setup && root.auth.field == "pass");
-                                box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
-                                edited(v) => { if root.setup { root.typing(v, root.confirm-text); } }
-                                accepted => { if !root.setup { root.go(); } }
+                            Rectangle {
+                                min-height: pass.preferred-height;
+                                pass := Field {
+                                    width: parent.width;
+                                    label: "Password";
+                                    password: true;
+                                    text <=> root.password;
+                                    enabled: root.can-submit || root.wrong;
+                                    bad: root.wrong || (root.setup && root.auth.field == "pass");
+                                    box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                    edited(v) => { if root.setup { root.typing(v, root.confirm-text); } }
+                                    accepted => { if !root.setup { root.go(); } }
+                                }
+                                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-pass"; }
                             }
                             if root.setup: StrengthMeter { data: root.strength; }
-                            if root.setup: Field {
+                            if root.setup: Rectangle {
+                              min-height: confirm-field.preferred-height;
+                              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-confirm"; }
+                              confirm-field := Field {
+                                width: parent.width;
                                 label: "Confirm password";
                                 password: true;
                                 aside: root.strength.matches ? "Matches" : "";
@@ -512,8 +535,13 @@ export component SignInLayer inherits Rectangle {
                                 box-height: root.short ? 38px : 42px;
                                 edited(v) => { root.typing(root.password, v); }
                                 accepted => { if !root.auth.code-required { root.go(); } }
+                              }
                             }
-                            if root.setup && root.auth.code-required: Field {
+                            if root.setup && root.auth.code-required: Rectangle {
+                              min-height: code-field.preferred-height;
+                              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-code"; }
+                              code-field := Field {
+                                width: parent.width;
                                 label: "Setup code";
                                 aside: "printed in the server's terminal";
                                 placeholder: "e.g. EXAM-PLE0";
@@ -522,6 +550,7 @@ export component SignInLayer inherits Rectangle {
                                 bad: root.auth.field == "code";
                                 box-height: root.short ? 38px : 42px;
                                 accepted => { root.go(); }
+                              }
                             }
                             if root.setup && root.auth.code-required: Text {
                                 text: "Also saved on the server in ~/.ccs/auth/setup-code";
@@ -536,6 +565,7 @@ export component SignInLayer inherits Rectangle {
                             property <bool> on: root.auth.message != "" || root.connecting;
                             property <bool> info: root.connecting || root.auth.notice;
                             min-height: max(root.short ? 34px : 38px, msg-row.preferred-height);
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: msg.height; id: msg.on ? "signin-message" : ""; }
                             msg-row := HorizontalLayout {
                                 y: msg.on ? 0px : -3px;
                                 height: self.preferred-height;
@@ -642,6 +672,7 @@ export component SignInLayer inherits Rectangle {
                                 VerticalLayout { alignment: center; Icon { name: "check"; tint: Theme.paper; width: 18px; height: 18px; } }
                                 Text { text: "Signed in"; font-size: 14px; font-weight: 620; color: Theme.paper; vertical-alignment: center; }
                             }
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-submit"; }
                             sb-ta := TouchArea {
                                 mouse-cursor: root.can-submit ? pointer : root.connecting ? progress : default;
                                 clicked => {
@@ -666,6 +697,7 @@ export component SignInLayer inherits Rectangle {
                                 Text { text: root.auth.transport-note; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; }
                             }
                             Icon { x: 0px; y: 1px; name: "lock"; tint: Theme.ink-3; width: 15px; height: 15px; }
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-note"; }
                         }
                     }
                 }
@@ -709,7 +741,7 @@ export component SignInLayer inherits Rectangle {
         HorizontalLayout {
             spacing: 8px;
             VerticalLayout { alignment: center; Icon { name: "link"; tint: Theme.ink-4; width: 15px; height: 15px; } }
-            Text { text: "The Mac and Windows trays sign in on their own"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+            Text { text: "The Mac and Windows trays stay signed in with their own device tokens"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
         }
     }
 }

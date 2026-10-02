@@ -2,6 +2,7 @@
 import { Theme, Motion, Type } from "../theme.slint";
 import { Icon } from "icon.slint";
 import { PlatformGlyph } from "mark.slint";
+import { ProbeMark } from "probe.slint";
 
 // Square icon button (34 px; 28 px small). `bare` drops the border until hover; `pressed-look` is the
 // state of a toggle such as an open menu; `chevron` adds a trailing chevron that flips while pressed.
@@ -17,6 +18,9 @@ export component IconButton inherits Rectangle {
     in property <color> tint: (ta.has-hover || root.pressed-look) && root.enabled ? Theme.ink : Theme.ink-2;
     // While true the icon spins (one-property loop); on release it eases out to the next rest point.
     in property <bool> spinning: false;
+    // drawn dimmed but still clickable (a refusal opens its reason); names the button for the e2e harness
+    in property <bool> muted: false;
+    in property <string> probe;
     callback clicked();
 
     property <bool> hovered: ta.has-hover && root.enabled;
@@ -58,7 +62,7 @@ export component IconButton inherits Rectangle {
         : (root.hovered ? Theme.paper-2 : Theme.paper);
     border-color: root.bare ? Theme.rule.with-alpha(0)
         : root.pressed-look || root.hovered ? Theme.rule-strong : Theme.rule;
-    opacity: root.enabled ? 1 : 0.45;
+    opacity: root.enabled && !root.muted ? 1 : 0.45;
     animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
     transform-scale: ta.pressed && root.enabled ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -104,4 +108,5 @@ export component IconButton inherits Rectangle {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => { root.clicked(); }
     }
+    ProbeMark { x: 0px; y: 0px; id: root.probe; width: root.width; height: root.height; }
 }

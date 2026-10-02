@@ -1209,6 +1209,48 @@ describe('registry, re-check, open, label and trash', () => {
     expect([restore.status, restore.body.code]).toEqual([409, 'not_implemented']);
   });
 
+  it("refuses a computer's default Claude profile with account_protected, host steps on or off", async () => {
+    const inventory = {
+      version: 1,
+      profiles: [
+        {
+          id: 'home',
+          email: 'home@example.com',
+          mac: {
+            launcherName: 'Claude',
+            launcherPath: '/Applications/Claude.app',
+            profilePath: '/fake/mac/Claude',
+            isDefault: true,
+            sshHost: 'jared-mac',
+          },
+          windows: {
+            launcherName: 'h',
+            profilePath: 'C:\\x\\Claude-home',
+            sshHost: 'jared-windows',
+          },
+        },
+      ],
+    };
+    for (const claudeEnabled of [false, true]) {
+      const f = await fixture({ claudeEnabled });
+      fs.writeFileSync(
+        path.join(ccsDir, 'claude-desktop-profiles.json'),
+        JSON.stringify(inventory)
+      );
+      const refused = await f.request('POST', '/claude:home/remove', {});
+      expect([claudeEnabled, refused.status, refused.body.code]).toEqual([
+        claudeEnabled,
+        409,
+        'account_protected',
+      ]);
+      expect(String(refused.body.error)).toContain('default Claude profile');
+      expect(f.audits).toContainEqual([
+        'accounts.remove.refused',
+        { provider: 'claude', code: 'account_protected' },
+      ]);
+    }
+  });
+
   it('adds, removes into the trash and restores a Claude profile with fake hosts', async () => {
     const f = await fixture({ claudeEnabled: true });
     fs.writeFileSync(

@@ -1,7 +1,9 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength } from './pkg/ccs_account_dashboard.js';
-import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, hiddenProviders, PROVIDER_REGISTRY } from './view-model.mjs';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, probe_tick } from './pkg/ccs_account_dashboard.js';
+import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
-import { strength, validateSetup, triesLeft, triesLine, limitWindowMinutes, retrySeconds, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner } from './auth-view.mjs';
+import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure } from './auth-view.mjs';
+import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
+import { copyText, signOutFailureText } from './account-actions.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
 import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
 import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
@@ -17,8 +19,8 @@ import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 // window.ccsDashboardAction(kind, value). See web-dashboard/ui/README-ARCHITECTURE.md.
 let authenticated = false;
 let busy = false;
-// `serverData` is the dashboard response as received; `data` is the same with this browser's hidden providers
-// added to settings.hiddenProviders, so Home, Details and Analytics honour a "Show on dashboard" choice.
+// `serverData` is the dashboard response as received; `data` is the copy the pages draw from. "Show on
+// dashboard" is saved on the server (settings.hiddenProviders), so both are the same response.
 let serverData = null;
 let data = null;
 let profiles = [];
@@ -42,21 +44,17 @@ let detailsOpens = 0;
 let sessionHours = 24;
 let setupInfo = { form: false, codeRequired: false };
 let authNonce = 0;
+// GET /api/auth/check as last read: the trusted local network state and this connection, for the sign-in page's
+// network note and the Dashboard sign-in block.
+let authCheck = null;
 const transport = transportOf(location.protocol, location.hostname);
 const origin = typeof location.origin === 'string' ? location.origin : '';
-// "Show on dashboard": saved in this browser until the server stores visibility (CONTRACT-registry-lifecycle 4).
-const HIDDEN_KEY = 'aac-hidden-providers';
-function storedHidden() {
-  try {
-    const list = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]');
-    return new Set(Array.isArray(list) ? list.filter(id => PROVIDER_REGISTRY.some(row => row.id === id)) : []);
-  } catch { return new Set(); }
-}
-let localHidden = storedHidden();
-function withLocalHidden(next) {
-  if (!next) return next;
-  const hidden = new Set([...hiddenProviders(next), ...localHidden]);
-  return { ...next, settings: { ...(next.settings || {}), hiddenProviders: [...hidden] } };
+// End-to-end probes (?e2e only): the harness asks the canvas where each probed control is.
+const e2e = /[?&]e2e\b/.test(location.search);
+const probeRects = new Map();
+if (e2e) {
+  globalThis.__aacProbe = probeRects;
+  globalThis.__aacProbeNow = () => { probeRects.clear(); try { probe_tick(); } catch {} };
 }
 /** URL state: the page routes /, /analytics and /accounts (page-route.mjs); ?view= still works as an alias. */
 function pageFromLocation() { return pageFromUrl(location.pathname, location.search); }
@@ -76,24 +74,38 @@ const host = typeof location.host === 'string' ? location.host : '';
 // ---------------------------------------------------------------- feedback
 function setBusy(value) { busy = value; set_busy(value); }
 /** Results and failures appear as toasts on any page, never buried at the bottom. */
-function toast(kind, title, body = '', ms = 4800) { push_toast(kind, title, body, ms); }
+function toast(kind, title, body = '', ms = 4800) {
+  if (e2e) (globalThis.__aacToasts ||= []).push({ kind, title, body });
+  push_toast(kind, title, body, ms);
+}
 function failure(message, title = 'That did not work') { toast('err', title, message, 6400); }
 let authState = 'loading';
 function auth(signedIn, state, extra = {}) {
   authenticated = signedIn;
   authState = state;
-  set_auth(signedIn, JSON.stringify({
-    state, host, username, transportNote: transportNote(transport), sessionHours, nonce: authNonce,
+  const view = {
+    state, host, username, transportNote: transportNote(transport, authCheck), sessionHours, nonce: authNonce,
     setupForm: setupInfo.form, codeRequired: setupInfo.codeRequired, ...extra,
-  }));
+  };
+  // the e2e harness reads the words it handed Slint next to the pixels it sees (?e2e only)
+  if (e2e) globalThis.__aacLastAuth = { signedIn, ...view };
+  set_auth(signedIn, JSON.stringify(view));
 }
 
 /** One request: { status, payload } on success; a refusal throws with its status, payload and headers. */
 async function send(path, options = {}) {
-  const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
-  const payload = await response.json().catch(() => null);
+  let response;
+  try {
+    response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+  } catch (cause) {
+    throw Object.assign(new Error('The dashboard did not answer.'), { network: true, status: 0, payload: null, cause });
+  }
+  const payload = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
-    if (response.status === 401 && path !== '/api/auth/login' && authenticated) sessionEnded();
+    // signed out from another browser (sign out other browsers, a password change, sign out all devices)
+    // A 401 that is about the session ends it here; a refused password (wrong_password) is only an answer.
+    const code = payload?.code;
+    if (response.status === 401 && path !== '/api/auth/login' && authenticated && (!code || code === 'auth_required' || code === 'session_revoked')) sessionEnded(code === 'session_revoked' ? 'revoked' : undefined);
     const error = new Error(payload?.error || `Request failed (${response.status}).`);
     error.status = response.status;
     error.payload = payload;
@@ -105,6 +117,29 @@ async function send(path, options = {}) {
 }
 async function request(path, options = {}) { return (await send(path, options)).payload; }
 const mutation = (path, body, method = 'POST') => request(path, { method, body: JSON.stringify(body) });
+/** One request built by account-actions.mjs `requests` ({ method, path, body }). */
+const call = req => send(req.path, { method: req.method, ...(req.body !== undefined ? { body: JSON.stringify(req.body) } : {}) });
+
+// Accounts & Settings: every sign-in and sign-out control (accounts-controller.mjs).
+const accounts = createAccountsController({
+  call,
+  changed: () => renderAccounts(),
+  toast: (kind, title, body, ms) => toast(kind, title, body, ms),
+  refresh: () => refresh(true),
+  data: () => serverData,
+  setData: next => { serverData = next; data = next; render(); },
+  strength: view => { try { set_accounts_strength(JSON.stringify(view)); } catch {} },
+  copy: value => copyText(value),
+  open: url => { try { globalThis.open?.(url, '_blank', 'noopener'); } catch {} },
+  storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
+  // Turn off (or on): the saved check follows at once, then is read again (secureTransport moves with it)
+  networkChanged: async net => {
+    if (authCheck && net && typeof net.trustLocalNetwork === 'boolean') {
+      authCheck = { ...authCheck, trustedLocalNetwork: net.trustLocalNetwork, ...(net.connection && typeof net.connection === 'object' ? { connection: net.connection } : {}) };
+    }
+    await refreshAuthCheck();
+  },
+});
 
 // Claude "Open" progress (claude-open.mjs): one POST that asks for the 202 answer, then read-only polling of the
 // profile list. A finished Open ends in a toast; the row line clears a few seconds later.
@@ -146,12 +181,16 @@ function render() {
 /** Accounts & Settings (version 1, accounts-view.mjs): drawn while the page is open. */
 function renderAccounts() {
   if (!serverData || currentPage !== 'accounts') return;
+  const st = accounts.state;
   try {
-    set_accounts(JSON.stringify(accountsViewModel(serverData, context({
-      refreshing: false, serverHidden: hiddenProviders(serverData), localHidden,
+    const vm = accountsViewModel(serverData, context({
+      refreshing: false,
       refreshSeconds: refreshIntervalSeconds, refreshKnown: refreshSettingsKnown, updateJob,
       origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
-    }))));
+      registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin,
+    }));
+    if (e2e) globalThis.__aacLastAccounts = vm;
+    set_accounts(JSON.stringify(vm));
   } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
 }
 function renderChrome(isRefreshing = false) {
@@ -234,12 +273,14 @@ async function refresh(force = false) {
       if (generation !== refreshGeneration || !authenticated) return;
       if (next?.schemaVersion !== 1 || !Array.isArray(next.accounts)) throw new Error('Unsupported account dashboard response.');
       serverData = next;
-      data = withLocalHidden(next);
+      data = next;
       if (Number.isInteger(next.settings?.refreshIntervalSeconds)) applyRefreshInterval(next.settings.refreshIntervalSeconds);
       profiles = Array.isArray(inventory?.profiles) ? inventory.profiles : profiles;
       antigravityInventory = antigravityProfiles;
       antigravityAuto = validAntigravityAuto(antigravityStatus) ? antigravityStatus : validAntigravityAuto(next.antigravityAutoSwitch) ? next.antigravityAutoSwitch : null;
       render();
+      // the page's actions and refusals follow the accounts: read them again with each refresh while it is open
+      if (currentPage === 'accounts') void accounts.loadRegistry();
     } catch (error) {
       if (generation === refreshGeneration && authenticated) failure(`${error.message} The last received readings stay visible.`, 'Refresh failed');
     }
@@ -423,7 +464,7 @@ function navigate(page, { replace = false } = {}) {
   const url = pagePath(page);
   try { globalThis.history?.[replace ? 'replaceState' : 'pushState']?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) void refreshAnalytics();
-  if (page === 'accounts' && authenticated) renderAccounts();
+  if (page === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
 }
 async function loadAuthSetup() {
   try {
@@ -442,27 +483,77 @@ function showSetup(extra = {}) {
     ...extra,
   });
 }
-/** The server no longer knows this browser's session: say whether it ran out or ended early. */
+/** GET /api/auth/check again; the copy in hand stays when it cannot be read. */
+async function refreshAuthCheck() {
+  try { const status = await request('/api/auth/check'); if (status && typeof status === 'object') authCheck = status; } catch {}
+}
+/**
+ * The sign-in page after a sign-out or an ended session. It is drawn at once from the check in hand, then the
+ * check is read again: local network trust may have been turned off since sign-in (here or in another browser),
+ * and the note under the form must say how the password travels now.
+ */
+function showSignedOut(state, extra) {
+  auth(false, state, extra);
+  const shown = transportNote(transport, authCheck);
+  void refreshAuthCheck().then(() => {
+    if (!authenticated && authState === state && transportNote(transport, authCheck) !== shown) auth(false, state, extra);
+  });
+}
+/** The server no longer knows this browser's session: say whether it ran out, ended early or was revoked. */
 function sessionEnded(reason = endedReason(signedInAt(globalThis.localStorage), sessionHours) || 'ended') {
   forgetSignIn(globalThis.localStorage);
   claudeOpen.reset();
+  accounts.reset();
   const banner = expiredBanner(reason, sessionHours);
-  auth(false, 'expired', { bannerTitle: banner.title, bannerBody: banner.body });
+  showSignedOut('expired', { bannerTitle: banner.title, bannerBody: banner.body });
+}
+/**
+ * Sign out. It is never held by a running save or Claude Open (`busy`), only by a switch confirmation that is
+ * waiting on screen. A failure is said in the page's own words, and this browser then stays signed in.
+ */
+async function signOut() {
+  if (pendingActivation()) { toast('info', 'Finish the account switch first', 'Confirm or cancel the switch, then sign out.'); return; }
+  if (accounts.state.signin.busy === 'logout') return;
+  accounts.state.signin.busy = 'logout'; renderAccounts();
+  try { await mutation('/api/auth/logout', {}); }
+  catch (error) {
+    accounts.state.signin.busy = ''; renderAccounts();
+    // a session another browser already signed out is signed out here too
+    if (error?.payload?.code !== 'session_revoked') {
+      if (authenticated) { const t = signOutFailureText(error); failure(t.body, t.title); }
+      return;
+    }
+  }
+  forgetSignIn(globalThis.localStorage);
+  analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
+  claudeOpen.reset();
+  accounts.reset();
+  showSignedOut('default', { notice: true, message: 'Signed out.' });
 }
 async function enterDashboard() {
   await loadSettings(); await refresh(true); await updateStatus();
+  await afterSignIn();
   if (currentPage === 'analytics') await refreshAnalytics();
+}
+/** Once signed in: move a browser-only "Show on dashboard" choice to the server, and read the settings block. */
+async function afterSignIn() {
+  try { await accounts.migrateLocalHidden(); } catch {}
+  try { authCheck = await request('/api/auth/check'); } catch {}
+  if (currentPage === 'accounts') await accounts.loadAll();
 }
 async function checkSession() {
   try {
     await loadAuthSetup();
     const status = await request('/api/auth/check');
+    authCheck = status && typeof status === 'object' ? status : null;
     username = typeof status?.username === 'string' ? status.username : '';
     if (status.authenticated === true || status.authRequired === false) {
       auth(true, 'default');
       await loadSettings(); await refresh(); await updateStatus();
+      await afterSignIn();
       if (currentPage === 'analytics') await refreshAnalytics();
     } else if (status.accessMode === 'setup') showSetup();
+    else if (status.signedOutReason === 'revoked') sessionEnded('revoked');
     else {
       const reason = endedReason(signedInAt(globalThis.localStorage), sessionHours);
       if (reason) sessionEnded(reason); else auth(false, 'default');
@@ -493,12 +584,12 @@ async function signIn(value) {
     authNonce++;
     const window = limitWindowMinutes(error.headers);
     if (error.status === 429) {
-      const limit = limitedView(retrySeconds(error.headers));
+      const limit = limitedView(retryFrom(error));
       auth(false, 'limited', { bannerTitle: limit.title, bannerBody: limit.body, bannerStrong: limit.until, retrySeconds: limit.seconds, limitSeconds: window * 60 });
     } else if (error.status === 401) {
-      auth(false, 'wrong', { message: "Username or password isn't right.", messageSub: triesLine(triesLeft(error.headers), window) });
-    } else if (error.status === 400 && /not configured/i.test(error.message)) showSetup();
-    else auth(false, 'default', { message: error.message || 'Sign-in failed.' });
+      auth(false, 'wrong', { message: "Username or password isn't right.", messageSub: triesLine(triesFrom(error), window) });
+    } else if (error.status === 400 && /not configured/i.test(error.payload?.error || '')) showSetup();
+    else auth(false, 'default', { message: loginFailure(error) });
   }
 }
 /** The first-run form (only when the server offers POST /api/auth/setup). */
@@ -516,9 +607,8 @@ async function createSignIn(value) {
     authNonce++;
     const code = error.payload?.code;
     if (code === 'already_configured') { await checkSession(); return; }
-    if (code === 'setup_code_required' || code === 'setup_code_invalid') { showSetup({ field: 'code', message: "That setup code isn't right. It has 8 letters and digits." }); return; }
-    if (code === 'secure_transport_required') { showSetup({ message: 'Setting up from another computer needs HTTPS or an encrypted tunnel. Use the dashboard host itself, or run ai-account-center dashboard auth setup there.' }); return; }
-    showSetup({ message: error.message || 'The sign-in could not be created.' });
+    const [field, message] = setupFailure(error, authCheck);
+    showSetup({ field, message });
   }
 }
 
@@ -545,34 +635,28 @@ window.ccsDashboardAction = async (action, value) => {
     }
     if (action === 'auth-recheck') { if (!authenticated && !busy) await checkSession(); return; }
     if (action === 'login-limit-over') { if (!authenticated && !busy) auth(false, 'default', { notice: true, message: 'Sign-in is open again.' }); return; }
-    if (action === 'accounts-show') {
-      if (!authenticated) return;
-      const [id, mode] = String(value).split(':');
-      const entry = PROVIDER_REGISTRY.find(row => row.id === id);
-      if (!entry || !['show', 'hide'].includes(mode)) return;
-      if (mode === 'hide') localHidden.add(id); else localHidden.delete(id);
-      try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...localHidden])); } catch {}
-      data = withLocalHidden(serverData);
-      render();
-      toast('info', mode === 'hide' ? `${entry.label} hidden from Home` : `${entry.label} shown on Home`,
-        'Saved in this browser. The trays and other browsers follow once the server stores it.');
+    if (action === 'probe-rect') {
+      if (!e2e) return;
+      const [id, x, y, w, h] = String(value).split('|');
+      if (id) probeRects.set(id, { x: Number(x), y: Number(y), w: Number(w), h: Number(h) });
       return;
     }
-    if (!authenticated || busy || pendingActivation()) return;
-    if (action === 'logout') {
-      await mutation('/api/auth/logout', {});
-      forgetSignIn(globalThis.localStorage);
-      analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
-      claudeOpen.reset();
-      auth(false, 'default', { notice: true, message: 'Signed out.' }); return;
-    }
+    if (!authenticated) return;
+    if (action === 'logout') { await signOut(); return; }
+    // Accounts & Settings: sign-in and sign-out controls, show and hide, the password, trays and the network.
+    // A change waits while an account-switch confirmation is pending, as every action here did before.
+    if (MUTATING_ACTIONS.has(action) && pendingActivation()) { toast('info', 'Finish the account switch first', 'Confirm or cancel the switch, then try again.'); return; }
+    if (await accounts.handle(action, value)) return;
+    if (busy || pendingActivation()) return;
     if (action === 'refresh') { await refresh(true); if (currentPage === 'analytics') await refreshAnalytics(true); return; }
     if (action === 'launch') {
       const [id, target] = value.split(':');
-      if (!['platyr', 'gmail', 'party', 'me'].includes(id) || !['mac', 'windows'].includes(target)) throw new Error('Unknown Claude profile.');
-      const launcher = profiles.find(row => row.id === id)?.[target];
+      // the profile ids come from the server's inventory (GET /api/claude/desktop-profiles), never a fixed list
+      const profile = profiles.find(row => row?.id === id);
+      if (!profile || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id) || !['mac', 'windows'].includes(target)) throw new Error('Unknown Claude profile.');
+      const launcher = profile[target];
       if (target === 'windows' && launcher?.canOpen !== true) {
-        if (platform === 'windows' && /^ccs-claude:\/\/launch\/(platyr|gmail|party|me)$/.test(launcher?.launchUri || '')) { location.href = launcher.launchUri; return; }
+        if (platform === 'windows' && launcher?.launchUri === `ccs-claude://launch/${id}`) { location.href = launcher.launchUri; return; }
         throw new Error('Remote Windows launcher is unavailable.');
       }
       // An Open of this profile that is already running (here, in a tray or another browser) is followed, never sent again.
@@ -581,7 +665,7 @@ window.ccsDashboardAction = async (action, value) => {
       setBusy(true);
       try { outcome = await claudeOpen.start(id, target); }
       finally { setBusy(false); }
-      if (outcome === 'opened') toast('info', `Opening Claude on ${target === 'mac' ? 'Mac' : 'Windows'}`, 'It opens in its own desktop profile.');
+      if (outcome === 'opened' && authenticated) toast('info', `Opening Claude on ${target === 'mac' ? 'Mac' : 'Windows'}`, 'It opens in its own desktop profile.');
       return;
     }
     if (action === 'activate') {
@@ -697,7 +781,7 @@ try {
   addEventListener('popstate', () => {
     currentPage = pageFromLocation(); set_current_page(currentPage);
     if (currentPage === 'analytics' && authenticated) void refreshAnalytics();
-    if (currentPage === 'accounts' && authenticated) renderAccounts();
+    if (currentPage === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
   });
   set_theme_mode(THEMES[storedTheme()]);
   // Auto follows the browser: the scheme is pushed now and on every change.

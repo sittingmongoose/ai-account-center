@@ -1,14 +1,16 @@
 // The sign-in page's words and rules (c-daylight-atlas/app-auth.js), as pure functions bridge.js uses to build
 // the AuthView it hands Slint (ui/shell/signin.slint). Covered by tests/auth-view.test.mjs.
 //
-// What the server says today (src/web-server/routes/auth-routes.ts and auth-middleware.ts):
-// - GET /api/auth/check: accessMode open | login | setup, authenticated, username.
-// - GET /api/auth/setup: enabled, configured, sessionTimeoutHours.
-// - POST /api/auth/login: 200, 400, 401; express-rate-limit (draft-6 headers) adds RateLimit-Remaining and
-//   RateLimit-Policy ("5;w=900") to every answer and Retry-After to a 429. Five tries per 15 minutes per address.
-// The first-run form appears only when GET /api/auth/setup reports `setupCodeRequired` as a boolean, the signal
-// CONTRACT-auth-devices.md section 4 adds together with POST /api/auth/setup. Until then the setup state shows the
-// command that sets sign-in up on the server.
+// What the server says (CONTRACT-auth-devices sections 4 and 10, the round-2 CLIENT API SHEET):
+// - GET /api/auth/check: accessMode open | login | setup, authenticated, username, signedOutReason ('revoked'
+//   after "sign out other browsers" or a password change elsewhere), setupCodeRequired, secureTransport,
+//   trustedLocalNetwork and connection { peer, trusted }.
+// - GET /api/auth/setup: enabled, configured, sessionTimeoutHours, setupCodeRequired, managedBy.
+// - POST /api/auth/login: 200; 401 { code: 'invalid_credentials', triesLeft }; 429 { code: 'rate_limited',
+//   retryAfterSeconds } with Retry-After; 400 and 500 without a code. express-rate-limit also adds
+//   RateLimit-Remaining and RateLimit-Policy ("5;w=900"). Five tries per 15 minutes per address.
+// - POST /api/auth/setup: 201, or 403 secure_transport_required / setup_code_required / setup_code_invalid
+//   (+ triesLeft), 400 invalid_username / weak_password, 409 already_configured / managed_by_env, 429.
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const bytes = value => new TextEncoder().encode(value).length;
@@ -102,7 +104,52 @@ export function endedReason(at, hours = 24, now = Date.now()) {
   return now - at >= hours * 3_600_000 - 60_000 ? 'expired' : 'ended';
 }
 export function expiredBanner(reason, hours = 24) {
+  if (reason === 'revoked') {
+    return { title: 'Signed out from another browser', body: 'This browser was signed out from another one, with Sign out other browsers, a password change or Sign out all devices. Sign in again to continue.' };
+  }
   return reason === 'expired'
     ? { title: `Signed out after ${hours} hours`, body: `Sessions on this dashboard last ${hours} hours. Your trays stayed connected.` }
     : { title: 'Your session ended', body: 'The dashboard signed this browser out, for example after it restarted. Your trays stayed connected.' };
+}
+
+/** Tries left after a refused sign-in: the answer's `triesLeft`, else the limiter's RateLimit-Remaining header. */
+export function triesFrom(error) {
+  const n = error?.payload?.triesLeft;
+  return Number.isInteger(n) && n >= 0 ? n : triesLeft(error?.headers);
+}
+/** Seconds to wait after a 429: the answer's `retryAfterSeconds`, else Retry-After. */
+export function retryFrom(error) {
+  const n = error?.payload?.retryAfterSeconds;
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : retrySeconds(error?.headers);
+}
+
+/**
+ * The words for a refused sign-in that is not a wrong password or a pause: a 400, a 500 or an unknown answer.
+ * A 500 never counts as a wrong password.
+ */
+export function loginFailure(error) {
+  if (error?.status === 500 || error?.status === 502 || error?.status === 503) return 'Sign-in failed on the dashboard. Try again.';
+  if (error?.network) return 'The dashboard did not answer. Check the connection and try again.';
+  if (error?.status === 400) return 'Enter your username and password.';
+  return 'Sign-in failed. Try again.';
+}
+
+/** The first-run form's refusals in plain words: [field, message]. */
+export function setupFailure(error, check = null) {
+  const code = error?.payload?.code;
+  if (code === 'setup_code_required' || code === 'setup_code_invalid') {
+    const left = Number.isInteger(error?.payload?.triesLeft) ? error.payload.triesLeft : null;
+    return ['code', `That setup code isn't right. It has 8 letters and digits.${left === null ? '' : left === 0 ? ' That was the last try before a 15-minute pause.' : ` ${left} ${left === 1 ? 'try' : 'tries'} left.`}`];
+  }
+  if (code === 'secure_transport_required') {
+    return ['', check?.trustedLocalNetwork === true
+      ? 'This address is not on your trusted local network. Set up sign-in from your home network, or on the dashboard computer itself.'
+      : 'Setting up from another computer needs local network trust, which is off. Set up sign-in on the dashboard computer itself, or run ai-account-center dashboard auth setup there.'];
+  }
+  if (code === 'invalid_username') return ['user', 'Start the username with a letter; use 3 or more letters, numbers, - or _.'];
+  if (code === 'weak_password') return ['pass', error?.payload?.reason === 'too_long' ? 'Keep the password within 72 bytes; bcrypt ignores the rest.' : 'Use at least 8 characters for the password.'];
+  if (code === 'managed_by_env') return ['', 'The sign-in comes from environment variables on the dashboard computer, so it is set up there.'];
+  if (code === 'rate_limited') return ['code', 'Too many tries from this address. Wait 15 minutes, then try again.'];
+  if (error?.status >= 500) return ['', 'The sign-in could not be created on the dashboard. Try again.'];
+  return ['', 'The sign-in could not be created. Try again.'];
 }

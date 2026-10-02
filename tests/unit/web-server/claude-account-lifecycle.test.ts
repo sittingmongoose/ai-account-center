@@ -21,6 +21,11 @@ import type {
   ClaudeHost,
   ClaudeHostLauncher,
 } from '../../../src/web-server/services/claude-account-stores';
+import {
+  inventoryRecord,
+  isDefaultClaudeDataFolder,
+  pendingRecord,
+} from '../../../src/web-server/services/claude-account-records';
 
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
 const dirs: string[] = [];
@@ -244,7 +249,12 @@ describe('Claude Remove and trash', () => {
   it('refuses the default launcher, a running app and an unknown app state', async () => {
     const { hosts, lifecycle } = setup();
     const gmail = await lifecycle.findProfile('gmail');
-    expect(await lifecycle.removeRefusal(gmail as never, true)).toBe('account_default');
+    expect(await lifecycle.removeRefusal(gmail as never, true)).toBe('account_protected');
+    // even a caller that skips the refusal cannot remove a computer's default profile
+    await expect(lifecycle.remove(gmail as never)).rejects.toMatchObject({
+      code: 'account_protected',
+    });
+    expect(hosts.calls.filter((call) => call.startsWith('trash'))).toEqual([]);
     const party = await lifecycle.findProfile('party');
     hosts.running.add('C:\\Users\\x\\AppData\\Roaming\\Claude-party');
     expect(await lifecycle.removeRefusal(party as never, true)).toBe('app_running');
@@ -254,6 +264,99 @@ describe('Claude Remove and trash', () => {
     hosts.unknown.clear();
     expect(await lifecycle.removeRefusal(party as never, true)).toBeNull();
     expect(await lifecycle.removeRefusal(party as never, false)).toBeNull();
+  });
+
+  it("refuses a computer's default profile even when the inventory lost its isDefault flag", async () => {
+    const { ccsDir, hosts, lifecycle, inventory } = setup();
+    // the app's own data folder on either host is the default profile, whatever the flag says
+    const document = inventory();
+    document.profiles.push({
+      id: 'desk',
+      email: 'desk@example.com',
+      mac: {
+        launcherName: 'Claude',
+        profilePath: '/Users/x/Library/Application Support/Claude/',
+        sshHost: 'jared-mac',
+      },
+      windows: {
+        launcherName: 'Claude (desk)',
+        profilePath: 'C:\\Users\\x\\AppData\\Roaming\\Claude-desk',
+        sshHost: 'jared-windows',
+      },
+    });
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify(document, null, 2)
+    );
+    const desk = await lifecycle.findProfile('desk');
+    expect(desk?.isDefault).toBe(true);
+    expect(await lifecycle.removeRefusal(desk as never, true)).toBe('account_protected');
+    await expect(lifecycle.remove(desk as never)).rejects.toMatchObject({
+      code: 'account_protected',
+    });
+    expect(hosts.calls.filter((call) => call.startsWith('trash'))).toEqual([]);
+    expect(inventory().profiles.map((entry: { id: string }) => entry.id)).toContain('desk');
+  });
+
+  it('reads the default data folder by its last path part, on either separator, in any case', () => {
+    for (const value of [
+      '/Users/x/Library/Application Support/Claude',
+      '/Users/x/Library/Application Support/Claude/',
+      'C:\\Users\\x\\AppData\\Roaming\\Claude',
+      'C:\\Users\\x\\AppData\\Roaming\\claude\\',
+      'C:/Users/x/AppData/Roaming/CLAUDE',
+    ]) {
+      expect(isDefaultClaudeDataFolder(value)).toBe(true);
+    }
+    for (const value of [
+      '/Users/x/Library/Application Support/Claude-party',
+      'C:\\Users\\x\\AppData\\Roaming\\Claude (party)',
+      '/Users/x/Claude/party',
+      '',
+      null,
+      42,
+    ]) {
+      expect(isDefaultClaudeDataFolder(value)).toBe(false);
+    }
+    const launcher = (profilePath: string) => ({
+      launcherName: 'Claude',
+      profilePath,
+      sshHost: 'jared-mac',
+    });
+    expect(
+      inventoryRecord({
+        id: 'desk',
+        windows: {
+          ...launcher('C:\\Users\\x\\AppData\\Roaming\\Claude'),
+          sshHost: 'jared-windows',
+        },
+      })?.isDefault
+    ).toBe(true);
+    // a launcher that does not parse still counts: its folder is what is protected
+    expect(inventoryRecord({ id: 'desk', mac: { profilePath: '/x/Claude' } })?.isDefault).toBe(
+      true
+    );
+    expect(inventoryRecord({ id: 'party', mac: launcher('/x/Claude-party') })?.isDefault).toBe(
+      false
+    );
+    expect(
+      pendingRecord({
+        id: 'odd',
+        label: null,
+        mac: launcher('/x/claude'),
+        windows: { ...launcher('C:\\x\\Claude-odd'), sshHost: 'jared-windows' },
+        createdAt: '2026-10-02T08:00:00Z',
+      }).isDefault
+    ).toBe(true);
+    expect(
+      pendingRecord({
+        id: 'work2',
+        label: null,
+        mac: launcher('/x/Claude-work2'),
+        windows: { ...launcher('C:\\x\\Claude-work2'), sshHost: 'jared-windows' },
+        createdAt: '2026-10-02T08:00:00Z',
+      }).isDefault
+    ).toBe(false);
   });
 
   it('trashes both hosts, drops only that inventory entry and keeps 30 days', async () => {

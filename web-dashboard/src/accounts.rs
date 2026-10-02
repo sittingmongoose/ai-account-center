@@ -1,14 +1,17 @@
-//! Accounts & Settings view model (version 1, public/accounts-view.mjs `accountsViewModel`): the provider
-//! sections with their account rows and fixed action slots, the Antigravity policy box, the settings column
-//! (Dashboard sign-in, refresh interval, auto-switch policies, Update apps results, Connection, About).
+//! Accounts & Settings view model (version 2, public/accounts-view.mjs `accountsViewModel`): the provider
+//! sections with their account rows, fixed action slots, the line under a row (remove, restore, refusals), the
+//! inline flows (add, sign in again, keys, guided sign-ins) and the Claude trash; the Antigravity policy box;
+//! the settings column (Dashboard sign-in with the trusted local network, password change and paired trays,
+//! refresh interval, auto-switch policies, Update apps results, Connection, About).
 //! Everything lands in the `AcData` global (ui/pages/accounts/ac-data.slint).
 //!
 //! Sections, rows and their actions are persistent models updated in place by id, so an account switch moves
 //! the selected-row highlight and cross-fades the Activate slot instead of re-mounting the list.
 use crate::sync::{Nested, sync_rows};
 use crate::{
-    AcAction, AcAgPolicy, AcData, AcPolicy, AcProvider, AcRow, AcSignin, AcUpdHost, AcUpdItem,
-    Dashboard, FactView, RunView, SegItem,
+    AcAction, AcAgPolicy, AcData, AcDevice, AcFlow, AcLine, AcNetwork, AcPolicy, AcProvider, AcRow,
+    AcSignin, AcTrashRow, AcUpdHost, AcUpdItem, Dashboard, FactView, RunView, SegItem,
+    StrengthView,
 };
 use serde_json::Value;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -16,7 +19,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 /// The view-model version this build understands (public/accounts-view.mjs ACCOUNTS_VIEW_VERSION).
-pub const ACCOUNTS_VIEW_VERSION: u64 = 1;
+pub const ACCOUNTS_VIEW_VERSION: u64 = 2;
 
 static NULL: Value = Value::Null;
 fn g<'a>(v: &'a Value, k: &str) -> &'a Value {
@@ -63,8 +66,14 @@ fn action(v: &Value) -> AcAction {
         style: s(v, "style"),
         enabled: b(v, "enabled"),
         coming: b(v, "coming"),
+        refused: b(v, "refused"),
+        busy: b(v, "busy"),
         tip: s(v, "tip"),
+        probe: s(v, "probe"),
     }
+}
+fn action_key(a: &AcAction) -> SharedString {
+    SharedString::from(format!("{}|{}|{}", a.kind, a.act, a.value))
 }
 fn fact(v: &Value) -> FactView {
     FactView {
@@ -81,7 +90,13 @@ pub struct AccountsModels {
     col_b: Rc<VecModel<AcProvider>>,
     rows: Nested<AcRow>,
     actions: Nested<AcAction>,
+    line_actions: Nested<AcAction>,
     foot: Nested<AcAction>,
+    flow_actions: Nested<AcAction>,
+    steps: Nested<SharedString>,
+    trash: Nested<AcTrashRow>,
+    trash_actions: Nested<AcAction>,
+    devices: Rc<VecModel<AcDevice>>,
     runs: Nested<RunView>,
     segs: Nested<SegItem>,
     policies: Rc<VecModel<AcPolicy>>,
@@ -101,25 +116,108 @@ pub fn bind(ui: &Dashboard, m: &AccountsModels) {
     ac.set_update_head(ModelRc::from(m.update_head.clone()));
     ac.set_pairing_note(ModelRc::from(m.pairing_note.clone()));
     ac.set_connection(ModelRc::from(m.connection.clone()));
+    ac.set_devices(ModelRc::from(m.devices.clone()));
 }
 
-fn provider(
-    m: &mut AccountsModels,
-    v: &Value,
-    live_rows: &mut Vec<String>,
-    live_runs: &mut Vec<String>,
-) -> AcProvider {
+/// The line under a row or a trash entry; its actions live in `line_actions` under `owner`.
+fn line(m: &mut AccountsModels, v: &Value, owner: &str, live: &mut Vec<String>) -> AcLine {
+    live.push(owner.to_string());
+    let actions = m.line_actions.sync(
+        owner,
+        arr(v, "actions").iter().map(action).collect(),
+        action_key,
+    );
+    AcLine {
+        shown: b(v, "shown"),
+        kind: s(v, "kind"),
+        icon: s(v, "icon"),
+        lead: s(v, "lead"),
+        text: s(v, "text"),
+        actions,
+    }
+}
+
+fn flow(m: &mut AccountsModels, v: &Value, owner: &str) -> AcFlow {
+    let steps = m.steps.sync(
+        owner,
+        arr(v, "steps")
+            .iter()
+            .map(|x| SharedString::from(x.as_str().unwrap_or("")))
+            .collect(),
+        |x: &SharedString| x.clone(),
+    );
+    let actions = m.flow_actions.sync(
+        owner,
+        arr(v, "actions").iter().map(action).collect(),
+        action_key,
+    );
+    AcFlow {
+        open: b(v, "open"),
+        key: s(v, "key"),
+        title: s(v, "title"),
+        body: s(v, "body"),
+        steps,
+        cur: i(v, "cur", 0),
+        input_kind: s(v, "inputKind"),
+        input_label: s(v, "inputLabel"),
+        input_placeholder: s(v, "inputPlaceholder"),
+        input_seed: s(v, "inputSeed"),
+        input_password: b(v, "inputPassword"),
+        label_field: b(v, "labelField"),
+        code_shown: b(v, "codeShown"),
+        code_url: s(v, "codeUrl"),
+        code_text: s(v, "codeText"),
+        code_expires: s(v, "codeExpires"),
+        code_input: b(v, "codeInput"),
+        waiting: s(v, "waiting"),
+        done: s(v, "done"),
+        error: s(v, "error"),
+        error_body: s(v, "errorBody"),
+        note: s(v, "note"),
+        actions,
+    }
+}
+
+/// The new password's strength while the change-password form is typed in (public/auth-view.mjs strength).
+pub fn set_strength(ui: &Dashboard, json: &str) -> Result<(), JsValue> {
+    let v: Value =
+        serde_json::from_str(json).map_err(|_| JsValue::from_str("Invalid strength hint"))?;
+    let pct = g(&v, "pct")
+        .as_f64()
+        .filter(|x| x.is_finite())
+        .unwrap_or(0.0);
+    ui.global::<AcData>().set_pw_strength(StrengthView {
+        lv: i(&v, "lv", 0).clamp(0, 5),
+        pct: pct.clamp(0.0, 100.0) as f32,
+        word: s(&v, "word"),
+        hint: s(&v, "hint"),
+        matches: b(&v, "matches"),
+    });
+    Ok(())
+}
+
+/// Owners still on the page, per nested family, so models of vanished rows are dropped.
+#[derive(Default)]
+struct Live {
+    rows: Vec<String>,
+    runs: Vec<String>,
+    lines: Vec<String>,
+    trash: Vec<String>,
+}
+
+fn provider(m: &mut AccountsModels, v: &Value, live: &mut Live) -> AcProvider {
     let id = s(v, "id");
     let mut rows = Vec::new();
     for r in arr(v, "rows") {
         let owner = format!("{}|{}", id, s(r, "id"));
-        live_rows.push(owner.clone());
+        live.rows.push(owner.clone());
         let actions = m.actions.sync(
             &owner,
             arr(r, "actions").iter().map(action).collect(),
-            |a: &AcAction| SharedString::from(format!("{}|{}|{}", a.kind, a.act, a.value)),
+            action_key,
         );
-        live_runs.push(owner.clone());
+        let row_line = line(m, g(r, "line"), &format!("line|{}", owner), &mut live.lines);
+        live.runs.push(owner.clone());
         let confirm_runs = m.runs.sync(
             &owner,
             arr(r, "confirmRuns").iter().map(run).collect(),
@@ -145,14 +243,39 @@ fn provider(
             confirm: b(r, "confirm"),
             confirm_runs,
             actions,
+            line: row_line,
+            gone: b(r, "gone"),
         });
     }
+    let mut trash = Vec::new();
+    for t in arr(v, "trash") {
+        let tid = s(t, "id");
+        live.trash.push(tid.to_string());
+        let actions = m.trash_actions.sync(
+            tid.as_str(),
+            arr(t, "actions").iter().map(action).collect(),
+            action_key,
+        );
+        let trash_line = line(m, g(t, "line"), &format!("trash|{}", tid), &mut live.lines);
+        trash.push(AcTrashRow {
+            id: tid,
+            label: s(t, "label"),
+            sub: s(t, "sub"),
+            actions,
+            line: trash_line,
+        });
+    }
+    let trash = m
+        .trash
+        .sync(id.as_str(), trash, |t: &AcTrashRow| t.id.clone());
+    let flow = flow(m, g(v, "flow"), id.as_str());
     let rows = m.rows.sync(id.as_str(), rows, |r: &AcRow| r.id.clone());
     let foot = m.foot.sync(
         id.as_str(),
         arr(v, "foot").iter().map(action).collect(),
         |a: &AcAction| a.act.clone(),
     );
+    let foot_coming = arr(v, "foot").iter().any(|a| b(a, "coming"));
     AcProvider {
         id: id.clone(),
         label: s(v, "label"),
@@ -164,15 +287,23 @@ fn provider(
         hidden_note: s(v, "hiddenNote"),
         toggle_enabled: b(v, "toggleEnabled"),
         toggle_tip: s(v, "toggleTip"),
+        tray_visible: b(v, "trayVisible"),
+        tray_enabled: b(v, "trayEnabled"),
+        tray_coming: b(v, "trayComing"),
+        tray_tip: s(v, "trayTip"),
         switchable: b(v, "switchable"),
         can_switch: b(v, "canSwitch"),
         slots: i(v, "slots", 1),
         acts_min: i(v, "actsMin", 150) as f32,
         how: s(v, "how"),
+        needs: b(v, "needs"),
         empty: s(v, "empty"),
         ag: b(v, "ag"),
         foot,
+        foot_coming,
         rows,
+        flow,
+        trash,
     }
 }
 
@@ -183,23 +314,27 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
         return Err(JsValue::from_str("Unsupported accounts view-model version"));
     }
     let ac = ui.global::<AcData>();
-    let mut live_rows = Vec::new();
-    let mut live_runs = Vec::new();
+    let mut live = Live::default();
     let mut live_providers = Vec::new();
     for (key, model) in [("colA", m.col_a.clone()), ("colB", m.col_b.clone())] {
         let list: Vec<AcProvider> = arr(&v, key)
             .iter()
             .map(|p| {
                 live_providers.push(s(p, "id").to_string());
-                provider(m, p, &mut live_rows, &mut live_runs)
+                provider(m, p, &mut live)
             })
             .collect();
         sync_rows(&model, list, |p: &AcProvider| p.id.clone());
     }
     m.rows.retain(&live_providers);
     m.foot.retain(&live_providers);
-    m.actions.retain(&live_rows);
-    m.runs.retain(&live_runs);
+    m.flow_actions.retain(&live_providers);
+    m.steps.retain(&live_providers);
+    m.trash.retain(&live_providers);
+    m.actions.retain(&live.rows);
+    m.runs.retain(&live.runs);
+    m.line_actions.retain(&live.lines);
+    m.trash_actions.retain(&live.trash);
 
     let ag = g(&v, "ag");
     let pools = m.segs.sync(
@@ -299,18 +434,59 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     m.host_items.retain(&live_hosts);
 
     let si = g(&v, "signin");
+    let net = g(si, "network");
     ac.set_signin(AcSignin {
         username: s(si, "username"),
         connection: s(si, "connection"),
         session: s(si, "session"),
         session_sub: s(si, "sessionSub"),
         session_tip: s(si, "sessionTip"),
-        other_tip: s(si, "otherTip"),
-        password_tip: s(si, "passwordTip"),
+        others_text: s(si, "othersText"),
+        others_enabled: b(si, "othersEnabled"),
+        others_busy: b(si, "othersBusy"),
+        others_tip: s(si, "othersTip"),
+        password_when: s(si, "passwordWhen"),
+        password_can: b(si, "passwordCan"),
+        password_note: s(si, "passwordNote"),
+        password_open: b(si, "passwordOpen"),
+        password_busy: b(si, "passwordBusy"),
+        password_done: b(si, "passwordDone"),
+        password_field: s(si, "passwordField"),
+        password_error: s(si, "passwordError"),
+        password_nonce: i(si, "passwordNonce", 0),
+        password_others: s(si, "passwordOthers"),
         devices_note: s(si, "devicesNote"),
-        devices_tip: s(si, "devicesTip"),
-        revoke_all_tip: s(si, "revokeAllTip"),
+        devices_known: b(si, "devicesKnown"),
+        revoke_busy: s(si, "revokeBusy"),
+        revoke_all_enabled: b(si, "revokeAllEnabled"),
+        revoke_all_busy: b(si, "revokeAllBusy"),
+        sign_out_busy: b(si, "signOutBusy"),
+        network: AcNetwork {
+            known: b(net, "known"),
+            on: b(net, "on"),
+            line: s(net, "line"),
+            note: s(net, "note"),
+            act: s(net, "act"),
+            act_label: s(net, "actLabel"),
+            act_enabled: b(net, "actEnabled"),
+            tip: s(net, "tip"),
+            busy: b(net, "busy"),
+        },
     });
+    sync_rows(
+        &m.devices,
+        arr(si, "devices")
+            .iter()
+            .map(|d| AcDevice {
+                id: s(d, "id"),
+                name: s(d, "name"),
+                platform: s(d, "platform"),
+                sub: s(d, "sub"),
+                tip: s(d, "tip"),
+            })
+            .collect(),
+        |d: &AcDevice| d.id.clone(),
+    );
     sync_rows(
         &m.pairing_note,
         arr(si, "pairingNote").iter().map(run).collect(),

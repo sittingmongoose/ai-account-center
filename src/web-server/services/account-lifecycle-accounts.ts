@@ -46,6 +46,7 @@ export const LIFECYCLE_MESSAGES: Readonly<Record<string, string>> = Object.freez
   use_replace_key: 'Use Replace key for this account.',
   account_active: 'Activate another account first, then try again.',
   account_default: 'This is the default account. Make another account the default first.',
+  account_protected: "This is this computer's default Claude profile. It can't be removed here.",
   last_account: 'This is the last account of this provider.',
   activation_running: 'An account switch is running. Wait for it to finish.',
   signin_running: 'A sign-in for this account is running.',

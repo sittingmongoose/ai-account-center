@@ -1,0 +1,355 @@
+// The inline flows of Accounts & Settings (concept: the `.flow` panels of app-accounts.js and styles.css) and the
+// line that opens under a row for a remove, a restore or a refusal (`.confirm-line`). Every word and every state
+// comes from public/accounts-view.mjs (flowView, lineView); Slint lays them out and animates them:
+// - the panel opens by animating its height (ease-out, never past its target) and closes the same way;
+// - a new step cross-fades and slides in 10 px from the right, the way the concept's `.flow-in.pre` does;
+// - the step bar's segments take the step colours; the waiting spinner turns only while a request runs.
+// The typed text stays in Slint until it is submitted: a key is sent once with the action and the field is
+// cleared at once, so the page never shows or keeps it.
+import { Theme, Motion, Type } from "../../theme.slint";
+import { Icon } from "../../components/icon.slint";
+import { Caps } from "../../components/text.slint";
+import { Field } from "../../components/field.slint";
+import { ProbeMark } from "../../components/probe.slint";
+import { AcFlow, AcLine, AcAction } from "ac-data.slint";
+import { ActionControl, TipArea } from "ac-actions.slint";
+
+// The waiting spinner (a ring and a turning arc; it only turns while it is shown).
+export component Spinner inherits Rectangle {
+    in property <length> size: 16px;
+    in property <color> ink: Theme.ink-2;
+    width: root.size;
+    height: root.size;
+    Rectangle {
+        transform-rotation: Motion.on ? mod(animation-tick() / 1100ms, 1) * 360deg : 0deg;
+        Path {
+            width: root.size; height: root.size; viewbox-width: 24; viewbox-height: 24;
+            commands: "M12 3 A9 9 0 1 1 11.99 3";
+            stroke: root.ink.with-alpha(0.28); stroke-width: 2.2px; fill: transparent;
+        }
+        Path {
+            width: root.size; height: root.size; viewbox-width: 24; viewbox-height: 24;
+            commands: "M21 12 A9 9 0 0 0 12 3";
+            stroke: root.ink; stroke-width: 2.2px; stroke-line-cap: round; fill: transparent;
+        }
+    }
+}
+
+// A wrapped line with a leading 15 or 16 px icon placed beside its first line (the text sits directly in a
+// VerticalLayout so its wrapped height is measured at its real width).
+component LeadLine inherits Rectangle {
+    in property <string> icon;
+    in property <color> icon-ink: Theme.ink-3;
+    in property <string> lead;
+    in property <string> text;
+    in property <color> ink: Theme.ink-2;
+    in property <color> lead-ink: Theme.ink;
+    in property <length> size: 12.5px;
+    in property <length> icon-size: 16px;
+    min-height: lay.preferred-height;
+    preferred-height: lay.preferred-height;
+    lay := VerticalLayout {
+        padding-left: root.icon-size + 9px;
+        spacing: 1px;
+        if root.lead != "": Text { text: root.lead; font-size: root.size; font-weight: 640; color: root.lead-ink; wrap: word-wrap; }
+        if root.text != "": Text { text: root.text; font-size: root.size; color: root.ink; wrap: word-wrap; }
+    }
+    Icon { x: 0px; y: 1px; width: root.icon-size; height: root.icon-size; name: root.icon; tint: root.icon-ink; }
+}
+
+// The step bar: one segment per step, its caption under a 2 px rule (done: calm, current: accent).
+component Steps inherits HorizontalLayout {
+    in property <[string]> steps;
+    in property <int> cur;
+    spacing: 6px;
+    for s[i] in root.steps: VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 6px;
+        Rectangle {
+            height: 2px;
+            background: i < root.cur ? Theme.calm : i == root.cur ? Theme.accent : Theme.rule;
+            animate background { duration: Motion.tint(300ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        }
+        Text {
+            text: (i + 1) + "  " + s.to-uppercase();
+            font-family: Type.mono;
+            font-size: Type.caption;
+            letter-spacing: 0.5px;
+            color: i < root.cur ? Theme.ink-3 : i == root.cur ? Theme.ink : Theme.ink-4;
+            overflow: elide;
+            animate color { duration: Motion.tint(300ms); }
+        }
+    }
+}
+
+// The verification page and the code (device-code and supervised sign-ins).
+component CodeBox inherits Rectangle {
+    in property <AcFlow> flow;
+    in property <string> probe;
+    min-height: lay.preferred-height;
+    preferred-height: lay.preferred-height;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.rule;
+    background: Theme.paper;
+    lay := HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 14px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 3px;
+            alignment: center;
+            Caps { text: "VERIFICATION PAGE"; }
+            Text { text: root.flow.code-url; font-size: 12.5px; font-weight: 560; color: Theme.accent-text; wrap: char-wrap; }
+            if root.flow.code-expires != "": Text { text: root.flow.code-expires; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; }
+        }
+        if root.flow.code-text != "": VerticalLayout {
+            horizontal-stretch: 0;
+            spacing: 3px;
+            alignment: center;
+            Caps { text: "CODE"; horizontal-alignment: right; }
+            Text {
+                text: root.flow.code-text;
+                font-family: Type.mono;
+                font-size: 20px;
+                font-weight: 600;
+                letter-spacing: 2.8px;
+                color: Theme.ink;
+                horizontal-alignment: right;
+            }
+        }
+    }
+    ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: root.probe; }
+}
+
+// The flow panel under a provider section. It owns its text fields; `act` gets "flow-submit" with
+// "<provider>\n<field>\n<label>" and every other action unchanged.
+export component FlowPanel inherits Rectangle {
+    in property <AcFlow> flow;
+    in property <string> provider;
+    in property <bool> busy;
+    callback act(string, string);
+
+    property <string> input-text;
+    property <string> label-text;
+    // a new flow (its key) starts with the suggested value; a key or a code field always starts empty
+    property <string> flow-key: root.flow.key;
+    changed flow-key => {
+        root.input-text = root.flow.input-seed;
+        root.label-text = "";
+    }
+    // each new step cross-fades in from 10 px to the right
+    property <string> sig: root.flow.key + "|" + root.flow.cur + "|" + root.flow.title + "|" + root.flow.done + "|" + root.flow.error + "|" + root.flow.waiting;
+    property <bool> pre: false;
+    changed sig => {
+        if Motion.on {
+            root.pre = true;
+            enter.running = false;
+            enter.running = true;
+        }
+    }
+    enter := Timer { interval: 30ms; running: false; triggered => { self.running = false; root.pre = false; } }
+
+    function submit() {
+        root.act("flow-submit", root.provider + "\n" + root.input-text + "\n" + root.label-text);
+        // a key or a code is sent once and never kept here
+        if root.flow.input-password || root.flow.input-kind == "code" { root.input-text = ""; }
+    }
+    function run(kind: string, value: string) {
+        if kind == "flow-submit" { root.submit(); } else { root.act(kind, value); }
+    }
+
+    property <bool> open: root.flow.open;
+    property <length> natural: box.preferred-height + 14px;
+    height: root.open ? root.natural : 0px;
+    animate height { duration: Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    clip: true;
+
+    box := Rectangle {
+        x: 18px;
+        y: 0px;
+        width: root.width - 36px;
+        height: self.preferred-height;
+        preferred-height: inner.preferred-height;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.rule;
+        background: Theme.paper-2;
+        inner := VerticalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 14px;
+            padding-bottom: 15px;
+            spacing: 0px;
+            opacity: root.pre ? 0 : 1;
+            animate opacity { duration: Motion.on ? 200ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            if root.flow.steps.length > 0: Steps { steps: root.flow.steps; cur: root.flow.cur; }
+            if root.flow.steps.length > 0: Rectangle { height: 14px; }
+            Rectangle {
+              min-height: content.preferred-height;
+              preferred-height: content.preferred-height;
+              content := VerticalLayout {
+                spacing: 0px;
+                x: root.pre ? 10px : 0px;
+                width: parent.width;
+                animate x { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                if root.flow.title != "": Text { text: root.flow.title; font-size: 14px; font-weight: 640; color: Theme.ink; wrap: word-wrap; }
+                if root.flow.title != "": Rectangle { height: 4px; }
+                if root.flow.done != "": HorizontalLayout {
+                    spacing: 10px;
+                    VerticalLayout { alignment: center; Icon { name: "check-circle"; tint: Theme.good-text; width: 18px; height: 18px; } }
+                    Text { text: root.flow.done; font-size: 13px; font-weight: 600; color: Theme.good-text; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+                }
+                if root.flow.done != "": Rectangle { height: 6px; }
+                if root.flow.body != "": Text { text: root.flow.body; font-size: 12.5px; color: Theme.ink-2; wrap: word-wrap; }
+                if root.flow.body != "": Rectangle { height: 12px; }
+                if root.flow.code-shown: CodeBox { flow: root.flow; probe: "flow-code:" + root.provider; }
+                if root.flow.code-shown: Rectangle { height: 12px; }
+                if root.flow.input-kind != "": HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        horizontal-stretch: 2;
+                        min-height: input.preferred-height;
+                        input := Field {
+                            width: parent.width;
+                            label: root.flow.input-label;
+                            placeholder: root.flow.input-placeholder;
+                            password: root.flow.input-password;
+                            box-height: 34px;
+                            enabled: !root.busy;
+                            bad: root.flow.error != "";
+                            text <=> root.input-text;
+                            accepted => { root.submit(); }
+                        }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "flow-input:" + root.provider; }
+                    }
+                    if root.flow.label-field: Rectangle {
+                        horizontal-stretch: 1;
+                        min-height: label.preferred-height;
+                        label := Field {
+                            width: parent.width;
+                            label: "Label (optional)";
+                            placeholder: "Work";
+                            box-height: 34px;
+                            enabled: !root.busy;
+                            text <=> root.label-text;
+                            accepted => { root.submit(); }
+                        }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "flow-label:" + root.provider; }
+                    }
+                }
+                if root.flow.input-kind != "": Rectangle { height: 12px; }
+                if root.flow.waiting != "": HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout { alignment: center; Spinner { size: 16px; ink: Theme.ink-2; } }
+                    Text { text: root.flow.waiting; font-size: 12.5px; color: Theme.ink-2; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+                }
+                if root.flow.waiting != "" && root.flow.actions.length > 0: Rectangle { height: 12px; }
+                if root.flow.error != "": LeadLine {
+                    icon: "alert-circle";
+                    icon-ink: Theme.crit-text;
+                    lead: root.flow.error;
+                    lead-ink: Theme.crit-text;
+                    text: root.flow.error-body;
+                }
+                if root.flow.error != "": Rectangle { height: 12px; }
+                if root.flow.actions.length > 0: HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    for a[i] in root.flow.actions: ActionControl {
+                        width: self.natural;
+                        align-end: false;
+                        data: a;
+                        owner: "flow:" + root.provider + ":" + i;
+                        busy: root.busy && !a.busy;
+                        act(kind, value) => { root.run(kind, value); }
+                    }
+                }
+                if root.flow.note != "": Rectangle { height: 10px; }
+                if root.flow.note != "": LeadLine { icon: "lock-open"; icon-size: 15px; text: root.flow.note; ink: Theme.ink-3; size: 12px; }
+              }
+            }
+        }
+    }
+}
+
+// The line under a row (concept `.confirm-line`): a dashed rule above, a quiet tint, the icon, the sentence
+// with its lead in bold, then the buttons. It opens and closes with its height and keeps the last words while
+// it closes.
+export component RowLine inherits Rectangle {
+    in property <AcLine> line;
+    in property <string> owner;
+    in property <bool> busy;
+    callback act(string, string);
+    property <bool> open: root.line.shown;
+    // keep what was shown while the line closes
+    property <AcLine> held;
+    changed line => { if root.line.shown { root.held = root.line; } }
+    init => { if root.line.shown { root.held = root.line; } }
+    property <length> natural: lay.preferred-height + 1px;
+    height: root.open ? root.natural : 0px;
+    animate height { duration: Motion.on ? (root.open ? Motion.med : 200ms) : 0ms; easing: root.open ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1); }
+    clip: true;
+    background: root.held.kind == "refuse" ? Theme.warn.mix(Theme.paper, 0.07) : root.held.kind == "busy" ? Theme.paper-2 : Theme.crit.mix(Theme.paper, 0.05);
+    // the dashed rule above the line (drawn only while the line is open)
+    if root.open: Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: 1px;
+        for d in ceil(root.width / 8px): Rectangle {
+            x: d * 8px;
+            y: 0px;
+            width: 4px;
+            height: 1px;
+            background: Theme.rule;
+        }
+    }
+    lay := HorizontalLayout {
+        y: 1px;
+        height: self.preferred-height;
+        padding-left: 18px;
+        padding-right: 18px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 10px;
+        opacity: root.open ? 1 : 0;
+        animate opacity { duration: Motion.on ? (root.open ? Motion.med : 160ms) : 0ms; delay: Motion.on && root.open ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            padding-top: 1px;
+            if root.held.kind != "busy": Icon {
+                name: root.held.icon;
+                tint: root.held.kind == "refuse" ? Theme.warn-text : Theme.crit-text;
+                width: 16px;
+                height: 16px;
+            }
+            if root.held.kind == "busy": Spinner { size: 16px; ink: Theme.ink-2; }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            StyledText {
+                text: @markdown("**\{root.held.lead}** \{root.held.text}");
+                default-color: Theme.ink-2;
+                default-font-size: 12.5px;
+            }
+        }
+        for a[i] in root.held.actions: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            ActionControl {
+                width: self.natural;
+                align-end: false;
+                data: a;
+                owner: root.owner + ":" + i;
+                busy: root.busy;
+                act(kind, value) => { root.act(kind, value); }
+            }
+        }
+    }
+}

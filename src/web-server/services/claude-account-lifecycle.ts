@@ -53,7 +53,7 @@ export type ClaudeLifecycleCode =
   | 'host_unreachable'
   | 'unknown_account'
   | 'not_removable'
-  | 'account_default'
+  | 'account_protected'
   | 'app_running'
   | 'app_state_unknown'
   | 'trash_cross_volume'
@@ -207,12 +207,15 @@ export class ClaudeAccountLifecycle {
     return profile;
   }
 
-  /** The first refusal a remove would hit; `checkHosts` asks each host whether the app runs. */
+  /**
+   * The first refusal a remove would hit; `checkHosts` asks each host whether the app runs. A computer's
+   * default Claude profile (a launcher marked `isDefault`) is never removed here: `account_protected`.
+   */
   async removeRefusal(
     profile: ClaudeProfileRecord,
     checkHosts: boolean
-  ): Promise<'account_default' | 'app_running' | 'app_state_unknown' | null> {
-    if (profile.isDefault) return 'account_default';
+  ): Promise<'account_protected' | 'app_running' | 'app_state_unknown' | null> {
+    if (profile.isDefault) return 'account_protected';
     if (!checkHosts) return null;
     let unknown = false;
     for (const host of CLAUDE_HOSTS) {
@@ -232,6 +235,8 @@ export class ClaudeAccountLifecycle {
   }
 
   async remove(profile: ClaudeProfileRecord): Promise<{ trashId: string; purgeAfter: string }> {
+    // A default profile is refused before anything else, even if a caller skipped removeRefusal.
+    if (profile.isDefault) throw new ClaudeLifecycleError('account_protected');
     this.assertEnabled();
     if (
       profile.incomplete ||

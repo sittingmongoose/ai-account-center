@@ -69,7 +69,7 @@ export async function registryListing(
             open: [...row.capabilities.claudePlatforms],
             recheck: false,
           },
-          profile?.isDefault ? 'account_default' : null
+          profile?.isDefault ? 'account_protected' : null
         )
       );
       continue;

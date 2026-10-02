@@ -58,26 +58,50 @@ export component Field inherits VerticalLayout {
             padding-left: 12px;
             padding-right: root.password ? 4px : 12px;
             spacing: 6px;
-            input := TextInput {
-                text <=> root.text;
-                enabled: root.enabled;
-                input-type: root.password && !root.revealed ? InputType.password : InputType.text;
-                font-size: Type.body;
-                color: Theme.ink;
-                selection-background-color: Theme.accent.with-alpha(0.25);
-                selection-foreground-color: Theme.ink;
-                vertical-alignment: center;
-                single-line: true;
-                accepted => { root.accepted(); }
-                edited => { root.edited(self.text); }
-                Text {
-                    width: 100%;
+            // A raw TextInput neither clips nor scrolls: long text would draw past the box and over the
+            // eye button. The viewport clips it to the text area (the layout already reserves the eye
+            // button's width plus padding), and the input slides sideways so the caret stays visible,
+            // the way std-widgets' LineEdit does via cursor-position-changed.
+            viewport := Rectangle {
+                clip: true;
+                horizontal-stretch: 1;
+                input := TextInput {
+                    property <length> computed-x;
+                    x: min(0px, max(parent.width - self.width - 2px, self.computed-x));
+                    width: max(parent.width - 2px, self.preferred-width);
                     height: 100%;
-                    text: root.placeholder;
-                    visible: input.text == "";
-                    color: Theme.ink-4;
+                    text <=> root.text;
+                    enabled: root.enabled;
+                    input-type: root.password && !root.revealed ? InputType.password : InputType.text;
                     font-size: Type.body;
+                    color: Theme.ink;
+                    selection-background-color: Theme.accent.with-alpha(0.25);
+                    selection-foreground-color: Theme.ink;
                     vertical-alignment: center;
+                    single-line: true;
+                    accepted => { root.accepted(); }
+                    edited => { root.edited(self.text); }
+                    // pos is relative to the input's own top-left, so pos.x + computed-x is the
+                    // caret's viewport position. Track it in computed-x (never assign x directly:
+                    // the assignment does not stick from this callback) and let the x binding clamp
+                    // it: flush at the left edge so Home returns the text to its initial position,
+                    // 2 px of air at the right edge, and back to 0 whenever the text fits.
+                    cursor-position-changed(pos) => {
+                        if pos.x + self.computed-x < 0px {
+                            self.computed-x = -pos.x;
+                        } else if pos.x + self.computed-x > viewport.width - 2px {
+                            self.computed-x = viewport.width - pos.x - 2px;
+                        }
+                    }
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: root.placeholder;
+                        visible: input.text == "";
+                        color: Theme.ink-4;
+                        font-size: Type.body;
+                        vertical-alignment: center;
+                    }
                 }
             }
             if root.password: VerticalLayout {

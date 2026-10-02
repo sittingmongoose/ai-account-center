@@ -78,6 +78,19 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
   }
   if (account.kind === 'claude') {
     const claude = env.claude();
+    // A computer's default Claude profile is refused first (and audited like every refusal), whether or
+    // not the host steps are on.
+    if (account.profile.isDefault) {
+      return {
+        kind: 'desktop-profile',
+        effects: [],
+        refusal: async () => 'account_protected',
+        fingerprint: async () => claude.removeFingerprint(account.profile),
+        commit: async () => {
+          throw new LifecycleHttpError(409, 'account_protected');
+        },
+      };
+    }
     if (!claude.enabled) throw new LifecycleHttpError(409, 'not_implemented');
     return {
       kind: 'desktop-profile',

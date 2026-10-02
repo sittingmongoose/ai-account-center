@@ -1,0 +1,20 @@
+// End-to-end probes. The canvas has no DOM, so a harness that drives the real page needs to know where a control
+// is. While the page runs with `?e2e`, bridge.js calls the wasm export `probe_tick()`: every ProbeMark with an id
+// then reports its window rectangle once (Probe.rect -> the `probe-rect` action), and the harness clicks the
+// centre of what it asked for. Without `?e2e` nothing is ever reported and a ProbeMark draws nothing.
+export global Probe {
+    in-out property <bool> on: false;
+    in-out property <int> tick: 0;
+    callback rect(string, length, length, length, length);
+}
+
+// A transparent marker the size of its parent (place it last inside the control it names).
+export component ProbeMark inherits Rectangle {
+    in property <string> id;
+    property <int> t: Probe.tick;
+    changed t => {
+        if Probe.on && root.id != "" {
+            Probe.rect(root.id, self.absolute-position.x, self.absolute-position.y, self.width, self.height);
+        }
+    }
+}

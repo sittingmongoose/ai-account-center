@@ -1,0 +1,114 @@
+// The small pieces every part of Accounts & Settings shares: the "coming" caption, the hover-tip area, a note
+// with its icon, and one action control (a button, an icon-only button or a quiet word).
+import { Theme, Motion, Type } from "../../theme.slint";
+import { Icon } from "../../components/icon.slint";
+import { Button } from "../../components/button.slint";
+import { IconButton } from "../../components/icon-button.slint";
+import { Hover } from "../../components/hover-card.slint";
+import { ProbeMark } from "../../components/probe.slint";
+import { AcAction } from "ac-data.slint";
+
+// "coming": the concept's quiet mono caption (its "proposal" word), for an action the server has no route for
+// yet. No pill, no box.
+export component ComingWord inherits Text {
+    text: "coming";
+    font-family: Type.mono;
+    font-size: Type.caption;
+    letter-spacing: 0.33px;
+    color: Theme.ink-3;
+    vertical-alignment: center;
+}
+
+// A hover tip for whatever sits inside it, including a disabled control (which takes no pointer events itself).
+// A click on it is taken here, so a nested control never also opens the row's Details.
+export component TipArea inherits TouchArea {
+    in property <string> tip;
+    in property <string> owner;
+    changed has-hover => {
+        if self.has-hover {
+            Hover.tip(root.owner, self.absolute-position, self.width, self.height, root.tip);
+        } else {
+            Hover.leave(root.owner);
+        }
+    }
+}
+
+// A wrapped note with a leading 15 px icon. The text sits directly in a VerticalLayout so its wrapped height is
+// measured at its real width (a wrapping Text inside a HorizontalLayout reports one line); the icon is placed
+// beside it on the first line.
+export component IconNote inherits Rectangle {
+    in property <string> icon: "info";
+    in property <string> text;
+    in property <color> ink: Theme.ink-3;
+    in property <color> icon-ink: Theme.ink-3;
+    in property <length> size: 12.5px;
+    in property <length> gap: 9px;
+    min-height: lay.preferred-height;
+    preferred-height: lay.preferred-height;
+    lay := VerticalLayout {
+        padding-left: 15px + root.gap;
+        Text { text: root.text; font-size: root.size; color: root.ink; wrap: word-wrap; }
+    }
+    Icon { x: 0px; y: 2px; width: 15px; height: 15px; name: root.icon; tint: root.icon-ink; }
+}
+
+// One action: a button, an icon-only button or a quiet word. A "coming" action is dimmed and says on hover what
+// it will do; a "refused" one is dimmed but clickable (its click opens the reason); a busy one shows a spinner.
+export component ActionControl inherits Rectangle {
+    in property <AcAction> data;
+    in property <string> owner;
+    in property <bool> busy;
+    in property <bool> align-end: true;
+    callback act(string, string);
+    out property <length> natural: root.data.kind == "button" ? btn.preferred-width
+        : root.data.kind == "icon" ? 28px
+        : root.data.kind == "quiet" ? quiet.preferred-width : 0px;
+    property <bool> shown: root.data.kind == "button" || root.data.kind == "icon" || root.data.kind == "quiet";
+    min-height: 28px;
+    tip := TipArea {
+        x: root.align-end ? root.width - root.natural : 0px;
+        y: (root.height - 28px) / 2;
+        width: root.natural;
+        height: 28px;
+        visible: root.shown;
+        owner: root.owner;
+        tip: root.data.tip;
+        btn := Button {
+            x: 0px;
+            y: 0px;
+            width: self.preferred-width;
+            visible: root.data.kind == "button";
+            small: true;
+            text: root.data.label;
+            icon: root.data.icon;
+            platform: root.data.platform;
+            kind: root.data.style == "" ? "default" : root.data.style;
+            enabled: root.data.enabled && (!root.busy || root.data.busy);
+            muted: root.data.refused;
+            busy: root.data.busy;
+            hint: root.data.tip;
+            clicked => { root.act(root.data.act, root.data.value); }
+        }
+        IconButton {
+            x: 0px;
+            y: 0px;
+            visible: root.data.kind == "icon";
+            small: true;
+            bare: true;
+            icon: root.data.icon;
+            enabled: root.data.enabled && !root.busy;
+            muted: root.data.refused;
+            hint: root.data.label;
+            clicked => { root.act(root.data.act, root.data.value); }
+        }
+        quiet := Text {
+            x: 0px;
+            y: (parent.height - self.preferred-height) / 2;
+            visible: root.data.kind == "quiet";
+            text: root.data.label;
+            font-size: 12.5px;
+            color: Theme.ink-3;
+        }
+        if root.shown && root.data.probe != "": ProbeMark { x: 0px; y: 0px; width: root.natural; height: 28px; id: root.data.probe; }
+    }
+}

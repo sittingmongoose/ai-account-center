@@ -144,7 +144,10 @@ export function meterView(account, w, { now = Date.now(), notch = null, notchFai
   const value = w && !pending ? usedPercent(w) : null;
   const hasValue = value !== null && w?.unlimited !== true;
   const unit = text(w?.unit);
-  const amount = !pending && finite(w?.used) && finite(w?.limit) && w.limit > 0
+  // A limit of 100 with no unit only restates the meter's own percentage ("99 of 100" under a 99%
+  // bar), so cards show no caption for it. Counts with a real limit or a named unit stay.
+  const restatesPercent = w?.limit === 100 && !unit;
+  const amount = !pending && !restatesPercent && finite(w?.used) && finite(w?.limit) && w.limit > 0
     ? `${nfCompact.format(w.used)} of ${compactAmount(w.limit)}${unit ? ` ${unit}` : ''}` : '';
   return {
     key: `${account?.id || ''}|${text(w?.key) || 'missing'}`,
@@ -497,7 +500,9 @@ export function chromeView(data, { now = Date.now(), refreshing = false, interva
  */
 export function dashboardViewModel(data, ctx = {}) {
   const now = ctx.now ?? Date.now();
-  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  // Accounts hidden one by one (`settings.hiddenAccountIds`, saved on the server) leave Home like hidden providers.
+  const hiddenIds = new Set(Array.isArray(data?.settings?.hiddenAccountIds) ? data.settings.hiddenAccountIds : []);
+  const accounts = (Array.isArray(data?.accounts) ? data.accounts : []).filter(account => !hiddenIds.has(account?.id));
   const hidden = hiddenProviders(data);
   const of = provider => accounts.filter(account => account.provider === provider);
   const sections = [];
