@@ -55,7 +55,8 @@ function buildQuota(profile: QuotaProfile, now: number, row?: BarSummaryRow): Co
           : window.label,
     usedPercent: window.usedPercent,
     ...(window.resetAt ? { resetsAt: window.resetAt } : {}),
-    ...(readingPredatesReset(window.resetAt, row?.fetchedAt, now)
+    // A stale local reading was sampled at its session file's mtime, not at fetchedAt.
+    ...(readingPredatesReset(window.resetAt, row?.staleAsOf ?? row?.fetchedAt, now)
       ? { resetPassed: true as const }
       : {}),
   }));

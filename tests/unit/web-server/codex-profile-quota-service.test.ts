@@ -110,6 +110,39 @@ describe('Codex native profile quota DTO', () => {
     expect(JSON.stringify(before)).not.toContain('resetPassed');
   });
 
+  it('judges a stale local reading by its session time, not by when it was fetched', async () => {
+    const response = await getCodexProfileQuotas({
+      listProfiles: async () => [
+        { name: 'default', authValid: true },
+        { name: 'gmail', authValid: true },
+      ],
+      getRows: async () => [
+        // Fetched at 15:10 from a session file last written at 14:00, before the reset.
+        row('default', {
+          quotaSource: 'local',
+          health: 'warning',
+          fetchedAt: '2026-10-01T15:10:00Z',
+          staleAsOf: '2026-10-01T14:00:00Z',
+        }),
+        // A fresh local reading carries no staleAsOf and is current after the reset.
+        row('gmail', { quotaSource: 'local', fetchedAt: '2026-10-01T15:10:00Z' }),
+      ],
+      now: () => Date.parse('2026-10-01T15:10:00Z'),
+    });
+    expect(response.profiles[0]).toMatchObject({
+      status: 'available',
+      fetchedAt: '2026-10-01T15:10:00Z',
+    });
+    expect(response.profiles[0].windows[0]).toEqual({
+      key: 'five_hour',
+      label: '5-hour limit',
+      usedPercent: 25,
+      resetsAt: '2026-10-01T15:00:00Z',
+      resetPassed: true,
+    });
+    expect(JSON.stringify(response.profiles[1])).not.toContain('resetPassed');
+  });
+
   it('distinguishes expired, missing, and not-yet-retrieved saved logins without zeros', async () => {
     const response = await getCodexProfileQuotas({
       listProfiles: async () => [

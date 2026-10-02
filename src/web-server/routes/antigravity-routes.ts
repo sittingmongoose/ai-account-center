@@ -247,12 +247,13 @@ export function createAntigravityRouter(
       return;
     }
     try {
+      const accounts = await deps.getAccounts({ refresh: req.query.refresh === 'true' });
+      // One instant per response, so every account is judged against the same clock.
+      const at = now();
       res.json({
         schemaVersion: 1,
         hostId: 'ubuntu',
-        accounts: (await deps.getAccounts({ refresh: req.query.refresh === 'true' })).map(
-          (account) => markPassedResets(publicAccount(account), now())
-        ),
+        accounts: accounts.map((account) => markPassedResets(publicAccount(account), at)),
       });
     } catch {
       res.status(500).json({ error: 'Antigravity usage could not be read safely.' });

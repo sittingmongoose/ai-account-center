@@ -158,10 +158,12 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
   let calls: Calls;
   let deps: AntigravityApiDependencies;
   let now: number;
+  let clockReads: number;
 
   beforeEach(async () => {
     // The fixture reading is current unless a test moves the clock past its reset.
     now = Date.parse(SAMPLE_TIME);
+    clockReads = 0;
     calls = {
       inventory: 0,
       accounts: [],
@@ -212,7 +214,10 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
       createAntigravityRouter(
         deps,
         (req) => req.get('origin') === baseUrl && req.get('host') === new URL(baseUrl).host,
-        () => now
+        () => {
+          clockReads++;
+          return now;
+        }
       )
     );
     server = await new Promise<Server>((resolve) => {
@@ -397,6 +402,17 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
     now = Date.parse('2026-10-02T16:59:59.999Z');
     const before = await request('/profiles/quotas');
     expect(before.body.accounts[0].windows[0]).toEqual(account().windows[0]);
+  });
+
+  test('quota output judges every account in one response against one clock reading', async () => {
+    const second = account();
+    second.id = 'antigravity:profile:gmail';
+    second.capabilities.antigravityProfileId = 'gmail';
+    deps.getAccounts = async () => [account(), second];
+    const response = await request('/profiles/quotas');
+    expect(response.status).toBe(200);
+    expect(response.body.accounts).toHaveLength(2);
+    expect(clockReads).toBe(1);
   });
 
   test('quota output filters malformed windows without inventing an hourly interval', async () => {

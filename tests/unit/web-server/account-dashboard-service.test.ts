@@ -1113,4 +1113,39 @@ describe('consolidated account dashboard', () => {
     const kept = (await service.get()).accounts.find((account) => account.id === 'cursor:usage')!;
     expect(kept.windows[0]).toMatchObject({ usedPercent: 64, remainingPercent: 36 });
   });
+
+  it('judges a stale Codex local reading by its session time, not by when it was fetched', async () => {
+    const result = await new AccountDashboardService(
+      deps({
+        now: () => Date.parse('2026-10-01T15:10:00Z'),
+        getCodexRows: async (names) =>
+          names.map((name) =>
+            name === 'gmail'
+              ? // Local fallback read at 15:10 from a session file last written at 14:00,
+                // before the 15:00 five-hour reset: history, not the current window.
+                row(name, {
+                  quotaSource: 'local',
+                  health: 'warning',
+                  fetchedAt: '2026-10-01T15:10:00Z',
+                  staleAsOf: '2026-10-01T14:00:00Z',
+                })
+              : // A fresh local reading (no staleAsOf) after the reset is current.
+                row(name, { quotaSource: 'local', fetchedAt: '2026-10-01T15:10:00Z' })
+          ),
+      })
+    ).get();
+    const codex = (name: string) =>
+      result.accounts.find((account) => account.id === `codex:${name}`)!;
+    expect(codex('gmail')).toMatchObject({
+      fetchedAt: '2026-10-01T15:10:00.000Z',
+      sampledAt: '2026-10-01T14:00:00.000Z',
+    });
+    expect(codex('gmail').windows[0]).toMatchObject({
+      key: 'five_hour',
+      usedPercent: 30,
+      resetPassed: true,
+    });
+    expect(codex('party').sampledAt).toBe('2026-10-01T15:10:00.000Z');
+    expect(codex('party').windows[0].resetPassed).toBeUndefined();
+  });
 });
