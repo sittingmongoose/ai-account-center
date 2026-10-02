@@ -441,7 +441,7 @@ struct ActivePlatter: View {
     // Transparency and Increase Contrast, as in the concept.
     ZStack {
       if reduceTransparency {
-        shape.fill(Color(nsColor: .controlBackgroundColor))
+        shape.fill(palette.solidGroup)
         shape.fill(palette.accent.opacity(dark ? 0.24 : 0.18))
         shape.stroke(palette.accent.opacity(contrast == .increased ? 1 : 0.6), lineWidth: 2)
       } else {

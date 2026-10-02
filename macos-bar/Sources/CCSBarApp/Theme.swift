@@ -66,18 +66,20 @@ struct TrayPalette {
     return dark ? Color.white.opacity(0.09) : Color.black.opacity(0.09)
   }
 
-  /// Section group platters: a translucent lift on the glass (.fill.quinary in spirit), opaque under
-  /// Reduce Transparency.
+  /// Section group platters: a translucent lift on the glass (.fill.quinary in spirit). Under Reduce
+  /// Transparency they turn solid and stay a lift: the concept's --lg-solid-group (white in light; in dark
+  /// a grey above the opaque panel, where controlBackgroundColor would sink below it as a well).
   var group: Color {
-    if reduceTransparency { return Color(nsColor: .controlBackgroundColor) }
+    if reduceTransparency { return solidGroup }
     return dark ? Color.white.opacity(0.055) : Color.white.opacity(0.34)
   }
+  var solidGroup: Color { dark ? Self.hex(0x2D2E33) : Self.hex(0xFFFFFF) }
   var rowHover: Color { dark ? Color.white.opacity(0.07) : Self.hex(0x767680, 0.11) }
   var controlInner: Color { dark ? Color.white.opacity(0.09) : Self.hex(0x767680, 0.14) }
 
   // Meters.
   var track: Color {
-    if reduceTransparency { return Color(nsColor: .separatorColor) }
+    if reduceTransparency { return dark ? Self.hex(0x45464C) : Self.hex(0xDADDE2) }  // --lg-solid-track
     if increasedContrast { return dark ? Self.hex(0x8C8C96, 0.42) : Self.hex(0x767680, 0.32) }
     return dark ? Self.hex(0x8C8C96, 0.30) : Self.hex(0x767680, 0.20)
   }
@@ -167,22 +169,22 @@ struct GlassControl: ViewModifier {
     }
   }
 
-  @ViewBuilder private func apply<S: Shape>(_ content: Content, _ shape: S) -> some View {
+  @ViewBuilder private func apply<S: InsettableShape>(_ content: Content, _ shape: S) -> some View {
     if staticRender && reduceTransparency {
       // What system glass shows under Reduce Transparency: a solid control (--lg-solid-ctl) with an edge.
       let dark = scheme == .dark
       content
         .background(shape.fill(tint ?? .clear))
         .background(shape.fill(dark ? Color(.sRGB, red: 0x3A / 255, green: 0x3B / 255, blue: 0x40 / 255) : .white))
-        .overlay(shape.stroke(dark ? Color(.sRGB, red: 0xEB / 255, green: 0xEB / 255, blue: 0xF5 / 255, opacity: 0.34)
+        .overlay(shape.strokeBorder(dark ? Color(.sRGB, red: 0xEB / 255, green: 0xEB / 255, blue: 0xF5 / 255, opacity: 0.34)
           : Color(.sRGB, red: 0x1C / 255, green: 0x1C / 255, blue: 0x24 / 255, opacity: 0.38), lineWidth: 0.5))
     } else if staticRender {
       let dark = scheme == .dark
       content
         .background(shape.fill(Color.white.opacity(dark ? 0.11 : 0.52)))
         .background(shape.fill(tint ?? .clear))
-        .overlay(shape.stroke(Color.black.opacity(dark ? 0.40 : 0.10), lineWidth: 0.5))
-        .overlay(shape.stroke(LinearGradient(colors: [Color.white.opacity(dark ? 0.35 : 0.9), .clear],
+        .overlay(shape.strokeBorder(Color.black.opacity(dark ? 0.40 : 0.10), lineWidth: 0.5))
+        .overlay(shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(dark ? 0.35 : 0.9), .clear],
           startPoint: .top, endPoint: .center), lineWidth: 0.75))
         .shadow(color: .black.opacity(dark ? 0.25 : 0.08), radius: 3, y: 1)
     } else {
