@@ -17,15 +17,18 @@ import { authMiddleware } from '../../../src/web-server/middleware/auth-middlewa
 import claudeDesktopRoutes, {
   prefersRespondAsync,
 } from '../../../src/web-server/routes/claude-desktop-routes';
+import * as profileService from '../../../src/web-server/services/claude-desktop-profile-service';
 import * as transport from '../../../src/web-server/services/claude-desktop-transport';
 import { ClaudeDesktopTransportError } from '../../../src/web-server/services/claude-desktop-transport';
 import {
   ClaudeOpenOperations,
+  getClaudeOpenOperations,
   type ClaudeOpenOperation,
 } from '../../../src/web-server/services/claude-open-operations';
 import { ClaudeHistoryOpenHeldError } from '../../../src/web-server/services/claude-desktop-open-service';
 import { ProfileError } from '../../../src/errors/error-types';
 import { getRecentLogEntries } from '../../../src/services/logging';
+import { getCcsDir } from '../../../src/utils/config-manager';
 
 const fx = require('../claude-history/synthetic-history-fixtures.cjs');
 const core = require('../../../scripts/claude-history/history-index-sync.cjs');
@@ -56,6 +59,7 @@ let appendOutcome: 'success' | 'lost' = 'success';
 let appendGate: Gate | null = null;
 let openGate: Gate | null = null;
 let openFailure: Error | null = null;
+let readGates: Gate[] = [];
 
 function snapshot(platform: string) {
   const records = platform === 'mac' ? [fx.envelope(fx.record(seed))] : [];
@@ -144,7 +148,12 @@ async function request(
     headers: { 'Content-Type': 'application/json', ...headers },
     ...(method === 'POST' ? { body: JSON.stringify({ platform: 'windows' }) } : {}),
   });
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  const applied = response.headers.get('preference-applied');
+  return {
+    status: response.status,
+    body: (await response.json()) as Record<string, unknown>,
+    ...(applied === null ? {} : { preferenceApplied: applied }),
+  };
 }
 
 const ASYNC = { Prefer: 'respond-async' };
@@ -180,6 +189,7 @@ beforeEach(async () => {
   appendCalls = opened = 0;
   appendOutcome = 'success';
   appendGate = openGate = null;
+  readGates = [];
   openFailure = null;
   writeManifest();
   spyOn(transport, 'runClaudeHistoryHelper').mockImplementation(
@@ -228,6 +238,7 @@ beforeEach(async () => {
 afterEach(async () => {
   appendGate?.release();
   openGate?.release();
+  for (const hold of readGates) hold.release();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   mock.restore();
   if (previousCcsDir === undefined) delete process.env.CCS_DIR;
@@ -479,6 +490,209 @@ describe('Claude Open without Prefer: respond-async (the shipped clients)', () =
       platform: 'windows',
     });
     expect(JSON.stringify(last)).not.toMatch(/platyr|synthetic|Synthetic/);
+  });
+});
+
+interface Pause {
+  /** Resolves once the paused read waits at its gate. */
+  entered: Promise<void>;
+  release: () => void;
+}
+/**
+ * Pause later profile reads on gates the test releases by hand. `reads` counts the
+ * profile reads from now (0 is the next one); each listed read waits at its own gate.
+ */
+function pauseProfileReads(...reads: number[]): Pause[] {
+  const read = profileService.listClaudeDesktopProfiles;
+  const pauses = reads.map(() => {
+    const hold = gate();
+    readGates.push(hold);
+    let enter = () => {};
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    return { hold, enter, entered };
+  });
+  let count = 0;
+  spyOn(profileService, 'listClaudeDesktopProfiles').mockImplementation(async () => {
+    const pause = pauses[reads.indexOf(count++)];
+    if (pause) {
+      pause.enter();
+      await pause.hold.promise;
+    }
+    return read();
+  });
+  return pauses.map(({ entered, hold }) => ({ entered, release: hold.release }));
+}
+
+async function waitUntil(done: () => boolean, what: string): Promise<void> {
+  for (const deadline = Date.now() + 5000; !done(); ) {
+    if (Date.now() > deadline) throw new Error(what);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+// POST B passes the running check, then waits in a profile read while POST A starts
+// the Open, whose history copy arms the hold marker. B must join A, never refuse it.
+const PAUSE_POINTS = [
+  ['in the managed-history preflight', 0],
+  ['in the launch check', 1],
+] as const;
+
+describe('Claude Open that waits while another click starts the Open', () => {
+  it.each(PAUSE_POINTS)(
+    'with Prefer, joins it with the same 202 and operationId (paused %s)',
+    async (_where, skip) => {
+      appendGate = gate();
+      const [paused] = pauseProfileReads(skip);
+      const second = open();
+      await paused.entered;
+      const first = await open();
+      expect(first).toEqual({
+        status: 202,
+        body: {
+          id: 'platyr',
+          platform: 'windows',
+          state: 'checking',
+          operationId: expect.stringMatching(/^op_[a-f0-9]{24}$/),
+        },
+        preferenceApplied: 'respond-async',
+      });
+      // The copy is appending, so its hold marker is armed when B resumes.
+      await waitForState('copying');
+      paused.release();
+      expect(await second).toEqual({
+        status: 202,
+        body: {
+          id: 'platyr',
+          platform: 'windows',
+          state: 'copying',
+          operationId: first.body.operationId,
+        },
+        preferenceApplied: 'respond-async',
+      });
+      appendGate.release();
+      expect((await waitForState('opened')).id).toBe(first.body.operationId as string);
+      expect(appendCalls).toBe(1);
+      expect(opened).toBe(1);
+    }
+  );
+
+  it.each(PAUSE_POINTS)(
+    'without Prefer, waits for it and answers the same 200 (paused %s)',
+    async (_where, skip) => {
+      appendGate = gate();
+      const [paused] = pauseProfileReads(skip);
+      let secondDone = false;
+      const second = openAndWait().finally(() => {
+        secondDone = true;
+      });
+      await paused.entered;
+      const first = openAndWait();
+      const operation = await waitForState('copying');
+      // A already waits on its Open; the next wait on it is B joining.
+      const waits = spyOn(ClaudeOpenOperations.prototype, 'settled');
+      paused.release();
+      await waitUntil(
+        () => waits.mock.calls.length > 0 || secondDone,
+        'The paused POST neither joined the Open nor answered.'
+      );
+      // B waits for the Open it joined; it never answers before that Open ends.
+      expect(secondDone).toBe(false);
+      appendGate.release();
+      const ok = { status: 200, body: { opened: true, id: 'platyr', platform: 'windows' } };
+      expect(await first).toEqual(ok);
+      expect(await second).toEqual(ok);
+      expect(await currentOperation()).toMatchObject({ id: operation.id, state: 'opened' });
+      expect(appendCalls).toBe(1);
+      expect(opened).toBe(1);
+    }
+  );
+
+  it.each(PAUSE_POINTS)(
+    'without Prefer, answers the same refusal when that Open ends unconfirmed (paused %s)',
+    async (_where, skip) => {
+      appendGate = gate();
+      appendOutcome = 'lost';
+      const [paused] = pauseProfileReads(skip);
+      let secondDone = false;
+      const second = openAndWait().finally(() => {
+        secondDone = true;
+      });
+      await paused.entered;
+      const first = openAndWait();
+      const operation = await waitForState('copying');
+      const waits = spyOn(ClaudeOpenOperations.prototype, 'settled');
+      paused.release();
+      await waitUntil(
+        () => waits.mock.calls.length > 0 || secondDone,
+        'The paused POST neither joined the Open nor answered.'
+      );
+      // B waits for the Open it joined; it never answers before that Open ends.
+      expect(secondDone).toBe(false);
+      appendGate.release();
+      const refused = { status: 409, body: { error: UNCONFIRMED, code: 'history_unconfirmed' } };
+      expect(await first).toEqual(refused);
+      expect(await second).toEqual(refused);
+      expect(await currentOperation()).toMatchObject({
+        id: operation.id,
+        state: 'blocked_uncertain',
+      });
+      expect(appendCalls).toBe(1);
+      expect(opened).toBe(0);
+    }
+  );
+
+  it.each(PAUSE_POINTS)(
+    'joins an Open that started before its copy armed the hold (paused %s)',
+    async (_where, skip) => {
+      // B's read waits, then A's three reads: preflight, launch check and its own Open.
+      const [paused, firstOpen] = pauseProfileReads(skip, skip + 3);
+      const second = open();
+      await paused.entered;
+      const first = await open();
+      expect(first.status).toBe(202);
+      // A runs but has not reached its copy, so no hold refuses B; B still joins A.
+      await firstOpen.entered;
+      paused.release();
+      expect(await second).toEqual({
+        status: 202,
+        body: {
+          id: 'platyr',
+          platform: 'windows',
+          state: 'checking',
+          operationId: first.body.operationId,
+        },
+        preferenceApplied: 'respond-async',
+      });
+      firstOpen.release();
+      expect((await waitForState('opened')).id).toBe(first.body.operationId as string);
+      expect(appendCalls).toBe(1);
+      expect(opened).toBe(1);
+    }
+  );
+
+  it('keeps 409 for a durable hold when no Open runs for this scope, profile and platform', async () => {
+    // A marker left by an earlier unconfirmed copy; nothing is running for it.
+    core.armPendingMarker(directory, 'platyr', 'windows').release();
+    // Running Opens that are not this one: another scope, and this profile on the Mac.
+    const elsewhere = gate();
+    const operations = getClaudeOpenOperations();
+    operations.start(`${directory}-other-scope`, 'platyr', 'windows', () => elsewhere.promise);
+    operations.start(getCcsDir(), 'platyr', 'mac', () => elsewhere.promise);
+    try {
+      for (const headers of [ASYNC, {}]) {
+        expect(await request('POST', '/platyr/open', headers)).toEqual({
+          status: 409,
+          body: { error: UNCONFIRMED, code: 'history_unconfirmed' },
+        });
+      }
+      expect(operations.running(getCcsDir(), 'platyr', 'windows')).toBeNull();
+      expect(appendCalls).toBe(0);
+      expect(opened).toBe(0);
+    } finally {
+      elsewhere.release();
+    }
   });
 });
 

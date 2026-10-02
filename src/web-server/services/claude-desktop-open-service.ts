@@ -61,7 +61,11 @@ async function resolveOpenTarget(id: string, platform: 'mac' | 'windows') {
 /**
  * Whether this Open would run the managed history copy first (a verified
  * private policy exists for the profile). False whenever that is not certain;
- * the ordinary Open then reports any refusal exactly as before.
+ * the ordinary Open then reports any refusal exactly as before. The one
+ * refusal raised here is a held copy (`ClaudeHistoryOpenHeldError`), so the
+ * caller can tell the hold of an Open that is running for this profile, which
+ * a click joins, from a durable one. Profiles without a managed history copy
+ * never hold, so their ordinary Open is unchanged.
  */
 export async function claudeOpenUsesManagedHistory(
   id: string,
@@ -70,7 +74,8 @@ export async function claudeOpenUsesManagedHistory(
   try {
     const { profile } = await resolveOpenTarget(id, platform);
     return (await loadClaudeHistoryPolicy(profile)) !== null;
-  } catch {
+  } catch (error) {
+    if (error instanceof ClaudeHistoryOpenHeldError) throw error;
     return false;
   }
 }
