@@ -189,6 +189,28 @@ def update_cli(install, deadline):
         return result(install.app_id, install.platform, "failed", before, before, install.manager, "update_failed", attempted)
 
 
+def check_readiness(install):
+    """Per-app pre-flight before an update is attempted. Read-only: no installs,
+    stops or restarts. Returns None when ready, else (status, code): 'failed'
+    when the check ran and said no (no supported updater, or running instances
+    that cannot restart safely), 'unknown' when the check itself could not run.
+    """
+    try:
+        if install.manager == "unsupported":
+            return ("failed", "unsupported")
+        if install.app_id.endswith("-desktop"):
+            # Desktop updaters verify before stopping anything; the manager
+            # check above is the whole pre-flight.
+            return None
+        contexts, _targets = cli_contexts(install, scan(install.platform))
+        check_terminal(install.platform, contexts)
+    except UpdateFailure as error:
+        return ("failed", error.code)
+    except Exception:
+        return ("unknown", "readiness_unknown")
+    return None
+
+
 def run_apply(platform):
     results = []
     deadline = time.monotonic() + 15 * 60
@@ -203,11 +225,16 @@ def run_apply(platform):
                 results.append(result(app_id, platform, "not_installed"))
             elif time.monotonic() >= deadline:
                 results.append(result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout"))
-            elif app_id.endswith("-desktop"):
-                try: results.append(update_desktop(install, deadline))
-                except Exception: results.append(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
             else:
-                results.append(update_cli(install, deadline))
+                gate = check_readiness(install)
+                if gate is not None:
+                    status, code = gate
+                    results.append(result(app_id, platform, status, install.version, install.version, install.manager, code))
+                elif app_id.endswith("-desktop"):
+                    try: results.append(update_desktop(install, deadline))
+                    except Exception: results.append(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
+                else:
+                    results.append(update_cli(install, deadline))
     return {"results": results}
 
 

@@ -55,6 +55,33 @@ export function createAppUpdateRouter(service?: AppUpdateService): Router {
       res.status(500).json({ error: 'App updates could not start safely.' });
     }
   });
+  router.post('/cancel', (req, res) => {
+    if (
+      typeof req.headers.origin !== 'string' ||
+      !req.headers.origin ||
+      !isDashboardWebSocketOriginAllowed(req)
+    ) {
+      res.status(403).json({ error: 'App updates require the dashboard origin.' });
+      return;
+    }
+    if (!req.is('application/json')) {
+      res.status(415).json({ error: 'App updates require application/json.' });
+      return;
+    }
+    if (
+      Object.keys(req.query).length !== 0 ||
+      !req.body ||
+      typeof req.body !== 'object' ||
+      Array.isArray(req.body) ||
+      Object.keys(req.body).length !== 0
+    ) {
+      res.status(400).json({ error: 'Provide an empty JSON object.' });
+      return;
+    }
+    const updater = service ?? getAppUpdateService();
+    const outcome = updater.cancel();
+    res.status(outcome.cancelling ? 202 : 200).json(outcome);
+  });
   return router;
 }
 
