@@ -1,34 +1,97 @@
 # AI Account Center for macOS
 
 The macOS menu bar app in [AI Account Center](https://github.com/sittingmongoose/ai-account-center), renamed from the CCS Bar accounts edition. Its packaging originated in
-[CCS Bar](https://github.com/kaitranntt/ccs/tree/main/macos-bar); upstream credit, license and compatibility identifiers are preserved. The Windows WPF version
-matches its 760-point navy panel, individual Claude/Codex rows, compact provider rows, account detail popovers, blue quota bars, and color palette.
+[CCS Bar](https://github.com/kaitranntt/ccs/tree/main/macos-bar); upstream credit, license and compatibility identifiers are preserved. The panel is 760 points wide
+and follows the AI Account Center tray design shared with the Windows tray: the same order, data rules and active-account indicator.
 
-The panel shows Claude, Codex, Antigravity, Muse Code, Cursor, Kimi Code, Qwen,
-Z.ai, and OpenCode Go usage returned by AI Account Center. Unknown usage stays unavailable;
-reset and separate expiration labels use actual server timestamps in the computer's local time. Supported visible hourly, rolling, weekly, and monthly windows are shown, with extra usage, numeric remaining balances, and explicit unlimited/enabled states. Cached
-rows remain marked. Provider credentials never enter the app. All four Claude and all three Codex accounts are visible directly under their section labels. Each compact row shows actual quota percentages and reset times, alongside Mac/Windows Claude launch buttons or Codex activation controls. The active Codex account has a green check, highlighted row, and its email in the panel header. The seven other providers use compact usage rows. Info buttons expose the supported visible windows, balances, and expiration; raw provider fields remain intact. Codex Chat pass and unknown Pro five-hour windows, Qwen plan subscription, and empty Z.ai reset-pack summaries are hidden; actual Lex five-hour usage and real extra balances remain visible. Fractional display values use at most two decimal places. Native AppKit tooltip labels name each info and footer action. The footer places Codex auto-switch and its threshold beside Dashboard, Refresh and Settings; no disclosure chevrons or account expansion is required. The panel grows up to the available workarea and scrolls only when the content exceeds it. Actual reported usage above 100% remains visible; only quota bar widths are capped at 100%.
+The menu-bar panel is one macOS 27 Liquid Glass surface: a regular `NSGlassEffectView` (20 pt corners) under
+the status item, with content rows on translucent group platters and glass controls (SwiftUI `glassEffect`,
+`GlassEffectContainer`, `glassEffectUnion`, a materializing Settings close button). Under Reduce Transparency the
+system glass turns opaque and the panel's own fills switch to opaque system colours; Increase Contrast adds borders.
+Text is the system font (SF Pro) with tabular digits, and every percent sign is part of its number's run.
 
-Controls are limited to opening configured Claude profiles on Mac or Windows, safely
-activating native Codex profiles on the shared Ubuntu runtime, toggling Codex
-automatic switching, and setting its confirmed threshold, with poll/idle settings. Seven added
-providers have usage display only. Footer controls open the dashboard, refresh,
-configure the connection and sign-in startup, or quit. Spend charts, pool routing,
-tier locking, profile editing, alerts, and upstream automatic updates are absent.
+The layout and order are today's: header (Apex Soft mark, name, "9 of 9 reporting · cached · updated 3:15 PM", menu);
+Claude; Codex; Antigravity; the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go) as one group;
+and a footer that floats over the list (Codex auto-switch and threshold, Dashboard, Refresh, Settings).
+
+- **Usage is never invented.** A missing reading reads "Unavailable" (or "Not reported yet"), never 0. Values keep at
+  most two decimals. Codex Chat pass windows, the Qwen subscription row and empty Z.ai reset-pack summaries stay
+  hidden; a Codex account gets a 5-hour cell only when its exact `five_hour` window is reported.
+- **Claude Fable** has its own column for Max plans only, read from the provider's `seven_day_fable` window; a Max
+  account without one shows "Not reported yet", and Pro accounts have no Fable cell.
+- **Active account (Selected row).** In Codex and Antigravity the active row sits on one accent-tinted platter that
+  glides to the new row after a switch (ease-out, no overshoot). Its action slot shows a filled check, "Active" and
+  "on Ubuntu" with no button chrome, lined up exactly with the Activate capsules above and below (the capsule's label
+  inset is the check plus its gap). `--check-native-tooltips` measures this alignment.
+- **Antigravity switching** uses the dashboard routes `POST /api/antigravity/profiles/:id/activate`,
+  `POST /api/antigravity/profiles/:id/confirm` and `PUT /api/antigravity/auto-switch`. Activate is offered only when the
+  dashboard reports `antigravityCanActivate` for the Ubuntu host. Running Antigravity programs produce an inline
+  confirmation listing them; only "Stop, switch, restart" sends the one-use token, once. With two accounts the section
+  header carries Antigravity's own auto-switch and threshold (percent used); it can be turned on once the shared quota
+  pool has been chosen in the dashboard.
+- **Hidden providers.** Providers hidden in the dashboard's Accounts & Settings are left out of the panel when the
+  dashboard DTO carries them (`hiddenProviders`, top level or inside `settings`); otherwise every provider shows.
+- **Meters** are 6 pt tracks with quarter ticks, a severity fill (calm, warning from 80 %, critical from 95 %, and an
+  overage cap above 100 %) and the auto-switch notch. Widths and numbers ease out and never pass the reading.
+  Reported usage above 100 % stays in the text; only the bar is capped.
+- **Motion.** The first open of a session staggers the blocks in and sweeps every meter from zero while the numbers
+  count up; later opens animate only readings that changed since the panel last closed. The menu-bar percentage rolls
+  to its new value, Refresh spins while it works, the gear turns as Settings slides in, and the active check draws in
+  after a switch. Reduce Motion shows the settled state.
+- **Details.** Clicking anywhere on an account or provider row opens its details popover (every window with its exact
+  reset, balances and expiries, and Activate or Active). Nested buttons act on their own and never open details.
+- **Settings** opens inside the panel, sliding over the list: the gear toggles it, the glass X and Escape close it.
+  It holds Appearance (Light / Dark / Auto, stored on this Mac), the connection, what the menu bar shows (the active
+  Codex or Antigravity account, or the logo only; % left or % used), the open shortcut, Launch at login, read-only
+  facts from the dashboard and About.
+
+Controls are limited to opening configured Claude profiles on Mac or Windows, safely activating native Codex and
+Antigravity profiles on the shared Ubuntu runtime, and the two automatic-switching policies. Footer controls open the
+dashboard, refresh and toggle Settings; the header menu offers Settings, About and Quit.
+
+## Opening the panel
+
+- Click the Apex glyph in the menu bar.
+- **Launch the app again** from Spotlight, Launchpad (Apps), Finder or the Dock, or with
+  `open -a "AI Account Center"`: while it runs, macOS sends the running copy a reopen event
+  (`applicationShouldHandleReopen`) and the panel opens. If it was quit, the same launch starts it and opens the
+  panel. The login item starts it quietly in the menu bar.
+- **Option-Command-A** opens or closes the panel from any app. The shortcut uses Carbon `RegisterEventHotKey`, which
+  needs no Accessibility or Input Monitoring permission. It is on by default and can be turned off in Settings (Open
+  shortcut). Finder also uses Option-Command-A for Deselect All; while the shortcut is on, the panel wins. If another
+  app has already claimed the combination, Settings says so and the other ways still work.
+- The installer puts the app in `~/Applications`, which Spotlight and Launchpad index. New installer backups are kept
+  in `.noindex` folders so search never offers an old copy.
+- The panel closes when you click outside it, switch apps or Spaces, press Escape (after Settings), or click the
+  menu-bar glyph again.
 
 ## Build, verify, package, install
 
-macOS 14+, Swift 5.9+; Command Line Tools or Xcode are sufficient. No npm/CCS CLI
-is needed on the Mac because this edition connects to the existing dashboard.
+macOS 26 or later and Xcode 26 or later (the build Mac uses Xcode 27, Swift 6.4); the package uses
+`swift-tools-version:6.2` with the Swift 5 language mode. No npm/CCS CLI is needed on the Mac because this edition
+connects to the existing dashboard.
 
 ```sh
 swift build -c release
-swift run ccs-bar-check
+swift run ccs-bar-check                                  # offline core and contract checks
+export AAC_ASSETS_DIR="$PWD/Resources/Assets"            # unbundled runs read artwork from the source tree
+.build/release/CCSBar --check-native-tooltips Tests/Fixtures/tray-concept-preview.json
+.build/release/CCSBar --check-native-packs Tests/Fixtures/tray-concept-preview.json /tmp/packs.png
+.build/release/CCSBar --self-test Tests/Fixtures/tray-concept-preview.json
+.build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/panel.png --dark [--settings]
+python3 Scripts/migration_check.py
 ./Scripts/package_app.sh
 ./Scripts/install_user.sh --launch
 ```
 
-The installer stages and verifies `AI Account Center.app` before replacing the installed app in `~/Applications`. It preserves Gatekeeper metadata and the existing sign-in startup preference. Existing owned apps are saved in unique backups under `~/Library/Application Support/CCS Bar/Backups`; unrelated apps or foreign symlinks at either install path are rejected. With `--launch`, it starts only this app through the enabled GUI launch agent, or opens it directly if sign-in startup is disabled.
+- `--check-native-tooltips` checks every icon control's help tag, the full-row Details targets, that nested controls
+  are never the row, and the Selected-row alignment within 0.5 pt.
+- `--self-test` opens the real glass panel from a fixture (no sign-in, no network): status item and reading, the open
+  shortcut, the glass panel under the menu bar, gear and Escape for Settings, relaunch reopen and Appearance. It shows
+  the panel on screen for a few seconds.
+- `--render-preview` draws the panel content offscreen (`--light`, `--dark`, `--settings`). System glass is composited
+  by the window server and never reaches an offscreen render, so previews bake a glass stand-in behind the real content
+  and pin "now" to the fixture's capture time.
 
 ### Rename compatibility
 
@@ -40,8 +103,9 @@ The installer stages and verifies `AI Account Center.app` before replacing the i
 
 Connection settings save `~/.ccs/bar/accounts-connection.json` in a private
 directory (0700) with file mode 0600. The file is not part of the source or app
-bundle. Its keys are `baseURL`, `username`, and `password`; configure them in the
-native connection window or deploy the file privately. Existing saved connection files are preserved during app upgrades. The client signs in to
+bundle. Its keys are `baseURL`, `username`, and `password`; configure them in
+Settings › Connection (or the first-run connect screen in the panel) or deploy the
+file privately. Device pairing waits for the dashboard's device-token routes. Existing saved connection files are preserved during app upgrades. The client signs in to
 `POST /api/auth/login`, retains cookies only in an ephemeral session, and sends
 the dashboard's exact Origin on mutations. It does not disable dashboard
 authentication. Failed login polling backs off for 15 minutes.
@@ -52,7 +116,7 @@ reads use the dashboard’s saved usage refresh interval (60 seconds by default)
 Adjust it in dashboard Settings; manual Refresh bypasses the normal sample cache. The dashboard service owns Codex automatic switching,
 so closing this app does not disable it.
 
-When manual activation finds running Codex programs, the native confirmation dialog lists their names, PIDs and roles, and warns that stopping them interrupts active work. Only Yes — Stop, Switch, Restart sends the server's one-use token. Cancel makes no further request. Expired or stale offers require a fresh Activate to review the current programs; confirmed requests are never replayed automatically after an authentication failure. Automatic switching still waits for idle.
+When manual activation finds running Codex programs, an inline confirmation under the row lists their names, PIDs and roles, and warns that stopping them interrupts active work. Only "Stop, switch, restart" sends the server's one-use token. Cancel makes no further request. Expired or stale offers require a fresh Activate to review the current programs; confirmed requests are never replayed automatically after an authentication failure. Automatic switching still waits for idle.
 
 The Used-threshold menu shows the confirmed stored setting: 85/90/95/98 percent
 used map to 15/10/5/2 percent remaining. Selecting a threshold preserves the
@@ -77,6 +141,8 @@ upstream edition.
 The original package layout and ad-hoc packaging script came from
 `kaitranntt/ccs`'s `macos-bar` at fork commit
 `1a4a68dee71063ecb8b2138d7c55ceed552150d3`, under the included MIT license.
-Provider PNG marks were rendered from the fork's existing SVG assets, with Cursor's icon taken from the installed Mac app. The blue stacked CCS mark and Muse/OpenCode fallback marks follow the supplied concept.
+Provider marks are the official artwork listed with sources and SHA-256 in `Resources/Assets/PROVIDER-SOURCES.md`
+(light-surface variants where the provider ships one; Kimi Code uses its official app icon). The Apex Soft menu-bar
+template, header mark and app icon come from the project's own logo export.
 All accounts models, authenticated client, grouped views, and user installer are
 the accounts-edition implementation.

@@ -102,6 +102,14 @@ public enum TrayColumns {
     return first.glanceMeters.map { (key: $0.key, label: shortLabel(provider: "antigravity", $0)) }
   }
 
+  /// Full window names for Details: the provider's label, with the terse Codex and Claude ones spelled out.
+  public static func fullLabel(provider: String, _ window: AccountQuotaWindow) -> String {
+    if window.isFable { return window.label.isEmpty ? "Weekly Fable usage" : window.label }
+    if provider == "codex" { return ["week": "Weekly", "5h": "5-hour"][window.label] ?? window.label }
+    if provider == "claude" { return ["Five-hour usage": "5-hour usage"][window.label] ?? window.label }
+    return window.label.isEmpty ? "Usage" : window.label
+  }
+
   /// Short meter captions, as in the concept.
   public static func shortLabel(provider: String, _ window: AccountQuotaWindow) -> String {
     if window.isFable { return "Fable" }

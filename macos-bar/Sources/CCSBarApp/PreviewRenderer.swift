@@ -13,6 +13,7 @@ enum PreviewRenderer {
     var settings = false
     var width: CGFloat = 760
     var wallpaper = true
+    var details: String?
 
     init(_ arguments: [String]) {
       for argument in arguments {
@@ -21,6 +22,7 @@ enum PreviewRenderer {
         if argument == "--settings" { settings = true }
         if argument == "--plain" { wallpaper = false }
         if argument.hasPrefix("--width="), let value = Double(argument.dropFirst(8)) { width = CGFloat(value) }
+        if argument.hasPrefix("--details=") { details = String(argument.dropFirst(10)) }
       }
     }
   }
@@ -65,6 +67,34 @@ enum PreviewRenderer {
     return (host, state, window)
   }
 
+  /// The Details popover's content for one account (or a provider's accounts), as the popover shows it.
+  private static func detailsHost(_ dashboard: AccountDashboard, accountID: String, options: Options) throws -> NSView {
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    let appearance = NSAppearance(named: options.appearance == "dark" ? .darkAqua : .aqua)
+    NSApplication.shared.appearance = appearance
+    TrayFormat.referenceNow = AccountFormatting.date(dashboard.updatedAt)
+    let accounts = dashboard.accounts.filter { $0.id == accountID || $0.provider == accountID }
+    guard !accounts.isEmpty else { throw BarClientError.decoding }
+    let model = AccountsViewModel(preview: dashboard)
+    let root = AccountDetailsPopover(model: model, accounts: accounts, maxHeight: 4000)
+      .background(PreviewGlass())
+      .environment(\.trayStaticRender, true)
+      .modifier(PreviewActiveControls(enabled: true))
+    let host = NSHostingView(rootView: root)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 470, height: 600), styleMask: .borderless,
+      backing: .buffered, defer: false)
+    window.appearance = appearance
+    window.contentView = host
+    window.setFrameOrigin(NSPoint(x: -30_000, y: -30_000))
+    window.orderFrontRegardless()
+    settle(host)
+    let size = host.fittingSize
+    window.setContentSize(size)
+    host.frame = NSRect(origin: .zero, size: size)
+    settle(host)
+    return host
+  }
+
   private static func settle(_ view: NSView) {
     for _ in 0..<4 {
       view.layoutSubtreeIfNeeded()
@@ -78,7 +108,12 @@ enum PreviewRenderer {
     do {
       let options = Options(arguments)
       let dashboard = try loadFixture(input)
-      let (host, _, _) = host(dashboard, options: options)
+      let host: NSView
+      if let id = options.details {
+        host = try detailsHost(dashboard, accountID: id, options: options)
+      } else {
+        host = Self.host(dashboard, options: options).0
+      }
       let size = host.bounds.size
       if ProcessInfo.processInfo.environment["AAC_PREVIEW_DEBUG"] == "1" {
         func dump(_ view: NSView, _ depth: Int) {

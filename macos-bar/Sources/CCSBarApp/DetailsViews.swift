@@ -10,7 +10,7 @@ struct AccountDetailsPopover: View {
   var maxHeight: CGFloat = 520
 
   var body: some View {
-    ScrollView {
+    PanelScroll {
       VStack(alignment: .leading, spacing: 18) {
         ForEach(accounts) { account in
           AccountDetailsBody(model: model, account: account)
@@ -20,7 +20,6 @@ struct AccountDetailsPopover: View {
       .padding(16)
       .frame(width: 470, alignment: .leading)
     }
-    .scrollIndicators(.automatic)
     .frame(width: 470)
     .frame(maxHeight: maxHeight)
     .fixedSize(horizontal: false, vertical: accounts.count == 1)
@@ -56,9 +55,13 @@ struct AccountDetailsBody: View {
             alignment: .leading, spacing: 12) {
             ForEach(meters) { window in
               VStack(alignment: .leading, spacing: 3) {
-                MeterView(key: "\(account.id)|\(window.key)", window: window, labelText: window.label,
-                  showAmount: true, motion: MeterMotion(animate: false))
-                Text(TrayFormat.longReset(window.resetAt)).font(.system(size: 11)).foregroundStyle(palette.label2).lineLimit(1)
+                MeterView(key: "\(account.id)|\(window.key)", window: window,
+                  labelText: TrayColumns.fullLabel(provider: account.provider, window),
+                  motion: MeterMotion(animate: false), detail: true)
+                if let used = window.used, let limit = window.limit {
+                  Text("\(TrayFormat.number(used)) of \(TrayFormat.number(limit))\(window.unit.map { " \($0)" } ?? "")")
+                    .font(.system(size: 11.5)).monospacedDigit().foregroundStyle(palette.label2).lineLimit(1)
+                }
                 if let cached = AccountFormatting.cachedSample(status: window.status, sampledAt: window.sampledAt) {
                   Text(cached).font(.system(size: 11)).foregroundStyle(palette.warnText).lineLimit(1)
                 }

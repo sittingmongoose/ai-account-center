@@ -91,6 +91,8 @@ struct MeterView: View {
   var unavailableHelp = "Unavailable: no reading was reported, which is not the same as zero."
   var hovered = false
   var motion = MeterMotion()
+  /// Details form: the foot carries the full reset date, time and countdown.
+  var detail = false
   @State private var shown: Double?
   @Environment(\.trayStaticRender) private var staticRender
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -144,7 +146,12 @@ struct MeterView: View {
 
   @ViewBuilder private func foot(_ palette: TrayPalette) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
-      if let window { ResetLabel(iso: window.resetAt) }
+      if detail {
+        Text(TrayFormat.longReset(window?.resetAt)).font(.system(size: 11.5)).foregroundStyle(palette.label2).lineLimit(1)
+          .minimumScaleFactor(0.85)
+      } else if let window {
+        ResetLabel(iso: window.resetAt)
+      }
       Spacer(minLength: 0)
       if showAmount, let window, let used = window.used, let limit = window.limit, limit > 0 {
         Text("\(TrayFormat.number(used)) of \(limit >= 1_000_000 ? limit.formatted(.number.notation(.compactName)) : TrayFormat.number(limit))\(window.unit.map { " \($0)" } ?? "")")
@@ -181,17 +188,20 @@ struct MeterView: View {
   }
 }
 
-/// "6d 20h" or "8:15 PM" with a clock glyph; quiet text, emphasised when under two hours.
+/// "6d 20h" or "8:15 PM" with a clock glyph; quiet text, emphasised when under two hours. In a tight
+/// column the glyph gives way before the text is shortened.
 struct ResetLabel: View {
   let iso: String?
   var body: some View {
     withPalette { palette in
       if let text = TrayFormat.shortReset(iso) {
         let soon = TrayFormat.isSoon(iso)
-        HStack(spacing: 4) {
-          Image(systemName: "clock").font(.system(size: 10.5, weight: .medium))
-          Text(text).font(.system(size: 11.5, weight: soon ? .medium : .regular)).monospacedDigit().lineLimit(1)
-            .minimumScaleFactor(0.8)
+        let label = Text(text).font(.system(size: 11.5, weight: soon ? .medium : .regular)).monospacedDigit().lineLimit(1)
+        let clock = Image(systemName: "clock").font(.system(size: 10.5, weight: .medium))
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 4) { clock; label }.fixedSize()
+          label.fixedSize()
+          HStack(spacing: 4) { clock; label.minimumScaleFactor(0.8) }
         }
         .foregroundStyle(soon ? palette.label : palette.label2)
         .help(TrayFormat.longReset(iso))

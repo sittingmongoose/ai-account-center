@@ -162,7 +162,9 @@ def ensure_plain_directory(path: Path) -> None:
 def new_backup_directory(paths: InstallPaths) -> Path:
     ensure_plain_directory(paths.backups)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    backup = paths.backups / (timestamp + "-" + uuid4().hex)
+    # ".noindex" keeps Spotlight and Launchpad from offering an old copy of the app in place of
+    # the installed one; the backup itself is unchanged.
+    backup = paths.backups / (timestamp + "-" + uuid4().hex + ".noindex")
     backup.mkdir(mode=0o700)
     return backup
 
