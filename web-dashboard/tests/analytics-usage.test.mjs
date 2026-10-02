@@ -177,3 +177,17 @@ test('the donut groups models under one percent and every degree maps to its seg
   assert.ok(segs.every(s => s.idx < view.cbm.rows.length));
   assert.match(dashedRect(40, 20), /^M/);
 });
+
+test("Claude Code's <synthetic> placeholder is excluded silently: never listed, never noted", () => {
+  const synthetic = { model: '<synthetic>', provider: 'claude', inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCostUsd: 0 };
+  const p = payload({}, { models: [modelRow('claude-haiku-4-5', 'claude', claudeRows), modelRow('gpt-5', 'codex', codexRows), synthetic] });
+  assert.ok(activityData(p, now).models.every(m => m.model !== '<synthetic>'));
+  const view = usageView(p, state(), { now });
+  assert.ok(view.cbm.rows.every(r => r.name !== '<synthetic>'));
+  assert.equal(view.cbm.foot, '');
+  assert.ok(!JSON.stringify(view).includes('<synthetic>'));
+  // a zero-token model that is not the placeholder is still disclosed as left out
+  const q = payload({}, { models: [modelRow('claude-haiku-4-5', 'claude', claudeRows),
+    { model: 'gpt-5', provider: 'codex', inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCostUsd: 0 }] });
+  assert.match(usageView(q, state(), { now }).cbm.foot, /gpt-5 is left out/);
+});

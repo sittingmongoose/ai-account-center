@@ -170,7 +170,7 @@ export function apiRangeFor(state, now = Date.now()) {
 }
 const dayStartMonth = now => { const d = new Date(now); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
-/** Validated activity rows. Malformed, unknown-provider and duplicate rows are dropped, never counted twice. */
+/** Validated activity rows. Malformed, unknown-provider and duplicate rows are dropped, never counted twice. So is `<synthetic>`, Claude Code's placeholder for messages that never reached a model: it is excluded silently, never listed and never noted. */
 export function activityData(payload, now = Date.now()) {
   const act = payload?.activity || {};
   const available = ['ok', 'cached'].includes(act.status) && tokens(act.totals);
@@ -196,7 +196,7 @@ export function activityData(payload, now = Date.now()) {
   const modelKeys = new Set();
   if (available) {
     for (const row of Array.isArray(act.models) ? act.models : []) {
-      if (!['claude', 'codex'].includes(row?.provider) || !text(row.model) || !tokens(row)) continue;
+      if (!['claude', 'codex'].includes(row?.provider) || !text(row.model) || !tokens(row) || text(row.model) === '<synthetic>') continue;
       const key = `${row.provider}|${row.model}`;
       if (modelKeys.has(key)) continue;
       modelKeys.add(key);
