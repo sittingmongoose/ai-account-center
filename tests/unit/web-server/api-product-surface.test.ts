@@ -182,6 +182,7 @@ describe('retained account dashboard API surface', () => {
     '/accounts/dashboard',
     '/accounts/settings',
     '/accounts/analytics',
+    '/accounts/visibility',
     '/app-updates/status',
     '/bar/auth',
   ])('protects remote GET /api%s before its handler runs', async (route) => {

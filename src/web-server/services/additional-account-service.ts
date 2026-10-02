@@ -1,14 +1,15 @@
-import { createHash } from 'crypto';
-import fs from 'fs/promises';
 import path from 'path';
-import { ConfigError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
+import { parseSourceManifest, readSourceManifestFile } from './account-usage-manifest';
 import {
-  ADDITIONAL_PROVIDERS,
+  readAccountRegistry,
+  registrySource,
+  type AccountRegistryRead,
+} from './account-registry-v2';
+import {
   AdditionalUsageTransportError,
-  isAdditionalProvider,
-  isSafeUsageSshAlias,
+  isCollectableSource,
   runAdditionalUsageSource,
   type AdditionalProvider,
   type AdditionalUsageSource,
@@ -17,7 +18,6 @@ import {
 const CACHE_TTL_MS = 120_000;
 const REFRESH_DEBOUNCE_MS = 5_000;
 const FAILURE_BACKOFF_MS = 30_000;
-const MAX_MANIFEST_BYTES = 32 * 1024;
 const MAX_RESULT_BYTES = 64 * 1024;
 const MAX_USAGE_WINDOWS = 256;
 const MAX_SCOPES = 16;
@@ -39,12 +39,24 @@ const MUSE_TRANSIENT_FAILURES = new Set(['rate_limited', 'provider_error', 'netw
 
 export interface AdditionalAccountDeps {
   ccsDir?: string;
+  /** Version 1 manifest contents (`account-usage-sources.json`), read when registry v2 is absent. */
   readManifest?: () => Promise<string | null>;
+  /** Registry v2 (`account-usage-accounts.json`); absent, invalid or valid. */
+  readRegistry?: () => Promise<AccountRegistryRead>;
   runSource?: (source: AdditionalUsageSource) => Promise<string>;
   now?: () => number;
 }
 
+/** Which store listed the accounts: v1 manifest, valid v2 registry, or an unreadable v2 file. */
+export type AdditionalRegistryMode = 'v1' | 'v2' | 'v2-invalid';
+
+export interface AdditionalAccountsSnapshot {
+  registry: AdditionalRegistryMode;
+  accounts: DashboardAccount[];
+}
+
 interface Manifest {
+  mode: AdditionalRegistryMode;
   fingerprint: string;
   valid: boolean;
   sources: AdditionalUsageSource[];
@@ -168,10 +180,10 @@ function unavailable(
   message = 'Saved account usage is unavailable on this computer.'
 ): DashboardAccount {
   return {
-    id: `${source.provider}:usage`,
+    id: source.account?.id ?? `${source.provider}:usage`,
     provider: source.provider,
     providerLabel: LABELS[source.provider],
-    label: LABELS[source.provider],
+    label: source.account?.label ?? LABELS[source.provider],
     email: null,
     plan: null,
     platform: source.platform,
@@ -216,7 +228,7 @@ function normalize(
   account.email = email(result.email);
   let invalidIdentity =
     result.email !== null && result.email !== undefined && account.email === null;
-  account.label = account.email ?? LABELS[source.provider];
+  account.label = source.account?.label ?? account.email ?? LABELS[source.provider];
   const plan = displayText(result.plan, 48);
   account.plan = plan && /^[A-Za-z][A-Za-z0-9 ._+-]*$/.test(plan) ? plan : null;
   if (source.provider === 'muse' && (!account.email || !account.plan)) invalidIdentity = true;
@@ -278,92 +290,91 @@ function observationTime(account: DashboardAccount): number {
   return Date.parse(account.sampledAt ?? account.fetchedAt ?? '');
 }
 
-async function readManifestFile(ccsDir: string): Promise<string | null> {
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    handle = await fs.open(path.join(ccsDir, 'account-usage-sources.json'), 'r');
-    const buffer = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > MAX_MANIFEST_BYTES) throw new ConfigError('Invalid source configuration.');
-    return buffer.subarray(0, bytesRead).toString('utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new ConfigError('Invalid source configuration.');
-  } finally {
-    await handle?.close();
-  }
+/** One cache per account and source: a changed host, credential or id never inherits a sample. */
+function sourceKey(source: AdditionalUsageSource): string {
+  return JSON.stringify([
+    source.account?.id ?? `${source.provider}:usage`,
+    source.provider,
+    source.platform,
+    source.sshHost ?? null,
+    source.account?.credential ?? null,
+  ]);
 }
 
-function manifest(contents: string | null): Manifest {
-  const defaults = ADDITIONAL_PROVIDERS.map((provider) => ({
-    provider,
-    platform: 'ubuntu' as const,
-  }));
-  const fingerprint = createHash('sha256')
-    .update(contents ?? 'local-ubuntu-defaults')
-    .digest('hex');
-  if (contents === null) return { fingerprint, valid: true, sources: defaults };
-  try {
-    if (Buffer.byteLength(contents, 'utf8') > MAX_MANIFEST_BYTES) {
-      throw new ConfigError('Invalid source configuration.');
-    }
-    const config: unknown = JSON.parse(contents);
-    if (
-      !record(config) ||
-      config.version !== 1 ||
-      Object.keys(config).some((key) => !['version', 'sources'].includes(key)) ||
-      !Array.isArray(config.sources) ||
-      config.sources.length > ADDITIONAL_PROVIDERS.length
-    ) {
-      throw new ConfigError('Invalid source configuration.');
-    }
-    const configured = new Map<AdditionalProvider, AdditionalUsageSource>();
-    for (const entry of config.sources) {
-      if (
-        !record(entry) ||
-        !isAdditionalProvider(entry.provider) ||
-        !['ubuntu', 'mac', 'windows'].includes(entry.platform as string) ||
-        Object.keys(entry).some((key) => !['provider', 'platform', 'sshHost'].includes(key)) ||
-        (entry.sshHost !== undefined && !isSafeUsageSshAlias(entry.sshHost)) ||
-        configured.has(entry.provider)
-      ) {
-        throw new ConfigError('Invalid source configuration.');
-      }
-      configured.set(entry.provider, {
-        provider: entry.provider,
-        platform: entry.platform as AdditionalUsageSource['platform'],
-        ...(entry.sshHost === undefined ? {} : { sshHost: entry.sshHost }),
-      });
-    }
-    return {
-      fingerprint,
-      valid: true,
-      sources: defaults.map((source) => configured.get(source.provider) ?? source),
-    };
-  } catch {
-    return { fingerprint, valid: false, sources: defaults };
-  }
-}
+const DEFAULT_SOURCES = parseSourceManifest(null).sources;
 
-/** Per-CCS-scope cache. Changed source manifests never reuse another host's quota samples. */
+/**
+ * Per-CCS-scope cache, one entry per account (CONTRACT-registry-lifecycle 3.1).
+ * Read order: a valid registry v2 is the only source; an invalid v2 file shows
+ * every provider as unavailable and never falls back to version 1; without v2
+ * the version 1 manifest is read exactly as before. Changed version 1
+ * manifests never reuse another host's quota samples.
+ */
 export class AdditionalAccountService {
   private readonly ccsDir: string;
   private fingerprint = '';
-  private caches = new Map<AdditionalProvider, SourceCache>();
+  private caches = new Map<string, SourceCache>();
   private manifestPending: Promise<Manifest> | null = null;
+  private lastManifest: Manifest | null = null;
 
   constructor(private readonly deps: AdditionalAccountDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
   }
 
-  private loadManifest(): Promise<Manifest> {
-    this.manifestPending ??= (this.deps.readManifest ?? (() => readManifestFile(this.ccsDir)))()
-      .then(manifest)
-      .catch(() => ({
+  private async readManifest(): Promise<Manifest> {
+    // An injected version 1 reader without a registry reader is a version 1 fixture.
+    const readRegistry =
+      this.deps.readRegistry ??
+      (this.deps.readManifest
+        ? async (): Promise<AccountRegistryRead> => ({ state: 'absent' })
+        : () => readAccountRegistry(this.ccsDir));
+    const registry = await readRegistry();
+    if (registry.state === 'ok') {
+      return {
+        mode: 'v2',
+        // Accounts own their caches, so editing the list keeps unchanged accounts' samples.
+        fingerprint: 'account-registry-v2',
+        valid: true,
+        sources: registry.registry.accounts.map(registrySource),
+      };
+    }
+    if (registry.state === 'invalid') {
+      return {
+        mode: 'v2-invalid',
+        fingerprint: 'invalid-account-registry',
+        valid: false,
+        sources: DEFAULT_SOURCES,
+      };
+    }
+    try {
+      const contents = await (
+        this.deps.readManifest ?? (() => readSourceManifestFile(this.ccsDir))
+      )();
+      return { mode: 'v1', ...parseSourceManifest(contents) };
+    } catch {
+      return {
+        mode: 'v1',
         fingerprint: 'invalid-source-config',
         valid: false,
-        sources: manifest(null).sources,
-      }))
+        sources: DEFAULT_SOURCES,
+      };
+    }
+  }
+
+  private loadManifest(): Promise<Manifest> {
+    this.manifestPending ??= this.readManifest()
+      .catch(
+        (): Manifest => ({
+          mode: 'v2-invalid',
+          fingerprint: 'invalid-account-registry',
+          valid: false,
+          sources: DEFAULT_SOURCES,
+        })
+      )
+      .then((loaded) => {
+        this.lastManifest = loaded;
+        return loaded;
+      })
       .finally(() => {
         this.manifestPending = null;
       });
@@ -383,13 +394,20 @@ export class AdditionalAccountService {
       invalidIdentity = normalized.invalidIdentity;
       museTransientFailure = normalized.museTransientFailure;
     } catch (error) {
-      cache.result = unavailable(
-        source,
-        'error',
-        error instanceof AdditionalUsageTransportError && error.timedOut
-          ? 'Account usage request timed out.'
-          : 'Account usage is temporarily unavailable.'
-      );
+      cache.result =
+        error instanceof AdditionalUsageTransportError && error.helperOutdated
+          ? unavailable(
+              source,
+              'unavailable',
+              `Update the usage helper on ${PLATFORM_LABELS[source.platform]}.`
+            )
+          : unavailable(
+              source,
+              'error',
+              error instanceof AdditionalUsageTransportError && error.timedOut
+                ? 'Account usage request timed out.'
+                : 'Account usage is temporarily unavailable.'
+            );
     }
     if (
       source.provider === 'muse' &&
@@ -443,7 +461,15 @@ export class AdditionalAccountService {
     source: AdditionalUsageSource,
     refresh: boolean
   ): Promise<DashboardAccount> {
-    let cache = this.caches.get(source.provider);
+    if (!isCollectableSource(source)) {
+      return unavailable(
+        source,
+        'unavailable',
+        'This account type is not read by the usage helper yet.'
+      );
+    }
+    const key = sourceKey(source);
+    let cache = this.caches.get(key);
     if (!cache) {
       cache = {
         result: null,
@@ -453,7 +479,7 @@ export class AdditionalAccountService {
         failed: false,
         pending: null,
       };
-      this.caches.set(source.provider, cache);
+      this.caches.set(key, cache);
     }
     const now = (this.deps.now ?? Date.now)();
     const force = refresh && now - cache.refreshedAt >= REFRESH_DEBOUNCE_MS;
@@ -470,34 +496,79 @@ export class AdditionalAccountService {
     return copy(cache.result ?? unavailable(source), true);
   }
 
-  async get(
+  async snapshot(
     opts: { refresh?: boolean; excludeAntigravity?: boolean } = {}
-  ): Promise<DashboardAccount[]> {
+  ): Promise<AdditionalAccountsSnapshot> {
     const config = await this.loadManifest();
     if (config.fingerprint !== this.fingerprint) {
       this.fingerprint = config.fingerprint;
       this.caches = new Map();
     }
-    if (!config.valid) {
-      return config.sources.map((source) =>
-        unavailable(source, 'error', 'Account usage source configuration is invalid.')
-      );
+    if (config.mode === 'v2-invalid') {
+      return {
+        registry: config.mode,
+        accounts: config.sources.map((source) =>
+          unavailable(source, 'unavailable', 'Account list could not be read safely.')
+        ),
+      };
     }
-    return Promise.all(
-      config.sources
+    if (!config.valid) {
+      return {
+        registry: config.mode,
+        accounts: config.sources.map((source) =>
+          unavailable(source, 'error', 'Account usage source configuration is invalid.')
+        ),
+      };
+    }
+    const current = new Set(config.sources.map(sourceKey));
+    for (const key of this.caches.keys()) if (!current.has(key)) this.caches.delete(key);
+    return {
+      registry: config.mode,
+      accounts: await Promise.all(
+        config.sources
+          .filter(
+            (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
+          )
+          .map((source) => this.getSource(source, opts.refresh === true))
+      ),
+    };
+  }
+
+  async get(
+    opts: { refresh?: boolean; excludeAntigravity?: boolean } = {}
+  ): Promise<DashboardAccount[]> {
+    return (await this.snapshot(opts)).accounts;
+  }
+
+  /**
+   * Placeholder rows for the accounts the last loaded list names, for a
+   * response that cannot wait for collection; null before the first load.
+   */
+  configured(opts: { excludeAntigravity?: boolean } = {}): AdditionalAccountsSnapshot | null {
+    const config = this.lastManifest;
+    if (!config) return null;
+    return {
+      registry: config.mode,
+      accounts: config.sources
         .filter(
           (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
         )
-        .map((source) => this.getSource(source, opts.refresh === true))
-    );
+        .map((source) =>
+          unavailable(
+            source,
+            'unavailable',
+            config.mode === 'v2-invalid'
+              ? 'Account list could not be read safely.'
+              : 'Account usage is temporarily unavailable.'
+          )
+        ),
+    };
   }
 }
 
 const services = new Map<string, AdditionalAccountService>();
 
-export function getAdditionalDashboardAccounts(
-  opts: { refresh?: boolean; excludeAntigravity?: boolean } = {}
-): Promise<DashboardAccount[]> {
+function scopedService(): AdditionalAccountService {
   const scope = path.resolve(getCcsDir());
   let service = services.get(scope);
   if (!service) {
@@ -509,5 +580,23 @@ export function getAdditionalDashboardAccounts(
       services.delete(oldest);
     }
   }
-  return service.get(opts);
+  return service;
+}
+
+export function getAdditionalDashboardAccounts(
+  opts: { refresh?: boolean; excludeAntigravity?: boolean } = {}
+): Promise<DashboardAccount[]> {
+  return scopedService().get(opts);
+}
+
+export function getAdditionalDashboardSnapshot(
+  opts: { refresh?: boolean; excludeAntigravity?: boolean } = {}
+): Promise<AdditionalAccountsSnapshot> {
+  return scopedService().snapshot(opts);
+}
+
+export function getConfiguredAdditionalAccounts(
+  opts: { excludeAntigravity?: boolean } = {}
+): AdditionalAccountsSnapshot | null {
+  return services.get(path.resolve(getCcsDir()))?.configured(opts) ?? null;
 }

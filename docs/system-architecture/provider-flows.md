@@ -26,8 +26,28 @@ its `ubuntu`, `mac` or `windows` platform, and optionally an already approved
 unsupported provider entries, and does not accept arbitrary commands or paths.
 Without a manifest the additional-provider sources default to local Ubuntu;
 absence of a local valid login is reported as unavailable. Consult the
-[source parser](../../src/web-server/services/additional-account-service.ts)
+[source parser](../../src/web-server/services/account-usage-manifest.ts)
 before changing an existing deployment.
+
+Registry v2, the private `account-usage-accounts.json` (0600, at most 64 KB),
+lists several accounts per additional provider (at most 16 each, 64 in all).
+When it exists and is valid it is the only source; when it exists but is unsafe
+or malformed, every additional provider reads "Account list could not be read
+safely" and the version 1 defaults are not used; when it is absent the version 1
+manifest is read exactly as before. The dashboard never writes version 1: the
+first lifecycle write copies the effective version 1 sources into v2 as
+`discover` entries with ids `<provider>:usage`, so an older package that only
+reads version 1 keeps working. Each account has its own cache and backoff. A
+`discover` account keeps today's collector call; any other credential kind adds
+only `--account <id> --credential <kind>` and `--key-id`, `--capsule-id` or
+`--home-id`, never a path, host or secret. A helper that rejects those arguments
+(an older helper) shows the account as unavailable with "Update the usage helper
+on <host>". See the [registry](../../src/web-server/services/account-registry-v2.ts).
+
+The display-only visibility file `account-visibility.json` (0600) holds
+`hiddenProviders` and `hiddenAccountIds`. Hidden accounts are still collected and
+still auto-switch candidates; the dashboard marks them `hidden` and lists every
+provider in `providers[]` with `visible`.
 
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
 the existing `platyr`, `gmail`, `party` and `me` profile IDs. The optional

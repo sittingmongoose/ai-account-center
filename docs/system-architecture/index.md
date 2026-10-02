@@ -35,6 +35,13 @@ snapshots are not additive token totals.
 [App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
 jobs triggered explicitly, never from startup or routine polling.
 
+The dashboard response lists every supported provider in `providers[]` (labels,
+order, sign-in kind, live availability and capabilities) from one
+[server table](../../src/web-server/services/dashboard-provider-registry.ts), and marks
+each account `hidden` from the [visibility store](../../src/web-server/services/account-visibility.ts).
+`GET`/`PUT /api/accounts/visibility` read and replace that store; a saved change
+sends `{"type":"accounts-changed"}` to the signed-in `/ws` clients as a hint to re-read.
+
 A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
 is tracked as an operation, and the profile list reports its progress as
 `openOperation` (counts and fixed sentences only). A request that sends

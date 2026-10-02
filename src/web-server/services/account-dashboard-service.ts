@@ -27,7 +27,17 @@ import {
   type ClaudeDesktopUsage,
 } from './claude-desktop-usage-service';
 import { getCodexAutoSwitchService } from './codex-auto-switch-service';
-import { getAdditionalDashboardAccounts } from './additional-account-service';
+import {
+  getAdditionalDashboardSnapshot,
+  getConfiguredAdditionalAccounts,
+  type AdditionalAccountsSnapshot,
+} from './additional-account-service';
+import { readAccountVisibility, type AccountVisibilityRead } from './account-visibility';
+import {
+  buildDashboardProviders,
+  DEFAULT_PROVIDER_REGISTRY_FACTS,
+  type ProviderRegistryFacts,
+} from './dashboard-provider-registry';
 import { getOpenCodeConsoleWalletAccounts } from './opencode-console-wallet-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import {
@@ -67,7 +77,15 @@ export interface AccountDashboardDeps {
     refresh: boolean
   ) => Promise<ClaudeDesktopLiveUsage | null>;
   getCachedLiveClaudeUsage?: (profileId: string) => Promise<ClaudeDesktopLiveUsage | null>;
+  /** Legacy fixture source: rows as the version 1 manifest returns them. */
   getAdditionalAccounts?: () => Promise<DashboardAccount[]>;
+  /** Rows plus the store that listed them (version 1 manifest or registry v2). */
+  getAdditionalSnapshot?: (refresh: boolean) => Promise<AdditionalAccountsSnapshot>;
+  /** Placeholder rows for the configured accounts while collection is slow. */
+  getConfiguredAdditional?: () => AdditionalAccountsSnapshot | null;
+  readVisibility?: (scope: string) => Promise<AccountVisibilityRead>;
+  /** Live facts behind providers[].signIn and capabilities. */
+  providerFacts?: (context: AccountDashboardRequestContext) => ProviderRegistryFacts;
   getOptionalWalletAccounts?: (refresh: boolean) => Promise<DashboardAccount[]>;
   getAutoSwitchStatus?: () => Omit<AccountDashboard['codexAutoSwitch'], 'thresholdUsedPercent'>;
   hasAntigravityProfiles?: () => boolean;
@@ -83,8 +101,15 @@ export interface AccountDashboardDeps {
   serverInfo?: () => DashboardServerInfo | undefined;
 }
 
+/** Per-request facts the cached collection does not know. */
+export interface AccountDashboardRequestContext {
+  /** isSecureTransport(req) (CONTRACT-auth-devices 2a); false until that check ships. */
+  secureTransport?: boolean;
+}
+
 const REFRESH_DEBOUNCE_MS = 5_000;
 const MAX_SCOPES = 16;
+const VISIBILITY_BUDGET_FLOOR_MS = 250;
 interface DashboardState {
   fetchedAt: number;
   refreshedAt: number;
@@ -101,6 +126,7 @@ export class AccountDashboardService {
   private readonly codexInventories = new Map<string, CodexAuthProfilesSummary>();
   private readonly claudeInventories = new Map<string, ClaudeDesktopProfile[]>();
   private readonly claudeLiveSamples = new Map<string, ClaudeDesktopLiveUsage>();
+  private readonly visibility = new Map<string, AccountVisibilityRead>();
 
   constructor(private readonly deps: AccountDashboardDeps = {}) {}
 
@@ -245,6 +271,29 @@ export class AccountDashboardService {
     return accounts;
   }
 
+  private additionalSnapshot(
+    refresh: boolean,
+    excludeAntigravity: boolean
+  ): Promise<AdditionalAccountsSnapshot> {
+    if (this.deps.getAdditionalSnapshot) return this.deps.getAdditionalSnapshot(refresh);
+    if (this.deps.getAdditionalAccounts) {
+      return this.deps.getAdditionalAccounts().then((accounts) => ({ registry: 'v1', accounts }));
+    }
+    return getAdditionalDashboardSnapshot({ refresh, excludeAntigravity });
+  }
+
+  /** Before the first collection finishes: the configured registry v2 accounts, else the seven defaults. */
+  private additionalPlaceholders(excludeAntigravity: boolean): DashboardAccount[] {
+    const configured = this.deps.getConfiguredAdditional
+      ? this.deps.getConfiguredAdditional()
+      : this.deps.getAdditionalAccounts || this.deps.getAdditionalSnapshot
+        ? null
+        : getConfiguredAdditionalAccounts({ excludeAntigravity });
+    return configured && configured.registry !== 'v1'
+      ? additionalAccounts(configured.accounts, configured.registry)
+      : ADDITIONAL_PROVIDERS.map(([provider, label]) => additionalFallback(provider, label));
+  }
+
   private async collect(
     state: DashboardState,
     scope: string,
@@ -270,30 +319,25 @@ export class AccountDashboardService {
       ],
       [
         'additional',
-        Promise.resolve()
-          .then(() => {
-            if (this.deps.getAdditionalAccounts && !this.deps.getOptionalWalletAccounts)
-              return this.deps.getAdditionalAccounts();
-            const primary = (
-              this.deps.getAdditionalAccounts ??
-              (() =>
-                getAdditionalDashboardAccounts({
-                  refresh,
-                  excludeAntigravity: registeredAntigravity,
-                }))
-            )().then((accounts) => {
-              // The optional wallet must never delay the seven existing usage rows.
-              if (state.generation === generation) state.additional = additionalAccounts(accounts);
-              return accounts;
-            });
-            const wallet = (
-              this.deps.getOptionalWalletAccounts ??
-              ((force) => getOpenCodeConsoleWalletAccounts({ refresh: force }))
-            )(refresh).catch(() => []);
-            return Promise.all([primary, wallet]).then((parts) => parts.flat());
-          })
-          .then(additionalAccounts),
-        () => ADDITIONAL_PROVIDERS.map(([provider, label]) => additionalFallback(provider, label)),
+        Promise.resolve().then(async () => {
+          if (this.deps.getAdditionalAccounts && !this.deps.getOptionalWalletAccounts)
+            return additionalAccounts(await this.deps.getAdditionalAccounts());
+          const primary = this.additionalSnapshot(refresh, registeredAntigravity).then(
+            (snapshot) => {
+              // The optional wallet must never delay the existing usage rows.
+              if (state.generation === generation)
+                state.additional = additionalAccounts(snapshot.accounts, snapshot.registry);
+              return snapshot;
+            }
+          );
+          const wallet = (
+            this.deps.getOptionalWalletAccounts ??
+            ((force) => getOpenCodeConsoleWalletAccounts({ refresh: force }))
+          )(refresh).catch(() => []);
+          const [snapshot, wallets] = await Promise.all([primary, wallet]);
+          return additionalAccounts([...snapshot.accounts, ...wallets], snapshot.registry);
+        }),
+        () => this.additionalPlaceholders(registeredAntigravity),
       ],
       [
         'antigravity',
@@ -334,7 +378,11 @@ export class AccountDashboardService {
     return [...state.codex, ...state.claude, ...state.additional, ...state.antigravity];
   }
 
-  async get(platform: ClaudeDashboardPlatform = 'mac', refresh = false): Promise<AccountDashboard> {
+  async get(
+    platform: ClaudeDashboardPlatform = 'mac',
+    refresh = false,
+    context: AccountDashboardRequestContext = {}
+  ): Promise<AccountDashboard> {
     const startedAt = Date.now();
     const now = (this.deps.now ?? Date.now)();
     const scope = (this.deps.scope ?? getCcsDir)();
@@ -383,7 +431,7 @@ export class AccountDashboardService {
       0,
       (this.deps.responseBudgetMs ?? 2500) - (Date.now() - startedAt)
     );
-    const [summary, selectedAntigravityProfileId] = await Promise.all([
+    const [summary, selectedAntigravityProfileId, visibilityRead] = await Promise.all([
       this.bounded(
         Promise.resolve().then(() => (this.deps.getCodexSummary ?? getCodexAuthProfilesSummary)()),
         () => null,
@@ -401,7 +449,31 @@ export class AccountDashboardService {
             remainingBudget
           )
         : Promise.resolve(null),
+      // A small private file; unreadable means "could not be read", never "nothing hidden".
+      // A slow read falls back to the last read of this scope, so a slow cycle never unhides rows.
+      this.bounded(
+        Promise.resolve()
+          .then(() => (this.deps.readVisibility ?? readAccountVisibility)(scope))
+          .then((read) => {
+            this.visibility.delete(scope);
+            this.visibility.set(scope, read);
+            while (this.visibility.size > MAX_SCOPES) {
+              const oldest = this.visibility.keys().next().value;
+              if (oldest === undefined) break;
+              this.visibility.delete(oldest);
+            }
+            return read;
+          }),
+        (): AccountVisibilityRead => this.visibility.get(scope) ?? { state: 'unavailable' },
+        Math.max(remainingBudget, VISIBILITY_BUDGET_FLOOR_MS)
+      ),
     ]);
+    const visibility =
+      visibilityRead.state === 'ok'
+        ? visibilityRead.visibility
+        : { hiddenProviders: [], hiddenAccountIds: [] };
+    const hiddenProviders = new Set<string>(visibility.hiddenProviders);
+    const hiddenAccountIds = new Set(visibility.hiddenAccountIds);
     // Validate saved credential revisions on every response, including dashboard
     // cache hits. This synchronous cache projection never starts a provider call.
     if (registeredAntigravity) {
@@ -435,32 +507,29 @@ export class AccountDashboardService {
       ...(registeredAntigravity ? state.antigravity : []),
     ];
     const server = (this.deps.serverInfo ?? getDashboardServerInfo)();
-    return {
-      schemaVersion: 1,
-      updatedAt: new Date((this.deps.now ?? Date.now)()).toISOString(),
-      settings: { refreshIntervalSeconds },
-      accounts: accounts.flatMap((account) => {
-        let current = account;
-        let codexAuthValid: boolean | undefined;
-        if (account.provider === 'codex' && summary) {
-          const profile = summary.profiles.find(
-            (candidate) => candidate.name === account.capabilities.codexProfile
-          );
-          if (!profile) return [];
-          codexAuthValid = profile.authValid;
-          const previous = this.codexInventories
-            .get(scope)
-            ?.profiles.find((candidate) => candidate.name === profile.name);
-          if (
-            !profile.authValid ||
-            previous?.accountId !== profile.accountId ||
-            account.email !== emailForComparison(profile.email)
-          ) {
-            current = codexAccount(profile, summary.activated, undefined);
-          }
+    const rows = accounts.flatMap((account) => {
+      let current = account;
+      let codexAuthValid: boolean | undefined;
+      if (account.provider === 'codex' && summary) {
+        const profile = summary.profiles.find(
+          (candidate) => candidate.name === account.capabilities.codexProfile
+        );
+        if (!profile) return [];
+        codexAuthValid = profile.authValid;
+        const previous = this.codexInventories
+          .get(scope)
+          ?.profiles.find((candidate) => candidate.name === profile.name);
+        if (
+          !profile.authValid ||
+          previous?.accountId !== profile.accountId ||
+          account.email !== emailForComparison(profile.email)
+        ) {
+          current = codexAccount(profile, summary.activated, undefined);
         }
-        return [
-          withAccountState(
+      }
+      return [
+        {
+          ...withAccountState(
             {
               ...current,
               status: usedCache && current.status === 'ok' ? 'cached' : current.status,
@@ -474,8 +543,29 @@ export class AccountDashboardService {
             },
             codexAuthValid
           ),
-        ];
-      }),
+          // Display only: hidden rows stay in the list, collected and switchable.
+          hidden: hiddenProviders.has(current.provider) || hiddenAccountIds.has(current.id),
+        },
+      ];
+    });
+    return {
+      schemaVersion: 1,
+      updatedAt: new Date((this.deps.now ?? Date.now)()).toISOString(),
+      settings: {
+        refreshIntervalSeconds,
+        hiddenProviders: [...visibility.hiddenProviders],
+        hiddenAccountIds: [...visibility.hiddenAccountIds],
+        visibilityAvailable: visibilityRead.state === 'ok',
+      },
+      providers: buildDashboardProviders(
+        rows,
+        visibility.hiddenProviders,
+        this.deps.providerFacts?.(context) ?? {
+          ...DEFAULT_PROVIDER_REGISTRY_FACTS,
+          secureTransport: context.secureTransport === true,
+        }
+      ),
+      accounts: rows,
       antigravityAutoSwitch: (
         this.deps.getAntigravityAutoSwitchStatus ?? getAntigravityAutoSwitchStatus
       )(),
@@ -490,8 +580,9 @@ export class AccountDashboardService {
 let service: AccountDashboardService | null = null;
 export function getAccountDashboard(
   platform: ClaudeDashboardPlatform = 'mac',
-  refresh = false
+  refresh = false,
+  context: AccountDashboardRequestContext = {}
 ): Promise<AccountDashboard> {
   service ??= new AccountDashboardService();
-  return service.get(platform, refresh);
+  return service.get(platform, refresh, context);
 }

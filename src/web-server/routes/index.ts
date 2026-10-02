@@ -24,6 +24,7 @@ import {
 import accountDashboardRoutes from './account-dashboard-routes';
 import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
 import accountAnalyticsRoutes from './account-analytics-routes';
+import accountVisibilityRoutes from './account-visibility-routes';
 import appUpdateRoutes from './app-update-routes';
 import codexRoutes from './codex-routes';
 import antigravityRoutes from './antigravity-routes';
@@ -90,6 +91,7 @@ apiRoutes.use((req, res, next) => {
 apiRoutes.use('/accounts', accountDashboardRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
 apiRoutes.use('/accounts', accountAnalyticsRoutes);
+apiRoutes.use('/accounts', accountVisibilityRoutes);
 apiRoutes.use('/app-updates', appUpdateRoutes);
 apiRoutes.use('/auth', authRoutes);
 apiRoutes.use('/claude', claudeDesktopRoutes);

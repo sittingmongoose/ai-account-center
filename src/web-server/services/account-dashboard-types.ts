@@ -82,6 +82,77 @@ export interface DashboardAccount {
   switchable?: boolean;
   /** Always set on GET /api/accounts/dashboard rows; optional for other producers. */
   lifecycle?: DashboardAccountLifecycle;
+  /**
+   * Display only: the provider is hidden or this id is in hiddenAccountIds.
+   * A hidden account is still collected and still an auto-switch candidate.
+   * Always set on GET /api/accounts/dashboard rows.
+   */
+  hidden?: boolean;
+}
+
+/** How a provider's accounts are signed in (CONTRACT-registry-lifecycle section 2). */
+export type DashboardSignInKind =
+  | 'desktop-profile'
+  | 'device-code'
+  | 'supervised-cli'
+  | 'api-key'
+  | 'app-session'
+  | 'browser-session';
+
+export type DashboardSignInUnavailableReason =
+  | 'secure_transport_required'
+  | 'not_implemented'
+  | 'preflight_failed'
+  | 'tool_missing'
+  | 'isolation_unproven'
+  | 'extension_update_required';
+
+export interface DashboardProviderEntry {
+  id: DashboardProvider;
+  label: string;
+  longLabel: string;
+  /** marks.js key; equals id. */
+  iconKey: string;
+  /** 0-based display order: claude, codex, antigravity, then the rest. */
+  order: number;
+  /** Not in settings.hiddenProviders. */
+  visible: boolean;
+  /** Every account of this provider in accounts[], hidden ones included. */
+  accountCount: number;
+  switchable: boolean;
+  signIn: {
+    kind: DashboardSignInKind;
+    label: string;
+    platforms: DashboardPlatform[];
+    secureTransportRequired: boolean;
+    available: boolean;
+    unavailableReason: DashboardSignInUnavailableReason | null;
+  };
+  extras: null | { kind: 'browser-extension'; platform: ClaudeDashboardPlatform; label: string };
+  capabilities: {
+    multiAccount: boolean;
+    add: boolean;
+    signInAgain: boolean;
+    replaceKey: boolean;
+    remove: boolean;
+    activate: boolean;
+    autoSwitch: boolean;
+    openApp: ClaudeDashboardPlatform[];
+    recheck: boolean;
+  };
+}
+
+export interface AccountDashboardSettings {
+  refreshIntervalSeconds: number;
+  /** Always set by the dashboard service; empty when nothing is hidden. */
+  hiddenProviders?: DashboardProvider[];
+  /** Always set by the dashboard service; ids may name accounts that are briefly absent. */
+  hiddenAccountIds?: string[];
+  /**
+   * False when the visibility file exists but could not be read safely; the
+   * lists are then empty and the page should say so rather than hide anything.
+   */
+  visibilityAvailable?: boolean;
 }
 
 export interface CodexAutoSwitchDashboardStatus {
@@ -107,7 +178,9 @@ export interface DashboardServerInfo {
 export interface AccountDashboard {
   schemaVersion: 1;
   updatedAt: string;
-  settings?: { refreshIntervalSeconds: number };
+  settings?: AccountDashboardSettings;
+  /** Every supported provider in display order, even at 0 accounts. Always set by the service. */
+  providers?: DashboardProviderEntry[];
   accounts: DashboardAccount[];
   antigravityAutoSwitch?: AntigravityAutoSwitchStatus;
   codexAutoSwitch: CodexAutoSwitchDashboardStatus;

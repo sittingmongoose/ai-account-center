@@ -4,6 +4,7 @@ import path from 'path';
 import {
   ADDITIONAL_PROVIDERS,
   AdditionalUsageTransportError,
+  collectorAccountArguments,
   isAdditionalProvider,
   isSafeUsageSshAlias,
   runAdditionalUsageSource,
@@ -247,4 +248,154 @@ describe('additional account usage transport', () => {
       expect(error.message).toBe('Account usage request failed.');
     }
   );
+});
+
+describe('registry v2 collector arguments', () => {
+  const keyAccount: AdditionalUsageSource = {
+    provider: 'zai',
+    platform: localPlatform,
+    account: {
+      id: 'zai:acct:9f2c41d0',
+      label: 'Work label with spaces',
+      credential: { kind: 'aac-key', keyId: '9f2c41d0' },
+    },
+  };
+
+  it('passes exactly the enumerated account arguments for a key account', async () => {
+    const exec = mockProcess('{}');
+    await runAdditionalUsageSource(keyAccount);
+    const [binary, args] = exec.mock.calls[0]!;
+    expect(binary).toBe(localPlatform === 'windows' ? 'python.exe' : '/usr/bin/python3');
+    expect((args as string[]).slice(1)).toEqual([
+      '--provider',
+      'zai',
+      '--platform',
+      localPlatform,
+      '--account',
+      'zai:acct:9f2c41d0',
+      '--credential',
+      'aac-key',
+      '--key-id',
+      '9f2c41d0',
+    ]);
+    // No path, host, label or secret beyond the fixed helper path.
+    const joined = (args as string[]).slice(1).join(' ');
+    expect(joined).not.toContain('/');
+    expect(joined).not.toContain('Work label');
+  });
+
+  it('keeps the exact version 1 call for a discover account', async () => {
+    const exec = mockProcess('{}');
+    await runAdditionalUsageSource({
+      provider: 'cursor',
+      platform: 'mac',
+      sshHost: 'work-mac',
+      account: { id: 'cursor:usage', label: null, credential: { kind: 'discover' } },
+    });
+    expect((exec.mock.calls[0]![1] as string[]).at(-1)).toBe(
+      `/usr/bin/python3 "$HOME/.ccs/account-usage/desktop_usage.py" --provider 'cursor' --platform 'mac'`
+    );
+  });
+
+  it('quotes the account arguments in the remote Mac and Windows commands', async () => {
+    const exec = mockProcess('{}');
+    await runAdditionalUsageSource({ ...keyAccount, platform: 'mac', sshHost: 'work-mac' });
+    expect((exec.mock.calls[0]![1] as string[]).at(-1)).toBe(
+      `/usr/bin/python3 "$HOME/.ccs/account-usage/plan_usage.py" --provider 'zai' --platform 'mac' --account 'zai:acct:9f2c41d0' --credential 'aac-key' --key-id '9f2c41d0'`
+    );
+    await runAdditionalUsageSource({
+      provider: 'qwen',
+      platform: 'windows',
+      sshHost: 'work-windows',
+      account: {
+        id: 'qwen:acct:0a1b2c3d',
+        label: null,
+        credential: { kind: 'browser-capsule', capsuleId: '0a1b2c3d' },
+      },
+    });
+    const command = (exec.mock.calls[1]![1] as string[]).at(-1)!;
+    const script = Buffer.from(command.split(' ').at(-1)!, 'base64').toString('utf16le');
+    expect(script).toContain(
+      "& python.exe $helper --provider 'qwen' --platform 'windows' --account 'qwen:acct:0a1b2c3d' --credential 'browser-capsule' --capsule-id '0a1b2c3d'"
+    );
+  });
+
+  it.each([
+    [
+      'an id of another provider',
+      {
+        id: 'kimi-code:acct:9f2c41d0',
+        label: null,
+        credential: { kind: 'aac-key', keyId: '9f2c41d0' },
+      },
+    ],
+    [
+      'a quote in the id',
+      {
+        id: "zai:acct:9f2c41d0' ; x",
+        label: null,
+        credential: { kind: 'aac-key', keyId: '9f2c41d0' },
+      },
+    ],
+    [
+      'a path as key id',
+      { id: 'zai:acct:9f2c41d0', label: null, credential: { kind: 'aac-key', keyId: '../../x' } },
+    ],
+    [
+      'an extra credential field',
+      {
+        id: 'zai:acct:9f2c41d0',
+        label: null,
+        credential: { kind: 'aac-key', keyId: '9f2c41d0', path: '/x' },
+      },
+    ],
+    [
+      'a capsule on Z.ai',
+      {
+        id: 'zai:acct:9f2c41d0',
+        label: null,
+        credential: { kind: 'browser-capsule', capsuleId: 'default' },
+      },
+    ],
+    [
+      'a config home, not read by helpers yet',
+      {
+        id: 'zai:acct:9f2c41d0',
+        label: null,
+        credential: { kind: 'config-home', homeId: '9f2c41d0' },
+      },
+    ],
+  ])('rejects %s before execution', async (_name, account) => {
+    const exec = mockProcess('{}');
+    await expect(
+      runAdditionalUsageSource({
+        provider: 'zai',
+        platform: localPlatform,
+        account,
+      } as unknown as AdditionalUsageSource)
+    ).rejects.toBeInstanceOf(AdditionalUsageTransportError);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('flags exit status 2 as an outdated helper only when account arguments were sent', async () => {
+    mockProcess('', { code: 2 });
+    const outdated = await runAdditionalUsageSource(keyAccount).catch((failure) => failure);
+    expect(outdated).toBeInstanceOf(AdditionalUsageTransportError);
+    expect(outdated.helperOutdated).toBe(true);
+    expect(outdated.message).toBe('Account usage request failed.');
+    const legacy = await runAdditionalUsageSource({
+      provider: 'zai',
+      platform: localPlatform,
+    }).catch((failure) => failure);
+    expect(legacy.helperOutdated).toBe(false);
+    mock.restore();
+    mockProcess('', { code: 1 });
+    expect(
+      (await runAdditionalUsageSource(keyAccount).catch((failure) => failure)).helperOutdated
+    ).toBe(false);
+  });
+
+  it('builds no account arguments for version 1 sources', () => {
+    expect(collectorAccountArguments({ provider: 'zai', platform: 'ubuntu' })).toEqual([]);
+  });
 });

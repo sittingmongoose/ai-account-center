@@ -7,12 +7,14 @@ explicit scalar allowlist; upstream bodies and exception text are never emitted.
 import datetime as dt
 from contextlib import closing
 import base64
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import struct
 import sys
 import time
@@ -29,6 +31,17 @@ PROVIDERS = {
     "zai": "Z.ai Coding Plan",
     "opencode-go": "OpenCode Go",
 }
+
+
+# Registry v2 account selection (CONTRACT-registry-lifecycle 3.1, 3.2). Only ids
+# arrive on the command line; every path below is derived from fixed folders.
+KEY_PROVIDERS = ("kimi-code", "zai", "opencode-go")
+KEY_ID = re.compile(r"^[a-f0-9]{8}\Z")
+CAPSULE_ID = re.compile(r"^(?:default|[a-f0-9]{8})\Z")
+KEY_SECRET = re.compile(r"^[\x21-\x7e]{8,512}\Z")
+KEY_ENTROPY = b"AAC/account-key/v1"
+MAX_KEY_FILE_BYTES = 4096
+KEY_FILE_FIELDS = {"version", "provider", "keyId", "secret", "fingerprint", "last4", "createdAt"}
 
 
 class CollectionError(Exception):
@@ -163,7 +176,7 @@ def _string(value):
     return value if isinstance(value, str) and value and len(value) <= 32768 and "\x00" not in value else None
 
 
-def _windows_unprotect(ciphertext):
+def _windows_unprotect(ciphertext, entropy=None):
     """Same-user DPAPI only; never prompt, persist plaintext, or bypass protection."""
     if os.name != "nt":
         return None
@@ -183,8 +196,12 @@ def _windows_unprotect(ciphertext):
         kernel32.LocalFree.restype = ctypes.c_void_p
         buffer = ctypes.create_string_buffer(ciphertext)
         input_blob = Blob(len(ciphertext), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+        entropy_blob = None
+        if entropy is not None:
+            entropy_buffer = ctypes.create_string_buffer(entropy)
+            entropy_blob = ctypes.byref(Blob(len(entropy), ctypes.cast(entropy_buffer, ctypes.POINTER(ctypes.c_ubyte))))
         output_blob = Blob()
-        if not crypt32.CryptUnprotectData(ctypes.byref(input_blob), None, None, None, None, 1, ctypes.byref(output_blob)):
+        if not crypt32.CryptUnprotectData(ctypes.byref(input_blob), None, entropy_blob, None, None, 1, ctypes.byref(output_blob)):
             return None
         try:
             if output_blob.cbData > 131072:
@@ -196,8 +213,11 @@ def _windows_unprotect(ciphertext):
         return None
 
 
-def _qwen_console_capsule(home):
-    capsule = load_json(home / ".ccs" / "account-usage" / "qwen-console-session.json")
+def _qwen_console_capsule(home, capsule_id="default"):
+    if not isinstance(capsule_id, str) or not CAPSULE_ID.match(capsule_id):
+        return None
+    name = "qwen-console-session.json" if capsule_id == "default" else "qwen-console-session-{}.json".format(capsule_id)
+    capsule = load_json(home / ".ccs" / "account-usage" / name)
     if not isinstance(capsule, dict) or capsule.get("region") not in ("intl", "cn"):
         return None
     version2 = capsule.get("version") == 2
@@ -335,9 +355,94 @@ def _safari_qwen_candidates(home):
     return result
 
 
-def credentials(provider, home=None):
-    """Resolve only fixed, existing user-owned stores. Never modify auth state."""
+def _private_file_bytes(path, limit):
+    """A regular file, not a symlink, no group/other access (POSIX), at most `limit` bytes."""
+    try:
+        if stat.S_ISLNK(os.lstat(str(path)).st_mode):
+            return None
+        descriptor = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit or (os.name != "nt" and info.st_mode & 0o077):
+            return None
+        contents = os.read(descriptor, limit + 1)
+        return contents if len(contents) <= limit else None
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
+def key_fingerprint(secret):
+    return "sha256:" + hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+
+
+def aac_key_credential(provider, key_id, home=None):
+    """The dashboard-owned key of one account, and nothing else (no OMP, OpenCode or env fallback)."""
+    if provider not in KEY_PROVIDERS or not isinstance(key_id, str) or not KEY_ID.match(key_id):
+        return None
     home = Path.home() if home is None else Path(home)
+    directory = home / ".ccs" / "account-usage" / "keys"
+    try:
+        info = os.lstat(str(directory))
+    except OSError:
+        return None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or (os.name != "nt" and info.st_mode & 0o077):
+        return None
+    if os.name == "nt":
+        raw = _private_file_bytes(directory / "{}-{}.dpapi".format(provider, key_id), MAX_KEY_FILE_BYTES * 4)
+        text = _windows_unprotect(raw, KEY_ENTROPY) if raw else None
+    else:
+        raw = _private_file_bytes(directory / "{}-{}.json".format(provider, key_id), MAX_KEY_FILE_BYTES)
+        try:
+            text = raw.decode("utf-8") if raw else None
+        except UnicodeError:
+            text = None
+    try:
+        record = json.loads(text) if isinstance(text, str) and len(text) <= MAX_KEY_FILE_BYTES else None
+    except ValueError:
+        return None
+    if not isinstance(record, dict) or not set(record) <= KEY_FILE_FIELDS:
+        return None
+    secret = record.get("secret")
+    if (record.get("version") != 1 or record.get("provider") != provider or record.get("keyId") != key_id
+            or not isinstance(secret, str) or not KEY_SECRET.match(secret)):
+        return None
+    if "fingerprint" in record and record["fingerprint"] != key_fingerprint(secret):
+        return None
+    return {"secret": secret, "source": "Dashboard key", "email": None, "expires": None}
+
+
+def _selected_credentials(provider, home, credential):
+    """Only the store a registry v2 account names; an unreadable store gives no candidate."""
+    kind = credential.get("kind")
+    if kind == "aac-key":
+        item = aac_key_credential(provider, credential.get("keyId"), home)
+        return [item] if item else []
+    if kind == "browser-capsule" and provider == "qwen":
+        capsule = _qwen_console_capsule(home, credential.get("capsuleId"))
+        if not capsule:
+            return []
+        cookie, region, gateway_cookie = capsule
+        packed = {"cookie": cookie, "baseUrl": "https://token-plan.{}.maas.aliyuncs.com/compatible-mode/v1".format(
+            "ap-southeast-1" if region == "intl" else "cn-beijing")}
+        if gateway_cookie is not None:
+            packed["gatewayCookie"] = gateway_cookie
+        return [{"secret": json.dumps(packed), "source": "Brave console", "email": None, "expires": None}]
+    return []
+
+
+def credentials(provider, home=None, credential=None):
+    """Resolve only fixed, existing user-owned stores. Never modify auth state.
+
+    Without `credential` (or with kind `discover`) this is the first-working
+    lookup across the existing stores. Any other kind reads only its own store.
+    """
+    home = Path.home() if home is None else Path(home)
+    if isinstance(credential, dict) and credential.get("kind") != "discover":
+        return _selected_credentials(provider, home, credential)
     candidates = []
     opencode = load_json(home / ".local" / "share" / "opencode" / "auth.json")
     aliases = {"kimi-code": ("kimi-for-coding", "kimi-code"), "qwen": ("alibaba-token-plan",),

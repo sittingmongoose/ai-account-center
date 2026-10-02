@@ -38,6 +38,7 @@ import { getInstalledAntigravityRuntimeFactory } from '../antigravity/production
 import { loadStaticUi, pageRouteHandler, precompressedStatic, uiStaticHeaders } from './static-ui';
 import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
+import { attachDashboardEventServer } from './dashboard-events';
 
 export interface ServerOptions {
   port: number;
@@ -219,9 +220,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   let antigravityRuntime: AntigravityRuntime | null = null;
+  // Account changes (visibility now, lifecycle jobs later) reach /ws clients as hints.
+  const detachDashboardEvents = attachDashboardEventServer(wss);
 
   // Combined cleanup function
   const cleanup = () => {
+    detachDashboardEvents();
     codexAutoSwitch.stop();
     antigravityRuntime?.stop();
     stopAccountAnalyticsSampling();

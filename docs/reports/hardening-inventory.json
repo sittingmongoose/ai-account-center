@@ -335,8 +335,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 225,
-    "filesAffected": 80,
+    "totalMarkers": 226,
+    "filesAffected": 81,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -516,11 +516,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 374,
-      "typedThrows": 112,
+      "totalThrows": 377,
+      "typedThrows": 115,
       "plainThrows": 70,
       "otherThrows": 192,
-      "adoptionRatio": 0.2995,
+      "adoptionRatio": 0.305,
       "topSubdomainsByThrows": [
         {
           "subdomain": "antigravity",
@@ -536,8 +536,8 @@
         },
         {
           "subdomain": "web-server",
-          "count": 77,
-          "typed": 49,
+          "count": 80,
+          "typed": 52,
           "plain": 10
         },
         {
@@ -597,9 +597,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 25,
-      "totalSourceFiles": 345,
-      "coverageRatio": 0.0725,
+      "filesWithCreateLogger": 26,
+      "totalSourceFiles": 352,
+      "coverageRatio": 0.0739,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -625,8 +625,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 67,
-          "withLogger": 4
+          "count": 74,
+          "withLogger": 5
         },
         {
           "subdomain": "utils",
@@ -745,7 +745,7 @@
     },
     "largeFiles": {
       "countOver400": 34,
-      "countOver600": 13,
+      "countOver600": 14,
       "topOver400": [
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
@@ -800,12 +800,12 @@
           "loc": 614
         },
         {
-          "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
-          "loc": 598
+          "file": "src/web-server/services/additional-account-service.ts",
+          "loc": 602
         },
         {
-          "file": "src/web-server/usage/data-aggregator.ts",
-          "loc": 575
+          "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
+          "loc": 598
         }
       ]
     }

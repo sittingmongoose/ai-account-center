@@ -55,6 +55,7 @@ const ROUTES: ApiRoute[] = [
   { family: 'accounts', method: 'GET', path: '/api/accounts/dashboard', status: 200 },
   { family: 'accounts', method: 'GET', path: '/api/accounts/settings', status: 200 },
   { family: 'accounts', method: 'GET', path: '/api/accounts/analytics', status: 200 },
+  { family: 'accounts', method: 'GET', path: '/api/accounts/visibility', status: 200 },
   { family: 'app-updates', method: 'GET', path: '/api/app-updates/status', status: 200 },
   { family: 'claude', method: 'GET', path: '/api/claude/desktop-profiles', status: 200 },
   {

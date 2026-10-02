@@ -164,8 +164,10 @@ ai-account-center codex-auth show
 ```
 
 Additional provider collectors run on the host that owns the corresponding login.
-Their source selection is the private `account-usage-sources.json` configuration;
-existing approved SSH aliases select remote Mac/Windows collectors. Missing
+Their source selection is the private `account-usage-sources.json` configuration,
+or the newer `account-usage-accounts.json` (registry v2, several accounts per
+provider) when that file exists; existing approved SSH aliases select remote
+Mac/Windows collectors. Missing
 credentials or collector setup yields unavailable usage. Follow the
 [provider boundaries](docs/system-architecture/provider-flows.md),
 [collector requirements](scripts/account-usage/README.md),
