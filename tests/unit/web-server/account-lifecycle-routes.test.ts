@@ -559,6 +559,60 @@ describe('remove with a confirmation token', () => {
     expect(new CodexProfileRegistry().listProfiles().sort()).toEqual(['gmail', 'party']);
   });
 
+  it('names the live Codex login by workspace, and by email when a binding is unreadable', async () => {
+    const f = await fixture();
+    const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const bound = (email: string, workspace: string): string =>
+      JSON.stringify({
+        tokens: {
+          id_token: [
+            part({ alg: 'none' }),
+            part({
+              email,
+              'https://api.openai.com/auth': {
+                chatgpt_account_id: workspace,
+                chatgpt_user_id: 'user-1',
+              },
+            }),
+            'sig',
+          ].join('.'),
+          access_token: 'a',
+          refresh_token: 'r',
+          account_id: workspace,
+        },
+      });
+    const saveLogin = (name: string, content: string) =>
+      fs.writeFileSync(path.join(ccsDir, 'codex-instances', name, 'auth.json'), content);
+    codexProfile('spare');
+    codexProfile('personal');
+    codexProfile('work');
+    new CodexProfileRegistry().setDefault('spare');
+    saveLogin('personal', bound('same@example.com', 'ws-personal'));
+    saveLogin('work', bound('same@example.com', 'ws-work'));
+    activate('work');
+    // One email, two workspaces: only the live workspace's profile is refused.
+    const live = await f.request('POST', '/codex:work/remove', {});
+    expect([live.status, live.body.code]).toEqual([409, 'account_active']);
+    const again = await f.request('POST', '/codex:work/signin-again', {});
+    expect([again.status, again.body.code]).toEqual([409, 'account_active']);
+    expect((await f.request('POST', '/codex:personal/remove', {})).status).toBe(200);
+    // A live login without a readable workspace binding names no profile in the summary;
+    // the refusals still follow the removal guard, where the email decides.
+    fs.writeFileSync(
+      path.join(codexHome, 'auth.json'),
+      JSON.stringify({
+        tokens: { id_token: idToken('same@example.com'), access_token: 'a', refresh_token: 'r' },
+      })
+    );
+    invalidateCodexAuthProfilesCache();
+    for (const name of ['personal', 'work']) {
+      const refused = await f.request('POST', `/codex:${name}/remove`, {});
+      expect([name, refused.status, refused.body.code]).toEqual([name, 409, 'account_active']);
+    }
+    const spare = await f.request('POST', '/codex:spare/remove', {});
+    expect([spare.status, spare.body.code]).toEqual([409, 'account_default']);
+  });
+
   it('keeps Antigravity, wallets and Claude (while off) out of Remove', async () => {
     const f = await fixture();
     for (const id of ['antigravity:profile:party', 'plan-opencode-go-console-mac-0123456789ab']) {
