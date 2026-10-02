@@ -103,13 +103,49 @@ from its row), amounts, facts (status, sampled, fetched, source, platform, profi
 `subLead` ("Codex · Pro"), `canSwitch`, `activeLabel`, `activateHint`, `platform`, `confirm` and `confirmRuns`,
 so Details shows the row's own action slot and asks the same inline question.
 
-### Analytics v2
+### Analytics v3
 
-`analyticsView()` keeps every per-window history in `quotaCharts` (the data a focus chart reads by key) and adds
-`quotaHistory`: one row per account, grouped by provider, summarising the account's main window (canonical
-weekly, never Fable) with its current percent, next reset and a sparkline path in a 100 x 100 viewbox.
-`analyticsSlintModel(view)` is the JSON for src/analytics.rs: `{ version, head, kpis, quotaGroups }`. The
-Analytics page task extends both (trends, cost by model, donut, sessions, heatmap, resets agenda).
+The Analytics page (W3) is built like the concept's `app-analytics.js`. Four pure modules make every number:
+
+- `public/analytics-usage.mjs` `usageView(payload, state, { now, sizes })`: the header, KPI row, usage trend,
+  cost by model, donut, session stats, token breakdown, cache efficiency, heatmap, daily cost and the custom
+  range calendar. It buckets the response's UTC hours in local time (24H hourly, 7D four-hourly, 30D/All
+  daily, Month and custom by span), validates and de-duplicates rows, and splits each provider's logged cost
+  by type at its models' blended rates so the parts add up to the logged total (exact for the whole window).
+  A missing cost estimate makes every cost unavailable; unavailable activity makes every block unavailable.
+- `public/model-rates.mjs`: the rate table, aliases and fallback mirrored from `src/web-server/model-pricing.ts`
+  (read only; `tests/model-rates.test.mjs` fails when they drift), the models.dev rates CCS resolved for the
+  logged Codex models, and `reconcile(row)`: a model's split is kept only when its four parts add up to its
+  logged `estimatedCostUsd`, otherwise it shows token shares and the card footnote says so.
+- `public/analytics-quota.mjs`: `quotaView()` (one row per account by identity, the main window never Fable,
+  step sparklines coloured by each run's value in a 600 x 24 viewbox, gaps and resets never bridged),
+  `focusChart()` (shapes, dots, placed labels and hover stops in pixels; a label takes the first free spot or
+  is dropped, so labels never overlap; Martian Mono is 7.15 px a character at 11 px, so label boxes are exact)
+  and `agendaView()` (resets at the same minute merged, expiries with what is left, spent packs dropped, two
+  balanced columns of whole days). Current readings come from the dashboard response, history from analytics.
+- `public/analytics-data.mjs` `analyticsSlintModel(view, page)`: the version 3 JSON for `src/analytics.rs`
+  (`ANALYTICS_VIEW_VERSION = 3`, its own version, checked there). It keeps the earlier `head`, `kpis` and
+  `quotaGroups` and adds `state`, `usage`, `quota` and `agenda`.
+
+`src/analytics.rs` writes it into the `AxData` global (`ui/pages/analytics/ax-data.slint`), with persistent
+models for everything that animates (KPIs, model bars, donut arcs, stats, token bars, heat cells, daily bars,
+quota groups and rows). Page state lives in bridge.js (`analyticsPage`): range, custom days, provider, the
+trend toggles, donut and heatmap modes, open focus rows, compare and collapsed groups. Kinds:
+`analytics-range` (24h|7d|30d|month|all), `analytics-custom` ("YYYY-MM-DD,YYYY-MM-DD", local days),
+`analytics-provider` (all|claude|codex), `analytics-split`, `analytics-cache` ("true"|"false"),
+`analytics-donut`, `analytics-heat`, `analytics-focus` and `analytics-compare` (account id), `analytics-group`
+(provider), `analytics-refresh`, and `analytics-layout` ("kind,width,height": the trend, daily, heat and focus
+boxes report their size, and bridge.js lays those charts out in pixels). The backend accepts 24h, 7d and 30d:
+Month, All and custom ranges request the covering window (`apiRangeFor`) and are cut in the browser; when the
+fetched window differs from the range, cost by model, the donut and session stats say which logs they cover.
+
+Motion: sections play their first view when they first scroll on screen (`AxReveal` reads its absolute
+position against the page scroll). The trend draws on through a clip; on a range, filter or toggle change
+bridge.js interpolates the 360-sample point arrays every frame and pushes only the eleven path strings
+(`set_analytics_trend_paths`), while the axes cross-fade. Count-ups (`AxNum`) roll on one ease-out and land on
+the exact text from bridge.js; the donut sweeps and morphs, the gauge arc and its number share one ease-out,
+bars grow in sequence, rows of the quota history and the agenda rise in with a stagger. Nothing loops while
+idle; the recent-sessions skeleton shimmers twice on first view.
 
 ### URL state
 
@@ -228,6 +264,20 @@ Gotchas found while building Home (W2):
 - `changed` callbacks fire for properties with bindings, so a Meter reports `value-changed` when its reading
   moves after the load-in and the row flashes.
 
+Gotchas found while building Analytics (W3):
+- `TouchArea.moved` fires only while a button is pressed: hover tracking uses `changed mouse-x` and
+  `changed mouse-y` (with `has-hover`).
+- A Text with `wrap: word-wrap` inside a HorizontalLayout reports a one-line preferred height; give it an
+  explicit width (or put it directly in a VerticalLayout) before measuring a popover or card from it.
+- A PopupWindow does not size itself: give it `height: <body>.preferred-height`.
+- A TouchArea used for a tooltip consumes clicks; forward them (`clicked => { ... }`) when it sits on a row.
+- Widths that depend on a card's own width inside its layout make a binding loop; derive them from
+  `Breakpoints.width` instead.
+- Slint has no exponent literals (`1e9`) and no dashed strokes: dashes are generated as subpaths in JS.
+- `gen` is a reserved word in Rust 2024: do not name a struct field `gen`.
+- `StyledText` with `@markdown("<font color='\{Theme.ink-2}'>**\{lead}**</font>\{rest}")` mixes weights in
+  a wrapping line (the KPI subtitles); interpolated strings are escaped.
+
 ## Pages
 
 - `pages/home.slint` (W2, built like the concept's Home):
@@ -249,7 +299,12 @@ Gotchas found while building Home (W2):
     Details).
   - `ProviderCard`: header with plan, inline meters (side by side from 560 px), plan note, amounts (two
     columns from 700 px, dashed separators), packs note, footer; a soft flash when a reading changes.
-- `pages/analytics.slint` (stub): header, KPI row, quota-history rows.
+- `pages/analytics.slint` (W3): the page; `pages/analytics/` holds `ax-data.slint` (structs and the `AxData`
+  global), `ax-common.slint` (colours, count-ups, card, switch, segmented control with marks, readout rows,
+  tips, the first-view reveal), `ax-head.slint` (header, scope disclosure, custom range picker, KPI row),
+  `ax-trend.slint`, `ax-models.slint` (cost by model, model popover, donut), `ax-stats.slint` (sessions, token
+  breakdown, cache gauge), `ax-time.slint` (heatmap, daily cost), `ax-quota.slint` (quota history and focus
+  charts) and `ax-agenda.slint`. Chart rows reflow 3 -> 2 columns at 1600 px.
 - `pages/accounts.slint` (stub): provider registry rows, Appearance, Usage refresh, About with `AboutSlint`
   (Slint's required attribution; keep it).
 - `pages/details.slint`: the Details content for the slide-over.

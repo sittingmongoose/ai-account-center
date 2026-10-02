@@ -75,8 +75,19 @@ page as file:// or configure a cross-origin API URL.
   Settings (30–3600 seconds, initially 60 seconds). Refresh requests fresh usage
   before reloading. Failed refreshes keep the received samples and report the
   failure as a toast; unavailable values are never replaced with zero.
-- Analytics shows the KPI row and the quota history (one row per account,
-  grouped by provider) from the version 2 analytics view model.
+- Analytics is built around Usage, the original CCS analytics page improved: range
+  presets (24H, 7D, 30D, Month, All) and a custom range of whole local days, a
+  Claude Code / Codex filter, five KPI cards, the usage-trends chart (tokens and
+  estimated cost on two axes, token types and cache reads toggles, a crosshair
+  readout), cost by model with a model popover, the model donut, session stats,
+  token breakdown, cache efficiency, a weekday x hour heatmap, daily cost by
+  provider, the compact quota history with focus charts and the upcoming resets
+  and expiries, all in local time from the version 3 analytics view model.
+  Per-type costs use the rates mirrored from `src/web-server/model-pricing.ts`
+  (`public/model-rates.mjs`) and are kept only when they add up to each model's
+  logged estimate; otherwise the split shows token shares and says so. Month,
+  All and custom ranges read the covering 24h, 7d or 30d response and are cut in
+  the browser; per-model and session data then say which logs they cover.
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
@@ -89,9 +100,12 @@ node --test web-dashboard/tests/*.test.mjs
 
 The Slint compiler validates UI bindings during the actual WASM release build.
 The data tests cover unknown versus genuine zero, credit units/expiration,
-additional counters, confirmed auto-switch thresholds, complete details and the
-version 2 view models (sections, Fable, switchable providers, hidden providers,
-quota history).
+additional counters, confirmed auto-switch thresholds, complete details, the
+version 2 dashboard view models (sections, Fable, switchable providers, hidden
+providers) and the version 3 analytics model (rate mirror parity with
+`model-pricing.ts`, per-type cost reconciliation, unavailable activity and cost,
+ranges and local-time buckets, the provider filter, heatmap gaps, quota history,
+focus-chart label placement and the resets agenda).
 
 For automated Chromium DPI checks, launch a disposable browser with
 `--force-device-scale-factor=N` and a new context with `device_scale_factor=N`

@@ -1,0 +1,426 @@
+// Session stats (with the skeleton slot for recent sessions), token breakdown and cache efficiency.
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Icon } from "../../components/icon.slint";
+import { ProviderMark } from "../../components/mark.slint";
+import { Caps, ValueUnit } from "../../components/text.slint";
+import { Skeleton } from "../../components/skeleton.slint";
+import { AxData, AxStat, AxTokRow } from "ax-data.slint";
+import { AxColor, AxCard, AxCardHead, AxNum, AxTip, AxSwatch, AxLegendEntry } from "ax-common.slint";
+
+// ---------------------------------------------------------------- session stats
+component SessCell inherits Text {
+    font-family: Type.tab;
+    font-size: 12.5px;
+    color: Theme.ink;
+    horizontal-alignment: right;
+    vertical-alignment: center;
+    horizontal-stretch: 1;
+}
+
+export component AxSessionsCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    property <bool> pad16: Breakpoints.width < 1180px;
+    // the skeleton shimmers twice on first view, then rests (nothing loops while idle)
+    property <bool> shimmer: false;
+    property <bool> seen: root.played;
+    changed seen => { if root.seen && Motion.on { root.shimmer = true; stop.running = true; } }
+    stop := Timer { interval: 3100ms; running: false; triggered => { self.running = false; root.shimmer = false; } }
+    AxCardHead { title: "Session stats"; sub: AxData.sessions.sub; note: AxData.sessions.note; }
+    VerticalLayout {
+        padding-left: root.pad16 ? 16px : 20px;
+        padding-right: self.padding-left;
+        padding-top: 2px;
+        padding-bottom: 16px;
+        spacing: 14px;
+        vertical-stretch: 1;
+        HorizontalLayout {
+            spacing: root.pad16 ? 10px : 12px;
+            vertical-stretch: 0;
+            for s[i] in AxData.sess-stats: VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 3px;
+                HorizontalLayout {
+                    AxNum {
+                        num: s.num;
+                        has: s.has;
+                        fmt: s.fmt;
+                        text: s.text;
+                        played: root.played;
+                        delay: root.delay + i * 60ms;
+                        size: 22px;
+                        weight: 640;
+                        na-size: 15px;
+                        height: 26px;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Text { text: s.label; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+            }
+        }
+        VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 0;
+            HorizontalLayout {
+                padding-bottom: 6px;
+                Caps { text: "CLI"; horizontal-stretch: 1.4; }
+                Caps { text: "SESSIONS"; horizontal-alignment: right; horizontal-stretch: 1; }
+                Caps { text: "PER SESSION"; horizontal-alignment: right; horizontal-stretch: 1; }
+                Caps { text: "EVENTS PER SESSION"; horizontal-alignment: right; horizontal-stretch: 1.4; }
+            }
+            for r in AxData.sess-rows: VerticalLayout {
+                Rectangle { height: 1px; background: Theme.rule-2; }
+                HorizontalLayout {
+                    min-height: 32px;
+                    HorizontalLayout {
+                        horizontal-stretch: 1.4;
+                        spacing: 8px;
+                        VerticalLayout { alignment: center; ProviderMark { provider: r.provider; size: 16px; } }
+                        Text { text: r.label; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    }
+                    SessCell { text: r.sessions; }
+                    SessCell { text: r.per; }
+                    SessCell { text: r.events; horizontal-stretch: 1.4; AxTip { tip: r.events-tip; } }
+                }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+        VerticalLayout {
+            spacing: 0px;
+            vertical-stretch: 0;
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Text { text: "Recent sessions"; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
+            Rectangle { height: 8px; }
+            for i in 3: HorizontalLayout {
+                padding-top: 5px;
+                padding-bottom: 5px;
+                spacing: 12px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 9px;
+                    Skeleton { x: 0px; width: parent.width * (0.88 - i * 0.14); height: 9px; border-radius: 5px; active: root.shimmer; }
+                }
+                Skeleton { width: 70px; height: 9px; border-radius: 5px; active: root.shimmer; }
+                Skeleton { width: 52px; height: 9px; border-radius: 5px; active: root.shimmer; }
+            }
+            HorizontalLayout {
+                padding-top: 8px;
+                spacing: 8px;
+                VerticalLayout { alignment: start; padding-top: 1px; Icon { name: "clock"; width: 14px; height: 14px; tint: Theme.ink-3; } }
+                Text { text: "Recent sessions arrive with the session list, a backend addition (session rows without paths)."; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; horizontal-stretch: 1; }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- token breakdown
+component TokBar inherits Rectangle {
+    in property <float> w;
+    in property <color> c;
+    in property <bool> played;
+    in property <duration> delay;
+    height: 7px;
+    border-radius: 4px;
+    background: Theme.paper-3;
+    clip: true;
+    property <bool> mounted: !Motion.on;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <bool> landed: !Motion.on;
+    land := Timer { interval: root.delay + 860ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
+    property <float> fill: root.played && root.mounted ? root.w : 0;
+    animate fill { duration: Motion.on ? 820ms : 0ms; delay: Motion.on && !root.landed ? root.delay : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    Rectangle { x: 0px; width: parent.width * root.fill / 100; height: 7px; border-radius: 4px; background: root.c; }
+}
+
+export component AxTokensCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    property <bool> narrow: Breakpoints.width < 1180px;
+    AxCardHead {
+        title: "Token breakdown";
+        sub: AxData.tokens-sub;
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: end;
+            horizontal-stretch: 0;
+            VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { shape: "bar-t"; label: "Share of tokens"; } }
+            VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { shape: "bar-c"; label: "Share of cost"; } }
+        }
+    }
+    VerticalLayout {
+        padding-left: root.narrow ? 16px : 20px;
+        padding-right: self.padding-left;
+        padding-top: 4px;
+        padding-bottom: 18px;
+        spacing: 12px;
+        alignment: start;
+        vertical-stretch: 1;
+        for t[i] in AxData.tokens: HorizontalLayout {
+            spacing: root.narrow ? 10px : 14px;
+            HorizontalLayout {
+                width: root.narrow ? 92px : 104px;
+                spacing: 8px;
+                VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(t.key); } }
+                Text { text: t.label; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                horizontal-stretch: 1;
+                min-width: 60px;
+                TokBar { w: t.wt; c: AxColor.of(t.key).with-alpha(0.42); played: root.played; delay: root.delay + i * 90ms; }
+                TokBar { w: t.wc; c: AxColor.of(t.key); played: root.played; delay: root.delay + i * 90ms + 40ms; }
+            }
+            VerticalLayout {
+                width: root.narrow ? 138px : 150px;
+                spacing: 0px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: t.tok; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; horizontal-stretch: 1; min-height: 17px; AxTip { tip: t.tok-tip; } }
+                    HorizontalLayout { width: 50px; alignment: end; ValueUnit { value: t.tok-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 17px; } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: t.cost; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; horizontal-stretch: 1; min-height: 17px; }
+                    HorizontalLayout { width: 50px; alignment: end; if t.cost-share != "": ValueUnit { value: t.cost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 17px; } }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- cache efficiency
+// The hit-rate gauge: a 240-degree track, quarter ticks, a gradient arc that sweeps with the count-up on one
+// non-overshooting ease-out (so the arc never passes the value), 0% and 100% at its ends.
+component Gauge inherits Rectangle {
+    in property <float> frac;
+    in property <bool> played;
+    in property <duration> delay;
+    property <float> cx: 80;
+    property <float> cy: 74;
+    property <float> r: 58;
+    property <bool> mounted: !Motion.on;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <bool> landed: !Motion.on;
+    land := Timer { interval: root.delay + 1060ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
+    property <float> f: root.played && root.mounted ? clamp(root.frac, 0, 1) : 0;
+    animate f { duration: Motion.on ? (root.landed ? 700ms : 1000ms) : 0ms; delay: Motion.on && !root.landed ? root.delay : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <float> deg: -120 + 240 * root.f;
+    property <float> x0: root.cx + root.r * sin(-120deg);
+    property <float> y0: root.cy - root.r * cos(-120deg);
+    property <float> x1: root.cx + root.r * sin(root.deg * 1deg);
+    property <float> y1: root.cy - root.r * cos(root.deg * 1deg);
+    property <float> xe: root.cx + root.r * sin(120deg);
+    property <float> ye: root.cy - root.r * cos(120deg);
+    property <float> sx: root.width / 160px;
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: 160;
+        viewbox-height: 132;
+        commands: "M\{root.x0} \{root.y0}A58 58 0 1 1 \{root.xe} \{root.ye}";
+        stroke: Theme.track;
+        stroke-width: 10px * root.sx;
+        stroke-line-cap: round;
+    }
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: 160;
+        viewbox-height: 132;
+        commands: "M\{root.cx + 67 * sin(-120deg)} \{root.cy - 67 * cos(-120deg)}L\{root.cx + 71 * sin(-120deg)} \{root.cy - 71 * cos(-120deg)}"
+            + "M\{root.cx + 67 * sin(-60deg)} \{root.cy - 67 * cos(-60deg)}L\{root.cx + 71 * sin(-60deg)} \{root.cy - 71 * cos(-60deg)}"
+            + "M\{root.cx} \{root.cy - 67}L\{root.cx} \{root.cy - 71}"
+            + "M\{root.cx + 67 * sin(60deg)} \{root.cy - 67 * cos(60deg)}L\{root.cx + 71 * sin(60deg)} \{root.cy - 71 * cos(60deg)}"
+            + "M\{root.cx + 67 * sin(120deg)} \{root.cy - 67 * cos(120deg)}L\{root.cx + 71 * sin(120deg)} \{root.cy - 71 * cos(120deg)}";
+        stroke: Theme.rule-strong;
+        stroke-width: 1.25px;
+        stroke-line-cap: round;
+    }
+    if root.f > 0.0005: Path {
+        width: root.width;
+        height: root.height;
+        viewbox-width: 160;
+        viewbox-height: 132;
+        commands: "M\{root.x0} \{root.y0}A58 58 0 \{root.deg + 120 > 180 ? 1 : 0} 1 \{root.x1} \{root.y1}";
+        stroke: @linear-gradient(90deg, AxColor.of("cr").mix(Theme.paper, 0.55) 0%, AxColor.of("cr") 100%);
+        stroke-width: 10px * root.sx;
+        stroke-line-cap: round;
+    }
+    Text { x: root.x0 * 1px * root.sx - self.preferred-width / 2; y: (root.y0 + 22) * 1px * root.sx - self.font-metrics.ascent; text: "0%"; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; }
+    Text { x: root.xe * 1px * root.sx - self.preferred-width / 2; y: (root.ye + 22) * 1px * root.sx - self.font-metrics.ascent; text: "100%"; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; }
+}
+
+component RwRow inherits HorizontalLayout {
+    in property <string> kind;
+    in property <string> name;
+    in property <string> note;
+    in property <string> tok;
+    in property <string> tip;
+    in property <string> share;
+    in property <string> cost;
+    in property <bool> narrow;
+    spacing: root.narrow ? 10px : 12px;
+    min-height: 23px;
+    HorizontalLayout {
+        horizontal-stretch: 1;
+        spacing: 8px;
+        VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(root.kind); } }
+        Text { text: root.name; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; vertical-alignment: center; }
+        if root.note != "": Text { text: root.note; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    Text { text: root.tok; width: root.narrow ? 64px : 76px; font-family: Type.tab; font-size: 12.5px; font-weight: 620; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxTip { tip: root.tip; } }
+    HorizontalLayout { width: root.narrow ? 60px : 70px; alignment: end; if root.share != "Unavailable": VerticalLayout { alignment: center; ValueUnit { value: root.share; size: 12.5px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
+    Text { text: root.cost; width: root.narrow ? 86px : 96px; font-family: Type.tab; font-size: 12.5px; font-weight: 620; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+}
+
+export component AxCacheCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    property <bool> narrow: Breakpoints.width < 1180px;
+    property <length> gw: root.narrow ? 140px : 160px;
+    AxCardHead { title: "Cache efficiency"; sub: AxData.cache.sub; }
+    HorizontalLayout {
+        padding-left: root.narrow ? 16px : 20px;
+        padding-right: self.padding-left;
+        padding-top: root.narrow ? 4px : 6px;
+        padding-bottom: root.narrow ? 12px : 16px;
+        spacing: root.narrow ? 20px : 28px;
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: root.gw;
+                height: root.gw * 132 / 160;
+                Gauge { width: parent.width; height: parent.height; frac: AxData.cache.has-hit ? AxData.cache.hit / 100 : 0; played: root.played; delay: root.delay; }
+                VerticalLayout {
+                    y: root.narrow ? 42px : 50px;
+                    width: parent.width;
+                    height: self.preferred-height;
+                    spacing: 3px;
+                    HorizontalLayout {
+                        alignment: center;
+                        AxNum {
+                            num: AxData.cache.hit;
+                            has: AxData.cache.has-hit;
+                            fmt: "pct2";
+                            text: AxData.cache.hit-text;
+                            pct: true;
+                            played: root.played;
+                            delay: root.delay;
+                            size: root.narrow ? 23px : 26px;
+                            weight: 640;
+                            na-size: 14px;
+                        }
+                    }
+                    Text { text: "hit rate"; font-size: 12px; color: Theme.ink-3; horizontal-alignment: center; }
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 0px;
+            Text { text: "Estimated savings"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
+            Rectangle { height: 3px; }
+            HorizontalLayout {
+                AxNum {
+                    num: AxData.cache.save;
+                    has: AxData.cache.has-save;
+                    fmt: "money";
+                    text: AxData.cache.save-text;
+                    played: root.played;
+                    delay: root.delay;
+                    size: root.narrow ? 23px : 26px;
+                    weight: 640;
+                    ink: Theme.good-text;
+                    na-size: 15px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { height: 3px; }
+            Text { text: "Cache reads priced at each model's cache-read rate instead of its input rate"; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+            Rectangle { height: 14px; }
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Rectangle { height: 14px; }
+            Text { text: "Estimated cache cost"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
+            Rectangle { height: 3px; }
+            HorizontalLayout {
+                AxNum {
+                    num: AxData.cache.ccost;
+                    has: AxData.cache.has-ccost;
+                    fmt: "money";
+                    text: AxData.cache.ccost-text;
+                    played: root.played;
+                    delay: root.delay;
+                    size: 21px;
+                    weight: 640;
+                    na-size: 15px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { height: 3px; }
+            if AxData.cache.ccost-share != "": HorizontalLayout {
+                spacing: 0px;
+                alignment: start;
+                ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
+                Text { text: " of the estimated cost for this range"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            }
+        }
+    }
+    VerticalLayout {
+        padding-left: root.narrow ? 16px : 20px;
+        padding-right: self.padding-left;
+        padding-bottom: 12px;
+        spacing: 0px;
+        Rectangle { height: 1px; background: Theme.rule-2; }
+        Text { text: "Cache reads vs writes"; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; min-height: 32px; vertical-alignment: bottom; }
+        Rectangle { height: 9px; }
+        rw := Rectangle {
+            height: 10px;
+            border-radius: 5px;
+            background: Theme.track;
+            clip: true;
+            property <float> total: AxData.cache.reads + AxData.cache.writes;
+            property <length> ww: self.total > 0 && AxData.cache.writes > 0 ? max(3px, (self.width - 2px) * AxData.cache.writes / self.total) : 0px;
+            property <length> rw-w: self.total > 0 && AxData.cache.reads > 0 ? self.width - self.ww - (self.ww > 0 ? 2px : 0px) : 0px;
+            animate ww, rw-w { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            Rectangle {
+                x: 0px;
+                width: rw.rw-w;
+                background: @linear-gradient(90deg, AxColor.of("cr").mix(Theme.paper, 0.55) 0%, AxColor.of("cr") 100%);
+                AxTip { tip: "Cache reads: " + AxData.cache.r-tip; }
+            }
+            Rectangle {
+                x: rw.width - rw.ww;
+                width: rw.ww;
+                background: AxColor.of("cw");
+                AxTip { tip: "Cache writes: " + AxData.cache.w-tip; }
+            }
+        }
+        Rectangle { height: 10px; }
+        HorizontalLayout {
+            spacing: root.narrow ? 10px : 12px;
+            padding-bottom: 2px;
+            Rectangle { horizontal-stretch: 1; }
+            Caps { text: "TOKENS"; width: root.narrow ? 64px : 76px; horizontal-alignment: right; }
+            Caps { text: "SHARE"; width: root.narrow ? 60px : 70px; horizontal-alignment: right; }
+            Caps { text: "EST. COST"; width: root.narrow ? 86px : 96px; horizontal-alignment: right; }
+        }
+        RwRow { kind: "cr"; name: "Reads"; tok: AxData.cache.r-tok; tip: AxData.cache.r-tip; share: AxData.cache.r-share; cost: AxData.cache.r-cost; narrow: root.narrow; }
+        RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }
+    }
+    HorizontalLayout {
+        padding-left: root.narrow ? 16px : 20px;
+        padding-right: self.padding-left;
+        padding-top: 2px;
+        padding-bottom: 14px;
+        Text {
+            text: "Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.";
+            font-size: 12px;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+}

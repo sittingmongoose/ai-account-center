@@ -1,0 +1,406 @@
+// Usage trends: a full-width smooth area chart, tokens on the left axis and estimated cost on the right. The
+// paths are Slint Path commands generated in bridge.js (analytics-usage.mjs) in plot pixels; on a range or
+// toggle change bridge.js interpolates the point arrays each frame (the morph) and the axes cross-fade. The
+// first view draws the chart on through a clip; the crosshair glides between buckets.
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Caps } from "../../components/text.slint";
+import { AxData, AxBucket, AxYTick, AxXTick } from "ax-data.slint";
+import { AxColor, AxCard, AxCardHead, AxSwitch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard } from "ax-common.slint";
+
+export global AxTrendPad {
+    out property <length> l: 62px;
+    out property <length> r: 70px;
+    out property <length> t: 30px;
+    out property <length> b: 34px;
+}
+
+component AxisLabel inherits Text {
+    in property <length> ax;
+    in property <length> baseline;
+    in property <int> anchor: 0; // 0 start, 1 middle, 2 end
+    x: root.anchor == 2 ? root.ax - self.preferred-width : root.anchor == 1 ? root.ax - self.preferred-width / 2 : root.ax;
+    y: root.baseline - self.font-metrics.ascent;
+    width: self.preferred-width;
+    font-family: Type.mono;
+    font-size: 11px;
+    color: Theme.ink-3;
+}
+
+// The static layer: gridlines, tick labels, the unread tail. Two copies cross-fade when the geometry changes.
+component TrendAxes inherits Rectangle {
+    in property <[AxYTick]> y-ticks;
+    in property <[AxXTick]> x-ticks;
+    in property <length> pw;
+    in property <length> ph;
+    in property <float> sx: 1;
+    in property <float> sy: 1;
+    in property <bool> cost-shown;
+    for t in root.y-ticks: Rectangle {
+        x: AxTrendPad.l;
+        y: AxTrendPad.t + t.y * 1px * root.sy;
+        width: root.pw;
+        height: 1px;
+        background: t.base ? Theme.rule-strong : Theme.grid;
+    }
+    for t in root.y-ticks: AxisLabel { ax: AxTrendPad.l - 10px; baseline: AxTrendPad.t + t.y * 1px * root.sy + 4px; anchor: 2; text: t.left; }
+    for t in root.y-ticks: AxisLabel { ax: AxTrendPad.l + root.pw + 10px; baseline: AxTrendPad.t + t.y * 1px * root.sy + 4px; text: t.right; color: Theme.ink-2; }
+    AxisLabel { ax: AxTrendPad.l - 10px; baseline: 14px; anchor: 2; text: "TOKENS"; letter-spacing: 0.66px; }
+    if root.cost-shown: AxisLabel { ax: AxTrendPad.l + root.pw + 10px; baseline: 14px; text: "USD"; letter-spacing: 0.66px; }
+    for t in root.x-ticks: Rectangle {
+        visible: t.major;
+        x: AxTrendPad.l + t.x * 1px * root.sx;
+        y: AxTrendPad.t;
+        width: 1px;
+        height: root.ph;
+        background: Theme.grid;
+    }
+    for t in root.x-ticks: AxisLabel {
+        ax: AxTrendPad.l + t.x * 1px * root.sx;
+        baseline: AxTrendPad.t + root.ph + 21px;
+        anchor: 1;
+        text: t.label;
+        color: t.major ? Theme.ink-2 : Theme.ink-3;
+    }
+}
+
+component TrendChart inherits Rectangle {
+    in property <bool> played;
+    in property <duration> delay;
+    property <length> pw: max(40px, root.width - AxTrendPad.l - AxTrendPad.r);
+    property <length> ph: max(40px, root.height - AxTrendPad.t - AxTrendPad.b);
+    // the paths are laid out for the size bridge.js last saw; scale until it re-lays them out
+    property <float> sx: AxData.trend.pw > 0 ? root.pw / (AxData.trend.pw * 1px) : 1;
+    property <float> sy: AxData.trend.ph > 0 ? root.ph / (AxData.trend.ph * 1px) : 1;
+    changed width => { AxData.layout("trend", root.width, root.height); }
+    changed height => { AxData.layout("trend", root.width, root.height); }
+
+    // ---- axes: the new set fades in over the old one ----
+    property <int> generation: AxData.trend.generation;
+    property <[AxYTick]> old-y;
+    property <[AxXTick]> old-x;
+    property <[AxYTick]> cur-y: AxData.trend-y;
+    property <[AxXTick]> cur-x: AxData.trend-x;
+    property <float> fade: 1;
+    property <bool> fading: false;
+    animate fade { duration: root.fading && Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    changed generation => {
+        if Motion.on && root.played {
+            root.fading = false;
+            root.fade = 0;
+            fade-start.running = true;
+        }
+    }
+    fade-start := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.fading = true;
+            root.fade = 1;
+            keep-old.running = true;
+        }
+    }
+    keep-old := Timer { interval: 420ms; running: false; triggered => { self.running = false; root.old-y = root.cur-y; root.old-x = root.cur-x; } }
+    init => {
+        root.old-y = root.cur-y;
+        root.old-x = root.cur-x;
+        AxData.layout("trend", root.width, root.height);
+    }
+
+    if root.fade < 1: TrendAxes {
+        width: root.width;
+        height: root.height;
+        opacity: 1 - root.fade;
+        y-ticks: root.old-y;
+        x-ticks: root.old-x;
+        pw: root.pw;
+        ph: root.ph;
+        sx: root.sx;
+        sy: root.sy;
+        cost-shown: AxData.trend.cost-shown;
+    }
+    TrendAxes {
+        width: root.width;
+        height: root.height;
+        opacity: root.fade;
+        y-ticks: root.cur-y;
+        x-ticks: root.cur-x;
+        pw: root.pw;
+        ph: root.ph;
+        sx: root.sx;
+        sy: root.sy;
+        cost-shown: AxData.trend.cost-shown;
+    }
+    // minor x gridlines (dashed)
+    Path {
+        x: AxTrendPad.l;
+        y: AxTrendPad.t;
+        width: root.pw;
+        height: root.ph;
+        viewbox-width: max(1, AxData.trend.pw);
+        viewbox-height: max(1, AxData.trend.ph);
+        fit: fill;
+        commands: AxData.trend.minor;
+        stroke: Theme.grid;
+        stroke-width: 1px;
+        opacity: root.fade;
+    }
+    // logs that are not read yet: a hatched tail after the last read, never drawn as zero
+    if AxData.trend.tail-x >= 0: Rectangle {
+        x: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx;
+        y: AxTrendPad.t;
+        width: max(0px, root.pw - AxData.trend.tail-x * 1px * root.sx);
+        height: root.ph;
+        clip: true;
+        Path {
+            x: -AxData.trend.tail-x * 1px * root.sx;
+            y: 0px;
+            width: root.pw;
+            height: root.ph;
+            viewbox-width: max(1, AxData.trend.pw);
+            viewbox-height: max(1, AxData.trend.ph);
+            fit: fill;
+            commands: AxData.trend.hatch;
+            stroke: Theme.grid-strong;
+            stroke-width: 1.2px;
+        }
+    }
+    if AxData.trend.tail-x >= 0: Path {
+        x: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx;
+        y: AxTrendPad.t - 4px;
+        width: 1px;
+        height: root.ph + 4px;
+        viewbox-width: 1;
+        viewbox-height: 1;
+        fit: fill;
+        commands: "M0.5 0V0.04M0.5 0.08V0.12M0.5 0.16V0.2M0.5 0.24V0.28M0.5 0.32V0.36M0.5 0.4V0.44M0.5 0.48V0.52M0.5 0.56V0.6M0.5 0.64V0.68M0.5 0.72V0.76M0.5 0.8V0.84M0.5 0.88V0.92M0.5 0.96V1";
+        stroke: Theme.ink-3;
+        stroke-width: 1px;
+    }
+    if AxData.trend.tail-x >= 0: AxisLabel {
+        ax: AxTrendPad.l + AxData.trend.tail-x * 1px * root.sx - 6px;
+        baseline: AxTrendPad.t + 14px;
+        anchor: 2;
+        text: AxData.trend.tail-label;
+        letter-spacing: 0.55px;
+    }
+    if AxData.trend.clip-note != "": AxisLabel {
+        ax: AxTrendPad.l + 6px;
+        baseline: AxTrendPad.t + 14px;
+        text: AxData.trend.clip-note;
+        letter-spacing: 0.55px;
+    }
+
+    // ---- the data, drawn on through a clip ----
+    property <length> clip-w: root.played || !Motion.on ? root.width : 0px;
+    animate clip-w { duration: Motion.on ? Motion.draw : 0ms; delay: Motion.on ? root.delay : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    clip := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: min(root.width, root.clip-w);
+        height: root.height;
+        clip: true;
+        Rectangle {
+            x: AxTrendPad.l;
+            y: AxTrendPad.t;
+            width: root.pw;
+            height: root.ph;
+            // total tokens: one gradient area (shown when the types are not split)
+            Rectangle {
+                opacity: AxData.split ? 0 : 1;
+                animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                Path {
+                    width: root.pw;
+                    height: root.ph;
+                    viewbox-width: max(1, AxData.trend.pw);
+                    viewbox-height: max(1, AxData.trend.ph);
+                    fit: fill;
+                    commands: AxData.trend-paths.total;
+                    fill: @linear-gradient(180deg, AxColor.of("tok").with-alpha(0.40) 0%, AxColor.of("tok").with-alpha(0.04) 100%);
+                }
+                Path {
+                    width: root.pw;
+                    height: root.ph;
+                    viewbox-width: max(1, AxData.trend.pw);
+                    viewbox-height: max(1, AxData.trend.ph);
+                    fit: fill;
+                    commands: AxData.trend-paths.total-line;
+                    stroke: AxColor.of("tok");
+                    stroke-width: 1.75px;
+                }
+            }
+            // stacked token types
+            Rectangle {
+                opacity: AxData.split ? 1 : 0;
+                animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                for k[i] in ["in", "out", "cw", "cr"]: Path {
+                    width: root.pw;
+                    height: root.ph;
+                    viewbox-width: max(1, AxData.trend.pw);
+                    viewbox-height: max(1, AxData.trend.ph);
+                    fit: fill;
+                    commands: i == 0 ? AxData.trend-paths.band0 : i == 1 ? AxData.trend-paths.band1 : i == 2 ? AxData.trend-paths.band2 : AxData.trend-paths.band3;
+                    fill: @linear-gradient(180deg, AxColor.of(k).with-alpha(0.78) 0%, AxColor.of(k).with-alpha(0.46) 100%);
+                }
+                for k[i] in ["in", "out", "cw", "cr"]: Path {
+                    width: root.pw;
+                    height: root.ph;
+                    viewbox-width: max(1, AxData.trend.pw);
+                    viewbox-height: max(1, AxData.trend.ph);
+                    fit: fill;
+                    commands: i == 0 ? AxData.trend-paths.line0 : i == 1 ? AxData.trend-paths.line1 : i == 2 ? AxData.trend-paths.line2 : AxData.trend-paths.line3;
+                    stroke: AxColor.of(k);
+                    stroke-width: 1.25px;
+                }
+            }
+            if AxData.trend.cost-shown: Path {
+                width: root.pw;
+                height: root.ph;
+                viewbox-width: max(1, AxData.trend.pw);
+                viewbox-height: max(1, AxData.trend.ph);
+                fit: fill;
+                commands: AxData.trend-paths.cost;
+                stroke: AxColor.of("cost");
+                stroke-width: 2px;
+                stroke-line-cap: round;
+            }
+        }
+    }
+    if AxData.trend.empty: Text {
+        width: root.width;
+        height: root.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: AxData.trend.empty-text;
+        font-size: 13px;
+        color: Theme.ink-3;
+    }
+
+    // ---- crosshair, dots and readout: they glide between buckets ----
+    property <int> idx: -1;
+    property <bool> xh-on: ta.has-hover && root.idx >= 0 && AxData.trend-buckets.length > 0;
+    property <bool> glide: false;
+    property <AxBucket> b: root.idx >= 0 && root.idx < AxData.trend-buckets.length ? AxData.trend-buckets[root.idx] : { };
+    property <length> bx: AxTrendPad.l + root.b.x * 1px * root.sx;
+    changed xh-on => { if !root.xh-on { root.glide = false; } }
+    xh := Rectangle {
+        x: root.bx;
+        y: AxTrendPad.t;
+        width: 1px;
+        height: root.ph;
+        background: Theme.ink-3;
+        opacity: root.xh-on ? 1 : 0;
+        animate x { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+    }
+    dot-tok := Rectangle {
+        x: root.bx - 5px;
+        y: AxTrendPad.t + root.b.y-tok * 1px * root.sy - 5px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: Theme.paper;
+        border-width: 2px;
+        border-color: AxColor.of("tok");
+        opacity: root.xh-on ? 1 : 0;
+        animate x, y { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+    }
+    if AxData.trend.cost-shown: Rectangle {
+        x: root.bx - 5px;
+        y: AxTrendPad.t + root.b.y-cost * 1px * root.sy - 5px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: Theme.paper;
+        border-width: 2px;
+        border-color: AxColor.of("cost");
+        opacity: root.xh-on ? 1 : 0;
+        animate x, y { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+    }
+    ro := AxRoCard {
+        property <length> rw: max(200px, body.preferred-width);
+        x: max(6px, root.bx + 16px + self.rw > root.width - 6px ? root.bx - 16px - self.rw : root.bx + 16px);
+        y: AxTrendPad.t + 4px;
+        width: self.rw;
+        height: body.preferred-height;
+        opacity: root.xh-on ? 1 : 0;
+        visible: self.opacity > 0.01;
+        animate x { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        body := VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 0px;
+            AxRoTime { text: root.b.time; }
+            Rectangle { height: 4px; }
+            AxRoRow { c: AxColor.of("in"); label: "Input"; value: root.b.vin; }
+            AxRoRow { c: AxColor.of("out"); label: "Output"; value: root.b.vout; }
+            AxRoRow { c: AxColor.of("cw"); label: "Cache write"; value: root.b.vcw; }
+            AxRoRow { c: AxColor.of("cr"); label: "Cache read"; value: root.b.vcr; dim: root.b.cr-dim; }
+            Rectangle { height: 11px; Rectangle { y: 5px; height: 1px; background: Theme.rule-2; } }
+            AxRoRow { c: AxColor.of("tok"); label: "All tokens"; value: root.b.all; strong: true; }
+            AxRoRow { c: AxColor.of("cost"); shape: "line"; label: "Estimated cost"; value: root.b.cost; strong: true; }
+            if root.b.foot != "": Text { text: root.b.foot; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }
+            if root.b.foot2 != "": Text { text: root.b.foot2; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: default;
+        function track() {
+            let mx = self.mouse-x - AxTrendPad.l;
+            if mx < -8px || mx > root.pw + 8px || AxData.trend-lut.length == 0 {
+                root.idx = -1;
+                return;
+            }
+            let col = clamp(floor(mx / root.sx / 2px), 0, AxData.trend-lut.length - 1);
+            if root.idx >= 0 { root.glide = true; }
+            root.idx = AxData.trend-lut[col];
+        }
+        changed mouse-x => { if self.has-hover { self.track(); } }
+        changed mouse-y => { if self.has-hover { self.track(); } }
+        changed has-hover => { if !self.has-hover { root.idx = -1; } }
+    }
+}
+
+export component AxTrendCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    in property <length> win-h: 900px;
+    property <length> chart-h: Breakpoints.width >= 2200px ? clamp(root.win-h * 0.34, 320px, 500px)
+        : root.win-h <= 760px ? 280px : clamp(root.win-h * 0.36, 290px, 460px);
+    AxCardHead {
+        title: "Usage trends";
+        sub: AxData.trend.sub;
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: end;
+            horizontal-stretch: 0;
+            VerticalLayout { alignment: start; AxSwitch { on: AxData.split; label: "Token types"; tip: "Stack the tokens by type"; toggled(v) => { AxData.action("analytics-split", v ? "true" : "false"); } } }
+            VerticalLayout { alignment: start; AxSwitch { on: AxData.cache-on; label: "Cache reads"; tip: "Cache reads dwarf the other types, so they start hidden"; toggled(v) => { AxData.action("analytics-cache", v ? "true" : "false"); } } }
+        }
+    }
+    HorizontalLayout {
+        padding-left: Breakpoints.width < 1180px ? 16px : 20px;
+        padding-right: self.padding-left;
+        padding-bottom: 6px;
+        spacing: 18px;
+        alignment: start;
+        for item in AxData.trend-legend: AxLegendEntry {
+            c: AxColor.of(item.key);
+            shape: item.key == "cost" ? "line" : "box";
+            label: item.label;
+            note: item.note;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 4px;
+        padding-bottom: 10px;
+        TrendChart { height: root.chart-h; played: root.played; delay: root.delay; }
+    }
+}

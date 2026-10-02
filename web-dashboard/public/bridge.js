@@ -1,9 +1,11 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_current_page, set_refresh_interval } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
 import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
 import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
 import { analyticsView, analyticsChoiceId, analyticsSlintModel } from './analytics-data.mjs';
+import { usageView, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGES, H, D } from './analytics-usage.mjs';
+import { quotaView, agendaView, QUOTA_PROVIDERS } from './analytics-quota.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
@@ -36,6 +38,14 @@ function pageFromLocation() {
 }
 let currentPage = pageFromLocation();
 const analyticsSelection = { range: '7d', provider: 'all', account: 'all', metricKey: '', activityInterval: 'Daily' };
+// The Analytics page state (version 3). Every number and label is computed in analytics-*.mjs from the response.
+const analyticsPage = {
+  range: '7d', from: null, to: null, prov: 'all', split: false, cache: false, donut: 'tokens', heat: 'cost',
+  open: new Set(), compare: new Set(), collapsed: new Set(),
+  // chart boxes reported by the Slint layout (analytics-layout): the charts are laid out in these pixels
+  sizes: { trend: null, daily: null, heat: null, focus: null },
+};
+let motionReduced = false;
 const platform = /Windows/i.test(navigator.userAgent) ? 'windows' : 'mac';
 const host = typeof location.host === 'string' ? location.host : '';
 
@@ -70,6 +80,8 @@ function render() {
   if (!data) return;
   set_dashboard(JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))));
   if (openDetailsId) renderDetails(openDetailsId);
+  // the quota history and the agenda read the current readings too
+  if (currentPage === 'analytics' && analyticsPayload) renderAnalytics();
 }
 function renderChrome(isRefreshing = false) {
   if (data || isRefreshing) set_chrome(JSON.stringify(chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host })));
@@ -144,55 +156,135 @@ async function refresh(force = false) {
 }
 
 // ---------------------------------------------------------------- analytics
-function renderAnalytics() {
-  if (!analyticsPayload) return;
-  analyticsModel = analyticsView(analyticsPayload, { catalog: data?.accounts || [], metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval });
-  set_analytics(JSON.stringify(analyticsSlintModel(analyticsModel)));
+// The usage-trend morph: the geometry on screen and the one being animated to (paths rebuilt every frame).
+let shownGeo = null, shownSize = '', trendRaf = 0, layoutTimer = 0;
+const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+function analyticsContext(now) {
+  const auto = data?.codexAutoSwitch;
+  const codex = auto?.enabled === true && Number.isFinite(auto?.thresholdPercent) ? 100 - auto.thresholdPercent : null;
+  const agAccounts = (data?.accounts || []).filter(account => account.provider === 'antigravity').length;
+  const antigravity = antigravityAuto?.enabled === true && agAccounts > 1 && Number.isFinite(antigravityAuto?.thresholdUsedPercent) ? antigravityAuto.thresholdUsedPercent : null;
+  return { now, dashboard: data, open: analyticsPage.open, compare: analyticsPage.compare, collapsed: analyticsPage.collapsed, focusWidth: analyticsPage.sizes.focus?.w, focusHeight: analyticsPage.sizes.focus?.h, thresholds: { codex, antigravity } };
 }
-async function refreshAnalytics(force = false) {
+/** mode 'morph' animates the usage trend from the shape on screen to the new one (range, filter and toggles). */
+function renderAnalytics(mode = 'static') {
+  if (!analyticsPayload) return;
+  const now = Date.now();
+  analyticsModel = analyticsView(analyticsPayload, { catalog: data?.accounts || [], metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval }, now);
+  const usage = usageView(analyticsPayload, analyticsPage, { now, sizes: analyticsPage.sizes });
+  const ctx = analyticsContext(now);
+  const quota = quotaView(analyticsPayload, ctx);
+  const agenda = agendaView(analyticsPayload, ctx);
+  const next = usage.trend.geo, size = `${usage.trend.pw}x${usage.trend.ph}`;
+  const from = shownGeo;
+  const morph = mode === 'morph' && !motionReduced && from && shownSize === size && from.lv[0].length === next.lv[0].length;
+  cancelAnimationFrame(trendRaf);
+  set_analytics(JSON.stringify(analyticsSlintModel(analyticsModel, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph ? from : next) })));
+  shownSize = size;
+  if (!morph) { shownGeo = next; return; }
+  const t0 = performance.now();
+  const frame = time => {
+    const k = easeInOut(Math.min(1, (time - t0) / 520));
+    shownGeo = k >= 1 ? next : mixGeo(from, next, k);
+    try { set_analytics_trend_paths(JSON.stringify(trendPaths(shownGeo))); } catch { return; }
+    if (k < 1) trendRaf = requestAnimationFrame(frame);
+  };
+  trendRaf = requestAnimationFrame(frame);
+}
+function renderAnalyticsHead() {
+  if (!analyticsPayload || currentPage !== 'analytics') return;
+  try { set_analytics_head(JSON.stringify(usageView(analyticsPayload, analyticsPage, { sizes: analyticsPage.sizes }).head)); } catch {}
+}
+/** True when the response in hand already holds the hours of the page range (no fetch is needed to draw it). */
+function analyticsCovers(payload, now = Date.now()) {
+  const from = Date.parse(payload?.range?.from);
+  if (!Number.isFinite(from)) return false;
+  const { range } = analyticsPage;
+  if (range === 'all') return payload.range?.preset === '30d';
+  const start = range === '24h' ? now - D : range === '7d' ? now - 7 * D : range === '30d' ? now - 30 * D
+    : range === 'month' ? new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime()
+    : Number.isFinite(analyticsPage.from) ? analyticsPage.from : now - 30 * D;
+  return from <= start + H;
+}
+async function refreshAnalytics(force = false, mode = 'static') {
   if (!authenticated) return;
   const generation = ++analyticsGeneration;
   set_analytics_loading(true, '');
-  const query = new URLSearchParams({ platform, range: analyticsSelection.range, provider: analyticsSelection.provider, account: analyticsSelection.account });
+  // the backend accepts 24h, 7d and 30d: Month, All and custom ranges read the covering window and are cut here
+  const query = new URLSearchParams({ platform, range: apiRangeFor(analyticsPage, Date.now()), provider: 'all', account: 'all' });
   if (force) query.set('refresh', 'true');
   try {
     const result = await request(`/api/accounts/analytics?${query}`);
     if (generation !== analyticsGeneration || !authenticated) return;
     if (result?.schemaVersion !== 1 || !Array.isArray(result.accounts)) throw new Error('Unsupported analytics response.');
-    analyticsPayload = result; renderAnalytics(); set_analytics_loading(false, '');
+    analyticsPayload = result; renderAnalytics(mode); set_analytics_loading(false, '');
   } catch (error) { if (generation === analyticsGeneration) { renderAnalytics(); set_analytics_loading(false, error?.message || 'Unable to load account analytics.'); } }
 }
+async function changeAnalyticsRange() {
+  const covered = analyticsPayload && analyticsCovers(analyticsPayload);
+  if (covered) renderAnalytics('morph');
+  if (!analyticsPayload || analyticsPayload.range?.preset !== apiRangeFor(analyticsPage, Date.now())) await refreshAnalytics(false, covered ? 'static' : 'morph');
+}
+const toggleIn = (set, value) => { if (set.has(value)) set.delete(value); else set.add(value); };
 async function analyticsAction(action, value) {
+  if (action === 'analytics-layout') {
+    const [kind, w, h] = String(value).split(',');
+    const width = Number(w), height = Number(h);
+    if (!(kind in analyticsPage.sizes) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0) return;
+    const prior = analyticsPage.sizes[kind];
+    if (prior && Math.abs(prior.w - width) < 1 && Math.abs(prior.h - height) < 1) return;
+    analyticsPage.sizes[kind] = { w: width, h: height };
+    // a layout report arrives while Slint lays out: draw again once it has finished
+    clearTimeout(layoutTimer);
+    layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
+    return;
+  }
+  if (action === 'analytics-range') {
+    if (!RANGES.some(([id]) => id === value) || (analyticsPage.range === value)) return;
+    analyticsPage.range = value; analyticsPage.from = null; analyticsPage.to = null;
+    await changeAnalyticsRange(); return;
+  }
+  if (action === 'analytics-custom') {
+    const [first, last] = String(value).split(',').map(parseIsoDay);
+    const now = Date.now();
+    if (!Number.isFinite(first) || !Number.isFinite(last) || last < first || first < now - 31 * D || first > now) return;
+    analyticsPage.range = 'custom'; analyticsPage.from = first; analyticsPage.to = addDays(last, 1);
+    await changeAnalyticsRange(); return;
+  }
+  if (action === 'analytics-provider' && ['all', 'claude', 'codex'].includes(value)) {
+    if (analyticsPage.prov === value) return;
+    analyticsPage.prov = value; renderAnalytics('morph'); return;
+  }
+  if (action === 'analytics-split') { analyticsPage.split = value === 'true'; renderAnalytics('morph'); return; }
+  if (action === 'analytics-cache') { analyticsPage.cache = value === 'true'; renderAnalytics('morph'); return; }
+  if (action === 'analytics-donut') { if (['tokens', 'cost'].includes(value)) { analyticsPage.donut = value; renderAnalytics(); } return; }
+  if (action === 'analytics-heat') { if (['cost', 'tokens'].includes(value)) { analyticsPage.heat = value; renderAnalytics(); } return; }
+  if (action === 'analytics-focus' || action === 'analytics-compare') {
+    if (!analyticsPayload?.accounts?.some(account => account?.id === value) && !data?.accounts?.some(account => account?.id === value)) return;
+    toggleIn(action === 'analytics-focus' ? analyticsPage.open : analyticsPage.compare, value); renderAnalytics(); return;
+  }
+  if (action === 'analytics-group') {
+    if (!QUOTA_PROVIDERS.some(([id]) => id === value)) return;
+    toggleIn(analyticsPage.collapsed, value); renderAnalytics(); return;
+  }
+  // the earlier analytics kinds keep working (they drive the quota-history data, not the page controls)
   if (action === 'analytics-activity-interval') {
     if (!['Daily', 'Hourly'].includes(value)) return;
     analyticsSelection.activityInterval = value; renderAnalytics(); return;
   }
   if (action === 'analytics-metric-key') {
-    // A quota-history row's focus chart: the exact history key, or nothing.
     analyticsSelection.metricKey = analyticsModel?.choices?.metrics?.some(row => row.id === value) ? value : '';
     renderAnalytics(); return;
   }
-  if (action === 'analytics-account-id') {
-    if (!analyticsModel?.choices?.accounts?.some(row => row.id === value)) return;
-    analyticsSelection.account = value; analyticsSelection.metricKey = '';
-    await refreshAnalytics(); return;
-  }
-  if (action === 'analytics-range') {
-    const label = String(value).toLowerCase();
-    const range = label.includes('24') ? '24h' : label.includes('30') ? '30d' : label.includes('7') ? '7d' : null;
-    if (!range) return;
-    analyticsSelection.range = range;
-  } else if (action === 'analytics-provider' || action === 'analytics-account' || action === 'analytics-metric') {
-    const kind = action.slice('analytics-'.length);
-    const id = analyticsChoiceId(analyticsModel, kind, value);
+  if (action === 'analytics-account-id' || action === 'analytics-account' || action === 'analytics-metric') {
+    const kind = action === 'analytics-account-id' ? 'account' : action.slice('analytics-'.length);
+    const id = action === 'analytics-account-id' ? (analyticsModel?.choices?.accounts?.some(row => row.id === value) ? value : null) : analyticsChoiceId(analyticsModel, kind, value);
     if (id === null) return;
-    if (kind === 'metric') { analyticsSelection.metricKey = id; renderAnalytics(); return; }
-    analyticsSelection[kind] = id;
-    if (kind === 'provider') analyticsSelection.account = 'all';
-    analyticsSelection.metricKey = '';
+    if (kind === 'metric') analyticsSelection.metricKey = id; else analyticsSelection.account = id;
+    renderAnalytics(); return;
   }
-  if (action === 'analytics-refresh') await refresh(true);
-  await refreshAnalytics(action === 'analytics-refresh');
+  if (action === 'analytics-refresh') { await refresh(true); await refreshAnalytics(true); return; }
+  await refreshAnalytics();
 }
 
 // ---------------------------------------------------------------- settings, updates, session
@@ -418,14 +510,14 @@ try {
   watchMedia('(prefers-color-scheme: dark)', dark => set_system_dark(dark));
   // Headless captures settle instantly (the existing screenshot guard); ?motion keeps motion on.
   const headless = /HeadlessChrome/.test(navigator.userAgent) && !/[?&]motion\b/.test(location.search);
-  watchMedia('(prefers-reduced-motion: reduce)', reduced => set_reduced_motion(reduced || headless));
+  watchMedia('(prefers-reduced-motion: reduce)', reduced => { motionReduced = reduced || headless; set_reduced_motion(motionReduced); });
   document.querySelector('#loading').hidden = true;
   await checkSession();
   applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
   setInterval(() => { activationConfirmation.expire(); antigravityConfirmation.expire(); }, 1_000);
   setInterval(() => { if (authenticated && updateJob?.state === 'running') void updateStatus(); }, 3_000);
   // "Updated 1m ago" and the reset countdowns stay current between refreshes.
-  setInterval(() => { if (authenticated && !refreshing) renderChrome(false); }, 15_000);
+  setInterval(() => { if (authenticated && !refreshing) { renderChrome(false); renderAnalyticsHead(); } }, 15_000);
   setInterval(() => { if (authenticated && !refreshing && !busy) render(); }, 60_000);
 } catch (error) {
   const status = document.querySelector('#loading');

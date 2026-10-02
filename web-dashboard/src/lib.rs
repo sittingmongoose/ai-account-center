@@ -650,6 +650,15 @@ pub fn start_dashboard(width: f32, height: f32, scale_factor: f32) -> Result<(),
     ui.set_confirmation_processes(ModelRc::from(models.processes.clone()));
     analytics::bind(&ui, &models.analytics);
     ui.on_action(|action, value| dispatch_action(action.as_str(), value.as_str()));
+    let ax = ui.global::<AxData>();
+    ax.on_action(|action, value| dispatch_action(action.as_str(), value.as_str()));
+    // the chart boxes report their size; bridge.js lays the charts out in those pixels
+    ax.on_layout(|kind, width, height| {
+        dispatch_action(
+            "analytics-layout",
+            &format!("{},{},{}", kind, width.round(), height.round()),
+        )
+    });
     ui.on_toast_dismissed(|id| {
         with_models(|m| {
             if let Some(index) = (0..m.toasts.row_count())
@@ -922,6 +931,7 @@ pub fn close_activation_confirmation() {
     });
 }
 
+/// The analytics view model (version 3, public/analytics-data.mjs).
 #[wasm_bindgen]
 pub fn set_analytics(json: &str) -> Result<(), JsValue> {
     UI.with(|slot| {
@@ -934,14 +944,25 @@ pub fn set_analytics(json: &str) -> Result<(), JsValue> {
     })
 }
 
+/// The analytics header alone ("read 2m ago" ticks between refreshes).
+#[wasm_bindgen]
+pub fn set_analytics_head(json: &str) -> Result<(), JsValue> {
+    let mut result = Ok(());
+    with_ui(|ui| result = analytics::set_head(ui, json));
+    result
+}
+
+/// One frame of the usage-trend morph (bridge.js interpolates the point arrays).
+#[wasm_bindgen]
+pub fn set_analytics_trend_paths(json: &str) -> Result<(), JsValue> {
+    let mut result = Ok(());
+    with_ui(|ui| result = analytics::set_trend_paths(ui, json));
+    result
+}
+
 #[wasm_bindgen]
 pub fn set_analytics_loading(loading: bool, error: &str) {
-    with_ui(|ui| {
-        let mut head = ui.get_analytics_head();
-        head.loading = loading;
-        head.error = error.into();
-        ui.set_analytics_head(head);
-    });
+    with_ui(|ui| analytics::set_loading(ui, loading, error));
 }
 
 /// "home" | "analytics" | "accounts"; the shell animates the change.

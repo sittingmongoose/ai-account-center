@@ -19,7 +19,7 @@ test('quota history lists every account once by provider, summarises its main wi
     account({ id: 'claude', provider: 'claude', providerLabel: 'Claude', isActive: false, windows: [metric({ key: 'seven_day_fable', label: 'Fable · weekly' }), metric({ key: 'seven_day', label: 'Weekly usage', usedPercent: 12 })] }),
   ];
   const view = analyticsView(payload({ accounts, summary: { activeCodexAccountId: 'active' } }), {}, now);
-  assert.equal(view.version, 2);
+  assert.equal(view.version, 3);
   assert.equal(view.selection.metricKey, 'all');
   // grouped in provider order, every account exactly once, ordered by identity, not by active state
   assert.deepEqual(view.quotaHistory.map(group => group.provider), ['claude', 'codex']);
@@ -38,7 +38,7 @@ test('quota history lists every account once by provider, summarises its main wi
   assert.equal(rows.active.active, true); assert.equal(rows.other.active, false);
   // the Slint seam carries the same groups
   const slint = analyticsSlintModel(view);
-  assert.equal(slint.version, 2); assert.deepEqual(slint.quotaGroups, view.quotaHistory); assert.equal(slint.head.range, '7d');
+  assert.equal(slint.version, 3); assert.deepEqual(slint.quotaGroups, view.quotaHistory); assert.equal(slint.head.range, '7d');
   // per-window history data stays available for a row's focus chart; nothing is summed across accounts
   assert.equal(view.quotaCharts.some(chart => chart.key === rows.active.key), true);
   assert.deepEqual(analyticsView(payload({ accounts: accounts.toReversed() }), {}, now).quotaHistory, view.quotaHistory);

@@ -1,0 +1,335 @@
+// "When you use the CLIs": the weekday x hour heatmap in local time, and the daily (or hourly) cost by provider.
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { AxData, AxBar } from "ax-data.slint";
+import { AxColor, AxCard, AxCardHead, AxSeg, AxTip, AxSwatch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard } from "ax-common.slint";
+
+// ---------------------------------------------------------------- heatmap
+component HeatCell inherits Rectangle {
+    in property <int> state;
+    in property <float> k;
+    in property <string> tip;
+    in property <bool> played;
+    in property <duration> delay;
+    in property <string> dash;
+    property <bool> shown: !Motion.on;
+    show := Timer { interval: max(1ms, root.delay); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
+    opacity: root.shown ? 1 : 0;
+    animate opacity { duration: Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    inner := Rectangle {
+        width: root.width;
+        height: root.height;
+        border-radius: 4px;
+        background: root.state == 0 ? Theme.paper.with-alpha(0) : root.state == 1 ? AxColor.heat-zero : AxColor.heat(root.k);
+        animate background { duration: Motion.tint(Motion.slow); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        transform-scale: ta.has-hover ? 1.12 : 1;
+        animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        if root.state == 0: Path {
+            width: root.width;
+            height: root.height;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            commands: root.dash;
+            stroke: Theme.grid-strong;
+            stroke-width: 1px;
+        }
+    }
+    ta := AxTip { tip: root.tip; }
+}
+
+export component AxHeatCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    in property <length> win-h: 900px;
+    property <bool> narrow: Breakpoints.width < 1180px;
+    property <length> ch: root.win-h <= 760px ? 18px : clamp(root.win-h * 0.024, 18px, 28px);
+    AxCardHead {
+        title: "When you use the CLIs";
+        sub: AxData.heat.sub;
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            AxSeg {
+                small: true;
+                items: [{ value: "cost", label: "Cost" }, { value: "tokens", label: "Tokens" }];
+                value: AxData.heat-mode;
+                picked(v) => { AxData.action("analytics-heat", v); }
+            }
+        }
+    }
+    VerticalLayout {
+        padding-left: root.narrow ? 16px : 20px;
+        padding-right: self.padding-left;
+        padding-top: 2px;
+        padding-bottom: 16px;
+        alignment: center;
+        vertical-stretch: 1;
+        grid := Rectangle {
+            property <length> cw: max(4px, (self.width - 38px - 24 * 3px) / 24);
+            height: 16px + 3px + 7 * (root.ch + 3px);
+            changed width => { AxData.layout("heat", self.width, root.ch); }
+            init => { AxData.layout("heat", self.width, root.ch); }
+            for h[i] in AxData.heat-hours: Text {
+                x: 38px + 3px + i * (grid.cw + 3px);
+                y: 0px;
+                height: 16px;
+                text: h;
+                font-family: Type.mono;
+                font-size: 11px;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+            }
+            for d[j] in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]: Text {
+                x: 0px;
+                y: 19px + j * (root.ch + 3px);
+                width: 38px;
+                height: root.ch;
+                text: d;
+                font-size: 12px;
+                font-weight: 540;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+            }
+            for c[n] in AxData.heat-cells: HeatCell {
+                x: 38px + 3px + mod(n, 24) * (grid.cw + 3px);
+                y: 19px + floor(n / 24) * (root.ch + 3px);
+                width: grid.cw;
+                height: root.ch;
+                state: c.state;
+                k: c.k;
+                tip: c.tip;
+                played: root.played;
+                delay: root.delay + (mod(n, 24) + floor(n / 24) * 2) * 9ms;
+                dash: AxData.heat.dash;
+            }
+        }
+        HorizontalLayout {
+            padding-top: 12px;
+            spacing: 10px;
+            Text { text: "Less"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
+            HorizontalLayout {
+                spacing: 3px;
+                horizontal-stretch: 0;
+                for t in [0.055, 0.447, 0.632, 0.775, 0.894, 1.0]: VerticalLayout { alignment: center; Rectangle { width: 16px; height: 10px; border-radius: 3px; background: AxColor.heat(t); } }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                horizontal-stretch: 0;
+                Text { text: "More · busiest hour"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+                Text { text: AxData.heat.busiest; font-family: Type.tab; font-size: 12px; font-weight: 600; color: Theme.ink-2; vertical-alignment: center; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            HorizontalLayout {
+                spacing: 7px;
+                horizontal-stretch: 0;
+                VerticalLayout { alignment: center; Rectangle { width: 16px; height: 10px; border-radius: 3px; background: AxColor.heat-zero; } }
+                Text { text: "Nothing logged"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+            }
+            Rectangle { width: 6px; horizontal-stretch: 0; }
+            HorizontalLayout {
+                spacing: 7px;
+                horizontal-stretch: 0;
+                VerticalLayout {
+                    alignment: center;
+                    Path {
+                        width: 16px;
+                        height: 10px;
+                        viewbox-width: 16;
+                        viewbox-height: 10;
+                        commands: "M0.5 3V0.5H3.5M6.5 0.5H9.5M12.5 0.5H15.5V3.5M15.5 6.5V9.5H12.5M9.5 9.5H6.5M3.5 9.5H0.5V6.5";
+                        stroke: Theme.grid-strong;
+                        stroke-width: 1px;
+                    }
+                }
+                Text { text: "Outside the logs"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- daily cost by provider
+export global AxDailyPad {
+    out property <length> l: 58px;
+    out property <length> r: 14px;
+    out property <length> t: 18px;
+    out property <length> b: 30px;
+}
+
+component BarColumn inherits Rectangle {
+    in property <AxBar> bar;
+    in property <int> i;
+    in property <int> n;
+    in property <length> slot;
+    in property <length> ph;
+    in property <bool> played;
+    in property <duration> delay;
+    in property <bool> hot;
+    in property <bool> dimmed;
+    in property <bool> show-claude;
+    in property <bool> show-codex;
+    property <length> bw: clamp(root.slot * 0.62, 4px, 64px);
+    property <bool> mounted: !Motion.on;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <bool> landed: !Motion.on;
+    land := Timer { interval: root.delay + root.i * min(70ms, 800ms / max(1, root.n)) + 760ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
+    property <float> h: root.played && root.mounted ? root.bar.h : 0;
+    animate h { duration: Motion.on ? 700ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.i * min(70ms, 800ms / max(1, root.n)) : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <length> total: root.ph * clamp(root.h, 0, 1.2);
+    property <float> cl-share: root.bar.cl;
+    animate cl-share { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    stack := Rectangle {
+        x: (root.width - root.bw) / 2;
+        y: root.ph - root.total - (root.hot ? 2px : 0px);
+        animate y { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        width: root.bw;
+        height: root.total;
+        border-top-left-radius: 4px;
+        border-top-right-radius: 4px;
+        border-bottom-left-radius: 2px;
+        border-bottom-right-radius: 2px;
+        clip: true;
+        property <length> clh: root.cl-share > 0 ? max(0px, self.height * root.cl-share - (root.cl-share < 1 ? 0.5px : 0px)) : 0px;
+        // Claude Code on top, Codex below, one pixel apart
+        Rectangle {
+            y: 0px;
+            height: stack.clh;
+            background: AxColor.of("claude");
+            opacity: root.dimmed ? 0.55 : 1;
+            animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+        }
+        Rectangle {
+            y: stack.clh + (stack.clh > 0 && root.cl-share < 1 ? 1px : 0px);
+            height: max(0px, stack.height - self.y);
+            background: AxColor.of("codex");
+            opacity: root.dimmed ? 0.55 : 1;
+            animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+        }
+    }
+}
+
+export component AxDailyCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    in property <length> win-h: 900px;
+    in property <bool> spans: false;
+    property <length> chart-h: root.spans ? 240px : clamp(root.win-h * 0.28, 220px, 320px);
+    AxCardHead {
+        title: AxData.daily.title;
+        sub: AxData.daily.sub;
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: end;
+            horizontal-stretch: 0;
+            if AxData.daily.show-claude: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("claude"); label: "Claude Code"; } }
+            if AxData.daily.show-codex: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("codex"); label: "Codex"; } }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 2px;
+        padding-bottom: 12px;
+        vertical-stretch: 1;
+        box := Rectangle {
+            min-height: root.chart-h;
+            property <length> pw: max(40px, self.width - AxDailyPad.l - AxDailyPad.r);
+            property <length> ph: max(40px, self.height - AxDailyPad.t - AxDailyPad.b);
+            property <int> n: max(1, AxData.daily-bars.length);
+            property <length> slot: self.pw / self.n;
+            property <int> every: max(1, ceil(64px / self.slot));
+            changed width => { AxData.layout("daily", self.width, self.height); }
+            changed height => { AxData.layout("daily", self.width, self.height); }
+            init => { AxData.layout("daily", self.width, self.height); }
+            for t in AxData.daily-y: Rectangle {
+                x: AxDailyPad.l;
+                y: AxDailyPad.t + box.ph - t.y * box.ph;
+                width: box.pw;
+                height: 1px;
+                background: t.base ? Theme.rule-strong : Theme.grid;
+            }
+            for t in AxData.daily-y: Text {
+                x: AxDailyPad.l - 10px - self.preferred-width;
+                y: AxDailyPad.t + box.ph - t.y * box.ph + 4px - self.font-metrics.ascent;
+                width: self.preferred-width;
+                text: t.left;
+                font-family: Type.mono;
+                font-size: 11px;
+                color: Theme.ink-3;
+            }
+            for b[i] in AxData.daily-bars: Text {
+                visible: b.label != "";
+                x: AxDailyPad.l + box.slot * (i + 0.5) - self.preferred-width / 2;
+                y: AxDailyPad.t + box.ph + 20px - self.font-metrics.ascent;
+                width: self.preferred-width;
+                text: b.label;
+                font-family: Type.mono;
+                font-size: 11px;
+                color: Theme.ink-3;
+            }
+            for b[i] in AxData.daily-bars: BarColumn {
+                x: AxDailyPad.l + box.slot * i;
+                y: AxDailyPad.t;
+                width: box.slot;
+                height: box.ph;
+                bar: b;
+                i: i;
+                n: box.n;
+                slot: box.slot;
+                ph: box.ph;
+                played: root.played;
+                delay: root.delay + 40ms;
+                hot: box.hot == i;
+                dimmed: box.hot >= 0 && box.hot != i;
+            }
+            if AxData.daily.empty: Text {
+                width: box.width;
+                height: box.height;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                text: AxData.daily.empty-text;
+                font-size: 13px;
+                color: Theme.ink-3;
+            }
+            property <int> hot: -1;
+            property <AxBar> hb: self.hot >= 0 && self.hot < AxData.daily-bars.length ? AxData.daily-bars[self.hot] : { };
+            property <length> hx: AxDailyPad.l + self.slot * (self.hot + 0.5) + clamp(self.slot * 0.62, 4px, 64px) / 2 - 8px;
+            property <bool> glide: false;
+            ro := AxRoCard {
+                property <length> rw: max(200px, ro-body.preferred-width);
+                x: max(6px, box.hx + 16px + self.rw > box.width - 6px ? box.hx - 16px - self.rw : box.hx + 16px);
+                y: AxDailyPad.t + 2px;
+                width: self.rw;
+                height: ro-body.preferred-height;
+                opacity: box.hot >= 0 ? 1 : 0;
+                visible: self.opacity > 0.01;
+                animate x { duration: box.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+                ro-body := VerticalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    AxRoTime { text: box.hb.time; }
+                    Rectangle { height: 4px; }
+                    if AxData.daily.show-claude: AxRoRow { c: AxColor.of("claude"); label: "Claude Code"; value: box.hb.claude; }
+                    if AxData.daily.show-codex: AxRoRow { c: AxColor.of("codex"); label: "Codex"; value: box.hb.codex; }
+                    if box.hb.total != "": Rectangle { height: 11px; Rectangle { y: 5px; height: 1px; background: Theme.rule-2; } }
+                    if box.hb.total != "": AxRoRow { no-swatch: true; label: "Total"; value: box.hb.total; strong: true; }
+                    if box.hb.foot != "": Text { text: box.hb.foot; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }
+                }
+            }
+            ta := TouchArea {
+                mouse-cursor: default;
+                function track() {
+                    let mx = self.mouse-x - AxDailyPad.l;
+                    if mx < 0 || mx > box.pw || self.mouse-y < AxDailyPad.t || self.mouse-y > AxDailyPad.t + box.ph || AxData.daily-bars.length == 0 { box.hot = -1; box.glide = false; return; }
+                    let i = clamp(floor(mx / box.slot), 0, AxData.daily-bars.length - 1);
+                    if box.hot >= 0 { box.glide = true; }
+                    box.hot = i;
+                }
+                changed mouse-x => { if self.has-hover { self.track(); } }
+                changed mouse-y => { if self.has-hover { self.track(); } }
+                changed has-hover => { if !self.has-hover { box.hot = -1; box.glide = false; } }
+            }
+        }
+    }
+}

@@ -1,4 +1,7 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { mainWindow } from './analytics-quota.mjs';
+
+export { mainWindow };
 
 /** A view of observed quotas. These samples are never summed into token or cost totals. */
 export const ANALYTICS_PROVIDERS = [
@@ -241,7 +244,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
     // Legacy single-chart bindings are empty; all histories are rendered by quotaCharts.
     metrics: [], points: [], chartTitle: 'Account histories', chartNote: '', chartHasPoints: false,
     ...activityView(accountId === 'all' ? payload?.activity : { ...payload?.activity, status: 'unavailable', totals: null, message: text(payload?.activity?.message) || 'Local CLI activity cannot be attributed to an individual account.' }, payload?.range, activityInterval),
-    // Version 2: the quota history (the former Headroom) is one row per account, grouped by provider.
+    // The quota history (the former Headroom) is one row per account, grouped by provider.
     // quotaCharts above remain the per-window history data that a row's focus chart reads by key.
     version: ANALYTICS_VIEW_VERSION,
     quotaHistory: quotaHistory(accounts, histories, payload?.range, now),
@@ -249,23 +252,8 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
   };
 }
 
-export const ANALYTICS_VIEW_VERSION = 2;
+export const ANALYTICS_VIEW_VERSION = 3;
 const percentOf = window => usedPercent(window);
-const periodOf = window => {
-  const d = `${text(window?.key)} ${text(window?.label)}`;
-  if (window?.windowMinutes === 300 || /five.?hour|5.?hour|\b5h\b|5 hours|rolling/i.test(d)) return '5h';
-  if (window?.windowMinutes === 10080 || /seven.?day|weekly|\bweek\b|7.?day/i.test(d)) return 'week';
-  return 'other';
-};
-const MAIN_WINDOW = { codex: 'seven_day', claude: 'seven_day', antigravity: 'gemini-weekly' };
-/** The window a quota-history row summarises: the provider's canonical weekly window, else the first weekly rate limit, else the first rate limit. */
-export function mainWindow(account) {
-  const windows = array(account?.windows).filter(window => window && !['balance', 'extra_usage', 'spend'].includes(window.kind) && !/fable/i.test(`${text(window.key)} ${text(window.label)}`));
-  return windows.find(window => window.key === MAIN_WINDOW[account?.provider])
-    || windows.find(window => periodOf(window) === 'week' && percentOf(window) !== null)
-    || windows.find(window => percentOf(window) !== null)
-    || windows[0] || null;
-}
 function relativeReset(value, now) {
   const time = timestamp(value);
   if (!Number.isFinite(time)) return '';
@@ -302,12 +290,27 @@ export function quotaHistory(accounts, histories, range, now = Date.now()) {
   }
   return groups;
 }
-/** The JSON src/analytics.rs reads (version 2). */
-export function analyticsSlintModel(view) {
-  return {
+/**
+ * The JSON src/analytics.rs reads (version 3). `page` carries the Analytics page: the page state echoed to
+ * the controls, the Usage blocks (analytics-usage.mjs), the quota history with the focus charts of open rows
+ * and the resets agenda (analytics-quota.mjs). The head, KPI and quota-group fields of the earlier seam stay.
+ */
+export function analyticsSlintModel(view, page = null) {
+  const base = {
     version: ANALYTICS_VIEW_VERSION,
     head: { updated: text(view?.updated), range: { 'Last 24 hours': '24h', 'Last 7 days': '7d', 'Last 30 days': '30d' }[view?.rangeValue] || '7d', provider: text(view?.providerValue), note: text(view?.historyNote), hasActivity: view?.activityHasData === true },
     kpis: array(view?.activitySummaries).map(row => ({ key: row.label, label: row.label, value: row.value, sub: row.note })),
     quotaGroups: array(view?.quotaHistory),
+  };
+  if (!page) return base;
+  const { usage, quota, agenda, state, paths } = page;
+  const { geo, ...trend } = usage.trend;
+  const { range, ...rest } = usage;
+  return {
+    ...base,
+    state: { range: state.range, prov: state.prov, split: !!state.split, cache: !!state.cache, donut: state.donut, heat: state.heat },
+    usage: { ...rest, trend: { ...trend, ...(paths ? { paths } : {}) } },
+    quota,
+    agenda,
   };
 }

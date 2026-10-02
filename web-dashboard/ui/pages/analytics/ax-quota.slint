@@ -1,0 +1,504 @@
+// Quota history (the former Headroom), compact and near the bottom: one ~36 px row per account with its main
+// window's 7-day sparkline, current % and next reset, grouped by provider with collapsible groups. A row opens
+// its focus chart (step lines, reset markers, the active band, the auto-switch threshold, the projection to
+// the reset and a crosshair); the chart's labels were placed by bridge.js so they never overlap.
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Icon } from "../../components/icon.slint";
+import { Button } from "../../components/button.slint";
+import { ProviderMark } from "../../components/mark.slint";
+import { Caps, ValueUnit } from "../../components/text.slint";
+import { AxData, AxQuotaRow, AxQuotaGroup, AxFocus, AxStop, AxShape, AxLabel } from "ax-data.slint";
+import { AxColor, AxCard, AxCardHead, AxSwitch, AxTip, AxSwatch, AxRoTime, AxRoCard } from "ax-common.slint";
+
+export global AxQuotaCols {
+    out property <bool> tight: Breakpoints.width <= 1360px;
+    out property <length> gap: tight ? 12px : 16px;
+    out property <length> used: tight ? 72px : 76px;
+    out property <length> next: tight ? 96px : 110px;
+    out property <length> chev: tight ? 22px : 26px;
+    // the row width is the card width, which follows the page width (no layout loop): minmax(240px, 34%)
+    out property <length> card-w: min(Breakpoints.width, Breakpoints.max-content) - 2 * Breakpoints.gutter;
+    out property <length> id-w: max(tight ? 220px : 240px, (card-w - 68px) * (tight ? 0.36 : 0.34));
+}
+
+// ---------------------------------------------------------------- the focus chart
+component FocusShape inherits Path {
+    in property <AxShape> s;
+    in property <string> provider;
+    in property <float> vw;
+    in property <float> vh;
+    viewbox-width: max(1, root.vw);
+    viewbox-height: max(1, root.vh);
+    fit: fill;
+    commands: root.s.d;
+    stroke: root.s.stroke == "" ? Theme.paper.with-alpha(0) : AxColor.key(root.s.stroke, root.provider, root.s.shade);
+    stroke-width: root.s.sw * 1px;
+    stroke-line-cap: root.s.round ? round : butt;
+    fill: root.s.fill == "" ? Theme.paper.with-alpha(0) : AxColor.key(root.s.fill, root.provider, root.s.shade);
+    opacity: root.s.op;
+}
+
+component FocusLegend inherits HorizontalLayout {
+    in property <string> name;
+    in property <string> kind;
+    in property <string> provider;
+    in property <int> shade;
+    in property <int> dash;
+    in property <float> lw;
+    spacing: 7px;
+    horizontal-stretch: 0;
+    VerticalLayout {
+        alignment: center;
+        if root.kind == "active": Rectangle { width: 10px; height: 10px; border-radius: 3px; background: Theme.accent.with-alpha(0.22); }
+        if root.kind != "active": Path {
+            width: 22px;
+            height: 10px;
+            viewbox-width: 22;
+            viewbox-height: 10;
+            commands: root.kind == "proj" ? "M1 5L2.5 5M6.5 5L8 5M12 5L13.5 5M17.5 5L19 5"
+                : root.kind == "thr" ? "M1 5L7 5M11 5L17 5"
+                : root.dash == 1 ? "M1 5L10 5M14 5L21 5" : root.dash == 2 ? "M1 5L10 5M13 5L15 5M18 5L21 5" : "M1 5L21 5";
+            stroke: root.kind == "proj" ? Theme.ink-3 : root.kind == "thr" ? Theme.ink : AxColor.series(root.provider, root.shade);
+            stroke-width: root.lw * 1px;
+            stroke-line-cap: root.kind == "proj" ? round : butt;
+        }
+    }
+    Text { text: root.name; font-size: 12.5px; color: Theme.ink-2; vertical-alignment: center; min-height: 18px; }
+}
+
+component FocusChart inherits Rectangle {
+    in property <AxFocus> f;
+    in property <bool> draw;
+    changed width => { AxData.layout("focus", self.width, self.height); }
+    init => { AxData.layout("focus", self.width, self.height); }
+    property <float> vw: root.f.w > 0 ? root.f.w : root.width / 1px;
+    property <float> vh: root.f.h > 0 ? root.f.h : root.height / 1px;
+    property <float> sx: root.width / 1px / root.vw;
+    property <float> sy: root.height / 1px / root.vh;
+    background: Theme.paper;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.rule;
+    clip: true;
+    // background (bands, grid, markers), then the data lines drawn on through a clip, then the foreground
+    for s in root.f.shapes: FocusShape {
+        visible: s.layer == 0;
+        width: root.width;
+        height: root.height;
+        s: s;
+        provider: root.f.provider;
+        vw: root.vw;
+        vh: root.vh;
+    }
+    property <bool> mounted: !Motion.on || !root.draw;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <float> drawn: root.mounted ? 1 : 0;
+    animate drawn { duration: Motion.on ? Motion.draw : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width * root.drawn;
+        height: root.height;
+        clip: true;
+        for s in root.f.shapes: FocusShape {
+            visible: s.layer == 1;
+            x: 0px;
+            width: root.width;
+            height: root.height;
+            s: s;
+            provider: root.f.provider;
+            vw: root.vw;
+            vh: root.vh;
+        }
+    }
+    for s in root.f.shapes: FocusShape {
+        visible: s.layer == 2;
+        width: root.width;
+        height: root.height;
+        s: s;
+        provider: root.f.provider;
+        vw: root.vw;
+        vh: root.vh;
+    }
+    for d in root.f.dots: Rectangle {
+        x: d.x * 1px * root.sx - d.r * 1px;
+        y: d.y * 1px * root.sy - d.r * 1px;
+        width: d.r * 2px;
+        height: d.r * 2px;
+        border-radius: d.r * 1px;
+        background: d.fill == "paper" ? Theme.paper : AxColor.series(root.f.provider, d.shade);
+        border-width: d.fill == "paper" ? 2px : 0px;
+        border-color: AxColor.series(root.f.provider, d.shade);
+    }
+    for l in root.f.labels: Rectangle {
+        x: l.px * 1px * root.sx;
+        y: l.py * 1px * root.sy;
+        width: l.pw * 1px;
+        height: l.ph * 1px;
+        border-radius: 3px;
+        background: l.plate ? Theme.paper.with-alpha(0.92) : Theme.paper.with-alpha(0);
+        Text {
+            x: (l.x - l.px) * 1px;
+            y: (l.y - l.py) * 1px - self.font-metrics.ascent;
+            width: self.preferred-width;
+            text: l.text;
+            font-family: Type.mono;
+            font-size: 11px;
+            color: AxColor.key(l.color, root.f.provider, l.shade);
+        }
+    }
+    if root.f.empty != "": Text {
+        width: root.width;
+        height: root.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.f.empty;
+        font-size: 13px;
+        color: Theme.ink-3;
+    }
+    // crosshair: the nearest observed sample (or forecast hour) per 4 px column
+    property <int> idx: -1;
+    property <bool> on: ta.has-hover && root.idx >= 0;
+    property <bool> glide: false;
+    property <AxStop> st: root.idx >= 0 && root.idx < root.f.stops.length ? root.f.stops[root.idx] : { };
+    property <length> stx: root.st.x * 1px * root.sx;
+    Rectangle {
+        x: root.stx;
+        y: root.f.plot-t * 1px * root.sy;
+        width: 1px;
+        height: root.f.plot-h * 1px * root.sy;
+        background: Theme.ink-3;
+        opacity: root.on ? 1 : 0;
+        animate x { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+    }
+    Rectangle {
+        x: root.stx - 5px;
+        y: root.st.dot-y * 1px * root.sy - 5px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: Theme.paper;
+        border-width: 2px;
+        border-color: Theme.ink;
+        opacity: root.on && root.st.dot-y >= 0 ? 1 : 0;
+        animate x, y { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+    }
+    ro := AxRoCard {
+        property <length> rw: max(200px, ro-body.preferred-width);
+        x: max(6px, root.stx + 16px + self.rw > root.width - 6px ? root.stx - 16px - self.rw : root.stx + 16px);
+        y: root.f.plot-t * 1px * root.sy + 8px;
+        width: self.rw;
+        height: ro-body.preferred-height;
+        opacity: root.on ? 1 : 0;
+        visible: self.opacity > 0.01;
+        animate x { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+        ro-body := VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            AxRoTime { text: root.st.time; }
+            Rectangle { height: 4px; }
+            for r in root.st.rows: HorizontalLayout {
+                spacing: 8px;
+                min-height: 19px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle { width: 14px; height: 6px; Rectangle { y: 2px; height: 2.4px; background: AxColor.series(root.f.provider, r.shade); } }
+                }
+                Text { text: r.name; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; }
+                Text { text: r.value; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+            }
+            if root.st.proj: Text { text: "From the recent pace, not a reading"; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: default;
+        function track() {
+            if root.f.lut.length == 0 { root.idx = -1; return; }
+            let col = clamp(floor(self.mouse-x / root.sx / 4px), 0, root.f.lut.length - 1);
+            if root.idx >= 0 { root.glide = true; }
+            root.idx = root.f.lut[col];
+        }
+        changed mouse-x => { if self.has-hover { self.track(); } }
+        changed mouse-y => { if self.has-hover { self.track(); } }
+        changed has-hover => { if !self.has-hover { root.idx = -1; root.glide = false; } }
+    }
+}
+
+// The expanded part of a quota row: legend, compare switch, Details, the chart and its foot.
+component FocusPanel inherits VerticalLayout {
+    in property <AxQuotaRow> qr;
+    padding-left: 48px;
+    padding-right: 20px;
+    padding-top: 4px;
+    padding-bottom: 6px;
+    spacing: 0px;
+    HorizontalLayout {
+        padding-top: 8px;
+        padding-bottom: 10px;
+        spacing: 12px;
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: start;
+            horizontal-stretch: 1;
+            for l in root.qr.focus.legend: FocusLegend { name: l.name; kind: l.kind; provider: root.qr.focus.provider; shade: l.shade; dash: l.dash; lw: l.width; }
+        }
+        if root.qr.focus.comparable: VerticalLayout {
+            alignment: center;
+            AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
+        }
+        VerticalLayout { alignment: center; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
+    }
+    FocusChart { height: Breakpoints.width >= 2200px ? 300px : 270px; f: root.qr.focus; draw: true; }
+    Text { text: root.qr.focus.foot; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; min-height: 34px; vertical-alignment: center; }
+}
+
+// ---------------------------------------------------------------- rows and groups
+component QuotaRow inherits Rectangle {
+    in property <AxQuotaRow> qr;
+    in property <bool> played;
+    in property <duration> delay;
+    in property <int> n;
+    // sparkline draw-on
+    property <bool> mounted: !Motion.on;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <float> clip-f: root.played && root.mounted ? 1 : 0;
+    animate clip-f { duration: Motion.on ? Motion.draw : 0ms; delay: Motion.on ? root.delay + 160ms + root.n * 36ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    // a changed reading flashes the row for 600 ms
+    property <float> value: root.qr.value;
+    property <bool> flash: false;
+    changed value => { if root.clip-f >= 1 && Motion.on { root.flash = true; unflash.running = true; } }
+    unflash := Timer { interval: 600ms; running: false; triggered => { self.running = false; root.flash = false; } }
+    // the row itself rises in with the section, one stagger apart
+    property <bool> shown: !Motion.on;
+    show := Timer { interval: max(1ms, root.delay + root.n * 22ms); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
+    // the focus chart opens with an animated height
+    property <length> focus-h: root.qr.open ? focus.preferred-height : 0px;
+    animate focus-h { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    min-height: 36px + root.focus-h;
+    preferred-height: self.min-height;
+    head := Rectangle {
+        y: 0px;
+        height: 36px;
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        background: root.flash ? Theme.accent-soft : root.qr.open ? Theme.paper-2 : ta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+        animate background { duration: Motion.tint(root.flash ? 0ms : Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { AxData.action("analytics-focus", root.qr.id); }
+            HorizontalLayout {
+                y: root.shown ? 0px : 8px;
+                animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                padding-left: 48px;
+                padding-right: 20px;
+                padding-top: 3px;
+                padding-bottom: 3px;
+                spacing: AxQuotaCols.gap;
+                HorizontalLayout {
+                    width: AxQuotaCols.id-w;
+                    spacing: 9px;
+                    VerticalLayout { alignment: center; ProviderMark { provider: root.qr.provider; size: 18px; } }
+                    Text { text: root.qr.label; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; min-width: 40px; }
+                    if root.qr.active: Text { text: "Active"; font-size: 12px; font-weight: 640; color: Theme.good-text; vertical-alignment: center; horizontal-stretch: 0; }
+                    if root.qr.plan != "" && Breakpoints.width >= 1180px: Text { text: root.qr.plan; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+                    if root.qr.win != "": Text { text: root.qr.win; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                spark := Rectangle {
+                    horizontal-stretch: 1;
+                    min-width: 120px;
+                    if root.qr.na != "": Text { y: (parent.height - self.preferred-height) / 2; text: root.qr.na; font-size: 12px; color: Theme.ink-3; }
+                    if root.qr.na == "": Rectangle {
+                        x: 0px;
+                        y: (parent.height - 24px) / 2;
+                        width: parent.width * root.clip-f;
+                        height: 24px;
+                        clip: true;
+                        for k[i] in ["calm", "warn", "crit", "over"]: Path {
+                            width: spark.width;
+                            height: 24px;
+                            viewbox-width: 600;
+                            viewbox-height: 24;
+                            fit: fill;
+                            commands: i == 0 ? root.qr.calm-fill : i == 1 ? root.qr.warn-fill : i == 2 ? root.qr.crit-fill : root.qr.over-fill;
+                            fill: AxColor.sev-line(i).with-alpha(i == 0 ? 0.12 : 0.16);
+                        }
+                        Path {
+                            width: spark.width;
+                            height: 24px;
+                            viewbox-width: 600;
+                            viewbox-height: 24;
+                            fit: fill;
+                            commands: root.qr.limit;
+                            stroke: Theme.grid-strong;
+                            stroke-width: 1px;
+                        }
+                        for k[i] in ["calm", "warn", "crit", "over"]: Path {
+                            width: spark.width;
+                            height: 24px;
+                            viewbox-width: 600;
+                            viewbox-height: 24;
+                            fit: fill;
+                            commands: i == 0 ? root.qr.calm-line : i == 1 ? root.qr.warn-line : i == 2 ? root.qr.crit-line : root.qr.over-line;
+                            stroke: AxColor.sev-line(i);
+                            stroke-width: ta.has-hover ? 2.2px : 1.6px;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    width: AxQuotaCols.used;
+                    alignment: end;
+                    if root.qr.has-value: VerticalLayout {
+                        alignment: center;
+                        ValueUnit { value: root.qr.value-text; size: 13px; weight: 640; ink: Theme.sev-text(root.qr.sev); unit-scale: 0.96; height: 18px; }
+                    }
+                    if !root.qr.has-value: Text { text: "Unavailable"; font-size: 12.5px; font-weight: 500; color: Theme.ink-3; vertical-alignment: center; }
+                }
+                Text {
+                    width: AxQuotaCols.next;
+                    text: root.qr.next != "" ? root.qr.next : "No reset reported";
+                    font-family: Type.tab;
+                    font-size: 12.5px;
+                    color: root.qr.next != "" ? Theme.ink-2 : Theme.ink-3;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                    AxTip { tip: root.qr.next-tip; clicked => { AxData.action("analytics-focus", root.qr.id); } }
+                }
+                VerticalLayout {
+                    width: AxQuotaCols.chev;
+                    alignment: center;
+                    Icon {
+                        name: "chev-down";
+                        width: 15px;
+                        height: 15px;
+                        tint: ta.has-hover ? Theme.ink : Theme.ink-3;
+                        transform-rotation: root.qr.open ? 180deg : 0deg;
+                        animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                    }
+                }
+            }
+        }
+    }
+    focus-clip := Rectangle {
+        y: 36px;
+        height: root.focus-h;
+        clip: true;
+        background: Theme.paper-2;
+        focus := FocusPanel {
+            y: 0px;
+            width: parent.width;
+            height: self.preferred-height;
+            qr: root.qr;
+            opacity: root.qr.open ? 1 : 0;
+            animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        }
+    }
+}
+
+component QuotaGroup inherits Rectangle {
+    in property <AxQuotaGroup> g;
+    in property <bool> played;
+    in property <duration> delay;
+    in property <int> n0;
+    property <length> rows-h: root.g.collapsed ? 0px : rows.preferred-height;
+    animate rows-h { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    property <bool> shown: !Motion.on;
+    show := Timer { interval: max(1ms, root.delay + root.n0 * 22ms); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
+    min-height: 1px + 40px + root.rows-h;
+    preferred-height: self.min-height;
+    Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
+    gh := Rectangle {
+        y: 1px;
+        height: 40px;
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        background: gta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+        animate background { duration: Motion.tint(Motion.fast); }
+        gta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { AxData.action("analytics-group", root.g.provider); }
+            HorizontalLayout {
+                y: root.shown ? 0px : 8px;
+                animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        name: "chev-down";
+                        width: 15px;
+                        height: 15px;
+                        tint: Theme.ink-3;
+                        transform-rotation: root.g.collapsed ? -90deg : 0deg;
+                        animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                    }
+                }
+                VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: 20px; } }
+                Text { text: root.g.label; font-size: 13.5px; font-weight: 640; color: Theme.ink; vertical-alignment: center; }
+                Text { text: root.g.meta; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; }
+            }
+        }
+    }
+    Rectangle {
+        y: 41px;
+        height: root.rows-h;
+        clip: true;
+        rows := VerticalLayout {
+            y: 0px;
+            width: parent.width;
+            height: self.preferred-height;
+            padding-bottom: 6px;
+            opacity: root.g.collapsed ? 0 : 1;
+            animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            for r[i] in root.g.rows: QuotaRow { qr: r; played: root.played; delay: root.delay; n: root.n0 + 1 + i; }
+        }
+    }
+}
+
+export component AxQuotaCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    AxCardHead { title: "Quota history"; sub: AxData.quota-sub; }
+    axis := HorizontalLayout {
+        padding-left: 48px;
+        padding-right: 20px;
+        padding-bottom: 6px;
+        spacing: AxQuotaCols.gap;
+        height: 28px;
+        Rectangle { width: AxQuotaCols.id-w; }
+        ticks := Rectangle {
+            horizontal-stretch: 1;
+            min-width: 120px;
+            for t in AxData.quota-ticks: Text {
+                x: t.pos * ticks.width - self.preferred-width / 2;
+                y: 0px;
+                height: 16px;
+                width: self.preferred-width;
+                text: t.label;
+                font-family: Type.mono;
+                font-size: 11px;
+                color: Theme.ink-3;
+            }
+            Text { x: ticks.width - self.preferred-width; y: 0px; height: 16px; width: self.preferred-width; text: "Now"; font-family: Type.mono; font-size: 11px; color: Theme.ink-2; }
+        }
+        Caps { text: "USED"; width: AxQuotaCols.used; horizontal-alignment: right; vertical-alignment: top; }
+        Caps { text: "NEXT RESET"; width: AxQuotaCols.next; horizontal-alignment: right; vertical-alignment: top; }
+        Rectangle { width: AxQuotaCols.chev; }
+    }
+    for g[i] in AxData.quota-groups: QuotaGroup { g: g; played: root.played; delay: root.delay; n0: i * 4; }
+    if AxData.quota-groups.length == 0: Text {
+        text: AxData.ready ? "No account history in this range yet." : "Loading account history";
+        font-size: 13px;
+        color: Theme.ink-3;
+        horizontal-alignment: center;
+        min-height: 60px;
+        vertical-alignment: center;
+    }
+    Rectangle { height: 8px; }
+}

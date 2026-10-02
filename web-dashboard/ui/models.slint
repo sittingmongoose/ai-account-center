@@ -244,43 +244,13 @@ export struct AuthView {
     retry: string,
 }
 
-export struct KpiView {
-    key: string,
-    label: string,
-    value: string,
-    sub: string,
-}
-
-// One row of the Analytics quota history (the former Headroom): the account's main window.
-export struct QuotaRowView {
-    id: string,
-    key: string,
-    provider: string,
-    label: string,
-    sub: string,
-    window-label: string,
-    has-value: bool,
-    value: float,
-    value-text: string,
-    reset: string,
-    active: bool,
-    spark: string,
-    spark-points: int,
-}
-
-export struct QuotaGroupView {
-    provider: string,
-    label: string,
-    count: int,
-    rows: [QuotaRowView],
-}
-
+// The Analytics header (version 3): loading and error come from set_analytics_loading, the rest from the view model.
 export struct AnalyticsHeadView {
     loading: bool,
     error: string,
-    updated: string,
-    range: string,
-    provider: string,
-    note: string,
-    has-activity: bool,
+    scope: string,
+    read: string,
+    read-tip: string,
+    date: string,
+    custom: bool,
 }
