@@ -1,7 +1,7 @@
 // What each control sends and what each answer means (public/account-actions.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText } from '../public/account-actions.mjs';
+import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText, terminalCommand } from '../public/account-actions.mjs';
 
 const err = (status, code, extra = {}) => ({ status, payload: { error: 'server sentence', code, ...extra } });
 
@@ -87,6 +87,16 @@ test('job failures, unavailable reasons and the local checks', () => {
     const u = unavailableText(reason, 'codex');
     assert.equal(u.coming, false, reason);
     assert.ok(u.text, reason);
+  }
+  // Antigravity signs in from a terminal on Ubuntu: the reason names the command, and a refusal that carries the
+  // server's terminal fallback shows exactly that command (anything else is never shown)
+  assert.equal(unavailableText('preflight_failed', 'antigravity').text, 'Run ai-account-center antigravity signin <profile-name> in a terminal on Ubuntu.');
+  const fallback = command => ({ status: 409, payload: { code: 'preflight_failed', error: 'x', fallback: { kind: 'terminal', host: 'ubuntu', command } } });
+  assert.deepEqual(errorText(fallback('ai-account-center antigravity signin party'), { provider: 'antigravity' }).title, 'Sign in from a terminal');
+  assert.match(errorText(fallback('ai-account-center antigravity signin party'), { provider: 'antigravity' }).body, /Run this on Ubuntu: ai-account-center antigravity signin party\./);
+  for (const bad of ['rm -rf /', 'ai-account-center antigravity signin Party', 'ai-account-center antigravity signin party; id', '']) {
+    assert.equal(terminalCommand(fallback(bad).payload), '', bad);
+    assert.equal(errorText(fallback(bad), { provider: 'antigravity' }).title, 'Needs setup', bad);
   }
   assert.equal(profileNameProblem(''), 'Name the profile first.');
   assert.match(profileNameProblem('bad name'), /letters, digits/);

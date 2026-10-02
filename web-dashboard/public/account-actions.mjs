@@ -108,11 +108,23 @@ export function unavailableText(reason, provider) {
     case 'not_implemented': return { coming: true, text: `${label(provider)} sign-in from the dashboard is not on this server yet.` };
     case 'secure_transport_required': return { coming: false, text: 'Needs a trusted connection. Turn on local network trust on the dashboard computer (Settings, Dashboard sign-in), or use the dashboard there.' };
     case 'tool_missing': return { coming: false, text: `The ${label(provider)} command-line tool is not installed on the dashboard computer.` };
-    case 'preflight_failed': return { coming: false, text: 'Needs setup: the isolated sign-in check did not pass on the dashboard computer.' };
+    // Antigravity signs in from a terminal on Ubuntu (the contract's terminal fallback): say the command
+    case 'preflight_failed': return provider === 'antigravity'
+      ? { coming: false, text: `Run ${ANTIGRAVITY_SIGNIN} <profile-name> in a terminal on Ubuntu.` }
+      : { coming: false, text: 'Needs setup: the isolated sign-in check did not pass on the dashboard computer.' };
     case 'isolation_unproven': return { coming: false, text: `Needs setup: a second ${label(provider)} account cannot be kept apart yet.` };
     case 'extension_update_required': return { coming: false, text: 'Needs an update of the browser extension first.' };
     default: return { coming: false, text: '' };
   }
+}
+
+/** The Antigravity terminal sign-in (AGY lane), and the only fallback command the page will show. */
+export const ANTIGRAVITY_SIGNIN = 'ai-account-center antigravity signin';
+const TERMINAL_COMMAND = /^ai-account-center antigravity signin [a-z][a-z0-9_-]{0,47}$/;
+/** A server `fallback: {kind:'terminal', host:'ubuntu', command}` the page may show, or ''. */
+export function terminalCommand(payload) {
+  const f = payload?.fallback;
+  return f && f.kind === 'terminal' && f.host === 'ubuntu' && TERMINAL_COMMAND.test(text(f.command)) ? f.command : '';
 }
 
 // ---------------------------------------------------------------- errors
@@ -222,7 +234,12 @@ export function errorText(error, ctx = {}) {
     case 'tool_missing': return t('Sign-in tool missing', `The ${label(p)} command-line tool is not installed on the dashboard computer.`);
     case 'unknown_job': return t('That sign-in has ended', 'Start it again if you still need it.');
     case 'code_not_expected': return t('Not waiting for a code', 'This sign-in is not asking for a code now.');
-    case 'preflight_failed': case 'isolation_unproven': case 'extension_update_required':
+    case 'preflight_failed': {
+      const command = terminalCommand(payload);
+      if (command) return t('Sign in from a terminal', `Run this on Ubuntu: ${command}. The dashboard picks the account up when it is done.`);
+      return t('Needs setup', unavailableText(code, p).text);
+    }
+    case 'isolation_unproven': case 'extension_update_required':
       return t('Needs setup', unavailableText(code, p).text);
     case 'session_rotation_failed': return t('Password changed', 'This browser may need to sign in again.');
     default: break;
