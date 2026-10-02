@@ -138,6 +138,8 @@ public static class FixtureRender
             PressEscape(window);
             report.Checks[$"{name}_escape_then_hides_panel"] = !window.IsVisible;
 
+            await PairedSettings(report, fixture, directory, name);
+
             // The restyled notification-area menu (WinForms ContextMenuStrip with the Atlas renderer).
             report.Checks[$"{name}_tray_menu_styled"] = TrayMenu(Path.Combine(directory, $"tray-menu-{name}.png"));
 
@@ -351,35 +353,39 @@ public static class FixtureRender
     /// each state opens. One PNG per state for review.</summary>
     private static async Task SignInStates(CheckReport report, Dictionary<string, double> measures, string directory, string name)
     {
-        var expected = new (SignInState State, string Title, string[] Open, bool Repair)[]
+        var expected = new (SignInState State, string Title, string[] Open, string? Variant)[]
         {
-            (SignInState.FirstRun, "Connect this PC", new[] { "addr", "acts" }, false),
-            (SignInState.Password, "Sign in to pair", new[] { "creds", "device", "acts" }, false),
-            (SignInState.SetupCode, "Set up sign-in", new[] { "creds", "setup", "acts" }, false),
-            (SignInState.Pairing, "Pairing this PC", new[] { "steps", "acts" }, false),
-            (SignInState.NotLocal, "This address isn't on your local network", new[] { "addr", "guide", "acts" }, false),
-            (SignInState.PairingOff, "Pairing is turned off for remote computers", new[] { "acts" }, false),
-            (SignInState.WrongPassword, "Sign in to pair", new[] { "creds", "device", "acts" }, false),
-            (SignInState.RateLimited, "Sign in to pair", new[] { "banner", "creds", "device", "acts" }, false),
-            (SignInState.Unreachable, "Can't reach that address", new[] { "addr", "acts" }, false),
-            (SignInState.WrongAddress, "That isn't a dashboard address", new[] { "addr", "acts" }, false),
-            (SignInState.Securing, "Securing this tray", new[] { "steps" }, false),
-            (SignInState.SignedOut, "This tray was signed out", new[] { "creds", "device", "acts" }, false),
-            (SignInState.SignedOutAll, "This tray was signed out", new[] { "creds", "device", "acts" }, false),
-            (SignInState.Expired, "This tray was signed out", new[] { "creds", "device", "acts" }, false),
-            (SignInState.Success, "Paired", new[] { "steps", "acts" }, false),
-            (SignInState.Password, "Sign in to re-pair", new[] { "banner", "creds", "device", "acts" }, true),
-            (SignInState.Unreachable, "Can't reach that address", new[] { "banner", "addr", "acts" }, true),
+            (SignInState.FirstRun, "Connect this PC", new[] { "addr", "acts" }, null),
+            (SignInState.Password, "Sign in to pair", new[] { "creds", "device", "acts" }, null),
+            (SignInState.SetupCode, "Set up sign-in", new[] { "creds", "setup", "acts" }, null),
+            (SignInState.Pairing, "Pairing this PC", new[] { "steps", "acts" }, null),
+            (SignInState.NotLocal, "This address isn't on your local network", new[] { "addr", "guide", "acts" }, null),
+            (SignInState.PairingOff, "Pairing is turned off for remote computers", new[] { "acts" }, null),
+            (SignInState.WrongPassword, "Sign in to pair", new[] { "creds", "device", "acts" }, null),
+            (SignInState.RateLimited, "Sign in to pair", new[] { "banner", "creds", "device", "acts" }, null),
+            (SignInState.Unreachable, "Can't reach that address", new[] { "addr", "acts" }, null),
+            (SignInState.WrongAddress, "That isn't a dashboard address", new[] { "addr", "acts" }, null),
+            (SignInState.Securing, "Securing this tray", new[] { "steps" }, null),
+            (SignInState.SignedOut, "This tray was signed out", new[] { "creds", "device", "acts" }, null),
+            (SignInState.SignedOutAll, "This tray was signed out", new[] { "creds", "device", "acts" }, null),
+            (SignInState.Expired, "This tray was signed out", new[] { "creds", "device", "acts" }, null),
+            (SignInState.Success, "Paired", new[] { "steps", "acts" }, null),
+            (SignInState.Password, "Sign in to re-pair", new[] { "banner", "creds", "device", "acts" }, "repair"),
+            (SignInState.Unreachable, "Can't reach that address", new[] { "banner", "addr", "acts" }, "repair"),
+            (SignInState.Password, "Sign in to pair this tray", new[] { "banner", "creds", "device", "acts" }, "upgrade"),
+            (SignInState.Password, "Sign in with your password", new[] { "creds", "acts" }, "legacy"),
+            (SignInState.PairingOff, "Pairing is turned off for remote computers", new[] { "acts" }, "fallback"),
+            (SignInState.Unreachable, "Can't reach that address", new[] { "banner", "addr", "acts" }, "uncertain"),
         };
         var regions = new[] { "banner", "addr", "guide", "creds", "setup", "device", "steps", "acts" };
-        foreach (var (state, title, open, repair) in expected)
+        foreach (var (state, title, open, variant) in expected)
         {
-            var tag = $"{name}_signin_{state.ToString().ToLowerInvariant()}{(repair ? "_repair" : "")}";
+            var tag = $"{name}_signin_{state.ToString().ToLowerInvariant()}{(variant is null ? "" : "_" + variant)}";
             var window = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
             try
             {
                 window.Show();
-                window.PresetSignInForCheck(state, repair);
+                window.PresetSignInForCheck(state, variant == "repair", variant);
                 await Settle(window);
                 var view = window.SignIn;
                 SavePng(window, Path.Combine(directory, tag + ".png"));
@@ -401,10 +407,48 @@ public static class FixtureRender
                     report.Checks[tag + "_primary_label_centred"] = Math.Abs(buttonMid - labelMid) <= 1;
                 }
                 report.Notes[tag + "_status"] = window.StatusText.Text;
+                if (variant is "fallback") report.Checks[tag + "_offers_the_password"] = FindUid(view, "si-use-password") is Button { IsVisible: true };
+                if (variant is "uncertain") report.Checks[tag + "_never_says_unchanged"] = view.BannerText.StartsWith("The current key may have been replaced", StringComparison.Ordinal) && view.AltButton.Content as string == "Back to usage";
+                if (variant is "upgrade") report.Checks[tag + "_speaks_of_the_saved_password"] = view.BannerText.StartsWith("Pairing replaces the saved password", StringComparison.Ordinal) && window.StatusText.Text == "Pairing · the saved password still works";
             }
             catch (Exception error) { report.Checks[tag + "_rendered"] = false; report.Notes[tag] = error.GetType().Name + ": " + error.Message; }
             finally { window.AllowClose = true; window.Close(); }
         }
+    }
+
+    /// <summary>Settings › Connection on a paired tray: the paired lines, Re-pair and Disconnect, then Disconnect's inline
+    /// confirm. The dashboard's view of this computer is given, so the render sends nothing.</summary>
+    private static async Task PairedSettings(CheckReport report, AccountDashboard fixture, string directory, string name)
+    {
+        var window = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
+        try
+        {
+            window.UsePairedFixtureConnection();
+            window.ConnectionLineForRender = new AuthCheck { Connection = new AuthConnection { Peer = "192.168.1.31", Trusted = true } };
+            window.Show();
+            window.ApplyDashboardSample(Clone(fixture));
+            window.OpenSettings();
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"settings-paired-{name}.png"));
+            var card = FindUid(window.SettingsPanel, "settings-connection");
+            var who = FindUid(window.SettingsPanel, "settings-connection-who") as TextBlock;
+            var via = FindUid(window.SettingsPanel, "settings-this-connection") as TextBlock;
+            var whoText = who is null ? "" : new System.Windows.Documents.TextRange(who.ContentStart, who.ContentEnd).Text;
+            report.Notes[$"{name}_settings_paired_who"] = whoText;
+            report.Checks[$"{name}_settings_paired_connection_card"] = card is not null && whoText.StartsWith("Paired as Windows tray", StringComparison.Ordinal)
+                && via?.Text == "This connection: 192.168.1.31, trusted local network" && FindUid(window.SettingsPanel, "settings-repair") is Button { IsVisible: true, IsEnabled: true }
+                && FindUid(window.SettingsPanel, "settings-disconnect") is Button { IsVisible: true, IsEnabled: true } && NoClippedText(card!);
+            if (FindUid(window.SettingsPanel, "settings-disconnect") is Button disconnect) Click(disconnect);
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"settings-disconnect-{name}.png"));
+            var line = FindUid(window.SettingsPanel, "settings-disconnect-line");
+            var text = FindUid(window.SettingsPanel, "settings-disconnect-text") as TextBlock;
+            report.Checks[$"{name}_settings_disconnect_confirm"] = line is { IsVisible: true, ActualHeight: > 0 } && text?.Text.StartsWith("Disconnect this Windows tray?", StringComparison.Ordinal) == true
+                && FindUid(window.SettingsPanel, "settings-disconnect-yes") is Button { IsVisible: true } && FindUid(window.SettingsPanel, "settings-disconnect-cancel") is Button { IsVisible: true }
+                && NoClippedText(card!) && window.ClientForCheck is { Paired: true };
+        }
+        catch (Exception error) { report.Checks[$"{name}_settings_paired_rendered"] = false; report.Notes[$"{name}_settings_paired"] = error.GetType().Name + ": " + error.Message; }
+        finally { window.AllowClose = true; window.Close(); }
     }
 
     /// <summary>No single-line text in the element is wider than its own box (wrapped text is laid out to fit).</summary>

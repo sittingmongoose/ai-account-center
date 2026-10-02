@@ -45,6 +45,9 @@ public sealed class DashboardReachException : Exception
 {
     public bool NotDashboard { get; }
     public bool TimedOut { get; }
+    /// <summary>No connection was made (refused, unreachable or not resolved), so the request never reached the
+    /// dashboard. A timeout or a dropped answer may have.</summary>
+    public bool NeverSent { get; init; }
     public DashboardReachException(bool notDashboard, bool timedOut) : base(notDashboard ? "That address answered, but not as an AI Account Center dashboard." : "Could not reach a dashboard at that address.")
     { NotDashboard = notDashboard; TimedOut = timedOut; }
 }
@@ -125,7 +128,10 @@ public sealed class AuthApi : IDisposable
             return await Read(response, cancel);
         }
         catch (TaskCanceledException) when (!cancel.IsCancellationRequested) { throw new DashboardReachException(false, true); }
-        catch (HttpRequestException) { throw new DashboardReachException(false, false); }
+        catch (HttpRequestException failure)
+        {
+            throw new DashboardReachException(false, false) { NeverSent = failure.HttpRequestError is HttpRequestError.ConnectionError or HttpRequestError.NameResolutionError };
+        }
         finally { if (bytes is not null) CryptographicOperations.ZeroMemory(bytes); }
     }
 

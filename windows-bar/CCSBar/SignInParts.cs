@@ -98,9 +98,11 @@ internal sealed class Collapsible : Border
     {
         measureWidth = width;
         inner = content;
-        // The 6 px side margins keep a focused field's halo inside the clip, as the concept's .si-coll does.
+        // The 6 px side margins keep a focused field's halo inside the clip, as the concept's .si-coll does. The content's
+        // own vertical margins stay (a field's 12 px below it, a hint's -4 and 12), as they do inside the concept's region.
         Margin = new Thickness(-6, 0, -6, 0);
-        inner.Margin = new Thickness(6, 0, 6, 0);
+        var own = content.Margin;
+        inner.Margin = new Thickness(own.Left + 6, own.Top, own.Right + 6, own.Bottom);
         inner.RenderTransform = shift;
         Child = inner;
         ClipToBounds = true;

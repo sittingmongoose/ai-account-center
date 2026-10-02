@@ -48,12 +48,19 @@ public static class SecureStore
         finally { CryptographicOperations.ZeroMemory(decrypted); }
     }
 
-    /// <summary>Migration step 1: copies the version 1 file, byte for byte, to the rollback file.</summary>
+    /// <summary>Migration step 1: copies the version 1 file, byte for byte, to the rollback file. Its 24 hours count from
+    /// now: a Windows copy keeps the source's last-write time, so without the stamp a version 1 file written weeks ago
+    /// would make the rollback count as expired the moment it is made (review B5N finding 2).</summary>
     public static void KeepRollback(string path)
     {
         var rollback = RollbackPath(path);
         var temporary = rollback + ".tmp-" + Guid.NewGuid().ToString("N");
-        try { File.Copy(path, temporary, true); File.Move(temporary, rollback, true); }
+        try
+        {
+            File.Copy(path, temporary, true);
+            File.SetLastWriteTimeUtc(temporary, DateTime.UtcNow);
+            File.Move(temporary, rollback, true);
+        }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
@@ -71,7 +78,8 @@ public static class SecureStore
         if (File.Exists(rollback)) File.Delete(rollback);
     }
 
-    /// <summary>The rollback file's age, or null when there is none (it never lives longer than 24 hours).</summary>
+    /// <summary>The rollback file's age since <see cref="KeepRollback"/> made it, or null when there is none (it never
+    /// lives longer than 24 hours).</summary>
     public static TimeSpan? RollbackAge(string path)
     {
         var rollback = RollbackPath(path);

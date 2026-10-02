@@ -31,6 +31,8 @@ public static partial class Checks
 
     /// <summary>The E2E driver's click: the same as the checks'.</summary>
     internal static Task SubmitForE2E(MainWindow window) => Submit(window);
+    /// <summary>The E2E driver's plain click, without waiting for the flow it starts.</summary>
+    internal static void PressForE2E(ButtonBase button) => Press(button);
 
     private static string[] Keys(string path) => File.Exists(path) ? SecureStore.StoredKeysForCheck(path).OrderBy(key => key, StringComparer.Ordinal).ToArray() : Array.Empty<string>();
 
@@ -50,9 +52,16 @@ public static partial class Checks
         using var fixture = new PairingFixture();
         int store = 0;
         string Store() => Path.Combine(folder, "case-" + (++store), "connection.dpapi");
+        // The windows' preferences live in the isolated folder too: a migration writes its attempt time there, never in
+        // the tray's real preferences.json, whether or not AAC_TRAY_STATE_DIR is set (review B5N finding 5).
+        var preferencesFile = Path.Combine(folder, "preferences.json");
+        var realPreferences = Preferences.DefaultPath;
+        DateTime? Stamp(string file) => File.Exists(file) ? File.GetLastWriteTimeUtc(file) : null;
+        var realPreferencesBefore = Stamp(realPreferences);
         MainWindow Panel(string path)
         {
-            var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false) { StepPace = TimeSpan.FromMilliseconds(1), SuccessPause = TimeSpan.FromMilliseconds(1), AddressTimeout = TimeSpan.FromSeconds(5) };
+            var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false, StorePath = preferencesFile }, loadConnection: false)
+            { StepPace = TimeSpan.FromMilliseconds(1), SuccessPause = TimeSpan.FromMilliseconds(1), AddressTimeout = TimeSpan.FromSeconds(5), KeyProofBackoff = new[] { TimeSpan.FromMilliseconds(20) } };
             window.UseConnectionStoreForCheck(path);
             windows.Add(window);
             return window;
@@ -206,6 +215,87 @@ public static partial class Checks
             var repaired = SecureStore.Load(first.ConnectionStorePath)!;
             report.Checks["repair_replaces_the_key_with_the_same_install"] = !first.SignInVisible && repaired.DeviceToken != oldKey && repaired.InstallId == installBefore && fixture.LastInstallId == installBefore && !fixture.Accepts(oldKey);
 
+            // ---- Re-pair once Pair is pressed (review B5N finding 1): the dashboard replaces the current key as soon as it
+            // answers, so Cancel, Escape and Disconnect rest until the new key is proved, saved and adopted.
+            var heldKey = SecureStore.Load(first.ConnectionStorePath)!.DeviceToken!;
+            first.ShowSignIn(SignInState.Password, repair: true);
+            view.Pass.Value = "fixture-changed";
+            fixture.PairDelayMs = 400;
+            Press(view.PrimaryButton);
+            var heldWhileOut = first.PairHeld && view.AltHeld && first.SignInStatus == "Re-pairing";
+            Press(view.AltButton);
+            first.EscapeForCheck();
+            var disconnectWaits = await first.DisconnectTray();
+            var stillPairing = first.SignInVisible;
+            await first.SignInFlowTask;
+            await first.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            fixture.PairDelayMs = 0;
+            var heldResult = SecureStore.Load(first.ConnectionStorePath)!;
+            report.Checks["repair_cancel_and_escape_rest_once_pair_is_sent"] = heldWhileOut && stillPairing && disconnectWaits == "Pairing is finishing. Try again in a moment."
+                && !first.SignInVisible && first.ClientForCheck is { Paired: true } && heldResult.DeviceToken != heldKey && fixture.Accepts(heldResult.DeviceToken!) && !fixture.Accepts(heldKey)
+                && !first.PairHeld && !view.AltHeld && first.StatusFlashForCheck == "Paired · signed in with a device key";
+
+            // A new key whose first check is cut off once is asked again, not given up.
+            var beforeRetry = heldResult.DeviceToken!;
+            first.ShowSignIn(SignInState.Password, repair: true);
+            view.Pass.Value = "fixture-changed";
+            fixture.DeviceMeDropNext = 1;
+            fixture.ClearLog();
+            await Submit(first);
+            var retried = SecureStore.Load(first.ConnectionStorePath)!;
+            report.Checks["repair_new_key_check_is_asked_again_after_a_network_error"] = !first.SignInVisible && first.ClientForCheck is { Paired: true } && retried.DeviceToken != beforeRetry
+                && fixture.Accepts(retried.DeviceToken!) && fixture.Count("GET /api/auth/devices/me") >= 2 && fixture.DeviceMeDropNext == 0;
+
+            // A new key that never answers: the current key is already gone, so the new one is kept and used, and the screen
+            // never claims the old connection still works.
+            var deadKey = retried.DeviceToken!;
+            var seen = new List<SignInState>();
+            void Seen(SignInState state) => seen.Add(state);
+            first.ShowSignIn(SignInState.Password, repair: true);
+            view.Pass.Value = "fixture-changed";
+            view.StateApplied += Seen;
+            fixture.DeviceMeMode = "abort";
+            await Submit(first);
+            fixture.DeviceMeMode = "200";
+            view.StateApplied -= Seen;
+            var unproved = SecureStore.Load(first.ConnectionStorePath)!;
+            report.Notes["repair_without_an_answer_states"] = string.Join(" > ", seen);
+            report.Checks["repair_without_an_answer_keeps_the_new_key_not_the_dead_one"] = !first.SignInVisible && first.ClientForCheck is { Paired: true } && unproved.DeviceToken != deadKey
+                && fixture.Accepts(unproved.DeviceToken!) && !fixture.Accepts(deadKey) && !seen.Contains(SignInState.Unreachable) && first.Dashboard is not null && !first.IsStale;
+
+            // A pair request that never reached the dashboard (nothing listening) leaves the current key, and says so.
+            var keptClient = first.ClientForCheck;
+            var keptKey = unproved.DeviceToken!;
+            first.ShowSignIn(SignInState.Password, repair: true);
+            view.Model.Verified = ClosedLoopbackOrigin();
+            view.Pass.Value = "fixture-changed";
+            await Submit(first);
+            report.Checks["repair_pair_never_sent_keeps_the_connection"] = view.Model.State == SignInState.Unreachable && view.BannerText.StartsWith("Your current connection is unchanged", StringComparison.Ordinal)
+                && view.AltVisible && ReferenceEquals(first.ClientForCheck, keptClient) && SecureStore.Load(first.ConnectionStorePath)!.DeviceToken == keptKey && fixture.Accepts(keptKey);
+            Press(view.AltButton);
+
+            // A pair answer lost after the dashboard replaced the key: the tray is signed out, and the screen says why.
+            first.ShowSignIn(SignInState.Password, repair: true);
+            view.Pass.Value = "fixture-changed";
+            fixture.PairDropsAnswer = true;
+            await Submit(first);
+            fixture.PairDropsAnswer = false;
+            report.Notes["repair_answer_lost_message"] = view.MessageText;
+            report.Checks["repair_answer_lost_after_the_key_was_replaced_signs_out_and_says_why"] = first.SignInVisible && view.Model.State == SignInState.SignedOut
+                && view.MessageText.StartsWith("Pairing reached the dashboard, but its answer was lost.", StringComparison.Ordinal) && first.ClientForCheck is null && SecureStore.Load(first.ConnectionStorePath) is { IsSignedOut: true };
+            view.Pass.Value = "fixture-changed";
+            await Submit(first);
+
+            // Pairing turned off never offers a paired tray the password sign-in (it would trade a key for a password).
+            fixture.TrustSwitch = false;
+            first.ShowSignIn(SignInState.Password, repair: true);
+            view.Pass.Value = "fixture-changed";
+            await Submit(first);
+            report.Checks["pairing_off_never_offers_a_paired_tray_the_password"] = view.Model.State == SignInState.PairingOff && !view.Model.PasswordFallback
+                && FixtureRender.FindUid(view, "si-use-password") is null && first.ClientForCheck is { Paired: true };
+            Press(view.AltButton);
+            fixture.TrustSwitch = true;
+
             // ---- a remote sign-out: revoked, revoke-all with who, expired; 503 is not a sign-out
             fixture.DashboardMode = "503:auth_store_unavailable";
             await first.Refresh(true);
@@ -267,6 +357,17 @@ public static partial class Checks
             var refused = await first.DisconnectTray();
             report.Checks["disconnect_unreachable_keeps_the_pairing"] = refused?.StartsWith("Can't reach the dashboard", StringComparison.Ordinal) == true && first.ClientForCheck is { Paired: true } && SecureStore.Load(first.ConnectionStorePath)!.IsPaired;
             fixture.DisconnectMode = "204";
+
+            // ---- a rotation still out when Disconnect lands never writes the old device's key back (review B5N finding 4)
+            fixture.RotateDelayMs = 400;
+            fixture.ClearLog();
+            var maintaining = first.MaintainDeviceKey(force: true);
+            for (int i = 0; i < 100 && fixture.Count("POST /api/auth/devices/me/rotate") == 0; i++) await Task.Delay(20);
+            var raceGone = await first.DisconnectTray();
+            await maintaining;
+            fixture.RotateDelayMs = 0;
+            report.Checks["rotation_in_flight_never_overwrites_a_disconnect"] = raceGone is null && fixture.Count("POST /api/auth/devices/me/rotate") == 1
+                && SecureStore.Load(first.ConnectionStorePath) is { IsSignedOut: true, SignedOutReason: "disconnected" } && first.ClientForCheck is null && first.SignInVisible;
             fixture.Password = "fixture-new";
 
             // ---- first-run setup with the code
@@ -303,12 +404,40 @@ public static partial class Checks
             report.Checks["older_dashboard_keeps_the_password_sign_in"] = !legacy.SignInVisible && legacy.ClientForCheck is { Paired: false } && Keys(legacy.ConnectionStorePath).SequenceEqual(new[] { "baseURL", "password", "username" });
             fixture.TrustSwitch = true; fixture.PairRouteExists = true;
 
+
             // ---- F4: a blank password is never sent to a new address
             var otherDashboard = ClosedLoopbackOrigin();
             fixture.ClearLog();
             var blank = await legacy.SubmitConnection(otherDashboard, "fixture", "");
             var sameBlank = await legacy.SubmitConnection(fixture.Origin, "fixture", "");
             report.Checks["blank_password_reused_only_for_the_same_dashboard"] = blank?.StartsWith("Enter the password for this dashboard.", StringComparison.Ordinal) == true && sameBlank is null && fixture.Count("POST /api/auth/login") == 1;
+
+            // ---- a version 1 tray pairing from Settings speaks of its saved password, not a device key (review B5N finding 7)
+            var lv = legacy.SignIn;
+            var legacyClient = legacy.ClientForCheck;
+            legacy.ShowSignIn(SignInState.Password, repair: true);
+            var upgradeWords = lv.Model.Upgrade && !lv.Model.Repair && lv.TitleText == "Sign in to pair this tray" && lv.BannerText.StartsWith("Pairing replaces the saved password", StringComparison.Ordinal)
+                && legacy.SignInStatus == "Pairing · the saved password still works" && lv.AltVisible;
+            Press(lv.AltButton);
+            report.Checks["version_1_pair_from_settings_speaks_of_the_saved_password"] = upgradeWords && !legacy.SignInVisible && ReferenceEquals(legacy.ClientForCheck, legacyClient);
+
+            // ---- pairing turned off, on a tray without a key: the dashboard password changed, and the tray can still take
+            // the new one, verified before it is saved (review B5N finding 3)
+            fixture.TrustSwitch = false; fixture.Password = "fixture-rotated";
+            legacy.ShowSignIn(SignInState.Password, repair: true);
+            lv.Pass.Value = "fixture-rotated";
+            await Submit(legacy);
+            var offeredPassword = lv.Model.State == SignInState.PairingOff && lv.Model.PasswordFallback && lv.LedeText.Contains("Or use your password for now", StringComparison.Ordinal);
+            if (FixtureRender.FindUid(lv, "si-use-password") is System.Windows.Controls.Button usePassword) Press(usePassword);
+            var passwordForm = lv.Model.State == SignInState.Password && lv.Model.Legacy && lv.TitleText == "Sign in with your password" && lv.PrimaryLabel == "Sign in" && !lv.RegionOpen("device");
+            lv.Pass.Value = "fixture-rotated";
+            fixture.ClearLog();
+            await Submit(legacy);
+            report.Notes["pairing_off_password_flash"] = legacy.StatusFlashForCheck ?? "";
+            report.Checks["pairing_off_offers_the_password_to_a_tray_without_a_key"] = offeredPassword && passwordForm && !legacy.SignInVisible && legacy.ClientForCheck is { Paired: false } && legacy.Dashboard is not null
+                && Keys(legacy.ConnectionStorePath).SequenceEqual(new[] { "baseURL", "password", "username" }) && fixture.Count("POST /api/auth/login") == 1 && fixture.Count("POST /api/auth/devices/pair") == 0
+                && legacy.StatusFlashForCheck == "Signed in with your password. Turn on Trust this local network to pair this tray.";
+            fixture.TrustSwitch = true; fixture.Password = "fixture-new";
 
             // ---- migration from a version 1 password (section 8): Securing, then the key; the rollback is deleted
             var v1 = Store();
@@ -336,6 +465,23 @@ public static partial class Checks
             fixture.DeviceMeMode = "200";
             await offline.Refresh(true);
             report.Checks["migration_network_error_keeps_both_then_settles"] = bothKept && SecureStore.RollbackAge(v1Offline) is null && SecureStore.Load(v1Offline) is { IsPaired: true };
+            // A version 1 file written 40 days ago: the rollback's 24 hours still count from the migration, so a 401 on the
+            // new key's first use brings version 1 back (review B5N finding 2).
+            var v1Aged = Store();
+            SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-new" }, v1Aged);
+            var v1AgedBytes = File.ReadAllBytes(v1Aged);
+            File.SetLastWriteTimeUtc(v1Aged, DateTime.UtcNow.AddDays(-40));
+            fixture.DeviceMeMode = "abort";
+            var aged = Panel(v1Aged);
+            await aged.MigrateIfDue(force: true);
+            fixture.DeviceMeMode = "200";
+            var agedRollback = SecureStore.RollbackAge(v1Aged);
+            report.Notes["migration_rollback_age_seconds"] = agedRollback?.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture) ?? "none";
+            fixture.RevokeAll();
+            await aged.Refresh(true);
+            report.Checks["migration_rollback_counts_from_the_migration_not_the_file"] = agedRollback is { } young && young < TimeSpan.FromMinutes(10) && young > TimeSpan.FromMinutes(-10);
+            report.Checks["migration_restores_an_old_version_1_file_on_a_401"] = File.ReadAllBytes(v1Aged).AsSpan().SequenceEqual(v1AgedBytes) && SecureStore.RollbackAge(v1Aged) is null
+                && aged.ClientForCheck is { Paired: false } && !aged.SignInVisible && aged.StatusFlashForCheck == "This tray went back to its saved password sign-in.";
             fixture.TrustSwitch = false;
             var v1Off = Store();
             SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-new" }, v1Off);
@@ -351,8 +497,18 @@ public static partial class Checks
             var stored = Store();
             var notPaired = await Pairing.ConfigureAsync(new ConnectionSettings { BaseURL = ClosedLoopbackOrigin(), Username = "fixture", Password = "fixture-new" }, stored);
             report.Checks["configure_stdin_pairs_or_keeps_version_1"] = pairedNow && Keys(configured).SequenceEqual(expectedV2) && !notPaired && Keys(stored).SequenceEqual(new[] { "baseURL", "password", "username" });
+            // Run again (a reinstall): the same install record is replaced, so no orphan device is left (review B5N finding 8).
+            var firstConfigured = SecureStore.Load(configured)!;
+            await Pairing.ConfigureAsync(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-new" }, configured);
+            var againConfigured = SecureStore.Load(configured)!;
+            report.Checks["configure_stdin_again_replaces_its_own_device_record"] = againConfigured.InstallId == firstConfigured.InstallId && fixture.LastInstallId == firstConfigured.InstallId
+                && againConfigured.DeviceToken != firstConfigured.DeviceToken && !fixture.Accepts(firstConfigured.DeviceToken!) && fixture.Accepts(againConfigured.DeviceToken!);
 
             report.Checks["pairing_requests_reach_only_the_loopback_fixture"] = fixture.Unexpected == 0;
+            var bare = new MainWindow(new Preferences(), loadConnection: false);
+            windows.Add(bare);
+            report.Checks["pairing_checks_never_write_the_real_preferences"] = Stamp(realPreferences) == realPreferencesBefore && Preferences.Load(preferencesFile).LastPairAttempt is { Length: > 0 }
+                && bare.PreferencesForCheck.Detached && !windows[0].PreferencesForCheck.Detached;
         }
         catch (Exception error)
         {

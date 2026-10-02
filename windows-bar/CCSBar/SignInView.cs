@@ -30,8 +30,22 @@ public enum SignInFlow { Pair, Setup, Secure }
 public sealed class SignInModel
 {
     public SignInState State { get; set; } = SignInState.FirstRun;
-    /// <summary>Re-pair or Change from Settings: the current device key keeps working, and Cancel changes nothing.</summary>
+    /// <summary>Re-pair or Change from Settings on a paired tray: the current device key keeps working until Pair is
+    /// pressed, and Cancel before then changes nothing.</summary>
     public bool Repair { get; set; }
+    /// <summary>Pair from Settings on a version 1 tray (a saved password, no key): the saved password keeps working
+    /// until pairing finishes, and Cancel changes nothing.</summary>
+    public bool Upgrade { get; set; }
+    /// <summary>A working connection is waiting behind the screen (Re-pair or Upgrade), so Cancel can return to it.</summary>
+    public bool HasCurrent => Repair || Upgrade;
+    /// <summary>Sign in with the password the old way and keep it with DPAPI (version 1): a dashboard without pairing,
+    /// or the password option while pairing is turned off.</summary>
+    public bool Legacy { get; set; }
+    /// <summary>Pairing is turned off and this tray holds no device key: the password sign-in is offered instead.</summary>
+    public bool PasswordFallback { get; set; }
+    /// <summary>A Re-pair's pair request got no answer and the current key did not answer either, so the dashboard may
+    /// have replaced it.</summary>
+    public bool KeyUncertain { get; set; }
     /// <summary>The dashboard address that answered as a dashboard.</summary>
     public string Verified { get; set; } = "";
     /// <summary>The address just refused: not local, unreachable or not a dashboard.</summary>
@@ -69,7 +83,7 @@ public sealed class SignInModel
 /// </summary>
 public sealed class SignInView : Grid
 {
-    public event Action? Submitted, AltClicked, ChangeClicked, UseLocalClicked, CountdownFinished;
+    public event Action? Submitted, AltClicked, ChangeClicked, UseLocalClicked, UsePasswordClicked, CountdownFinished;
     /// <summary>After every state change (the E2E driver records the sequence and renders each state).</summary>
     public event Action<SignInState>? StateApplied;
     public SignInModel Model { get; } = new();
@@ -336,6 +350,7 @@ public sealed class SignInView : Grid
     private const string Where = "Settings › Dashboard sign-in";
     private const string KeyLine = "The device key is kept with Windows data protection, readable only by your Windows account.";
     private const string LanNote = "Your password is sent once over your local network to pair this tray, then forgotten. The tray keeps a device key with Windows data protection, readable only by your Windows account.";
+    private const string LegacyNote = "The tray keeps your password with Windows data protection, readable only by your Windows account, and trades it for a device key once the dashboard can pair it.";
 
     private StepSpec[] StepsFor(SignInFlow flow)
     {
@@ -358,27 +373,34 @@ public sealed class SignInView : Grid
         };
     }
 
-    private BannerSpec? RepairBanner() => Model.Repair
-        ? new BannerSpec("key", "info", "Re-pairing replaces this tray's device key", () => new Inline[] { new Run("The current key keeps working until the new one is issued, so Cancel changes nothing.") })
-        : null;
+    /// <summary>Re-pair: the current key works until Pair is pressed (the dashboard replaces it as soon as it answers).
+    /// Upgrade: the saved password works until pairing finishes. Neither shows for the password sign-in.</summary>
+    private BannerSpec? RepairBanner()
+    {
+        if (Model.Legacy) return null;
+        if (Model.Repair) return new BannerSpec("key", "info", "Re-pairing replaces this tray's device key", () => new Inline[] { new Run("The current key keeps working until you press Pair. Cancel before then changes nothing.") });
+        if (Model.Upgrade) return new BannerSpec("key", "info", "Pairing replaces the saved password", () => new Inline[] { new Run("This tray keeps signing in with its saved password until it is paired, so Cancel changes nothing.") });
+        return null;
+    }
 
     private Spec SpecFor(SignInState state)
     {
         var sp = new Spec();
-        var cancel = Model.Repair ? "Cancel" : null;
+        var cancel = Model.HasCurrent ? "Cancel" : null;
         var firstFoot = ("house", "Pairing works from your home network, or over your home VPN.");
         void Password()
         {
-            sp.Title = Model.Repair ? "Sign in to re-pair" : "Sign in to pair";
+            sp.Title = Model.Legacy ? "Sign in with your password" : Model.Repair ? "Sign in to re-pair" : Model.Upgrade ? "Sign in to pair this tray" : "Sign in to pair";
             sp.Lede = () => AtLine();
-            sp.Banner = RepairBanner(); sp.Creds = true; sp.Device = true;
-            sp.Primary = new PrimarySpec("Pair this PC", "Checking password", "Paired"); sp.Alt = cancel;
-            sp.Foot = ("key", LanNote);
+            sp.Banner = RepairBanner(); sp.Creds = true; sp.Device = !Model.Legacy;
+            sp.Primary = Model.Legacy ? new PrimarySpec("Sign in", "Checking password", "Signed in") : new PrimarySpec("Pair this PC", "Checking password", "Paired");
+            sp.Alt = cancel;
+            sp.Foot = ("key", Model.Legacy ? LegacyNote : LanNote);
         }
         switch (state)
         {
             case SignInState.FirstRun:
-                sp.Title = Model.Repair ? "Change the address" : "Connect this PC";
+                sp.Title = Model.HasCurrent ? "Change the address" : "Connect this PC";
                 sp.Lede = () => Lede(new Run("Enter the address of your AI Account Center dashboard. You sign in once; this tray then keeps its own device key."));
                 sp.Banner = Model.DisconnectedAt is DateTimeOffset gone
                     ? new BannerSpec("signOut", "info", "Disconnected at " + Formatting.Clock(gone), () => new Inline[] { new Run("This tray forgot its device key and the dashboard revoked it. Pair again to see usage.") })
@@ -433,6 +455,7 @@ public sealed class SignInView : Grid
                     var both = new StackPanel();
                     both.Children.Add(Lede(new Run("On the dashboard, open " + Where + " and turn on "), Bold("Trust this local network"), new Run(".")));
                     both.Children.Add(AtLine(sub: true));
+                    if (Model.PasswordFallback) both.Children.Add(PasswordOption());
                     return both;
                 };
                 sp.Banner = RepairBanner(); sp.Primary = new PrimarySpec("Try again", "Checking", "Done"); sp.Alt = cancel;
@@ -441,13 +464,16 @@ public sealed class SignInView : Grid
             case SignInState.Unreachable:
                 sp.Title = "Can't reach that address";
                 sp.Lede = () => Lede(Bold(HostOf(Model.Tried)), new Run(" didn't answer."));
-                sp.Banner = Model.Repair && Model.LocalAddress is { Length: > 0 } current
+                // "Unchanged" only while that is known: a pair request that got no answer may have replaced the key.
+                sp.Banner = Model.KeyUncertain
+                    ? new BannerSpec("shield", "warn", "The current key may have been replaced", () => new Inline[] { new Run("The dashboard stopped answering after the pair request was sent. Retry to pair again. If the key was replaced, this tray signs out at its next refresh.") })
+                    : Model.HasCurrent && Model.LocalAddress is { Length: > 0 } current
                     ? new BannerSpec("shield", "info", "Your current connection is unchanged", () => new Inline[] { new Run("Nothing was saved. This tray keeps using "), Bold(HostOf(current), "Ink"), new Run(" until a new address answers and pairs.") })
                     : null;
                 sp.Addr = true;
                 sp.Msg = Model.TimedOut ? new MsgSpec("err", "No answer after 10 seconds.", "Check the address, and that the dashboard is running.")
                     : new MsgSpec("err", "Nothing answered at that address.", "Check the address, and that the dashboard is running.");
-                sp.Primary = new PrimarySpec("Retry", "Checking", "Done"); sp.Alt = Model.Repair ? "Keep current connection" : null;
+                sp.Primary = new PrimarySpec("Retry", "Checking", "Done"); sp.Alt = !Model.HasCurrent ? null : Model.KeyUncertain ? "Back to usage" : "Keep current connection";
                 sp.Foot = ("lock", "The tray checks an address before it saves anything.");
                 break;
             case SignInState.WrongAddress:
@@ -510,6 +536,9 @@ public sealed class SignInView : Grid
     internal Border Card => card;
     internal int StepsDone => stepRows.Count(row => row.Done);
     internal bool AltVisible => alt.Visibility == Visibility.Visible;
+    /// <summary>From the moment a pair request is sent until its key is saved or refused, Cancel rests: the dashboard
+    /// may already have replaced the current key, so nothing may walk away from its answer.</summary>
+    internal bool AltHeld { get => !alt.IsEnabled; set => alt.IsEnabled = !value; }
 
     private static string TextOf(DependencyObject? element)
     {
@@ -674,26 +703,40 @@ public sealed class SignInView : Grid
 
     internal string CountdownText => countNumber?.Text ?? "";
 
+    /// <summary>One option row of the concept's .si-opt: icon, a bold head with a line under it, and an action.</summary>
+    private static FrameworkElement Option(string icon, string head, IEnumerable<Inline> body, Button? action, bool first)
+    {
+        var grid = new Grid { Margin = new Thickness(0, first ? 0 : 9, 0, 9) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var glyph = SignInIcons.Icon(icon, 16, Theme.Brush("Ink2")); glyph.VerticalAlignment = VerticalAlignment.Top; glyph.HorizontalAlignment = HorizontalAlignment.Left; glyph.Margin = new Thickness(0, 1, 0, 0);
+        grid.Children.Add(glyph);
+        var words = new StackPanel();
+        words.Children.Add(Ui.Text(head, 12.5, "Ink", FontWeights.SemiBold, wrap: true));
+        var sub = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), TextWrapping = TextWrapping.Wrap, LineHeight = 17.4, LineStackingStrategy = LineStackingStrategy.BlockLineHeight };
+        sub.Inlines.AddRange(body);
+        words.Children.Add(sub);
+        Grid.SetColumn(words, 1); grid.Children.Add(words);
+        if (action is not null) { action.Margin = new Thickness(10, 0, 0, 0); action.VerticalAlignment = VerticalAlignment.Center; Grid.SetColumn(action, 2); grid.Children.Add(action); }
+        return grid;
+    }
+
+    /// <summary>Pairing turned off, on a tray without a device key: the password sign-in it always had, verified before
+    /// it is saved, so a changed dashboard password can still be entered while pairing waits for the owner.</summary>
+    private FrameworkElement PasswordOption()
+    {
+        var stack = new StackPanel { Margin = new Thickness(0, 14, 0, 0), Uid = "si-password-option" };
+        stack.Children.Add(new Border { Height = 1, Background = Theme.Brush("Rule2"), Margin = new Thickness(0, 0, 0, 10) });
+        var use = Ui.Button("Use password"); use.Height = 28; use.Uid = "si-use-password";
+        use.Click += (_, _) => UsePasswordClicked?.Invoke();
+        stack.Children.Add(Option("key", "Or use your password for now", new Inline[] { new Run("The tray keeps it with Windows data protection, and pairs by itself once Trust this local network is on.") }, use, true));
+        return stack;
+    }
+
     private FrameworkElement Guide()
     {
         var stack = new StackPanel { Margin = new Thickness(0, 0, 0, 8), Uid = "si-guide" };
-        FrameworkElement Option(string icon, string head, IEnumerable<Inline> body, Button? action, bool first)
-        {
-            var grid = new Grid { Margin = new Thickness(0, first ? 0 : 9, 0, 9) };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var glyph = SignInIcons.Icon(icon, 16, Theme.Brush("Ink2")); glyph.VerticalAlignment = VerticalAlignment.Top; glyph.HorizontalAlignment = HorizontalAlignment.Left; glyph.Margin = new Thickness(0, 1, 0, 0);
-            grid.Children.Add(glyph);
-            var words = new StackPanel();
-            words.Children.Add(Ui.Text(head, 12.5, "Ink", FontWeights.SemiBold, wrap: true));
-            var sub = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), TextWrapping = TextWrapping.Wrap, LineHeight = 17.4, LineStackingStrategy = LineStackingStrategy.BlockLineHeight };
-            sub.Inlines.AddRange(body);
-            words.Children.Add(sub);
-            Grid.SetColumn(words, 1); grid.Children.Add(words);
-            if (action is not null) { action.Margin = new Thickness(10, 0, 0, 0); action.VerticalAlignment = VerticalAlignment.Center; Grid.SetColumn(action, 2); grid.Children.Add(action); }
-            return grid;
-        }
         Button? use = null;
         IEnumerable<Inline> localBody;
         if (Model.LocalAddress is { Length: > 0 } local)

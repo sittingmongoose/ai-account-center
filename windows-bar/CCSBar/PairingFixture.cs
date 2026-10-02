@@ -49,6 +49,15 @@ internal sealed class PairingFixture : IDisposable
     public string? RevokedBy { get; set; }
     public string RotateMode { get; set; } = "200";
     public string DisconnectMode { get; set; } = "204";
+    /// <summary>How long pair waits before it answers, after it has already replaced the install's record (the real
+    /// dashboard revokes a Re-pair's old key before the answer reaches the tray).</summary>
+    public int PairDelayMs { get; set; }
+    /// <summary>Pair replaces the record and issues the key, then drops the connection instead of answering.</summary>
+    public bool PairDropsAnswer { get; set; }
+    /// <summary>How long rotate waits before it answers, after it has issued the new key.</summary>
+    public int RotateDelayMs { get; set; }
+    /// <summary>The next N devices/me requests (any key) are dropped, as a flaky network would.</summary>
+    public int DeviceMeDropNext { get; set; }
     public string? LastInstallId { get; private set; }
     public string? LastDeviceName { get; private set; }
     public string? LastBearer { get; private set; }
@@ -90,7 +99,7 @@ internal sealed class PairingFixture : IDisposable
         if (request.HasEntityBody) { using var reader = new StreamReader(request.InputStream); body = await reader.ReadToEndAsync(); }
         var bearer = request.Headers["Authorization"] is { } header && header.StartsWith("Bearer ", StringComparison.Ordinal) ? header[7..] : null;
         var cookie = request.Cookies["fixture-session"]?.Value == "yes";
-        int status = 200; object? payload = null; var abort = false; int? retry = null;
+        int status = 200; object? payload = null; var abort = false; int? retry = null; var delay = 0;
         lock (gate)
         {
             if (bearer is not null) LastBearer = bearer;
@@ -145,6 +154,7 @@ internal sealed class PairingFixture : IDisposable
                     var token = NewToken(); var id = "dev_" + Hex(LastInstallId ?? (++deviceCounter).ToString(System.Globalization.CultureInfo.InvariantCulture));
                     tokens[token] = (id, "active");
                     status = 201; payload = new { deviceId = id, token, name = LastDeviceName, platform = "windows", pairedAt = "2026-10-02T12:00:00.000Z", rotateAfter = RotateAfter };
+                    delay = PairDelayMs; abort = PairDropsAnswer;
                 }
             }
             else if (method == "POST" && path == "/api/auth/setup")
@@ -161,6 +171,7 @@ internal sealed class PairingFixture : IDisposable
             }
             else if (path == "/api/auth/devices/me" && method == "GET")
             {
+                if (DeviceMeDropNext > 0) { DeviceMeDropNext--; abort = true; }
                 var rejected = DeviceRejection() ?? Scripted(DeviceMeMode);
                 if (rejected is { } no) { status = no.Item1; payload = no.Item2; }
                 else payload = new { id = device!.Value.Id, name = LastDeviceName, platform = "windows", pairedAt = "2026-10-02T12:00:00.000Z", rotateAfter = RotateAfter, idleExpiresAt = "2026-12-31T12:00:00.000Z" };
@@ -175,6 +186,7 @@ internal sealed class PairingFixture : IDisposable
                     // The previous key stays valid until the new one is first used (contract section 7).
                     tokens[bearer!] = (device.Value.Id, "previous:" + next);
                     payload = new { token = next, rotateAfter = "2026-12-01T00:00:00.000Z" };
+                    delay = RotateDelayMs;
                 }
             }
             else if (path == "/api/auth/devices/me" && method == "DELETE")
@@ -219,6 +231,7 @@ internal sealed class PairingFixture : IDisposable
         }
         try
         {
+            if (delay > 0) await Task.Delay(delay);
             if (abort) { context.Response.Abort(); return; }
             context.Response.StatusCode = status;
             if (retry is int seconds) context.Response.AddHeader("Retry-After", seconds.ToString(System.Globalization.CultureInfo.InvariantCulture));

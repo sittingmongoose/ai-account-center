@@ -213,10 +213,11 @@ public partial class MainWindow
             var via = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), Margin = new Thickness(0, 1, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Text = "This connection: checking", Uid = "settings-this-connection" };
             words.Children.Add(via);
             FillConnectionLine(via, client.BaseURL);
-            var repair = Ui.Button("Re-pair"); repair.Uid = "settings-repair";
-            repair.Click += (_, _) => { CloseSettings(animate: false); ShowSignIn(SignInState.Password, repair: true); };
-            var disconnect = Ui.Button("Disconnect"); disconnect.Foreground = Theme.Brush("CritText"); disconnect.Margin = new Thickness(8, 0, 0, 0); disconnect.Uid = "settings-disconnect";
-            disconnect.Click += (_, _) => confirm.Child = DisconnectConfirm(confirm);
+            // While a pair request's answer is being finished, neither may start: it could undo what that answer did.
+            var repair = Ui.Button("Re-pair"); repair.Uid = "settings-repair"; repair.IsEnabled = !pairHeld;
+            repair.Click += (_, _) => { if (pairHeld) return; CloseSettings(animate: false); ShowSignIn(SignInState.Password, repair: true); };
+            var disconnect = Ui.Button("Disconnect"); disconnect.Foreground = Theme.Brush("CritText"); disconnect.Margin = new Thickness(8, 0, 0, 0); disconnect.Uid = "settings-disconnect"; disconnect.IsEnabled = !pairHeld;
+            disconnect.Click += (_, _) => { if (!pairHeld) confirm.Child = DisconnectConfirm(confirm); };
             buttons.Children.Add(repair); buttons.Children.Add(disconnect);
             note = "This tray signs in with its own device key, not your password, so changing the dashboard password keeps it signed in. Revoking it in the dashboard signs it out.";
         }
@@ -225,8 +226,9 @@ public partial class MainWindow
             who.Inlines.Add(new Run("Signed in as ")); who.Inlines.Add(new Run(connection.Username) { FontWeight = FontWeights.SemiBold }); who.Inlines.Add(new Run(" with a saved password"));
             where.Inlines.Add(new Run(dashboard is null ? "Connecting" : staleSample ? "Last refresh failed" : "Connected") { Foreground = Theme.Brush(staleSample ? "WarnText" : "GoodText"), FontWeight = FontWeights.SemiBold });
             where.Inlines.Add(new Run(" · " + client.BaseURL.GetLeftPart(UriPartial.Authority) + (dashboard is null ? "" : " · last synced " + Formatting.Relative(dashboard.UpdatedAt))));
-            var pair = Ui.Button("Pair", "AtlasPrimaryButton"); pair.Uid = "settings-pair";
-            pair.Click += (_, _) => { CloseSettings(animate: false); ShowSignIn(SignInState.Password, repair: true); };
+            var pair = Ui.Button("Pair", "AtlasPrimaryButton"); pair.Uid = "settings-pair"; pair.IsEnabled = !pairHeld;
+            // A version 1 tray pairs from here: the saved password keeps working until pairing finishes (Upgrade).
+            pair.Click += (_, _) => { if (pairHeld) return; CloseSettings(animate: false); ShowSignIn(SignInState.Password, repair: true); };
             buttons.Children.Add(pair);
             note = "This tray still signs in with your saved dashboard password, kept with Windows data protection. Pair gives it its own device key and deletes the password.";
         }
@@ -251,6 +253,7 @@ public partial class MainWindow
     /// computer right now, so the owner can confirm once that the home VPN counts.</summary>
     private async void FillConnectionLine(TextBlock line, Uri origin)
     {
+        if (ConnectionLineForRender is { } given) { line.Text = ConnectionLine(given); return; }
         try
         {
             using var api = new AuthApi(origin, TimeSpan.FromSeconds(5));
@@ -259,6 +262,9 @@ public partial class MainWindow
         }
         catch { line.Text = "This connection: the dashboard did not answer"; }
     }
+
+    /// <summary>Renders only: the dashboard's view of this computer, given instead of asked, so a render sends nothing.</summary>
+    internal AuthCheck? ConnectionLineForRender { get; set; }
 
     internal static string ConnectionLine(AuthCheck check)
     {
@@ -272,11 +278,12 @@ public partial class MainWindow
     /// <summary>Disconnect asks inline first (the concept's confirm line), then revokes and forgets the key.</summary>
     private FrameworkElement DisconnectConfirm(Border slot)
     {
-        var line = new Grid { Margin = new Thickness(0, 10, 0, 0), Uid = "settings-disconnect-line" };
+        var line = new Grid { Uid = "settings-disconnect-line" };
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(23) });
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var box = new Border { Background = Theme.Brush("CritSoft"), BorderBrush = Theme.Brush("CritLine"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 9, 10, 9), Child = line };
+        // The gap sits outside the box, so the confirm keeps clear of the "This connection" line above it.
+        var box = new Border { Background = Theme.Brush("CritSoft"), BorderBrush = Theme.Brush("CritLine"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 9, 10, 9), Margin = new Thickness(0, 10, 0, 0), Child = line };
         var glyph = Icons.Icon("unplug", 15, Theme.Brush("CritText")); glyph.VerticalAlignment = VerticalAlignment.Center; glyph.HorizontalAlignment = HorizontalAlignment.Left;
         line.Children.Add(glyph);
         var text = Ui.Text("Disconnect this Windows tray? The dashboard revokes its device key and the tray forgets it. Pairing again needs the dashboard password.", 12, "Ink2", wrap: true);

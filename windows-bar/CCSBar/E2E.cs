@@ -34,7 +34,7 @@ public static class E2E
         Motion.Enabled = false;
         var store = SecureStore.SettingsPath;
         Input? input = null;
-        if (step is "pair" or "pair-again" or "migrate" or "wrong-password" or "pairing-off")
+        if (step is "pair" or "pair-again" or "migrate" or "migrate-aged" or "wrong-password" or "pairing-off" or "repair-held" or "password-off" or "configure-twice")
         {
             var text = await Console.In.ReadToEndAsync();
             input = JsonSerializer.Deserialize<Input>(text, Formatting.Json);
@@ -125,16 +125,90 @@ public static class E2E
                     report.Notes["disconnect_banner"] = view.BannerText;
                     break;
                 }
+                case "repair-held":
+                {
+                    // Re-pair, then Cancel and Escape while the pair request is out (review B5N finding 1): the answer is
+                    // finished, the new key saved and used, and the old key is dead at the dashboard.
+                    await window.Refresh(true);
+                    var old = SecureStore.Load(store)!.DeviceToken!;
+                    window.ShowSignIn(SignInState.Password, repair: true);
+                    var view = window.SignIn;
+                    view.Pass.Value = input!.Password;
+                    Checks.PressForE2E(view.PrimaryButton);
+                    var held = window.PairHeld && view.AltHeld && window.SignInStatus == "Re-pairing";
+                    Checks.PressForE2E(view.AltButton);
+                    window.EscapeForCheck();
+                    var waits = await window.DisconnectTray();
+                    var stillShown = window.SignInVisible;
+                    await window.SignInFlowTask;
+                    await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+                    var now = SecureStore.Load(store)!;
+                    report.Checks["repair_held_cancel_escape_and_disconnect_rest"] = held && stillShown && waits == "Pairing is finishing. Try again in a moment.";
+                    report.Checks["repair_held_new_key_saved_and_used"] = !window.SignInVisible && window.ClientForCheck is { Paired: true } && window.Dashboard is not null && now.DeviceToken != old
+                        && Keys(store).SequenceEqual(new[] { "baseURL", "deviceId", "deviceToken", "installId", "pairedAt", "rotateAfter", "username", "version" });
+                    using var api = new AuthApi(new Uri(now.BaseURL + "/"), TimeSpan.FromSeconds(10));
+                    var dead = await api.DeviceMe(old);
+                    report.Notes["repair_held_old_key_status"] = ((int)dead.Status).ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + dead.Code;
+                    report.Checks["repair_held_old_key_replaced_at_the_dashboard"] = (int)dead.Status == 401;
+                    report.Notes["repair_held_flash"] = window.StatusFlashForCheck ?? "";
+                    break;
+                }
+                case "password-off":
+                {
+                    // Pairing turned off on the dashboard, on a tray without a key: the password option signs in (verified
+                    // before it is saved) and stores version 1 (review B5N finding 3).
+                    await StartAndAsk(window, input!.BaseURL, report);
+                    var view = window.SignIn;
+                    report.Checks["password_off_offers_the_password"] = view.Model.State == SignInState.PairingOff && view.Model.PasswordFallback && FixtureRender.FindUid(view, "si-use-password") is not null;
+                    if (FixtureRender.FindUid(view, "si-use-password") is System.Windows.Controls.Button use) Checks.PressForE2E(use);
+                    report.Checks["password_off_password_form"] = view.Model.State == SignInState.Password && view.TitleText == "Sign in with your password" && view.PrimaryLabel == "Sign in";
+                    view.User.Value = input.Username; view.Pass.Value = input.Password;
+                    await Checks.SubmitForE2E(window);
+                    report.Checks["password_off_signed_in_with_version_1"] = !window.SignInVisible && window.ClientForCheck is { Paired: false } && window.Dashboard is not null
+                        && Keys(store).SequenceEqual(new[] { "baseURL", "password", "username" });
+                    report.Notes["password_off_flash"] = window.StatusFlashForCheck ?? "";
+                    break;
+                }
+                case "configure-twice":
+                {
+                    // --configure-stdin run twice (a reinstall): one device record, the first key replaced (finding 8).
+                    var settings = new ConnectionSettings { BaseURL = input!.BaseURL, Username = input.Username, Password = input.Password };
+                    var once = await Pairing.ConfigureAsync(settings, store);
+                    var first = SecureStore.Load(store)!;
+                    var twice = await Pairing.ConfigureAsync(new ConnectionSettings { BaseURL = input.BaseURL, Username = input.Username, Password = input.Password }, store);
+                    var second = SecureStore.Load(store)!;
+                    using var api = new AuthApi(new Uri(second.BaseURL + "/"), TimeSpan.FromSeconds(10));
+                    var firstNow = await api.DeviceMe(first.DeviceToken!);
+                    var secondNow = await api.DeviceMe(second.DeviceToken!);
+                    report.Checks["configure_twice_paired_both_times"] = once && twice && first.IsPaired && second.IsPaired && !second.HasPassword;
+                    report.Checks["configure_twice_same_install"] = first.InstallId is { Length: 36 } && second.InstallId == first.InstallId && second.DeviceToken != first.DeviceToken;
+                    report.Notes["configure_twice_key_status"] = ((int)firstNow.Status).ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + firstNow.Code + " / " + ((int)secondNow.Status).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    report.Checks["configure_twice_first_key_replaced"] = (int)firstNow.Status == 401 && (int)secondNow.Status == 200;
+                    break;
+                }
                 case "migrate":
+                case "migrate-aged":
                 {
                     // A fake version 1 file: the old shape, the same DPAPI scope and entropy, written by the tray's own writer.
+                    // migrate-aged dates it 40 days back, as a real version 1 file is (review B5N finding 2).
                     SecureStore.Save(new ConnectionSettings { BaseURL = input!.BaseURL, Username = input.Username, Password = input.Password }, store);
+                    if (step == "migrate-aged") File.SetLastWriteTimeUtc(store, DateTime.UtcNow.AddDays(-40));
                     report.Checks["fake_version_1_written"] = Keys(store).SequenceEqual(new[] { "baseURL", "password", "username" });
                     window.UseConnectionStoreForCheck(store);
                     await window.Refresh(true);
                     var legacyReads = window.Dashboard is not null && window.ClientForCheck is { Paired: false };
-                    await window.MigrateIfDue(force: true);
+                    // The rollback copy is watched while the migration runs: its 24 hours must count from now.
+                    TimeSpan? rollbackAge = null;
+                    var migrating = window.MigrateIfDue(force: true);
+                    while (!migrating.IsCompleted)
+                    {
+                        if (SecureStore.RollbackAge(store) is TimeSpan age) rollbackAge ??= age;
+                        await Task.Delay(5);
+                    }
+                    await migrating;
                     await window.SignInFlowTask;
+                    report.Notes["migration_rollback_age_seen_seconds"] = rollbackAge?.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) ?? "not seen";
+                    if (step == "migrate-aged") report.Checks["migration_rollback_counts_from_the_migration"] = rollbackAge is { } seen && seen < TimeSpan.FromMinutes(10) && seen > TimeSpan.FromMinutes(-10);
                     report.Checks["version_1_read_with_the_password_first"] = legacyReads;
                     report.Checks["migration_showed_securing_then_success"] = states.Contains(nameof(SignInState.Securing)) && states.Contains(nameof(SignInState.Success));
                     report.Checks["migration_stored_the_key_without_the_password"] = Keys(store).SequenceEqual(new[] { "baseURL", "deviceId", "deviceToken", "installId", "pairedAt", "rotateAfter", "username", "version" }) && SecureStore.Load(store) is { Version: 2, HasPassword: false, IsPaired: true };

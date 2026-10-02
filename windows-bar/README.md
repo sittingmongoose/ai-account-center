@@ -96,7 +96,10 @@ type, focus halo, three-layer primary button, error shake and success hand-off. 
    link-local or unknown address (the tray resolves the name and checks every address) is refused before anything is
    sent, with "Use the dashboard's local address" and "Or connect through your home VPN first". The same screen shows
    when the dashboard itself does not trust this computer ("The dashboard sees this PC at ...").
-5. **Pairing turned off:** the dashboard's "Trust this local network" is off; Try again asks once more.
+5. **Pairing turned off:** the dashboard's "Trust this local network" is off; Try again asks once more. A tray without
+   a device key (new, signed out, or still on its version 1 password) is also offered "Use password": the password
+   sign-in it always had, verified before it is saved, so a changed dashboard password can be entered while pairing
+   waits. A paired tray is never offered it.
 6. **Wrong password** with the tries left, and 7. **rate limited** with a countdown and the button rested.
 8. **Unreachable** or **wrong address** (answered, but not as AI Account Center); the saved connection is untouched.
 9. **Securing this tray:** a stored version 1 password is traded for a key by itself (below).
@@ -106,7 +109,15 @@ type, focus halo, three-layer primary button, error shake and success hand-off. 
 
 Pairing is `POST /api/auth/devices/pair` with the password, this PC's name, `platform: windows` and an install id. The
 new key must work once (`GET /api/auth/devices/me` with `Authorization: Bearer`) before anything is saved, and a
-working connection is never replaced by one that has not. The key is stored with DPAPI in the same file, scope and
+working connection is never replaced by one that has not. The new key's first check is asked again after a network
+error (twice, after 1 and 3 seconds). From the moment the pair request is sent until its answer is finished, Cancel and
+Escape rest and Settings' Re-pair and Disconnect wait: the dashboard replaces this install's record (and so revokes a
+Re-pair's current key) as soon as it answers, before the new key is ever used, so the answer is always finished. When
+a Re-pair's new key still gets no answer, the tray asks whether its current key survived: if it did (another dashboard
+answered the pair) nothing is saved; if it did not, the new key is the only one that can work, so it is saved and used
+and the next refresh proves it. A pair request that got no answer is handled the same way: never sent (nothing
+listening), the connection is unchanged; cut off after the dashboard replaced the key, the tray is signed out and says
+so; no answer either, the screen says the current key may have been replaced. The key is stored with DPAPI in the same file, scope and
 entropy as before (`%LOCALAPPDATA%\CCS Bar\connection.dpapi`), as version 2 JSON with no password:
 `{ version: 2, baseURL, username, deviceId, deviceToken, installId, pairedAt, rotateAfter }`. Every tray route then
 carries the key as a bearer token and the cookie sign-in is never used. A dashboard that predates pairing (no
@@ -119,7 +130,8 @@ trusted-local-network rule, or no pair route) keeps today's password sign-in, ve
   keeps the address and username and why), stops polling and shows the signed-out screen; the tooltip says
   "Signed out". A 503 `auth_store_unavailable` or a network error is not a sign-out.
 - **Upgrade from version 1 (section 8):** on launch, at most once per launch and every 24 hours, when the dashboard can
-  pair this computer: the version 1 file is copied to `connection.v1-rollback.dpapi` (same bytes), the tray pairs with
+  pair this computer: the version 1 file is copied to `connection.v1-rollback.dpapi` (same bytes, with its time set to
+  now, because a Windows copy keeps the source's time and the 24 hours count from the migration), the tray pairs with
   the stored credentials, writes version 2 and calls `devices/me`. On 200 the rollback is deleted; on a 401 device
   code version 1 comes back from the rollback and the cookie sign-in stays; on a network error both are kept and the
   check runs again on the next poll (the rollback never lives longer than 24 hours).
@@ -135,10 +147,11 @@ auto-switch, providers hidden in the trays, address) and About (version, third-p
 **Connection** reads "Paired as Windows tray, last synced 20s ago", then this PC and the saved address, then "This
 connection: 192.168.50.31, trusted local network" (or "not trusted"), as the dashboard sees this computer right now
 (`GET /api/auth/check`, read when Settings opens), so you can confirm once that the home VPN counts. **Re-pair** opens
-the password step with Cancel: the current key keeps working until the new one is issued, and pairing again with the
-same install id revokes the old key. **Disconnect** asks inline, then calls `DELETE /api/auth/devices/me`, forgets the
+the password step with Cancel: the current key keeps working until Pair is pressed, and pairing again with the same
+install id revokes the old key. **Disconnect** asks inline, then calls `DELETE /api/auth/devices/me`, forgets the
 key and shows the first-run screen with "Disconnected at ..." and the last address filled in; when the dashboard cannot
-be reached nothing changes. A tray still on a version 1 password says so and offers Pair.
+be reached nothing changes. A tray still on a version 1 password says so and offers Pair, whose screen reads "Sign in to
+pair this tray": the saved password keeps working until pairing finishes, and Cancel changes nothing.
 
 The version 1 password sign-in (a dashboard without pairing) verifies before it saves: a temporary client signs in
 (`POST /api/auth/login`) and reads `GET /api/accounts/settings`; only when both work is the connection written and the
@@ -201,12 +214,15 @@ For unattended setup, pipe a private JSON object containing `baseURL`, `username
 dotnet CCSBar.dll --configure-stdin
 ```
 
-It pairs at once and stores only the device key; when the dashboard cannot pair this computer (no pairing yet, local
+It pairs at once and stores only the device key, as the install id already stored there when there is one (so a
+reinstall replaces its own device record instead of leaving one behind); when the dashboard cannot pair this computer (no pairing yet, local
 network trust off, not reachable) it stores the version 1 password sign-in as before. Input is never echoed and only
 DPAPI ciphertext is written to `%LOCALAPPDATA%\CCS Bar\connection.dpapi`. Do not place this JSON in the source tree or
 in command-line arguments. HTTP is accepted for local network origins; other origins require HTTPS.
 
-- `--check <report>`: offline checks; the report holds no account emails or authentication data.
+- `--check <report>`: offline checks; the report holds no account emails or authentication data. Its windows never
+  write the real `preferences.json` (the pairing checks keep theirs in their temporary folder), with or without
+  `AAC_TRAY_STATE_DIR`.
 - `--check-live <report>`: reads the configured dashboard without mutation (provider counts, id validation).
 - `--render-fixture <dir> [light|dark]`: renders the real panel from the bundled sanitized fixture
   (`CCSBar/Fixtures/dashboard.json`, example.com identities) to PNGs, with Settings, details, a switch, two Antigravity
@@ -217,15 +233,20 @@ in command-line arguments. HTTP is accepted for local network origins; other ori
   anywhere.
 - `--render-proof <png>`: renders the live panel against the configured dashboard without a second tray instance.
 - `--e2e <step> <dir>`: one live end-to-end step against a sandbox dashboard (pair, wrong-password, pairing-off,
-  reads, rotate, revoked, pair-again, disconnect, migrate), driven through the sign-in screen's own fields and button.
+  reads, rotate, revoked, pair-again, disconnect, migrate, migrate-aged, repair-held, password-off, configure-twice),
+  driven through the sign-in screen's own fields and button.
   It refuses to run unless `AAC_TRAY_STATE_DIR` names an isolated folder; credentials arrive on stdin and reports carry
   states, titles, store key names and status codes only.
 
 The render checks also show each of the sign-in screen's states directly (light and dark) and check its title, which
 regions it opens, that the card fits above the footer, that no single-line text is cut off and that the primary's label
 is centred. The pairing checks drive the screen against a loopback fixture dashboard: every state and flow above,
-verify-before-save, rotation, remote sign-out, Re-pair, Disconnect, the version 1 upgrade and its rollback, setup with
-the code, the fallback for a dashboard without pairing, and `--configure-stdin`.
+verify-before-save, rotation, remote sign-out, Re-pair (Cancel and Escape held once Pair is pressed, a new key's check
+asked again, a new key that never answers, a pair request never sent, an answer lost), Disconnect (and a rotation still
+out when it lands), the version 1 upgrade and its rollback (including a version 1 file weeks old), Pair from Settings on
+a version 1 tray, the password option while pairing is off, setup with the code, the fallback for a dashboard without
+pairing, and `--configure-stdin` (run twice, one device record). The render checks also draw the paired Settings ›
+Connection card and Disconnect's inline confirm.
 
 No test activates a real Codex, Antigravity or Claude account, or pairs with a real dashboard. The Claude Open checks run the tray's own flow against a
 loopback fixture dashboard with the connection in an isolated temporary store, and prove that no shell launch happens

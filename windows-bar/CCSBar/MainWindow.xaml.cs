@@ -74,6 +74,9 @@ public partial class MainWindow : Window
     public MainWindow(Preferences? preferences = null, bool loadConnection = true)
     {
         this.preferences = preferences ?? new Preferences();
+        // A window that does not load the real connection (a check, a render, the E2E driver) never writes the real
+        // preferences either, unless it was given a file of its own.
+        if (!loadConnection && this.preferences.StorePath is null) this.preferences.Detached = true;
         InitializeComponent();
         FontFamily = Theme.Sans;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Ideal);
@@ -112,6 +115,9 @@ public partial class MainWindow : Window
                 // A version 2 file without a key (signed out remotely, or Disconnect) opens on the sign-in screen.
                 if (connection is { IsSignedOut: false }) client = new DashboardClient(connection);
             }
+            // A stored file the tray no longer accepts (such as plain HTTP outside the local network) is not a locked one:
+            // say why, in the client's own words.
+            catch (ArgumentException invalid) { statusFlash = "The saved connection can't be used. " + invalid.Message; }
             catch { statusFlash = "The stored connection could not be unlocked. Sign in again."; }
         }
         RenderFooter();
@@ -126,6 +132,13 @@ public partial class MainWindow : Window
         client = new DashboardClient(connection);
         timer.Stop(); RenderFooter();
     }
+    /// <summary>Fixture renders only: a paired loopback connection that is never requested (Settings › Connection).</summary>
+    internal void UsePairedFixtureConnection()
+    {
+        connection = new ConnectionSettings { Version = 2, BaseURL = "http://127.0.0.1:3000", Username = "fixture", DeviceId = "dev_0000000000000000", DeviceToken = "aacd_" + new string('A', 43), InstallId = "00000000-0000-4000-8000-000000000000" };
+        client = new DashboardClient(connection);
+        timer.Stop(); RenderFooter();
+    }
     /// <summary>Checks only: a connection read from an isolated fixture store, which a verified Change replaces.</summary>
     internal void UseConnectionStoreForCheck(string path)
     {
@@ -136,6 +149,7 @@ public partial class MainWindow : Window
         timer.Stop(); RenderFooter();
     }
     internal ConnectionSettings? StoredConnectionForCheck => connection;
+    internal Preferences PreferencesForCheck => preferences;
     internal void ToggleDetailsForCheck(string id) => ToggleDetails(id);
     internal Border? PlatterFor(string provider) => platters.TryGetValue(provider, out var platter) ? platter : null;
     internal void SetRefreshingForCheck(bool spinning) => SetRefreshing(spinning);
@@ -244,14 +258,24 @@ public partial class MainWindow : Window
     {
         if (e.Key != Key.Escape) return;
         e.Handled = true;
+        Escape();
+    }
+
+    /// <summary>Escape, in order: a popup, Settings, a connection check, then the sign-in screen, then the panel.</summary>
+    private void Escape()
+    {
         if (openPopup is { IsOpen: true }) { openPopup.IsOpen = false; return; }
         if (settingsVisible) { CloseSettings(); return; }
         if (connectionCheck is not null) { CancelConnectionCheck(); return; }
-        // Re-pair and Change: Escape is Cancel (the current key keeps working). Anywhere else on the sign-in screen,
-        // including a migration that runs by itself, Escape only hides the panel.
-        if (signInVisible && signInView?.Model.Repair == true && client is not null) { SiAlt(); return; }
+        // Re-pair, Pair and Change from Settings: Escape is Cancel (the current connection keeps working) until the pair
+        // request is sent; from then on it is ignored, so the answer is never abandoned. Anywhere else on the sign-in
+        // screen, including a migration that runs by itself, Escape only hides the panel.
+        if (signInVisible && signInView?.Model.HasCurrent == true && client is not null) { if (!pairHeld) SiAlt(); return; }
         HidePopup();
     }
+
+    /// <summary>Checks only: Escape as the key handler runs it (the checks' windows are never shown).</summary>
+    internal void EscapeForCheck() => Escape();
 
     // ------------------------------------------------------------------ data
 

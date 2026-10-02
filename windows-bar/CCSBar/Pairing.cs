@@ -26,7 +26,8 @@ public static class Pairing
                     var check = await api.Check();
                     if (check.SupportsPairing && check.CanPair && check.AccessMode == "login")
                     {
-                        var installId = settings.InstallId is { Length: 36 } kept && Guid.TryParse(kept, out _) ? kept : Guid.NewGuid().ToString("D");
+                        // A reinstall pairs as the same install: the record it left is replaced (its key revoked), not orphaned.
+                        var installId = settings.InstallId is { Length: 36 } kept && Guid.TryParse(kept, out _) ? kept : StoredInstallId(path) ?? Guid.NewGuid().ToString("D");
                         var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
                         var answer = await api.Pair(settings.Username.Trim(), settings.Password!, Environment.MachineName, installId, version);
                         if (PairedDevice.From(answer) is { } device)
@@ -49,5 +50,12 @@ public static class Pairing
         }
         SecureStore.Save(settings, path);
         return false;
+    }
+
+    /// <summary>The installId of the connection already stored at the path (paired, or signed out), if it has one.</summary>
+    private static string? StoredInstallId(string path)
+    {
+        try { return SecureStore.Load(path)?.InstallId is { Length: 36 } id && Guid.TryParse(id, out _) ? id : null; }
+        catch (Exception) { return null; }
     }
 }

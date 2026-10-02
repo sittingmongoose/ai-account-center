@@ -25,8 +25,18 @@ public partial class MainWindow
     private int siRun;
     private CancellationTokenSource? siCancel;
     private Task siTask = Task.CompletedTask;
-    /// <summary>The dashboard predates pairing (no trusted-local-network rule): sign in the old way, with the password.</summary>
+    /// <summary>Sign in the old way, with the password (version 1): the dashboard predates pairing, or pairing is turned
+    /// off and the owner chose the password option.</summary>
     private bool siLegacy;
+    /// <summary>The dashboard's last /api/auth/check said it can pair trays (its words after a password sign-in).</summary>
+    private bool siSupportsPairing;
+    /// <summary>
+    /// From the moment a pair request is sent until its key is saved, adopted or refused. The dashboard replaces this
+    /// install's record as soon as it answers 201, which revokes a Re-pair's current key before the new key is ever
+    /// used, so nothing may walk away from the answer: Cancel and Escape rest, and Settings' Re-pair and Disconnect wait.
+    /// </summary>
+    private bool pairHeld;
+    internal bool PairHeld => pairHeld;
     private DateTimeOffset lastRotateAttempt = DateTimeOffset.MinValue, lastDeviceRead = DateTimeOffset.MinValue;
     /// <summary>The time of the last good sample, for the signed-out note.</summary>
     private DateTimeOffset? lastGoodSample;
@@ -41,6 +51,8 @@ public partial class MainWindow
     internal TimeSpan SuccessPause { get; set; } = TimeSpan.FromSeconds(1);
     /// <summary>The pace of the visible step ticks (shortened by the checks).</summary>
     internal TimeSpan StepPace { get; set; } = TimeSpan.FromMilliseconds(220);
+    /// <summary>The pauses before a new key's devices/me is asked again after a network error (shortened by the checks).</summary>
+    internal TimeSpan[] KeyProofBackoff { get; set; } = { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
 
     private static string AppVersion => Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
 
@@ -52,6 +64,12 @@ public partial class MainWindow
         view.ChangeClicked += () => { view.Addr.Value = view.Model.Verified; view.Model.Note = null; view.Apply(SignInState.FirstRun); view.FocusFor(SignInState.FirstRun); };
         view.UseLocalClicked += () => { if (view.Model.LocalAddress is { Length: > 0 } local) { view.Addr.Value = local; Run(SiContinue); } };
         view.CountdownFinished += () => { view.Model.TriesLeft = 5; view.Apply(SignInState.Password); view.FocusFor(SignInState.Password); };
+        view.UsePasswordClicked += () =>
+        {
+            if (pairHeld || !view.Model.PasswordFallback) return;
+            siLegacy = true; view.Model.Legacy = true; view.Model.Note = null;
+            view.Apply(SignInState.Password); view.FocusFor(SignInState.Password);
+        };
         SignInLayer.Children.Clear();
         SignInLayer.Children.Add(view);
         return view;
@@ -63,7 +81,8 @@ public partial class MainWindow
         get
         {
             if (!signInVisible || signInView is null) return client is null ? (connection?.IsSignedOut == true && connection.SignedOutReason != "disconnected" ? "Signed out" : "Not paired") : null;
-            if (signInView.Model.Repair) return "Re-pairing · the current key still works";
+            if (signInView.Model.Repair) return pairHeld ? "Re-pairing" : "Re-pairing · the current key still works";
+            if (signInView.Model.Upgrade && !signInView.Model.Legacy) return pairHeld ? "Pairing" : "Pairing · the saved password still works";
             return signInView.Model.State switch
             {
                 SignInState.Pairing => "Pairing", SignInState.Securing => "Securing this tray", SignInState.Success => "Paired",
@@ -74,7 +93,9 @@ public partial class MainWindow
 
     private string SignInFootNote => signInView?.Model switch
     {
+        { HasCurrent: true } when pairHeld => "Pairing; this finishes by itself",
         { Repair: true } => "Cancel keeps the current device key and returns to usage",
+        { Upgrade: true } => "Cancel keeps the saved password and returns to usage",
         { State: SignInState.Securing } => "This runs once, by itself",
         { State: SignInState.Success } => "Opening your accounts",
         _ => "Usage appears after this tray is paired",
@@ -95,7 +116,9 @@ public partial class MainWindow
         siRun++;
         var view = SignIn;
         var model = view.Model;
-        model.Repair = repair && client is not null;
+        model.Repair = repair && client is { Paired: true };
+        model.Upgrade = repair && client is { Paired: false };
+        model.Legacy = false; model.PasswordFallback = false; model.KeyUncertain = false;
         model.Note = null; model.NoteField = null; model.Peer = null; model.Tried = ""; model.TriesLeft = 5; model.Step = 0; model.Flow = SignInFlow.Pair;
         model.Verified = connection?.BaseURL is { Length: > 0 } saved ? Origin(saved) : "";
         model.LocalAddress = model.Verified.Length > 0 && Uri.TryCreate(model.Verified, UriKind.Absolute, out var local) && LocalNetwork.IsLocalHostName(local.Host) ? model.Verified : null;
@@ -164,12 +187,24 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Cancel (Re-pair or Change from Settings) and "Keep current connection": the current key keeps working.</summary>
+    /// <summary>Cancel (Re-pair, Pair or Change from Settings) and "Keep current connection": the current connection keeps
+    /// working. Never once the pair request is out: its answer may already have replaced the current key.</summary>
     private void SiAlt()
     {
-        if (!SignIn.Model.Repair || client is null) return;
+        if (pairHeld || !SignIn.Model.HasCurrent || client is null) return;
+        var uncertain = SignIn.Model.KeyUncertain;
         CloseSignIn();
-        FlashStatus("The current connection was kept.");
+        if (!uncertain) { FlashStatus("The current connection was kept."); return; }
+        FlashStatus("Back to usage. The next refresh shows whether the current key still works.");
+        _ = Refresh(true);
+    }
+
+    /// <summary>Holds (or releases) a pair request's answer: see <see cref="pairHeld"/>.</summary>
+    private void HoldPair(bool held)
+    {
+        pairHeld = held;
+        if (signInView is not null) signInView.AltHeld = held;
+        RenderFooter(); UpdateStatus(); SampleChanged?.Invoke();
     }
 
     /// <summary>Applies a state with a message that is not the state's own (a refusal with no screen of its own).</summary>
@@ -239,6 +274,10 @@ public partial class MainWindow
     {
         var view = SignIn;
         siLegacy = !check.SupportsPairing;
+        siSupportsPairing = check.SupportsPairing;
+        view.Model.Legacy = siLegacy;
+        // Pairing turned off: a tray without a device key may sign in with its password instead (never a paired one).
+        view.Model.PasswordFallback = !view.Model.Repair && client is not { Paired: true };
         SignInState next;
         if (check.AccessMode == "open")
         {
@@ -278,19 +317,61 @@ public partial class MainWindow
         var origin = new Uri(view.Model.Verified + "/");
         if (siLegacy) { await SiLegacy(run, origin, username, password); return; }
         view.SetBusy(true);
-        AuthAnswer answer;
         using var api = new AuthApi(origin, TimeSpan.FromSeconds(20));
-        try { answer = await api.Pair(username, password, Environment.MachineName, lastInstallId = InstallIdFor(), AppVersion, cancel); }
-        catch (DashboardReachException failure)
+        var current = view.Model.Repair ? client : null;
+        HoldPair(true);
+        try
         {
-            if (!Alive(run)) return;
-            view.Model.Tried = view.Model.Verified; view.Model.TimedOut = failure.TimedOut;
-            view.Addr.Value = view.Model.Verified;
-            view.Apply(SignInState.Unreachable);
+            AuthAnswer answer;
+            // Not cancellable: the dashboard acts on the request the moment it arrives.
+            try { answer = await api.Pair(username, password, Environment.MachineName, lastInstallId = InstallIdFor(), AppVersion, CancellationToken.None); }
+            catch (DashboardReachException failure)
+            {
+                await SiPairLost(run, failure, current);
+                return;
+            }
+            await SiPairAnswer(run, origin, username, password, answer, SignInFlow.Pair, cancel);
+        }
+        finally { HoldPair(false); }
+    }
+
+    /// <summary>
+    /// The pair request got no answer. With no connection made, it never arrived. Timed out or cut off, the dashboard may
+    /// have acted on it, and for a Re-pair that would have replaced the current key: the current key is asked once.
+    /// Still working, the screen says the connection is unchanged; refused, this tray is signed out (its new key never
+    /// arrived) and says so; no answer either, the screen says it can't tell.
+    /// </summary>
+    private async Task SiPairLost(int run, DashboardReachException failure, DashboardClient? current)
+    {
+        var survived = !failure.NeverSent && current is not null ? await StillWorks(current) : true;
+        if (!Alive(run)) return;
+        var view = SignIn;
+        if (survived == false)
+        {
+            SignedOutRemotely(new DeviceSignedOutException("device_revoked"));
+            SiNote(SignIn.Model.State, "Pairing reached the dashboard, but its answer was lost.", "The dashboard replaced this tray's key. Pair again.");
             return;
         }
-        if (!Alive(run)) return;
-        await SiPairAnswer(run, api, origin, username, password, answer, SignInFlow.Pair, cancel);
+        view.Model.KeyUncertain = survived is null;
+        view.Model.Tried = view.Model.Verified; view.Model.TimedOut = failure.TimedOut;
+        view.Addr.Value = view.Model.Verified;
+        view.Apply(SignInState.Unreachable);
+    }
+
+    /// <summary>Whether a key this tray already holds still works: true, false (a 401 device code), or null (no answer
+    /// within the address check's time limit).</summary>
+    private async Task<bool?> StillWorks(DashboardClient current)
+    {
+        if (!current.Paired) return true;
+        var probe = current.DeviceMe();
+        if (await Task.WhenAny(probe, Task.Delay(AddressTimeout)) != probe)
+        {
+            _ = probe.ContinueWith(late => late.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            return null;
+        }
+        try { await probe; return true; }
+        catch (DeviceSignedOutException signedOut) when (signedOut.IsDeviceCode) { return false; }
+        catch { return null; }
     }
 
     /// <summary>The installId this tray pairs with: the one it already holds (so pairing again replaces that record and
@@ -301,15 +382,19 @@ public partial class MainWindow
         : lastInstallId is { Length: 36 } sent && Guid.TryParse(sent, out _) ? sent
         : Guid.NewGuid().ToString("D");
 
-    private async Task SiPairAnswer(int run, AuthApi api, Uri origin, string username, string password, AuthAnswer answer, SignInFlow flow, CancellationToken cancel)
+    /// <summary>What pair's answer leads to. A 201 is always finished (verified, saved and adopted), even when the screen
+    /// moved on meanwhile: the dashboard has already replaced this install's record. Any other answer is shown only
+    /// while its flow is still the one on screen.</summary>
+    private async Task SiPairAnswer(int run, Uri origin, string username, string password, AuthAnswer answer, SignInFlow flow, CancellationToken cancel)
     {
         var view = SignIn;
-        view.SetBusy(false);
+        if (answer.Status != HttpStatusCode.Created && !Alive(run)) return;
+        if (Alive(run)) view.SetBusy(false);
         switch ((int)answer.Status)
         {
             case 201:
-                if (PairedDevice.From(answer) is not { } device) { SiNote(SignInState.Password, "The dashboard sent an unreadable device key.", "Nothing was saved. Try again."); return; }
-                await SiFinish(run, origin, username, device, flow, cancel);
+                if (PairedDevice.From(answer) is not { } device) { if (Alive(run)) SiNote(SignInState.Password, "The dashboard sent an unreadable device key.", "Nothing was saved. Try again."); return; }
+                await SiFinish(run, origin, username, device, flow);
                 return;
             case 401 when answer.Code == "invalid_credentials":
                 var tries = answer.Int("triesLeft") ?? Math.Max(0, view.Model.TriesLeft - 1);
@@ -328,7 +413,7 @@ public partial class MainWindow
                 return;
             case 404 or 405:
                 // A dashboard that predates pairing: keep working the old way (contract section 8).
-                siLegacy = true;
+                siLegacy = true; siSupportsPairing = false; view.Model.Legacy = true;
                 await SiLegacy(run, origin, username, password);
                 return;
             case 409 when answer.Code == "too_many_devices":
@@ -359,20 +444,28 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// After pair 201: the steps tick through while the tray proves the new key works (GET /api/auth/devices/me), then
-    /// saves it with DPAPI (version 2, no password), forgets the password and swaps in the paired client. Success,
-    /// then the hand-off into the account list.
+    /// After pair 201: the steps tick through while the tray proves the new key works (GET /api/auth/devices/me, asked
+    /// again after a network error), then saves it with DPAPI (version 2, no password), forgets the password and swaps
+    /// in the paired client. Success, then the hand-off into the account list.
+    /// The dashboard answered 201, so it has already replaced this install's record, and a Re-pair's current key stopped
+    /// working with that answer. From here the new key is therefore proved, saved and adopted to the end whatever the
+    /// screen does meanwhile; only the visible steps follow the screen. When the new key gets no answer, a Re-pair asks
+    /// whether the current key survived: if it did (another dashboard answered the pair), nothing is saved; if it did not,
+    /// the new key is the only one that can work, so it is saved and used, and the next refresh proves it.
     /// </summary>
-    private async Task SiFinish(int run, Uri origin, string username, PairedDevice device, SignInFlow flow, CancellationToken cancel)
+    private async Task SiFinish(int run, Uri origin, string username, PairedDevice device, SignInFlow flow)
     {
         var view = SignIn;
-        view.Model.Flow = flow; view.Model.Username = username; view.Model.Step = 0;
-        view.Pass.Clear(); view.Confirm.Clear();
-        view.Apply(SignInState.Pairing);
-        await Task.Delay(StepPace, cancel); if (!Alive(run)) return;
-        view.SetStep(1);
-        await Task.Delay(StepPace, cancel); if (!Alive(run)) return;
-        view.SetStep(2);
+        var current = view.Model.Repair && client is { Paired: true } held ? held : null;
+        bool Shown() => Alive(run);
+        if (Shown())
+        {
+            view.Model.Flow = flow; view.Model.Username = username; view.Model.Step = 0;
+            view.Pass.Clear(); view.Confirm.Clear();
+            view.Apply(SignInState.Pairing);
+        }
+        await Task.Delay(StepPace); if (Shown()) view.SetStep(1);
+        await Task.Delay(StepPace); if (Shown()) view.SetStep(2);
         var candidate = new ConnectionSettings
         {
             Version = 2, BaseURL = origin.GetLeftPart(UriPartial.Authority), Username = username, DeviceId = device.DeviceId, DeviceToken = device.Token,
@@ -380,33 +473,77 @@ public partial class MainWindow
             InstallId = lastInstallId ?? InstallIdFor(), PairedAt = device.PairedAt ?? DateTimeOffset.UtcNow.ToString("O"), RotateAfter = device.RotateAfter,
         };
         var verified = new DashboardClient(candidate);
-        try
+        var (record, failure) = await ProveKey(verified);
+        var unproved = false;
+        if (record is not null) candidate.RotateAfter = record.RotateAfter ?? candidate.RotateAfter;
+        else
         {
-            var me = await verified.DeviceMe();
-            candidate.RotateAfter = me.RotateAfter ?? candidate.RotateAfter;
+            var refused = failure is DeviceSignedOutException;
+            // Only a Re-pair has a key to lose; another dashboard answering the pair leaves it working.
+            var survived = current is null ? true : await StillWorks(current);
+            var replaced = survived == false || survived is null && ConnectionSettings.SameOrigin(candidate.BaseURL, current!.BaseURL.ToString());
+            if (!replaced)
+            {
+                verified.Dispose();
+                if (!Shown()) return;
+                if (refused) SiNote(SignInState.Password, "The new device key did not work.", current is null ? "Nothing was saved. Try pairing again." : "Nothing was saved, and this tray keeps its current key. Try pairing again.");
+                else { view.Model.KeyUncertain = survived is null; view.Model.Tried = view.Model.Verified; view.Model.TimedOut = failure is TaskCanceledException; view.Apply(SignInState.Unreachable); }
+                return;
+            }
+            if (refused)
+            {
+                // The new key was refused and the current one is gone: this tray is signed out, and says why.
+                verified.Dispose();
+                SignedOutRemotely(new DeviceSignedOutException("device_revoked"));
+                SiNote(SignIn.Model.State, "The new device key did not work.", "The dashboard had already replaced the current one. Pair again.");
+                return;
+            }
+            unproved = true;
         }
-        catch (Exception failure)
-        {
-            verified.Dispose();
-            if (!Alive(run)) return;
-            if (failure is DeviceSignedOutException) SiNote(SignInState.Password, "The new device key did not work.", "Nothing was saved. Try pairing again.");
-            else { view.Model.Tried = view.Model.Verified; view.Model.TimedOut = failure is TaskCanceledException; view.Apply(SignInState.Unreachable); }
-            return;
-        }
-        if (!Alive(run)) { verified.Dispose(); return; }
+        var saved = true;
         try { SecureStore.Save(candidate, ConnectionStorePath); }
         catch (Exception)
         {
-            verified.Dispose();
-            SiNote(SignInState.Password, "Windows could not save the device key.", "Nothing was changed. Try again.");
-            return;
+            if (current is null)
+            {
+                verified.Dispose();
+                if (Shown()) SiNote(SignInState.Password, "Windows could not save the device key.", "Nothing was changed. Try again.");
+                return;
+            }
+            // The current key is already gone: the new one is used for this session.
+            saved = false;
         }
         try { SecureStore.DeleteRollback(ConnectionStorePath); } catch { }
-        view.SetStep(3);
-        await Task.Delay(StepPace, CancellationToken.None);
-        view.SetStep(4);
+        if (Shown()) view.SetStep(3);
+        await Task.Delay(StepPace);
+        if (Shown()) view.SetStep(4);
         AdoptClient(candidate, verified);
-        await SiSucceed(run, flow == SignInFlow.Secure ? "Secured · this tray now signs in with a device key" : "Paired · signed in with a device key");
+        var done = flow == SignInFlow.Secure ? "Secured · this tray now signs in with a device key" : "Paired · signed in with a device key";
+        if (saved && !unproved && Shown()) { await SiSucceed(run, done); return; }
+        // Not proved yet, not saved, or the screen moved on: no success screen; the list shows what a refresh finds (a
+        // 401 there signs the tray out, with the signed-out screen).
+        if (Shown()) CloseSignIn();
+        await Refresh(true);
+        if (!ReferenceEquals(client, verified)) return;
+        FlashStatus(!saved ? "Paired for this session. Windows could not save the device key, so pair again after a restart."
+            : dashboard is not null && !staleSample ? done
+            : "Paired. The dashboard isn't answering yet, so the new key is checked at the next refresh.");
+    }
+
+    /// <summary>GET /api/auth/devices/me with a new key, asked again after a network error (<see cref="KeyProofBackoff"/>):
+    /// the device record, or the failure (a 401 device code refused the key).</summary>
+    private async Task<(DeviceRecord? Record, Exception? Failure)> ProveKey(DashboardClient keyed)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try { return (await keyed.DeviceMe(), null); }
+            catch (DeviceSignedOutException refused) { return (null, refused); }
+            catch (Exception failure)
+            {
+                if (attempt >= KeyProofBackoff.Length) return (null, failure);
+                await Task.Delay(KeyProofBackoff[attempt]);
+            }
+        }
     }
 
     private string? lastInstallId;
@@ -497,11 +634,15 @@ public partial class MainWindow
             case 201:
                 view.Model.Username = username;
                 view.SetBusy(true);
-                AuthAnswer paired;
-                try { paired = await api.Pair(username, password, Environment.MachineName, lastInstallId = InstallIdFor(), AppVersion, cancel); }
-                catch (DashboardReachException) { if (Alive(run)) SiNote(SignInState.Password, "The sign-in was created, but pairing could not finish.", "Sign in with it to pair this tray."); return; }
-                if (!Alive(run)) return;
-                await SiPairAnswer(run, api, origin, username, password, paired, SignInFlow.Setup, cancel);
+                HoldPair(true);
+                try
+                {
+                    AuthAnswer paired;
+                    try { paired = await api.Pair(username, password, Environment.MachineName, lastInstallId = InstallIdFor(), AppVersion, CancellationToken.None); }
+                    catch (DashboardReachException) { if (Alive(run)) SiNote(SignInState.Password, "The sign-in was created, but pairing could not finish.", "Sign in with it to pair this tray."); return; }
+                    await SiPairAnswer(run, origin, username, password, paired, SignInFlow.Setup, cancel);
+                }
+                finally { HoldPair(false); }
                 return;
             case 403 when answer.Code == "setup_code_required": view.Fail("code", "Enter the setup code from the server's terminal."); return;
             case 403 when answer.Code == "setup_code_invalid":
@@ -549,7 +690,7 @@ public partial class MainWindow
         SignInLayer.Visibility = Visibility.Collapsed;
         RenderFooter(); UpdateStatus(); SampleChanged?.Invoke();
         await Refresh(true);
-        FlashStatus("Signed in with your password. This dashboard can't pair trays yet.");
+        FlashStatus(siSupportsPairing ? "Signed in with your password. Turn on Trust this local network to pair this tray." : "Signed in with your password. This dashboard can't pair trays yet.");
     }
 
     // ------------------------------------------------------------------ 9 · securing: upgrade a stored version 1 password
@@ -583,6 +724,15 @@ public partial class MainWindow
         }
         preferences.LastPairAttempt = now.ToString("O"); preferences.Save();
         ShowSignIn(SignInState.Securing, entrance: IsVisible);
+        HoldPair(true);
+        try { await Secure(legacy, origin, now); }
+        finally { HoldPair(false); }
+    }
+
+    /// <summary>Migration steps 1 to 4 (<see cref="MigrateIfDue"/>), from the rollback copy to the first request with the
+    /// new key; held like any pair request, so nothing walks away from its answer.</summary>
+    private async Task Secure(ConnectionSettings legacy, Uri origin, DateTimeOffset now)
+    {
         var view = SignIn;
         view.Model.Flow = SignInFlow.Secure;
         var run = siRun;
@@ -655,9 +805,10 @@ public partial class MainWindow
         var path = ConnectionStorePath;
         if (client is not { Paired: true } paired || SecureStore.RollbackAge(path) is not TimeSpan age) return;
         if (age > TimeSpan.FromHours(24)) { try { SecureStore.DeleteRollback(path); } catch { } return; }
-        try { await paired.DeviceMe(); SecureStore.DeleteRollback(path); }
-        catch (DeviceSignedOutException) { throw; }
-        catch { /* still offline: keep both and check again on the next poll */ }
+        var generation = connectionGeneration;
+        try { await paired.DeviceMe(); if (ReferenceEquals(client, paired) && generation == connectionGeneration) SecureStore.DeleteRollback(path); }
+        catch (DeviceSignedOutException) when (ReferenceEquals(client, paired) && generation == connectionGeneration) { throw; }
+        catch { /* still offline (keep both and check again on the next poll), or the connection was replaced */ }
     }
 
     // ------------------------------------------------------------------ 7 · rotation
@@ -668,11 +819,23 @@ public partial class MainWindow
     internal async Task MaintainDeviceKey(bool force = false)
     {
         if (client is not { Paired: true } paired || connection is not { IsPaired: true } current) return;
+        // A Re-pair, a Disconnect or a sign-out that lands while a request below is out replaces the connection: the
+        // file it left is never overwritten with this older device's key, and whatever then happens to that device's
+        // request (a 401, or the request cut off when its client is disposed) is not news.
+        var generation = connectionGeneration;
+        bool Current() => ReferenceEquals(client, paired) && generation == connectionGeneration;
+        try { await MaintainKey(paired, current, Current, force); }
+        catch (Exception) when (!Current()) { }
+    }
+
+    private async Task MaintainKey(DashboardClient paired, ConnectionSettings current, Func<bool> stillCurrent, bool force)
+    {
         var now = DateTimeOffset.UtcNow;
         if (force || now - lastDeviceRead > TimeSpan.FromHours(6))
         {
             lastDeviceRead = now;
             var me = await paired.DeviceMe();
+            if (!stillCurrent()) return;
             if (me.RotateAfter is { } after && after != current.RotateAfter)
             {
                 current.RotateAfter = after;
@@ -683,7 +846,7 @@ public partial class MainWindow
         if (!force && (!due || now - lastRotateAttempt < TimeSpan.FromHours(1))) return;
         lastRotateAttempt = now;
         var rotated = await paired.Rotate();
-        if (rotated is null) return;
+        if (rotated is null || !stillCurrent()) return;
         var next = new ConnectionSettings
         {
             Version = 2, BaseURL = current.BaseURL, Username = current.Username, DeviceId = current.DeviceId, DeviceToken = rotated.Token,
@@ -691,7 +854,6 @@ public partial class MainWindow
         };
         // Saved before the first use: a crash here leaves the old key, which stays valid until the new one is used.
         SecureStore.Save(next, ConnectionStorePath);
-        if (!ReferenceEquals(client, paired)) return;
         paired.UseToken(rotated.Token);
         connection = next;
     }
@@ -764,16 +926,20 @@ public partial class MainWindow
     // ------------------------------------------------------------------ renders and checks: a state shown directly
 
     /// <summary>Render checks only: shows a state directly with example values (the concept's siPreset). Example
-    /// addresses use the documentation-safe 192.168.1.x and example.net names.</summary>
-    internal void PresetSignInForCheck(SignInState state, bool repair = false)
+    /// addresses use the documentation-safe 192.168.1.x and example.net names. A variant shows a state's other forms:
+    /// "upgrade" (a version 1 tray pairing from Settings), "legacy" (the password sign-in), "fallback" (pairing off,
+    /// with the password option) and "uncertain" (a Re-pair whose pair request got no answer).</summary>
+    internal void PresetSignInForCheck(SignInState state, bool repair = false, string? variant = null)
     {
         const string lan = "http://192.168.1.20:3000";
+        repair |= variant == "uncertain";
         if (repair) { connection = new ConnectionSettings { Version = 2, BaseURL = lan, Username = "example", DeviceToken = "aacd_" + new string('A', 43), DeviceId = "dev_0000000000000000" }; client ??= new DashboardClient(connection); }
+        else if (variant == "upgrade") { connection = new ConnectionSettings { BaseURL = lan, Username = "example", Password = "example-only" }; client ??= new DashboardClient(connection); }
         else if (state is SignInState.SignedOut or SignInState.SignedOutAll or SignInState.Expired)
             connection = new ConnectionSettings { Version = 2, BaseURL = lan, Username = "example", SignedOutReason = state == SignInState.Expired ? "device_expired" : state == SignInState.SignedOutAll ? "revoke_all" : "device_revoked", SignedOutAt = Formatting.Now().AddMinutes(-34).ToString("O") };
         else connection = null;
         lastGoodSample = state is SignInState.SignedOut or SignInState.SignedOutAll ? Formatting.Now().AddMinutes(-34) : null;
-        ShowSignIn(state == SignInState.Success ? SignInState.Pairing : state, repair, entrance: false);
+        ShowSignIn(state == SignInState.Success ? SignInState.Pairing : state, repair || variant == "upgrade", entrance: false);
         var view = SignIn;
         var model = view.Model;
         model.Verified = lan;
@@ -788,6 +954,9 @@ public partial class MainWindow
         if (state == SignInState.RateLimited) { model.LimitTotal = TimeSpan.FromMinutes(15); model.LimitUntil = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(15) - TimeSpan.FromSeconds(23); model.TriesLeft = 0; }
         model.Flow = state == SignInState.Securing ? SignInFlow.Secure : SignInFlow.Pair;
         model.Step = state is SignInState.Pairing or SignInState.Securing ? 2 : 4;
+        model.Legacy = siLegacy = variant == "legacy";
+        model.PasswordFallback = variant == "fallback";
+        model.KeyUncertain = variant == "uncertain";
         view.Apply(state, instant: true);
         RenderFooter(); UpdateStatus();
     }
@@ -800,6 +969,7 @@ public partial class MainWindow
     internal async Task<string?> DisconnectTray()
     {
         if (client is not { Paired: true } paired || connection is not { } current) return "This tray is not paired.";
+        if (pairHeld) return "Pairing is finishing. Try again in a moment.";
         bool revoked;
         try { revoked = await paired.Disconnect(); }
         catch (Exception) { return "Can't reach the dashboard, so this tray is still paired. Try again."; }

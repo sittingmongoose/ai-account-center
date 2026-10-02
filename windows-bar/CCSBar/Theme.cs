@@ -21,6 +21,12 @@ public sealed class Preferences
     public string? LastPairAttempt { get; set; }
 
     public static string DefaultPath => Path.Combine(SecureStore.StateDirectory, "preferences.json");
+    /// <summary>Where <see cref="Save"/> writes when no path is given: null is the tray's own file. The pairing checks give
+    /// their windows a file in their isolated folder.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] internal string? StorePath { get; init; }
+    /// <summary>A check's, a render's or the E2E driver's copy without a file of its own (its window does not load the
+    /// real connection): Save writes nothing, so running the checks never rewrites the real preferences.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] internal bool Detached { get; set; }
 
     public ThemeMode Mode => Theme switch { "light" => ThemeMode.Light, "dark" => ThemeMode.Dark, _ => ThemeMode.Auto };
 
@@ -43,7 +49,8 @@ public sealed class Preferences
     {
         try
         {
-            var file = path ?? DefaultPath;
+            var file = path ?? StorePath ?? (Detached ? null : DefaultPath);
+            if (file is null) return;
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             var temporary = file + ".tmp-" + Guid.NewGuid().ToString("N");
             File.WriteAllText(temporary, JsonSerializer.Serialize(this, Formatting.Json));
