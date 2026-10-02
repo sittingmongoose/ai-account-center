@@ -43,6 +43,7 @@ import { readPendingProfiles, type PendingClaudeProfile } from './claude-account
 import { getOpenCodeConsoleWalletAccounts } from './opencode-console-wallet-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import {
+  ClaudeDesktopLiveUsageError,
   getCachedClaudeDesktopLiveUsage,
   getLiveClaudeDesktopUsage,
   type ClaudeDesktopLiveUsage,
@@ -256,6 +257,7 @@ export class AccountDashboardService {
     const live = Promise.all(
       profiles.map(async (profile, index) => {
         if (!profile.id) return;
+        let helperOutdated = false;
         const sample = await Promise.resolve()
           .then(() =>
             (
@@ -263,8 +265,35 @@ export class AccountDashboardService {
               ((id, force) => getLiveClaudeDesktopUsage(id, { refresh: force }))
             )(profile.id as string, refresh)
           )
-          .catch(() => null);
-        if (!sample) return;
+          .catch((error: unknown) => {
+            if (error instanceof ClaudeDesktopLiveUsageError && error.helperOutdated) {
+              helperOutdated = true;
+            }
+            return null;
+          });
+        if (!sample) {
+          // A new ID the old installed collector cannot know: say so, instead
+          // of a misleading sign-in prompt. Rows that already show live or
+          // cached readings are left alone.
+          const current = accounts[index];
+          if (
+            helperOutdated &&
+            current.source !== 'Claude Desktop live quota on Windows' &&
+            current.windows.length === 0
+          ) {
+            accounts = accounts.map((account, rowIndex) =>
+              rowIndex === index
+                ? {
+                    ...account,
+                    status: 'unavailable' as const,
+                    message: 'Update the usage helper on Windows.',
+                  }
+                : account
+            );
+            publishCached(accounts);
+          }
+          return;
+        }
         const previous = this.claudeLiveSamples.get(sampleKeys[index]);
         if (previous && Date.parse(previous.fetchedAt) > Date.parse(sample.fetchedAt)) return;
         const result = applyClaudeLiveUsage(accounts[index], sample);

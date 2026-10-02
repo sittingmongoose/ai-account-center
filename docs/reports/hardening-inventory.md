@@ -6,9 +6,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 943 |
+| Sync fs occurrences (all) | 952 |
 | Sync fs files affected (all) | 99 |
-| Sync fs occurrences (runtime hotpaths) | 429 |
+| Sync fs occurrences (runtime hotpaths) | 438 |
 | Sync fs files affected (runtime hotpaths) | 58 |
 | Legacy shim markers | 193 |
 | Legacy shim files affected | 74 |
@@ -23,10 +23,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/management/shared-manager/plugin-layout-internals.ts` | 18 | copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync |
 | `src/cliproxy/accounts/registry.ts` | 17 | existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync |
 | `src/management/shared-manager/shared-dir-linker.ts` | 16 | copyFileSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync |
+| `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
 | `src/web-server/services/app-update-service.ts` | 15 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/cliproxy/accounts/token-file-ops.ts` | 14 | existsSync, mkdirSync, readdirSync, renameSync, unlinkSync |
 | `src/management/shared-manager/canonical-first-file-claims.ts` | 14 | chmodSync, copyFileSync, linkSync, lstatSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync |
-| `src/management/shared-manager/fs-helpers.ts` | 14 | copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, unlinkSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 24.9% (130/521) |
+| typed-error adoption (typed/total throws) | 24.9% (130/522) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 65 (272 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 16 |
-| files with createLogger | 30/362 |
+| files with createLogger | 31/362 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
 | files > 400 LOC | 38 |
-| files > 600 LOC | 12 |
+| files > 600 LOC | 13 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -94,11 +94,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/aggregator.ts` | 782 |
 | `src/web-server/usage/native-quota-collector.ts` | 768 |
 | `src/auth/profile-detector.ts` | 767 |
-| `src/web-server/services/account-dashboard-service.ts` | 639 |
+| `src/web-server/services/account-dashboard-service.ts` | 668 |
 | `src/web-server/services/additional-account-service.ts` | 636 |
 | `src/cliproxy/services/usage-compatibility-transformer.ts` | 632 |
 | `src/cliproxy/services/stats-fetcher.ts` | 614 |
+| `src/web-server/services/claude-desktop-live-service.ts` | 611 |
 | `src/web-server/services/account-analytics-projection.ts` | 600 |
 | `src/utils/hooks/image-analysis-backend-resolver.ts` | 598 |
-| `src/web-server/usage/data-aggregator.ts` | 575 |
 

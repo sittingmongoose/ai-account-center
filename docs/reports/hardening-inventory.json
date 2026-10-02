@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 943,
+    "totalOccurrences": 952,
     "filesAffected": 99,
-    "hotpathOccurrences": 429,
+    "hotpathOccurrences": 438,
     "hotpathFilesAffected": 58,
     "topHotpathFiles": [
       {
@@ -104,6 +104,23 @@
         "markers": []
       },
       {
+        "file": "src/web-server/services/account-refresh-settings.ts",
+        "count": 15,
+        "calls": [
+          "closeSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "renameSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/web-server/services/app-update-service.ts",
         "count": 15,
         "calls": [
@@ -143,21 +160,6 @@
           "readFileSync",
           "renameSync",
           "statSync",
-          "unlinkSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/management/shared-manager/fs-helpers.ts",
-        "count": 14,
-        "calls": [
-          "copyFileSync",
-          "existsSync",
-          "lstatSync",
-          "mkdirSync",
-          "readdirSync",
-          "readlinkSync",
-          "rmSync",
           "unlinkSync"
         ],
         "markers": []
@@ -511,15 +513,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 521,
+      "totalThrows": 522,
       "typedThrows": 130,
       "plainThrows": 69,
-      "otherThrows": 322,
-      "adoptionRatio": 0.2495,
+      "otherThrows": 323,
+      "adoptionRatio": 0.249,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 222,
+          "count": 223,
           "typed": 68,
           "plain": 10
         },
@@ -592,9 +594,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 30,
+      "filesWithCreateLogger": 31,
       "totalSourceFiles": 362,
-      "coverageRatio": 0.0829,
+      "coverageRatio": 0.0856,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -622,7 +624,7 @@
         {
           "subdomain": "web-server",
           "count": 122,
-          "withLogger": 14
+          "withLogger": 15
         },
         {
           "subdomain": "utils",
@@ -741,7 +743,7 @@
     },
     "largeFiles": {
       "countOver400": 38,
-      "countOver600": 12,
+      "countOver600": 13,
       "topOver400": [
         {
           "file": "src/web-server/model-pricing.ts",
@@ -777,7 +779,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 639
+          "loc": 668
         },
         {
           "file": "src/web-server/services/additional-account-service.ts",
@@ -792,16 +794,16 @@
           "loc": 614
         },
         {
+          "file": "src/web-server/services/claude-desktop-live-service.ts",
+          "loc": 611
+        },
+        {
           "file": "src/web-server/services/account-analytics-projection.ts",
           "loc": 600
         },
         {
           "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
           "loc": 598
-        },
-        {
-          "file": "src/web-server/usage/data-aggregator.ts",
-          "loc": 575
         }
       ]
     }

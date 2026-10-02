@@ -1,26 +1,63 @@
 <#
 .SYNOPSIS
-Validate or register the four CCS Claude launch tasks for the current Windows user.
+Validate or register the CCS Claude launch tasks for the current Windows user.
 .DESCRIPTION
-Uses the already installed per-user CCS Claude URI helper and its fixed account
-allowlist. Tasks run only on demand in that user's interactive session, with
-Limited privileges. Neither mode launches Claude or changes its authentication.
+Takes the account IDs from -AccountIds or -AccountListFile (a generated list,
+one ID per line) and validates each with the shared safe-ID rule. Uses the
+already installed per-user CCS Claude URI helper, which reads the same account
+set from its generated sibling file. -DefaultAccountId selects the profile
+that maps to the default Store app target; every other ID maps to its exact
+saved named profile. Tasks run only on demand in that user's interactive
+session, with Limited privileges. Neither mode launches Claude or changes its
+authentication.
 .EXAMPLE
-powershell.exe -NoProfile -File windows-claude-launch-tasks.ps1 -Mode Validate
+powershell.exe -NoProfile -File windows-claude-launch-tasks.ps1 -Mode Validate -AccountIds work,home -DefaultAccountId work
 .EXAMPLE
-powershell.exe -NoProfile -File windows-claude-launch-tasks.ps1 -Mode Install
+powershell.exe -NoProfile -File windows-claude-launch-tasks.ps1 -Mode Install -AccountListFile .\ccs-claude-accounts.txt -DefaultAccountId work
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Validate', 'Install')]
-    [string]$Mode = 'Validate'
+    [string]$Mode = 'Validate',
+    [string[]]$AccountIds,
+    [string]$AccountListFile,
+    [string]$DefaultAccountId
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 
-$accountIds = @('platyr', 'gmail', 'party', 'me')
+$accountIdPattern = '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$'
+function Assert-AccountId([string]$Value, [string]$Where) {
+    if ([string]::IsNullOrEmpty($Value) -or $Value -cnotmatch $accountIdPattern) {
+        throw "An account ID in $Where is not a valid safe profile ID."
+    }
+}
+
+$accountIds = @()
+if ($AccountIds -and $AccountIds.Count -gt 0) { $accountIds += $AccountIds }
+if (-not [string]::IsNullOrEmpty($AccountListFile)) {
+    $lines = Get-Content -LiteralPath $AccountListFile -ErrorAction Stop
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ($trimmed.Length -eq 0 -or $trimmed.StartsWith('#')) { continue }
+        $accountIds += $trimmed
+    }
+}
+if ($accountIds.Count -eq 0) {
+    throw 'Pass the Claude account IDs with -AccountIds or -AccountListFile.'
+}
+if ($accountIds.Count -gt 64) { throw 'Too many Claude account IDs (at most 64).' }
+foreach ($id in $accountIds) { Assert-AccountId $id 'the account list' }
+$distinct = @($accountIds | Sort-Object -Unique -CaseSensitive)
+if ($distinct.Count -ne $accountIds.Count) { throw 'The Claude account list has duplicate IDs.' }
+if (-not [string]::IsNullOrEmpty($DefaultAccountId)) {
+    Assert-AccountId $DefaultAccountId '-DefaultAccountId'
+    if (-not ($accountIds -ccontains $DefaultAccountId)) {
+        throw 'The default account ID is not in the account list.'
+    }
+}
 $taskPath = '\'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $userSid = $identity.User.Value
@@ -117,7 +154,7 @@ $shell = New-Object -ComObject WScript.Shell
 try {
     foreach ($id in $accountIds) {
         $target = Get-HelperTarget $id
-        if ($id -eq 'gmail') {
+        if (-not [string]::IsNullOrEmpty($DefaultAccountId) -and $id -ceq $DefaultAccountId) {
             if ($target -cne 'shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude') {
                 throw 'The default Claude helper mapping differs from the expected app ID.'
             }

@@ -4,16 +4,49 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 // Fixed per-user URI launcher. Profile paths/arguments are derived only from the
-// allowlist, never from URI data. Store updates cannot pin named profiles to an
-// obsolete WindowsApps version. The native catalog reads current-user packages.
+// generated account list, never from URI data. Store updates cannot pin named
+// profiles to an obsolete WindowsApps version. The native catalog reads
+// current-user packages.
 public sealed class ClaudeRegisteredPackage
 {
     public readonly string FullName;
     public readonly string InstallPath;
     public ClaudeRegisteredPackage(string fullName, string installPath)
     { FullName = fullName; InstallPath = installPath; }
+}
+
+// The generated account set: allowed IDs plus which one maps to the default
+// Store app target. Every other ID maps to its exact saved named profile.
+public sealed class ClaudeAccountSet
+{
+    public readonly IList<string> Allowed;
+    public readonly string Default;
+    public ClaudeAccountSet(IList<string> allowed, string defaultId)
+    {
+        if (allowed == null || allowed.Count == 0 || allowed.Count > 64)
+            throw new InvalidOperationException("Claude account list is unavailable.");
+        List<string> unique = new List<string>(allowed.Count);
+        foreach (string id in allowed)
+        {
+            if (id == null || !ClaudeProfileLaunchPlanner.AccountIdPattern.IsMatch(id))
+                throw new InvalidOperationException("Claude account list is unavailable.");
+            foreach (string seen in unique)
+                if (String.Equals(id, seen, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Claude account list is unavailable.");
+            unique.Add(id);
+        }
+        if (defaultId == null)
+            throw new InvalidOperationException("Claude account list is unavailable.");
+        bool found = false;
+        foreach (string id in unique)
+            if (String.Equals(id, defaultId, StringComparison.Ordinal)) found = true;
+        if (!found) throw new InvalidOperationException("Claude account list is unavailable.");
+        Allowed = unique.AsReadOnly();
+        Default = defaultId;
+    }
 }
 
 public interface IClaudeRegisteredPackageCatalog
@@ -35,10 +68,49 @@ public static class ClaudeProfileLaunchPlanner
 {
     public const string Family = "Claude_pzs8sxrjxfjjc";
     public const string DefaultTarget = "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude";
-    public static string ProfileId(string uri)
+    public const string AccountsFileName = "ccs-claude-accounts.txt";
+    // Same safe-ID rule as the server (CLAUDE_PROFILE_ID_PATTERN).
+    public static readonly Regex AccountIdPattern =
+        new Regex("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", RegexOptions.CultureInvariant);
+
+    // Generated sibling file: one account ID per line, `#` comments and blank
+    // lines ignored, first ID is the default Store profile. Bounded and fully
+    // validated; any problem refuses to launch rather than guessing.
+    public static ClaudeAccountSet LoadAccounts(string exeDirectory)
     {
-        foreach (string id in new[] { "gmail", "platyr", "party", "me" })
-            if (uri == "ccs-claude://launch/" + id) return id;
+        if (String.IsNullOrEmpty(exeDirectory))
+            throw new InvalidOperationException("Claude account list is unavailable.");
+        string file = Path.Combine(exeDirectory, AccountsFileName);
+        string text;
+        try
+        {
+            if (new FileInfo(file).Length > 8192)
+                throw new InvalidOperationException("Claude account list is unavailable.");
+            text = File.ReadAllText(file, Encoding.UTF8);
+        }
+        catch (InvalidOperationException) { throw; }
+        catch { throw new InvalidOperationException("Claude account list is unavailable."); }
+        List<string> ids = new List<string>();
+        foreach (string line in text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+        {
+            string id = line.Trim();
+            if (id.Length == 0 || id[0] == '#') continue;
+            ids.Add(id);
+        }
+        if (ids.Count == 0)
+            throw new InvalidOperationException("Claude account list is unavailable.");
+        return new ClaudeAccountSet(ids, ids[0]);
+    }
+
+    public static string ProfileId(string uri, ClaudeAccountSet accounts)
+    {
+        const string prefix = "ccs-claude://launch/";
+        if (accounts == null || uri == null || !uri.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+        string id = uri.Substring(prefix.Length);
+        if (!AccountIdPattern.IsMatch(id)) return null;
+        foreach (string allowed in accounts.Allowed)
+            if (String.Equals(id, allowed, StringComparison.Ordinal)) return id;
         return null;
     }
 
@@ -70,11 +142,12 @@ public static class ClaudeProfileLaunchPlanner
 
     public static ClaudeLaunchPlan Create(string uri, string windowsDirectory,
         string appDataDirectory, IClaudeRegisteredPackageCatalog catalog,
-        Func<string, bool> fileExists, Func<string, bool> directoryExists)
+        Func<string, bool> fileExists, Func<string, bool> directoryExists,
+        ClaudeAccountSet accounts)
     {
-        string id = ProfileId(uri);
+        string id = ProfileId(uri, accounts);
         if (id == null) throw new ArgumentException("Unsupported Claude account link.");
-        if (id == "gmail")
+        if (String.Equals(id, accounts.Default, StringComparison.Ordinal))
         {
             string explorer = Path.Combine(EnvironmentRoot(windowsDirectory), "explorer.exe");
             if (!fileExists(explorer)) throw new InvalidOperationException("Default Claude launcher unavailable.");
@@ -105,8 +178,8 @@ public static class ClaudeProfileLaunchPlanner
         }
         if (latest == null) throw new InvalidOperationException("Current Claude package unavailable.");
         string executable = Path.GetFullPath(Path.Combine(latest.InstallPath, "app", "Claude.exe"));
-        // Never launch an older package or Gmail when the selected current
-        // package/profile is unavailable.
+        // Never launch an older package or the default profile when the
+        // selected current package/profile is unavailable.
         if (!fileExists(executable))
             throw new InvalidOperationException("Current Claude executable unavailable.");
         return new ClaudeLaunchPlan { ProfileId = id, Executable = executable,
@@ -193,8 +266,15 @@ public static class CcsClaudeAccountLauncher
         bool describe = args.Length == 2 && args[0] == "--describe";
         if (args.Length != 1 && !dryRun && !describe)
         { Console.Error.WriteLine("Expected one supported Claude account link."); return 2; }
+        ClaudeAccountSet accounts;
+        try
+        {
+            string exe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            accounts = ClaudeProfileLaunchPlanner.LoadAccounts(Path.GetDirectoryName(exe));
+        }
+        catch { Console.Error.WriteLine("The Claude account list is unavailable."); return 3; }
         string uri = args[(dryRun || describe) ? 1 : 0];
-        if (ClaudeProfileLaunchPlanner.ProfileId(uri) == null)
+        if (ClaudeProfileLaunchPlanner.ProfileId(uri, accounts) == null)
         { Console.Error.WriteLine("Unsupported Claude account link."); return 2; }
         ClaudeLaunchPlan plan;
         try
@@ -202,7 +282,7 @@ public static class CcsClaudeAccountLauncher
             plan = ClaudeProfileLaunchPlanner.Create(uri,
                 Environment.GetFolderPath(Environment.SpecialFolder.Windows),
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                new NativeClaudePackageCatalog(), File.Exists, Directory.Exists);
+                new NativeClaudePackageCatalog(), File.Exists, Directory.Exists, accounts);
         }
         catch { Console.Error.WriteLine("The current Claude app or saved profile is unavailable."); return 3; }
         if (describe) { Console.WriteLine(Describe(plan)); return 0; }
@@ -211,7 +291,7 @@ public static class CcsClaudeAccountLauncher
         try
         {
             ProcessStartInfo start = new ProcessStartInfo(plan.Executable, plan.Arguments);
-            start.UseShellExecute = plan.ProfileId == "gmail";
+            start.UseShellExecute = plan.DefaultAppTarget != null;
             if (plan.WorkingDirectory != null) start.WorkingDirectory = plan.WorkingDirectory;
             Process.Start(start);
             return 0;

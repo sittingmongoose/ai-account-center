@@ -15,6 +15,7 @@ import {
   type ClaudeDesktopProfile,
 } from '../../../src/web-server/services/claude-desktop-profile-service';
 import {
+  ClaudeDesktopLiveUsageError,
   getCachedClaudeDesktopLiveUsage,
   type ClaudeDesktopLiveUsage,
 } from '../../../src/web-server/services/claude-desktop-live-service';
@@ -575,6 +576,41 @@ describe('consolidated account dashboard', () => {
     scope = 'first';
     await service.get();
     expect(calls).toBe(2);
+  });
+
+  it('tells a new profile the installed collector needs an update instead of sign-in', async () => {
+    const added: ClaudeDesktopProfile = {
+      id: 'added-profile',
+      email: 'added@example.com',
+      mac: {
+        launcherName: 'Mac',
+        sshHost: 'fixture-mac',
+        launcherPath: '/Applications/Fixture.app',
+        profilePath: '/fixture/profile',
+      },
+      windows: {
+        launcherName: 'Windows',
+        sshHost: 'fixture-windows',
+        profilePath: 'C:\\fixture\\profile',
+      },
+    };
+    const result = await new AccountDashboardService(
+      deps({
+        listClaudeProfiles: async () => [added],
+        getClaudeUsage: async (platform) => ({
+          platform,
+          fetchedAt: '2026-10-01T12:00:00Z',
+          profiles: [],
+        }),
+        getLiveClaudeUsage: async () => {
+          throw new ClaudeDesktopLiveUsageError(true);
+        },
+      })
+    ).get('mac');
+    const row = result.accounts.find((account) => account.id === 'claude:added-profile');
+    expect(row?.status).toBe('unavailable');
+    expect(row?.message).toBe('Update the usage helper on Windows.');
+    expect(row?.windows).toEqual([]);
   });
 
   it('uses verified live Claude quota while keeping the selected launcher platform', async () => {
