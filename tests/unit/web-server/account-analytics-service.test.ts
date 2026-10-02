@@ -127,7 +127,7 @@ describe('account quota analytics', () => {
     });
     const result = await service.get({ ...QUERY, refresh: true });
     expect(dashboardCalls).toEqual([['mac', false]]);
-    expect(activityCalls).toEqual([{ ...QUERY, refresh: true }]);
+    expect(activityCalls).toEqual([{ ...QUERY, refresh: true, tz: 'UTC' }]);
     expect(result.filters).toEqual({ platform: 'mac', provider: 'all', account: 'all' });
   });
   it('includes all nine providers and all fourteen logical accounts with the actual active Codex row', async () => {
@@ -159,6 +159,7 @@ describe('account quota analytics', () => {
       accountCount: 14,
       availableAccounts: 14,
       activeCodexAccountId: 'codex:c',
+      activeAccountIds: { codex: 'codex:c', antigravity: null },
       sampleCount: 14,
     });
     expect(result.providers).toHaveLength(9);
@@ -183,7 +184,14 @@ describe('account quota analytics', () => {
     });
     const result = await service.get({ ...QUERY, provider: 'codex', account: first.id });
     expect(result.accounts.map((row) => row.id)).toEqual([first.id]);
-    expect(result.providers.map((row) => row.provider)).toEqual(['codex']);
+    // The provider list stays stable under filters; its counts and quota
+    // history follow the account filter.
+    expect(
+      result.providers.map((row) => [row.provider, row.accountCount, row.hasQuotaHistory])
+    ).toEqual([
+      ['codex', 1, true],
+      ['qwen', 0, false],
+    ]);
     expect(result.activity.totals).toBeNull();
     const mismatch = await service.get({ ...QUERY, provider: 'qwen', account: first.id });
     expect(mismatch.accounts).toEqual([]);

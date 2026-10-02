@@ -256,13 +256,21 @@ describe('native local analytics activity', () => {
       'ok',
       'Native fixture'
     );
-    expect(result.totals).toEqual({
+    expect(result.totals).toMatchObject({
       inputTokens: 300,
       outputTokens: 10,
       cacheCreationTokens: 4,
       cacheReadTokens: 6,
       estimatedCostUsd: 0.015,
     });
+    // Claude has a built-in rate. Without a provider, `gpt-5.4` is priced only
+    // by the unknown-model fallback, which never yields a cost split.
+    expect(result.providers.map((row) => [row.provider, row.totals.costByType !== null])).toEqual([
+      ['claude', true],
+      ['codex', false],
+    ]);
+    expect(result.totals?.costByType).toBeNull();
+    expect(result.models.find((row) => row.model === 'gpt-5.4')?.rates?.source).toBe('fallback');
     expect(
       result.providers.map((row) => [
         row.provider,
@@ -460,6 +468,39 @@ describe('native local analytics activity', () => {
     refreshIntervalSeconds = 30;
     expect((await service.get(QUERY, FROM, now)).totals?.inputTokens).toBe(30);
     expect(calls).toBe(3);
+  });
+
+  it('spends the response budget end to end, keeping recent projection time out of the wait', async () => {
+    let calls = 0;
+    let elapsed = 0;
+    const service = new AccountAnalyticsActivityService({
+      requests: () => [
+        {
+          provider: 'codex',
+          request: { kind: 'codex', codexHome: '/fixture', cacheDir: '/fixture/cache' },
+        },
+      ],
+      loadWorker: async () => {
+        calls++;
+        if (calls === 1) return data('gpt-5.4', 10, 0);
+        return new Promise<UsageWorkerResult>(() => {});
+      },
+      now: () => NOW,
+      scope: () => '/fixture-budget',
+      responseBudgetMs: 1000,
+      // Every projection appears to cost 900 ms of the 1,000 ms budget.
+      elapsedMs: () => (elapsed += 900),
+    });
+    expect((await service.get(QUERY, FROM, NOW)).status).toBe('ok');
+    const started = performance.now();
+    const refreshing = await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    const waited = performance.now() - started;
+    expect(refreshing.status).toBe('cached');
+    expect(refreshing.totals?.inputTokens).toBe(10);
+    // The wait is what is left after the projection: about 100 ms, never the
+    // whole budget on top of the projection.
+    expect(waited).toBeGreaterThanOrEqual(80);
+    expect(waited).toBeLessThan(600);
   });
 
   it('coalesces concurrent manual refreshes into one bounded scan and exposes cached data while it runs', async () => {

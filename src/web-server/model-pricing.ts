@@ -1053,49 +1053,69 @@ function applyServiceTier(pricing: ModelPricing, tier: string | undefined): Mode
   return { ...tierRates, serviceTiers: pricing.serviceTiers };
 }
 
+/** Where a resolved rate came from: the CCS table, the models.dev cache, or the unknown-model fallback. */
+export type ModelPricingSource = 'builtin' | 'models-dev' | 'fallback';
+
+export interface ModelPricingResolution {
+  pricing: ModelPricing;
+  source: ModelPricingSource;
+}
+
 /**
  * Get pricing for a model with narrow fuzzy matching fallback.
  * Unknown future model families should fall back instead of inheriting the
  * first known family tier that happens to share a prefix.
  */
 export function getModelPricing(model: string, options: PricingLookupOptions = {}): ModelPricing {
-  return applyServiceTier(resolveBasePricing(model, options), options.serviceTier);
+  return getModelPricingWithSource(model, options).pricing;
 }
 
-function resolveBasePricing(model: string, options: PricingLookupOptions): ModelPricing {
+/** The same lookup as `getModelPricing`, also saying which table supplied the rates. */
+export function getModelPricingWithSource(
+  model: string,
+  options: PricingLookupOptions = {}
+): ModelPricingResolution {
+  const resolved = resolveBasePricing(model, options);
+  return {
+    pricing: applyServiceTier(resolved.pricing, options.serviceTier),
+    source: resolved.source,
+  };
+}
+
+function resolveBasePricing(model: string, options: PricingLookupOptions): ModelPricingResolution {
   if (hasProviderContext(model, options)) {
     const ccsOverridePricing = getCcsPolicyOverridePricing(model);
     if (ccsOverridePricing !== undefined) {
-      return ccsOverridePricing;
+      return { pricing: ccsOverridePricing, source: 'builtin' };
     }
 
     const providerPricing = resolveModelsDevPricing(model, options);
     if (providerPricing !== undefined) {
-      return providerPricing.pricing;
+      return { pricing: providerPricing.pricing, source: 'models-dev' };
     }
   }
 
   const ccsStaticPricing = getCcsStaticPricing(model);
   if (ccsStaticPricing !== undefined) {
-    return ccsStaticPricing;
+    return { pricing: ccsStaticPricing, source: 'builtin' };
   }
 
   const modelsDevPricing = resolveModelsDevPricing(model, options);
   if (modelsDevPricing !== undefined) {
-    return modelsDevPricing.pricing;
+    return { pricing: modelsDevPricing.pricing, source: 'models-dev' };
   }
 
   for (const candidate of getLookupCandidates(model)) {
     // Allow provider/routing wrappers to suffix a canonical model ID.
     for (const [key, pricing] of Object.entries(NORMALIZED_PRICING_REGISTRY)) {
       if (candidate.endsWith(key)) {
-        return pricing;
+        return { pricing, source: 'builtin' };
       }
     }
   }
 
   // Fallback to unknown model pricing
-  return UNKNOWN_MODEL_PRICING;
+  return { pricing: UNKNOWN_MODEL_PRICING, source: 'fallback' };
 }
 
 /**

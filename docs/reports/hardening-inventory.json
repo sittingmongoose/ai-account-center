@@ -598,8 +598,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 25,
-      "totalSourceFiles": 346,
-      "coverageRatio": 0.0723,
+      "totalSourceFiles": 351,
+      "coverageRatio": 0.0712,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -625,7 +625,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 67,
+          "count": 72,
           "withLogger": 4
         },
         {
@@ -753,7 +753,7 @@
         },
         {
           "file": "src/web-server/model-pricing.ts",
-          "loc": 1138
+          "loc": 1158
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -800,12 +800,12 @@
           "loc": 614
         },
         {
-          "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
-          "loc": 598
+          "file": "src/web-server/services/account-analytics-projection.ts",
+          "loc": 600
         },
         {
-          "file": "src/web-server/usage/data-aggregator.ts",
-          "loc": 575
+          "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
+          "loc": 598
         }
       ]
     }

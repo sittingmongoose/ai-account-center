@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import express from 'express';
 import type { Server } from 'http';
 import { createAccountAnalyticsRouter } from '../../../src/web-server/routes/account-analytics-routes';
+import { AccountAnalyticsQueryError } from '../../../src/web-server/services/account-analytics-range';
 import type {
   AccountAnalytics,
   AccountAnalyticsQuery,
@@ -127,5 +128,115 @@ describe('account analytics route', () => {
     expect(response.status).toBe(500);
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(await response.text()).not.toContain('sentinel');
+  });
+});
+
+describe('account analytics route: contract additions', () => {
+  async function withRouter(
+    deps: Parameters<typeof createAccountAnalyticsRouter>[0],
+    run: (get: (query: string) => Promise<Response>) => Promise<void>
+  ): Promise<void> {
+    const app = express();
+    app.use((req, _res, next) => {
+      Object.assign(req, { session: { authenticated: true } });
+      next();
+    });
+    app.use('/api/accounts', createAccountAnalyticsRouter(deps));
+    const instance = await new Promise<Server>((resolve) => {
+      const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
+    });
+    try {
+      const address = instance.address();
+      if (!address || typeof address === 'string') throw new Error('No test listener');
+      await run((query) =>
+        fetch(`http://127.0.0.1:${address.port}/api/accounts/analytics${query}`)
+      );
+    } finally {
+      await new Promise<void>((resolve) => instance.close(() => resolve()));
+    }
+  }
+
+  it('passes month, all and custom ranges with a zone through to the service', async () => {
+    for (const [query, expected] of [
+      ['?range=month&tz=America%2FNew_York', { range: 'month', tz: 'America/New_York' }],
+      ['?range=all', { range: 'all' }],
+      [
+        '?range=custom&from=2026-09-20&to=2026-09-26&tz=Asia%2FKolkata',
+        { range: 'custom', from: '2026-09-20', to: '2026-09-26', tz: 'Asia/Kolkata' },
+      ],
+    ] as const) {
+      calls = [];
+      expect((await request(query)).status).toBe(200);
+      expect(calls).toEqual([{ platform: 'mac', provider: 'all', account: 'all', ...expected }]);
+    }
+  });
+
+  it.each([
+    ['?tz=Mars%2FBase', 'invalid_tz'],
+    ['?tz=%2B05%3A00', 'invalid_tz'],
+    ['?range=7d&from=2026-09-20', 'invalid_range'],
+    ['?range=24h&to=2026-09-20', 'invalid_range'],
+    ['?range=custom&from=2026-09-20', 'invalid_range'],
+    ['?range=custom&from=2026-09-26&to=2026-09-20', 'invalid_range'],
+    ['?range=custom&from=2026-08-01&to=2026-09-20', 'invalid_range'],
+    ['?range=custom&from=2026-02-30&to=2026-03-01', 'invalid_range'],
+    ['?range=year', 'invalid_range'],
+    ['?provider=cliproxy', 'invalid_provider'],
+    ['?from[x]=1', 'invalid_query'],
+  ])('rejects %s with 400 %s before reading analytics', async (query, code) => {
+    const response = await request(query);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code });
+    expect(calls).toEqual([]);
+  });
+
+  it('validates providers against the server table, not a fixed list', async () => {
+    const seen: AccountAnalyticsQuery[] = [];
+    await withRouter(
+      {
+        providerIds: () => ['claude', 'codex', 'antigravity'],
+        getAnalytics: async (query) => {
+          seen.push(query);
+          return { schemaVersion: 1 } as unknown as AccountAnalytics;
+        },
+      },
+      async (get) => {
+        const refused = await get('?provider=kimi-code');
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({
+          error: 'Select a provider that this server reports.',
+          code: 'invalid_provider',
+        });
+        expect((await get('?provider=antigravity')).status).toBe(200);
+        expect((await get('?provider=all')).status).toBe(200);
+      }
+    );
+    expect(seen.map((query) => query.provider)).toEqual(['antigravity', 'all']);
+  });
+
+  it('maps service range errors to 400 with their code and keeps fixed error codes', async () => {
+    await withRouter(
+      {
+        getAnalytics: async () => {
+          throw new AccountAnalyticsQueryError('invalid_range', 'raw detail sentinel');
+        },
+      },
+      async (get) => {
+        const response = await get('?range=custom&from=2026-09-01&to=2026-09-02');
+        expect(response.status).toBe(400);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        const body = await response.json();
+        expect(body.code).toBe('invalid_range');
+        expect(JSON.stringify(body)).not.toContain('sentinel');
+      }
+    );
+    expect(await (await request('', {})).json()).toMatchObject({ code: 'auth_required' });
+    expect(
+      await (
+        await request('', { 'x-test-session': 'true', origin: 'https://attacker.example' })
+      ).json()
+    ).toMatchObject({ code: 'origin_required' });
+    failing = true;
+    expect(await (await request()).json()).toMatchObject({ code: 'analytics_unavailable' });
   });
 });

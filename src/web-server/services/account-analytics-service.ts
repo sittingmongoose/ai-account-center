@@ -1,7 +1,24 @@
 import { getCcsDir } from '../../utils/config-manager';
 import { getAccountDashboard } from './account-dashboard-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
-import { getAccountAnalyticsActivity } from './account-analytics-activity';
+import {
+  getAccountAnalyticsActivity,
+  type AccountAnalyticsActivityResult,
+} from './account-analytics-activity';
+import {
+  ACCOUNT_ANALYTICS_RETAINED_MS,
+  canonicalAccountAnalyticsTimeZone,
+  localDate,
+  localMidnight,
+  resolveAccountAnalyticsRange,
+  validateAccountAnalyticsRangeShape,
+} from './account-analytics-range';
+import {
+  analyticsProviderRows,
+  dashboardRegistryFacts,
+  defaultAnalyticsProviderTable,
+  type AnalyticsProviderEntry,
+} from './account-analytics-providers';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
 import type {
   AccountAnalytics,
@@ -9,7 +26,6 @@ import type {
   AccountAnalyticsActivity,
   AccountAnalyticsPoint,
   AccountAnalyticsQuery,
-  AccountAnalyticsRange,
 } from './account-analytics-types';
 import {
   accountAnalyticsIdentity,
@@ -26,8 +42,11 @@ export interface AccountAnalyticsDeps {
   getActivity?: (
     query: AccountAnalyticsQuery,
     from: number,
-    to: number
-  ) => Promise<AccountAnalyticsActivity>;
+    to: number,
+    options?: { tz?: string }
+  ) => Promise<AccountAnalyticsActivityResult>;
+  /** The server's provider table; a dashboard registry, when present, overrides labels and order. */
+  providerTable?: () => AnalyticsProviderEntry[];
   createHistoryStore?: (scope: string) => AccountAnalyticsHistoryStore;
   scope?: () => string;
   now?: () => number;
@@ -44,18 +63,14 @@ interface HistoryState {
   store: AccountAnalyticsHistoryStore;
 }
 
-const RANGE_MS: Record<AccountAnalyticsRange, number> = {
-  '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-  '30d': 30 * 24 * 60 * 60 * 1000,
-};
-const BUCKET_MINUTES: Record<AccountAnalyticsRange, number> = { '24h': 10, '7d': 60, '30d': 180 };
+/** 31 days of 3-hour buckets plus the partial one at the start. */
+const MAX_POINTS_PER_WINDOW = 249;
 
-function unavailableActivity(message: string): AccountAnalyticsActivity {
+function unavailableActivity(message: string, tz: string): AccountAnalyticsActivity {
   return {
     status: 'unavailable',
     scope: 'ubuntu-local-cli',
-    timezone: 'UTC',
+    timezone: tz,
     accountAttribution: 'unavailable',
     costBasis: 'estimated-api-equivalent',
     fetchedAt: null,
@@ -65,6 +80,9 @@ function unavailableActivity(message: string): AccountAnalyticsActivity {
     byDay: [],
     byHour: [],
     models: [],
+    byDayModel: [],
+    sessions: null,
+    anomalies: null,
   };
 }
 
@@ -95,7 +113,8 @@ function accountSeries(
   history: AccountAnalyticsHistoryData | null,
   from: number,
   to: number,
-  bucketMinutes: number
+  bucketMinutes: number,
+  registry: { switchable: boolean; hidden: boolean }
 ): AccountAnalyticsAccount {
   const identity = accountAnalyticsIdentity(account);
   const records = (history?.records ?? []).filter(
@@ -115,6 +134,8 @@ function accountSeries(
     if (!preferredWindows.has(key)) preferredWindows.set(key, window);
   return {
     ...account,
+    switchable: registry.switchable,
+    hidden: registry.hidden,
     firstSampleAt: records[0]?.sampledAt ?? null,
     lastSampleAt: records[records.length - 1]?.sampledAt ?? null,
     sampleCount: records.length,
@@ -151,7 +172,7 @@ function accountSeries(
           : {}),
         points: [...buckets.values()]
           .sort((a, b) => Date.parse(a.sampledAt) - Date.parse(b.sampledAt))
-          .slice(-241),
+          .slice(-MAX_POINTS_PER_WINDOW),
       };
     }),
   };
@@ -230,55 +251,98 @@ export class AccountAnalyticsService {
     return state;
   }
 
-  async get(query: AccountAnalyticsQuery): Promise<AccountAnalytics> {
+  async get(requested: AccountAnalyticsQuery): Promise<AccountAnalytics> {
+    // Malformed ranges and zones fail before any collector or history read.
+    validateAccountAnalyticsRangeShape(requested);
+    const tz = canonicalAccountAnalyticsTimeZone(requested.tz);
+    const query: AccountAnalyticsQuery = { ...requested, tz };
+    const clock = this.deps.now ?? Date.now;
+    // So does a custom range outside retention: a refused request records no
+    // quota snapshot. The range is resolved again after the snapshot, whose
+    // sample times must not fall after `to`.
+    const checkedAt = clock();
+    resolveAccountAnalyticsRange(query, checkedAt, checkedAt - ACCOUNT_ANALYTICS_RETAINED_MS);
     const scope = (this.deps.scope ?? getCcsDir)();
     const dashboard = await (this.deps.getDashboard ?? getAccountDashboard)(query.platform, false);
     const state = await this.record(dashboard.accounts, scope);
-    const now = (this.deps.now ?? Date.now)();
-    const from = now - RANGE_MS[query.range];
+    const now = clock();
+    const retainedFrom = now - ACCOUNT_ANALYTICS_RETAINED_MS;
+    // Every range except `all` resolves without the data; `all` reads the
+    // whole retained window and then starts at the oldest retained point.
+    const provisional = resolveAccountAnalyticsRange(query, now, retainedFrom);
+    const activityResult = await (this.deps.getActivity ?? getAccountAnalyticsActivity)(
+      query,
+      provisional.from,
+      provisional.to,
+      { tz }
+    ).catch(
+      (): AccountAnalyticsActivityResult =>
+        unavailableActivity('Local usage history is temporarily unavailable.', tz)
+    );
+    const { coverage, ...activity } = activityResult;
+    let oldestQuota = Infinity;
+    for (const record of state.data?.records ?? []) {
+      const sampled = Date.parse(record.sampledAt);
+      if (Number.isFinite(sampled) && sampled < oldestQuota) oldestQuota = sampled;
+    }
+    const oldest = Math.min(oldestQuota, coverage?.oldestHourAt ?? Infinity);
+    const availableFrom = Number.isFinite(oldest)
+      ? Math.min(now, Math.max(retainedFrom, oldest))
+      : Math.max(retainedFrom, localMidnight(localDate(now, tz), tz));
+    const range =
+      query.range === 'all' ? resolveAccountAnalyticsRange(query, now, availableFrom) : provisional;
+    const { from, to } = range;
+
+    const registry = dashboardRegistryFacts(
+      dashboard,
+      (this.deps.providerTable ?? defaultAnalyticsProviderTable)()
+    );
     const accounts = dashboard.accounts.filter(
       (account) =>
         (query.provider === 'all' || query.provider === account.provider) &&
         (query.account === 'all' || query.account === account.id)
     );
     const series = accounts.map((account) =>
-      accountSeries(account, state.data, from, now, BUCKET_MINUTES[query.range])
+      accountSeries(account, state.data, from, to, range.bucketMinutes, {
+        switchable: registry.switchable(account),
+        hidden: registry.hidden(account),
+      })
     );
     const sampleCount = series.reduce((sum, account) => sum + account.sampleCount, 0);
     const stamps = series
       .flatMap((account) => [account.firstSampleAt, account.lastSampleAt])
       .filter((stamp): stamp is string => stamp !== null)
       .sort();
-    const providers = [...new Set(accounts.map((account) => account.provider))].map((provider) => {
-      const matches = series.filter((account) => account.provider === provider);
-      return {
-        provider,
-        label: matches[0].providerLabel,
-        accountCount: matches.length,
-        availableAccounts: matches.filter(
-          (account) => account.status === 'ok' || account.status === 'cached'
-        ).length,
-        latestSampleAt:
-          matches
-            .map((account) => account.lastSampleAt)
-            .filter((stamp): stamp is string => stamp !== null)
-            .sort()
-            .pop() ?? null,
-      };
-    });
-    const activity = await (this.deps.getActivity ?? getAccountAnalyticsActivity)(
-      query,
+
+    const providers = analyticsProviderRows({
+      registry,
+      accounts: dashboard.accounts,
+      account: query.account,
+      records: state.data?.records ?? [],
       from,
-      now
-    ).catch(() => unavailableActivity('Local usage history is temporarily unavailable.'));
+      to,
+      providersWithActivity: coverage?.providersWithActivity ?? [],
+    });
+    const activeAccountIds: AccountAnalytics['summary']['activeAccountIds'] = {};
+    for (const entry of registry.table)
+      if (entry.switchable && (entry.id === 'codex' || entry.id === 'antigravity'))
+        activeAccountIds[entry.id] =
+          dashboard.accounts.find((account) => account.provider === entry.id && account.isActive)
+            ?.id ?? null;
+    const activeCodexAccountId =
+      dashboard.accounts.find((account) => account.provider === 'codex' && account.isActive)?.id ??
+      null;
     return {
       schemaVersion: 1,
       updatedAt: new Date(now).toISOString(),
       range: {
-        preset: query.range,
+        preset: range.preset,
         from: new Date(from).toISOString(),
-        to: new Date(now).toISOString(),
-        bucketMinutes: BUCKET_MINUTES[query.range],
+        to: new Date(to).toISOString(),
+        bucketMinutes: range.bucketMinutes,
+        tz,
+        dayBucketTz: tz,
+        availableFrom: new Date(availableFrom).toISOString(),
       },
       filters: { platform: query.platform, provider: query.provider, account: query.account },
       history: {
@@ -299,9 +363,8 @@ export class AccountAnalyticsService {
         availableAccounts: accounts.filter(
           (account) => account.status === 'ok' || account.status === 'cached'
         ).length,
-        activeCodexAccountId:
-          dashboard.accounts.find((account) => account.provider === 'codex' && account.isActive)
-            ?.id ?? null,
+        activeCodexAccountId,
+        activeAccountIds,
         sampleCount,
       },
       providers,

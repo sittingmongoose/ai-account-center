@@ -228,6 +228,7 @@ function aggregateRows(
   interface Bucket {
     models: Map<string, ModelBreakdown>;
     requestCount: number;
+    firstActivity: string;
     lastActivity: string;
     versions: Set<string>;
     target?: string;
@@ -240,6 +241,7 @@ function aggregateRows(
     const bucket: Bucket = map.get(key) ?? {
       models: new Map(),
       requestCount: 0,
+      firstActivity: '',
       lastActivity: '',
       versions: new Set(),
     };
@@ -264,6 +266,8 @@ function aggregateRows(
     bucket.models.set(modelKey, model);
     bucket.requestCount += row.events;
     if (entry.timestamp > bucket.lastActivity) bucket.lastActivity = entry.timestamp;
+    if (!bucket.firstActivity || entry.timestamp < bucket.firstActivity)
+      bucket.firstActivity = entry.timestamp;
     if (entry.version) bucket.versions.add(entry.version);
     if (entry.target) bucket.target = entry.target;
     map.set(key, bucket);
@@ -309,6 +313,7 @@ function aggregateRows(
         sessionId,
         projectPath: '',
         ...values(bucket),
+        firstActivity: bucket.firstActivity,
         lastActivity: bucket.lastActivity,
         versions: [...bucket.versions],
         target: bucket.target,
