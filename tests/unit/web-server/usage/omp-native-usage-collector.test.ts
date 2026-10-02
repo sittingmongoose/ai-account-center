@@ -151,6 +151,20 @@ describe('omp session roots', () => {
     expect(roots).not.toContain(empty);
   });
 
+  it('honors explicit scan bounds', () => {
+    const custom = path.join(home, 'PM-Experiments', 'proj', 'sessions');
+    fs.mkdirSync(custom, { recursive: true });
+    fs.writeFileSync(path.join(custom, 'x.jsonl'), '{}\n');
+    const starved = resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      scanBounds: { maxEntries: 1 },
+    });
+    expect(starved).not.toContain(custom);
+    const found = resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(found).toContain(custom);
+  });
+
   it('caches the marker scan for six hours', () => {
     const cacheDir = path.join(home, 'cache');
     const first = path.join(home, 'PM-Experiments', 'a', 'sessions');

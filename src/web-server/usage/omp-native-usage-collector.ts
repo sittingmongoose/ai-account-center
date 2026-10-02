@@ -117,11 +117,14 @@ export interface OmpRootOptions {
   /** Cache directory for the marker-scan roots; without it every call scans. */
   cacheDir?: string;
   now?: () => number;
+  scanBounds?: OmpScanBounds;
 }
 
 export interface OmpScanBounds {
   maxDepth?: number;
   maxDirs?: number;
+  /** Total directory entries examined across the walk. */
+  maxEntries?: number;
   deadlineMs?: number;
 }
 
@@ -163,6 +166,7 @@ function sessionsDirHasMarker(directory: string): boolean {
 function scanSessionRoots(base: string, bounds: OmpScanBounds = {}): string[] {
   const maxDepth = bounds.maxDepth ?? OMP_SCAN_MAX_DEPTH;
   const maxDirs = bounds.maxDirs ?? OMP_SCAN_MAX_DIRS;
+  const maxEntries = bounds.maxEntries ?? 500_000;
   const deadline = Date.now() + Math.max(1, bounds.deadlineMs ?? 15_000);
   const found: string[] = [];
   try {
@@ -173,6 +177,7 @@ function scanSessionRoots(base: string, bounds: OmpScanBounds = {}): string[] {
   // Breadth-first so shallow roots are found even when the caps bite.
   const pending: Array<{ directory: string; depth: number }> = [{ directory: base, depth: 0 }];
   let visited = 0;
+  let examined = 0;
   while (pending.length && found.length < OMP_SCAN_MAX_ROOTS) {
     const current = pending.shift();
     if (
@@ -189,6 +194,8 @@ function scanSessionRoots(base: string, bounds: OmpScanBounds = {}): string[] {
     } catch {
       continue;
     }
+    examined += entries.length;
+    if (examined > maxEntries) break;
     if (path.basename(current.directory) === 'sessions' && current.directory !== base) {
       if (sessionsDirHasMarker(current.directory)) found.push(current.directory);
       continue;
@@ -290,7 +297,11 @@ export function resolveOmpSessionRoots(options: OmpRootOptions = {}): string[] {
   // A complete walk of a large tree; bounded by depth, directory count and a
   // deadline, and cached afterwards. A bounded walk that finds nothing keeps
   // no stale roots: defaults and explicit roots still apply.
-  const scanned = scanSessionRoots(base, { maxDirs: 100_000, deadlineMs: 30_000 });
+  const scanned = scanSessionRoots(base, {
+    maxDirs: 100_000,
+    deadlineMs: 30_000,
+    ...options.scanBounds,
+  });
   if (options.cacheDir) writeRootsCache(options.cacheDir, scanned, now);
   for (const found of scanned) add(found);
   return roots.slice(0, OMP_SCAN_MAX_ROOTS);
