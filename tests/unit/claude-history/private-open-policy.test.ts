@@ -53,6 +53,16 @@ test('publisher retained private candidate hardlink is accepted without exposing
   expect(JSON.stringify(parsed)).not.toContain('historySync');
   expect(fs.statSync(filename()).nlink).toBe(2);
 });
+test('Windows fixed-task profile with absent launcherPath retains private policy and ordinary Open', async () => {
+  const row = profile(); delete (row.windows as any).launcherPath;
+  write([row]); const before = fs.readFileSync(filename());
+  const parsed = (await listClaudeDesktopProfiles())[0];
+  expect(parsed.windows).not.toHaveProperty('launcherPath');
+  expect(await loadClaudeHistoryPolicy(parsed)).toEqual(policy());
+  await openClaudeDesktopProfile('platyr', 'windows');
+  expect(helperCalls).toBe(1); expect(opened).toBe(1);
+  expect(fs.readFileSync(filename())).toEqual(before);
+});
 test('absent policy preserves the existing Open with no private helper attempt', async () => {
   const row = profile(); delete (row as any).historySync; write([row]); const before = fs.readFileSync(filename());
   await openClaudeDesktopProfile('platyr', 'windows');
