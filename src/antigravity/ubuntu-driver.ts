@@ -4,10 +4,14 @@ import type {
   AntigravitySwitchDriver,
   InstallReceipt,
   NativeCredential,
+  RuntimeProof,
   StopReceipt,
   VerifiedIdentity,
 } from './types';
-import type { UbuntuRuntimeBridge } from './ubuntu-runtime-bridge';
+import {
+  AntigravityRuntimeStartupNotReadyError,
+  type UbuntuRuntimeBridge,
+} from './ubuntu-runtime-bridge';
 import type { createAntigravityQuotaWorker } from './quota-worker-transport';
 
 /** Credential bytes and rollback handles are private application dependencies. */
@@ -23,6 +27,9 @@ export interface UbuntuAntigravityDriverDependencies {
   bridge: UbuntuRuntimeBridge;
   /** A trusted installed-source gate; never a dashboard field or saved user setting. */
   releaseGate?: () => Promise<boolean>;
+  /** Trusted monotonic/test seams only; never dashboard settings or request fields. */
+  startupClock?: () => number;
+  pauseStartup?: (milliseconds: number) => Promise<void>;
 }
 
 /** Construction touches no credential, file, provider, IPC or process. */
@@ -134,13 +141,41 @@ export function createUbuntuAntigravityDriver(
     restartProcesses: (receipt) => deps.bridge.restartProcesses(receipt),
     proveRuntimeIdentity: async (expected) => {
       await requireReleased();
-      const proof = await deps.bridge.proveRuntimeIdentity(expected);
+      const boundExpected = { ...expected };
+      const clock = deps.startupClock ?? (() => performance.now());
+      const pause =
+        deps.pauseStartup ??
+        ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+      const deadline = clock() + 10_000;
+      let proof: RuntimeProof;
+      let waiting = false;
+      while (true) {
+        if (waiting && !(await released()))
+          throw new AntigravityError('antigravity-runtime-unavailable');
+        const remaining = Math.ceil(deadline - clock());
+        if (remaining <= 0) throw new AntigravityError('antigravity-runtime-unavailable');
+        try {
+          proof = await deps.bridge.proveRuntimeIdentity(
+            boundExpected,
+            Math.min(remaining, 15_000)
+          );
+          if (clock() > deadline) throw new AntigravityError('antigravity-runtime-unavailable');
+          break;
+        } catch (error) {
+          if (!(error instanceof AntigravityRuntimeStartupNotReadyError))
+            throw new AntigravityError('antigravity-runtime-unavailable');
+          const delay = Math.min(25, deadline - clock());
+          if (delay <= 0) throw new AntigravityError('antigravity-runtime-unavailable');
+          waiting = true;
+          await pause(delay);
+        }
+      }
       // Native refresh may publish new bytes; bind the exact current selection.
       const current = await deps.nativeStore.read();
       const actual = await deps.quotaWorker.validateCredential(current);
       if (
-        actual.email !== expected.email ||
-        actual.subject !== expected.subject ||
+        actual.email !== boundExpected.email ||
+        actual.subject !== boundExpected.subject ||
         proof.identity.email !== actual.email ||
         proof.identity.subject !== actual.subject ||
         proof.credentialFingerprint !== credentialFingerprint(current) ||

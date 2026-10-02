@@ -105,7 +105,7 @@ def unit_bytes(installation):
         value = str(value)
         if any(ord(char) < 32 for char in value): raise InstallationError('runtime-unit-path-invalid')
         return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
-    command = [bundle / 'venv/bin/python3', '-I', bundle / 'lib/resident_main.py',
+    command = ['/usr/bin/python3', '-I', bundle / 'lib/resident_main.py',
                '--binary', installation['nativeBinary'], '--database',
                home / '.gemini/antigravity-cli/conversation_summaries.db',
                '--socket', installation['socketPath']]
@@ -241,10 +241,21 @@ def rollback(home, *, runner=subprocess.run):
             ('originalCommand' in receipt and receipt['originalCommand'].get('path') !=
              str(state / 'original-status-command.json'))):
         raise InstallationError('runtime-adoption-checkpoint-invalid')
+    # Native may rewrite JSON formatting/inode around our exact owned hook.
+    # Only settings get the already-reviewed lexical reversal; other edits hold.
+    lexical={}
     # All conflicts are checked before stopping any service or reverting a file.
     for change in receipt['changes']:
         if not same(snapshot(change['before']['path'], missing=True, limit=4 * 1024 * 1024), change['installed']):
-            raise InstallationError('runtime-adoption-restore-conflict')
+            if change['before']['path']!=str(home/'.gemini/antigravity-cli/settings.json'):
+                raise InstallationError('runtime-adoption-restore-conflict')
+            installed=load_installation(home)
+            sys.path.insert(0,str(Path(installed['bundleDirectory'])/'lib'))
+            from native_status_hook_cleanup import guarded_read,prepare_hook_reversal,apply_removal
+            pin,current=guarded_read(change['before']['path'])
+            lexical[change['before']['path']]=prepare_hook_reversal(
+                (base64.b64decode(change['before']['rawBase64'],validate=True) if change['before']['existed'] else b'{}'),
+                base64.b64decode(change['installed']['rawBase64'],validate=True),current,pin)
     changed = {item['before']['path'] for item in receipt['changes']}
     for original in receipt['snapshots']:
         if original['path'] not in changed and not same(snapshot(original['path'], missing=True), original):
@@ -253,7 +264,17 @@ def rollback(home, *, runner=subprocess.run):
         raise InstallationError('runtime-original-command-changed')
     if receipt.get('serviceStarted') is True:
         run_user_service(runner, 'disable', '--now', UNIT)
-    for change in reversed(receipt['changes']): restore(change)
+    for change in reversed(receipt['changes']):
+        if change['before']['path'] in lexical:
+            from runtime_continuity import census_cli
+            installation=load_installation(home)
+            def no_writer():
+                if census_cli(installation['nativeBinary'],allowed_children=(
+                        str(home/'.gemini/antigravity-cli/bin/agentapi'),
+                        str(home/'.gemini/antigravity-cli/bin/webm_encoder'))):
+                    raise InstallationError('runtime-native-writer-present')
+            apply_removal(change['before']['path'],lexical[change['before']['path']],before_commit=no_writer)
+        else:restore(change)
     # Service/restore callbacks may replace either control leaf after preflight.
     # Recheck BOTH before deleting either, retaining foreign recovery material.
     if not same(snapshot(checkpoint, limit=4 * 1024 * 1024), checkpoint_owner):

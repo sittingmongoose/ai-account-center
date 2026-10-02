@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import sqlite3
 import subprocess
@@ -113,8 +114,15 @@ def census_cli(binary, candidates=None, allowed_children=()):
     """
     binary = os.path.realpath(binary)
     allowed = [binary, *map(os.path.realpath, allowed_children)]
-    names = {Path(filename).name[:15] for filename in allowed}
-    names |= {'agy', 'agentapi', 'antigravity', 'language_server', 'language_server_'}
+    # Interpreter permission is earned only by _family's exact native ancestry;
+    # it never makes all same-user interpreter processes AGY roots. The actual
+    # configured binary remains a root selector even in disposable stand-ins.
+    native_names = {Path(binary).name[:15]}
+    native_names |= {Path(filename).name[:15] for filename in allowed[1:]
+        if Path(filename).name not in {'sh', 'bash', 'dash', 'zsh', 'ksh'}
+        and not re.fullmatch(r'python(?:[0-9]+(?:\.[0-9]+)*)?', Path(filename).name)}
+    names = native_names | {'agy', 'agentapi', 'antigravity', 'language_server',
+                            'language_server_', 'webm_encoder'}
     found = []
     entries = Path('/proc').iterdir() if candidates is None else (
         Path('/proc') / str(pid) for pid in candidates)

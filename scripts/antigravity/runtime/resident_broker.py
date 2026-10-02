@@ -85,7 +85,7 @@ def actual_open_conversation(session, runtime, metadata):
 class ResidentBroker:
     def __init__(self, runtime, socket_path, observer_factory=None, adopter=None,
                  capability=None, identity_binder=None, launch_validator=None,
-                 census_provider=None, transaction_validator=None):
+                 census_provider=None, transaction_validator=None, status_service=None):
         self.runtime = runtime
         self.path = Path(socket_path)
         self.observer_factory = observer_factory
@@ -94,6 +94,7 @@ class ResidentBroker:
         self.identity_binder = identity_binder
         self.launch_validator = launch_validator or self._ordinary_args
         self.census_provider = census_provider
+        self.status_service = status_service
         # The installed native binder must independently validate exact native
         # identity/revision and phase context. Missing callback is unavailable.
         self.transaction_validator = transaction_validator
@@ -137,6 +138,7 @@ class ResidentBroker:
         self.listener = listener
         self.selector.register(listener, selectors.EVENT_READ, ('listen', None))
         self.running = True
+        if self.status_service:self.status_service.listen(self.selector)
 
     def _accept(self):
         client, _ = self.listener.accept()
@@ -351,7 +353,34 @@ class ResidentBroker:
             # Input remains blocked through native proof and durable registry
             # commit. Restart alone cannot authorize foreground input.
         saved_state['runningContexts'] = {token: self._context(token) for token in saved_state['binding']['contexts']}
+        saved_state['runningNativeKeys'] = ({token: self.status_service._key(self.runtime.sessions[token])
+            for token in saved_state['binding']['contexts']} if self.status_service else {})
+        saved_state['runningCredentialSnapshot'] = (self.status_service._snapshot_key(
+            self.status_service.read_snapshot()) if self.status_service else None)
         return {'ok': True}
+
+    def _startup_pending(self, tokens, unready, expected):
+        state = self.receipts.get(self.current_transaction)
+        if (not self.status_service or not state or state['phase'] not in ('target-running', 'recovery-running') or
+                set(tokens) != set(state['binding']['contexts']) or self._new_session(state['binding']['contexts']) or
+                any(self._context(token) != original for token, original in state['runningContexts'].items())):
+            return False
+        unmanaged = self.runtime.inspect_unmanaged()
+        if unmanaged.get('complete') is not True or unmanaged.get('processes'):
+            return False
+        for token in tokens:
+            session = self.runtime.sessions[token]
+            native_key = state.get('runningNativeKeys', {}).get(token)
+            if self.status_service._key(session) != native_key:
+                return False
+            if token in unready:
+                if not self.status_service.startup_pending(session, expected, native_key,
+                        state.get('runningCredentialSnapshot')):
+                    return False
+            else:
+                if not self.status_service.startup_ready(session, expected, state.get('runningCredentialSnapshot')):
+                    return False
+        return True
 
     def _proof(self, expected, tokens=None):
         if not self.capability() or self.identity_binder is None:raise ContinuityError('runtime-proof-unavailable')
@@ -360,6 +389,12 @@ class ResidentBroker:
         proofs = []
         tokens = list(tokens if tokens is not None else self.restart_tokens or
                       [token for token, session in self.runtime.sessions.items() if not session.stopped])
+        unready = [token for token in tokens if token not in self.foregrounds or
+            self.observers.get(token) is None or not self.observers[token].ready()]
+        if unready:
+            if self._startup_pending(tokens, unready, expected):
+                raise ContinuityError('runtime-startup-not-ready')
+            raise ContinuityError('runtime-proof-unavailable')
         for token in tokens:
             observer = self.observers.get(token)
             if token not in self.foregrounds or observer is None or not observer.ready():
@@ -517,9 +552,11 @@ class ResidentBroker:
         raise ContinuityError('ipc-method-unsupported')
 
     def tick(self, timeout=0.1):
+        if self.status_service:self.status_service.poll()
         for key, events in self.selector.select(timeout):
             kind, target = key.data
             if kind == 'listen':self._accept(); continue
+            if kind == 'status':self.status_service.receive(); continue
             if kind == 'pty':
                 token = target; session = self.runtime.sessions.get(token)
                 if not session:continue
@@ -567,13 +604,16 @@ class ResidentBroker:
                 session.stopped = True
 
     def serve(self):
-        self.listen()
         try:
+            self.listen()
             while self.running:self.tick()
         finally:self.close()
 
     def close(self):
         failures = []
+        if self.status_service:
+            try:self.status_service.close()
+            except Exception:failures.append('status-worker-cleanup')
         for token in list(self.runtime.sessions):
             try:
                 session = self.runtime.sessions[token]
