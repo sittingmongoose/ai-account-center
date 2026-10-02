@@ -161,7 +161,7 @@ struct AccountRow: View {
 
   private func meter(_ window: AccountQuotaWindow, notch: Double? = nil, notchOpacity: Double = 1) -> some View {
     let key = "\(account.id)|\(window.key)"
-    return MeterView(key: key, window: window, notch: notch, notchOpacity: notchOpacity, hovered: hovered,
+    return MeterView(key: key, window: window, sampledAt: account.sampledAt, pendingReset: account.pendingReset(window), notch: notch, notchOpacity: notchOpacity, hovered: hovered,
       motion: open.motion(key, block: block))
   }
 

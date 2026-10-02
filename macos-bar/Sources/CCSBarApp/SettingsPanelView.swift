@@ -185,6 +185,8 @@ struct SettingsPanelView: View {
         }
         Spacer(minLength: 8)
         Button(editingConnection ? "Cancel" : (model.connection == nil ? "Connect" : "Change")) {
+          // Cancel also stops a running check: nothing is saved and the current connection stays.
+          if editingConnection { model.cancelConnectionCheck() }
           withAnimation(.trayValue(duration: 0.3)) { editingConnection.toggle() }
         }
         .trayGlassButton()
@@ -196,7 +198,7 @@ struct SettingsPanelView: View {
       }
       HStack(alignment: .top, spacing: 6) {
         Image(systemName: "lock.shield").font(.system(size: 11.5)).foregroundStyle(palette.label2)
-        Text("The login is stored only in ~/.ccs/bar, readable by you alone. Device pairing, which keeps the tray signed in through a password change, arrives with the dashboard update.")
+        Text("The dashboard checks a new address and login before they are saved. The login is stored only in ~/.ccs/bar, readable by you alone. Device pairing, which keeps the tray signed in through a password change, arrives with the dashboard update.")
           .font(.system(size: 11.5)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
       }
       .padding(.top, 10)
@@ -306,7 +308,8 @@ struct ShortcutKeys: View {
   }
 }
 
-/// The dashboard address and login, saved privately. Used for first-run connect and for Change.
+/// The dashboard address and login, saved privately once the dashboard accepts them. Used for first-run connect
+/// and for Change; while the check runs the fields rest and Cancel (or Escape) stops it.
 struct ConnectionForm: View {
   @ObservedObject var model: AccountsViewModel
   var compact = false
@@ -321,7 +324,9 @@ struct ConnectionForm: View {
     withPalette { palette in
       VStack(alignment: .leading, spacing: 10) {
         field("Dashboard address", palette) { TextField("http://host:3000", text: $baseURL).textFieldStyle(.roundedBorder) }
+          .disabled(model.checkingConnection)
         field("Username", palette) { TextField("Dashboard username", text: $username).textFieldStyle(.roundedBorder) }
+          .disabled(model.checkingConnection)
         field("Password", palette) {
           HStack(spacing: 6) {
             Group {
@@ -334,6 +339,7 @@ struct ConnectionForm: View {
             .help(showPassword ? "Hide password" : "Show password")
           }
         }
+        .disabled(model.checkingConnection)
         if URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.scheme?.lowercased() == "http" {
           HStack(alignment: .top, spacing: 6) {
             Image(systemName: "info.circle").font(.system(size: 11.5))
@@ -341,14 +347,23 @@ struct ConnectionForm: View {
               .fixedSize(horizontal: false, vertical: true)
           }.font(.system(size: 11.5)).foregroundStyle(palette.label2)
         }
-        if let error { Text(error).font(.system(size: 12)).foregroundStyle(palette.critText) }
+        if let error {
+          Text(error).font(.system(size: 12)).foregroundStyle(palette.critText).fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("connection-error")
+        }
         HStack {
           Spacer()
+          if model.checkingConnection {
+            Button("Cancel") { model.cancelConnectionCheck() }
+              .trayGlassButton(large: true)
+          }
           Button(action: save) {
-            Text(compact ? "Save" : "Connect").font(.system(size: 13, weight: .semibold)).frame(minWidth: compact ? 60 : 120)
+            Text(model.checkingConnection ? "Checking" : compact ? "Save" : "Connect").font(.system(size: 13, weight: .semibold))
+              .frame(minWidth: compact ? 60 : 120)
           }
           .trayGlassButton(prominent: true, tint: palette.accent, large: true)
           .keyboardShortcut(.defaultAction)
+          .disabled(model.checkingConnection)
         }
       }
       .onAppear {
@@ -366,14 +381,17 @@ struct ConnectionForm: View {
     }
   }
 
+  /// Verify, then save: the saved connection and the live client change only when the dashboard accepts them.
   private func save() {
-    do {
-      try model.saveConnection(baseURL: baseURL, username: username, password: password)
-      password = ""
-      error = nil
-      onDone()
-    } catch {
-      self.error = "Enter an http or https dashboard address without a path, plus the dashboard username and password."
+    guard !model.checkingConnection else { return }
+    error = nil
+    Task { @MainActor in
+      if let failure = await model.changeConnection(baseURL: baseURL, username: username, password: password) {
+        error = failure
+      } else {
+        password = ""
+        onDone()
+      }
     }
   }
 }

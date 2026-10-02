@@ -1444,6 +1444,248 @@ private func checkTrayPresentation() throws {
     && TrayMotion.fillFraction(42) == 0.42, "Meter fills are capped at the track; text keeps the real value")
 }
 
+// MARK: Sign-in and Change verify before they save
+
+/// What the fixture dashboard saw, across every client the session builds.
+private final class SignInFixture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var log: [String] = []
+  private var slow = false
+  func record(_ line: String) { lock.lock(); log.append(line); lock.unlock() }
+  var requests: [String] { lock.lock(); defer { lock.unlock() }; return log }
+  func slowLoginStarted() { lock.lock(); slow = true; lock.unlock() }
+  func takeSlowLogin() -> Bool { lock.lock(); defer { slow = false; lock.unlock() }; return slow }
+}
+
+/// One client's transport to a fixture dashboard, with its own session: POST /api/auth/login accepts only
+/// fixture/fixture-new; GET /api/accounts/settings needs that login. refused.invalid refuses the connection,
+/// elsewhere.invalid answers every path with a 404 page, and "fixture-slow" logins never answer until cancelled.
+private actor SignInTransport: BarHTTPTransport {
+  let fixture: SignInFixture
+  private var signedIn = false
+  init(_ fixture: SignInFixture) { self.fixture = fixture }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    let url = request.url!
+    let host = url.host ?? ""
+    let method = request.httpMethod ?? "GET"
+    func reply(_ status: Int, _ body: String = "{}") -> (Data, HTTPURLResponse) {
+      fixture.record("\(method) \(host)\(url.path) \(status)")
+      return (Data(body.utf8), HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!)
+    }
+    if host == "refused.invalid" { throw URLError(.cannotConnectToHost) }
+    if host == "elsewhere.invalid" { return reply(404, "<html>Not found</html>") }
+    if method == "POST" && url.path == "/api/auth/login" {
+      let fields = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: String] ?? [:]
+      if fields["username"] == "fixture-slow" {
+        fixture.slowLoginStarted()
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+        return reply(200)
+      }
+      guard fields["username"] == "fixture", fields["password"] == "fixture-new" else { return reply(401, "{\"error\":\"Invalid credentials\"}") }
+      signedIn = true
+      return reply(200, "{\"success\":true}")
+    }
+    if method == "GET" && url.path == "/api/accounts/settings" {
+      return signedIn ? reply(200, "{\"refreshIntervalSeconds\":60}") : reply(401, "{\"error\":\"Authentication required\"}")
+    }
+    return reply(404)
+  }
+}
+
+/// A loopback port nothing listens on: bound for a moment to learn a free number, then closed.
+private func closedLoopbackPort() -> Int {
+  let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+  defer { close(socketFD) }
+  var address = sockaddr_in()
+  address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+  address.sin_family = sa_family_t(AF_INET)
+  address.sin_port = 0
+  address.sin_addr.s_addr = inet_addr("127.0.0.1")
+  var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+  _ = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(socketFD, $0, length) } }
+  _ = withUnsafeMutablePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(socketFD, $0, &length) } }
+  return Int(UInt16(bigEndian: address.sin_port))
+}
+
+/// Sign-in and Change through the tray's own `ConnectionSession`, with the connection file in an isolated temporary
+/// folder (never ~/.ccs). Every failure must leave the file's bytes and the live client exactly as they were; success
+/// must replace both, through the same writer.
+@MainActor private func checkConnectionChange() async throws {
+  let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aac-signin-check-\(UUID().uuidString)")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let file = directory.appendingPathComponent("bar/accounts-connection.json")
+  let real = BarConnection.configURL.deletingLastPathComponent().standardizedFileURL.path
+  try expect(!file.standardizedFileURL.path.hasPrefix(real) && file.standardizedFileURL.path != BarConnection.configURL.standardizedFileURL.path,
+    "Sign-in checks must use an isolated connection file")
+  let fixture = SignInFixture()
+  let dashboard = "http://dashboard.invalid:3000"
+  try ConnectionStore.save(BarConnection(baseURL: URL(string: dashboard)!, username: "fixture", password: "fixture-old"), to: file)
+  let session = ConnectionSession(fileURL: file, makeTransport: { SignInTransport(fixture) })
+  try session.load()
+  let saved = try Data(contentsOf: file)
+  guard let live = session.client else { throw CheckFailure(description: "The saved connection must load a live client") }
+  func unchanged() -> Bool {
+    (try? Data(contentsOf: file)) == saved && session.client === live && session.connection?.password == "fixture-old" && !session.isChecking
+  }
+  let kept = "The saved connection was not changed."
+
+  let refused = await session.change(baseURL: "http://refused.invalid:3000", username: "fixture", password: "fixture-new")
+  try expect(refused == "Could not reach a dashboard at that address. \(kept)" && unchanged(),
+    "A wrong address must keep the saved connection and the live client")
+  let elsewhere = await session.change(baseURL: "http://elsewhere.invalid:3000", username: "fixture", password: "fixture-new")
+  try expect(elsewhere == "That address answered, but not as an AI Account Center dashboard. \(kept)" && unchanged(),
+    "An address that is not the dashboard must keep the saved connection and the live client")
+  let rejected = await session.change(baseURL: dashboard, username: "fixture", password: "wrong-password")
+  try expect(rejected == "The dashboard did not accept that username and password. \(kept)" && unchanged()
+    && !fixture.requests.contains { $0.contains("/api/accounts/settings") },
+    "A wrong login must keep the saved connection and the live client, and read nothing")
+
+  // Cancel while the dashboard is still answering the login: the call Cancel and Escape make.
+  _ = fixture.takeSlowLogin()
+  let slow = Task { @MainActor in await session.change(baseURL: dashboard, username: "fixture-slow", password: "fixture-new") }
+  var waited = 0
+  while !fixture.takeSlowLogin() && waited < 500 { try await Task.sleep(nanoseconds: 10_000_000); waited += 1 }
+  let checking = session.isChecking
+  session.cancelCheck()
+  let cancelled = await slow.value
+  try expect(waited < 500 && checking && cancelled == "Connection check cancelled. \(kept)" && unchanged(),
+    "Cancel during the check must keep the saved connection and the live client")
+
+  session.checkTimeout = 0.3
+  let late = await session.change(baseURL: dashboard, username: "fixture-slow", password: "fixture-new")
+  session.checkTimeout = 15
+  try expect(late == "The dashboard took too long to answer. \(kept)" && unchanged(),
+    "A timeout must keep the saved connection and the live client")
+
+  let invalid = await session.change(baseURL: "\(dashboard)/account", username: "fixture", password: "fixture-new")
+  try expect(invalid == ConnectionCheckError.invalidDetails.errorDescription && unchanged(),
+    "Invalid details must never be checked or saved")
+
+  let before = fixture.requests.count
+  let ok = await session.change(baseURL: dashboard, username: "fixture", password: "fixture-new")
+  let reloaded = try BarConnection.load(from: file)
+  let keys = (try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]).map { Set($0.keys) }
+  let filePermissions = (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?.intValue
+  let folderPermissions = (try FileManager.default.attributesOfItem(atPath: file.deletingLastPathComponent().path)[.posixPermissions] as? NSNumber)?.intValue
+  try expect(Array(fixture.requests.dropFirst(before)) == ["POST dashboard.invalid/api/auth/login 200", "GET dashboard.invalid/api/accounts/settings 200"],
+    "Success must log in once, then read the settings with that session")
+  let savedAfter = try Data(contentsOf: file)
+  try expect(ok == nil && savedAfter != saved && reloaded.password == "fixture-new"
+    && reloaded.baseURL.absoluteString == dashboard && session.client !== live && session.connection?.password == "fixture-new",
+    "Success must replace the saved connection and the live client")
+  try expect(keys == ["baseURL", "username", "password"] && filePermissions == 0o600 && folderPermissions == 0o700,
+    "The verified connection must keep the file's JSON shape and private permissions")
+
+  // Other members of the saved file (a device token from a later pairing) survive a verified Change exactly.
+  let paired = directory.appendingPathComponent("paired/accounts-connection.json")
+  try FileManager.default.createDirectory(at: paired.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try JSONSerialization.data(withJSONObject: ["baseURL": dashboard, "username": "fixture", "password": "fixture-old",
+    "deviceToken": "fixture-device-token", "pairedAt": 1] as [String: Any]).write(to: paired)
+  try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paired.path)
+  let pairedSession = ConnectionSession(fileURL: paired, makeTransport: { SignInTransport(fixture) })
+  try pairedSession.load()
+  let pairedFailed = await pairedSession.change(baseURL: dashboard, username: "fixture", password: "wrong-password")
+  let pairedOk = await pairedSession.change(baseURL: dashboard, username: "fixture", password: "fixture-new")
+  let pairedObject = try JSONSerialization.jsonObject(with: Data(contentsOf: paired)) as? [String: Any]
+  try expect(pairedFailed != nil && pairedOk == nil && pairedObject?["deviceToken"] as? String == "fixture-device-token"
+    && (pairedObject?["pairedAt"] as? NSNumber)?.intValue == 1 && pairedObject?["password"] as? String == "fixture-new",
+    "A verified Change must keep the file's other members exactly")
+
+  // First run: nothing saved yet. A failure saves nothing and leaves no client; success saves and connects.
+  let firstFile = directory.appendingPathComponent("first/accounts-connection.json")
+  let first = ConnectionSession(fileURL: firstFile, makeTransport: { SignInTransport(fixture) })
+  let firstRejected = await first.change(baseURL: dashboard, username: "fixture", password: "wrong-password")
+  let firstRefused = await first.change(baseURL: "http://refused.invalid:3000", username: "fixture", password: "fixture-new")
+  try expect(firstRejected == "The dashboard did not accept that username and password. Nothing was saved."
+    && firstRefused == "Could not reach a dashboard at that address. Nothing was saved."
+    && !FileManager.default.fileExists(atPath: firstFile.path) && first.client == nil && first.connection == nil,
+    "A failed first sign-in must save nothing and leave no client")
+  let firstOk = await first.change(baseURL: dashboard, username: "fixture", password: "fixture-new")
+  try expect(firstOk == nil && (try? BarConnection.load(from: firstFile))?.password == "fixture-new" && first.client != nil,
+    "A verified first sign-in must save the connection and connect")
+
+  // The real URLSession transport against a loopback port nothing listens on.
+  let loopback = ConnectionSession(fileURL: firstFile)
+  try loopback.load()
+  let loopbackSaved = try Data(contentsOf: firstFile)
+  let loopbackClient = loopback.client
+  let loopbackRefused = await loopback.change(baseURL: "http://127.0.0.1:\(closedLoopbackPort())", username: "fixture", password: "fixture-new")
+  let loopbackAfter = try Data(contentsOf: firstFile)
+  try expect(loopbackRefused == "Could not reach a dashboard at that address. \(kept)"
+    && loopbackAfter == loopbackSaved && loopback.client === loopbackClient,
+    "A refused loopback connection must keep the saved connection and the live client")
+  try expect(ConnectionCheckError.login(status: 429) == .rateLimited && ConnectionCheckError.login(status: 302) == .notDashboard
+    && ConnectionCheckError.login(status: 400) == .signInNotSetUp && ConnectionCheckError.login(status: 500) == .failed,
+    "Login failures map to fixed public reasons")
+}
+
+// MARK: F6: a reading from before its window's reset is not shown
+
+private func checkResetPending() throws {
+  let iso = ISO8601DateFormatter()
+  let now = iso.date(from: "2026-10-02T12:00:00Z")!
+  let past = "2026-10-02T11:00:00Z", future = "2026-10-02T15:00:00Z"
+  let reset = iso.date(from: past)!
+  func window(_ resetAt: String, sampled: String? = nil, extra: String = "") throws -> AccountQuotaWindow {
+    let sample = sampled.map { ",\"sampledAt\":\"\($0)\"" } ?? ""
+    let json = "{\"key\":\"five_hour\",\"label\":\"Five-hour usage\",\"usedPercent\":37,\"kind\":\"rate_limit\",\"windowMinutes\":300,\"resetAt\":\"\(resetAt)\"\(sample)\(extra)}"
+    return try JSONDecoder().decode(AccountQuotaWindow.self, from: Data(json.utf8))
+  }
+  let older = "2026-10-02T10:00:00Z", newer = "2026-10-02T11:30:00Z"
+  let passed = try window(past), ahead = try window(future)
+  let ownNewer = try window(past, sampled: "2026-10-02T11:45:00Z"), ownOlder = try window(past, sampled: "2026-10-02T10:30:00Z")
+  let unlimited = try window(past, extra: ",\"unlimited\":true"), disabled = try window(past, extra: ",\"enabled\":false")
+  try expect(TrayReset.pending(passed, accountSampledAt: older, now: now) == reset,
+    "A past reset with an older sample is pending")
+  try expect(TrayReset.pending(passed, accountSampledAt: newer, now: now) == nil,
+    "A past reset with a newer sample shows the reading")
+  try expect(TrayReset.pending(ahead, accountSampledAt: older, now: now) == nil
+    && TrayReset.pending(ahead, accountSampledAt: nil, now: now) == nil,
+    "A future reset shows the reading")
+  try expect(TrayReset.pending(passed, accountSampledAt: nil, now: now) == reset
+    && TrayReset.pending(passed, accountSampledAt: "not-a-time", now: now) == reset,
+    "A past reset with no known sample time is pending")
+  try expect(TrayReset.pending(ownNewer, accountSampledAt: older, now: now) == nil
+    && TrayReset.pending(ownOlder, accountSampledAt: newer, now: now) == reset,
+    "A window's own sample time comes before the account's")
+  let balance = try JSONDecoder().decode(AccountQuotaWindow.self, from: Data(
+    "{\"key\":\"credits\",\"label\":\"Credits\",\"kind\":\"balance\",\"remaining\":4,\"resetAt\":\"\(past)\"}".utf8))
+  try expect(TrayReset.pending(unlimited, accountSampledAt: older, now: now) == nil
+    && TrayReset.pending(disabled, accountSampledAt: older, now: now) == nil
+    && TrayReset.pending(balance, accountSampledAt: older, now: now) == nil,
+    "Amounts, unlimited and disabled windows are left alone")
+  let forms = TrayReset.forms(reset, now: now)
+  try expect(forms[0] == "\(TrayReset.at(reset, now: now)) · new reading pending" && forms[0].hasPrefix("Reset at ")
+    && forms.allSatisfy { !$0.contains("%") } && TrayReset.long(reset).hasSuffix(" · new reading pending"),
+    "Pending text names the reset and shows no number")
+
+  // The menu bar never shows a reading from before its reset; the timer's key set flips when a reset passes.
+  func dashboard(sampledAt: String, resetAt: String) throws -> AccountDashboard {
+    let json = """
+    {"schemaVersion":1,"updatedAt":"\(older)","accounts":[{"id":"codex:a","provider":"codex","providerLabel":"Codex","label":"a",
+      "email":"codex-2@example.com","plan":"pro","platform":"ubuntu","source":"Fixture","status":"cached","message":null,
+      "fetchedAt":"\(sampledAt)","sampledAt":"\(sampledAt)","isActive":true,
+      "windows":[{"key":"seven_day","label":"Weekly","usedPercent":9.25,"windowMinutes":10080,"resetAt":"\(resetAt)"}],
+      "capabilities":{"codexProfile":"a","claudePlatforms":[]}}],
+     "codexAutoSwitch":{"enabled":true,"thresholdPercent":5,"pollIntervalSeconds":60,"outcome":"healthy","message":"",
+      "activationInProgress":false,"lastCheckedAt":null,"lastSwitchedAt":null}}
+    """
+    return try JSONDecoder().decode(AccountDashboard.self, from: Data(json.utf8))
+  }
+  let saved = TrayFormat.referenceNow
+  defer { TrayFormat.referenceNow = saved }
+  TrayFormat.referenceNow = now
+  let pending = try dashboard(sampledAt: older, resetAt: past)
+  let fresh = try dashboard(sampledAt: newer, resetAt: past)
+  try expect(MenuBarReading.make(dashboard: pending, source: .codex, mode: .left) == nil
+    && MenuBarReading.make(dashboard: fresh, source: .codex, mode: .left)?.text == "\(TrayFormat.number(90.75))%",
+    "The menu bar hides a weekly reading from before its reset and shows a newer one")
+  let soon = try dashboard(sampledAt: older, resetAt: "2026-10-02T12:00:30Z")
+  try expect(soon.pendingResetKeys(now: now).isEmpty && soon.pendingResetKeys(now: now.addingTimeInterval(60)) == ["codex:a|seven_day"],
+    "A window flips to pending when its reset passes while the panel is open")
+}
+
 private func printJSON(_ object: [String: Any]) throws {
   let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
   print(String(decoding: data, as: UTF8.self))
@@ -1511,6 +1753,10 @@ do {
   print("PASS Antigravity policy and capabilities, activation guards, tray order, and dashboard-hidden providers")
   try checkTrayPresentation()
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
+  try await checkConnectionChange()
+  print("PASS sign-in and Change verify before saving: wrong address, wrong login, cancel, timeout, success, first run")
+  try checkResetPending()
+  print("PASS readings from before their reset show as new reading pending, never 0%")
   print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
   fputs("AI Account Center core check failed: \(error)\n", stderr)

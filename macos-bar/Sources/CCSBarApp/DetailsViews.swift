@@ -56,10 +56,11 @@ struct AccountDetailsBody: View {
             alignment: .leading, spacing: 12) {
             ForEach(meters) { window in
               VStack(alignment: .leading, spacing: 3) {
-                MeterView(key: "\(account.id)|\(window.key)", window: window,
+                MeterView(key: "\(account.id)|\(window.key)", window: window, sampledAt: account.sampledAt,
+                  pendingReset: account.pendingReset(window),
                   labelText: TrayColumns.fullLabel(provider: account.provider, window),
                   motion: MeterMotion(animate: false), detail: true)
-                if let used = window.used, let limit = window.limit {
+                if account.pendingReset(window) == nil, let used = window.used, let limit = window.limit {
                   Text("\(TrayFormat.number(used)) of \(TrayFormat.number(limit))\(window.unit.map { " \($0)" } ?? "")")
                     .font(.system(size: 11.5)).monospacedDigit().foregroundStyle(palette.label2).lineLimit(1)
                 }
@@ -237,7 +238,8 @@ struct ProviderRow: View {
 
   private func meter(_ window: AccountQuotaWindow, label: String, amount: Bool) -> some View {
     let key = "\(group.representative.id)|\(window.key)"
-    return MeterView(key: key, window: window, labelText: label, showAmount: amount, hovered: hovered,
+    return MeterView(key: key, window: window, sampledAt: group.representative.sampledAt,
+      pendingReset: group.representative.pendingReset(window), labelText: label, showAmount: amount, hovered: hovered,
       motion: open.motion(key, block: block))
   }
 }

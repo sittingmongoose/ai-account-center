@@ -44,6 +44,59 @@ extension AccountQuotaWindow {
   }
 }
 
+/// F6: once a window's reset has passed, a reading sampled before it no longer describes the window. The tray then
+/// shows "Reset at <time> · new reading pending" with no number and no fill, never 0%.
+public enum TrayReset {
+  /// The reset time when `resetAt` is in the past and the reading was sampled before it (the window's own
+  /// `sampledAt`, else the account's), or when its sample time is unknown. Nil when the reading stands. Amounts,
+  /// unlimited and disabled windows are left alone.
+  public static func pending(_ window: AccountQuotaWindow, accountSampledAt: String?, now: Date = TrayFormat.now) -> Date? {
+    guard window.isMeter, window.unlimited != true, window.enabled != false,
+      let reset = AccountFormatting.date(window.resetAt), reset <= now else { return nil }
+    if let sampled = AccountFormatting.date(window.sampledAt ?? accountSampledAt), sampled >= reset { return nil }
+    return reset
+  }
+
+  /// "10:15 AM" today, "Oct 1, 11:00 PM" on another day.
+  public static func when(_ reset: Date, now: Date = TrayFormat.now) -> String {
+    Calendar.current.isDate(reset, inSameDayAs: now)
+      ? reset.formatted(date: .omitted, time: .shortened)
+      : reset.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+  }
+
+  /// "Reset at 10:15 AM".
+  public static func at(_ reset: Date, now: Date = TrayFormat.now) -> String { "Reset at \(when(reset, now: now))" }
+
+  /// Details and tooltips: "Reset at Thu, Oct 1, 10:15 AM · new reading pending".
+  public static func long(_ reset: Date) -> String {
+    "Reset at \(reset.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())) · new reading pending"
+  }
+
+  /// Compact cells, longest first: the whole sentence, then shorter forms for a narrow cell. The tooltip always has
+  /// the whole sentence.
+  public static func forms(_ reset: Date, now: Date = TrayFormat.now) -> [String] {
+    let time = when(reset, now: now)
+    return ["Reset at \(time) · new reading pending", "Reset at \(time) · pending", "Reset \(time) · pending",
+      "Reset at \(time)", "New reading pending", "Pending"]
+  }
+}
+
+extension DashboardAccount {
+  /// F6 for one of this account's windows (see `TrayReset.pending`).
+  public func pendingReset(_ window: AccountQuotaWindow, now: Date = TrayFormat.now) -> Date? {
+    TrayReset.pending(window, accountSampledAt: sampledAt, now: now)
+  }
+}
+
+extension AccountDashboard {
+  /// Every window now shown as "new reading pending", so a timer can tell when one flips.
+  public func pendingResetKeys(now: Date = TrayFormat.now) -> Set<String> {
+    Set(accounts.flatMap { account in
+      account.windows.filter { account.pendingReset($0, now: now) != nil }.map { "\(account.id)|\($0.key)" }
+    })
+  }
+}
+
 /// A Claude row's Fable column: only Max plans have one, and an absent window is "Not reported yet".
 public enum FableCell: Sendable {
   case notApplicable
@@ -165,7 +218,8 @@ public struct MenuBarReading: Sendable, Equatable {
       let keys = TrayColumns.antigravity([account]).map(\.key)
       windows = account.visibleWindows.filter { keys.contains($0.key) }
     }
-    let readings = windows.compactMap { window in window.meterUsedPercent.map { (window, $0) } }
+    // A reading from before its window's reset is not shown here either (F6).
+    let readings = windows.filter { account.pendingReset($0) == nil }.compactMap { window in window.meterUsedPercent.map { (window, $0) } }
     guard let tightest = readings.max(by: { $0.1 < $1.1 }) else { return nil }
     let value = mode == .left ? max(0, 100 - tightest.1) : tightest.1
     let text = "\(TrayFormat.number(value))%"

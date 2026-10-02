@@ -44,7 +44,16 @@ final class AccountsViewModel: ObservableObject {
   /// The first open of a session sweeps every meter from zero.
   var hasOpenedThisSession = false
   let isPreview: Bool
-  private var client: AccountsClient?
+  /// True while Connect or Save checks the entered details against the dashboard.
+  @Published private(set) var checkingConnection = false
+  /// The saved connection and its client. Sign-in and Change replace them only after the dashboard accepts the new
+  /// details (`ConnectionSession.change`).
+  private let session = ConnectionSession()
+  private var client: AccountsClient? { session.client }
+  /// Bumped when a verified Change replaces the client, so a sample still in flight from the old one is dropped.
+  private var connectionGeneration = 0
+  /// The windows now drawn as "new reading pending" (F6), so the timer redraws only when one flips.
+  private var pendingResets = Set<String>()
   private var timer: Timer?
 
   /// The first-run connect screen with no connection file and no network, for offline renders.
@@ -71,6 +80,7 @@ final class AccountsViewModel: ObservableObject {
     timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
       Task { @MainActor in
         guard let self else { return }
+        self.reevaluateResets()
         if self.client == nil { self.configure() }
         else { await self.refresh() }
       }
@@ -91,53 +101,79 @@ final class AccountsViewModel: ObservableObject {
     pendingAntigravitySwitch = nil
     connected = false
     do {
-      connection = try BarConnection.load()
-      client = AccountsClient(connection: connection!)
+      try session.load()
+      connection = session.connection
       message = nil
       Task { await refresh() }
     } catch {
+      session.clear()
       connection = nil
-      client = nil
       message = FileManager.default.fileExists(atPath: BarConnection.configURL.path)
         ? error.localizedDescription : nil
     }
   }
 
-  /// Saves the dashboard address and login privately (0700 directory, 0600 file), then reconnects.
-  func saveConnection(baseURL: String, username: String, password: String) throws {
-    guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
-      ["http", "https"].contains(url.scheme ?? ""), url.host != nil,
-      url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-      url.path.isEmpty || url.path == "/", !username.isEmpty, !password.isEmpty
-    else { throw BarClientError.invalidConnection }
-    let config = BarConnection(baseURL: url, username: username, password: password)
-    let directory = BarConnection.configURL.deletingLastPathComponent()
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-    try JSONEncoder().encode(config).write(to: BarConnection.configURL, options: .atomic)
-    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: BarConnection.configURL.path)
-    configure()
+  /// Connect and Change: verify, then save. A temporary client signs in with the entered details and reads the
+  /// dashboard; only then are they written privately (0700 directory, 0600 file, the same JSON) and the live client
+  /// replaced. A wrong address, a rejected login, a timeout or Cancel keeps the saved file and the live client.
+  /// Returns nil on success, or the message for the form.
+  func changeConnection(baseURL: String, username: String, password: String) async -> String? {
+    guard !isPreview else { return nil }
+    checkingConnection = true
+    let failure = await session.change(baseURL: baseURL, username: username, password: password)
+    checkingConnection = false
+    if let failure { return failure }
+    connectionGeneration += 1
+    pendingCodexSwitch = nil
+    pendingAntigravitySwitch = nil
+    connection = session.connection
+    connected = false
+    message = nil
+    await refresh()
+    return nil
   }
+
+  /// Cancel or Escape while a connection check runs.
+  func cancelConnectionCheck() { session.cancelCheck() }
 
   func refresh(force: Bool = false) async {
     guard !isPreview, !isRefreshing, busyAction == nil, !hasPendingConfirmation, let client else { return }
+    let generation = connectionGeneration
     isRefreshing = true
-    defer { isRefreshing = false }
+    var replaced = false
     do {
       let value = try await client.dashboard(refresh: force)
       guard value.schemaVersion == 1 else { throw BarClientError.decoding }
-      dashboard = value
-      configureRefreshTimer(value.settings?.validatedInterval ?? 60)
-      connected = true
-      lastSyncedAt = Date()
-      message = nil
-      recordStatus(connected: true)
+      if generation == connectionGeneration {
+        dashboard = value
+        pendingResets = value.pendingResetKeys()
+        configureRefreshTimer(value.settings?.validatedInterval ?? 60)
+        connected = true
+        lastSyncedAt = Date()
+        message = nil
+        recordStatus(connected: true)
+      } else { replaced = true }
     } catch {
-      connected = false
-      message = error.localizedDescription
-      recordStatus(connected: false)
+      if generation == connectionGeneration {
+        connected = false
+        message = error.localizedDescription
+        recordStatus(connected: false)
+      } else { replaced = true }
     }
+    isRefreshing = false
+    // A Change landed while this sample was in flight: read the new connection now.
+    if replaced { await refresh() }
+  }
+
+  /// The refresh timer's first step (F6): a window whose reset passes while the panel is open turns into "Reset at
+  /// ... · new reading pending" on this tick, even when the refresh after it is skipped or fails. Nothing redraws
+  /// unless a window changed state.
+  func reevaluateResets() {
+    guard let dashboard else { return }
+    let now = dashboard.pendingResetKeys()
+    guard now != pendingResets else { return }
+    pendingResets = now
+    objectWillChange.send()
   }
 
   private func recordStatus(connected: Bool) {
@@ -160,7 +196,7 @@ final class AccountsViewModel: ObservableObject {
   var currentReadings: [String: Double] {
     var values: [String: Double] = [:]
     for account in dashboard?.visibleAccounts ?? [] {
-      for window in account.visibleWindows {
+      for window in account.visibleWindows where account.pendingReset(window) == nil {
         if let used = window.meterUsedPercent { values["\(account.id)|\(window.key)"] = used }
       }
     }

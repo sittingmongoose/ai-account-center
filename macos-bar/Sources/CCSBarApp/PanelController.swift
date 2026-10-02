@@ -153,9 +153,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
   }
 
-  /// Escape closes a popover first, then Settings, then an unanswered switch confirmation, then the panel.
+  /// Escape closes a popover first, then stops a running connection check (nothing is saved), then closes Settings,
+  /// then an unanswered switch confirmation, then the panel.
   func cancel() {
     if popoverShown { state.popoverDismissal += 1 }
+    else if model.checkingConnection { model.cancelConnectionCheck() }
     else if state.settingsOpen { state.setSettings(false) }
     else if model.pendingCodexSwitch != nil { model.cancelCodexSwitch() }
     else if model.pendingAntigravitySwitch != nil { model.cancelAntigravitySwitch() }

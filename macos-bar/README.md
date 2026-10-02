@@ -17,6 +17,11 @@ and a footer that floats over the list (Codex auto-switch and threshold, Dashboa
 - **Usage is never invented.** A missing reading reads "Unavailable" (or "Not reported yet"), never 0. Values keep at
   most two decimals. Codex Chat pass windows, the Qwen subscription row and empty Z.ai reset-pack summaries stay
   hidden; a Codex account gets a 5-hour cell only when its exact `five_hour` window is reported.
+- **A reading from before its reset is not shown.** Once a window's `resetAt` has passed and its reading was sampled
+  before it (the window's own `sampledAt`, else the account's, or no sample time at all), the meter is drawn
+  unavailable with no number and reads "Reset at 10:15 AM · new reading pending" (shorter forms in a narrow cell,
+  "Pending" beside a label), never 0%. The menu bar skips such a reading. The refresh timer re-checks this on every
+  tick, so a window flips when its reset passes while the panel is open.
 - **Claude Fable** has its own column for Max plans only, read from the provider's `seven_day_fable` window; a Max
   account without one shows "Not reported yet", and Pro accounts have no Fable cell.
 - **Active account (Selected row).** In Codex and Antigravity the active row sits on one accent-tinted platter that
@@ -114,7 +119,11 @@ Connection settings save `~/.ccs/bar/accounts-connection.json` in a private
 directory (0700) with file mode 0600. The file is not part of the source or app
 bundle. Its keys are `baseURL`, `username`, and `password`; configure them in
 Settings › Connection (or the first-run connect screen in the panel) or deploy the
-file privately. Device pairing waits for the dashboard's device-token routes. Existing saved connection files are preserved during app upgrades. The client signs in to
+file privately. Connect and Change verify before they save: a temporary client signs in with the entered details
+and reads `GET /api/accounts/settings` with that session, and only then is the file written (same path, permissions
+and JSON, any other members kept) and the live client replaced. A wrong address, a rejected login, a timeout (15 s)
+or Cancel (or Escape) while it checks keeps the saved file and the live client, and the reason shows under the form.
+Device pairing waits for the dashboard's device-token routes. Existing saved connection files are preserved during app upgrades. The client signs in to
 `POST /api/auth/login`, retains cookies only in an ephemeral session, and sends
 the dashboard's exact Origin on mutations. It does not disable dashboard
 authentication. Failed login polling backs off for 15 minutes.

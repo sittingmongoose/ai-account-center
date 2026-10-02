@@ -63,6 +63,24 @@ public actor AccountsClient {
     }
   }
 
+  /// Sign-in and Change: proves this connection before anything is saved. One login (no retry and no failure
+  /// backoff), then GET /api/accounts/settings, a small read that always needs the session and answers with the
+  /// dashboard's refresh settings. Success leaves the client signed in, ready to become the live client. Failures
+  /// throw `ConnectionCheckError` (fixed text) or the transport's own error.
+  public func verify() async throws {
+    let body = try JSONSerialization.data(withJSONObject: ["username": connection.username, "password": connection.password])
+    let (_, login) = try await transport.send(makeRequest("api/auth/login", method: "POST", body: body))
+    guard (200..<300).contains(login.statusCode) else { throw ConnectionCheckError.login(status: login.statusCode) }
+    let (data, read) = try await transport.send(makeRequest("api/accounts/settings"))
+    if read.statusCode == 401 { throw ConnectionCheckError.sessionDropped }
+    guard (200..<300).contains(read.statusCode),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      object["refreshIntervalSeconds"] is NSNumber
+    else { throw ConnectionCheckError.notDashboard }
+    authenticated = true
+    loginBlockedUntil = nil
+  }
+
   private func makeRequest(_ path: String, method: String = "GET", body: Data? = nil) -> URLRequest {
     let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
     var components = URLComponents(url: connection.baseURL.appendingPathComponent(String(parts[0])), resolvingAgainstBaseURL: false)!

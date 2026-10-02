@@ -83,6 +83,12 @@ struct MeterTrack: View {
 struct MeterView: View {
   let key: String
   let window: AccountQuotaWindow?
+  /// The account's sample time, for the tooltip when the window has none of its own.
+  var sampledAt: String? = nil
+  /// F6: the reset time when this window's reading was taken before its reset (or at an unknown time), from
+  /// `DashboardAccount.pendingReset`. The parent works it out, so a timer tick that flips it redraws this meter. The
+  /// meter then shows no number, no fill and no notch, never 0%: "Reset at 10:15 AM · new reading pending".
+  var pendingReset: Date? = nil
   var labelText: String? = nil
   var notch: Double? = nil
   var notchOpacity: Double = 1
@@ -97,7 +103,7 @@ struct MeterView: View {
   @Environment(\.trayStaticRender) private var staticRender
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  private var target: Double? { window?.meterUsedPercent }
+  private var target: Double? { pendingReset == nil ? window?.meterUsedPercent : nil }
 
   var body: some View {
     withPalette { palette in
@@ -127,6 +133,9 @@ struct MeterView: View {
           .lineLimit(1).truncationMode(.tail)
         Spacer(minLength: 4)
         value(palette, severity, size: 14)
+      } else if let reset = pendingReset {
+        PendingResetText(reset: reset)
+        Spacer(minLength: 0)
       } else {
         value(palette, severity, size: 15)
         Spacer(minLength: 4)
@@ -140,28 +149,45 @@ struct MeterView: View {
       CountingPercent(value: shown ?? target, decimals: TrayFormat.decimals(target), size: size)
         .foregroundStyle(palette.valueText(severity))
     } else {
-      Text(unavailableText).font(.system(size: 12, weight: .medium)).foregroundStyle(palette.label3).lineLimit(1)
+      Text(pendingReset == nil ? unavailableText : "Pending").font(.system(size: 12, weight: .medium)).foregroundStyle(palette.label3).lineLimit(1)
     }
   }
 
   @ViewBuilder private func foot(_ palette: TrayPalette) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
-      if detail {
+      if let reset = pendingReset {
+        if detail {
+          // Details keep the whole sentence, on a second line when the column is narrow.
+          Text(TrayReset.long(reset)).font(.system(size: 11.5)).foregroundStyle(palette.label2).lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+          HStack(spacing: 4) {
+            Image(systemName: "clock").font(.system(size: 10.5, weight: .medium))
+            Text(TrayReset.at(reset)).font(.system(size: 11.5)).monospacedDigit().lineLimit(1)
+          }
+          .foregroundStyle(palette.label2)
+        }
+      } else if detail {
         Text(TrayFormat.longReset(window?.resetAt)).font(.system(size: 11.5)).foregroundStyle(palette.label2).lineLimit(1)
           .minimumScaleFactor(0.85)
       } else if let window {
         ResetLabel(iso: window.resetAt)
       }
       Spacer(minLength: 0)
-      if showAmount, let window, let used = window.used, let limit = window.limit, limit > 0 {
+      if showAmount, pendingReset == nil, let window, let used = window.used, let limit = window.limit, limit > 0 {
         Text("\(TrayFormat.number(used)) of \(limit >= 1_000_000 ? limit.formatted(.number.notation(.compactName)) : TrayFormat.number(limit))\(window.unit.map { " \($0)" } ?? "")")
           .font(.system(size: 11.5)).monospacedDigit().foregroundStyle(palette.label2).lineLimit(1)
       }
-    }.frame(height: 14)
+    }.frame(height: pendingReset != nil && detail ? nil : 14)
   }
 
   private var helpText: String {
     guard let window else { return unavailableHelp }
+    if let reset = pendingReset {
+      let sampled = AccountFormatting.date(window.sampledAt ?? sampledAt).map { "Sampled \(TrayFormat.relative($0))" }
+      return [window.label, TrayReset.long(reset), "The last reading was taken before this reset, so it is not shown",
+        sampled ?? "Sample time unavailable"].joined(separator: " · ")
+    }
     var parts = [window.label]
     if let target {
       var used = "\(TrayFormat.number(target))% used"
@@ -185,6 +211,25 @@ struct MeterView: View {
     }
     shown = start
     withAnimation(.trayValue().delay(motion.delay)) { shown = target }
+  }
+}
+
+/// A compact cell whose reading was taken before its reset (F6): the longest of "Reset at 10:15 AM · new reading
+/// pending" and its shorter forms that fits, in the unavailable style. The meter's tooltip keeps the whole sentence.
+struct PendingResetText: View {
+  let reset: Date
+  var body: some View {
+    withPalette { palette in
+      let forms = TrayReset.forms(reset)
+      ViewThatFits(in: .horizontal) {
+        line(forms[0]); line(forms[1]); line(forms[2]); line(forms[3]); line(forms[4]); line(forms[5])
+      }
+      .foregroundStyle(palette.label3)
+    }
+  }
+
+  private func line(_ text: String) -> some View {
+    Text(text).font(.system(size: 12, weight: .medium)).lineLimit(1).fixedSize()
   }
 }
 
