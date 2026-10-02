@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1234,
-    "filesAffected": 122,
+    "totalOccurrences": 1267,
+    "filesAffected": 124,
     "hotpathOccurrences": 522,
     "hotpathFilesAffected": 68,
     "topHotpathFiles": [
@@ -186,12 +186,13 @@
       },
       {
         "file": "src/antigravity/registry.ts",
-        "count": 54,
+        "count": 69,
         "calls": [
           "closeSync",
           "existsSync",
           "fstatSync",
           "fsyncSync",
+          "futimesSync",
           "lstatSync",
           "mkdirSync",
           "openSync",
@@ -199,7 +200,6 @@
           "readFileSync",
           "renameSync",
           "rmdirSync",
-          "rmSync",
           "unlinkSync",
           "writeFileSync"
         ],
@@ -519,11 +519,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 577,
+      "totalThrows": 588,
       "typedThrows": 133,
       "plainThrows": 70,
-      "otherThrows": 374,
-      "adoptionRatio": 0.2305,
+      "otherThrows": 385,
+      "adoptionRatio": 0.2262,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -533,7 +533,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 151,
+          "count": 162,
           "typed": 0,
           "plain": 0
         },
@@ -601,8 +601,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 33,
-      "totalSourceFiles": 400,
-      "coverageRatio": 0.0825,
+      "totalSourceFiles": 402,
+      "coverageRatio": 0.0821,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -648,7 +648,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 28,
+          "count": 30,
           "withLogger": 0
         },
         {
@@ -679,9 +679,9 @@
       ]
     },
     "hotpathConsoleErrors": {
-      "totalOccurrences": 294,
+      "totalOccurrences": 296,
       "exemptOccurrences": 208,
-      "hotpathOccurrences": 86,
+      "hotpathOccurrences": 88,
       "filesAffected": 21,
       "topFiles": [
         {
@@ -705,6 +705,10 @@
           "count": 7
         },
         {
+          "file": "src/antigravity/registry.ts",
+          "count": 5
+        },
+        {
           "file": "src/bin/compat-cli.ts",
           "count": 5
         },
@@ -719,10 +723,6 @@
         {
           "file": "src/utils/platform-commands.ts",
           "count": 4
-        },
-        {
-          "file": "src/antigravity/registry.ts",
-          "count": 3
         },
         {
           "file": "src/auth/profile-continuity-inheritance.ts",
@@ -747,7 +747,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 39,
+      "countOver400": 40,
       "countOver600": 16,
       "topOver400": [
         {
@@ -757,6 +757,10 @@
         {
           "file": "src/web-server/model-pricing.ts",
           "loc": 1138
+        },
+        {
+          "file": "src/antigravity/registry.ts",
+          "loc": 1083
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -777,10 +781,6 @@
         {
           "file": "src/cliproxy/accounts/registry.ts",
           "loc": 871
-        },
-        {
-          "file": "src/antigravity/registry.ts",
-          "loc": 853
         },
         {
           "file": "src/cliproxy/accounts/account-safety.ts",

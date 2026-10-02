@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { createUbuntuNativeCredentialStore } from './native-credential-transport';
 import { createAntigravityQuotaWorker } from './quota-worker-transport';
+import { antigravitySignInRunning } from './signin-marker';
 import {
   AntigravityProfileRegistry,
   PrivateStorageError,
@@ -104,10 +105,9 @@ export class AntigravityAccountLifecycle {
     return path.resolve(this.deps.ccsDir());
   }
 
-  /** The registry, only when it exists: reading never creates private folders. */
+  /** The registry, only when it exists, opened read-only: reading never creates a folder. */
   private existingRegistry(): AntigravityProfileRegistry | null {
-    if (!fs.existsSync(path.join(this.ccsDir(), 'antigravity-profiles'))) return null;
-    return new AntigravityProfileRegistry(this.ccsDir());
+    return AntigravityProfileRegistry.openExisting(this.ccsDir());
   }
 
   private validate(credential: NativeCredential): Promise<VerifiedIdentity> {
@@ -137,10 +137,19 @@ export class AntigravityAccountLifecycle {
     return this.listProfiles().length;
   }
 
-  /** A switch, import or remove holds the lock, or an unresolved switch needs recovery. */
+  /**
+   * A live switch, import or remove holds the lock, or an unresolved switch
+   * needs recovery. An abandoned lock does not count: the next Add, Sign in
+   * again or Remove takes it over.
+   */
   activationRunning(): boolean {
     const registry = this.existingRegistry();
-    return registry !== null && (registry.lockPresent() || registry.hasRecovery());
+    return registry !== null && (registry.lockHeldLive() || registry.hasRecovery());
+  }
+
+  /** A terminal sign-in for this profile is running now. */
+  signInRunning(profileId: string): boolean {
+    return !this.nameError(profileId) && antigravitySignInRunning(this.ccsDir(), profileId);
   }
 
   /** The registry's last runtime-verified active profile, if any. */
@@ -152,8 +161,10 @@ export class AntigravityAccountLifecycle {
 
   /**
    * Whether this saved profile is the live native login, checked now: the same
-   * saved credential bytes, else the same verified Google identity. No native
-   * login file means no profile is live. A check that cannot run throws.
+   * credential bytes the registry recorded for it, else the same verified
+   * Google identity. The saved snapshot file is not read, so a missing or
+   * corrupt one never blocks the check. No native login file means no profile
+   * is live. A check that cannot run throws.
    */
   async isLiveNativeProfile(profileId: string): Promise<boolean> {
     const registry = this.existingRegistry();
@@ -167,8 +178,7 @@ export class AntigravityAccountLifecycle {
       throw error;
     }
     const native = await this.readNative();
-    const saved = registry.readCredential(profileId, 'ubuntu');
-    if (credentialFingerprint(native) === saved.credentialRevision) return true;
+    if (credentialFingerprint(native) === registry.savedRevision(profileId)) return true;
     const identity = checkedIdentity(await this.validate(native));
     return identityKey(identity) === profile.identityKey;
   }
@@ -186,7 +196,7 @@ export class AntigravityAccountLifecycle {
     if (this.runtimeActiveProfileId() === profileId || options.liveHint === true)
       return 'account_active';
     if (options.fresh && (await this.isLiveNativeProfile(profileId))) return 'account_active';
-    if (options.signinRunning) return 'signin_running';
+    if (options.signinRunning || this.signInRunning(profileId)) return 'signin_running';
     return null;
   }
 
@@ -216,8 +226,13 @@ export class AntigravityAccountLifecycle {
 
   /** Delete the saved snapshot under the registry lock; refusals are checked again there. */
   async remove(profileId: string): Promise<{ leftInPlace: number }> {
-    const registry = this.existingRegistry();
-    if (!registry) throw new AntigravityLifecycleError('unknown_account');
+    if (!this.existingRegistry()) throw new AntigravityLifecycleError('unknown_account');
+    let registry: AntigravityProfileRegistry;
+    try {
+      registry = new AntigravityProfileRegistry(this.ccsDir());
+    } catch {
+      throw new AntigravityLifecycleError('remove_failed');
+    }
     try {
       return await registry.withLock(async () => {
         if (registry.hasRecovery()) throw new AntigravityLifecycleError('activation_running');
@@ -225,6 +240,7 @@ export class AntigravityAccountLifecycle {
           throw new AntigravityLifecycleError('unknown_account');
         if (this.runtimeActiveProfileId() === profileId)
           throw new AntigravityLifecycleError('account_active');
+        if (this.signInRunning(profileId)) throw new AntigravityLifecycleError('signin_running');
         let live: boolean;
         try {
           live = await this.isLiveNativeProfile(profileId);
@@ -236,6 +252,23 @@ export class AntigravityAccountLifecycle {
       });
     } catch (error) {
       throw new AntigravityLifecycleError(storageCode(error, 'remove_failed'));
+    }
+  }
+
+  /**
+   * Maintenance: delete the credential files of profile folders no saved
+   * profile names (a crash between a Remove's registry revision and its file
+   * deletion, or a failed Add). Skipped while the lock is held.
+   */
+  async sweepOrphans(): Promise<{ removed: number; leftInPlace: number }> {
+    if (!this.existingRegistry()) return { removed: 0, leftInPlace: 0 };
+    const registry = new AntigravityProfileRegistry(this.ccsDir());
+    try {
+      return await registry.withLock(async () => registry.sweepOrphanedInstances());
+    } catch (error) {
+      if (error instanceof PrivateStorageError && error.code === 'busy')
+        return { removed: 0, leftInPlace: 0 };
+      throw error;
     }
   }
 

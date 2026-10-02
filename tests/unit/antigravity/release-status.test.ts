@@ -150,6 +150,12 @@ describe('Antigravity switching readiness', () => {
     expect(read({ dashboardGate: true }).automaticSwitching?.enabled).toBe(true);
   });
 
+  it('only reads: an empty profiles folder gains no credential folder', () => {
+    fs.mkdirSync(path.join(ccsDir, 'antigravity-profiles'), { mode: 0o700 });
+    expect(read().profiles).toEqual([]);
+    expect(fs.readdirSync(ccsDir)).toEqual(['antigravity-profiles']);
+  });
+
   it('formats one line per gate without secrets', async () => {
     installAgy();
     await save('gmail');

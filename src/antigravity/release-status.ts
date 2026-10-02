@@ -121,16 +121,17 @@ export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): Antigravi
     }
   }
   let profiles: AntigravityReleaseStatus['profiles'] = [];
-  if (fs.existsSync(path.join(ccsDir, 'antigravity-profiles'))) {
-    try {
-      profiles = new AntigravityProfileRegistry(ccsDir).listProfiles().map((profile) => ({
+  try {
+    // Read-only: the report never creates a folder.
+    profiles = (AntigravityProfileRegistry.openExisting(ccsDir)?.listProfiles() ?? []).map(
+      (profile) => ({
         id: profile.id,
         email: profile.email,
         runtimeVerifiedActive: profile.hosts.some((host) => host.active),
-      }));
-    } catch {
-      profiles = [];
-    }
+      })
+    );
+  } catch {
+    profiles = [];
   }
   let automaticSwitching: AntigravityReleaseStatus['automaticSwitching'] = null;
   try {

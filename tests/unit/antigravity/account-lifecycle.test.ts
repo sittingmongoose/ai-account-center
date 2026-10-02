@@ -3,7 +3,8 @@
  * private registry in a temporary CCS folder. The provider identity check and
  * the live native login are fakes; no native store or provider is touched.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -17,6 +18,10 @@ import {
   AntigravityProfileRegistry,
   credentialFingerprint,
 } from '../../../src/antigravity/registry';
+import {
+  antigravitySignInRunning,
+  claimAntigravitySignInMarker,
+} from '../../../src/antigravity/signin-marker';
 import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 
 const NOW = Date.parse('2026-10-02T12:00:00.000Z');
@@ -346,5 +351,139 @@ describe('Antigravity sign-in import', () => {
         })
       )
     ).toBe('too_many_accounts');
+  });
+});
+
+/** A disposable reaped child pid. */
+async function deadPid(): Promise<number> {
+  const child = spawn(process.execPath, ['--version'], { stdio: 'ignore' });
+  const pid = child.pid;
+  await new Promise<void>((resolve, reject) => {
+    child.once('exit', () => resolve());
+    child.once('error', reject);
+  });
+  if (pid === undefined) throw new Error('fixture could not spawn a disposable process');
+  return pid;
+}
+
+function plantDeadLock(pid: number): string {
+  const lock = path.join(ccsDir, 'antigravity-profiles', '.transaction-lock');
+  fs.mkdirSync(lock, { mode: 0o700 });
+  fs.writeFileSync(
+    path.join(lock, 'holder.json'),
+    JSON.stringify({ pid, startedAt: new Date().toISOString() }),
+    { mode: 0o600 }
+  );
+  return lock;
+}
+
+describe('Antigravity lifecycle review fixes', () => {
+  it('an abandoned lock never blocks Remove: the removal takes it over', async () => {
+    await save('gmail');
+    await save('party');
+    const lock = plantDeadLock(await deadPid());
+    const agy = lifecycle();
+    expect(agy.activationRunning()).toBe(false);
+    expect(await agy.removeRefusal('party', { signinRunning: false, fresh: true })).toBeNull();
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    let result: string;
+    try {
+      result = await code(agy.remove('party'));
+    } finally {
+      warn.mockRestore();
+    }
+    expect(result).toBe('resolved');
+    expect(fs.existsSync(lock)).toBe(false);
+    expect(agy.listProfiles().map((profile) => profile.id)).toEqual(['gmail']);
+  });
+
+  it('removes a profile whose saved snapshot is unreadable, and still refuses the live account', async () => {
+    await save('gmail');
+    await save('party');
+    for (const id of ['gmail', 'party'])
+      for (const name of credentialFiles(id))
+        fs.rmSync(path.join(ccsDir, 'antigravity-instances', id, 'ubuntu', name));
+    const agy = lifecycle();
+    // The live login is gmail's account with refreshed bytes: matched by identity.
+    setNative(credential('gmail@example.com', 7));
+    expect(await agy.isLiveNativeProfile('gmail')).toBe(true);
+    expect(await agy.removeRefusal('gmail', { signinRunning: false, fresh: true })).toBe(
+      'account_active'
+    );
+    expect(await code(agy.remove('gmail'))).toBe('account_active');
+    expect(await agy.isLiveNativeProfile('party')).toBe(false);
+    expect(await code(agy.remove('party'))).toBe('resolved');
+    expect(agy.listProfiles().map((profile) => profile.id)).toEqual(['gmail']);
+  });
+
+  it('refuses Remove while a terminal sign-in for the profile runs', async () => {
+    await save('gmail');
+    await save('party');
+    const agy = lifecycle();
+    const marker = claimAntigravitySignInMarker(ccsDir, 'party');
+    expect(marker).not.toBeNull();
+    expect(claimAntigravitySignInMarker(ccsDir, 'party')).toBeNull();
+    expect(agy.signInRunning('party')).toBe(true);
+    expect(agy.signInRunning('gmail')).toBe(false);
+    expect(await agy.removeRefusal('party', { signinRunning: false, fresh: false })).toBe(
+      'signin_running'
+    );
+    expect(await code(agy.remove('party'))).toBe('signin_running');
+    marker!.release();
+    expect(agy.signInRunning('party')).toBe(false);
+    expect(await agy.removeRefusal('party', { signinRunning: false, fresh: false })).toBeNull();
+    expect(fs.readdirSync(path.join(ccsDir, 'antigravity-signin'))).toEqual([]);
+  });
+
+  it('a marker left by a sign-in that died does not count and is replaced', async () => {
+    const pid = await deadPid();
+    const directory = path.join(ccsDir, 'antigravity-signin');
+    fs.mkdirSync(directory, { mode: 0o700 });
+    fs.writeFileSync(
+      path.join(directory, 'party.running'),
+      JSON.stringify({ pid, startedAt: new Date().toISOString() }),
+      { mode: 0o600 }
+    );
+    expect(antigravitySignInRunning(ccsDir, 'party')).toBe(false);
+    const marker = claimAntigravitySignInMarker(ccsDir, 'party');
+    expect(marker).not.toBeNull();
+    expect(antigravitySignInRunning(ccsDir, 'party')).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(directory, 'party.running'), 'utf8')).pid).toBe(
+      process.pid
+    );
+    marker!.release();
+    expect(fs.readdirSync(directory)).toEqual([]);
+  });
+
+  it('sweeps credential files no saved profile names, and a new profile keeps no leftovers', async () => {
+    await save('gmail');
+    const ghost = path.join(ccsDir, 'antigravity-instances', 'ghost', 'ubuntu');
+    fs.mkdirSync(ghost, { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.dirname(ghost), 0o700);
+    const leftover = `credential-${'a'.repeat(64)}.bin`;
+    fs.writeFileSync(path.join(ghost, leftover), 'old', { mode: 0o600 });
+    // A new Add of the same name does not keep the leftover as its previous copy.
+    await save('ghost');
+    expect(credentialFiles('ghost')).toEqual([
+      `credential-${credentialFingerprint(credential('ghost@example.com'))}.bin`,
+    ]);
+    const agy = lifecycle();
+    expect(await code(agy.remove('ghost'))).toBe('resolved');
+    fs.mkdirSync(ghost, { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.dirname(ghost), 0o700);
+    fs.writeFileSync(path.join(ghost, leftover), 'old', { mode: 0o600 });
+    expect(await agy.sweepOrphans()).toEqual({ removed: 1, leftInPlace: 0 });
+    expect(fs.existsSync(path.dirname(ghost))).toBe(false);
+    expect(credentialFiles('gmail').length).toBe(1);
+  });
+
+  it('reading the registry never creates the credential folder', async () => {
+    fs.mkdirSync(path.join(ccsDir, 'antigravity-profiles'), { mode: 0o700 });
+    const agy = lifecycle();
+    expect(agy.listProfiles()).toEqual([]);
+    expect(agy.activationRunning()).toBe(false);
+    expect(agy.removeFingerprint('party')).toMatch(/^[a-f0-9]{64}$/);
+    expect(await agy.isLiveNativeProfile('party')).toBe(false);
+    expect(fs.readdirSync(ccsDir)).toEqual(['antigravity-profiles']);
   });
 });

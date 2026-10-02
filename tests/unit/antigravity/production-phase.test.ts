@@ -283,6 +283,25 @@ test('idle changes at final locked approval are deferred before stop', async () 
   expect(driver.events).not.toContain('stop');
 });
 
+test('an automatic switch whose first approval probe fails is busy before anything stops', async () => {
+  const { driver, service } = await setup();
+  driver.plan = runningPlan();
+  driver.approveHook = () => {
+    throw new Error('runtime-proof-unavailable');
+  };
+  const result = await service.activate({
+    profileId: 'second',
+    hostId: 'ubuntu',
+    mode: 'automatic',
+    expectedActiveIdentityKey: identityKey(fixtureIdentity(driver.current)),
+    revalidateAutomatic: async () => true,
+  });
+  expect(result.status).toBe('busy');
+  expect(result.reason).toBe('running-processes');
+  expect(driver.events).not.toContain('stop');
+  expect(driver.events).not.toContain('install');
+});
+
 test('final policy rejection resumes proves and commits previous session before deferred', async () => {
   const { driver, service, registry } = await setup();
   driver.plan = runningPlan();

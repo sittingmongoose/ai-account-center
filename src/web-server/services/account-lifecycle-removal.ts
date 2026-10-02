@@ -124,7 +124,13 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
         agy.removeRefusal(account.profileId, { signinRunning: running(), fresh: true }),
       fingerprint: async () => agy.removeFingerprint(account.profileId),
       commit: async () => {
-        await agy.remove(account.profileId);
+        const { leftInPlace } = await agy.remove(account.profileId);
+        // Files that could not be proven ours stay for review; say so.
+        if (leftInPlace > 0)
+          env.audit('accounts.remove.left_in_place', {
+            provider: 'antigravity',
+            count: leftInPlace,
+          });
         return { trashId: null, purgeAfter: null };
       },
     };

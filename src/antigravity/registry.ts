@@ -1,6 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomBytes } from 'crypto';
+import {
+  HOLDER_RECORD_BYTES,
+  holderStaleReason,
+  ownHolderRecord,
+  parseHolderRecord,
+  type HolderRecord,
+} from './holder-record';
 import type { AntigravityHostId, NativeCredential, ProfileDto, VerifiedIdentity } from './types';
 
 const MAX_NATIVE_BYTES = 1024 * 1024;
@@ -8,11 +15,18 @@ const MAX_REGISTRY_BYTES = 1024 * 1024;
 const PROFILE_ID = /^[a-z][a-z0-9_-]{0,47}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const FORMAT = /^[a-z][a-z0-9_.-]{1,63}$/;
+const LOCK_NAME = '.transaction-lock';
 const LOCK_HOLDER_FILE = 'holder.json';
-const LOCK_HOLDER_BYTES = 512;
-/** The switch flow bounds nothing longer (broker approval TTL 60s, runtime-proof
- * budget 10s, identity max age 5min); stale locks age out after 10 minutes. */
+/** A live holder refreshes its record's mtime this often while it holds the lock. */
+const LOCK_HEARTBEAT_MS = 60_000;
+/**
+ * A live holder silent this long is taken over: its event loop has been
+ * blocked for ten heartbeats. The switch flow bounds nothing longer (broker
+ * approval TTL 60s, runtime-proof budget 10s, identity max age 5min).
+ */
 const STALE_LOCK_TIMEOUT_MS = 10 * 60_000;
+/** A takeover claim is held for a few synchronous file calls; one this old is abandoned. */
+const STALE_CLAIM_MS = 30_000;
 const CREDENTIAL_FILE = /^credential-([a-f0-9]{64})\.bin$/;
 
 interface CredentialRecord {
@@ -176,66 +190,49 @@ function ownedPrivateDirectory(target: string): DirectoryIdentity {
   return { dev: stat.dev, ino: stat.ino };
 }
 
-function readLockHolder(lock: string): { pid: number; startedAt: number } | null {
+/** The holder record inside a lock or claim folder, read without following links. */
+function readLockHolder(lock: string): HolderRecord | null {
   const holder = path.join(lock, LOCK_HOLDER_FILE);
   try {
     const stat = fs.lstatSync(holder);
     if (
       !stat.isFile() ||
       stat.isSymbolicLink() ||
-      stat.size > LOCK_HOLDER_BYTES ||
+      stat.size > HOLDER_RECORD_BYTES ||
       (process.platform !== 'win32' &&
         ((stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())))
     )
       return null;
     const fd = fs.openSync(holder, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(fs.readFileSync(fd, 'utf8'));
+      return parseHolderRecord(fs.readFileSync(fd, 'utf8'), fs.fstatSync(fd).mtimeMs);
     } finally {
       fs.closeSync(fd);
     }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const { pid, startedAt } = parsed as { pid?: unknown; startedAt?: unknown };
-    if (!Number.isSafeInteger(pid) || (pid as number) <= 0 || typeof startedAt !== 'string')
-      return null;
-    const started = Date.parse(startedAt);
-    return Number.isFinite(started) ? { pid: pid as number, startedAt: started } : null;
   } catch {
     return null;
   }
 }
 
-function holderAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // ESRCH proves exit; anything else (for example EPERM) still counts as live.
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
-  }
-}
-
-/** One-line reason when the lock is provably abandoned, otherwise null. */
-function staleLockReason(lock: string, now: number): string | null {
+/**
+ * One-line reason when the folder is provably abandoned, otherwise null: its
+ * holder process is gone (dead, its pid reused, or from an earlier boot), or
+ * it is alive but sent no heartbeat for `silentAfterMs`; a folder without a
+ * readable holder record ages out on its own mtime.
+ */
+function staleLockReason(lock: string, now: number, silentAfterMs: number): string | null {
   const holder = readLockHolder(lock);
-  if (holder) {
-    if (!holderAlive(holder.pid)) return `holder pid ${holder.pid} is dead`;
-    if (now - holder.startedAt > STALE_LOCK_TIMEOUT_MS)
-      return `holder pid ${holder.pid} held the lock for ${now - holder.startedAt}ms`;
-    return null;
-  }
-  // A crashed writer or a pre-holder record lock ages out on its directory time.
+  if (holder) return holderStaleReason(holder, now, silentAfterMs);
   try {
-    if (now - fs.lstatSync(lock).mtimeMs > STALE_LOCK_TIMEOUT_MS)
-      return `lock is older than ${STALE_LOCK_TIMEOUT_MS}ms without a holder record`;
+    if (now - fs.lstatSync(lock).mtimeMs > silentAfterMs)
+      return `lock is older than ${silentAfterMs}ms without a holder record`;
   } catch {
     return null;
   }
   return null;
 }
 
-/** A displaced lock is removed only when it holds nothing but our own holder record. */
+/** A displaced lock is removed only when it holds nothing but a holder record. */
 function discardStaleLock(aside: string): void {
   try {
     const entries = fs.readdirSync(aside);
@@ -247,6 +244,139 @@ function discardStaleLock(aside: string): void {
   }
 }
 
+interface StagedFolder {
+  directory: string;
+  identity: DirectoryIdentity;
+  /** Open on our own holder record: its inode proves the record is ours. */
+  holderFd: number;
+}
+
+/**
+ * A new lock or claim folder, complete with its holder record, made beside
+ * `target` before it is renamed into place. A lock or claim folder therefore
+ * never sits empty at its path, so a rename onto that path fails rather than
+ * replacing one (rename(2) replaces only an empty folder).
+ */
+function stageHolderFolder(target: string): StagedFolder {
+  const directory = `${target}.new-${process.pid}-${randomBytes(6).toString('hex')}`;
+  fs.mkdirSync(directory, { mode: 0o700 });
+  const made = fs.lstatSync(directory);
+  const identity = { dev: made.dev, ino: made.ino };
+  let holderFd: number | undefined;
+  try {
+    holderFd = fs.openSync(
+      path.join(directory, LOCK_HOLDER_FILE),
+      fs.constants.O_WRONLY |
+        fs.constants.O_CREAT |
+        fs.constants.O_EXCL |
+        (fs.constants.O_NOFOLLOW ?? 0),
+      0o600
+    );
+    fs.writeFileSync(holderFd, ownHolderRecord());
+    return { directory, identity, holderFd };
+  } catch {
+    discardStagedFolder(directory, identity, holderFd);
+    throw new PrivateStorageError('unsafe');
+  }
+}
+
+/** Remove only what this process made: its own holder record by inode, then its own folder by inode. */
+function discardStagedFolder(
+  directory: string,
+  identity: DirectoryIdentity,
+  holderFd: number | undefined
+): void {
+  if (holderFd !== undefined) {
+    unlinkOwnHolder(directory, holderFd);
+    try {
+      fs.closeSync(holderFd);
+    } catch {
+      /* Already closed. */
+    }
+  }
+  try {
+    if (sameDirectory(identity, fs.lstatSync(directory))) fs.rmdirSync(directory);
+  } catch {
+    /* Not ours any more, or not empty: left for review. */
+  }
+}
+
+function unlinkOwnHolder(directory: string, holderFd: number): void {
+  try {
+    const own = fs.fstatSync(holderFd);
+    const holder = path.join(directory, LOCK_HOLDER_FILE);
+    const named = fs.lstatSync(holder);
+    if (named.isFile() && named.dev === own.dev && named.ino === own.ino) fs.unlinkSync(holder);
+  } catch {
+    /* Gone already, or not ours: never removed. */
+  }
+}
+
+/** Rename a staged folder onto `target` only when nothing is there; false when something is. */
+function placeStagedFolder(staged: StagedFolder, target: string): boolean {
+  try {
+    fs.lstatSync(target);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new PrivateStorageError('unsafe');
+  }
+  try {
+    fs.renameSync(staged.directory, target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOTEMPTY' || code === 'EEXIST') return false;
+    throw new PrivateStorageError('unsafe');
+  }
+  if (!sameDirectory(staged.identity, fs.lstatSync(target)))
+    throw new PrivateStorageError('unsafe');
+  return true;
+}
+
+/**
+ * Move `target` aside when it is still the judged folder; returns the aside
+ * path, or null when another folder was there (which is then put back). The
+ * caller holds the takeover claim, so only a judged-stale holder that was in
+ * fact alive and released at this instant can leave a different folder here.
+ * A lock or claim folder is never empty at its path, so putting it back can
+ * only fill a free path and never replaces a newer one.
+ */
+function moveAsideIfJudged(target: string, judged: DirectoryIdentity): string | null {
+  const aside = `${target}.stale-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`;
+  try {
+    fs.renameSync(target, aside);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new PrivateStorageError('unsafe');
+  }
+  if (sameDirectory(judged, fs.lstatSync(aside))) return aside;
+  try {
+    fs.renameSync(aside, target);
+  } catch {
+    console.warn(
+      'antigravity: a lock moved during a takeover could not be put back; kept for review'
+    );
+  }
+  return null;
+}
+
+/** Clear a takeover claim whose holder is gone or that outlived any takeover; true when cleared. */
+function clearAbandonedClaim(claim: string): boolean {
+  let judged: fs.Stats;
+  try {
+    judged = fs.lstatSync(claim);
+  } catch {
+    return true;
+  }
+  if (!judged.isDirectory() || judged.isSymbolicLink()) return false;
+  const reason = staleLockReason(claim, Date.now(), STALE_CLAIM_MS);
+  if (!reason) return false;
+  const aside = moveAsideIfJudged(claim, judged);
+  if (!aside) return false;
+  discardStaleLock(aside);
+  console.warn(`antigravity: cleared an abandoned lock takeover claim (${reason})`);
+  return true;
+}
+
 export interface CredentialPruneReport {
   deleted: string[];
   skipped: string[];
@@ -256,16 +386,17 @@ export interface CredentialPruneReport {
  * Credential retention: keep the current file plus ONE previous copy for
  * rollback. Unlinks only owned 0600 regular files directly inside `directory`,
  * selected by the exact credential filename; symlinks are never followed and
- * anything else is left alone and reported.
+ * anything else is left alone and reported. Without `previousFingerprint` the
+ * newest other safe copy is kept; `null` keeps no previous copy.
  */
 export function pruneSupersededCredentials(
   directory: string,
   currentFingerprint: string,
-  previousFingerprint?: string
+  previousFingerprint?: string | null
 ): CredentialPruneReport {
   if (
     !HASH.test(currentFingerprint) ||
-    (previousFingerprint !== undefined && !HASH.test(previousFingerprint))
+    (typeof previousFingerprint === 'string' && !HASH.test(previousFingerprint))
   )
     throw new PrivateStorageError('unsafe');
   ownedPrivateDirectory(directory);
@@ -296,12 +427,16 @@ export function pruneSupersededCredentials(
     candidates.push({ name: entry.name, fingerprint: match[1], mtimeMs, safe });
   }
   const previous =
-    previousFingerprint !== undefined && previousFingerprint !== currentFingerprint
-      ? previousFingerprint
-      : candidates
-          .filter((candidate) => candidate.safe)
-          .sort((left, right) => right.mtimeMs - left.mtimeMs || (right.name > left.name ? 1 : -1))
-          .map((candidate) => candidate.fingerprint)[0];
+    previousFingerprint === null
+      ? null
+      : previousFingerprint !== undefined && previousFingerprint !== currentFingerprint
+        ? previousFingerprint
+        : candidates
+            .filter((candidate) => candidate.safe)
+            .sort(
+              (left, right) => right.mtimeMs - left.mtimeMs || (right.name > left.name ? 1 : -1)
+            )
+            .map((candidate) => candidate.fingerprint)[0];
   for (const candidate of candidates) {
     if (candidate.fingerprint === previous) continue;
     if (!candidate.safe) {
@@ -446,126 +581,184 @@ function validateState(raw: unknown): RegistryState {
 /**
  * Storage lives below the existing private .ccs directory. Both credential and
  * metadata publications are immutable; revisions never overwrite predecessors.
- * A held transaction lock is taken over only when its recorded holder is dead
- * or the lock aged past a bounded timeout, and every takeover is logged; an
- * unresolved intent still blocks another switch until a separately reviewed
- * recovery verifies the native state. Superseded credential generations are
- * pruned by pruneSupersededCredentials to the current plus one previous copy.
+ * A held transaction lock is taken over only when its recorded holder process
+ * is gone (dead, its pid reused, or from an earlier boot) or alive but silent
+ * past a bounded heartbeat timeout. Takeovers are serialized on a claim folder
+ * and every one is logged; an unresolved intent still blocks another switch
+ * until a separately reviewed recovery verifies the native state. Superseded
+ * credential generations are pruned by pruneSupersededCredentials to the
+ * current plus one previous copy.
  */
 export class AntigravityProfileRegistry {
   private readonly profilesDirectory: string;
   private readonly instancesDirectory: string;
   private readonly profilesIdentity: DirectoryIdentity;
-  private readonly instancesIdentity: DirectoryIdentity;
+  private readonly instancesIdentity: DirectoryIdentity | null;
+  private readonly readOnly: boolean;
+  private readonly heartbeatMs: number;
   private lockHeld = false;
 
-  constructor(ccsDirectory: string) {
-    privateDirectory(path.resolve(ccsDirectory));
+  /**
+   * `readOnly` opens existing storage without creating any folder; such a
+   * registry reads but never locks or writes. It throws when the profiles
+   * folder does not exist. `heartbeatMs` exists for tests.
+   */
+  constructor(ccsDirectory: string, options: { readOnly?: boolean; heartbeatMs?: number } = {}) {
+    this.readOnly = options.readOnly === true;
+    this.heartbeatMs = options.heartbeatMs ?? LOCK_HEARTBEAT_MS;
     this.profilesDirectory = path.join(ccsDirectory, 'antigravity-profiles');
     this.instancesDirectory = path.join(ccsDirectory, 'antigravity-instances');
+    if (this.readOnly) {
+      ownedPrivateDirectory(path.resolve(ccsDirectory));
+      this.profilesIdentity = ownedPrivateDirectory(this.profilesDirectory);
+      let instances: DirectoryIdentity | null = null;
+      try {
+        instances = ownedPrivateDirectory(this.instancesDirectory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      this.instancesIdentity = instances;
+      return;
+    }
+    privateDirectory(path.resolve(ccsDirectory));
     this.profilesIdentity = privateDirectory(this.profilesDirectory);
     this.instancesIdentity = privateDirectory(this.instancesDirectory);
   }
 
+  /** A read-only registry over existing storage, or null when none was ever saved. */
+  static openExisting(ccsDirectory: string): AntigravityProfileRegistry | null {
+    if (!fs.existsSync(path.join(path.resolve(ccsDirectory), 'antigravity-profiles'))) return null;
+    return new AntigravityProfileRegistry(ccsDirectory, { readOnly: true });
+  }
+
+  private instances(): DirectoryIdentity {
+    if (!this.instancesIdentity) throw new PrivateStorageError('missing');
+    assertDirectory(this.instancesDirectory, this.instancesIdentity);
+    return this.instancesIdentity;
+  }
+
   async withLock<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.readOnly) throw new PrivateStorageError('unsafe');
     assertDirectory(this.profilesDirectory, this.profilesIdentity);
-    const lock = path.join(this.profilesDirectory, '.transaction-lock');
-    const owner = this.acquireLockDirectory(lock);
+    const lock = path.join(this.profilesDirectory, LOCK_NAME);
+    const held = this.acquireLock(lock);
     this.lockHeld = true;
+    // The heartbeat goes to our own record by its descriptor, never by path,
+    // so a lock that was taken over is never refreshed on another's behalf.
+    const heartbeat = setInterval(() => {
+      try {
+        const now = new Date();
+        fs.futimesSync(held.holderFd, now, now);
+      } catch {
+        /* A missed beat only brings the takeover timeout closer. */
+      }
+    }, this.heartbeatMs);
+    heartbeat.unref?.();
     try {
       return await operation();
     } finally {
       this.lockHeld = false;
+      clearInterval(heartbeat);
+      this.releaseLock(lock, held);
+    }
+  }
+
+  private releaseLock(lock: string, held: StagedFolder): void {
+    try {
       assertDirectory(this.profilesDirectory, this.profilesIdentity);
-      const current = fs.lstatSync(lock);
-      if (!sameDirectory(owner, current)) throw new PrivateStorageError('unsafe');
-      // Remove our own holder record; empty directory removal still refuses
-      // foreign contents and foreign replacement.
+      let current: fs.Stats;
       try {
-        fs.unlinkSync(path.join(lock, LOCK_HOLDER_FILE));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-      fs.rmdirSync(lock);
-    }
-  }
-
-  /** A live, recent holder always wins; only a provably abandoned lock is taken over. */
-  private acquireLockDirectory(lock: string): DirectoryIdentity {
-    try {
-      fs.mkdirSync(lock, { mode: 0o700 });
-      this.writeLockHolder(lock);
-      return fs.lstatSync(lock);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
+        current = fs.lstatSync(lock);
+      } catch {
         throw new PrivateStorageError('unsafe');
-    }
-    // The staleness verdict belongs to this exact directory; a lock released or
-    // replaced meanwhile is never judged on another lock's record.
-    let judged: fs.Stats;
-    try {
-      judged = fs.lstatSync(lock);
-    } catch {
-      throw new PrivateStorageError('busy');
-    }
-    if (!judged.isDirectory() || judged.isSymbolicLink()) throw new PrivateStorageError('unsafe');
-    const reason = staleLockReason(lock, Date.now());
-    if (!reason) throw new PrivateStorageError('busy');
-    // Atomic takeover: exactly one racer can rename a given source aside; every
-    // other racer observes it gone (ENOENT) and yields to that winner as busy.
-    const aside = `${lock}.stale-${process.pid}-${Date.now()}`;
-    try {
-      fs.renameSync(lock, aside);
-    } catch (error) {
-      throw new PrivateStorageError(
-        (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'busy' : 'unsafe'
-      );
-    }
-    // Another process may have taken the same stale lock over between the
-    // verdict and the rename, and created its own fresh lock at this path.
-    // That fresh lock is never displaced: it goes back untouched, and this
-    // caller yields as busy.
-    const displaced = fs.lstatSync(aside);
-    if (displaced.dev !== judged.dev || displaced.ino !== judged.ino) {
-      try {
-        if (!fs.existsSync(lock)) fs.renameSync(aside, lock);
-      } catch {
-        /* Left for review; its holder's release refuses a replaced lock. */
       }
-      throw new PrivateStorageError('busy');
+      if (!sameDirectory(held.identity, current)) throw new PrivateStorageError('unsafe');
+      // Our own holder record only; empty-folder removal still refuses foreign contents.
+      unlinkOwnHolder(lock, held.holderFd);
+      fs.rmdirSync(lock);
+    } finally {
+      fs.closeSync(held.holderFd);
     }
-    try {
-      fs.mkdirSync(lock, { mode: 0o700 });
-      this.writeLockHolder(lock);
-    } catch (error) {
-      discardStaleLock(aside);
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new PrivateStorageError('busy');
-      throw new PrivateStorageError('unsafe');
-    }
-    const owner = fs.lstatSync(lock);
-    discardStaleLock(aside);
-    console.warn(`antigravity: recovered a stale transaction lock (${reason})`);
-    return owner;
   }
 
-  private writeLockHolder(lock: string): void {
-    const holder = path.join(lock, LOCK_HOLDER_FILE);
+  /**
+   * A live holder with a recent heartbeat always wins; only a provably
+   * abandoned lock is taken over. A new lock is staged complete with its
+   * holder record and renamed into place, so the lock path is never empty
+   * and never free while a holder runs.
+   */
+  private acquireLock(lock: string): StagedFolder {
+    const staged = stageHolderFolder(lock);
+    let placed = false;
     try {
-      fs.writeFileSync(
-        holder,
-        JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
-        { flag: 'wx', mode: 0o600 }
-      );
-    } catch {
-      // A lock without a holder record could survive our own crash; never hold
-      // it half-written.
+      placed = placeStagedFolder(staged, lock);
+      if (placed) return staged;
+      // The staleness verdict belongs to this exact folder; a lock released or
+      // replaced meanwhile is never judged on another lock's record.
+      let judged: fs.Stats;
       try {
-        fs.rmSync(holder, { force: true });
-        fs.rmdirSync(lock);
+        judged = fs.lstatSync(lock);
       } catch {
-        /* Release-time identity checks still refuse foreign replacement. */
+        throw new PrivateStorageError('busy');
       }
-      throw new PrivateStorageError('unsafe');
+      if (!judged.isDirectory() || judged.isSymbolicLink()) throw new PrivateStorageError('unsafe');
+      const reason = staleLockReason(lock, Date.now(), STALE_LOCK_TIMEOUT_MS);
+      if (!reason) throw new PrivateStorageError('busy');
+      this.withTakeoverClaim(lock, () => {
+        // Under the claim no other takeover moves this lock and a gone holder
+        // never releases it, so the judged lock, if still here, is what moves.
+        let current: fs.Stats;
+        try {
+          current = fs.lstatSync(lock);
+        } catch {
+          throw new PrivateStorageError('busy');
+        }
+        if (
+          !sameDirectory(judged, current) ||
+          !staleLockReason(lock, Date.now(), STALE_LOCK_TIMEOUT_MS)
+        )
+          throw new PrivateStorageError('busy');
+        const aside = moveAsideIfJudged(lock, judged);
+        if (!aside) throw new PrivateStorageError('busy');
+        placed = placeStagedFolder(staged, lock);
+        discardStaleLock(aside);
+        if (!placed) throw new PrivateStorageError('busy');
+      });
+      console.warn(`antigravity: recovered a stale transaction lock (${reason})`);
+      return staged;
+    } finally {
+      if (!placed) discardStagedFolder(staged.directory, staged.identity, staged.holderFd);
+    }
+  }
+
+  /**
+   * Run `critical` (synchronous file calls only) while holding the takeover
+   * claim beside `lock`; busy when another takeover holds it. An abandoned
+   * claim is cleared first.
+   */
+  private withTakeoverClaim(lock: string, critical: () => void): void {
+    const claim = `${lock}.takeover`;
+    const staged = stageHolderFolder(claim);
+    let placed = false;
+    try {
+      placed = placeStagedFolder(staged, claim);
+      if (!placed && clearAbandonedClaim(claim)) placed = placeStagedFolder(staged, claim);
+      if (!placed) throw new PrivateStorageError('busy');
+      critical();
+    } finally {
+      if (placed) {
+        try {
+          if (sameDirectory(staged.identity, fs.lstatSync(claim))) {
+            unlinkOwnHolder(claim, staged.holderFd);
+            fs.rmdirSync(claim);
+          }
+        } catch {
+          /* A claim that is not ours any more is left to its holder. */
+        }
+        fs.closeSync(staged.holderFd);
+      } else {
+        discardStagedFolder(staged.directory, staged.identity, staged.holderFd);
+      }
     }
   }
 
@@ -646,7 +839,7 @@ export class AntigravityProfileRegistry {
     assertProfileId(profileId);
     const profile = this.readState().profiles.find((entry) => entry.id === profileId);
     if (!profile) throw new PrivateStorageError('corrupt');
-    assertDirectory(this.instancesDirectory, this.instancesIdentity);
+    this.instances();
     const directory = path.join(this.instancesDirectory, profileId, 'ubuntu');
     const bytes = readPrivateFile(
       path.join(directory, `credential-${profile.credential.fingerprint}.bin`),
@@ -694,7 +887,7 @@ export class AntigravityProfileRegistry {
     ) {
       throw new PrivateStorageError('unsafe');
     }
-    assertDirectory(this.instancesDirectory, this.instancesIdentity);
+    this.instances();
     const profileDirectory = path.join(this.instancesDirectory, profileId);
     privateDirectory(profileDirectory);
     const hostDirectory = path.join(profileDirectory, hostId);
@@ -723,14 +916,18 @@ export class AntigravityProfileRegistry {
     state.profiles = [...state.profiles.filter((profile) => profile.id !== profileId), record];
     this.publish(state);
     // Retention: the published revision references `fingerprint`; keep exactly
-    // one previous generation for rollback and delete older copies safely.
+    // one previous generation for rollback and delete older copies safely. A
+    // new profile has no previous generation: files a removed or failed
+    // profile of the same name left behind are not kept as one.
     try {
       const pruned = pruneSupersededCredentials(
         hostDirectory,
         fingerprint,
-        existing && existing.credential.fingerprint !== fingerprint
-          ? existing.credential.fingerprint
-          : undefined
+        !existing
+          ? null
+          : existing.credential.fingerprint !== fingerprint
+            ? existing.credential.fingerprint
+            : undefined
       );
       for (const name of pruned.skipped)
         console.warn(`antigravity: superseded credential ${name} was left in place for review`);
@@ -772,15 +969,27 @@ export class AntigravityProfileRegistry {
     this.publish(state);
   }
 
-  /** True while a switch, import or remove holds the transaction lock (stale or not). */
-  lockPresent(): boolean {
+  /**
+   * True while a live switch, import or remove holds the transaction lock. An
+   * abandoned lock does not count: the next withLock takes it over.
+   */
+  lockHeldLive(): boolean {
+    const lock = path.join(this.profilesDirectory, LOCK_NAME);
     try {
-      fs.lstatSync(path.join(this.profilesDirectory, '.transaction-lock'));
-      return true;
+      fs.lstatSync(lock);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
       throw new PrivateStorageError('unsafe');
     }
+    return staleLockReason(lock, Date.now(), STALE_LOCK_TIMEOUT_MS) === null;
+  }
+
+  /** The fingerprint of a profile's saved credential as the registry records it; null when unknown. */
+  savedRevision(profileId: string): string | null {
+    return (
+      this.readState().profiles.find((entry) => entry.id === profileId)?.credential.fingerprint ??
+      null
+    );
   }
 
   /**
@@ -804,10 +1013,31 @@ export class AntigravityProfileRegistry {
     return { leftInPlace: this.deleteProfileFiles(profileId) };
   }
 
+  /**
+   * Delete the credential files of profile folders no saved profile names
+   * (left by a crash between a Remove's registry revision and its file
+   * deletion, or by a failed Add). Must be called under withLock, so no save
+   * is between writing its file and publishing its revision.
+   */
+  sweepOrphanedInstances(): { removed: number; leftInPlace: number } {
+    if (!this.lockHeld) throw new PrivateStorageError('unsafe');
+    const saved = new Set(this.readState().profiles.map((profile) => profile.id));
+    this.instances();
+    let removed = 0;
+    let leftInPlace = 0;
+    for (const name of fs.readdirSync(this.instancesDirectory)) {
+      if (!PROFILE_ID.test(name) || saved.has(name)) continue;
+      const left = this.deleteProfileFiles(name);
+      leftInPlace += left;
+      if (!fs.existsSync(path.join(this.instancesDirectory, name))) removed += 1;
+    }
+    return { removed, leftInPlace };
+  }
+
   private deleteProfileFiles(profileId: string): number {
     let left = 0;
     try {
-      assertDirectory(this.instancesDirectory, this.instancesIdentity);
+      this.instances();
     } catch {
       return 1;
     }

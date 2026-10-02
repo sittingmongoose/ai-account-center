@@ -31,6 +31,7 @@ import { buildDashboardProviders } from '../../../src/web-server/services/dashbo
 import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
+import { claimAntigravitySignInMarker } from '../../../src/antigravity/signin-marker';
 import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 
 const KEY = 'zai-TEST-key-0123456789-x7Qa';
@@ -1275,6 +1276,41 @@ describe('Antigravity profiles', () => {
     ]);
     const unknown = await f.request('POST', '/antigravity:profile:nobody/signin-again', {});
     expect([unknown.status, unknown.body.code]).toEqual([404, 'unknown_account']);
+  });
+
+  it('refuses Sign in again and Remove while a terminal sign-in for the profile runs', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('gmail');
+    const marker = claimAntigravitySignInMarker(ccsDir, 'party');
+    expect(marker).not.toBeNull();
+    const again = await f.request('POST', '/antigravity:profile:party/signin-again', {});
+    expect([again.status, again.body.code]).toEqual([409, 'signin_running']);
+    const removal = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect([removal.status, removal.body.code]).toEqual([409, 'signin_running']);
+    marker!.release();
+    const prepared = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect(prepared.status).toBe(200);
+  });
+
+  it('records Remove files left for review in the audit log', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('gmail');
+    const foreign = path.join(ccsDir, 'antigravity-instances', 'party', 'ubuntu', 'notes.txt');
+    fs.writeFileSync(foreign, 'kept', { mode: 0o600 });
+    const prepared = await f.request('POST', '/antigravity:profile:party/remove', {});
+    const committed = await f.request('POST', '/antigravity:profile:party/remove', {
+      confirmationToken: (prepared.body.confirmation as { token: string }).token,
+    });
+    expect(committed.status).toBe(200);
+    expect(fs.readFileSync(foreign, 'utf8')).toBe('kept');
+    expect(f.audits).toContainEqual([
+      'accounts.remove.left_in_place',
+      { provider: 'antigravity', count: 1 },
+    ]);
   });
 
   it('serves the terminal command only for a valid profile name and a browser session', async () => {

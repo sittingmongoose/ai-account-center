@@ -2,6 +2,7 @@ import os from 'os';
 import { getCcsDir } from '../../utils/config-manager';
 import { AntigravityAccountLifecycle } from '../../antigravity/account-lifecycle';
 import { nativeBinaryProblem, sweepSignInStaging } from '../../antigravity/signin-sandbox';
+import { sweepAntigravitySignInMarkers } from '../../antigravity/signin-marker';
 import { createLogger } from '../../services/logging';
 import { broadcastDashboardEvent, type DashboardEventClient } from '../dashboard-events';
 import { sweepOrphanKeys } from './account-key-sweep';
@@ -191,6 +192,14 @@ async function runMaintenance(): Promise<void> {
   }
   try {
     sweepSignInStaging(getCcsDir());
+    sweepAntigravitySignInMarkers(getCcsDir());
+  } catch {
+    /* Retried at the next sweep. */
+  }
+  try {
+    const swept = await getAntigravityLifecycle().sweepOrphans();
+    if (swept.removed > 0 || swept.leftInPlace > 0)
+      auditLifecycle('accounts.antigravity.orphans.swept', swept);
   } catch {
     /* Retried at the next sweep. */
   }

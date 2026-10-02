@@ -140,8 +140,9 @@ A new name adds a profile; a saved name signs that profile in again. Run it in
 an interactive terminal on Ubuntu; SSH from the Mac or Windows is fine. The
 official CLI starts inside a private sign-in home: bubblewrap with user, PID,
 IPC and UTS namespaces, the root read-only, an owned folder bound over
-`~/.gemini`, a private session bus so the real Secret Service is out of reach,
-an allowlisted environment and browser stubs. The user chooses **Google OAuth**,
+`~/.gemini`, an empty folder over `/run/user/<uid>` and a private session bus
+so the real session bus and Secret Service are out of reach, an allowlisted
+environment and browser stubs. The user chooses **Google OAuth**,
 opens the link in a browser, signs in to the Google account for that profile
 and pastes the code back into the CLI. The command never reads the link, the
 code or the screen. As soon as the new credential file is complete, the CLI is
@@ -154,7 +155,22 @@ the private sign-in folder is removed after every attempt.
 - Sign in again keeps the same Google account (email and subject) and is
   refused for the live login, because a later switch saves the live login back
   into that profile. Switch to another profile first.
-- A running switch (the registry's transaction lock) refuses both.
+- A running switch (the registry's transaction lock) refuses both, and so does
+  another sign-in for the same profile.
+
+While it runs, the command marks the profile in
+`~/.ccs/antigravity-signin/<profile>.running` (its pid, process start time and
+boot). Remove and Sign in again for that profile answer 409 `signin_running`
+until it ends; a marker whose process is gone does not count. Ctrl+C reaches
+the CLI and cancels. A closed terminal (SIGHUP) or SIGTERM stops the CLI and
+removes the private sign-in folder, with any new credential in it, before the
+command exits.
+
+The transaction lock names its holder the same way and is refreshed every
+minute while it is held. A lock whose holder process is gone (dead, its pid
+reused, or from an earlier boot), or whose holder sent no refresh for ten
+minutes, is abandoned: it does not refuse Add, Sign in again or Remove, and
+the next one of them takes it over (one takeover at a time) and logs it.
 
 The command needs `/usr/bin/bwrap`, `/usr/bin/dbus-run-session` and an
 unprivileged user namespace; its preflight checks them with one harmless
@@ -181,7 +197,12 @@ credential files only. It never logs out and never touches the live login or
 shared history. It refuses the live login (the same saved bytes, else the same
 verified Google identity), the registry's runtime-verified active profile, a
 held transaction lock or pending switch, and a running sign-in. A live-login
-check that cannot run refuses with 500 `remove_failed`.
+check that cannot run refuses with 500 `remove_failed`. A missing or damaged
+saved snapshot does not block it: the live login is then compared by verified
+identity. Files in the profile's folder that cannot be proven to be its own
+credentials stay in place and are logged (`accounts.remove.left_in_place`).
+The daily maintenance deletes credential files of profile folders no saved
+profile names, for example after a crash during a Remove.
 
 ### Reading status
 

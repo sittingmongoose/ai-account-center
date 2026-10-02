@@ -18,6 +18,7 @@ import {
   type SignInPreflight,
   type SignInStaging,
 } from './signin-sandbox';
+import { claimAntigravitySignInMarker, type SignInMarker } from './signin-marker';
 import type { NativeCredential } from './types';
 
 /**
@@ -83,8 +84,16 @@ export interface TerminalSignInDeps {
   wait?: (ms: number) => Promise<void>;
   now?: () => number;
   timeoutMs?: number;
-  /** Signals this process ignores while the CLI owns the terminal. */
+  /**
+   * While the CLI owns the terminal this process ignores SIGINT, SIGQUIT and
+   * SIGTSTP; on SIGHUP or SIGTERM it stops the CLI, removes the isolated home
+   * with the new credential and the running marker, and exits.
+   */
   guardSignals?: boolean;
+  /** Exit after SIGHUP or SIGTERM; process.exit by default. */
+  exit?: (code: number) => void;
+  /** Where the guarded signals arrive; this process by default. */
+  signals?: Pick<NodeJS.EventEmitter, 'on' | 'off'>;
 }
 
 function defaultIo(): TerminalSignInIo {
@@ -181,8 +190,9 @@ export async function runAntigravityTerminalSignIn(
     return fail(
       'Profile names start with a lowercase letter and use lowercase letters, digits, - or _ (at most 48).'
     );
-  const mode = lifecycle.hasProfile(profileId) ? 'signin-again' : 'add';
+  let mode: 'add' | 'signin-again';
   try {
+    mode = lifecycle.hasProfile(profileId) ? 'signin-again' : 'add';
     if (lifecycle.activationRunning()) return fail(FAILURES.activation_running);
     if (mode === 'add' && lifecycle.profileCount() >= ANTIGRAVITY_MAX_PROFILES)
       return fail(FAILURES.too_many_accounts);
@@ -206,12 +216,21 @@ export async function runAntigravityTerminalSignIn(
   const preflight = (deps.preflight ?? (() => antigravitySignInPreflight(deps.realHome)))();
   if (!preflight.ok) return fail(`${preflight.detail} Nothing was started.`);
 
+  let marker: SignInMarker | null;
   let staging: SignInStaging;
   try {
-    staging = prepareSignInStaging(deps.ccsDir);
+    marker = claimAntigravitySignInMarker(deps.ccsDir, profileId);
   } catch {
     return fail('The private sign-in folder could not be prepared. Nothing was started.');
   }
+  if (!marker) return fail(FAILURES.signin_running);
+  try {
+    staging = prepareSignInStaging(deps.ccsDir);
+  } catch {
+    marker.release();
+    return fail('The private sign-in folder could not be prepared. Nothing was started.');
+  }
+  const held = marker;
   const wait =
     deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = deps.now ?? Date.now;
@@ -219,6 +238,35 @@ export async function runAntigravityTerminalSignIn(
   const ignore = () => undefined;
   let saved: string | null = null;
   let terminalSaved = false;
+  let sandbox: SandboxChild | null = null;
+  // A closed terminal (SIGHUP) or a stop request (SIGTERM) never leaves the
+  // new credential behind for the daily sweep: it is removed before exiting.
+  const abort = (code: number) => {
+    sandbox?.kill('SIGKILL');
+    try {
+      removeSignInStaging(staging);
+    } catch {
+      /* Swept within a day. */
+    }
+    held.release();
+    if (terminalSaved) {
+      terminalSaved = false;
+      try {
+        io.restoreTerminal(saved);
+        io.write(TERMINAL_RESET);
+      } catch {
+        /* The terminal is gone. */
+      }
+    }
+    (deps.exit ?? ((value: number) => process.exit(value)))(code);
+  };
+  const onHangup = () => abort(129);
+  const onTerminate = () => abort(143);
+  const signals = deps.signals ?? process;
+  if (deps.guardSignals !== false) {
+    signals.on('SIGHUP', onHangup);
+    signals.on('SIGTERM', onTerminate);
+  }
   try {
     say(
       mode === 'add'
@@ -235,16 +283,18 @@ export async function runAntigravityTerminalSignIn(
     say('');
     saved = io.saveTerminal();
     terminalSaved = true;
-    if (deps.guardSignals !== false) for (const name of ignored) process.on(name, ignore);
+    if (deps.guardSignals !== false) for (const name of ignored) signals.on(name, ignore);
     const child = (deps.spawnSandbox ?? defaultSpawn)(
       BWRAP,
       sandboxArgs(staging, {
         realHome: deps.realHome,
         nativeBinary: preflight.nativeBinary,
         apparmorLeaf: preflight.apparmorLeaf,
+        runtimeDir: preflight.runtimeDir ?? null,
       }),
       sandboxEnvironment(staging, { realHome: deps.realHome, source: deps.env })
     );
+    sandbox = child;
     let exitCode: number | null | undefined;
     child.onExit((code) => {
       exitCode = code;
@@ -253,9 +303,12 @@ export async function runAntigravityTerminalSignIn(
     let complete = false;
     let timedOut = false;
     let stableChecks = 0;
+    // A finished credential (complete, or complete in an unsafe file the
+    // import refuses) stops the CLI before a task can be typed into it.
+    const finished = () => ['complete', 'unsafe'].includes(maskedCredentialState(staging));
     while (exitCode === undefined) {
       await wait(POLL_MS);
-      if (maskedCredentialState(staging) === 'complete') {
+      if (finished()) {
         // Twice in a row, so a credential still being written is never cut off.
         stableChecks += 1;
         if (stableChecks >= 2) {
@@ -278,7 +331,7 @@ export async function runAntigravityTerminalSignIn(
     terminalSaved = false;
     io.restoreTerminal(saved);
     io.write(TERMINAL_RESET);
-    if (!complete) complete = maskedCredentialState(staging) === 'complete';
+    if (!complete) complete = finished();
     if (!complete) {
       return fail(
         timedOut
@@ -311,11 +364,16 @@ export async function runAntigravityTerminalSignIn(
       io.restoreTerminal(saved);
       io.write(TERMINAL_RESET);
     }
-    if (deps.guardSignals !== false) for (const name of ignored) process.off(name, ignore);
+    if (deps.guardSignals !== false) {
+      for (const name of ignored) signals.off(name, ignore);
+      signals.off('SIGHUP', onHangup);
+      signals.off('SIGTERM', onTerminate);
+    }
     try {
       removeSignInStaging(staging);
     } catch {
       say('[!] The private sign-in folder could not be removed; it is swept within a day.');
     }
+    held.release();
   }
 }

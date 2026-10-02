@@ -4,7 +4,9 @@
  * official CLI does after the user pastes the code. The provider identity
  * check and the live native login are fakes; temporary folders only.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { spawn } from 'child_process';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -18,6 +20,7 @@ import {
 } from '../../../src/antigravity/terminal-signin';
 import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 import { prepareSignInStaging } from '../../../src/antigravity/signin-sandbox';
+import { claimAntigravitySignInMarker } from '../../../src/antigravity/signin-marker';
 
 const NOW = Date.parse('2026-10-02T12:00:00.000Z');
 let root: string;
@@ -319,6 +322,122 @@ describe('terminal sign-in', () => {
     expect(result.code).toBe(1);
     expect(result.output).toContain('This profile is the live Antigravity login.');
     expect(result.spawned).toEqual([]);
+  });
+});
+
+describe('terminal sign-in review fixes', () => {
+  it('takes over a lock its own dead run left behind and saves the profile', async () => {
+    await save('gmail');
+    const child = spawn(process.execPath, ['--version'], { stdio: 'ignore' });
+    const pid = child.pid as number;
+    await new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    const lock = path.join(ccsDir, 'antigravity-profiles', '.transaction-lock');
+    fs.mkdirSync(lock, { mode: 0o700 });
+    fs.writeFileSync(
+      path.join(lock, 'holder.json'),
+      JSON.stringify({ pid, startedAt: new Date().toISOString() }),
+      { mode: 0o600 }
+    );
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    let result: Run;
+    try {
+      result = await run('party', { write: { content: envelope('party@example.com') } });
+    } finally {
+      warn.mockRestore();
+    }
+    expect(result.code).toBe(0);
+    expect(fs.existsSync(lock)).toBe(false);
+    expect(
+      new AntigravityProfileRegistry(ccsDir).listProfiles().map((profile) => profile.id)
+    ).toEqual(['gmail', 'party']);
+  });
+
+  it('reports an unreadable registry plainly and starts nothing', async () => {
+    const profiles = path.join(ccsDir, 'antigravity-profiles');
+    fs.mkdirSync(profiles, { mode: 0o700 });
+    fs.writeFileSync(path.join(profiles, 'registry-000000000001.json'), '{not json', {
+      mode: 0o600,
+    });
+    const result = await run('party', { write: null });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain('could not be read safely. Nothing was started.');
+    expect(result.spawned).toEqual([]);
+  });
+
+  it('refuses a second sign-in for a profile while one runs, and leaves no marker after a run', async () => {
+    const held = claimAntigravitySignInMarker(ccsDir, 'party');
+    expect(held).not.toBeNull();
+    const second = await run('party', { write: null });
+    expect(second.code).toBe(1);
+    expect(second.output).toContain('A sign-in for this profile is already running.');
+    expect(second.spawned).toEqual([]);
+    held!.release();
+    const done = await run('party', { write: { content: envelope('party@example.com') } });
+    expect(done.code).toBe(0);
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  it('on SIGHUP stops the CLI, removes the new credential and the marker, then exits', async () => {
+    const exits: number[] = [];
+    // A private emitter: the test never raises a signal on the test process.
+    const signals = new EventEmitter();
+    let staging = '';
+    const result = await run(
+      'party',
+      { write: { content: envelope('party@example.com'), afterPolls: 1 } },
+      {
+        guardSignals: true,
+        signals,
+        exit: (code) => {
+          exits.push(code);
+        },
+        wait: (() => {
+          let polls = 0;
+          return async () => {
+            polls += 1;
+            await Promise.resolve();
+            const directory = path.join(ccsDir, 'antigravity-signin');
+            const name = fs.readdirSync(directory).find((entry) => entry.startsWith('.staging-'));
+            if (polls === 1 && name) {
+              staging = path.join(directory, name);
+              fs.writeFileSync(
+                path.join(staging, 'home', '.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
+                envelope('party@example.com'),
+                { mode: 0o600 }
+              );
+              signals.emit('SIGHUP');
+            }
+          };
+        })(),
+      }
+    );
+    expect(exits).toEqual([129]);
+    expect(result.signals[0]).toBe('SIGKILL');
+    expect(staging).not.toBe('');
+    expect(fs.existsSync(staging)).toBe(false);
+    expect(stagingLeft()).toEqual([]);
+    expect(result.code).toBe(1);
+    expect(fs.existsSync(path.join(ccsDir, 'antigravity-profiles'))).toBe(false);
+    for (const name of ['SIGHUP', 'SIGTERM', 'SIGINT', 'SIGQUIT', 'SIGTSTP'])
+      expect(signals.listenerCount(name)).toBe(0);
+  });
+
+  it('masks the user runtime folder when the preflight found one', async () => {
+    const result = await run(
+      'party',
+      { write: { content: envelope('party@example.com') } },
+      {
+        preflight: () => ({
+          ok: true,
+          nativeBinary: '/fixture/agy',
+          apparmorLeaf: null,
+          runtimeDir: '/run/user/4242',
+        }),
+      }
+    );
+    expect(result.code).toBe(0);
+    const args = result.spawned[0].args;
+    expect(args.slice(8, 12)).toEqual(['--tmpfs', '/tmp', '--tmpfs', '/run/user/4242']);
   });
 });
 

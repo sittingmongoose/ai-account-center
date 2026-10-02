@@ -93,6 +93,7 @@ describe('sign-in staging', () => {
       realHome: home,
       nativeBinary: '/fixture/agy',
       apparmorLeaf: APPARMOR_QUERY_LEAF,
+      runtimeDir: '/run/user/4242',
     });
     expect(args).toEqual([
       '--die-with-parent',
@@ -105,6 +106,8 @@ describe('sign-in staging', () => {
       '/',
       '--tmpfs',
       '/tmp',
+      '--tmpfs',
+      '/run/user/4242',
       '--ro-bind',
       staging.busConfig,
       staging.busConfig,
@@ -137,6 +140,7 @@ describe('sign-in staging', () => {
     });
     expect(withoutLeaf).not.toContain(APPARMOR_QUERY_LEAF);
     expect(withoutLeaf.filter((arg) => arg === '--bind').length).toBe(1);
+    expect(withoutLeaf.filter((arg) => arg.startsWith('/run/user'))).toEqual([]);
   });
 
   it('passes only the allowlisted environment, the real HOME and browser stubs', () => {
@@ -188,7 +192,7 @@ describe('sign-in staging', () => {
 });
 
 describe('the new credential in the mask', () => {
-  it('is absent, partial while incomplete or unsafe, and complete only as a consumer login', () => {
+  it('is absent, partial while incomplete, and complete only as a consumer login', () => {
     const staging = prepareSignInStaging(ccsDir);
     expect(maskedCredentialState(staging)).toBe('absent');
     fs.writeFileSync(staging.token, '{"auth_method":"cons', { mode: 0o600 });
@@ -212,6 +216,29 @@ describe('the new credential in the mask', () => {
     fs.symlinkSync('/etc/hostname', staging.token);
     expect(maskedCredentialState(staging)).toBe('partial');
   });
+
+  it('applies the import guards: a loose mode or a second link is unsafe, a link is never followed', () => {
+    const staging = prepareSignInStaging(ccsDir);
+    const login = JSON.stringify({
+      auth_method: 'consumer',
+      token: { access_token: 'a', refresh_token: 'r' },
+    });
+    fs.writeFileSync(staging.token, login, { mode: 0o600 });
+    fs.chmodSync(staging.token, 0o644);
+    expect(maskedCredentialState(staging)).toBe('unsafe');
+    fs.chmodSync(staging.token, 0o600);
+    expect(maskedCredentialState(staging)).toBe('complete');
+    const second = path.join(staging.directory, 'second-link');
+    fs.linkSync(staging.token, second);
+    expect(maskedCredentialState(staging)).toBe('unsafe');
+    fs.rmSync(second);
+    // A complete login elsewhere, reached through a link, is never read.
+    const elsewhere = path.join(staging.directory, 'elsewhere.json');
+    fs.writeFileSync(elsewhere, login, { mode: 0o600 });
+    fs.rmSync(staging.token);
+    fs.symlinkSync(elsewhere, staging.token);
+    expect(maskedCredentialState(staging)).toBe('partial');
+  });
 });
 
 describe('isolation preflight', () => {
@@ -228,6 +255,13 @@ describe('isolation preflight', () => {
     });
     expect(result).toMatchObject({ ok: true, nativeBinary: binary });
     expect(probes).toBe(1);
+    const masked = antigravitySignInPreflight(home, {
+      platform: 'linux',
+      exists: () => true,
+      probe: () => 0,
+      runtimeDir: '/run/user/4242',
+    });
+    expect(masked).toMatchObject({ ok: true, runtimeDir: '/run/user/4242' });
   });
 
   it('names tool_missing for a missing or unsafe CLI and preflight_failed for the sandbox', () => {

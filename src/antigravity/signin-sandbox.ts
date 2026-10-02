@@ -94,8 +94,8 @@ function privateFolder(target: string): void {
   fs.chmodSync(target, 0o700);
 }
 
-/** Owned 0700 folders, browser stubs and the bus config; nothing else. */
-export function prepareSignInStaging(ccsDir: string): SignInStaging {
+/** `<ccs>/antigravity-signin`, made when missing: an owned 0700 folder. */
+export function signInRoot(ccsDir: string): string {
   const root = path.join(path.resolve(ccsDir), ANTIGRAVITY_SIGNIN_DIR);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const rootStat = fs.lstatSync(root);
@@ -106,6 +106,12 @@ export function prepareSignInStaging(ccsDir: string): SignInStaging {
   )
     throw new AntigravityError('antigravity-signin-staging-unsafe');
   fs.chmodSync(root, 0o700);
+  return root;
+}
+
+/** Owned 0700 folders, browser stubs and the bus config; nothing else. */
+export function prepareSignInStaging(ccsDir: string): SignInStaging {
+  const root = signInRoot(ccsDir);
   const directory = path.join(
     root,
     `${ANTIGRAVITY_SIGNIN_STAGING_PREFIX}${randomBytes(8).toString('hex')}`
@@ -142,11 +148,18 @@ export function prepareSignInStaging(ccsDir: string): SignInStaging {
  * The exact bubblewrap argv; the native CLI gets no argument at all. The
  * private /tmp comes first, so the binds after it stay visible even when a
  * home or the CCS folder lives below /tmp; the bus config and the CLI are
- * bound read-only by their own paths for the same reason.
+ * bound read-only by their own paths for the same reason. The user's runtime
+ * folder (`/run/user/<uid>`, with the real session bus and keyring sockets)
+ * is masked by an empty one when it exists.
  */
 export function sandboxArgs(
   staging: SignInStaging,
-  options: { realHome: string; nativeBinary: string; apparmorLeaf: string | null }
+  options: {
+    realHome: string;
+    nativeBinary: string;
+    apparmorLeaf: string | null;
+    runtimeDir?: string | null;
+  }
 ): string[] {
   const realGemini = path.join(path.resolve(options.realHome), '.gemini');
   return [
@@ -160,6 +173,7 @@ export function sandboxArgs(
     '/',
     '--tmpfs',
     '/tmp',
+    ...(options.runtimeDir ? ['--tmpfs', options.runtimeDir] : []),
     '--ro-bind',
     staging.busConfig,
     staging.busConfig,
@@ -205,7 +219,7 @@ export function sandboxEnvironment(
 }
 
 export type SignInPreflight =
-  | { ok: true; nativeBinary: string; apparmorLeaf: string | null }
+  | { ok: true; nativeBinary: string; apparmorLeaf: string | null; runtimeDir?: string | null }
   | { ok: false; reason: 'tool_missing' | 'preflight_failed'; detail: string };
 
 export interface PreflightDeps {
@@ -214,6 +228,8 @@ export interface PreflightDeps {
   /** Runs the harmless namespace probe; returns its exit status. */
   probe?: () => number | null;
   exists?: (file: string) => boolean;
+  /** The user's runtime folder to mask; defaults to `/run/user/<uid>` when it is a folder. */
+  runtimeDir?: string | null;
 }
 
 function executable(file: string): boolean {
@@ -301,47 +317,79 @@ export function antigravitySignInPreflight(
   } catch {
     apparmorLeaf = null;
   }
+  let runtimeDir: string | null = null;
+  if (deps.runtimeDir !== undefined) runtimeDir = deps.runtimeDir;
+  else if (uid !== null) {
+    try {
+      const candidate = `/run/user/${uid}`;
+      if (fs.lstatSync(candidate).isDirectory()) runtimeDir = candidate;
+    } catch {
+      runtimeDir = null;
+    }
+  }
   return {
     ok: true,
     nativeBinary: path.join(path.resolve(realHome), '.local', 'bin', 'agy'),
     apparmorLeaf,
+    runtimeDir,
   };
 }
 
 /**
- * The state of the new credential in the mask: absent, still being written,
- * or a complete consumer login (an owned 0600 regular file whose JSON has a
- * consumer method and both tokens). Its contents are never returned here.
+ * The state of the new credential in the mask: absent, still being written, a
+ * complete consumer login (JSON with a consumer method and both tokens) in an
+ * owned 0600 regular file with one link, or `unsafe`: a complete login in a
+ * file that fails those checks, which the import then refuses. The file is
+ * opened without following links and must be the file that was judged. Its
+ * contents are never returned here.
  */
-export function maskedCredentialState(staging: SignInStaging): 'absent' | 'partial' | 'complete' {
-  let stat: fs.Stats;
+export function maskedCredentialState(
+  staging: SignInStaging
+): 'absent' | 'partial' | 'complete' | 'unsafe' {
+  let before: fs.Stats;
   try {
-    stat = fs.lstatSync(staging.token);
+    before = fs.lstatSync(staging.token);
   } catch {
     return 'absent';
   }
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.size === 0 ||
-    stat.size > MAX_TOKEN_BYTES ||
-    (process.getuid && stat.uid !== process.getuid())
-  )
-    return 'partial';
+  if (!before.isFile() || before.isSymbolicLink()) return 'partial';
+  let fd: number;
   try {
-    const value = JSON.parse(fs.readFileSync(staging.token, 'utf8')) as {
+    fd = fs.openSync(staging.token, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return 'partial';
+  }
+  try {
+    const opened = fs.fstatSync(fd);
+    if (
+      !opened.isFile() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.size === 0 ||
+      opened.size > MAX_TOKEN_BYTES
+    )
+      return 'partial';
+    const value = JSON.parse(fs.readFileSync(fd, 'utf8')) as {
       auth_method?: unknown;
       token?: { access_token?: unknown; refresh_token?: unknown };
     };
-    return value?.auth_method === 'consumer' &&
+    const complete =
+      value?.auth_method === 'consumer' &&
       typeof value.token?.access_token === 'string' &&
       value.token.access_token.length > 0 &&
       typeof value.token?.refresh_token === 'string' &&
-      value.token.refresh_token.length > 0
-      ? 'complete'
-      : 'partial';
+      value.token.refresh_token.length > 0;
+    if (!complete) return 'partial';
+    // The same guards as the read that imports it (readMaskedCredential).
+    return opened.nlink !== 1 ||
+      (opened.mode & 0o777) !== 0o600 ||
+      (process.getuid && opened.uid !== process.getuid())
+      ? 'unsafe'
+      : 'complete';
   } catch {
     return 'partial';
+  } finally {
+    fs.closeSync(fd);
   }
 }
 

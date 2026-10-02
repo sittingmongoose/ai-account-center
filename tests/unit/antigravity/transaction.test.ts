@@ -805,6 +805,27 @@ test('a broker that cannot honour the stop is never offered as stop-and-switch',
   expect(fs.readdirSync(registryDirectory)).toEqual(before);
 });
 
+test('a broker approval probe that fails answers busy, never invalid-profile', async () => {
+  const { directory, driver, service } = await setup();
+  driver.plan = runningPlan();
+  driver.approveOwnedIdlePlan = async () => {
+    throw new Error('runtime-proof-unavailable');
+  };
+  const registryDirectory = path.join(directory, '.ccs', 'antigravity-profiles');
+  const before = fs.readdirSync(registryDirectory);
+  const response = await service.activate({
+    profileId: 'second',
+    hostId: 'ubuntu',
+    mode: 'manual',
+  });
+  expect(response.status).toBe('busy');
+  expect(response.reason).toBe('running-processes');
+  expect(response.confirmation).toBeUndefined();
+  expect(driver.events).not.toContain('stop');
+  expect(driver.events).not.toContain('install');
+  expect(fs.readdirSync(registryDirectory)).toEqual(before);
+});
+
 test('a broker that can honour the stop still offers review and completes the confirmed switch', async () => {
   const { driver, service } = await setup();
   driver.plan = runningPlan();

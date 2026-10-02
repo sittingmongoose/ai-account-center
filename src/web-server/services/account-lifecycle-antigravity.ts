@@ -63,7 +63,9 @@ export async function antigravitySignInAgain(
       ? 'activation_running'
       : agy.runtimeActiveProfileId() === profileId
         ? 'account_active'
-        : null;
+        : agy.signInRunning(profileId)
+          ? 'signin_running'
+          : null;
   } catch {
     throw new LifecycleHttpError(500, 'registry_unavailable');
   }

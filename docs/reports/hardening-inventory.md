@@ -6,8 +6,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1234 |
-| Sync fs files affected (all) | 122 |
+| Sync fs occurrences (all) | 1267 |
+| Sync fs files affected (all) | 124 |
 | Sync fs occurrences (runtime hotpaths) | 522 |
 | Sync fs files affected (runtime hotpaths) | 68 |
 | Legacy shim markers | 228 |
@@ -53,13 +53,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 23.1% (133/577) |
+| typed-error adoption (typed/total throws) | 22.6% (133/588) |
 | typed-error adoption (P4 locked subdomains) | 88.2% (15/17), target 40% |
-| hotpath console.error/warn occurrences | 86 (294 total, 208 CLI-UX exempt) |
+| hotpath console.error/warn occurrences | 88 (296 total, 208 CLI-UX exempt) |
 | hotpath console.error/warn files | 21 |
-| files with createLogger | 33/400 |
+| files with createLogger | 33/402 |
 | subdomains with zero createLogger | 20 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, shared, targets, types) |
-| files > 400 LOC | 39 |
+| files > 400 LOC | 40 |
 | files > 600 LOC | 16 |
 
 ### Top Hotpath console.error/warn Files
@@ -71,11 +71,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/cliproxy/accounts/account-safety-cross-lane.ts` | 9 |
 | `src/config/unified-config-loader.ts` | 7 |
 | `src/utils/shell-executor.ts` | 7 |
+| `src/antigravity/registry.ts` | 5 |
 | `src/bin/compat-cli.ts` | 5 |
 | `src/targets/codex-detector.ts` | 5 |
 | `src/utils/claude-detector.ts` | 4 |
 | `src/utils/platform-commands.ts` | 4 |
-| `src/antigravity/registry.ts` | 3 |
 | `src/auth/profile-continuity-inheritance.ts` | 3 |
 | `src/auth/profile-detector.ts` | 3 |
 | `src/ccs.ts` | 2 |
@@ -88,12 +88,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|
 | `src/web-server/usage/native-quota-collector.ts` | 1871 |
 | `src/web-server/model-pricing.ts` | 1138 |
+| `src/antigravity/registry.ts` | 1083 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1052 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
 | `src/cliproxy/quota/quota-manager.ts` | 954 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
-| `src/antigravity/registry.ts` | 853 |
 | `src/cliproxy/accounts/account-safety.ts` | 787 |
 | `src/web-server/usage/aggregator.ts` | 782 |
 | `src/auth/profile-detector.ts` | 767 |

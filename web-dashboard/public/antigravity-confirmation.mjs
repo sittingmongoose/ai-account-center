@@ -9,7 +9,7 @@ const WARNING = 'Another Antigravity program is running on Ubuntu. Stop the list
 const EXPIRED = 'This confirmation expired. Cancel, then click Activate again.';
 const FAILED = 'The switch could not complete. Cancel, then click Activate again.';
 const ACTIVATION_MESSAGES = Object.freeze({
-  busy: 'Antigravity is busy on Ubuntu. The switch waits until its programs are idle, so activate again then.',
+  busy: 'Antigravity is busy on Ubuntu. Nothing was switched; activate again once its programs are idle.',
   deferred: 'Antigravity activation is deferred on Ubuntu. Refresh its native status before trying again.',
   'unsupported-runtime-probe': 'The Ubuntu Antigravity runtime could not be verified. Account switching is unavailable.',
   'stale-confirmation': 'This Antigravity confirmation is no longer valid. Cancel, then click Activate again.',

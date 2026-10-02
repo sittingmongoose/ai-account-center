@@ -97,6 +97,28 @@ export class AntigravitySwitchService {
     return identity;
   }
 
+  /**
+   * The broker's owned-idle approval, probed before anything is offered or
+   * stopped. A probe that fails (for example a runtime proof that is not
+   * ready yet) counts as a refusal, so the caller answers busy.
+   */
+  private async ownedIdleApproved(
+    plan: ProcessPlan,
+    current: VerifiedIdentity,
+    credential: NativeCredential
+  ): Promise<boolean> {
+    if (!this.driver.approveOwnedIdlePlan) return false;
+    try {
+      return await this.driver.approveOwnedIdlePlan(
+        plan,
+        current,
+        credentialFingerprint(credential)
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async activate(request: ActivateRequest): Promise<ActivationResult> {
     const result = (
       status: ActivationResult['status'],
@@ -145,11 +167,7 @@ export class AntigravitySwitchService {
             initialPlan.processes.length &&
             (!initialPlan.continuity?.restorable ||
               !this.driver.approveOwnedIdlePlan ||
-              !(await this.driver.approveOwnedIdlePlan(
-                initialPlan,
-                current,
-                credentialFingerprint(currentCredential)
-              )))
+              !(await this.ownedIdleApproved(initialPlan, current, currentCredential)))
           )
             return result('busy', {
               ...publicIdentity,
@@ -220,11 +238,7 @@ export class AntigravitySwitchService {
           // is probed first, and its refusal keeps the existing busy result.
           if (
             this.driver.approveOwnedIdlePlan &&
-            !(await this.driver.approveOwnedIdlePlan(
-              initialPlan,
-              current,
-              credentialFingerprint(currentCredential)
-            ))
+            !(await this.ownedIdleApproved(initialPlan, current, currentCredential))
           ) {
             return result('busy', {
               ...publicIdentity,

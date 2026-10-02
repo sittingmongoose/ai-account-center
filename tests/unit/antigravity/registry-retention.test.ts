@@ -53,6 +53,17 @@ test('five generations keep only the current file plus one previous copy', () =>
   expect(report.skipped).toEqual([]);
 });
 
+test('a null previous generation keeps only the current file', () => {
+  const directory = hostDirectory();
+  writeGeneration(directory, generation(1), 120_000);
+  writeGeneration(directory, generation(2), 60_000);
+  const current = writeGeneration(directory, generation(3), 0);
+  const report = pruneSupersededCredentials(directory, generation(3), null);
+  expect(fs.readdirSync(directory)).toEqual([current]);
+  expect(report.deleted.length).toBe(2);
+  expect(report.skipped).toEqual([]);
+});
+
 test('the recorded previous generation survives even when a newer orphan exists', () => {
   const directory = hostDirectory();
   // A crashed save can leave an unpublished generation newer than the recorded previous.
