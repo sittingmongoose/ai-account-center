@@ -158,9 +158,9 @@ test('two concurrent acquirers of one stale lock never both win', async () => {
   }
   expect(wins).toBe(1);
   expect(results.filter((entry) => entry.status === 'fulfilled').length).toBe(1);
-  const rejected = results.find(
-    (entry) => entry.status === 'rejected'
-  ) as PromiseRejectedResult | undefined;
+  const rejected = results.find((entry) => entry.status === 'rejected') as
+    | PromiseRejectedResult
+    | undefined;
   expect(rejected?.reason).toBeInstanceOf(PrivateStorageError);
   expect((rejected?.reason as PrivateStorageError).code).toBe('busy');
   expect(fs.existsSync(path.join(profiles, '.transaction-lock'))).toBe(false);
@@ -190,4 +190,48 @@ test('a displaced lock with foreign contents is preserved across a takeover', as
     'review me'
   );
   expect(fs.existsSync(lock)).toBe(false);
+});
+
+test('a fresh lock another process made after the stale verdict is never displaced', async () => {
+  const { profiles, registry } = setup();
+  const pid = await deadPid();
+  const lock = plantLock(profiles, { pid, startedAt: new Date().toISOString() });
+  const original = fs.renameSync;
+  let raced = false;
+  let rival: fs.Stats | null = null;
+  // The rival process's takeover lands between this caller's verdict and its rename.
+  const rename = spyOn(fs, 'renameSync').mockImplementation(((
+    from: fs.PathLike,
+    to: fs.PathLike
+  ) => {
+    if (!raced && String(from) === lock) {
+      raced = true;
+      original(lock, `${lock}.rival-aside`);
+      fs.mkdirSync(lock, { mode: 0o700 });
+      fs.writeFileSync(
+        path.join(lock, 'holder.json'),
+        JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+        { flag: 'wx', mode: 0o600 }
+      );
+      rival = fs.lstatSync(lock);
+    }
+    return original(from, to);
+  }) as typeof fs.renameSync);
+  let ran = false;
+  try {
+    await expect(
+      registry.withLock(async () => {
+        ran = true;
+      })
+    ).rejects.toMatchObject({ code: 'busy' });
+  } finally {
+    rename.mockRestore();
+  }
+  expect(raced).toBe(true);
+  expect(ran).toBe(false);
+  const current = fs.lstatSync(lock);
+  expect(rival).not.toBeNull();
+  expect(current.ino).toBe((rival as unknown as fs.Stats).ino);
+  expect(JSON.parse(fs.readFileSync(path.join(lock, 'holder.json'), 'utf8')).pid).toBe(process.pid);
+  expect(fs.readdirSync(profiles).filter((name) => name.includes('.stale-'))).toEqual([]);
 });

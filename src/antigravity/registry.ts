@@ -498,6 +498,15 @@ export class AntigravityProfileRegistry {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
         throw new PrivateStorageError('unsafe');
     }
+    // The staleness verdict belongs to this exact directory; a lock released or
+    // replaced meanwhile is never judged on another lock's record.
+    let judged: fs.Stats;
+    try {
+      judged = fs.lstatSync(lock);
+    } catch {
+      throw new PrivateStorageError('busy');
+    }
+    if (!judged.isDirectory() || judged.isSymbolicLink()) throw new PrivateStorageError('unsafe');
     const reason = staleLockReason(lock, Date.now());
     if (!reason) throw new PrivateStorageError('busy');
     // Atomic takeover: exactly one racer can rename a given source aside; every
@@ -509,6 +518,19 @@ export class AntigravityProfileRegistry {
       throw new PrivateStorageError(
         (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'busy' : 'unsafe'
       );
+    }
+    // Another process may have taken the same stale lock over between the
+    // verdict and the rename, and created its own fresh lock at this path.
+    // That fresh lock is never displaced: it goes back untouched, and this
+    // caller yields as busy.
+    const displaced = fs.lstatSync(aside);
+    if (displaced.dev !== judged.dev || displaced.ino !== judged.ino) {
+      try {
+        if (!fs.existsSync(lock)) fs.renameSync(aside, lock);
+      } catch {
+        /* Left for review; its holder's release refuses a replaced lock. */
+      }
+      throw new PrivateStorageError('busy');
     }
     try {
       fs.mkdirSync(lock, { mode: 0o700 });
