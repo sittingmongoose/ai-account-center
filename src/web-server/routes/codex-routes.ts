@@ -17,6 +17,7 @@ import { getCodexProfileQuotas } from '../services/codex-profile-quota-service';
 import {
   getCodexAutoSwitchService,
   isCodexAutoSwitchSettings,
+  type CodexAutoSwitchSettings,
 } from '../services/codex-auto-switch-service';
 
 const router = createApiRouter();
@@ -47,6 +48,27 @@ router.get('/profiles/quotas', async (req: Request, res: Response): Promise<void
   }
 });
 
+/**
+ * PUT body: `thresholdPercent` (% remaining) as before, or `thresholdUsedPercent`
+ * (% used, the unit Antigravity uses), stored as 100 - thresholdUsedPercent.
+ */
+function autoSwitchSettingsFromBody(body: unknown): CodexAutoSwitchSettings | 'both' | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(body, key);
+  if (!has('thresholdUsedPercent')) return isCodexAutoSwitchSettings(body) ? body : null;
+  if (has('thresholdPercent')) return 'both';
+  const { thresholdUsedPercent, ...rest } = body as Record<string, unknown>;
+  if (
+    typeof thresholdUsedPercent !== 'number' ||
+    !Number.isInteger(thresholdUsedPercent) ||
+    thresholdUsedPercent < 1 ||
+    thresholdUsedPercent > 99
+  )
+    return null;
+  const settings = { ...rest, thresholdPercent: 100 - thresholdUsedPercent };
+  return isCodexAutoSwitchSettings(settings) ? settings : null;
+}
+
 router.get('/profiles/auto-switch', (req: Request, res: Response): void => {
   if (req.session?.authenticated !== true) {
     res.status(401).json({ error: 'Authentication required' });
@@ -68,14 +90,19 @@ router.put('/profiles/auto-switch', (req: Request, res: Response): void => {
     res.status(415).json({ error: 'Codex automatic switching requires application/json.' });
     return;
   }
-  if (!isCodexAutoSwitchSettings(req.body)) {
+  const settings = autoSwitchSettingsFromBody(req.body);
+  if (settings === 'both') {
+    res.status(400).json({ error: 'Provide thresholdPercent or thresholdUsedPercent, not both.' });
+    return;
+  }
+  if (!settings) {
     res
       .status(400)
       .json({ error: 'Provide an enabled boolean or a remaining threshold integer from 1 to 99.' });
     return;
   }
   try {
-    res.json(getCodexAutoSwitchService().updateSettings(req.body));
+    res.json(getCodexAutoSwitchService().updateSettings(settings));
   } catch {
     res
       .status(500)

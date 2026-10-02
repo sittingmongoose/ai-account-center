@@ -39,9 +39,11 @@ COPY . .
 RUN bun run build:all
 
 # Verify the executable and actual Slint browser artifacts before packaging.
+# The wasm lives in dist/ui/pkg/<buildId>/; verify-bundle.js checks it against the manifest.
 RUN test -s dist/ccs.js \
   && test -s dist/ui/index.html \
-  && test -s dist/ui/pkg/ccs_account_dashboard_bg.wasm
+  && test -s dist/ui/ui-build-manifest.json \
+  && node scripts/verify-bundle.js
 
 # Build runtime deps from the committed bun.lock to keep Docker installs pinned.
 # --ignore-scripts avoids user-home side effects from postinstall during image build.

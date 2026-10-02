@@ -232,13 +232,29 @@ function wireSnapshot(value: unknown): unknown {
   };
 }
 
+/** Progress callbacks for the Open progress view; counts only, never record contents. */
+export interface ClaudeHistorySyncObserver {
+  /** The create-only append is about to run for this many history records. */
+  copying?: (totalCount: number) => void;
+}
+
+/** An observer can never change or fail the copy transaction it watches. */
+function notifyObserver(callback: () => void): void {
+  try {
+    callback();
+  } catch {
+    /* Progress is informational only. */
+  }
+}
+
 /** Called only inside the existing coalesced authenticated Open operation.
  * This does not open/resume/stop an app, write a transcript or return private
  * descriptors. Pre-append skips preserve Open; uncertain append holds Open.
  */
 export async function synchronizeClaudeHistoryBeforeOpen(
   profile: ClaudeDesktopProfile,
-  platform: 'mac' | 'windows'
+  platform: 'mac' | 'windows',
+  observer: ClaudeHistorySyncObserver = {}
 ): Promise<HistoryResult> {
   try {
     if (profile.id && claudeHistoryOpenHeld(profile.id, platform))
@@ -319,6 +335,8 @@ export async function synchronizeClaudeHistoryBeforeOpen(
           }
           try {
             marker.assertBound();
+            const totalCount = Array.isArray(payload.records) ? payload.records.length : null;
+            if (totalCount !== null) notifyObserver(() => observer.copying?.(totalCount));
             const result = await call(platform, 'append', {
               expectedTarget: wireSnapshot(payload.target),
               records: (wireSnapshot({ records: payload.records }) as { records: unknown }).records,

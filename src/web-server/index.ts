@@ -35,6 +35,9 @@ import {
 } from '../antigravity/runtime-service';
 import type { AntigravityRuntime } from '../antigravity/runtime-composition';
 import { getInstalledAntigravityRuntimeFactory } from '../antigravity/production-runtime';
+import { loadStaticUi, pageRouteHandler, precompressedStatic, uiStaticHeaders } from './static-ui';
+import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
+import { setDashboardBuildCommit } from './services/dashboard-server-info';
 
 export interface ServerOptions {
   port: number;
@@ -58,6 +61,31 @@ function getListenHost(options: ServerOptions): string {
 const logger = createLogger('web-server');
 
 /**
+ * A short error class for the log: a body-parser type, a system code or the
+ * error's class name, never its message.
+ */
+export function requestErrorKind(error: unknown): string {
+  const candidate = error as { type?: unknown; code?: unknown; name?: unknown } | null;
+  for (const value of [candidate?.type, candidate?.code, candidate?.name]) {
+    if (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value)) return value;
+  }
+  return 'unknown';
+}
+
+/** The final handler's trace: status and error class only, no message, stack or path. */
+function logRequestFailure(status: number, error: unknown, headersSent: boolean): void {
+  try {
+    logger[status >= 500 ? 'error' : 'warn']('web.request.failed', 'Dashboard request failed', {
+      status,
+      kind: requestErrorKind(error),
+      headersSent,
+    });
+  } catch {
+    /* Logging never changes the answer. */
+  }
+}
+
+/**
  * Start Express server with WebSocket support
  */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
@@ -75,13 +103,18 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.use(express.json());
   app.use(
     (
-      err: Error & { status?: number; body?: string },
+      err: Error & { status?: number; body?: string; type?: string },
       _req: express.Request,
       res: express.Response,
       next: express.NextFunction
     ) => {
       if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
         res.status(400).json({ error: 'Invalid JSON in request body' });
+        return;
+      }
+      // body-parser's own 413 would otherwise reach Express's HTML error page.
+      if (err.type === 'entity.too.large') {
+        res.status(413).json({ error: 'Request body is too large.' });
         return;
       }
       next(err);
@@ -99,27 +132,52 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // REST API routes (modularized)
   const { apiRoutes } = await import('./routes/index');
   app.use('/api', apiRoutes);
+  // Any /api request no router answered, in any method or letter case, is a JSON 404;
+  // it never reaches the static files or the page fallback below.
+  app.use((req, res, next) => {
+    if (!isApiRequestPath(req.path)) {
+      next();
+      return;
+    }
+    res.status(404).json({ error: 'API endpoint was not found.' });
+  });
 
   const staticDir = options.staticDir || path.join(__dirname, '../ui');
+  const staticUi = loadStaticUi(staticDir);
+  setDashboardBuildCommit(staticUi.commit);
+  app.use(precompressedStatic(staticUi));
   app.use(
     express.static(staticDir, {
-      setHeaders: (res, filePath) => {
-        if (filePath.endsWith('.wasm')) res.setHeader('Content-Type', 'application/wasm');
-      },
+      // '/' is a page route below, with the page headers.
+      index: false,
+      setHeaders: uiStaticHeaders(staticUi),
     })
   );
   // Slint owns the account dashboard and login state; no React portal is served.
-  app.get('*', (req, res) => {
-    if (req.path === '/' || req.path === '/login') {
-      res.sendFile(path.join(staticDir, 'index.html'));
-      return;
+  app.get('*', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
+  // Last: whatever failed above answers in JSON, never with a stack trace.
+  app.use(
+    (
+      err: Error & { status?: number; statusCode?: number },
+      _req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      const raw = err?.status ?? err?.statusCode;
+      const status =
+        typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw < 500 ? raw : 500;
+      logRequestFailure(status, err, res.headersSent);
+      if (res.headersSent) {
+        next(err);
+        return;
+      }
+      if (status < 500) {
+        res.status(status).json({ error: 'The request could not be processed.' });
+        return;
+      }
+      res.status(500).json({ error: 'The request could not be completed safely.' });
     }
-    if (isApiRequestPath(req.path)) {
-      res.status(404).json({ error: 'API endpoint was not found.' });
-      return;
-    }
-    res.redirect('/');
-  });
+  );
 
   server.on('upgrade', (request, socket, head) => {
     const pathname = getUpgradePathname(request.url);
