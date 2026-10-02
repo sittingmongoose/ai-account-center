@@ -26,6 +26,31 @@ const reject = reason => { throw new Refused(reason); };
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const validId = value => typeof value === 'string' && UUID.test(value);
 const snapshotRevision = records => sha(JSON.stringify(records.map(r => [r.name, sha(r.bytes)]).sort((a,b) => a[0].localeCompare(b[0]))));
+// Bounded microbatches. A full 18-descriptor batch overran the unchanged
+// 25-second Node deadline, while a one-descriptor transaction measured about
+// 4.6-4.8 s locally (capacity plan v1, 2026-10-02). A larger batch needs its own
+// measured per-platform qualification; never a longer deadline or fewer guards.
+const MICROBATCH_RECORDS = 1;
+const REGISTRY_LIMIT = 200;
+// One Open copies for a bounded time, so Claude opens within the native
+// clients' wait even for a first copy of many records. The bound is checked
+// only between batches, after the last batch's trusted receipt finished the
+// durable marker, so stopping leaves no hold; the next Open's plan skips every
+// record already present and copies the rest. Callers may only tighten it.
+// Each transaction also leaves one private snapshot folder on the target (see
+// docs/claude-history-sync.md), so this bound caps those per Open as well.
+const OPEN_COPY_BUDGET_MS = 45_000;
+const MAX_BATCHES_PER_OPEN = 50;
+function copyLimits(limits) {
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  const now = typeof limits?.now === 'function' ? limits.now : Date.now;
+  return {
+    budgetMs: positive(limits?.budgetMs) ? Math.min(limits.budgetMs, OPEN_COPY_BUDGET_MS) : OPEN_COPY_BUDGET_MS,
+    maxBatches: positive(limits?.maxBatches) ? Math.min(limits.maxBatches, MAX_BATCHES_PER_OPEN) : MAX_BATCHES_PER_OPEN,
+    // An unreadable clock counts as an exhausted budget, never as more time.
+    clock: () => { try { const value = now(); return Number.isFinite(value) ? value : NaN; } catch { return NaN; } },
+  };
+}
 
 function decodeRecords(snapshot) {
   if (!Array.isArray(snapshot.records) || snapshot.records.length > 200) reject('registry_invalid');
@@ -134,11 +159,14 @@ function planMissing(sourceRows, targetRows, sourcePlatform, targetPlatform, pol
   return {records, alreadyPresentCount, skipped};
 }
 
-async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, adapters}) {
+async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, adapters, limits}) {
   if (typeof profileId !== 'string' || typeof targetPlatform !== 'string' || !PROFILES.has(profileId) || !['mac', 'windows'].includes(targetPlatform)) return {status: 'skipped', reason: 'unsupported_profile_or_platform', createdCount: 0};
   const direction = DIRECTIONS[profileId];
   if (!direction || direction[1] !== targetPlatform) return {status: 'skipped', reason: 'unsupported_direction', createdCount: 0};
   const sourcePlatform = direction[0];
+  // The per-Open bound counts from the start of this Open's history work.
+  const budget = copyLimits(limits), startedAt = budget.clock();
+  let confirmedCount = 0, batchesRun = 0;
   const skipped = reason => ({status: 'skipped', reason, createdCount: 0});
   try {
     validatePolicy(policy);
@@ -162,31 +190,68 @@ async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, 
     validateSnapshot(sourceAgain, profileId, sourcePlatform, policy);
     if (!nativeGuardVerified(sourceAgain, sourcePlatform)) return skipped('native_guard_unverified');
     if (sourceAgain.revision !== source.revision) return skipped('source_changed');
+    let batchTarget = target;
     const guard = async () => {
       if (await adapters.isTargetClosed(profileId, targetPlatform) !== true) reject('target_opened');
-      if (await adapters.targetProtectedStateUnchanged?.(target) !== true) reject('target_state_changed');
+      if (await adapters.targetProtectedStateUnchanged?.(batchTarget) !== true) reject('target_state_changed');
     };
-    await guard();
-    let result;
-    try { result = await adapters.appendCreateOnly({profileId, targetPlatform, target, records: plan.records, closedGuard: guard}); }
-    catch {
-      // A lost append receipt is not proof that the remote writer did nothing.
-      // Preserve unknown partial metadata/snapshots; never automatically retry.
-      return {status: 'refused', reason: 'create_only_transaction_unconfirmed', createdCount: 0, recoveryRequired: true};
+    // Each transaction retains the existing complete guard checks and its
+    // existing 25-second Node / 30-second SSH deadlines. The service does not
+    // cache identity, closed-state, native, protected or registry verification.
+    // Confirmed batches are preserved; an unknown reply stops before any next
+    // batch, and the existing owned pending marker still holds ordinary Open.
+    if (target.records.length + plan.records.length > REGISTRY_LIMIT) return skipped('registry_invalid');
+    const totalCount = plan.records.length;
+    const authorized = [...target.records];
+    for (let offset = 0; offset < totalCount; offset += MICROBATCH_RECORDS) {
+      const batch = plan.records.slice(offset, offset + MICROBATCH_RECORDS);
+      await guard();
+      let result;
+      // totalCount/confirmedCount describe the whole plan for progress only;
+      // they never reach the remote helper or change what is written.
+      try { result = await adapters.appendCreateOnly({profileId, targetPlatform, target: batchTarget, records: batch, totalCount, confirmedCount, closedGuard: guard}); }
+      catch {
+        // A lost append receipt is not proof that the remote writer did nothing.
+        // Earlier confirmed batches stay; never retry or start the next batch.
+        return {status: 'refused', reason: 'create_only_transaction_unconfirmed', createdCount: confirmedCount, recoveryRequired: true};
+      }
+      if (result?.status !== 'created_metadata' || result.createdCount !== batch.length || result.protectedBytesUnchanged !== true) return {
+        status: 'refused', reason: 'create_only_transaction_refused', createdCount: confirmedCount,
+        recoveryRequired: result?.recoveryRequired === true || result?.status === 'refused_replacement_preserved' ||
+          (result?.status !== 'refused_rolled_back' && !(result?.status === 'refused' && result?.ownedFilesRolledBack === true && result?.recoveryRequired === false)),
+        createdCountBeforeRefusal: Number.isInteger(result?.createdCountBeforeRefusal) && result.createdCountBeforeRefusal >= 0 && result.createdCountBeforeRefusal <= batch.length ? result.createdCountBeforeRefusal : 0,
+      };
+      confirmedCount += batch.length;
+      batchesRun++;
+      for (const record of batch) authorized.push({...record, sha256: sha(record.bytes)});
+      if (confirmedCount === totalCount) break;
+      // Only here, between batches: the last batch's terminal receipt has
+      // finished the marker, so a stop holds nothing and needs no recovery.
+      if (batchesRun >= budget.maxBatches || !(budget.clock() - startedAt < budget.budgetMs)) return {
+        status: 'partial', reason: 'open_copy_budget_reached', createdCount: confirmedCount,
+        remainingCount: totalCount - confirmedCount, recoveryRequired: false, ...publicCounts,
+        originalIdsPreserved: true, explicitNativeConfirmationRequired: true,
+        resumedSessions: 0, copiedTranscripts: 0};
+      const current = await adapters.readTarget(profileId, targetPlatform);
+      validateSnapshot(current, profileId, targetPlatform, policy);
+      if (!nativeGuardVerified(current, targetPlatform)) reject('target_state_changed');
+      if (current.noPendingInput !== true || current.noScheduledWork !== true || current.protectedSnapshotStable !== true ||
+          JSON.stringify(current.protectedSnapshot) !== JSON.stringify(target.protectedSnapshot)) reject('target_state_changed');
+      if (current.records.length !== authorized.length) reject('target_state_changed');
+      const allowed = new Map(authorized.map(row => [row.name, row.bytes]));
+      for (const row of current.records) if (!allowed.get(row.name)?.equals(row.bytes)) reject('target_state_changed');
+      // Original rows and only the exact confirmed neutral candidate bytes
+      // become the next baseline. No arbitrary current row is trusted.
+      batchTarget = current;
     }
-    if (result?.status !== 'created_metadata' || result.createdCount !== plan.records.length || result.protectedBytesUnchanged !== true) return {
-      status: 'refused', reason: 'create_only_transaction_refused', createdCount: 0,
-      recoveryRequired: result?.recoveryRequired === true || result?.status === 'refused_replacement_preserved' ||
-        (result?.status !== 'refused_rolled_back' && !(result?.status === 'refused' && result?.ownedFilesRolledBack === true && result?.recoveryRequired === false)),
-      createdCountBeforeRefusal: Number.isInteger(result?.createdCountBeforeRefusal) && result.createdCountBeforeRefusal >= 0 && result.createdCountBeforeRefusal <= 200 ? result.createdCountBeforeRefusal : 0,
-    };
-    return {status: 'synchronized', createdCount: result.createdCount, ...publicCounts,
+    return {status: 'synchronized', createdCount: confirmedCount, ...publicCounts,
       originalIdsPreserved: true, explicitNativeConfirmationRequired: true,
       resumedSessions: 0, copiedTranscripts: 0};
   } catch (error) {
     // Adapter/provider/path errors may contain secrets. Only our fixed known
     // reason tokens leave this boundary; no raw error or stack is returned.
-    return skipped(error instanceof Refused && SAFE_REASONS.has(error.reason) ? error.reason : 'unavailable');
+    const reason = error instanceof Refused && SAFE_REASONS.has(error.reason) ? error.reason : 'unavailable';
+    return confirmedCount > 0 ? {status: 'refused', reason, createdCount: confirmedCount, recoveryRequired: false} : skipped(reason);
   }
 }
 
@@ -204,6 +269,9 @@ async function beforeOrdinaryProfileOpen(synchronize, ordinaryOpen) {
 // This is a durable uncertain-append hold, not a writer lease. Each operation
 // owns a separate create-only file. Finishing its own file cannot clear another
 // operation, and server restart / policy removal never proves quiescence.
+// One Open's microbatches share its one file: pending while a batch's append may
+// be in flight, finished between batches (see rearm), so the bounded marker
+// capacity counts Opens that copied, not copied records.
 const MARKER_LIMIT = 256;
 const MARKER_NAME = /^(platyr|gmail|party|me)-(mac|windows)-([0-9a-f]{32})\.json$/;
 const markerDirectory = directory => path.join(directory, 'claude-history-pending');
@@ -275,13 +343,15 @@ function armPendingMarker(directory, profileId, targetPlatform) {
   syncDirectory(directory);
   const state = pendingMarkerState(directory, profileId, targetPlatform);
   if (state.held) throw new Refused('history_append_pending');
-  if (state.count >= MARKER_LIMIT) throw new Refused('history_marker_unavailable');
+  // Its own reason, so a full store is visible rather than a silent skip.
+  if (state.count >= MARKER_LIMIT) throw new Refused('history_marker_store_full');
   const nonce = crypto.randomBytes(16).toString('hex');
   const filename = path.join(root, `${profileId}-${targetPlatform}-${nonce}.json`);
   const record = {version:1, profileId, targetPlatform, nonce, state:'pending', createdAt:new Date().toISOString()};
   const bytes = Buffer.from(JSON.stringify(record));
   const fd = fs.openSync(filename, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   let released = false;
+  let finishedBytes = null;
   const bound = () => {
     const current = readMarker(filename), original = fs.fstatSync(fd);
     if (!rootIsPrivate(directory) || !ownedPrivate(fs.lstatSync(root), true) ||
@@ -293,7 +363,7 @@ function armPendingMarker(directory, profileId, targetPlatform) {
   return {
     assertBound: bound,
     finish: terminalReceipt => {
-      if (released || !terminalReceipt || terminalReceipt.writerQuiescent !== true ||
+      if (released || finishedBytes !== null || !terminalReceipt || terminalReceipt.writerQuiescent !== true ||
           !['created_metadata','refused'].includes(terminalReceipt.status) ||
           !Number.isInteger(terminalReceipt.createdCount) || terminalReceipt.createdCount < 0 || terminalReceipt.createdCount > 200)
         throw new Refused('history_append_pending');
@@ -306,6 +376,22 @@ function armPendingMarker(directory, profileId, targetPlatform) {
       const current = readMarker(filename), original = fs.fstatSync(fd);
       if (current.info.dev !== original.dev || current.info.ino !== original.ino || !current.bytes.equals(finished))
         throw new Refused('history_append_pending');
+      finishedBytes = finished;
+    },
+    // Return this operation's own finished file to pending before its next
+    // batch. Only the exact finished bytes on our held inode qualify, and any
+    // other pending marker for this profile and platform still holds Open.
+    rearm: () => {
+      if (released || finishedBytes === null) throw new Refused('history_append_pending');
+      const current = readMarker(filename), original = fs.fstatSync(fd);
+      if (!rootIsPrivate(directory) || !ownedPrivate(fs.lstatSync(root), true) ||
+          current.info.dev !== original.dev || current.info.ino !== original.ino || !current.bytes.equals(finishedBytes))
+        throw new Refused('history_append_pending');
+      if (pendingMarkerState(directory, profileId, targetPlatform).held) throw new Refused('history_append_pending');
+      // An interrupted rewrite leaves an unreadable file, which holds Open.
+      fs.ftruncateSync(fd, 0); fs.writeSync(fd, bytes, 0, bytes.length, 0); fs.fsyncSync(fd);
+      finishedBytes = null;
+      bound();
     },
     release: () => { if (!released) { released = true; fs.closeSync(fd); } },
   };
@@ -327,4 +413,5 @@ function createLocalTargetAppender({profileId, targetPlatform, profileRoot, regi
 
 module.exports = {synchronizeBeforeProfileOpen, beforeOrdinaryProfileOpen,
   createLocalTargetAppender, planMissing, neutral, decodeRecords, snapshotRevision, validatePolicy, PROFILES, DIRECTIONS, NATIVE, Refused,
-  pendingMarkerState, armPendingMarker};
+  pendingMarkerState, armPendingMarker, MICROBATCH_RECORDS, REGISTRY_LIMIT, MARKER_LIMIT,
+  OPEN_COPY_BUDGET_MS, MAX_BATCHES_PER_OPEN};

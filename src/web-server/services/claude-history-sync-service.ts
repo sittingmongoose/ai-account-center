@@ -5,6 +5,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import type { ClaudeDesktopProfile } from './claude-desktop-profile-service';
 import { runClaudeHistoryHelper } from './claude-desktop-transport';
 import { ValidationError } from '../../errors/error-types';
+import { createLogger } from '../../services/logging';
 
 export interface ClaudeHistorySyncPolicy {
   version: 1;
@@ -22,6 +23,8 @@ interface HistoryResult {
   reason?: string;
   createdCount: number;
   recoveryRequired?: boolean;
+  /** Set on `partial`: records the per-Open bound left for the next Open. */
+  remainingCount?: number;
 }
 interface PrivateRecord {
   name: string;
@@ -51,11 +54,15 @@ interface HistoryCore {
     directory: string,
     profileId: string,
     platform: 'mac' | 'windows'
-  ) => {
-    assertBound: () => void;
-    finish: (receipt: unknown) => void;
-    release: () => void;
-  };
+  ) => HistoryMarker;
+}
+/** One Open's durable uncertain-append hold (see armPendingMarker in the core). */
+interface HistoryMarker {
+  assertBound: () => void;
+  finish: (receipt: unknown) => void;
+  /** Back to pending before the next batch; only after this marker's own finish. */
+  rearm: () => void;
+  release: () => void;
 }
 const scriptsRoot = path.resolve(__dirname, '../../../scripts/claude-history');
 // Runtime uses the already packaged scripts directory. It never accepts a
@@ -68,6 +75,21 @@ const MAX_HELPER_BYTES = 24 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const hash = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
 const skipped = (reason: string): HistoryResult => ({ status: 'skipped', reason, createdCount: 0 });
+const logger = createLogger('web-server:claude-history');
+
+/** Counts, platform and fixed reason tokens only: never ids, paths, titles or errors. */
+function logHistory(
+  level: 'info' | 'warn',
+  event: string,
+  message: string,
+  context: Record<string, unknown>
+): void {
+  try {
+    logger[level](event, message, context);
+  } catch {
+    /* Logging never changes the copy or the Open. */
+  }
+}
 
 /** Check before policy lookup and after every optional-copy outcome. A removed
  * policy, repeated click or server restart cannot clear an uncertain append.
@@ -234,8 +256,12 @@ function wireSnapshot(value: unknown): unknown {
 
 /** Progress callbacks for the Open progress view; counts only, never record contents. */
 export interface ClaudeHistorySyncObserver {
-  /** The create-only append is about to run for this many history records. */
-  copying?: (totalCount: number) => void;
+  /**
+   * A bounded batch of the copy is about to be appended. `totalCount` is the
+   * whole plan of missing records and `confirmedCount` the records already
+   * confirmed by earlier batches of this Open (0 before the first batch).
+   */
+  copying?: (totalCount: number, confirmedCount?: number) => void;
 }
 
 /** An observer can never change or fail the copy transaction it watches. */
@@ -290,68 +316,139 @@ export async function synchronizeClaudeHistoryBeforeOpen(
         throw new ValidationError('helper_unavailable');
       return response;
     };
-    return await loadCore().synchronizeBeforeProfileOpen({
-      profileId: id,
-      targetPlatform: platform,
-      policy,
-      adapters: {
-        isTargetClosed: async () => {
-          const response = await call(platform, 'closed-check');
-          return object(response) && response.closed === true;
-        },
-        readSource: async (_id, source) =>
-          decodeSnapshot(await call(source as 'mac' | 'windows', 'collect')),
-        readTarget: async () => decodeSnapshot(await call(platform, 'collect')),
-        verifyTranscriptReferences: async (_id, source, records) => {
-          const response = await call(source as 'mac' | 'windows', 'verify-transcripts', {
-            records: (wireSnapshot({ records }) as { records: unknown }).records,
-          });
-          return object(response) && response.verified === true;
-        },
-        targetProtectedStateUnchanged: async (target) => {
-          const response = await call(platform, 'protected-check', {
-            expectedTarget: wireSnapshot(target),
-          });
-          return object(response) && response.unchanged === true;
-        },
-        appendCreateOnly: async (payload) => {
-          const currentPolicy = await loadClaudeHistoryPolicy(profile);
-          if (!currentPolicy || JSON.stringify(currentPolicy) !== JSON.stringify(policy))
-            throw new ValidationError('policy_changed');
-          if (!object(payload)) throw new ValidationError('helper_unavailable');
-          let marker: ReturnType<HistoryCore['armPendingMarker']>;
-          try {
-            marker = loadCore().armPendingMarker(getCcsDir(), id, platform);
-          } catch {
-            // No remote append was invoked. Existing/unknown markers hold Open;
-            // lack of private marker storage alone skips this optional copy.
-            if (claudeHistoryOpenHeld(id, platform)) throw new ValidationError('append_pending');
-            return {
-              status: 'refused',
-              createdCount: 0,
-              recoveryRequired: false,
-              ownedFilesRolledBack: true,
-            };
-          }
-          try {
-            marker.assertBound();
-            const totalCount = Array.isArray(payload.records) ? payload.records.length : null;
-            if (totalCount !== null) notifyObserver(() => observer.copying?.(totalCount));
-            const result = await call(platform, 'append', {
-              expectedTarget: wireSnapshot(payload.target),
-              records: (wireSnapshot({ records: payload.records }) as { records: unknown }).records,
+    // One durable marker per Open, so the bounded marker capacity counts Opens
+    // that copied, not records. It is armed before the first batch, finished by
+    // each batch's trusted terminal receipt and re-armed before the next batch;
+    // a lost or malformed receipt leaves it pending and stops the sequence.
+    const sequence: { marker: HistoryMarker | null; stopReason: string | null } = {
+      marker: null,
+      stopReason: null,
+    };
+    // A stop before this batch's marker is armed or re-armed: no remote append
+    // was invoked and no marker is pending, so the copy ends cleanly and Open
+    // proceeds. The next Open's plan skips the records already confirmed.
+    const cleanStop = (reason: string): unknown => {
+      sequence.stopReason = reason;
+      return {
+        status: 'refused',
+        createdCount: 0,
+        recoveryRequired: false,
+        ownedFilesRolledBack: true,
+      };
+    };
+    const appendCreateOnly = async (payload: unknown): Promise<unknown> => {
+      // A changed or removed policy (for example, removed to stop a long copy)
+      // stops before this batch; it never claims an unconfirmed append.
+      const currentPolicy = await loadClaudeHistoryPolicy(profile);
+      if (!currentPolicy || JSON.stringify(currentPolicy) !== JSON.stringify(policy))
+        return cleanStop('history_policy_changed');
+      if (!object(payload)) return cleanStop('history_payload_invalid');
+      let marker: HistoryMarker;
+      try {
+        if (sequence.marker) sequence.marker.rearm();
+        else sequence.marker = loadCore().armPendingMarker(getCcsDir(), id, platform);
+        marker = sequence.marker;
+      } catch (error) {
+        // No remote append was invoked. Existing/unknown markers hold Open;
+        // lack of private marker storage alone skips this optional copy.
+        if (claudeHistoryOpenHeld(id, platform)) throw new ValidationError('append_pending');
+        return cleanStop(
+          object(error) && error.reason === 'history_marker_store_full'
+            ? 'history_marker_store_full'
+            : 'history_marker_unavailable'
+        );
+      }
+      marker.assertBound();
+      const batchCount = Array.isArray(payload.records) ? payload.records.length : null;
+      const totalCount = payload.totalCount ?? batchCount;
+      const confirmedCount = payload.confirmedCount ?? 0;
+      // Counts describe the whole neutral plan, never just this batch.
+      // Invalid observer metadata is ignored; it cannot affect mutation.
+      if (
+        batchCount !== null &&
+        Number.isSafeInteger(totalCount) &&
+        Number.isSafeInteger(confirmedCount) &&
+        typeof totalCount === 'number' &&
+        typeof confirmedCount === 'number' &&
+        totalCount >= batchCount &&
+        totalCount <= 200 &&
+        confirmedCount >= 0 &&
+        confirmedCount + batchCount <= totalCount
+      )
+        notifyObserver(() => observer.copying?.(totalCount, confirmedCount));
+      const result = await call(platform, 'append', {
+        expectedTarget: wireSnapshot(payload.target),
+        records: (wireSnapshot({ records: payload.records }) as { records: unknown }).records,
+      });
+      // Only the fixed helper's successful terminal response says its
+      // sole Node mutator is finished/killed and reaped. Lost/malformed
+      // responses retain the durable hold; no automatic retry occurs.
+      marker.finish(result);
+      return result;
+    };
+    try {
+      const result = await loadCore().synchronizeBeforeProfileOpen({
+        profileId: id,
+        targetPlatform: platform,
+        policy,
+        adapters: {
+          isTargetClosed: async () => {
+            const response = await call(platform, 'closed-check');
+            return object(response) && response.closed === true;
+          },
+          readSource: async (_id, source) =>
+            decodeSnapshot(await call(source as 'mac' | 'windows', 'collect')),
+          readTarget: async () => decodeSnapshot(await call(platform, 'collect')),
+          verifyTranscriptReferences: async (_id, source, records) => {
+            const response = await call(source as 'mac' | 'windows', 'verify-transcripts', {
+              records: (wireSnapshot({ records }) as { records: unknown }).records,
             });
-            // Only the fixed helper's successful terminal response says its
-            // sole Node mutator is finished/killed and reaped. Lost/malformed
-            // responses retain the durable hold; no automatic retry occurs.
-            marker.finish(result);
-            return result;
-          } finally {
-            marker.release();
-          }
+            return object(response) && response.verified === true;
+          },
+          targetProtectedStateUnchanged: async (target) => {
+            const response = await call(platform, 'protected-check', {
+              expectedTarget: wireSnapshot(target),
+            });
+            return object(response) && response.unchanged === true;
+          },
+          appendCreateOnly,
         },
-      },
-    });
+      });
+      if (
+        sequence.stopReason &&
+        result.status === 'refused' &&
+        result.reason === 'create_only_transaction_refused' &&
+        result.recoveryRequired !== true
+      ) {
+        // Its own reason and log line, so a full marker store or a policy change
+        // is visible rather than a silent skip.
+        const reason = sequence.stopReason;
+        const full = reason === 'history_marker_store_full';
+        logHistory(
+          full ? 'warn' : 'info',
+          full ? 'claude.history.marker_store_full' : 'claude.history.copy_stopped',
+          full
+            ? 'Claude history marker store is full; nothing was copied'
+            : 'Claude history copy stopped before an append',
+          { reason, platform, confirmedCount: result.createdCount }
+        );
+        return { ...result, reason };
+      }
+      if (result.status === 'partial')
+        logHistory(
+          'info',
+          'claude.history.copy_budget_reached',
+          'Claude history copy paused for this Open',
+          {
+            platform,
+            confirmedCount: result.createdCount,
+            remainingCount: result.remainingCount,
+          }
+        );
+      return result;
+    } finally {
+      sequence.marker?.release();
+    }
   } catch {
     return skipped('unavailable');
   }

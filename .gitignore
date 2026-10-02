@@ -17,8 +17,8 @@ repomix-output.xml
 plans/
 *.tgz
 
-# Node.js
-node_modules/
+# Node.js (no trailing slash, so a worktree's node_modules symlink is ignored too)
+node_modules
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
