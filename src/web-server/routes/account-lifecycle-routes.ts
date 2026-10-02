@@ -22,6 +22,7 @@ import {
 } from '../services/account-lifecycle-env';
 import { removeAccount, restoreTrash, trashListing } from '../services/account-lifecycle-removal';
 import { JOB_ID_PATTERN } from '../services/signin-jobs';
+import { antigravityTerminal } from '../services/account-lifecycle-helpers';
 
 /**
  * The account lifecycle routes (CONTRACT-registry-lifecycle section 6), under
@@ -171,8 +172,10 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
       ) {
         throw new LifecycleHttpError(400, 'invalid_body');
       }
-      // The command belongs to Codex's staged Antigravity lane, which this server does not ship.
-      throw new LifecycleHttpError(409, 'not_implemented');
+      if (!env().antigravity) throw new LifecycleHttpError(409, 'not_implemented');
+      // A fixed command with the validated profile name; it carries no secret.
+      const { host, command } = antigravityTerminal(query.profile);
+      return { status: 200, body: { host, command } };
     })
   );
   router.post(

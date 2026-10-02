@@ -7,7 +7,7 @@
     },
     {
       "path": "auth_platforms.py",
-      "sha256": "e101d8d5d297d09ac4f3d0208507f8dab6d3accb1afdba0cd5f21031dcc99183"
+      "sha256": "1fac67f7027cf944f5d79a42f99b25e02462c67c6e76240fcf807f4c5af85611"
     },
     {
       "path": "foreground_launcher.py",

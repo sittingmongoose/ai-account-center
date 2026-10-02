@@ -4,6 +4,7 @@ import { readFileSync } from 'fs';
 import * as configCommand from '../../../src/commands/config-command';
 import * as codexAuthCommand from '../../../src/codex-auth/codex-auth-router';
 import * as barCommand from '../../../src/commands/bar';
+import * as antigravityCommand from '../../../src/commands/antigravity-command';
 import * as versionCommand from '../../../src/commands/version-command';
 import * as helpCommand from '../../../src/commands/help-command';
 import {
@@ -39,6 +40,12 @@ beforeEach(() => {
   const barSpy = spyOn(barCommand, 'handleBarCommand').mockImplementation(async (args) => {
     calls.push({ command: 'bar', args: [...args] });
   });
+  const antigravitySpy = spyOn(antigravityCommand, 'handleAntigravityCommand').mockImplementation(
+    async (args) => {
+      calls.push({ command: 'antigravity', args: [...args] });
+      return 41;
+    }
+  );
   const versionSpy = spyOn(versionCommand, 'handleVersionCommand').mockImplementation(async () => {
     calls.push({ command: 'version', args: [] });
   });
@@ -58,6 +65,7 @@ beforeEach(() => {
       configSpy,
       authSpy,
       barSpy,
+      antigravitySpy,
       versionSpy,
       helpSpy,
       rootHelpSpy,
@@ -87,6 +95,13 @@ describe('retained root command routing', () => {
 
     expect(calls).toEqual([{ command: 'codex-auth', args: ['activate', 'work'] }]);
     expect(process.exitCode).toBe(37);
+  });
+
+  it('delegates Antigravity profile arguments and preserves the returned status', async () => {
+    await expect(tryHandleRootCommand(['antigravity', 'signin', 'party'])).resolves.toBe(true);
+
+    expect(calls).toEqual([{ command: 'antigravity', args: ['signin', 'party'] }]);
+    expect(process.exitCode).toBe(41);
   });
 
   it('passes menu bar arguments unchanged without launching another command', async () => {
@@ -201,6 +216,9 @@ describe('configuration-backed runtime service gate', () => {
     ['codex-auth', 'switch', 'saved'],
     ['bar', '--help=true'],
     ['bar', 'version'],
+    ['antigravity'],
+    ['antigravity', 'help'],
+    ['antigravity', 'signin', 'party', '--help'],
   ])(
     'keeps metadata and retired invocations outside configuration logging: %j',
     async (...args) => {
@@ -213,6 +231,8 @@ describe('configuration-backed runtime service gate', () => {
     ['config', '--port', '4100'],
     ['config', 'auth', 'setup'],
     ['codex-auth', 'activate', 'saved'],
+    ['antigravity', 'signin', 'party'],
+    ['antigravity', 'status'],
     ['bar', 'status'],
   ])('preserves runtime service setup for account operations: %j', async (...args) => {
     expect(await requiresRuntimeServices(args)).toBe(true);

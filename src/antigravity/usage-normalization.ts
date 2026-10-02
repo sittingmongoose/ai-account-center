@@ -146,6 +146,10 @@ export function publicProfile(profile: AntigravityUsageProfile): AntigravityPubl
   };
 }
 
+/** The public message of an `identity_unbound` row. */
+export const IDENTITY_UNBOUND_MESSAGE =
+  'Antigravity usage could not be matched to this saved account.';
+
 export function publicDashboardAccount(
   value: AntigravityDashboardAccount
 ): AntigravityDashboardAccount {
@@ -161,6 +165,8 @@ export function publicDashboardAccount(
   const status = ['ok', 'cached', 'needs_sign_in', 'unavailable', 'error'].includes(value.status)
     ? value.status
     : 'error';
+  // The only reason kept: it is meaningful on an error row alone.
+  const identityUnbound = status === 'error' && value.statusReason === 'identity_unbound';
   return {
     id: value.id,
     provider: 'antigravity',
@@ -171,6 +177,7 @@ export function publicDashboardAccount(
     platform: 'ubuntu',
     source: 'Antigravity saved login on Ubuntu',
     status,
+    ...(identityUnbound ? { statusReason: 'identity_unbound' as const } : {}),
     message:
       status === 'ok'
         ? null
@@ -178,7 +185,9 @@ export function publicDashboardAccount(
           ? 'Showing the last successful Antigravity usage reading.'
           : status === 'needs_sign_in'
             ? 'This Antigravity profile needs to sign in again.'
-            : 'Antigravity usage is temporarily unavailable.',
+            : identityUnbound
+              ? IDENTITY_UNBOUND_MESSAGE
+              : 'Antigravity usage is temporarily unavailable.',
     fetchedAt: timestamp(value.fetchedAt),
     sampledAt: timestamp(value.sampledAt),
     isActive: value.isActive === true,

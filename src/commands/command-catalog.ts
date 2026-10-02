@@ -18,6 +18,11 @@ export const ROOT_COMMAND_CATALOG: readonly RootCommandEntry[] = [
     visibility: 'public',
   },
   {
+    name: 'antigravity',
+    summary: 'Add or sign in again to a saved Antigravity profile on Ubuntu',
+    visibility: 'public',
+  },
+  {
     name: 'bar',
     summary: 'Install, launch, or inspect the native account bar',
     visibility: 'public',

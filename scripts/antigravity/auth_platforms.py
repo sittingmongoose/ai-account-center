@@ -1,11 +1,10 @@
 """Private Antigravity credential adapters; no command-line secret transport.
 
-Only the Ubuntu fallback file is verified for production integration. macOS and
-Windows stores are reference adapters until an interactive native read/write
-round trip is explicitly reviewed. No function starts or stops an application.
+Only the Ubuntu fallback file is supported. Both trays control the Ubuntu CLI,
+so no macOS Keychain or Windows Credential Manager writer exists here. No
+function starts or stops an application.
 """
 from __future__ import annotations
-import base64
 import ctypes
 import datetime as dt
 import hashlib
@@ -17,12 +16,11 @@ import re
 import secrets
 import stat
 from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from typing import Callable
 
 MAX_BYTES = 16384
 SERVICE = 'gemini'
 ACCOUNT = 'antigravity'
-WINDOWS_TARGET = SERVICE + ':' + ACCOUNT
 FALLBACK_RELATIVE = pathlib.Path('.gemini/antigravity-cli/antigravity-oauth-token')
 
 class AuthError(Exception):
@@ -277,139 +275,6 @@ class SecureFileStore:
         """Refuses rollback when a foreign process replaced the written login."""
         return self._install(receipt.before.credential, receipt.installed)
 
-
-class NativeAPI(Protocol):
-    def read(self) -> bytes: ...
-    def replace_existing(self, raw: bytes) -> None: ...
-
-@dataclass(frozen=True)
-class NativeReceipt:
-    before: PrivateCredential = field(repr=False)
-    installed: PrivateCredential = field(repr=False)
-
-class ExistingNativeStore:
-    """Reference keyring adapter. An existing target/ACL must be preserved.
-
-    OS keyrings lack compare-and-swap; operations require the same external
-    transaction/process lock. This does not claim atomicity against independent
-    native login writers. Ubuntu production does not use this adapter.
-    """
-    def __init__(self, api: NativeAPI): self.api = api
-    def read_current(self) -> PrivateCredential: return credential(self.api.read())
-    def install(self, value: PrivateCredential, expected: PrivateCredential) -> NativeReceipt:
-        parse_credential(value.raw)
-        before = self.read_current()
-        if before.revision != expected.revision:
-            raise AuthError('Another process changed the Antigravity login. Review again.')
-        try:
-            self.api.replace_existing(value.raw)
-            installed = self.read_current()
-        except Exception:
-            raise AuthError('The native Antigravity login update could not be verified.') from None
-        if installed.revision != value.revision:
-            raise AuthError('Another process changed the native Antigravity login.')
-        return NativeReceipt(before, installed)
-    def rollback(self, receipt: NativeReceipt) -> NativeReceipt:
-        return self.install(receipt.before, receipt.installed)
-
-
-class WindowsCredentialAPI:
-    """Win32 Credential Manager; existing exact target, original metadata.
-
-    Never create a credential or grant access. Read/modify must happen in the
-    user's existing interactive logon session, not an SSH service session.
-    """
-    def __init__(self):
-        if os.name != 'nt': raise AuthError('Windows Credential Manager is unavailable.')
-        from ctypes import wintypes
-        class FILETIME(ctypes.Structure): _fields_ = [('low', wintypes.DWORD), ('high', wintypes.DWORD)]
-        class CREDENTIAL(ctypes.Structure):
-            _fields_ = [('Flags', wintypes.DWORD), ('Type', wintypes.DWORD), ('TargetName', wintypes.LPWSTR), ('Comment', wintypes.LPWSTR), ('LastWritten', FILETIME), ('CredentialBlobSize', wintypes.DWORD), ('CredentialBlob', ctypes.POINTER(ctypes.c_ubyte)), ('Persist', wintypes.DWORD), ('AttributeCount', wintypes.DWORD), ('Attributes', ctypes.c_void_p), ('TargetAlias', wintypes.LPWSTR), ('UserName', wintypes.LPWSTR)]
-        self.type = CREDENTIAL
-        self.api = ctypes.WinDLL('Advapi32.dll', use_last_error=True)
-        self.api.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.POINTER(CREDENTIAL))]
-        self.api.CredReadW.restype = wintypes.BOOL
-        self.api.CredWriteW.argtypes = [ctypes.POINTER(CREDENTIAL), wintypes.DWORD]
-        self.api.CredWriteW.restype = wintypes.BOOL
-        self.api.CredFree.argtypes = [ctypes.c_void_p]
-    def _read(self):
-        ptr = ctypes.POINTER(self.type)()
-        if not self.api.CredReadW(WINDOWS_TARGET, 1, 0, ctypes.byref(ptr)):
-            raise AuthError('The existing Antigravity credential is unavailable in this logon session.')
-        return ptr
-    def read(self):
-        ptr = self._read()
-        try:
-            size = ptr.contents.CredentialBlobSize
-            if not 0 < size <= MAX_BYTES: raise AuthError('Invalid native Antigravity credential size.')
-            return ctypes.string_at(ptr.contents.CredentialBlob, size)
-        finally: self.api.CredFree(ptr)
-    def replace_existing(self, raw):
-        parse_credential(raw)
-        ptr = self._read()
-        try:
-            # Keep all original native metadata and access semantics.
-            buffer = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
-            replacement = self.type.from_buffer_copy(ptr.contents)
-            replacement.CredentialBlob = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))
-            replacement.CredentialBlobSize = len(raw)
-            if not self.api.CredWriteW(ctypes.byref(replacement), 0):
-                raise AuthError('The existing native Antigravity credential could not be replaced.')
-        finally: self.api.CredFree(ptr)
-
-
-class MacKeychainAPI:
-    """Security.framework access to the existing item, without changing ACLs."""
-    def __init__(self):
-        import sys
-        if sys.platform != 'darwin': raise AuthError('macOS Keychain is unavailable.')
-        self.api = ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security')
-        self.api.SecKeychainFindGenericPassword.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
-        self.api.SecKeychainFindGenericPassword.restype = ctypes.c_int32
-        self.api.SecKeychainItemFreeContent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        self.api.SecKeychainItemModifyAttributesAndData.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
-        self.api.SecKeychainItemModifyAttributesAndData.restype = ctypes.c_int32
-        self.api.SecKeychainSetUserInteractionAllowed.argtypes = [ctypes.c_bool]
-        self.api.SecKeychainSetUserInteractionAllowed.restype = ctypes.c_int32
-        if self.api.SecKeychainSetUserInteractionAllowed(False) != 0:
-            raise AuthError('macOS Keychain access without interaction is unavailable.')
-        self.core = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
-        self.core.CFRelease.argtypes = [ctypes.c_void_p]
-    def _read(self):
-        size, data, item = ctypes.c_uint32(), ctypes.c_void_p(), ctypes.c_void_p()
-        status = self.api.SecKeychainFindGenericPassword(None, len(SERVICE), SERVICE.encode(), len(ACCOUNT), ACCOUNT.encode(), ctypes.byref(size), ctypes.byref(data), ctypes.byref(item))
-        if status != 0: raise AuthError('The existing Antigravity Keychain item is unavailable without interaction.')
-        try:
-            if not 0 < size.value <= MAX_BYTES * 2: raise AuthError('Invalid Antigravity Keychain item size.')
-            raw = ctypes.string_at(data, size.value)
-        except Exception:
-            if item: self.core.CFRelease(item)
-            raise
-        finally: self.api.SecKeychainItemFreeContent(None, data)
-        return raw, item
-    @staticmethod
-    def decode(raw):
-        try:
-            if raw.startswith(b'go-keyring-base64:'): return base64.b64decode(raw[len(b'go-keyring-base64:'):], validate=True)
-            if raw.startswith(b'go-keyring-encoded:'): return bytes.fromhex(raw[len(b'go-keyring-encoded:'):].decode('ascii'))
-            return raw
-        except ValueError: raise AuthError('Invalid Antigravity Keychain encoding.') from None
-    def read(self):
-        raw, item = self._read()
-        try: return self.decode(raw)
-        finally: self.core.CFRelease(item)
-    def replace_existing(self, raw):
-        parse_credential(raw)
-        before, item = self._read()
-        try:
-            # Preserve the installed item's encoding and its existing ACL.
-            if before.startswith(b'go-keyring-base64:'): encoded = b'go-keyring-base64:' + base64.b64encode(raw)
-            elif before.startswith(b'go-keyring-encoded:'): encoded = b'go-keyring-encoded:' + raw.hex().encode('ascii')
-            else: encoded = raw
-            buffer = ctypes.create_string_buffer(encoded)
-            if self.api.SecKeychainItemModifyAttributesAndData(item, None, len(encoded), buffer) != 0:
-                raise AuthError('The existing Antigravity Keychain item could not be replaced.')
-        finally: self.core.CFRelease(item)
 
 @dataclass(frozen=True)
 class UbuntuBackendProbe:

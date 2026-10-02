@@ -1,4 +1,8 @@
+import os from 'os';
 import { getCcsDir } from '../../utils/config-manager';
+import { AntigravityAccountLifecycle } from '../../antigravity/account-lifecycle';
+import { nativeBinaryProblem, sweepSignInStaging } from '../../antigravity/signin-sandbox';
+import { sweepAntigravitySignInMarkers } from '../../antigravity/signin-marker';
 import { createLogger } from '../../services/logging';
 import { broadcastDashboardEvent, type DashboardEventClient } from '../dashboard-events';
 import { sweepOrphanKeys } from './account-key-sweep';
@@ -6,6 +10,7 @@ import { ClaudeAccountLifecycle } from './claude-account-lifecycle';
 import { SshClaudeHostTransport } from './claude-host-transport';
 import { CodexAccountLifecycle } from './codex-account-lifecycle';
 import type { ProviderRegistryFacts } from './dashboard-provider-registry';
+import type { DashboardSignInUnavailableReason } from './account-dashboard-types';
 import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './signin-jobs';
 
 /**
@@ -76,6 +81,7 @@ export function notifyAccountsChanged(): void {
 let runner: SignInJobRunner | null = null;
 let codex: CodexAccountLifecycle | null = null;
 let claude: ClaudeAccountLifecycle | null = null;
+let antigravity: AntigravityAccountLifecycle | null = null;
 
 /** A runner wired like the server's: the /ws push, the audit line and the accounts-changed hint. */
 export function createSignInJobRunner(
@@ -118,9 +124,32 @@ export function getClaudeLifecycle(): ClaudeAccountLifecycle {
   return claude;
 }
 
+export function getAntigravityLifecycle(): AntigravityAccountLifecycle {
+  antigravity ??= new AntigravityAccountLifecycle({ ccsDir: getCcsDir, home: os.homedir });
+  return antigravity;
+}
+
+/**
+ * Antigravity sign-in runs in the user's terminal on Ubuntu
+ * (`ai-account-center antigravity signin <profile>`): the official CLI's
+ * first-run screens need the user's keys, so the in-browser supervised flow
+ * is not served. With the CLI installed the provider reads `preflight_failed`
+ * and Add and Sign in again answer with the terminal command (contract 6.2:
+ * "otherwise ... preflight_failed, and the UI shows the terminal fallback").
+ */
+export function antigravitySignInFlow(
+  home: string = os.homedir()
+): DashboardSignInUnavailableReason {
+  return nativeBinaryProblem(home, process.getuid?.() ?? null)
+    ? 'tool_missing'
+    : 'preflight_failed';
+}
+
 export interface LifecycleFactsSources {
   codexCliAvailable: () => boolean;
   claudeEnabled: () => boolean;
+  /** Antigravity's flow reason; the default checks the installed CLI. */
+  antigravityFlow?: () => DashboardSignInUnavailableReason;
 }
 
 /** What the lifecycle routes can do now, for `providers[]` (contract section 2). */
@@ -138,12 +167,11 @@ export function lifecycleProviderFacts(
     flows: {
       ...(sources.codexCliAvailable() ? {} : { codex: 'tool_missing' as const }),
       ...(claudeEnabled ? {} : { claude: 'not_implemented' as const }),
-      // Muse's Mac CLI path and device-code output are not verified; Antigravity
-      // sign-in belongs to Codex's isolated runtime lane.
+      // Muse's Mac CLI path and device-code output are not verified.
       muse: 'not_implemented',
-      antigravity: 'not_implemented',
+      antigravity: (sources.antigravityFlow ?? antigravitySignInFlow)(),
     },
-    remove: { antigravity: false, claude: claudeEnabled },
+    remove: { claude: claudeEnabled },
     recheck: { codex: false, claude: false, antigravity: false },
   };
 }
@@ -159,6 +187,19 @@ async function runMaintenance(): Promise<void> {
   try {
     const count = await sweepOrphanKeys(getCcsDir());
     if (count > 0) auditLifecycle('accounts.keys.swept', { count });
+  } catch {
+    /* Retried at the next sweep. */
+  }
+  try {
+    sweepSignInStaging(getCcsDir());
+    sweepAntigravitySignInMarkers(getCcsDir());
+  } catch {
+    /* Retried at the next sweep. */
+  }
+  try {
+    const swept = await getAntigravityLifecycle().sweepOrphans();
+    if (swept.removed > 0 || swept.leftInPlace > 0)
+      auditLifecycle('accounts.antigravity.orphans.swept', swept);
   } catch {
     /* Retried at the next sweep. */
   }

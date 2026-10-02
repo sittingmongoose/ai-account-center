@@ -74,6 +74,33 @@ export async function registryListing(
       );
       continue;
     }
+    const profileId = row.capabilities.antigravityProfileId;
+    if (row.provider === 'antigravity' && typeof profileId === 'string' && env.antigravity) {
+      const agy = env.antigravity();
+      // The page listing asks the registry and the row's own live flag; Remove
+      // itself asks the live native login again at both calls.
+      const refusal = await agy
+        .removeRefusal(profileId, { signinRunning: running, fresh: false, liveHint: row.isActive })
+        .catch(() => null);
+      const reason = signInState(env, 'antigravity', context.secure).unavailableReason;
+      accounts.push(
+        accountView(
+          row,
+          null,
+          {
+            // Sign in again answers with the terminal command (preflight_failed).
+            signInAgain:
+              reason !== 'tool_missing' && reason !== 'not_implemented' && refusal === null,
+            replaceKey: false,
+            remove: facts.remove?.antigravity !== false,
+            open: [],
+            recheck: false,
+          },
+          refusal
+        )
+      );
+      continue;
+    }
     const entry = entries.find((candidate) => candidate.id === row.id);
     if (entry) {
       const view = entryView(entry, await keyInfo(env, entry), canReplace(entry.provider), row);
@@ -82,7 +109,7 @@ export async function registryListing(
       accounts.push(view);
       continue;
     }
-    // Antigravity profiles (Codex's lane) and console wallets: no lifecycle action yet.
+    // Console wallets (and Antigravity without its lifecycle): no lifecycle action.
     accounts.push(
       accountView(
         row,

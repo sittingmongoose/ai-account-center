@@ -17,6 +17,7 @@ import { updateAccountRegistry, type RegistryAccount } from './account-registry-
 import { ClaudeLifecycleError } from './claude-account-lifecycle';
 import { TRASH_ID } from './claude-account-stores';
 import { CodexLifecycleError } from './codex-account-lifecycle';
+import { AntigravityLifecycleError } from '../../antigravity/account-lifecycle';
 
 /**
  * Remove and trash (CONTRACT-registry-lifecycle 6.7 and 6.8). One route, two
@@ -110,7 +111,31 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
       commit: () => serialized(keyQueue(entry.provider), () => removeAdditional(env, entry)),
     };
   }
-  // Antigravity snapshots (Codex's registry lane) and console wallets.
+  if (account.kind === 'antigravity' && env.antigravity) {
+    const agy = env.antigravity();
+    return {
+      kind: 'supervised-cli',
+      effects: [
+        'The saved Antigravity login of this profile is deleted from Ubuntu.',
+        'The live Antigravity login, its history and the other profiles are not changed.',
+      ],
+      // The live native login is asked at both calls; a check that cannot run refuses.
+      refusal: () =>
+        agy.removeRefusal(account.profileId, { signinRunning: running(), fresh: true }),
+      fingerprint: async () => agy.removeFingerprint(account.profileId),
+      commit: async () => {
+        const { leftInPlace } = await agy.remove(account.profileId);
+        // Files that could not be proven ours stay for review; say so.
+        if (leftInPlace > 0)
+          env.audit('accounts.remove.left_in_place', {
+            provider: 'antigravity',
+            count: leftInPlace,
+          });
+        return { trashId: null, purgeAfter: null };
+      },
+    };
+  }
+  // Console wallets.
   throw new LifecycleHttpError(409, 'not_implemented');
 }
 
@@ -174,7 +199,11 @@ async function removeAdditional(
 
 function mapError(error: unknown): LifecycleHttpError {
   if (error instanceof LifecycleHttpError) return error;
-  if (error instanceof CodexLifecycleError || error instanceof ClaudeLifecycleError) {
+  if (
+    error instanceof CodexLifecycleError ||
+    error instanceof ClaudeLifecycleError ||
+    error instanceof AntigravityLifecycleError
+  ) {
     const host = error instanceof ClaudeLifecycleError && error.host ? { host: error.host } : {};
     return new LifecycleHttpError(STATUS[error.code] ?? 409, error.code, host);
   }

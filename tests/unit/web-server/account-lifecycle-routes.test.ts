@@ -31,6 +31,10 @@ import { buildDashboardProviders } from '../../../src/web-server/services/dashbo
 import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
 import { setLocalNetworkTrustResolver } from '../../../src/web-server/middleware/secure-transport';
 import { parseTrustedNetworks } from '../../../src/web-server/middleware/trusted-networks';
+import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
+import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
+import { claimAntigravitySignInMarker } from '../../../src/antigravity/signin-marker';
+import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravity/types';
 
 const KEY = 'zai-TEST-key-0123456789-x7Qa';
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
@@ -38,14 +42,22 @@ const closers: Array<() => Promise<void>> = [];
 let root: string;
 let ccsDir: string;
 let codexHome: string;
+let agyHome: string;
+/** The live native Antigravity login of the fixture (null: none on this computer). */
+let agyNative: NativeCredential | null;
+let agyNativeFails: boolean;
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-lifecycle-routes-'));
   process.env.CCS_HOME = root;
   ccsDir = path.join(root, '.ccs');
   codexHome = path.join(root, 'native-codex');
+  agyHome = path.join(root, 'agy-home');
+  agyNative = null;
+  agyNativeFails = false;
   fs.mkdirSync(ccsDir, { recursive: true });
   fs.mkdirSync(codexHome);
+  fs.mkdirSync(agyHome);
   fs.writeFileSync(
     path.join(ccsDir, 'account-usage-sources.json'),
     JSON.stringify({
@@ -98,6 +110,54 @@ function activate(name: string): void {
   invalidateCodexAuthProfilesCache();
 }
 
+function agyCredential(email: string, version = 1): NativeCredential {
+  return {
+    format: 'antigravity-consumer-json',
+    bytes: Buffer.from(
+      JSON.stringify({
+        auth_method: 'consumer',
+        token: { access_token: `access:${email}:${version}`, refresh_token: `refresh:${email}` },
+      })
+    ),
+  };
+}
+
+function agyIdentity(value: NativeCredential): VerifiedIdentity {
+  const email = (JSON.parse(value.bytes.toString('utf8')).token.access_token as string).split(
+    ':'
+  )[1];
+  return {
+    email,
+    subject: `subject-${email}`,
+    plan: null,
+    verifiedAt: new Date().toISOString(),
+    source: 'provider-userinfo',
+  };
+}
+
+async function agyProfile(id: string): Promise<void> {
+  // The registry needs the private CCS folder the product always has (0700).
+  fs.chmodSync(ccsDir, 0o700);
+  const registry = new AntigravityProfileRegistry(ccsDir);
+  const value = agyCredential(`${id}@example.com`);
+  await registry.withLock(async () =>
+    registry.saveCredential(id, 'ubuntu', value, agyIdentity(value), Date.now())
+  );
+}
+
+/** Make `id`'s saved login the live native one (null: no native login file). */
+function agyLive(id: string | null): void {
+  const file = path.join(agyHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+  if (id === null) {
+    agyNative = null;
+    fs.rmSync(file, { force: true });
+    return;
+  }
+  agyNative = agyCredential(`${id}@example.com`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'placeholder; the fake reader answers', { mode: 0o600 });
+}
+
 function row(id: string, extra: Partial<DashboardAccount> = {}): DashboardAccount {
   const provider = (
     id.startsWith('plan-') ? 'opencode-go' : id.split(':')[0]
@@ -143,7 +203,9 @@ interface Fixture {
   ) => Promise<{ status: number; headers: Headers; body: Record<string, unknown> }>;
 }
 
-async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixture> {
+async function fixture(
+  options: { claudeEnabled?: boolean; antigravityFlow?: 'preflight_failed' | 'tool_missing' } = {}
+): Promise<Fixture> {
   const audits: Array<[string, Record<string, unknown>]> = [];
   const probes: AdditionalUsageSource[] = [];
   const opened: string[] = [];
@@ -177,7 +239,17 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
     lifecycleProviderFacts(context, {
       codexCliAvailable: () => true,
       claudeEnabled: () => claudeEnabled,
+      antigravityFlow: () => options.antigravityFlow ?? 'preflight_failed',
     });
+  const antigravity = new AntigravityAccountLifecycle({
+    ccsDir: () => ccsDir,
+    home: () => agyHome,
+    validateCredential: async (value) => agyIdentity(value),
+    readNativeCredential: async () => {
+      if (agyNativeFails || !agyNative) throw new Error('native store unavailable');
+      return agyNative;
+    },
+  });
   const env: LifecycleEnv = {
     ccsDir: () => ccsDir,
     runner: () => runner,
@@ -189,6 +261,7 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
         enabled: claudeEnabled,
         now: () => now,
       }),
+    antigravity: () => antigravity,
     confirmations: (() => {
       const store = new AccountConfirmationStore(() => now);
       return () => store;
@@ -207,6 +280,19 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
         row('zai:usage'),
         row('cursor:usage', { platform: 'mac' }),
         row('plan-opencode-go-console-mac-0123456789ab'),
+        ...antigravity.listProfiles().map((profile) =>
+          row(`antigravity:profile:${profile.id}`, {
+            email: profile.email,
+            label: profile.email,
+            capabilities: {
+              codexProfile: null,
+              claudeProfileId: null,
+              claudePlatforms: [],
+              antigravityProfileId: profile.id,
+              antigravityHostIds: ['ubuntu'],
+            },
+          })
+        ),
       ];
       return {
         schemaVersion: 1,
@@ -722,12 +808,12 @@ describe('remove with a confirmation token', () => {
     expect([spare.status, spare.body.code]).toEqual([409, 'account_default']);
   });
 
-  it('keeps Antigravity, wallets and Claude (while off) out of Remove', async () => {
+  it('keeps wallets out of Remove and answers 404 for an Antigravity profile not saved', async () => {
     const f = await fixture();
-    for (const id of ['antigravity:profile:party', 'plan-opencode-go-console-mac-0123456789ab']) {
-      const refused = await f.request('POST', `/${id}/remove`, {});
-      expect([id, refused.status, refused.body.code]).toEqual([id, 409, 'not_implemented']);
-    }
+    const wallet = await f.request('POST', '/plan-opencode-go-console-mac-0123456789ab/remove', {});
+    expect([wallet.status, wallet.body.code]).toEqual([409, 'not_implemented']);
+    const missing = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect([missing.status, missing.body.code]).toEqual([404, 'unknown_account']);
   });
 });
 
@@ -996,9 +1082,17 @@ describe('sign-in and guides', () => {
       provider: 'antigravity',
       profileName: 'x',
     });
-    expect([antigravity.status, antigravity.body.code]).toEqual([409, 'not_implemented']);
+    expect([antigravity.status, antigravity.body.code]).toEqual([409, 'preflight_failed']);
+    expect(antigravity.body.fallback).toEqual({
+      kind: 'terminal',
+      host: 'ubuntu',
+      command: 'ai-account-center antigravity signin x',
+    });
     const command = await f.request('GET', '/signin-command?provider=antigravity&profile=party');
-    expect([command.status, command.body.code]).toEqual([409, 'not_implemented']);
+    expect([command.status, command.body]).toEqual([
+      200,
+      { host: 'ubuntu', command: 'ai-account-center antigravity signin party' },
+    ]);
     const badCommand = await f.request('GET', '/signin-command?provider=codex&profile=party');
     expect(badCommand.status).toBe(400);
   });
@@ -1179,5 +1273,221 @@ describe('registry, re-check, open, label and trash', () => {
       'accounts.remove',
       'accounts.trash.restore',
     ]);
+  });
+});
+
+describe('Antigravity profiles', () => {
+  it('lists saved profiles with Sign in again, Remove and the live-login refusal', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    const registry = new AntigravityProfileRegistry(ccsDir);
+    await registry.withLock(async () =>
+      registry.completeTransaction('gmail', new Date().toISOString())
+    );
+    const listing = await f.request('GET', '/registry');
+    const accounts = listing.body.accounts as Array<Record<string, unknown>>;
+    const byId = (id: string) => accounts.find((account) => account.id === id);
+    expect(byId('antigravity:profile:gmail')).toMatchObject({
+      provider: 'antigravity',
+      credential: null,
+      removeRefusal: 'account_active',
+      actions: { signInAgain: false, replaceKey: false, remove: true, open: [], recheck: false },
+    });
+    expect(byId('antigravity:profile:party')).toMatchObject({
+      removeRefusal: null,
+      actions: { signInAgain: true, remove: true },
+    });
+    const providers = listing.body.providers as Array<{
+      id: string;
+      signIn: { available: boolean; unavailableReason: string | null };
+      capabilities: { remove: boolean };
+    }>;
+    expect(providers.find((entry) => entry.id === 'antigravity')).toMatchObject({
+      signIn: { available: false, unavailableReason: 'preflight_failed' },
+      capabilities: { remove: true },
+    });
+  });
+
+  it('removes a saved snapshot with a confirmation and keeps the live login, history and others', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('gmail');
+    const prepared = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect(prepared.status).toBe(200);
+    const confirmation = prepared.body.confirmation as { token: string; effects: string[] };
+    expect(confirmation.effects).toEqual([
+      'The saved Antigravity login of this profile is deleted from Ubuntu.',
+      'The live Antigravity login, its history and the other profiles are not changed.',
+    ]);
+    const committed = await f.request('POST', '/antigravity:profile:party/remove', {
+      confirmationToken: confirmation.token,
+    });
+    expect([committed.status, committed.body]).toEqual([
+      200,
+      { removed: true, trashId: null, purgeAfter: null },
+    ]);
+    expect(new AntigravityProfileRegistry(ccsDir).listProfiles().map((p) => p.id)).toEqual([
+      'gmail',
+    ]);
+    expect(fs.existsSync(path.join(ccsDir, 'antigravity-instances', 'party'))).toBe(false);
+    expect(f.audits).toContainEqual([
+      'accounts.remove',
+      { provider: 'antigravity', kind: 'supervised-cli', trashed: false },
+    ]);
+    expect(f.changes()).toBe(1);
+  });
+
+  it('refuses the live native login at prepare and at commit, and refuses when it cannot be checked', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive(null);
+    const prepared = await f.request('POST', '/antigravity:profile:gmail/remove', {});
+    expect(prepared.status).toBe(200);
+    agyLive('gmail');
+    const committed = await f.request('POST', '/antigravity:profile:gmail/remove', {
+      confirmationToken: (prepared.body.confirmation as { token: string }).token,
+    });
+    expect([committed.status, committed.body.code]).toEqual([409, 'account_active']);
+    const again = await f.request('POST', '/antigravity:profile:gmail/remove', {});
+    expect([again.status, again.body.code]).toEqual([409, 'account_active']);
+    agyNativeFails = true;
+    const unknown = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect([unknown.status, unknown.body.code]).toEqual([500, 'remove_failed']);
+    expect(new AntigravityProfileRegistry(ccsDir).listProfiles().length).toBe(2);
+    expect(f.audits).toContainEqual([
+      'accounts.remove.refused',
+      { provider: 'antigravity', code: 'account_active' },
+    ]);
+  });
+
+  it('refuses Remove while a switch holds the registry lock', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    const lock = path.join(ccsDir, 'antigravity-profiles', '.transaction-lock');
+    fs.mkdirSync(lock, { mode: 0o700 });
+    const refused = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect([refused.status, refused.body.code]).toEqual([409, 'activation_running']);
+  });
+
+  it('answers Add with the terminal command after its refusals, also on plain HTTP', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    const invalid = await f.request('POST', '/add', {
+      provider: 'antigravity',
+      profileName: 'A b',
+    });
+    expect([invalid.status, invalid.body.code]).toEqual([400, 'invalid_body']);
+    const extra = await f.request('POST', '/add', {
+      provider: 'antigravity',
+      profileName: 'party',
+      key: 'x',
+    });
+    expect(extra.status).toBe(400);
+    const taken = await f.request('POST', '/add', {
+      provider: 'antigravity',
+      profileName: 'gmail',
+    });
+    expect([taken.status, taken.body.code]).toEqual([409, 'id_in_use']);
+    for (const headers of [{}, PLAIN]) {
+      const add = await f.request(
+        'POST',
+        '/add',
+        { provider: 'antigravity', profileName: 'party' },
+        headers
+      );
+      expect([add.status, add.body.code, add.body.fallback]).toEqual([
+        409,
+        'preflight_failed',
+        {
+          kind: 'terminal',
+          host: 'ubuntu',
+          command: 'ai-account-center antigravity signin party',
+        },
+      ]);
+      expect(add.body.error).toBe(
+        'Sign in to this provider from a terminal on Ubuntu with the command shown.'
+      );
+    }
+    const missing = await fixture({ antigravityFlow: 'tool_missing' });
+    const noCli = await missing.request('POST', '/add', {
+      provider: 'antigravity',
+      profileName: 'party',
+    });
+    expect([noCli.status, noCli.body.code, noCli.body.fallback]).toEqual([
+      409,
+      'tool_missing',
+      undefined,
+    ]);
+  });
+
+  it('answers Sign in again with the terminal command, never for the live login', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('gmail');
+    const live = await f.request('POST', '/antigravity:profile:gmail/signin-again', {});
+    expect([live.status, live.body.code]).toEqual([409, 'account_active']);
+    const other = await f.request('POST', '/antigravity:profile:party/signin-again', {});
+    expect([other.status, other.body.code, other.body.fallback]).toEqual([
+      409,
+      'preflight_failed',
+      { kind: 'terminal', host: 'ubuntu', command: 'ai-account-center antigravity signin party' },
+    ]);
+    const unknown = await f.request('POST', '/antigravity:profile:nobody/signin-again', {});
+    expect([unknown.status, unknown.body.code]).toEqual([404, 'unknown_account']);
+  });
+
+  it('refuses Sign in again and Remove while a terminal sign-in for the profile runs', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('gmail');
+    const marker = claimAntigravitySignInMarker(ccsDir, 'party');
+    expect(marker).not.toBeNull();
+    const again = await f.request('POST', '/antigravity:profile:party/signin-again', {});
+    expect([again.status, again.body.code]).toEqual([409, 'signin_running']);
+    const removal = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect([removal.status, removal.body.code]).toEqual([409, 'signin_running']);
+    marker!.release();
+    const prepared = await f.request('POST', '/antigravity:profile:party/remove', {});
+    expect(prepared.status).toBe(200);
+  });
+
+  it('records Remove files left for review in the audit log', async () => {
+    const f = await fixture();
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('gmail');
+    const foreign = path.join(ccsDir, 'antigravity-instances', 'party', 'ubuntu', 'notes.txt');
+    fs.writeFileSync(foreign, 'kept', { mode: 0o600 });
+    const prepared = await f.request('POST', '/antigravity:profile:party/remove', {});
+    const committed = await f.request('POST', '/antigravity:profile:party/remove', {
+      confirmationToken: (prepared.body.confirmation as { token: string }).token,
+    });
+    expect(committed.status).toBe(200);
+    expect(fs.readFileSync(foreign, 'utf8')).toBe('kept');
+    expect(f.audits).toContainEqual([
+      'accounts.remove.left_in_place',
+      { provider: 'antigravity', count: 1 },
+    ]);
+  });
+
+  it('serves the terminal command only for a valid profile name and a browser session', async () => {
+    const f = await fixture();
+    const bad = await f.request('GET', '/signin-command?provider=antigravity&profile=Bad%20Name');
+    expect(bad.status).toBe(400);
+    const extra = await f.request('GET', '/signin-command?provider=antigravity&profile=party&x=1');
+    expect(extra.status).toBe(400);
+    const device = await f.request(
+      'GET',
+      '/signin-command?provider=antigravity&profile=party',
+      undefined,
+      { 'x-test-device': 'true' }
+    );
+    expect([device.status, device.body.code]).toEqual([403, 'device_scope']);
   });
 });

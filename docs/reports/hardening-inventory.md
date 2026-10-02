@@ -6,8 +6,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 952 |
-| Sync fs files affected (all) | 99 |
+| Sync fs occurrences (all) | 1043 |
+| Sync fs files affected (all) | 105 |
 | Sync fs occurrences (runtime hotpaths) | 438 |
 | Sync fs files affected (runtime hotpaths) | 58 |
 | Legacy shim markers | 193 |
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 24.9% (130/522) |
+| typed-error adoption (typed/total throws) | 22.3% (130/583) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
-| hotpath console.error/warn occurrences | 65 (272 total, 207 CLI-UX exempt) |
-| hotpath console.error/warn files | 16 |
-| files with createLogger | 31/362 |
+| hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
+| hotpath console.error/warn files | 17 |
+| files with createLogger | 31/370 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 38 |
-| files > 600 LOC | 13 |
+| files > 400 LOC | 39 |
+| files > 600 LOC | 14 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -70,6 +70,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/utils/prompt.ts` | 11 |
 | `src/config/unified-config-loader.ts` | 7 |
 | `src/utils/shell-executor.ts` | 7 |
+| `src/antigravity/registry.ts` | 5 |
 | `src/bin/compat-cli.ts` | 5 |
 | `src/targets/codex-detector.ts` | 5 |
 | `src/utils/platform-commands.ts` | 4 |
@@ -80,13 +81,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/utils/helpers.ts` | 2 |
 | `src/config/loader/normalizers.ts` | 1 |
 | `src/errors/cleanup-registry.ts` | 1 |
-| `src/utils/signal-forwarder.ts` | 1 |
 
 ### Files > 400 LOC (top 15)
 
 | File | LOC |
 |---|---:|
 | `src/web-server/model-pricing.ts` | 1158 |
+| `src/antigravity/registry.ts` | 1083 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1052 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
 | `src/cliproxy/model-catalog.ts` | 895 |
@@ -100,5 +101,4 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/cliproxy/services/stats-fetcher.ts` | 614 |
 | `src/web-server/services/claude-desktop-live-service.ts` | 611 |
 | `src/web-server/services/account-analytics-projection.ts` | 600 |
-| `src/utils/hooks/image-analysis-backend-resolver.ts` | 598 |
 

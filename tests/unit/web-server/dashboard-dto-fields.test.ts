@@ -202,14 +202,54 @@ describe('Antigravity "Needs setup" row, switchable and lifecycle', () => {
     ).get('mac');
     expect(dashboard.accounts.find((row) => row.id === 'antigravity:profile:work')).toMatchObject({
       status: 'error',
+      statusReason: 'identity_unbound',
+      message: 'Antigravity usage could not be matched to this saved account.',
       switchable: false,
       // Not a setup row: the saved login is verified; only this reading failed.
       lifecycle: { state: 'ready', jobId: null },
     });
-    expect(dashboard.accounts.find((row) => row.id === 'antigravity:profile:gmail')).toMatchObject({
-      status: 'unavailable',
-      switchable: true,
+    const gmail = dashboard.accounts.find((row) => row.id === 'antigravity:profile:gmail');
+    expect(gmail).toMatchObject({ status: 'unavailable', switchable: true });
+    expect(gmail && 'statusReason' in gmail).toBe(false);
+  });
+
+  it('keeps a bound Antigravity row whose reading failed for another reason a switch target', async () => {
+    const profiles = [
+      antigravityProfile('gmail', { selected: true, runtimeVerified: true }),
+      antigravityProfile('work'),
+    ];
+    const usage = new AntigravityUsageService({
+      readProfiles: async () => profiles,
+      now: () => Date.parse(NOW),
+      // `work` is bound to its saved identity, but the helper call fails.
+      collectQuota: async (id) => {
+        if (id === 'work') throw new Error('helper failed');
+        return {
+          profileId: id,
+          identityKey: `identity-${id}`,
+          credentialRevision: `revision-${id}`,
+          status: 'unavailable',
+          email: null,
+          plan: null,
+          fetchedAt: null,
+          sampledAt: null,
+          windows: [],
+        };
+      },
     });
+    await usage.getAccounts({ refresh: true });
+    const rows = () => usage.cachedAccounts(profiles);
+    const dashboard = await new AccountDashboardService(
+      deps({ getAntigravityAccounts: async () => rows(), getCachedAntigravityAccounts: rows })
+    ).get('mac');
+    const work = dashboard.accounts.find((row) => row.id === 'antigravity:profile:work');
+    expect(work).toMatchObject({
+      status: 'error',
+      message: 'Antigravity usage is temporarily unavailable.',
+      switchable: true,
+      lifecycle: { state: 'ready', jobId: null },
+    });
+    expect(work && 'statusReason' in work).toBe(false);
   });
 
   it('turns a profile whose saved login became unusable into a setup row on a cache hit', async () => {

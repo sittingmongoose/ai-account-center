@@ -22,14 +22,12 @@ export function isAntigravitySetupRow(account: DashboardAccount): boolean {
 /**
  * `switchable` and `lifecycle` for one dashboard row.
  * - Codex: every profile with a valid saved login.
- * - Antigravity: every registry profile with a verified, available saved login
- *   whose latest reading did not fail. A reading whose identity could not be
- *   bound to the saved account ends as `error` (src/antigravity/usage-service.ts),
- *   and the public row no longer says why, so every `error` row is left out
- *   rather than advertised as a switch target. `ok`, `cached` and `unavailable`
- *   (not sampled yet, or the provider is briefly unavailable) stay switchable;
- *   activation still does its own proof. A setup row is never a switch target
- *   and reads `pending_sign_in`.
+ * - Antigravity: every registry profile with a verified, available saved login,
+ *   except one whose latest reading could not be bound to the saved account
+ *   (`statusReason: 'identity_unbound'`, set by src/antigravity/usage-service.ts).
+ *   Any other reading, a failed one included, keeps the row switchable:
+ *   activation still does its own identity and runtime proof. A setup row is
+ *   never a switch target and reads `pending_sign_in`.
  * - Every other provider: not switchable.
  * A Claude profile from Add keeps `pending_sign_in` until its first reading.
  * Running sign-in jobs are laid over this by withJobState.
@@ -56,7 +54,7 @@ export function withAccountState(
       ? (codexAuthValid ?? account.status !== 'needs_sign_in')
       : account.provider === 'antigravity' &&
         typeof account.capabilities.antigravityProfileId === 'string' &&
-        account.status !== 'error';
+        account.statusReason !== 'identity_unbound';
   return { ...account, switchable, lifecycle: { state: 'ready', jobId: null } };
 }
 

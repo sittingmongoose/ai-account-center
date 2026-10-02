@@ -29,6 +29,7 @@ export async function handleHelpCommand(writeLine: HelpWriter = console.log): Pr
   writeLine('  ai-account-center dashboard auth setup');
   writeLine('  ai-account-center codex-auth show');
   writeLine('  ai-account-center codex-auth activate work');
+  writeLine('  ai-account-center antigravity signin party');
   writeLine('  ai-account-center bar status');
   writeLine('');
 }
@@ -53,6 +54,11 @@ export async function handleHelpRoute(
     case 'codex-auth': {
       const { printCodexAuthHelp } = await import('../codex-auth/codex-auth-help');
       printCodexAuthHelp();
+      return;
+    }
+    case 'antigravity': {
+      const { printAntigravityHelp } = await import('./antigravity-command');
+      printAntigravityHelp(writeLine);
       return;
     }
     case 'bar': {
