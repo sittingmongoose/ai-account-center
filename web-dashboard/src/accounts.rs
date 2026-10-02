@@ -262,6 +262,7 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     let update = g(&v, "update");
     ac.set_update_shown(b(update, "shown"));
     ac.set_update_running(b(update, "running"));
+    ac.set_update_cancelling(b(update, "cancelling"));
     sync_rows(
         &m.update_head,
         arr(update, "headRuns").iter().map(run).collect(),

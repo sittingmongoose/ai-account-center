@@ -182,6 +182,25 @@ test('Update apps results are grouped by computer, never invented', () => {
   assert.equal(running.hosts[1].items[0].app, 'Waiting for its turn');
 });
 
+test('Update apps cancel and readiness states read as plain text', () => {
+  const result = (platform, appLabel, status, extra = {}) => ({ appId: appLabel.toLowerCase().replace(/ /g, '-'), appLabel, platform, status, previousVersion: null, version: null, message: 'Done', ...extra });
+  const cancelling = updateResultsView({ state: 'running', startedAt: at(-1), finishedAt: null, activePlatform: 'mac', cancelRequested: true, expectedResults: 21, results: [result('ubuntu', 'Codex CLI', 'current')] }, now);
+  assert.equal(cancelling.cancelling, true);
+  assert.equal(cancelling.headRuns.map(r => r.text).join(''), 'Cancelling… · 1 of 21 done');
+  const idle = updateResultsView({ state: 'running', startedAt: at(-1), finishedAt: null, activePlatform: 'mac', results: [result('ubuntu', 'Codex CLI', 'current')] }, now);
+  assert.equal(idle.cancelling, false);
+  const done = updateResultsView({ state: 'completed', startedAt: at(-30), finishedAt: at(-20), activePlatform: null, cancelRequested: true, results: [
+    result('ubuntu', 'Codex CLI', 'current'),
+    result('mac', 'Muse Code', 'skipped', { message: 'Skipped: cancelled' }),
+    result('windows', 'OMP', 'unknown', { message: 'Unknown: this computer is not reachable.' }),
+    result('windows', 'Claude Code', 'unknown', { message: 'Unknown: the readiness check could not run.' }),
+  ] }, now);
+  assert.equal(done.headRuns.map(r => r.text).join(''), 'Last run 20m ago · 4 results, 1 skipped, 2 unknown, cancelled');
+  assert.deepEqual(done.hosts[0].items.map(i => i.result), ['Skipped: cancelled']);
+  assert.deepEqual(done.hosts[1].items.map(i => i.result), ['Unknown: Windows not reachable', 'Unknown']);
+  assert.equal(done.hosts[1].items[0].tip, 'Unknown: this computer is not reachable.');
+});
+
 test('connection facts and the sign-in block say only what the browser and server report', () => {
   assert.equal(transportOf('https:', 'aac.example.test'), 'https');
   assert.equal(transportOf('http:', 'localhost'), 'loopback');

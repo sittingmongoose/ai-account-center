@@ -150,6 +150,45 @@ class UpdaterTests(unittest.TestCase):
         self.assertTrue(all(item['status'] == 'not_installed' for item in value['results']))
         update.assert_not_called()
 
+    def test_readiness_without_supported_updater_is_failed(self):
+        install = common.Install('muse-code', 'ubuntu', pathlib.Path('/fixture/muse'), '1.0.0', 'unsupported')
+        with mock.patch.object(updater, 'scan') as scan:
+            self.assertEqual(updater.check_readiness(install), ('failed', 'unsupported'))
+            scan.assert_not_called()
+
+    def test_readiness_with_unrestartable_instances_is_failed(self):
+        install = common.Install('muse-code', 'ubuntu', pathlib.Path('/fixture/muse'), '1.0.0')
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal', side_effect=common.UpdateFailure('restart_context')):
+            self.assertEqual(updater.check_readiness(install), ('failed', 'restart_context'))
+
+    def test_readiness_probe_crash_is_unknown_not_failed(self):
+        install = common.Install('muse-code', 'ubuntu', pathlib.Path('/fixture/muse'), '1.0.0')
+        with mock.patch.object(updater, 'scan', side_effect=RuntimeError('fixture boom')):
+            self.assertEqual(updater.check_readiness(install), ('unknown', 'readiness_unknown'))
+
+    def test_readiness_ready_install_has_no_gate(self):
+        install = common.Install('muse-code', 'ubuntu', pathlib.Path('/fixture/muse'), '1.0.0')
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal') as check:
+            self.assertIsNone(updater.check_readiness(install))
+            check.assert_called_once()
+
+    def test_run_apply_skips_unready_apps_without_attempting(self):
+        installations = {key: common.Install(key, 'ubuntu', pathlib.Path('/fixture/app'), '1.0.0') for key in common.APP_LABELS}
+        def gate(install):
+            return ('failed', 'unsupported') if install.app_id == 'muse-code' else None
+        def cli(install, deadline):
+            return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update:
+            value = updater.run_apply('ubuntu')
+        rows = {item['appId']: item for item in value['results']}
+        self.assertEqual(len(value['results']), 7)
+        self.assertEqual(rows['muse-code']['status'], 'failed')
+        self.assertEqual(rows['muse-code']['messageCode'], 'unsupported')
+        self.assertFalse(rows['muse-code']['updateAttempted'])
+        attempted = {call.args[0].app_id for call in update.call_args_list} | {call.args[0].app_id for call in desktop_update.call_args_list}
+        self.assertNotIn('muse-code', attempted)
+        self.assertEqual(len(attempted), 6)
+
     @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('gcc') and shutil.which('tmux'), 'native fixture compiler and tmux required')
     def test_real_standin_cli_restarts_in_new_pty_without_original_prompt(self):
         source = r'''#include <stdio.h>

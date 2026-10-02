@@ -12,7 +12,8 @@ import {
   MAX_OUTPUT,
   UPDATE_APP_LABELS,
   record,
-  failure,
+  skipped,
+  unknown,
   normalizeAppUpdateResults,
   type UpdateAppId,
   type UpdatePlatform,
@@ -135,6 +136,7 @@ export class AppUpdateService {
       startedAt: new Date(this.deps.now()).toISOString(),
       finishedAt: null,
       activePlatform: null,
+      cancelRequested: false,
       results: [],
       expectedResults: EXPECTED_RESULTS,
     };
@@ -150,32 +152,63 @@ export class AppUpdateService {
     return { job: response };
   }
 
+  /**
+   * Acknowledges a cancel at once. The host batch running now is never killed;
+   * it finishes, then every queued app is reported as skipped. Idempotent:
+   * a second cancel changes nothing. Never promises an undo.
+   */
+  cancel(): { job: AppUpdateJob | null; cancelling: boolean } {
+    if (!this.lockHeld) this.restore();
+    if (this.job?.state !== 'running') return { job: this.getStatus().job, cancelling: false };
+    this.job.cancelRequested = true;
+    try {
+      this.save();
+    } catch {
+      /* The in-memory flag still stops queued work; persistence is display-only. */
+    }
+    return { job: this.getStatus().job, cancelling: true };
+  }
+
   private async execute(): Promise<void> {
     if (!this.job) return;
     try {
       for (const platform of PLATFORMS) {
+        if (this.job.cancelRequested) {
+          this.job.results.push(
+            ...(Object.keys(UPDATE_APP_LABELS) as UpdateAppId[]).map((id) => skipped(platform, id))
+          );
+          this.save();
+          continue;
+        }
         this.job.activePlatform = platform;
         this.save();
         try {
           const output = await this.deps.runHost(platform);
           this.job.results.push(...normalizeAppUpdateResults(output, platform));
         } catch {
+          // The host never answered, so no check ran: unknown, not failed.
           this.job.results.push(
             ...(Object.keys(UPDATE_APP_LABELS) as UpdateAppId[]).map((id) =>
-              failure(platform, id, 'host_unavailable')
+              unknown(platform, id, 'host_unknown')
             )
           );
         }
         this.save();
       }
       this.job.state = this.job.results.some(
-        (result) => result.status === 'failed' || result.status === 'restart_failed'
+        (result) =>
+          result.status === 'failed' ||
+          result.status === 'restart_failed' ||
+          result.status === 'unknown'
       )
         ? 'failed'
         : 'completed';
     } catch {
       this.job.state = 'failed';
     } finally {
+      // A cancel that landed after the last app changed no result; leave no trace.
+      if (!this.job.results.some((result) => result.status === 'skipped'))
+        this.job.cancelRequested = false;
       this.job.activePlatform = null;
       this.job.finishedAt = new Date(this.deps.now()).toISOString();
       try {
@@ -310,6 +343,7 @@ export class AppUpdateService {
           !abandoned && PLATFORMS.includes(raw.activePlatform as UpdatePlatform)
             ? (raw.activePlatform as UpdatePlatform)
             : null,
+        cancelRequested: raw.cancelRequested === true,
         results,
         expectedResults:
           typeof raw.expectedResults === 'number' &&

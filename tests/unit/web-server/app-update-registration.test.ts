@@ -37,5 +37,12 @@ describe('installed updater API registration', () => {
     });
     expect(start.status).toBe(401);
     expect(await start.json()).toEqual({ error: 'Authentication required' });
+    const cancel = await fetch(`${base}/api/app-updates/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: base },
+      body: '{}',
+    });
+    expect(cancel.status).toBe(401);
+    expect(await cancel.json()).toEqual({ error: 'Authentication required' });
   });
 });

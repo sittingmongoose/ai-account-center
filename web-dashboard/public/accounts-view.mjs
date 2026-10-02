@@ -265,27 +265,38 @@ const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows']
 const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],
   failed: ['Failed', 'crit'], restart_failed: ['Updated, restart failed', 'crit'],
+  skipped: ['Skipped: cancelled', ''],
 };
+// An unknown row on an unreachable host names the computer; any other unknown stays a plain word.
+const unknownWord = (row, label) => text(row.message).includes('not reachable') ? `Unknown: ${label} not reachable` : 'Unknown';
 export function updateResultsView(job, now = Date.now()) {
   const results = Array.isArray(job?.results) ? job.results.filter(row => row && typeof row === 'object') : [];
   const running = job?.state === 'running';
+  const cancelling = running && job.cancelRequested === true;
   const count = status => results.filter(row => row.status === status).length;
   const failed = count('failed') + count('restart_failed');
   const total = finite(job?.expectedResults) && job.expectedResults > 0 ? job.expectedResults : 21;
   let headRuns;
   if (!job) headRuns = [run('No run yet. '), run('Update apps'), run(' in the header runs one.')];
-  else if (running) headRuns = [run('Running now', true), run(` · ${results.length} of ${total} done`)];
+  else if (running) headRuns = cancelling
+    ? [run('Cancelling…', true), run(` · ${results.length} of ${total} done`)]
+    : [run('Running now', true), run(` · ${results.length} of ${total} done`)];
   else {
     const when = validDate(job.finishedAt) ? job.finishedAt : job.startedAt;
+    const parts = [`${results.length} ${results.length === 1 ? 'result' : 'results'}`];
+    if (failed) parts.push(`${failed} failed`);
+    if (count('skipped')) parts.push(`${count('skipped')} skipped`);
+    if (count('unknown')) parts.push(`${count('unknown')} unknown`);
+    if (job.cancelRequested === true) parts.push('cancelled');
     headRuns = [run('Last run '), run(validDate(when) ? relative(when, now) : 'time unknown', true),
-      run(` · ${results.length} ${results.length === 1 ? 'result' : 'results'}${failed ? `, ${failed} failed` : ''}`)];
+      run(` · ${parts.join(', ')}`)];
   }
   const order = ['ubuntu', 'mac', 'windows'];   // the order the server runs the hosts in
   const activeIndex = running ? order.indexOf(job.activePlatform) : -1;
   const hosts = job ? UPDATE_HOSTS.map(([id, label, platform]) => {
     const rows = results.filter(row => row.platform === id);
     const items = rows.map((row, index) => {
-      const [word, tone] = RESULT[row.status] || ['Unknown result', ''];
+      const [word, tone] = row.status === 'unknown' ? [unknownWord(row, label), ''] : (RESULT[row.status] || ['Unknown result', '']);
       const versions = text(row.previousVersion) && text(row.version) && row.previousVersion !== row.version ? `${row.previousVersion} to ${row.version}` : text(row.version) ? `version ${row.version}` : '';
       return {
         key: `${id}|${text(row.appId) || index}`, app: text(row.appLabel) || text(row.appId) || 'App',
@@ -303,7 +314,7 @@ export function updateResultsView(job, now = Date.now()) {
     }
     return { id, label, platform, items };
   }) : [];
-  return { shown: !!job, running, headRuns, hosts };
+  return { shown: !!job, running, cancelling, headRuns, hosts };
 }
 
 // ---------------------------------------------------------------- connection and sign-in facts

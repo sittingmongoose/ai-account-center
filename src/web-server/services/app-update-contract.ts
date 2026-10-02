@@ -16,7 +16,9 @@ export type UpdateResultStatus =
   | 'current'
   | 'not_installed'
   | 'failed'
-  | 'restart_failed';
+  | 'restart_failed'
+  | 'skipped'
+  | 'unknown';
 export interface AppUpdateResult {
   appId: UpdateAppId;
   appLabel: string;
@@ -41,6 +43,11 @@ export interface AppUpdateJob {
   startedAt: string;
   finishedAt: string | null;
   activePlatform: UpdatePlatform | null;
+  /**
+   * True once a cancel is acknowledged. The running host batch still finishes;
+   * every queued app is reported as skipped. Never promises an undo.
+   */
+  cancelRequested: boolean;
   results: AppUpdateResult[];
   /**
    * How many results the job will produce (apps times platforms attempted),
@@ -64,6 +71,9 @@ export const MESSAGES = {
   busy: 'Another app update is already running on this computer.',
   timeout: 'The update did not finish within its time limit.',
   signature_failed: 'The downloaded app did not pass its publisher verification.',
+  skipped_cancelled: 'Skipped: cancelled',
+  host_unknown: 'Unknown: this computer is not reachable.',
+  readiness_unknown: 'Unknown: the readiness check could not run.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows'];
@@ -75,6 +85,8 @@ const STATUSES: UpdateResultStatus[] = [
   'not_installed',
   'failed',
   'restart_failed',
+  'skipped',
+  'unknown',
 ];
 const MANAGERS = ['native', 'npm', 'brew', 'winget', 'msix', 'apt', 'official-download'];
 export const MAX_OUTPUT = 64 * 1024;
@@ -103,6 +115,46 @@ export function failure(
     appLabel: UPDATE_APP_LABELS[appId],
     platform,
     status: 'failed',
+    previousVersion: null,
+    version: null,
+    manager: null,
+    message: MESSAGES[code],
+    updateAttempted: false,
+    restartedProcesses: 0,
+    forcedStops: 0,
+    restartTargets: [],
+  };
+}
+
+/** A queued app dropped by an acknowledged cancel: never failed, never updated. */
+export function skipped(platform: UpdatePlatform, appId: UpdateAppId): AppUpdateResult {
+  return {
+    appId,
+    appLabel: UPDATE_APP_LABELS[appId],
+    platform,
+    status: 'skipped',
+    previousVersion: null,
+    version: null,
+    manager: null,
+    message: MESSAGES.skipped_cancelled,
+    updateAttempted: false,
+    restartedProcesses: 0,
+    forcedStops: 0,
+    restartTargets: [],
+  };
+}
+
+/** The outcome could not be determined: the check never ran, so it is not a failure. */
+export function unknown(
+  platform: UpdatePlatform,
+  appId: UpdateAppId,
+  code: 'host_unknown' | 'readiness_unknown'
+): AppUpdateResult {
+  return {
+    appId,
+    appLabel: UPDATE_APP_LABELS[appId],
+    platform,
+    status: 'unknown',
     previousVersion: null,
     version: null,
     manager: null,

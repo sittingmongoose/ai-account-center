@@ -44,6 +44,17 @@ function start(body = '{}', origin = base, authenticated = true, query = '') {
     body,
   });
 }
+function cancel(body = '{}', origin = base, authenticated = true, query = '') {
+  return fetch(`${base}/api/app-updates/cancel${query}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin,
+      ...(authenticated ? { 'x-test-session': 'true' } : {}),
+    },
+    body,
+  });
+}
 describe('authenticated app updater action', () => {
   it('reads status without triggering work', async () => {
     const response = await fetch(`${base}/api/app-updates/status`, {
@@ -95,5 +106,53 @@ describe('authenticated app updater action', () => {
     expect(second.status).toBe(409);
     expect((await second.json()).job.id).toBe(job.id);
     expect(calls).toBe(1);
+  });
+  it('cancel rejects unauthenticated and cross-origin actions', async () => {
+    expect((await cancel('{}', base, false)).status).toBe(401);
+    expect((await cancel('{}', 'https://external.example')).status).toBe(403);
+  });
+  it('cancel requires an explicit browser Origin before acting', async () => {
+    const response = await fetch(`${base}/api/app-updates/cancel`, {
+      method: 'POST',
+      headers: { 'x-test-session': 'true', 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(response.status).toBe(403);
+  });
+  it.each(['[]', '{"host":"untrusted"}', '{"command":"killall node"}', 'null'])(
+    'cancel rejects command/config selectors %s',
+    async (body) => {
+      expect((await cancel(body)).status).toBe(400);
+    }
+  );
+  it('cancel rejects query selectors and non-JSON content', async () => {
+    expect((await cancel('{}', base, true, '?host=external')).status).toBe(400);
+    const response = await fetch(`${base}/api/app-updates/cancel`, {
+      method: 'POST',
+      headers: { 'x-test-session': 'true', origin: base, 'content-type': 'text/plain' },
+      body: '{}',
+    });
+    expect(response.status).toBe(415);
+  });
+  it('cancel acknowledges a running job at once and is idempotent', async () => {
+    const started = await start();
+    expect(started.status).toBe(202);
+    const id = (await started.json()).job.id;
+    const first = await cancel();
+    expect(first.status).toBe(202);
+    const outcome = await first.json();
+    expect(outcome.cancelling).toBe(true);
+    expect(outcome.job.id).toBe(id);
+    expect(outcome.job.state).toBe('running');
+    expect(outcome.job.cancelRequested).toBe(true);
+    const second = await cancel();
+    expect(second.status).toBe(202);
+    expect(await second.json()).toEqual(outcome);
+    expect(calls).toBe(1);
+  });
+  it('cancel with no running job is a no-op', async () => {
+    const response = await cancel();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ job: null, cancelling: false });
   });
 });

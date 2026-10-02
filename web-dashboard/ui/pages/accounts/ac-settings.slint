@@ -472,6 +472,7 @@ component SettingsGroup inherits SetGroup {
 component UpdateGroup inherits SetGroup {
     title: "Update apps";
     note: "Runs from Update apps in the header";
+    callback act(string, string);
     SetItem {
         first: true;
         Runs {
@@ -481,6 +482,22 @@ component UpdateGroup inherits SetGroup {
             strong-ink: Theme.ink-2;
             strong-weight: 600;
             tabular: true;
+        }
+        if AcData.update-shown && AcData.update-running: HorizontalLayout {
+            alignment: start;
+            padding-top: 6px;
+            TipArea {
+                owner: "update-cancel";
+                tip: "Finishes the update running now, then skips the queued apps. Finished updates stay as they are.";
+                width: cancel-btn.preferred-width;
+                height: 28px;
+                cancel-btn := Button {
+                    small: true;
+                    text: AcData.update-cancelling ? "Cancelling…" : "Cancel";
+                    enabled: !AcData.update-cancelling;
+                    clicked => { root.act("update-cancel", ""); }
+                }
+            }
         }
         for h in AcData.update-hosts: VerticalLayout {
             spacing: 0px;
@@ -546,7 +563,9 @@ export component SettingsColumn inherits VerticalLayout {
             theme-picked(v) => { root.theme-picked(v); }
             act(k, v) => { root.act(k, v); }
         }
-        UpdateGroup { }
+        UpdateGroup {
+            act(k, v) => { root.act(k, v); }
+        }
         ConnectionGroup { }
         AboutGroup { }
     }
@@ -569,7 +588,9 @@ export component SettingsColumn inherits VerticalLayout {
             spacing: 16px;
             alignment: start;
             horizontal-stretch: 1;
-            UpdateGroup { }
+            UpdateGroup {
+                act(k, v) => { root.act(k, v); }
+            }
             AboutGroup { }
         }
     }
