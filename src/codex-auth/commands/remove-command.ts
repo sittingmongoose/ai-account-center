@@ -339,8 +339,9 @@ function _freshLogin(authPath: string, label: string): FreshLogin | null {
 /**
  * Whether a saved login is the live one. Like activation, this matches the workspace
  * and principal, so a personal and a workspace login under one email stay apart. A
- * match either way refuses, so a legacy copy of the live principal stays protected.
- * Only when either side has no readable binding does the email alone decide.
+ * match in either direction refuses, so an older saved token of the live workspace and
+ * email that carries no principal stays protected. Only when either side has no
+ * readable binding does the email alone decide.
  */
 function _isLiveLogin(live: FreshLogin, saved: FreshLogin): boolean {
   if (!live.binding || !saved.binding) return live.email === saved.email;
