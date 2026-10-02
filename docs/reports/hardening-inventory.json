@@ -593,8 +593,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 18,
-      "totalSourceFiles": 301,
-      "coverageRatio": 0.0598,
+      "totalSourceFiles": 300,
+      "coverageRatio": 0.06,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",

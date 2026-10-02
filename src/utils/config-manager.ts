@@ -10,7 +10,6 @@ import { isUnifiedMode, loadOrCreateUnifiedConfig } from '../config/unified-conf
 
 // TODO: Replace with proper imports after converting these files
 // const { ErrorManager } = require('./error-manager');
-// const RecoveryManager = require('./recovery-manager');
 
 // Module-level state for --config-dir CLI flag override
 let _globalConfigDir: string | undefined;
@@ -190,10 +189,6 @@ export function loadConfig(): Config {
   const configPath = getConfigPath();
 
   if (!fs.existsSync(configPath)) {
-    // TODO: Add recovery manager logic
-    // const recovery = new RecoveryManager();
-    // recovery.ensureConfigJson();
-
     error(`Config not found: ${configPath}`);
   }
 
@@ -368,10 +363,7 @@ export function getSettingsPath(profile: string): string {
   if (!fs.existsSync(expandedPath)) {
     // Auto-create if it's ~/.claude/settings.json
     if (expandedPath.includes('.claude') && expandedPath.endsWith('settings.json')) {
-      // TODO: Add recovery manager logic
-      // const recovery = new RecoveryManager();
-      // recovery.ensureClaudeSettings();
-
+      // TODO: nothing creates the file here yet.
       console.log(info('Auto-created missing settings file'));
     } else {
       error(`Settings file not found: ${expandedPath}`);

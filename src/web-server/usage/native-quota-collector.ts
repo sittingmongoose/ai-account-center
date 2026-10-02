@@ -42,12 +42,12 @@ import { resolveCodexProfileDir } from '../../codex-auth/codex-profile-paths';
 // Safety constants (concrete, named, module-level)
 // ============================================================================
 
-/** On-demand cache TTL. Floor is 5 min; we use 10 min because the bar polls
- *  /summary far more often than a hook fires. */
+/** On-demand cache TTL. Floor is 5 min; we use 10 min because the dashboard,
+ *  the trays and the auto-switch ask far more often than a hook fires. */
 const NATIVE_QUOTA_TTL_MS = 600_000; // 10 minutes
 // After a 401/expired result, cache the reauth row and cool the profile down so
 // an expired account is shown dimmed and re-checked at most this often instead
-// of being re-polled (and re-401'd) on every /summary refresh.
+// of being re-polled (and re-401'd) on every dashboard or tray refresh.
 const REAUTH_COOLDOWN_MS = NATIVE_QUOTA_TTL_MS; // 10 minutes
 // Parked rows (no on-disk creds, quotaStatus 'unsupported') re-check on a short
 // TTL — re-statting credentials is cheap, and this lets a profile that the user
