@@ -1,0 +1,119 @@
+// Official provider marks (ui/marks, provenance in ui/marks/sources.json). Shown bare at one optical
+// size: never recoloured, never on a disc or plate (Kimi Code's own app icon keeps its plate, Jared's
+// pick). `scale` is the optical scale from sources.json; the plated Kimi icon is drawn a further 14%
+// smaller so it carries the same visual mass as the open glyphs. Where a mark has separate light- and
+// dark-surface artwork, both are stacked and cross-fade with the theme.
+import { Theme } from "../theme.slint";
+
+export global Marks {
+    out property <image> claude: @image-url("../marks/claude.svg");
+    out property <image> codex: @image-url("../marks/codex.svg");
+    out property <image> codex-light: @image-url("../marks/codex-light.svg");
+    out property <image> antigravity: @image-url("../marks/antigravity.svg");
+    out property <image> cursor: @image-url("../marks/cursor.svg");
+    out property <image> cursor-light: @image-url("../marks/cursor-light.svg");
+    out property <image> muse: @image-url("../marks/muse.svg");
+    out property <image> kimi-code: @image-url("../marks/kimi-code.png");
+    out property <image> qwen: @image-url("../marks/qwen.svg");
+    out property <image> qwen-light: @image-url("../marks/qwen-light.svg");
+    out property <image> zai: @image-url("../marks/zai.svg");
+    out property <image> zai-light: @image-url("../marks/zai-light.svg");
+    out property <image> opencode-go: @image-url("../marks/opencode-go.svg");
+    out property <image> opencode-go-light: @image-url("../marks/opencode-go-light.svg");
+    out property <image> platform-apple: @image-url("../marks/platform-apple.svg");
+    out property <image> platform-windows: @image-url("../marks/platform-windows.svg");
+    out property <image> platform-ubuntu: @image-url("../marks/platform-ubuntu.svg");
+
+    // Artwork for dark surfaces (or the only artwork).
+    public pure function dark-art(id: string) -> image {
+        if id == "claude" { return claude; }
+        if id == "codex" { return codex; }
+        if id == "antigravity" { return antigravity; }
+        if id == "cursor" { return cursor; }
+        if id == "muse" { return muse; }
+        if id == "kimi-code" { return kimi-code; }
+        if id == "qwen" { return qwen; }
+        if id == "zai" { return zai; }
+        if id == "opencode-go" { return opencode-go; }
+        return claude;
+    }
+    // Artwork for light surfaces.
+    public pure function light-art(id: string) -> image {
+        if id == "codex" { return codex-light; }
+        if id == "cursor" { return cursor-light; }
+        if id == "qwen" { return qwen-light; }
+        if id == "zai" { return zai-light; }
+        if id == "opencode-go" { return opencode-go-light; }
+        return dark-art(id);
+    }
+    public pure function has-light-art(id: string) -> bool {
+        return id == "codex" || id == "cursor" || id == "qwen" || id == "zai" || id == "opencode-go";
+    }
+    public pure function known(id: string) -> bool {
+        return id == "claude" || id == "codex" || id == "antigravity" || id == "cursor" || id == "muse"
+            || id == "kimi-code" || id == "qwen" || id == "zai" || id == "opencode-go";
+    }
+    // Optical scale from sources.json (min-ink normalisation), with the plate correction for Kimi Code.
+    public pure function scale(id: string) -> float {
+        if id == "claude" { return 0.93; }
+        if id == "codex" { return 0.95; }
+        if id == "antigravity" { return 0.97; }
+        if id == "cursor" { return 0.89; }
+        if id == "muse" { return 1.0; }
+        if id == "kimi-code" { return 0.97 * 0.86; }
+        if id == "qwen" { return 0.93; }
+        if id == "zai" { return 0.92; }
+        if id == "opencode-go" { return 0.84; }
+        return 1.0;
+    }
+    public pure function platform(id: string) -> image {
+        if id == "windows" { return platform-windows; }
+        if id == "ubuntu" { return platform-ubuntu; }
+        return platform-apple;
+    }
+    public pure function platform-scale(id: string) -> float {
+        if id == "apple" || id == "mac" { return 0.9; }
+        return 0.86;
+    }
+}
+
+export component ProviderMark inherits Rectangle {
+    in property <string> provider;
+    in property <length> size: 22px;
+    in property <bool> dim: false;
+    width: root.size;
+    height: root.size;
+    opacity: root.dim ? 0.55 : 1;
+    property <length> art: root.size * Marks.scale(root.provider);
+    property <bool> twin: Marks.has-light-art(root.provider);
+
+    if Marks.known(root.provider): Image {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: root.art;
+        height: root.art;
+        source: Marks.dark-art(root.provider);
+        image-fit: contain;
+        opacity: root.twin ? Theme.mix : 1;
+    }
+    if Marks.known(root.provider) && root.twin: Image {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: root.art;
+        height: root.art;
+        source: Marks.light-art(root.provider);
+        image-fit: contain;
+        opacity: 1 - Theme.mix;
+    }
+}
+
+// Filled platform logos (Apple, Windows, Ubuntu from Simple Icons, CC0), tinted to the text colour.
+export component PlatformGlyph inherits Image {
+    in property <string> platform: "apple";
+    in property <color> tint: Theme.ink-2;
+    width: 15px;
+    height: 15px;
+    source: Marks.platform(root.platform);
+    colorize: root.tint;
+    image-fit: contain;
+}

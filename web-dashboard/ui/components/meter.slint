@@ -1,0 +1,290 @@
+// The meter: a 10 px track (7 px compact) with three ticks, a severity-coloured fill under a white wash,
+// a threshold notch, an overage segment past 100%, and an unavailable state drawn as a dashed outline
+// (never a zero bar). Every value-bearing animation uses the non-overshooting ease-out
+// cubic-bezier(0.2, 0.8, 0.2, 1): the fill never shows more than the reading, not even for a frame.
+// While the number counts up its colour climbs the ramp with the animated value (calm, warning at 80,
+// critical at 95), so a mid-sweep "24%" is never drawn red.
+import { Theme, Motion, Type } from "../theme.slint";
+import { MeterView } from "../models.slint";
+import { Caps, ValueUnit } from "text.slint";
+import { Hover } from "hover-card.slint";
+
+// Dashed outline for "no reading": short static segments (Slint draws no dash arrays).
+export component DashedTrack inherits Rectangle {
+    in property <color> line: Theme.rule-strong;
+    property <int> dashes: max(1, floor((root.width - 6px) / 7px));
+    for i in root.dashes: Rectangle {
+        x: 3px + i * 7px;
+        y: 0px;
+        width: 4px;
+        height: 1px;
+        background: root.line;
+    }
+    for i in root.dashes: Rectangle {
+        x: 3px + i * 7px;
+        y: root.height - 1px;
+        width: 4px;
+        height: 1px;
+        background: root.line;
+    }
+    Rectangle { x: 0px; y: 2px; width: 1px; height: max(0px, root.height - 4px); background: root.line; }
+    Rectangle { x: root.width - 1px; y: 2px; width: 1px; height: max(0px, root.height - 4px); background: root.line; }
+}
+
+// The bar alone (also used by the hover card and Details).
+export component MeterBar inherits Rectangle {
+    in property <bool> has-value;
+    // Animated used percentage (may exceed 100).
+    in property <float> shown;
+    // Final reading, for the overage segment.
+    in property <float> target;
+    in property <float> notch: -1;
+    in property <bool> notch-faint: false;
+    in property <bool> notch-off: false;
+    in property <bool> compact: false;
+    in property <bool> hot: false;
+    in property <int> sev: 0;
+    // During the load-in sweep the fill colour follows the climbing value without a cross-fade.
+    in property <bool> instant-color: false;
+
+    property <length> track-h: root.compact ? 7px : 10px;
+    property <bool> over: root.has-value && root.target > 100;
+    property <length> over-w: root.over ? min(26px, 6px + (root.target - 100) * 2px) : 0px;
+    property <length> track-w: root.over ? root.width - 30px : root.width;
+    height: root.track-h;
+
+    if root.has-value: track := Rectangle {
+        x: 0px;
+        y: root.hot ? -1px : 0px;
+        width: root.track-w;
+        height: root.track-h;
+        border-radius: root.track-h / 2;
+        background: root.hot ? Theme.track-hover : Theme.track;
+        clip: true;
+        animate background { duration: Motion.tint(160ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        animate y { duration: 220ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        for f in [0.25, 0.5, 0.75]: Rectangle {
+            x: parent.width * f;
+            y: root.compact ? 1px : 2px;
+            width: 1px;
+            height: parent.height - (root.compact ? 2px : 4px);
+            background: Theme.track-tick;
+        }
+        fill := Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width * clamp(root.shown, 0, 100) / 100;
+            height: parent.height;
+            border-radius: parent.height / 2;
+            background: Theme.sev-fill(root.sev);
+            animate background { duration: Motion.tint(root.instant-color ? 0ms : 400ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            Rectangle {
+                width: 100%;
+                height: 100%;
+                border-radius: parent.border-radius;
+                background: @linear-gradient(90deg, Theme.fill-wash 0%, Theme.fill-wash.with-alpha(0) 88%);
+            }
+        }
+    }
+    if root.has-value && root.over: Rectangle {
+        x: root.track-w + 3px;
+        y: -2px;
+        width: root.over-w * clamp((root.shown - 100) / max(0.01, root.target - 100), 0, 1);
+        height: root.track-h + 4px;
+        border-radius: 3px;
+        background: Theme.over;
+    }
+    if root.has-value && root.notch >= 0: Rectangle {
+        x: root.track-w * clamp(root.notch, 0, 100) / 100 - 1px;
+        y: root.notch-faint ? root.track-h * 0.15 - 1px : (root.compact ? -3px : -4px);
+        width: 2px;
+        height: root.notch-faint ? root.track-h * 0.7 + 2px : root.track-h + (root.compact ? 6px : 8px);
+        border-radius: 1px;
+        background: Theme.ink;
+        opacity: root.notch-off ? 0.18 : root.notch-faint ? 0.32 : 1;
+        animate x { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity, height, y { duration: 300ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    }
+    if !root.has-value: DashedTrack {
+        width: root.width;
+        height: root.track-h;
+        line: root.hot ? Theme.ink-3 : Theme.rule-strong;
+    }
+}
+
+// A labelled meter bound to one MeterView.
+// `played` starts the load-in sweep (fills from 0, numbers roll up) after `delay`; later value changes
+// animate from the previous reading without a delay.
+export component Meter inherits Rectangle {
+    in property <MeterView> data;
+    in property <bool> compact: false;
+    // Label and value on one line (cards, Details).
+    in property <bool> inline: false;
+    in property <bool> show-label: false;
+    in property <bool> show-reset: true;
+    in property <bool> show-unit: true;
+    in property <bool> played: true;
+    in property <duration> delay: 0ms;
+    in property <bool> hot: false;
+    // Who the reading belongs to, for the hover card ("Claude · claude-1@example.com").
+    in property <string> owner-label;
+    // A threshold the user is still choosing (the section's stepper): the notch slides there before the
+    // setting is saved. -1 keeps the reported notch.
+    in property <float> notch-override: -1;
+    // The reading changed after the load-in (a refresh): the row flashes softly.
+    callback value-changed();
+
+    property <float> target: root.data.has-value ? root.data.value : 0;
+    property <bool> swept: false;
+    changed target => { if root.swept { root.value-changed(); } }
+    // A meter created together with its data (first load, a new row) first renders at 0 and starts
+    // its sweep one frame later; otherwise it would appear at its final value without animating.
+    property <bool> mounted: !Motion.on;
+    mount := Timer {
+        interval: 16ms;
+        running: !root.mounted;
+        triggered => { self.running = false; root.mounted = true; }
+    }
+    property <float> anim: root.played && root.mounted ? root.target : 0;
+    animate anim {
+        duration: Motion.on ? Motion.meter : 0ms;
+        delay: root.swept || !Motion.on ? 0ms : root.delay;
+        easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    sweep-done := Timer {
+        interval: root.delay + Motion.meter + 40ms;
+        running: root.played && root.mounted && !root.swept;
+        triggered => { root.swept = true; self.running = false; }
+    }
+    property <bool> settled: !Motion.on || abs(root.anim - root.target) < 0.005;
+    property <int> sev: Theme.severity(root.data.has-value, root.anim);
+    property <string> number: root.settled ? root.data.value-text : "\{round(root.anim)}";
+    property <length> value-size: root.compact ? 15px : root.inline ? 17px : 19px;
+    // The value line's box, as the concept's .meter-top measures with its line-height 1 numbers and
+    // baseline-aligned words (Slint Text has no line-height, so the 1.22 em font box would add 2-3 px a meter).
+    property <length> top-h: root.compact ? 17.5px : root.inline ? 19.2px : 20.7px;
+    property <bool> hovering: ta.has-hover;
+    callback clicked();
+
+    min-height: col.min-height;
+    preferred-height: col.preferred-height;
+    min-width: 60px;
+    col := VerticalLayout {
+        spacing: 0px;
+        if root.show-label && !root.inline: Text {
+            min-height: 17.5px;
+            vertical-alignment: center;
+            text: root.data.label;
+            font-size: Type.small;
+            font-weight: 540;
+            color: Theme.ink-2;
+            overflow: elide;
+        }
+        if root.show-label && !root.inline: Rectangle { height: 4px; }
+        // Inline: the label takes the free width and the value sits at the right end. Otherwise the value,
+        // "used" and any caption sit at the start and "x% over" at the right end.
+        top := HorizontalLayout {
+            spacing: 6px;
+            min-height: root.top-h;
+            // the label sits on the value's baseline, as in the concept's baseline-aligned row
+            if root.inline: VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: start;
+                padding-top: max(0px, (root.top-h - 1.22 * root.value-size) / 2 + 0.97 * root.value-size - 0.97 * 12.5px);
+                Text {
+                    text: root.data.label;
+                    font-size: 12.5px;
+                    color: Theme.ink-2;
+                    overflow: elide;
+                }
+            }
+            if root.inline && root.data.has-value && root.data.caption != "": VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
+            }
+            if root.data.has-value: ValueUnit {
+                horizontal-stretch: 0;
+                box-h: root.top-h;
+                value: root.number;
+                size: root.value-size;
+                ink: Theme.sev-text(root.sev);
+                animate ink { duration: Motion.tint(root.swept ? 400ms : 0ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            }
+            if root.data.has-value && root.show-unit && !root.compact && !root.inline: VerticalLayout {
+                alignment: end;
+                horizontal-stretch: 0;
+                Text { text: "used"; font-size: Type.small; color: Theme.ink-3; }
+            }
+            if !root.inline && root.data.has-value && root.data.caption != "": VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
+            }
+            if !root.data.has-value: Text {
+                text: root.data.na-text != "" ? root.data.na-text : "Unavailable";
+                font-size: 13px;
+                font-weight: 520;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+            if !root.inline: Rectangle { horizontal-stretch: 1; }
+            if root.data.has-value && root.data.over-text != "" && !root.compact && !root.inline: VerticalLayout {
+                alignment: end;
+                horizontal-stretch: 0;
+                ValueUnit { value: root.data.over-text; unit: "% over"; size: 12px; weight: 640; ink: Theme.over-text; unit-scale: 1; unit-gap: 0px; }
+            }
+        }
+        Rectangle { height: root.compact ? 5px : 7px; }
+        bar := MeterBar {
+            has-value: root.data.has-value;
+            shown: root.anim;
+            target: root.target;
+            notch: root.notch-override >= 0 && root.data.notch >= 0 ? root.notch-override : root.data.notch;
+            notch-faint: root.data.notch-faint;
+            notch-off: root.data.notch-off;
+            compact: root.compact;
+            hot: root.hot || root.hovering;
+            sev: root.sev;
+            instant-color: !root.swept;
+        }
+        if root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): Rectangle { height: 6px; }
+        if root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): HorizontalLayout {
+            spacing: 10px;
+            Text {
+                min-height: 17.5px;
+                vertical-alignment: center;
+                text: root.data.has-value ? root.data.reset : root.data.na-sub;
+                font-family: Type.tab;
+                font-size: Type.small;
+                font-weight: root.data.reset-soon ? 560 : 400;
+                color: root.data.reset-soon ? Theme.ink-2 : Theme.ink-3;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            if root.data.amount != "" && !root.compact: Text {
+                min-height: 17.5px;
+                vertical-alignment: center;
+                text: root.data.amount;
+                font-family: Type.tab;
+                font-size: Type.small;
+                color: Theme.ink-3;
+                horizontal-alignment: right;
+                overflow: elide;
+            }
+        }
+
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        // The hover card needs the absolute rectangle of the meter.
+        changed has-hover => {
+            if self.has-hover {
+                Hover.meter-card(root.data.key, self.absolute-position, self.width, self.height, root.data, root.owner-label);
+            } else {
+                Hover.leave(root.data.key);
+            }
+        }
+    }
+}

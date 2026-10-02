@@ -1,0 +1,286 @@
+// View-model structs shared by Rust (src/lib.rs) and the pages. bridge.js builds them as JSON
+// (view model version 2, see public/view-model.mjs); lib.rs deserializes and keeps one persistent
+// VecModel per list, updated in place by id, so changed values animate instead of re-mounting.
+
+// One usage window drawn as a meter. `value` is the reported used percentage and may exceed 100.
+export struct MeterView {
+    key: string,
+    label: string,
+    full-label: string,
+    has-value: bool,
+    value: float,
+    value-text: string,
+    over-text: string,
+    reset: string,
+    reset-exact: string,
+    reset-soon: bool,
+    na-text: string,
+    na-sub: string,
+    amount: string,
+    left: string,
+    sampled: string,
+    source: string,
+    caption: string,
+    caption-tip: string,
+    notch: float,
+    notch-faint: bool,
+    notch-off: bool,
+}
+
+// Packs, balances, credits and spend: shown as amounts, never as fake meters.
+export struct AmountView {
+    key: string,
+    label: string,
+    value: string,
+    unit: string,
+    sub: string,
+    icon: string,
+    spent: bool,
+}
+
+// A run of text in a line that mixes weights ("**4** accounts · desktop profiles").
+// tone: "" (inherit), "good" (the active account's name), "warn".
+export struct RunView {
+    text: string,
+    strong: bool,
+    tone: string,
+}
+
+export struct ColumnView {
+    key: string,
+    label: string,
+}
+
+export struct AccountRowView {
+    id: string,
+    provider: string,
+    profile: string,
+    email: string,
+    plan: string,
+    meta: string,
+    status: string,
+    note: string,
+    platform: string,
+    active: bool,
+    active-label: string,
+    setup: bool,
+    can-activate: bool,
+    activate-kind: string,
+    activate-hint: string,
+    can-mac: bool,
+    can-windows: bool,
+    amounts-line: string,
+    amounts-runs: [RunView],
+    // Activating this account asks first: it is already past the section's switch point.
+    confirm: bool,
+    confirm-runs: [RunView],
+    cells: [MeterView],
+}
+
+export struct AutoSwitchView {
+    known: bool,
+    // false: the section header shows `off-runs` ("Auto-switch off · needs a second account") instead of the control.
+    shown: bool,
+    enabled: bool,
+    available: bool,
+    can-enable: bool,
+    threshold-used: int,
+    threshold-label: string,
+    min: int,
+    max: int,
+    pool: string,
+    off-runs: [RunView],
+    setting: string,
+    message: string,
+    example: bool,
+}
+
+// A section footer line (Codex: what auto-switch is doing about the active account).
+export struct FootView {
+    shown: bool,
+    warn: bool,
+    runs: [RunView],
+    when: string,
+}
+
+// A provider section on Home: Claude (desktop profiles) or a switchable provider (Codex, Antigravity).
+export struct SectionView {
+    id: string,
+    kind: string,
+    label: string,
+    long-label: string,
+    meta: string,
+    meta-runs: [RunView],
+    count: int,
+    switchable: bool,
+    // More than one account it could switch between: rows show Activate.
+    can-switch: bool,
+    active-id: string,
+    active-label: string,
+    empty: string,
+    auto: AutoSwitchView,
+    foot: FootView,
+    columns: [ColumnView],
+    rows: [AccountRowView],
+}
+
+// An "other provider" card: up to three meters plus amounts.
+export struct ProviderCardView {
+    id: string,
+    provider: string,
+    account-id: string,
+    label: string,
+    identity: string,
+    plan: string,
+    status: string,
+    source: string,
+    // Footer: a warning word ("Stale", "Sign-in needed"), "sampled 39s ago" and the platform.
+    flag: string,
+    sampled: string,
+    platform: string,
+    plan-note: string,
+    packs-note: string,
+    note: string,
+    meters: [MeterView],
+    amounts: [AmountView],
+}
+
+// The provider registry, derived client-side until the backend sends one.
+export struct RegistryView {
+    id: string,
+    label: string,
+    long-label: string,
+    sign-in: string,
+    multi: bool,
+    switchable: bool,
+    visible: bool,
+    count: int,
+}
+
+export struct ChromeView {
+    status-lead: string,
+    status-strong: string,
+    status-more: string,
+    status-tip: string,
+    refreshing: bool,
+    username: string,
+    host: string,
+}
+
+export struct UpdateView {
+    running: bool,
+    done: bool,
+    count: int,
+    total: int,
+    tip: string,
+    summary: string,
+}
+
+export struct ToastView {
+    id: int,
+    kind: string,
+    title: string,
+    body: string,
+    ms: int,
+}
+
+export struct FactView {
+    label: string,
+    value: string,
+    mono: bool,
+}
+
+export struct DetailsView {
+    id: string,
+    provider: string,
+    title: string,
+    sub: string,
+    sub-lead: string,
+    state: string,
+    active: bool,
+    switchable: bool,
+    can-activate: bool,
+    activate-kind: string,
+    can-switch: bool,
+    active-label: string,
+    activate-hint: string,
+    platform: string,
+    confirm: bool,
+    confirm-runs: [RunView],
+    profile: string,
+    can-mac: bool,
+    can-windows: bool,
+    note: string,
+    meter-count: int,
+    amount-count: int,
+    meters: [MeterView],
+    amounts: [AmountView],
+    facts: [FactView],
+}
+
+export struct ProcessView {
+    label: string,
+    pid: string,
+    role: string,
+}
+
+export struct ConfirmationView {
+    open: bool,
+    product: string,
+    target: string,
+    warning: string,
+    expires: string,
+    error: string,
+    valid: bool,
+    busy: bool,
+}
+
+// The sign-in layer: loading, default, connecting, wrong, limited, expired, setup, success
+// (public/auth-view.mjs builds the words; bridge.js the state).
+export struct AuthView {
+    state: string,
+    message: string,
+    // the second line under an error ("4 tries left before sign-in pauses for 15 minutes.")
+    message-sub: string,
+    // the message is information ("Signed out."), not an error
+    notice: bool,
+    username: string,
+    host: string,
+    retry: string,
+    // the expired, rate-limited or set-up-on-the-server banner
+    banner-title: string,
+    banner-body: string,
+    banner-strong: string,
+    // rate limited: seconds left when the state began, and the limiter's window for the drain bar
+    retry-seconds: int,
+    limit-seconds: int,
+    // first run: the form appears only when the server can create the sign-in (POST /api/auth/setup)
+    setup-form: bool,
+    code-required: bool,
+    // the field an error belongs to: user, pass, confirm, code
+    field: string,
+    transport-note: string,
+    session-hours: int,
+    // bumped on every failed attempt, so the form shakes again
+    nonce: int,
+}
+
+// The first-run form's password strength (public/auth-view.mjs strength) and whether the confirmation matches.
+export struct StrengthView {
+    lv: int,
+    pct: float,
+    word: string,
+    hint: string,
+    matches: bool,
+}
+
+// The Analytics header (version 3): loading and error come from set_analytics_loading, the rest from the view model.
+export struct AnalyticsHeadView {
+    loading: bool,
+    error: string,
+    scope: string,
+    read: string,
+    read-tip: string,
+    date: string,
+    custom: bool,
+}

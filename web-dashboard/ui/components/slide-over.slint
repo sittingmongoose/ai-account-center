@@ -1,0 +1,77 @@
+// Slide-over (Details).
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+
+// Right-hand panel: springs in (600 ms, a few px of overshoot hidden by its 28 px bleed), slides out
+// quickly (220 ms ease-in). The scrim only tints: like the concept's, it lets clicks through, so a click on
+// another row swaps the content (`swap()` dips it for 130 ms), and a click anywhere else closes the panel (the
+// window's background TouchAreas, and bridge.js for clicks that a button or card takes), as does Escape.
+// Content goes in @children.
+export component SlideOver inherits Rectangle {
+    in-out property <bool> open: false;
+    in property <length> view-w;
+    in property <length> view-h;
+    in property <string> title;
+    in property <string> subtitle;
+    callback close-requested();
+
+    // public/bridge.js detailsPanelLeft() mirrors this width to close the panel on clicks outside it
+    property <length> panel-w: clamp(root.view-w * 0.3, 420px, 580px);
+    property <length> bleed: 28px;
+    property <bool> dipping: false;
+    out property <length> shown-width: root.panel-w;
+    public function swap() {
+        root.dipping = true;
+        dip.running = true;
+    }
+    dip := Timer {
+        interval: Motion.on ? 130ms : 1ms;
+        running: false;
+        triggered => { self.running = false; root.dipping = false; }
+    }
+
+    width: root.view-w;
+    height: root.view-h;
+
+    scrim := Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.scrim;
+        opacity: root.open ? 1 : 0;
+        visible: self.opacity > 0.005;
+        animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    }
+    panel := Rectangle {
+        y: 0px;
+        width: root.panel-w + root.bleed;
+        height: root.view-h;
+        x: root.view-w + 8px;
+        visible: root.open || self.x < root.view-w;
+        background: Theme.paper;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-color: Theme.shadow-pop;
+        drop-shadow-blur: 44px;
+        drop-shadow-offset-y: 18px;
+        // swallow clicks inside the panel so they never reach the scrim
+        TouchArea { }
+        content := Rectangle {
+            x: 0px;
+            width: root.panel-w;
+            height: parent.height;
+            opacity: root.dipping ? 0 : 1;
+            animate opacity { duration: Motion.on ? 130ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            @children
+        }
+    }
+    states [
+        shown when root.open: {
+            panel.x: root.view-w - root.panel-w;
+            in {
+                animate panel.x { duration: Motion.on ? 600ms : 0ms; easing: cubic-bezier(0.32, 1.12, 0.52, 1); }
+            }
+            out {
+                animate panel.x { duration: Motion.on ? 220ms : 0ms; easing: cubic-bezier(0.4, 0, 1, 1); }
+            }
+        }
+    ]
+}

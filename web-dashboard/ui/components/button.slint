@@ -1,0 +1,86 @@
+// Buttons: tint on hover, scale to 0.97 on press (a spring only on this non-value property).
+import { Theme, Motion, Type } from "../theme.slint";
+import { Icon } from "icon.slint";
+import { PlatformGlyph } from "mark.slint";
+
+// kind: "default" | "primary" | "ink" | "accent-line" | "danger" | "danger-text" | "ghost"
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    // "apple" | "windows" | "ubuntu": a filled platform glyph instead of a Lucide icon.
+    in property <string> platform;
+    in property <string> kind: "default";
+    in property <bool> small: false;
+    in property <bool> enabled: true;
+    in property <string> hint;
+    callback clicked();
+
+    out property <bool> hovered: ta.has-hover && root.enabled;
+    out property <length> pad-left: root.kind == "danger-text" ? 6px : root.kind == "ghost" ? 9px : root.small ? 10px : 13px;
+    out property <length> icon-size: root.small ? 15px : 16px;
+    out property <length> icon-gap: 7px;
+
+    property <color> fg: root.kind == "primary" ? Theme.accent-ink
+        : root.kind == "ink" ? Theme.paper
+        : root.kind == "accent-line" ? Theme.accent-text
+        : root.kind == "danger" || root.kind == "danger-text" ? Theme.crit-text
+        : root.kind == "ghost" ? (root.hovered ? Theme.ink : Theme.ink-2)
+        : Theme.ink;
+    property <color> bg: root.kind == "primary" ? (root.hovered ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent)
+        : root.kind == "ink" ? (root.hovered ? Theme.ink.mix(Theme.paper, 0.86) : Theme.ink)
+        : root.kind == "accent-line" ? (root.hovered ? Theme.accent-soft : Theme.paper)
+        : root.kind == "danger" ? (root.hovered ? Theme.crit.mix(Theme.paper, 0.08) : Theme.paper)
+        : root.kind == "danger-text" ? (root.hovered ? Theme.crit.mix(Theme.paper, 0.08) : Theme.paper.with-alpha(0))
+        : root.kind == "ghost" ? (root.hovered ? Theme.paper-3 : Theme.paper.with-alpha(0))
+        : (root.hovered ? Theme.paper-2 : Theme.paper);
+    property <color> line: root.kind == "primary" ? (root.hovered ? Theme.accent.with-alpha(0) : Theme.accent)
+        : root.kind == "ink" ? Theme.ink
+        : root.kind == "accent-line" ? (root.hovered ? Theme.accent : Theme.accent.mix(Theme.rule, 0.45))
+        : root.kind == "danger" ? (root.hovered ? Theme.crit : Theme.rule)
+        : root.kind == "danger-text" || root.kind == "ghost" ? Theme.rule.with-alpha(0)
+        : (root.hovered ? Theme.rule-strong : Theme.rule);
+
+    height: root.small ? 28px : 32px;
+    min-width: row.min-width;
+    preferred-width: row.preferred-width;
+    border-radius: Theme.r-ctl;
+    border-width: 1px;
+    background: root.bg;
+    border-color: root.line;
+    opacity: root.enabled ? 1 : 0.45;
+    animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    animate opacity { duration: 200ms; }
+    transform-scale: ta.pressed && root.enabled ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    accessible-role: button;
+    accessible-label: root.hint == "" ? root.text : root.hint;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    row := HorizontalLayout {
+        padding-left: root.pad-left;
+        padding-right: root.pad-left;
+        spacing: root.icon-gap;
+        alignment: center;
+        if root.icon != "": VerticalLayout {
+            alignment: center;
+            Icon { name: root.icon; tint: root.fg; width: root.icon-size; height: root.icon-size; }
+        }
+        if root.platform != "": VerticalLayout {
+            alignment: center;
+            PlatformGlyph { platform: root.platform; tint: root.fg; width: root.icon-size - 1px; height: root.icon-size - 1px; }
+        }
+        if root.text != "": Text {
+            text: root.text;
+            color: root.fg;
+            font-size: root.small ? 12.5px : Type.control;
+            font-weight: 560;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}

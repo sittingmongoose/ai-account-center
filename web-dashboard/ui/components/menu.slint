@@ -1,0 +1,85 @@
+// Menu surfaces for PopupWindow: the panel fades in and rises 6 px with a small spring scale.
+import { Theme, Motion, Type } from "../theme.slint";
+import { Icon } from "icon.slint";
+import { Caps } from "text.slint";
+
+export component MenuPanel inherits Rectangle {
+    property <bool> shown: false;
+    init => { root.shown = true; }
+    background: Theme.paper;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.rule;
+    drop-shadow-color: Theme.shadow-pop;
+    drop-shadow-blur: 40px;
+    drop-shadow-offset-y: 16px;
+    opacity: root.shown ? 1 : 0;
+    transform-scale: root.shown ? 1 : 0.97;
+    transform-origin: { x: root.width, y: 0px };
+    animate opacity { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    animate transform-scale { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+    VerticalLayout {
+        padding: 6px;
+        spacing: 0px;
+        @children
+    }
+}
+
+export component MenuHead inherits Rectangle {
+    in property <string> text;
+    height: 28px;
+    Caps { x: 10px; text: root.text.to-uppercase(); }
+}
+
+export component MenuSeparator inherits Rectangle {
+    height: 13px;
+    Rectangle { x: 4px; y: 6px; width: parent.width - 8px; height: 1px; background: Theme.rule-2; }
+}
+
+export component MenuItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <bool> checked: false;
+    in property <bool> busy: false;
+    callback activated();
+    height: 36px;
+    border-radius: 8px;
+    background: ta.has-hover ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
+    animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    transform-scale: ta.pressed ? 0.98 : 1;
+    animate transform-scale { duration: Motion.fast; }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        if root.icon != "": VerticalLayout {
+            alignment: center;
+            Icon { name: root.busy ? "refresh" : root.icon; tint: Theme.ink-3; width: 16px; height: 16px; }
+        }
+        Text {
+            text: root.text;
+            font-size: Type.control;
+            font-weight: root.checked ? 600 : 400;
+            color: root.busy ? Theme.ink-3 : Theme.ink;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                name: "check";
+                tint: Theme.accent-text;
+                width: 16px;
+                height: 16px;
+                opacity: root.checked ? 1 : 0;
+                transform-scale: root.checked ? 1 : 0.6;
+                animate opacity { duration: Motion.fast; }
+                animate transform-scale { duration: Motion.med; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.activated(); }
+    }
+}

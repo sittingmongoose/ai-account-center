@@ -4,9 +4,16 @@ Source: [AI Account Center](https://github.com/sittingmongoose/ai-account-center
 a fork of [CCS](https://github.com/kaitranntt/ccs).
 
 The production account dashboard is a real Slint UI compiled from
-`ui/dashboard.slint` to Rust and WebAssembly. `public/bridge.js` supplies browser
-session authentication, same-origin API requests and asynchronous updates; it
-does not render the dashboard. No React production assets are required.
+`ui/dashboard.slint` to Rust and WebAssembly, in the Daylight Atlas design
+(light, dark and auto themes, embedded Instrument Sans and Martian Mono, Lucide
+icons, official provider marks and the Apex Soft logo). `public/bridge.js`
+supplies browser session authentication, same-origin API requests, URL state
+(`?view=home|analytics|accounts`) and asynchronous updates; it does not render
+the dashboard. `public/view-model.mjs` turns the API responses into the version 2
+view model that `src/lib.rs` writes into persistent Slint models in place, so
+changed readings animate. [ui/README-ARCHITECTURE.md](ui/README-ARCHITECTURE.md)
+maps the shell, the component library, the theme tokens and the data seam.
+No React production assets are required.
 The browser probes WebGL on a separate disposable canvas before starting Slint's
 supported FemtoVG WebAssembly renderer. If WebGL is denied or unavailable,
 the page displays a readable request to enable browser hardware acceleration.
@@ -41,35 +48,101 @@ page as file:// or configure a cross-origin API URL.
 ## Data and controls
 
 - GET `/api/accounts/dashboard` supplies consolidated provider accounts.
-- Claude and Codex table summaries show provider-reported 5-hour and weekly
-  percentages. They never invent token denominators or reset times.
-- Detail views retain every returned quota window, credit balance, numeric
-  amount, unlimited/enabled state, reset date and separate expiration date.
-  Product display exclusions remove Codex Chat pass, attach Qwen subscription
-  expiration to monthly usage, and hide empty Z.ai reset-pack summaries.
-- Provider cards preview up to three actual windows. Their Details control
-  shows all windows from every returned account.
-- Claude launch icons POST the configured profile ID plus Mac/Windows choice.
-- Codex activation and auto-switch settings reuse authenticated guarded APIs.
-  The threshold is shown in percent used and sent in percent remaining.
-  Busy activation opens a Slint review dialog listing the blocking programs.
-  Yes submits the server-issued, target-bound approval token; Cancel sends no
-  mutation. Expired or stale approvals require a fresh Activate review.
-  The active Codex identity appears in both the page and Codex headers, with
-  its table row highlighted and marked Active.
-- Update apps starts the allowlisted asynchronous update job only after the
-  user presses the button; it is never run while the dashboard starts.
-- Usage refreshes at the server-confirmed interval configured in Settings
-  (30–3600 seconds, initially 60 seconds). Dashboard and Analytics Refresh
-  controls request fresh usage before reloading their views.
-  Failed refreshes retain received samples and
-  display their failure; unavailable values are never replaced with zero.
-- Analytics is a dashboard navigation tab with all provider/account filters,
-  observed quota history, reset/expiration details and authentic local CLI
-  activity. History gaps stay empty; estimated API-equivalent costs are labeled.
+- Home shows Claude, then Codex and Antigravity as switchable sections, then one
+  card per account of the other providers. Meters show provider-reported
+  percentages with severity colours (warning from 80%, critical from 95%), the
+  auto-switch threshold notch and reported overage; they never invent token
+  denominators or reset times, and a missing reading is drawn as unavailable,
+  never as zero. Fable appears only for Claude Max plans, from the
+  `seven_day_fable` window ("Not reported yet" when absent).
+- Details (a slide-over opened by clicking any account row or card; closed by a
+  click anywhere outside it, including header buttons, nested row actions and
+  Analytics cards, or Escape; a click on another row swaps it to that account)
+  retain every visible quota window, credit balance,
+  numeric amount, unlimited/enabled state, reset date and separate expiration
+  date. Product display exclusions remove Codex Chat pass, attach Qwen
+  subscription expiration to monthly usage, and hide empty Z.ai reset-pack
+  summaries.
+- Claude launch buttons POST the configured profile ID plus Mac/Windows choice.
+- Codex and Antigravity activation and auto-switch settings reuse authenticated
+  guarded APIs. Thresholds are shown in percent used (Codex sends percent
+  remaining). Busy activation opens a Slint review dialog listing the blocking
+  programs. Yes submits the server-issued, target-bound approval token; Cancel
+  sends no mutation. Expired or stale approvals require a fresh Activate review.
+  The active account is the selected row, marked Active.
+- Update apps is its own header button. It starts the allowlisted asynchronous
+  update job only after the user presses it, shows progress in place and the
+  result as a toast; it is never run while the dashboard starts.
+- Usage refreshes at the server-confirmed interval configured in Accounts &
+  Settings (30–3600 seconds, initially 60 seconds). Refresh requests fresh usage
+  before reloading. Failed refreshes keep the received samples and report the
+  failure as a toast; unavailable values are never replaced with zero.
+- Analytics is built around Usage, the original CCS analytics page improved: range
+  presets (24H, 7D, 30D, Month, All) and a custom range of whole local days, a
+  Claude Code / Codex filter, five KPI cards, the usage-trends chart (tokens and
+  estimated cost on two axes, token types and cache reads toggles, a crosshair
+  readout), cost by model with a model popover, the model donut, session stats,
+  token breakdown, cache efficiency, a weekday x hour heatmap, daily cost by
+  provider, the compact quota history with focus charts and the upcoming resets
+  and expiries, all in local time from the version 3 analytics view model.
+  Per-type costs use the rates mirrored from `src/web-server/model-pricing.ts`
+  (`public/model-rates.mjs`) and are kept only when they add up to each model's
+  logged estimate; otherwise the split shows token shares and says so. Month,
+  All and custom ranges read the covering 24h, 7d or 30d response and are cut in
+  the browser; per-model and session data then say which logs they cover.
+- Accounts & Settings lists every provider with its accounts: status only for
+  an exception, the last sample, how it signs in, and fixed, aligned action
+  slots. Codex and Antigravity Activate, Claude Open on Mac or Windows, the
+  Codex and Antigravity auto-switch policies, the refresh interval and the
+  appearance are live; Add account, Sign in again, Replace key, Remove, app
+  sign-in, Re-check, Change password, other browsers and paired trays are shown
+  in place as "coming" until their server routes exist. "Show on dashboard" is
+  saved in this browser until the server stores visibility. The settings column
+  holds the Dashboard sign-in block, Update apps results by computer, read-only
+  connection facts and About.
+- The sign-in page is the login screen: wrong passwords show the tries left from
+  the login limiter's headers, a pause shows its countdown from `Retry-After`, a
+  session that ran out says so, and first-run setup appears only when the server
+  reports setup mode (the in-page form only once the server offers it; otherwise
+  the setup command).
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
+
+## Rendering performance
+
+The FemtoVG renderer redraws the whole canvas for every frame, so the dashboard
+keeps per-frame work small, which matters most on software WebGL (Chrome's
+SwiftShader on a machine without a GPU):
+
+- Nothing animates while idle: spinners, the update-progress bar, the sign-in
+  sweep and the skeleton shimmer read `animation-tick()` only while they are
+  active, and the browser requests no frames once the page settles.
+- Static surfaces render into cached layers (`cache-rendering-hint`): the paper
+  grid, Home's sections and provider cards, the Accounts & Settings sections and
+  settings groups, the Analytics KPI cards and every Analytics card whose
+  content does not follow the pointer. The usage-trends card caches its axes,
+  gridlines and data paths in their own layer, so the crosshair only blits it.
+  A layer re-renders only while something inside it changes.
+- Hover lifts fade in a second, static shadow (`HoverShadow`) instead of
+  animating a shadow's blur or colour, which would make the renderer blur a new
+  shadow texture on every frame.
+- Value animations (meter widths, count-ups, chart draws) use the ease-out
+  curve only; a filmed refresh moves every meter monotonically to its new value.
+
+Measured on the Ubuntu VM in headless Chrome with SwiftShader at 1440 x 900
+(2026-10-02, median per animation): the page's own work per frame (WebAssembly
+and JavaScript) is 5-11 ms for scrolling and hovering and about 17 ms while
+Details slides in, and frames arrive every 47-90 ms (11-21 fps), a rate set by
+SwiftShader's rasterising rather than by the page. Before the cached layers and
+static hover shadows, a hover in Analytics took 250-300 ms a frame (4 fps) and
+Home's scrolling about 20 ms of page work a frame. Hardware-accelerated browsers
+are far faster; the VM figure is the floor.
+
+Every state push from `bridge.js` (`with_ui` and the other entry points in
+`src/lib.rs`) asks for a frame and wakes winit's event loop, so a change that
+arrives while the loop sleeps is painted at once instead of at the next pointer
+event.
 
 ## Validation
 
@@ -79,7 +152,22 @@ node --test web-dashboard/tests/*.test.mjs
 
 The Slint compiler validates UI bindings during the actual WASM release build.
 The data tests cover unknown versus genuine zero, credit units/expiration,
-additional counters, confirmed auto-switch thresholds and complete details.
+additional counters, confirmed auto-switch thresholds, complete details, the
+version 2 dashboard view models (sections, Fable, switchable providers, hidden
+providers) and the version 3 analytics model (rate mirror parity with
+`model-pricing.ts`, per-type cost reconciliation, unavailable activity and cost,
+ranges and local-time buckets, the provider filter, heatmap gaps, quota history,
+focus-chart label placement and the resets agenda), the version 1 Accounts &
+Settings model (registry sections, fixed slots, live versus coming actions,
+local visibility, Update apps results, the refresh scale) and the sign-in
+rules (strength hint, first-run checks, limiter headers, ended sessions).
+
+Visual checks use the sanitized fixture preview in
+`~/PM-Experiments/ccs-accounts-20260930/worktrees/preview/` (see its README):
+it serves `dist/ui` with the concept's fixture data and screenshots it in
+headless Chrome with SwiftShader WebGL. Compare against the approved Daylight
+Atlas concept (`redesign-concepts-20261001/c-daylight-atlas/`) at 1024 x 700,
+1440 x 900, 1920 x 1080 and 2560 x 1440, light and dark.
 
 For automated Chromium DPI checks, launch a disposable browser with
 `--force-device-scale-factor=N` and a new context with `device_scale_factor=N`
@@ -98,6 +186,8 @@ Official API documentation: https://docs.slint.dev/latest/docs/rust/slint/
 The dashboard application source follows the parent CCS project's MIT license.
 Slint 1.18.1 is used under its
 [Royalty-free license](https://github.com/slint-ui/slint/blob/v1.18.1/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md).
-The standard unmodified `AboutSlint` widget is available at the bottom of the
-Settings dialog, accessible from the dashboard's top-level Settings menu.
+The standard unmodified `AboutSlint` widget is shown in the About section of the
+Accounts & Settings page.
+Instrument Sans and Martian Mono are embedded under the SIL Open Font License 1.1
+and the icons are Lucide (ISC); see `public/assets/THIRD-PARTY-NOTICES.txt`.
 See [Slint's licensing FAQ](https://github.com/slint-ui/slint/blob/master/FAQ.md#what-obligations-do-i-need-to-fulfil-to-use-the-royalty-free-license).

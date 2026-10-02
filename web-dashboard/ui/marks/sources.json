@@ -1,0 +1,670 @@
+{
+ "generated": "2026-10-01T20:31:31.632Z",
+ "rebuild": "cd shared/marks-v2 && node tools/build.mjs && node tools/emit.mjs (headless Chrome; writes out/, tools/measure.json, ../marks.js, ../../c-daylight-atlas/marks.js, sources.json)",
+ "rules": "Official artwork only. No recolouring, redrawing or geometry changes. SVG edits are limited to dropping the XML prolog and editor comments, setting the root viewBox/width/height (the crop), and, for lockups, dropping wordmark elements that lie wholly outside the crop (each verified pixel-identical). Optical scale is metadata only.",
+ "opticalScaleMethod": "inkBox = alpha-weighted share of a square box covered by the mark when contained in it (measured at 512px). scale = (min inkBox / inkBox) ^ 0.25, rounded to 0.01; render at box * scale. Platform glyphs are normalised among themselves.",
+ "zipSha256": {
+  "anthropic-press-kit.zip": "c68ac92df86c825f95177e24016fcc9a8863a3fd4ca344fe6f0700b2c1e07151",
+  "openai-logos.zip": "c54e85ab5884228f89f0230dd8effa8d588cad78166fe954135f4afa553222db",
+  "cursor-brand-assets.zip": "97488a7751914e60f9ff532bc33810cdeaebdddc017548abe6ca2bc29bbc3928"
+ },
+ "providers": {
+  "claude": {
+   "scale": 0.93,
+   "aspect": 1,
+   "surfaces": "One artwork for both surfaces: the press kit ships the Spark only in Clay (#D97757), which reads on light and dark.",
+   "licenseNote": "Claude and the Claude Spark are Anthropic trademarks. Official press-kit artwork, shown unmodified to identify the provider.",
+   "sources": [
+    {
+     "url": "https://www.anthropic.com/press-kit",
+     "note": "Anthropic media resources zip (sha256 c68ac92df86c825f95177e24016fcc9a8863a3fd4ca344fe6f0700b2c1e07151), member \"Anthropic media resources/Anthropic logos/Claude logos/3 Claude Spark/SVG/Claude Spark - Clay.svg\"",
+     "files": [
+      {
+       "file": "src/claude-spark-clay.svg",
+       "sha256": "6d53db4be375e899c937c26cf16684a80d6e869b1928d72b37748bef2560e219"
+      }
+     ]
+    },
+    {
+     "url": "https://claude.ai/favicon.svg",
+     "note": "same Spark geometry, kept for reference only",
+     "files": [
+      {
+       "file": "src/claude-favicon.svg",
+       "sha256": "b150888bc7257af83e3b85d3c2be4294f88986026f8168f6c12fc1fde6697350"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/claude.svg",
+     "sha256": "520ca8c178848629bfc63a18b400dabb3e20a2aaff75b3727eec5fda58030210",
+     "viewBox": [
+      -0.3104,
+      -0.5062,
+      95.0125,
+      95.0125
+     ],
+     "aspect": 1,
+     "sourceViewBox": [
+      0,
+      0,
+      94,
+      94
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/claude@256.png"
+    },
+    "light": null
+   }
+  },
+  "codex": {
+   "scale": 0.95,
+   "aspect": 1,
+   "surfaces": "Official black Blossom on light surfaces, official white Blossom on dark surfaces.",
+   "licenseNote": "OpenAI and the Blossom are OpenAI trademarks. Official brand-pack artwork, unmodified. Codex publishes no separate product mark (developers.openai.com/codex uses only UI icons), so the OpenAI Blossom identifies it.",
+   "sources": [
+    {
+     "url": "https://cdn.openai.com/brand/openai-logos.zip",
+     "note": "OpenAI brand logo pack (zip sha256 c54e85ab5884228f89f0230dd8effa8d588cad78166fe954135f4afa553222db), members OpenAI-logos/SVGs/OAI_OpenAI-Blossom_White.svg and _Black.svg; identical geometry, fill white vs black",
+     "files": [
+      {
+       "file": "src/OAI_OpenAI-Blossom_White.svg",
+       "sha256": "01d158767c4eec0e47bd617e67759c33da0accd1438be1a8d29dfdb99ce87285"
+      },
+      {
+       "file": "src/OAI_OpenAI-Blossom_Black.svg",
+       "sha256": "75c1e9fffa5e8c437bec1d67197a73992bca45d166c6ff23215185dea8fae92a"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/codex.svg",
+     "sha256": "63755aecd4ad31a2477f35142f6acd79a5209e4cbeb39a871b09d0b430fbc7a8",
+     "viewBox": [
+      177.8313,
+      177.8313,
+      360.0391,
+      360.0391
+     ],
+     "aspect": 1,
+     "sourceViewBox": [
+      0,
+      0,
+      716,
+      716
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/codex@256.png"
+    },
+    "light": {
+     "file": "out/codex-light.svg",
+     "sha256": "58daec6ea251c78fd347454e2825ce9a612afeaa7f0d43820d8028b5e51f77eb",
+     "viewBox": [
+      177.8313,
+      177.8313,
+      360.0391,
+      360.0391
+     ],
+     "aspect": 1,
+     "sourceViewBox": [
+      0,
+      0,
+      716,
+      716
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/codex-light@256.png"
+    }
+   }
+  },
+  "antigravity": {
+   "scale": 0.97,
+   "aspect": 1.0878,
+   "surfaces": "One artwork for both surfaces (multicolour gradient, reads on light and dark). Not used: /assets/image/antigravity-logo.svg on the same site is a different, stepped-pixel \"A\" (the CLI splash art), not the site icon.",
+   "licenseNote": "Google Antigravity is a Google trademark. Official vector artwork from antigravity.google, unmodified; the lockup is cropped to its symbol and the wordmark paths that fall outside the crop are dropped (render verified pixel-identical).",
+   "sources": [
+    {
+     "url": "https://antigravity.google/",
+     "note": "inline header lockup SVG (viewBox 0 0 869 113) from the homepage HTML (saved as antigravity-home.html); the arch symbol is the masked group at x 13..98. Same mark as the site icon /assets/image/antigravity-logo.png (200x184) and /apple-touch-icon.png (180)",
+     "files": [
+      {
+       "file": "src/antigravity-header-lockup.svg",
+       "sha256": "c25e97252eec5fbd0230d2ef63a35ff0ea7713511e10537c4e3994e755ad01d0"
+      },
+      {
+       "file": "src/antigravity-home.html",
+       "sha256": "6e1942f9a280490151825cbc5cb1939922422cc7237bbd53b02bf4b623f63542"
+      },
+      {
+       "file": "src/antigravity-logo-200.png",
+       "sha256": "8f0b95d2d21dbf930b4d100e2fdc4505673e900a731aa56ea633a4b59c312799"
+      },
+      {
+       "file": "src/antigravity-apple-touch-icon.png",
+       "sha256": "81ff621394faed1deb9c5577c7d5b651c5759ce927c1594dc8f6f6382a434670"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/antigravity.svg",
+     "sha256": "fbd31e8a3c8360a386861a4f963819c3865f5fbc88ddc608b1ff17f5a8b5c5ec",
+     "viewBox": [
+      13.1291,
+      17.8362,
+      85.2634,
+      78.3838
+     ],
+     "aspect": 1.0878,
+     "sourceViewBox": [
+      0,
+      0,
+      869,
+      113
+     ],
+     "wordmarkElementsDropped": 17,
+     "png256": "out/png/antigravity@256.png"
+    },
+    "light": null
+   }
+  },
+  "cursor": {
+   "scale": 0.89,
+   "aspect": 0.8789,
+   "surfaces": "CUBE_2D_LIGHT (dark ink) on light surfaces, CUBE_2D_DARK (light ink) on dark surfaces.",
+   "licenseNote": "Cursor is an Anysphere trademark. Official brand-kit SVGs, unmodified.",
+   "sources": [
+    {
+     "url": "https://ptht05hbb1ssoooe.public.blob.vercel-storage.com/assets/brand/cursor-brand-assets.zip",
+     "note": "Cursor brand assets (linked from cursor.com/brand), zip sha256 97488a7751914e60f9ff532bc33810cdeaebdddc017548abe6ca2bc29bbc3928, members \"General Logos/Cube/SVG/CUBE_2D_DARK.svg\" (fill #edecec) and \"CUBE_2D_LIGHT.svg\" (fill #26251e)",
+     "files": [
+      {
+       "file": "src/CUBE_2D_DARK.svg",
+       "sha256": "cd0e3e5d8991a4cdd4577f8896cd063105207665165c73e25a1ff918dd367eb7"
+      },
+      {
+       "file": "src/CUBE_2D_LIGHT.svg",
+       "sha256": "c483c02f78eb2619778fdd959e72a9adfac4844854472cd2653d4cbfd60e4d71"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/cursor.svg",
+     "sha256": "11685e18e8ec6e2119c6c3c4900a677d4b5654a8a845a5b02e42e390d4cdb18e",
+     "viewBox": [
+      -3.9907,
+      -3.9907,
+      474.6686,
+      540.0714
+     ],
+     "aspect": 0.8789,
+     "sourceViewBox": [
+      0,
+      0,
+      466.73,
+      532.09
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/cursor@256.png"
+    },
+    "light": {
+     "file": "out/cursor-light.svg",
+     "sha256": "c4bef195203f11544753d9c18d56fe0da1c27b16d1b6271bc6b34333da6632ec",
+     "viewBox": [
+      -3.9907,
+      -3.9907,
+      474.6686,
+      540.0714
+     ],
+     "aspect": 0.8789,
+     "sourceViewBox": [
+      0,
+      0,
+      466.73,
+      532.09
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/cursor-light@256.png"
+    }
+   }
+  },
+  "muse": {
+   "scale": 1,
+   "aspect": 1.491,
+   "surfaces": "One artwork for both surfaces (Meta blue gradient reads on light and dark).",
+   "licenseNote": "Meta and the Meta symbol are Meta Platforms trademarks. The Muse Code product page publishes no separate Muse Code mark (its only images are the Meta lockups, a 64px favicon of the same symbol and a background), so Meta's publisher symbol identifies it. Vector, unmodified; wordmark paths outside the crop dropped (pixel-identical render).",
+   "sources": [
+    {
+     "url": "https://dev.meta.ai/logo/meta-logo-with-text.svg",
+     "note": "Meta lockup preloaded by https://dev.meta.ai/products/muse-code; symbol cropped out (same symbol in -dark.svg, whose only change is a white wordmark)",
+     "files": [
+      {
+       "file": "src/meta-logo-with-text.svg",
+       "sha256": "7a0430c375fc8563eafa7636869b5b132e6da4461711a81d384bc0044a20d039"
+      },
+      {
+       "file": "src/meta-logo-with-text-dark.svg",
+       "sha256": "764de926994a45e479f4db6c0b6b39a870ff73cc096f37cf7cc2adf879da330a"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/muse.svg",
+     "sha256": "d3f62f331df9a89d91182b4cb70f3be31b8e4f5dc29a6f6a82237dfd917df09e",
+     "viewBox": [
+      -0.0719,
+      -0.0719,
+      15.373,
+      10.3105
+     ],
+     "aspect": 1.491,
+     "sourceViewBox": [
+      0,
+      0,
+      50,
+      11
+     ],
+     "wordmarkElementsDropped": 4,
+     "png256": "out/png/muse@256.png"
+    },
+    "light": null
+   }
+  },
+  "kimi-code": {
+   "scale": 0.97,
+   "aspect": 1.0386,
+   "surfaces": "Black K on light surfaces, white K on dark surfaces.",
+   "licenseNote": "Kimi is a Moonshot AI trademark. Kimi publishes its colour K (white K, blue dot) only as an app icon on a black plate (kimi.com pwa-192/512, favicons, Kimi Code docs and VS Code extension). The bare mark here is Kimi's own web-UI glyph, geometry unmodified; it is a currentColor glyph, rendered in the black/white pair Kimi uses for its official KIMI wordmark on light and dark. No blue dot exists in any bare official artwork.",
+   "sources": [
+    {
+     "url": "https://statics.moonshot.cn/kimi-web-seo/assets/kimi.icon-CElMvu4q.js",
+     "note": "kimi.com web app icon collection, glyph \"KforKimi_f\" (the K with its dot, 1024 grid, fill=currentColor). Extracted to kimi-web-iconset.json",
+     "files": [
+      {
+       "file": "src/kimi-web-iconset.json",
+       "sha256": "d4a87fb604ba36a9bd1c3a2097c715e72f91ebdff2a035008db073caf51c26f0"
+      }
+     ]
+    },
+    {
+     "url": "https://platform.kimi.com/",
+     "note": "official KIMI wordmark ships as logo-image-light fill #000 and logo-image-dark fill #fff; the same black/white pair is used for the K glyph",
+     "files": []
+    },
+    {
+     "url": "https://raw.githubusercontent.com/MoonshotAI/kimi-code/21406fb4c805cc8c715e6d1f16ad3fb5f25f4fe3/docs/.vitepress/theme/Kimi.png",
+     "note": "Kimi Code docs logo = the app icon (black rounded plate, white K, blue dot), not used because it is a plate",
+     "files": [
+      {
+       "file": "src/kimi-code-docs-Kimi.png",
+       "sha256": "c367897f22e26c917200dc6bd5e5cb1456d24bf5f6cf8dcb1524f9d34e336b6d"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/kimi-code.svg",
+     "sha256": "c5f2685be323a0d59a289024a620b25c05b0167031b5091dc02248c4fb348c78",
+     "viewBox": [
+      167.712,
+      147.6587,
+      688.576,
+      662.976
+     ],
+     "aspect": 1.0386,
+     "sourceViewBox": [
+      0,
+      0,
+      1024,
+      1024
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/kimi-code@256.png"
+    },
+    "light": {
+     "file": "out/kimi-code-light.svg",
+     "sha256": "31c693b7e0e7588aa42203bfa5bda0efddacd9cc94f9cc4fb0e264d1f8d1f2cc",
+     "viewBox": [
+      167.712,
+      147.6587,
+      688.576,
+      662.976
+     ],
+     "aspect": 1.0386,
+     "sourceViewBox": [
+      0,
+      0,
+      1024,
+      1024
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/kimi-code-light@256.png"
+    }
+   },
+   "decision": "2026-10-01 Jared: use the official Kimi Code app icon with its plate (docs Kimi.png); the bare K glyph is retired."
+  },
+  "qwen": {
+   "scale": 0.93,
+   "aspect": 0.9722,
+   "surfaces": "Official gradient symbol on light surfaces, official white symbol on dark surfaces.",
+   "licenseNote": "Qwen and Qwen Cloud are Alibaba Cloud trademarks. The Token Plan is a Qwen Cloud product (docs.qwencloud.com/token-plan; the collector reads home.qwencloud.com), so the Qwen Cloud symbol is used. Vector, unmodified; wordmark paths outside the crop dropped (pixel-identical render).",
+   "sources": [
+    {
+     "url": "https://docs.qwencloud.com/logo/light.svg",
+     "note": "Qwen Cloud docs nav logo for light mode (gradient #4F21FF to #D75BFE), symbol cropped from the lockup",
+     "files": [
+      {
+       "file": "src/qwencloud-docs-logo-light.svg",
+       "sha256": "6eb05b29b1564488e6f53534018804399e70ba3c0a097373dc4ca5b6ad732297"
+      }
+     ]
+    },
+    {
+     "url": "https://docs.qwencloud.com/logo/dark.svg",
+     "note": "Qwen Cloud docs nav logo for dark mode (white), symbol cropped from the lockup",
+     "files": [
+      {
+       "file": "src/qwencloud-docs-logo-dark.svg",
+       "sha256": "b1937ae9f28c04ca5179cb662e0b5357627d87b9dc7be4f0e67de7611b3e9458"
+      }
+     ]
+    },
+    {
+     "url": "https://img.alicdn.com/imgextra/i1/O1CN01OwlzsC1cRTnZrFfXa_!!6000000003597-2-tps-150-150.png",
+     "note": "alternative not used: qwen.ai blue Qwen (model) symbol, 150px raster only",
+     "files": [
+      {
+       "file": "src/qwen-ai-blue-150.png",
+       "sha256": "ea19f2ff6fc749ebd4fd9d7df3365d83ee333c2fd04a04596044ed3a09f4976d"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/qwen.svg",
+     "sha256": "280dce643f7ba3fb290c18496f33de6f83d8760c3905fff59df72b9c0d2300e6",
+     "viewBox": [
+      -0.2101,
+      -0.2101,
+      27.6473,
+      28.4384
+     ],
+     "aspect": 0.9722,
+     "sourceViewBox": [
+      0,
+      0,
+      158.21998596191406,
+      28
+     ],
+     "wordmarkElementsDropped": 9,
+     "png256": "out/png/qwen@256.png"
+    },
+    "light": {
+     "file": "out/qwen-light.svg",
+     "sha256": "4599d4e1f8f5f0dc89233747c9a72241598a4f41246c5837e2006a2e4f216189",
+     "viewBox": [
+      -0.2101,
+      -0.2101,
+      27.6473,
+      28.4384
+     ],
+     "aspect": 0.9722,
+     "sourceViewBox": [
+      0,
+      0,
+      158.21998596191406,
+      28
+     ],
+     "wordmarkElementsDropped": 9,
+     "png256": "out/png/qwen-light@256.png"
+    }
+   }
+  },
+  "zai": {
+   "scale": 0.92,
+   "aspect": 1.1734,
+   "surfaces": "Dark Z on light surfaces, white Z on dark surfaces.",
+   "licenseNote": "Z.ai is a Zhipu AI trademark. Official bare Z artwork from chat.z.ai, vector, unmodified.",
+   "sources": [
+    {
+     "url": "https://z-cdn.chatglm.cn/z-ai/static/logoLight.svg",
+     "note": "chat.z.ai light-theme logo (dark gradient Z, #070606 to #3b3b3b); identical to https://chat.z.ai/static/logoLight.svg",
+     "files": [
+      {
+       "file": "src/zai-logoLight.svg",
+       "sha256": "e11cb28e0fa0a4cbe11887c9a719d269957ef3c5198607a0036af799f94a7399"
+      }
+     ]
+    },
+    {
+     "url": "https://chat.z.ai/static/logoDark.svg",
+     "note": "chat.z.ai dark-theme logo (white Z). chat.z.ai picks logoLight for theme \"light\" and logoDark otherwise",
+     "files": [
+      {
+       "file": "src/zai-logoDark.svg",
+       "sha256": "69b26685f24975d74dfb566a4eb2c63f86f5302eb9bf7d6a77914bde39e70c4c"
+      }
+     ]
+    },
+    {
+     "url": "https://mintcdn.com/zhipu-32152247/B_E8wI-eiNa1QlPV/logo/dark.svg",
+     "note": "not used: docs.z.ai app-icon logo (white Z on a black rounded square plate)",
+     "files": [
+      {
+       "file": "src/zai-docs-logo-dark-plate.svg",
+       "sha256": "8007cd9e09717e42283db3591f82ed970a3200a0892ae91e1af9f2ef12e85642"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/zai.svg",
+     "sha256": "a427cb8f2552ae0da75717c3ae2891f3114c2f9a6690d5c9df3210a562507e97",
+     "viewBox": [
+      -15,
+      -15,
+      2030,
+      1730
+     ],
+     "aspect": 1.1734,
+     "sourceViewBox": [
+      0,
+      0,
+      2000,
+      1700
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/zai@256.png"
+    },
+    "light": {
+     "file": "out/zai-light.svg",
+     "sha256": "299716b08e890d75fa9d8be8f80958eaca39c60c3e75873a1b20613108a0140a",
+     "viewBox": [
+      -15,
+      -15,
+      2030,
+      1730
+     ],
+     "aspect": 1.1734,
+     "sourceViewBox": [
+      0,
+      0,
+      2000,
+      1700
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/zai-light@256.png"
+    }
+   }
+  },
+  "opencode-go": {
+   "scale": 0.84,
+   "aspect": 0.803,
+   "surfaces": "logo-light (dark frame) on light surfaces, logo-dark (light frame) on dark surfaces.",
+   "licenseNote": "OpenCode marks belong to the OpenCode project (anomalyco/opencode, code under MIT). Official brand-page SVGs, unmodified.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/anomalyco/opencode/aa481b8f5652f5576c55f914a64ed270e7daa7e0/packages/console/app/src/asset/brand/opencode-logo-dark.svg",
+     "note": "brand asset served on opencode.ai/brand; light frame #F1ECEC, for dark surfaces",
+     "files": [
+      {
+       "file": "src/opencode-logo-dark.svg",
+       "sha256": "5dd4abb4de60204510edf140bbe74b3580d07ebdda79fdb0081cd45acb53d44b"
+      }
+     ]
+    },
+    {
+     "url": "https://raw.githubusercontent.com/anomalyco/opencode/aa481b8f5652f5576c55f914a64ed270e7daa7e0/packages/console/app/src/asset/brand/opencode-logo-light.svg",
+     "note": "dark frame #211E1E, for light surfaces",
+     "files": [
+      {
+       "file": "src/opencode-logo-light.svg",
+       "sha256": "b47a4fecc77599382e238868e74064bbe92307b0e253a32f0b1a026517a2d2a6"
+      }
+     ]
+    }
+   ],
+   "out": {
+    "dark": {
+     "file": "out/opencode-go.svg",
+     "sha256": "f9ea0248bbd474de03c3c814598ce5ef11a951c545699f46b7906f2d92cef786",
+     "viewBox": [
+      -2.25,
+      -2.25,
+      244.5,
+      304.5
+     ],
+     "aspect": 0.803,
+     "sourceViewBox": [
+      0,
+      0,
+      240,
+      300
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/opencode-go@256.png"
+    },
+    "light": {
+     "file": "out/opencode-go-light.svg",
+     "sha256": "c4758ed2b43701571b59068895717beb4c9b62a99464be64765231c98a86f036",
+     "viewBox": [
+      -2.25,
+      -2.25,
+      244.5,
+      304.5
+     ],
+     "aspect": 0.803,
+     "sourceViewBox": [
+      0,
+      0,
+      240,
+      300
+     ],
+     "wordmarkElementsDropped": 0,
+     "png256": "out/png/opencode-go-light@256.png"
+    }
+   }
+  }
+ },
+ "platform": {
+  "platform-apple": {
+   "url": "https://cdn.jsdelivr.net/npm/simple-icons@16.33.0/icons/apple.svg",
+   "src": {
+    "file": "src/si-16.33.0-apple.svg",
+    "sha256": "2a1509dccd25e6d2bc7a11a8e52941077e1a48555e192ce638699b9f083c2a7c"
+   },
+   "licenseNote": "Simple Icons 16.33.0, CC0-1.0 (simple-icons-LICENSE.md). Apple logo is an Apple Inc. trademark; used only as a platform indicator.",
+   "scale": 0.9,
+   "aspect": 0.8177,
+   "out": {
+    "file": "out/platform-apple.svg",
+    "sha256": "0250ac2ac4c09678f79ba631b70b6a880911a6997da5c4b2aeed9585a3c5aaf5",
+    "viewBox": [
+     2.04,
+     -0.18,
+     19.92,
+     24.36
+    ],
+    "aspect": 0.8177,
+    "sourceViewBox": [
+     0,
+     0,
+     24,
+     24
+    ],
+    "wordmarkElementsDropped": 0,
+    "png256": "out/png/platform-apple@256.png"
+   }
+  },
+  "platform-windows": {
+   "url": "https://cdn.jsdelivr.net/npm/simple-icons@12.4.0/icons/windows.svg",
+   "src": {
+    "file": "src/si-12.4.0-windows.svg",
+    "sha256": "d35703096661a3f7590178d1c6872f2c9ffa15b537f250b4470150d349b30b37"
+   },
+   "licenseNote": "Simple Icons 12.4.0, CC0-1.0 (the Windows icons were removed from Simple Icons in v13, so 12.4.0 is the last release that has it; source cited there: Windows logo 2021). The Windows 11 four-pane logo is a Microsoft trademark; used only as a platform indicator.",
+   "scale": 0.82,
+   "aspect": 1,
+   "out": {
+    "file": "out/platform-windows.svg",
+    "sha256": "089f8bd1dbb964b97d1a496344a8d36c2408bb07b992957841210f4669f4721e",
+    "viewBox": [
+     -0.18,
+     -0.18,
+     24.36,
+     24.36
+    ],
+    "aspect": 1,
+    "sourceViewBox": [
+     0,
+     0,
+     24,
+     24
+    ],
+    "wordmarkElementsDropped": 0,
+    "png256": "out/png/platform-windows@256.png"
+   }
+  },
+  "platform-ubuntu": {
+   "url": "https://cdn.jsdelivr.net/npm/simple-icons@16.33.0/icons/ubuntu.svg",
+   "src": {
+    "file": "src/si-16.33.0-ubuntu.svg",
+    "sha256": "b0aca674c881a07bb60b26afbcee07093ae419e29ee38e376f938817fa66ae03"
+   },
+   "licenseNote": "Simple Icons 16.33.0, CC0-1.0. Ubuntu Circle of Friends is a Canonical trademark; used only as a platform indicator.",
+   "scale": 1,
+   "aspect": 1.0384,
+   "out": {
+    "file": "out/platform-ubuntu.svg",
+    "sha256": "60911aec878344c2aac233385f4eab382d007da1f7be527e77e0f81f5de36837",
+    "viewBox": [
+     -0.18,
+     0.27,
+     24.36,
+     23.46
+    ],
+    "aspect": 1.0384,
+    "sourceViewBox": [
+     0,
+     0,
+     24,
+     24
+    ],
+    "wordmarkElementsDropped": 0,
+    "png256": "out/png/platform-ubuntu@256.png"
+   }
+  }
+ }
+}

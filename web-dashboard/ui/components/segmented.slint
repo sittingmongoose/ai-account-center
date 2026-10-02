@@ -1,0 +1,108 @@
+// Segmented control with one sliding indicator (spring on x, ease-out on width).
+import { Theme, Motion, Type } from "../theme.slint";
+import { Icon } from "icon.slint";
+
+export struct SegItem {
+    value: string,
+    label: string,
+    icon: string,
+}
+
+component SegButton inherits Rectangle {
+    in property <SegItem> item;
+    in property <bool> selected;
+    in property <bool> mono: false;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 28px;
+    min-width: row.min-width;
+    preferred-width: row.preferred-width;
+    border-radius: 7px;
+    property <color> fg: root.selected || ta.has-hover ? Theme.ink : Theme.ink-3;
+    transform-scale: ta.pressed ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    row := HorizontalLayout {
+        padding-left: 13px;
+        padding-right: 13px;
+        spacing: 6px;
+        alignment: center;
+        if root.item.icon != "": VerticalLayout {
+            alignment: center;
+            Icon { name: root.item.icon; tint: root.fg; width: 15px; height: 15px; }
+        }
+        Text {
+            text: root.item.label;
+            color: root.fg;
+            animate color { duration: Motion.tint(200ms); }
+            font-family: root.mono ? Type.mono : Type.sans;
+            font-size: root.mono ? 11.5px : 12.5px;
+            font-weight: 560;
+            letter-spacing: root.mono ? 0.46px : 0px;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[SegItem]> items;
+    in-out property <string> value;
+    in property <bool> mono: false;
+    in property <bool> enabled: true;
+    callback changed-value(string);
+
+    property <length> ind-x: 0px;
+    property <length> ind-w: 0px;
+    property <bool> placed: false;
+
+    height: 36px;
+    min-width: row.min-width;
+    preferred-width: row.preferred-width;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.rule-2;
+    background: Theme.paper-3;
+    opacity: root.enabled ? 1 : 0.5;
+
+    indicator := Rectangle {
+        x: root.ind-x;
+        y: 4px;
+        width: root.ind-w;
+        height: root.height - 8px;
+        visible: root.ind-w > 0;
+        border-radius: 7px;
+        background: Theme.paper;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
+        animate x { duration: root.placed && Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        animate width { duration: root.placed && Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    }
+    row := HorizontalLayout {
+        padding: 4px;
+        spacing: 0px;
+        for item in root.items: SegButton {
+            item: item;
+            mono: root.mono;
+            enabled: root.enabled;
+            selected: item.value == root.value;
+            init => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; } }
+            changed selected => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }
+            changed x => { if self.selected { root.ind-x = self.x; } }
+            changed width => { if self.selected { root.ind-w = self.width; } }
+            clicked => {
+                if root.value != item.value {
+                    root.placed = true;
+                    root.value = item.value;
+                    root.changed-value(item.value);
+                }
+            }
+        }
+    }
+}

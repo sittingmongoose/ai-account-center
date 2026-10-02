@@ -1,0 +1,401 @@
+// Analytics header (title, scope line and its disclosure, range presets, the custom range picker, the provider
+// filter, refresh) and the KPI row.
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { RunView } from "../../models.slint";
+import { Icon } from "../../components/icon.slint";
+import { Hover } from "../../components/hover-card.slint";
+import { IconButton } from "../../components/icon-button.slint";
+import { Button } from "../../components/button.slint";
+import { Caps } from "../../components/text.slint";
+import { HoverShadow } from "../../components/card.slint";
+import { AxData, AxKpi, AxDay } from "ax-data.slint";
+import { AxColor, AxNum, AxTip, AxSwatch, AxSeg, AxSegItem, AxInfo } from "ax-common.slint";
+
+// A popover body that rises 4 px and fades in when it opens.
+export component AxPopBody inherits Rectangle {
+    in property <length> pad-x: 16px;
+    in property <length> pad-y: 14px;
+    property <bool> shown: !Motion.on;
+    t := Timer { interval: 16ms; running: !root.shown; triggered => { self.running = false; root.shown = true; } }
+    background: Theme.paper;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.rule;
+    drop-shadow-color: Theme.shadow-pop;
+    drop-shadow-blur: 40px;
+    drop-shadow-offset-y: 16px;
+    opacity: root.shown ? 1 : 0;
+    animate opacity { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    min-height: inner.min-height;
+    preferred-height: inner.preferred-height;
+    inner := VerticalLayout {
+        height: root.height;
+        y: root.shown ? 0px : 4px;
+        animate y { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-top: root.pad-y;
+        padding-bottom: root.pad-y;
+        spacing: 0px;
+        @children
+    }
+}
+
+// "What this page covers": the scope rules behind one info button, not paragraphs on the page.
+component ScopeLines inherits VerticalLayout {
+    spacing: 0px;
+    Text { text: "What this page covers"; font-size: 14px; font-weight: 640; color: Theme.ink; min-height: 20px; }
+    for line in AxData.scope: HorizontalLayout {
+        padding-top: 8px;
+        spacing: 10px;
+        VerticalLayout { alignment: start; padding-top: 2px; Icon { name: line.icon; width: 16px; height: 16px; tint: Theme.ink-3; } }
+        // an explicit width, so the wrapped height is measured at the popover's width
+        Text { text: line.text; width: 380px - 32px - 26px; font-size: 13px; color: Theme.ink-2; wrap: word-wrap; }
+    }
+}
+
+// One day of the custom range picker.
+component DayCell inherits Rectangle {
+    in property <AxDay> day;
+    in property <bool> inside;
+    in property <bool> lo;
+    in property <bool> hi;
+    callback picked(int);
+    callback hovered(int);
+    height: 38px;
+    property <bool> end: root.lo || root.hi;
+    background: root.end ? Theme.accent : root.inside ? Theme.accent-soft : ta.has-hover && !root.day.off ? Theme.paper-3 : Theme.paper.with-alpha(0);
+    border-top-left-radius: root.lo || (!root.inside && !root.end) ? 8px : 0px;
+    border-bottom-left-radius: self.border-top-left-radius;
+    border-top-right-radius: root.hi || (!root.inside && !root.end) ? 8px : 0px;
+    border-bottom-right-radius: self.border-top-right-radius;
+    animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    VerticalLayout {
+        alignment: center;
+        spacing: 0px;
+        if root.day.month != "": Text {
+            text: root.day.month;
+            font-size: 11px;
+            font-weight: 500;
+            color: root.end ? Theme.accent-ink.with-alpha(0.8) : root.day.off ? Theme.ink-4 : Theme.ink-3;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.day.label;
+            font-family: Type.tab;
+            font-size: 13px;
+            font-weight: root.end || (root.day.today && !root.end) ? 640 : 400;
+            color: root.end ? Theme.accent-ink : root.day.off ? Theme.ink-4 : root.day.today ? Theme.accent-text : Theme.ink;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: !root.day.off;
+        mouse-cursor: root.day.off ? default : pointer;
+        clicked => { root.picked(root.day.n); }
+        changed has-hover => { if self.has-hover { root.hovered(root.day.n); } }
+    }
+}
+
+// Custom range: whole local days within the logs that can be read.
+component DatesBody inherits VerticalLayout {
+    in-out property <int> lo;
+    in-out property <int> hi: -1;
+    in-out property <int> hover: -1;
+    callback apply(int, int);
+    callback cancel();
+    property <int> a: root.hi < 0 && root.hover >= 0 ? min(root.lo, root.hover) : root.lo;
+    property <int> b: root.hi >= 0 ? root.hi : root.hover >= 0 ? max(root.lo, root.hover) : root.lo;
+    property <string> lo-long: root.lo >= 0 && root.lo < AxData.days.length ? AxData.days[root.lo].long : "";
+    property <string> hi-long: root.hi >= 0 && root.hi < AxData.days.length ? AxData.days[root.hi].long : "";
+    spacing: 0px;
+    Text { text: "Custom range"; font-size: 14px; font-weight: 640; color: Theme.ink; min-height: 20px; }
+    Rectangle { height: 6px; }
+    Text { text: AxData.calendar.note; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+    HorizontalLayout {
+        padding-top: 10px;
+        padding-bottom: 8px;
+        spacing: 6px;
+        alignment: start;
+        for q[i] in ["Today", "Last 2 days", "Last 3 days"]: Button {
+            text: q;
+            small: true;
+            clicked => {
+                root.hi = AxData.calendar.last-n;
+                root.lo = max(AxData.calendar.first-n, AxData.calendar.last-n - i);
+                root.hover = -1;
+            }
+        }
+    }
+    grid := Rectangle {
+        property <length> cw: self.width / 7;
+        property <int> weeks: ceil(AxData.days.length / 7);
+        height: 22px + self.weeks * 40px;
+        for w[i] in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]: Caps {
+            x: i * grid.cw;
+            y: 0px;
+            width: grid.cw;
+            height: 22px;
+            text: w;
+            horizontal-alignment: center;
+        }
+        for d[i] in AxData.days: DayCell {
+            x: mod(i, 7) * grid.cw;
+            y: 22px + floor(i / 7) * 40px;
+            width: grid.cw;
+            day: d;
+            inside: !d.off && root.lo >= 0 && i >= root.a && i <= root.b;
+            lo: !d.off && root.lo >= 0 && i == root.a;
+            hi: !d.off && root.lo >= 0 && i == root.b;
+            hovered(n) => { if root.hi < 0 { root.hover = n; } }
+            picked(n) => {
+                if root.hi >= 0 || root.lo < 0 { root.lo = n; root.hi = -1; }
+                else if n < root.lo { root.hi = root.lo; root.lo = n; }
+                else { root.hi = n; }
+                root.hover = -1;
+            }
+        }
+    }
+    Rectangle { height: 12px; }
+    Rectangle { height: 1px; background: Theme.rule-2; }
+    HorizontalLayout {
+        padding-top: 10px;
+        spacing: 6px;
+        Text {
+            text: root.lo < 0 ? "Pick a first day"
+                : root.hi < 0 ? root.lo-long + " · pick a last day, or apply one day"
+                : root.lo-long + " to " + root.hi-long + " · \{root.hi - root.lo + 1} day" + (root.hi == root.lo ? "" : "s");
+            font-family: Type.tab;
+            font-size: 12px;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Button { text: "Cancel"; small: true; kind: "ghost"; clicked => { root.cancel(); } }
+        Button { text: "Apply"; small: true; kind: "primary"; enabled: root.lo >= 0; clicked => { root.apply(root.lo, root.hi >= 0 ? root.hi : root.lo); } }
+    }
+}
+
+component DateButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> open;
+    callback clicked();
+    height: 36px;
+    min-width: row.preferred-width;
+    preferred-width: row.preferred-width;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.open || ta.has-hover ? Theme.rule-strong : root.on ? Theme.ink-3 : Theme.rule;
+    background: ta.has-hover || root.open ? Theme.paper-2 : Theme.paper;
+    animate background, border-color { duration: Motion.tint(Motion.fast); }
+    transform-scale: ta.pressed ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    row := HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 10px;
+        spacing: 8px;
+        VerticalLayout { alignment: center; Icon { name: "calendar"; width: 15px; height: 15px; tint: root.on ? Theme.accent-text : Theme.ink-3; } }
+        Text { text: root.label; font-family: Type.tab; font-size: 13px; font-weight: 560; color: root.on || ta.has-hover ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                name: "chev-down";
+                width: 13px;
+                height: 13px;
+                tint: Theme.ink-3;
+                transform-rotation: root.open ? 180deg : 0deg;
+                animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            }
+        }
+    }
+    ta := AxTip { tip: root.open ? "" : "Pick days within the logs that were read"; mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
+}
+
+export component AxHeader inherits Rectangle {
+    property <bool> wide: Breakpoints.width >= 1360px;
+    property <[AxSegItem]> ranges: [{ value: "24h", label: "24H" }, { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "month", label: "Month" }, { value: "all", label: "All" }];
+    property <[AxSegItem]> provs: [{ value: "all", label: "All" }, { value: "claude", label: "Claude Code", mark: "claude" }, { value: "codex", label: "Codex", mark: "codex" }];
+    min-height: lay.min-height;
+    preferred-height: lay.preferred-height;
+
+    lay := VerticalLayout {
+        spacing: 16px;
+        HorizontalLayout {
+            spacing: 28px;
+            title := VerticalLayout {
+                alignment: end;
+                spacing: 7px;
+                horizontal-stretch: 0;
+                Text { text: "Analytics"; font-size: 30px; font-weight: 620; color: Theme.ink; letter-spacing: -0.6px; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: AxData.head.scope; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+                    Text {
+                        text: AxData.head.read;
+                        font-family: Type.tab;
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: Theme.ink-2;
+                        vertical-alignment: center;
+                        AxTip { tip: AxData.head.read-tip; }
+                    }
+                    info := AxInfo {
+                        open: scope-pop.is-open;
+                        clicked => { scope-pop.show(); }
+                        scope-pop := PopupWindow {
+                            x: 0px;
+                            y: info.height + 8px;
+                            width: 380px;
+                            height: scope-body.preferred-height;
+                            close-policy: close-on-click-outside;
+                            scope-body := AxPopBody { width: 380px; height: self.preferred-height; ScopeLines { } }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+            if root.wide: Rectangle { horizontal-stretch: 1; }
+            if root.wide: tools-wide := HorizontalLayout {
+                alignment: end;
+                spacing: 14px;
+                horizontal-stretch: 0;
+                VerticalLayout { alignment: end; HorizontalLayout { spacing: 8px; range-seg-w := AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } } date-w := DateButton { label: AxData.head.date; on: AxData.head.custom; open: dates-w.is-open; clicked => { dates-w.show(); } dates-w := PopupWindow { x: 0px; y: date-w.height + 8px; width: 336px; height: dw-body.preferred-height; close-policy: close-on-click-outside; dw-body := AxPopBody { width: 336px; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-w.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-w.close(); } } } } } } }
+                VerticalLayout { alignment: end; AxSeg { items: root.provs; value: AxData.prov; picked(v) => { AxData.action("analytics-provider", v); } } }
+                VerticalLayout { alignment: end; IconButton { icon: "refresh"; hint: "Refresh now"; spinning: AxData.head.loading; clicked => { AxData.action("analytics-refresh", ""); } } }
+            }
+        }
+        if !root.wide: HorizontalLayout {
+            spacing: 14px;
+            HorizontalLayout { spacing: 8px; horizontal-stretch: 0; AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } } date-n := DateButton { label: AxData.head.date; on: AxData.head.custom; open: dates-n.is-open; clicked => { dates-n.show(); } dates-n := PopupWindow { x: 0px; y: date-n.height + 8px; width: 336px; height: dn-body.preferred-height; close-policy: close-on-click-outside; dn-body := AxPopBody { width: 336px; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-n.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-n.close(); } } } } } }
+            AxSeg { items: root.provs; value: AxData.prov; picked(v) => { AxData.action("analytics-provider", v); } horizontal-stretch: 0; }
+            Rectangle { horizontal-stretch: 1; }
+            IconButton { icon: "refresh"; hint: "Refresh now"; spinning: AxData.head.loading; clicked => { AxData.action("analytics-refresh", ""); } }
+        }
+        if AxData.head.error != "": Text { text: AxData.head.error; font-size: 12.5px; color: Theme.crit-text; wrap: word-wrap; }
+    }
+}
+
+// ---------------------------------------------------------------- KPI row
+component KpiCard inherits Rectangle {
+    in property <AxKpi> kpi;
+    in property <bool> played;
+    in property <duration> delay;
+    in property <bool> loading;
+    property <bool> hovered: ta.has-hover;
+    min-height: col.min-height;
+    preferred-height: col.preferred-height;
+    min-width: 0px;
+    HoverShadow {
+        x: 0px;
+        y: surface.y;
+        width: root.width;
+        height: root.height;
+        radius: Theme.r-plate;
+        on: root.hovered;
+        blur: 24px;
+        offset: 8px;
+    }
+    surface := Rectangle {
+        x: 0px;
+        y: root.hovered ? -2px : 0px;
+        width: root.width;
+        height: root.height;
+        animate y { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        background: Theme.paper;
+        border-radius: Theme.r-plate;
+        border-width: 1px;
+        border-color: root.hovered ? Theme.rule-strong : Theme.rule;
+        animate border-color { duration: Motion.tint(Motion.med); }
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
+        ta := TouchArea {
+            cache-rendering-hint: true;
+            mouse-cursor: default;
+            col := VerticalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                padding-top: 15px;
+                padding-bottom: 16px;
+                spacing: 0px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    min-height: 19px;
+                    if root.kpi.swatch == "cost": VerticalLayout { alignment: center; AxSwatch { shape: "line"; c: AxColor.of("cost"); } }
+                    if root.kpi.swatch == "cache": VerticalLayout { alignment: center; AxSwatch { shape: "half"; c: AxColor.of("cw"); c2: AxColor.of("cr"); } }
+                    if root.kpi.swatch == "in" || root.kpi.swatch == "out": VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(root.kpi.swatch); } }
+                    Text { text: root.kpi.label; font-size: 13px; font-weight: 560; color: Theme.ink-2; vertical-alignment: center; overflow: elide; }
+                    if root.kpi.apport: VerticalLayout { alignment: center; AxInfo { side: 18px; glyph: 14px; tip: AxData.apport-tip; } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle { height: 8px; }
+                if root.loading: Rectangle { height: 33px; Rectangle { y: 4px; width: 120px; height: 26px; border-radius: 6px; background: Theme.paper-3; } }
+                if !root.loading: value := HorizontalLayout {
+                    AxNum {
+                        num: root.kpi.num;
+                        has: root.kpi.has;
+                        fmt: root.kpi.fmt;
+                        text: root.kpi.text;
+                        played: root.played;
+                        delay: root.delay;
+                        size: Breakpoints.width < 1600px ? 27px : 30px;
+                        weight: 620;
+                        na-size: 20px;
+                        height: 33px;
+                        AxTip { tip: root.kpi.tip; }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle { height: 6px; }
+                StyledText {
+                    text: root.kpi.sub.length == 0 ? @markdown("")
+                        : root.kpi.sub.length == 1 ? @markdown("\{root.kpi.sub[0].text}")
+                        : root.kpi.sub.length == 2 && root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}")
+                        : root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}")
+                        : @markdown("\{root.kpi.sub[0].text}\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}");
+                    default-color: Theme.ink-3;
+                    default-font-size: 12.5px;
+                    default-font-family: Type.tab;
+                }
+            }
+        }
+    }
+}
+
+export component AxKpiRow inherits Rectangle {
+    in property <bool> played;
+    in property <duration> delay;
+    property <bool> narrow: Breakpoints.width < 1180px;
+    property <bool> loading: AxData.kpis.length < 5;
+    property <AxKpi> k0: AxData.kpis.length > 0 ? AxData.kpis[0] : { label: "Total tokens" };
+    property <AxKpi> k1: AxData.kpis.length > 1 ? AxData.kpis[1] : { label: "Total cost" };
+    property <AxKpi> k2: AxData.kpis.length > 2 ? AxData.kpis[2] : { label: "Cache tokens" };
+    property <AxKpi> k3: AxData.kpis.length > 3 ? AxData.kpis[3] : { label: "Input cost" };
+    property <AxKpi> k4: AxData.kpis.length > 4 ? AxData.kpis[4] : { label: "Output cost" };
+    min-height: lay.min-height;
+    preferred-height: lay.preferred-height;
+    lay := VerticalLayout {
+        spacing: 12px;
+        if !root.narrow: HorizontalLayout {
+            spacing: 16px;
+            KpiCard { kpi: root.k0; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k1; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k2; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if root.narrow: HorizontalLayout {
+            spacing: 12px;
+            KpiCard { kpi: root.k0; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k1; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if root.narrow: HorizontalLayout {
+            spacing: 12px;
+            KpiCard { kpi: root.k2; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+    }
+}

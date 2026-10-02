@@ -1,0 +1,99 @@
+// Text and password fields for the sign-in layer and settings forms.
+import { Theme, Motion, Type } from "../theme.slint";
+import { Icon } from "icon.slint";
+
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> aside;
+    // the aside reads as a confirmation ("Matches"): green with a check
+    in property <bool> aside-good: false;
+    in property <bool> ok: false;
+    in property <length> box-height: 40px;
+    in property <string> placeholder;
+    in property <bool> password: false;
+    in property <bool> enabled: true;
+    in property <bool> bad: false;
+    in-out property <string> text;
+    callback accepted();
+    callback edited(string);
+    public function focus-input() { input.focus(); }
+
+    property <bool> revealed: false;
+    spacing: 6px;
+    HorizontalLayout {
+        Text { text: root.label; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; horizontal-stretch: 1; }
+        if root.aside != "" && root.aside-good: HorizontalLayout {
+            spacing: 5px;
+            horizontal-stretch: 0;
+            VerticalLayout { alignment: center; Icon { name: "check"; tint: Theme.good-text; width: 14px; height: 14px; } }
+            Text { text: root.aside; font-size: Type.small; font-weight: 560; color: Theme.good-text; vertical-alignment: center; }
+        }
+        if root.aside != "" && !root.aside-good: Text { text: root.aside; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: right; }
+    }
+    box := Rectangle {
+        height: root.box-height;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: root.bad ? Theme.crit : input.has-focus ? Theme.accent : root.ok ? Theme.calm.mix(Theme.rule-strong, 0.7) : hover.has-hover ? Theme.ink-3.mix(Theme.rule-strong, 0.4) : Theme.rule-strong;
+        background: root.enabled ? Theme.paper : Theme.paper-2;
+        opacity: root.enabled ? 1 : 0.72;
+        animate opacity { duration: Motion.tint(Motion.med); }
+        animate border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        // focus halo: a wider faint ring (no inset shadows, no blur filters)
+        Rectangle {
+            x: -3px;
+            y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 13px;
+            border-width: 3px;
+            border-color: (root.bad ? Theme.crit : Theme.accent).with-alpha(input.has-focus ? 0.18 : 0);
+            animate border-color { duration: Motion.tint(Motion.fast); }
+        }
+        hover := TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => { input.focus(); }
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: root.password ? 4px : 12px;
+            spacing: 6px;
+            input := TextInput {
+                text <=> root.text;
+                enabled: root.enabled;
+                input-type: root.password && !root.revealed ? InputType.password : InputType.text;
+                font-size: Type.body;
+                color: Theme.ink;
+                selection-background-color: Theme.accent.with-alpha(0.25);
+                selection-foreground-color: Theme.ink;
+                vertical-alignment: center;
+                single-line: true;
+                accepted => { root.accepted(); }
+                edited => { root.edited(self.text); }
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: root.placeholder;
+                    visible: input.text == "";
+                    color: Theme.ink-4;
+                    font-size: Type.body;
+                    vertical-alignment: center;
+                }
+            }
+            if root.password: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 7px;
+                    background: eye.has-hover ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
+                    Icon { name: root.revealed ? "eye-off" : "eye"; tint: eye.has-hover ? Theme.ink : Theme.ink-3; width: 17px; height: 17px; x: 7.5px; y: 7.5px; }
+                    eye := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.revealed = !root.revealed; }
+                    }
+                }
+            }
+        }
+    }
+}

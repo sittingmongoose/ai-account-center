@@ -1,0 +1,200 @@
+// Custom hover cards and tooltips (not the std Tooltip, which waits 500 ms). A target calls
+// Hover.meter(...) or Hover.tip(...) with its absolute rectangle on hover and Hover.leave(owner) when the
+// pointer leaves; the window-level HoverLayer fades the card in and rises it 4 px after a 90 ms intent
+// delay, glides it between targets, and keeps it inside the window.
+import { Theme, Motion, Type } from "../theme.slint";
+import { MeterView } from "../models.slint";
+import { Caps, ValueUnit } from "text.slint";
+
+export global Hover {
+    in-out property <bool> active: false;
+    in-out property <string> owner;
+    in-out property <string> kind: "tip";
+    in-out property <length> ax;
+    in-out property <length> ay;
+    in-out property <length> aw;
+    in-out property <length> ah;
+    in-out property <string> text;
+    in-out property <string> title;
+    in-out property <string> sub;
+    in-out property <MeterView> meter;
+    in-out property <string> scale-note;
+
+    public function tip(owner: string, pos: Point, w: length, h: length, text: string) {
+        if text == "" { return; }
+        self.owner = owner;
+        self.kind = "tip";
+        self.text = text;
+        self.ax = pos.x;
+        self.ay = pos.y;
+        self.aw = w;
+        self.ah = h;
+        self.active = true;
+    }
+    public function meter-card(owner: string, pos: Point, w: length, h: length, meter: MeterView, sub: string) {
+        self.owner = owner;
+        self.kind = "meter";
+        self.meter = meter;
+        self.title = meter.full-label != "" ? meter.full-label : meter.label;
+        self.sub = sub;
+        self.ax = pos.x;
+        self.ay = pos.y;
+        self.aw = w;
+        self.ah = h;
+        self.active = true;
+    }
+    public function leave(owner: string) {
+        if self.owner == owner { self.active = false; }
+    }
+    public function clear() { self.active = false; }
+}
+
+component FactRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <string> note;
+    spacing: 10px;
+    Caps { text: root.label.to-uppercase(); width: 76px; vertical-alignment: top; }
+    VerticalLayout {
+        spacing: 0px;
+        Text { text: root.value; font-family: Type.tab; font-size: 12.5px; color: Theme.ink; wrap: word-wrap; }
+        if root.note != "": Text { text: root.note; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+    }
+}
+
+// Five-step severity scale with the reading pinned on it: the legend lives here, not in a page strip.
+component SeverityScale inherits VerticalLayout {
+    in property <MeterView> meter;
+    spacing: 5px;
+    bar := Rectangle {
+        height: 14px;
+        Rectangle { x: 0px; y: 4px; width: parent.width * 0.8 - 1px; height: 6px; border-radius: 3px; background: Theme.calm;
+            Rectangle { width: 100%; height: 100%; border-radius: 3px; background: @linear-gradient(90deg, Theme.fill-wash 0%, Theme.fill-wash.with-alpha(0) 100%); }
+        }
+        Rectangle { x: parent.width * 0.8 + 1px; y: 4px; width: parent.width * 0.15 - 2px; height: 6px; border-radius: 1px; background: Theme.warn; }
+        Rectangle { x: parent.width * 0.95 + 1px; y: 4px; width: parent.width * 0.05 - 1px; height: 6px; border-radius: 3px; background: Theme.crit; }
+        if root.meter.notch >= 0: Rectangle {
+            x: parent.width * clamp(root.meter.notch, 0, 100) / 100 - 1px;
+            y: 1px;
+            width: 2px;
+            height: 12px;
+            border-radius: 1px;
+            background: Theme.ink;
+        }
+        if root.meter.has-value: Rectangle {
+            x: parent.width * clamp(root.meter.value, 0, 100) / 100 - 5px;
+            y: 0px;
+            width: 10px;
+            height: 14px;
+            border-radius: 3px;
+            border-width: 2px;
+            border-color: Theme.ink;
+            background: Theme.paper;
+        }
+    }
+    Rectangle {
+        height: 15px;
+        Caps { x: 0px; text: "0"; }
+        Caps { x: parent.width * 0.8 - self.preferred-width / 2; text: "80"; }
+        Caps { x: parent.width - self.preferred-width; text: "100%"; }
+    }
+    Text {
+        text: root.meter.notch >= 0 ? "Warning from 80%, critical from 95%; the notch is the auto-switch point" : "Warning from 80%, critical from 95%";
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+}
+
+export component HoverLayer inherits Rectangle {
+    // The window size, for edge clamping.
+    in property <length> view-w;
+    in property <length> view-h;
+
+    property <bool> shown: false;
+    property <length> card-w: Hover.kind == "meter" ? 310px : min(340px, tip-text.preferred-width + 18px);
+    property <length> card-h: Hover.kind == "meter" ? meter-body.preferred-height + 25px : tip-text.preferred-height + 12px;
+    property <length> below: Hover.ay + Hover.ah + 8px;
+    property <length> tx: clamp(Hover.ax + Hover.aw / 2 - root.card-w / 2, 8px, root.view-w - root.card-w - 8px);
+    property <length> ty: root.below + root.card-h + 8px > root.view-h ? max(8px, Hover.ay - root.card-h - 8px) : root.below;
+
+    intent := Timer {
+        interval: 90ms;
+        running: false;
+        triggered => { self.running = false; root.shown = Hover.active; }
+    }
+    changed tx => { }
+    init => { root.shown = false; }
+
+    // Show after a short intent delay the first time; swap instantly while one is already showing.
+    property <bool> want: Hover.active;
+    changed want => {
+        if root.want {
+            if root.shown { } else { intent.running = true; }
+        } else {
+            intent.running = false;
+            root.shown = false;
+        }
+    }
+
+    card := Rectangle {
+        x: root.tx;
+        y: root.ty + (root.shown ? 0px : 4px);
+        width: root.card-w;
+        height: root.card-h;
+        opacity: root.shown ? 1 : 0;
+        visible: self.opacity > 0.01;
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        animate y { duration: Motion.on ? 220ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate x { duration: Motion.on ? 120ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        border-radius: Hover.kind == "meter" ? 12px : 7px;
+        background: Hover.kind == "meter" ? Theme.paper : Theme.tip-bg;
+        border-width: Hover.kind == "meter" ? 1px : 0px;
+        border-color: Theme.rule;
+        drop-shadow-color: Theme.shadow-pop;
+        drop-shadow-blur: Hover.kind == "meter" ? 40px : 10px;
+        drop-shadow-offset-y: Hover.kind == "meter" ? 16px : 4px;
+
+        tip-text := Text {
+            x: 9px;
+            y: 6px;
+            width: root.card-w - 18px;
+            visible: Hover.kind == "tip";
+            text: Hover.text;
+            color: Theme.tip-fg;
+            font-family: Type.tab;
+            font-size: Type.small;
+            wrap: word-wrap;
+        }
+        meter-body := VerticalLayout {
+            x: 15px;
+            y: 13px;
+            width: root.card-w - 30px;
+            visible: Hover.kind == "meter";
+            spacing: 0px;
+            Text { text: Hover.title; font-size: 13.5px; font-weight: 640; color: Theme.ink; overflow: elide; }
+            Text { text: Hover.sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+            Rectangle { height: 10px; }
+            VerticalLayout {
+                spacing: 5px;
+                FactRow {
+                    label: "Used";
+                    value: Hover.meter.has-value ? Hover.meter.value-text + "%" + (Hover.meter.amount != "" ? " · " + Hover.meter.amount : "") : "Unavailable";
+                    note: Hover.meter.has-value ? (Hover.meter.over-text != "" ? Hover.meter.over-text + "% over the limit" : "") : "No reading, not zero";
+                }
+                if Hover.meter.left != "": FactRow { label: "Left"; value: Hover.meter.left; }
+                FactRow {
+                    label: "Reset";
+                    value: Hover.meter.reset-exact != "" ? Hover.meter.reset-exact : "No reset reported";
+                    note: Hover.meter.reset-exact != "" ? Hover.meter.reset : "";
+                }
+                FactRow { label: "Sampled"; value: Hover.meter.sampled != "" ? Hover.meter.sampled : "Never"; }
+                FactRow { label: "Source"; value: Hover.meter.source != "" ? Hover.meter.source : "Unknown"; }
+            }
+            Rectangle { height: 11px; }
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Rectangle { height: 10px; }
+            SeverityScale { meter: Hover.meter; }
+        }
+    }
+}

@@ -1,0 +1,285 @@
+// Analytics view model (version 3, public/analytics-data.mjs analyticsSlintModel): the structs and the
+// AxData global that src/analytics.rs fills. Every number, label and "unavailable" decision is made in
+// public/analytics-*.mjs; these components only lay out and animate what they are given. Chart geometry
+// (paths, ticks, label positions) arrives in pixels of the box the page reported through AxData.layout().
+import { RunView, AnalyticsHeadView } from "../../models.slint";
+
+export struct AxScopeLine { icon: string, text: string }
+
+// ---- KPI row and the count-up numbers (fmt: tok | money | int | pct1 | pct2) ----
+export struct AxKpi {
+    key: string,
+    label: string,
+    swatch: string,
+    num: float,
+    has: bool,
+    fmt: string,
+    text: string,
+    tip: string,
+    sub: [RunView],
+    apport: bool,
+}
+
+// ---- usage trends ----
+export struct AxYTick { y: float, left: string, right: string, base: bool }
+export struct AxXTick { x: float, label: string, major: bool }
+export struct AxLegendItem { key: string, label: string, note: string }
+export struct AxBucket {
+    x: float,
+    y-tok: float,
+    y-cost: float,
+    time: string,
+    vin: string,
+    vout: string,
+    vcw: string,
+    vcr: string,
+    all: string,
+    cost: string,
+    tin: string,
+    tout: string,
+    tcw: string,
+    tcr: string,
+    tall: string,
+    cr-dim: bool,
+    foot: string,
+    foot2: string,
+}
+export struct AxTrendPaths {
+    total: string,
+    total-line: string,
+    band0: string,
+    band1: string,
+    band2: string,
+    band3: string,
+    line0: string,
+    line1: string,
+    line2: string,
+    line3: string,
+    cost: string,
+}
+export struct AxTrend {
+    w: float,
+    h: float,
+    pw: float,
+    ph: float,
+    sub: string,
+    split: bool,
+    cache: bool,
+    cost-shown: bool,
+    empty: bool,
+    empty-text: string,
+    minor: string,
+    tail-x: float,
+    tail-label: string,
+    hatch: string,
+    clip-note: string,
+    // bumps on every new geometry (the axes cross-fade)
+    generation: int,
+}
+
+// ---- cost by model, model popover ----
+export struct AxModelType { key: string, label: string, tok: string, tip: string, cost: string, w: float, none: bool }
+export struct AxModelRow {
+    key: string,
+    name: string,
+    provider: string,
+    idx: int,
+    w: float,
+    fin: float,
+    fout: float,
+    fcw: float,
+    fcr: float,
+    tip-in: string,
+    tip-out: string,
+    tip-cw: string,
+    tip-cr: string,
+    tok: string,
+    tok-tip: string,
+    cost: string,
+    share: string,
+    sub: string,
+    usage: string,
+    types: [AxModelType],
+    io: string,
+    io-note: string,
+    io-quiet: string,
+    rate: string,
+}
+export struct AxCardText { sub: string, note: string, foot: string, empty: string }
+
+// ---- model donut ----
+export struct AxDonutSeg {
+    key: string,
+    name: string,
+    provider: string,
+    mix: float,
+    other: bool,
+    model: string,
+    tip: string,
+    a0: float,
+    a1: float,
+    share: string,
+    value: string,
+    value-tip: string,
+    label: bool,
+    idx: int,
+}
+export struct AxDonut { sub: string, note: string, mode: string, centre: string, centre-label: string, unit: string, empty: bool }
+
+// ---- session stats, token breakdown, cache efficiency ----
+export struct AxStat { key: string, label: string, num: float, has: bool, fmt: string, text: string }
+export struct AxSessRow { provider: string, label: string, sessions: string, per: string, events: string, events-tip: string }
+export struct AxTokRow { key: string, label: string, wt: float, wc: float, tok: string, tok-tip: string, tok-share: string, cost: string, cost-share: string }
+export struct AxCache {
+    sub: string,
+    hit: float,
+    has-hit: bool,
+    hit-text: string,
+    save: float,
+    has-save: bool,
+    save-text: string,
+    ccost: float,
+    has-ccost: bool,
+    ccost-text: string,
+    ccost-share: string,
+    r-tok: string,
+    r-tip: string,
+    r-share: string,
+    r-cost: string,
+    w-tok: string,
+    w-tip: string,
+    w-share: string,
+    w-cost: string,
+    w-note: string,
+    read-frac: float,
+    reads: float,
+    writes: float,
+}
+
+// ---- heatmap and daily cost ----
+// state 0: outside the logs in range (empty, never zero); 1: nothing logged; 2: a value (k = sqrt share of max)
+export struct AxHeatCell { state: int, k: float, tip: string }
+export struct AxHeat { mode: string, sub: string, busiest: string, dash: string }
+export struct AxBar { h: float, cl: float, label: string, time: string, claude: string, codex: string, total: string, foot: string }
+export struct AxDaily { title: string, sub: string, empty: bool, empty-text: string, show-claude: bool, show-codex: bool }
+
+// ---- custom range picker ----
+export struct AxDay { day: string, n: int, label: string, month: string, off: bool, today: bool, long: string }
+export struct AxCalendar { lo: int, hi: int, first-n: int, last-n: int, note: string }
+
+// ---- quota history and focus charts ----
+export struct AxTick { pos: float, label: string }
+// stroke/fill keys: grid, rule-strong, warn, crit, accent, ink, ink-2, ink-3, paper, paper-2, series
+export struct AxShape { d: string, stroke: string, fill: string, sw: float, op: float, shade: int, round: bool, layer: int }
+export struct AxLabel { x: float, y: float, w: float, text: string, color: string, shade: int, plate: bool, px: float, py: float, pw: float, ph: float }
+export struct AxDot { x: float, y: float, r: float, shade: int, fill: string }
+export struct AxFocusLegend { name: string, kind: string, shade: int, dash: int, width: float }
+export struct AxStopRow { name: string, value: string, shade: int }
+export struct AxStop { x: float, time: string, proj: bool, rows: [AxStopRow], dot-y: float }
+export struct AxFocus {
+    id: string,
+    provider: string,
+    w: float,
+    h: float,
+    comparable: bool,
+    compare: bool,
+    cmp-label: string,
+    empty: string,
+    foot: string,
+    shapes: [AxShape],
+    labels: [AxLabel],
+    dots: [AxDot],
+    legend: [AxFocusLegend],
+    stops: [AxStop],
+    lut: [int],
+    plot-l: float,
+    plot-t: float,
+    plot-w: float,
+    plot-h: float,
+}
+export struct AxQuotaRow {
+    id: string,
+    provider: string,
+    label: string,
+    active: bool,
+    plan: string,
+    win: string,
+    has-value: bool,
+    value: float,
+    value-text: string,
+    sev: int,
+    next: string,
+    next-tip: string,
+    open: bool,
+    calm-line: string,
+    warn-line: string,
+    crit-line: string,
+    over-line: string,
+    calm-fill: string,
+    warn-fill: string,
+    crit-fill: string,
+    over-fill: string,
+    limit: string,
+    na: string,
+    points: int,
+    focus: AxFocus,
+}
+export struct AxQuotaGroup { provider: string, label: string, count: int, meta: string, collapsed: bool, rows: [AxQuotaRow] }
+
+// ---- resets and expiries ----
+export struct AxAgendaRow { kind: string, day: string, hint: string, time: string, rel: string, provider: string, who: string, what: string, tip: string, now: [RunView], i: int }
+
+export global AxData {
+    in-out property <AnalyticsHeadView> head: { loading: true };
+    // true once the first analytics response has been rendered
+    in-out property <bool> ready: false;
+    in-out property <bool> available: false;
+    in-out property <string> status-note;
+    in-out property <string> apport-tip;
+    in-out property <[AxScopeLine]> scope;
+    in-out property <[AxKpi]> kpis;
+    in-out property <AxTrend> trend;
+    in-out property <AxTrendPaths> trend-paths;
+    in-out property <[AxYTick]> trend-y;
+    in-out property <[AxXTick]> trend-x;
+    in-out property <[AxLegendItem]> trend-legend;
+    in-out property <[AxBucket]> trend-buckets;
+    in-out property <[int]> trend-lut;
+    in-out property <AxCardText> cbm;
+    in-out property <[AxModelRow]> models;
+    in-out property <AxDonut> donut;
+    in-out property <[AxDonutSeg]> donut-segs;
+    // segment index per degree, clockwise from the top (-1 where no segment is drawn)
+    in-out property <[int]> donut-lut;
+    in-out property <AxCardText> sessions;
+    in-out property <[AxStat]> sess-stats;
+    in-out property <[AxSessRow]> sess-rows;
+    in-out property <string> tokens-sub;
+    in-out property <[AxTokRow]> tokens;
+    in-out property <AxCache> cache;
+    in-out property <AxHeat> heat;
+    in-out property <[AxHeatCell]> heat-cells;
+    in-out property <[string]> heat-hours;
+    in-out property <AxDaily> daily;
+    in-out property <[AxYTick]> daily-y;
+    in-out property <[AxBar]> daily-bars;
+    in-out property <AxCalendar> calendar;
+    in-out property <[AxDay]> days;
+    in-out property <string> quota-sub;
+    in-out property <[AxTick]> quota-ticks;
+    in-out property <[AxQuotaGroup]> quota-groups;
+    in-out property <bool> agenda-empty: true;
+    in-out property <[AxAgendaRow]> agenda-a;
+    in-out property <[AxAgendaRow]> agenda-b;
+    // page state echoed back by bridge.js (the controls show it)
+    in-out property <string> range: "7d";
+    in-out property <string> prov: "all";
+    in-out property <bool> split: false;
+    in-out property <bool> cache-on: false;
+    in-out property <string> donut-mode: "tokens";
+    in-out property <string> heat-mode: "cost";
+    // intent: analytics-* kinds, forwarded unchanged to window.ccsDashboardAction
+    callback action(string, string);
+    // the chart boxes report their size (kind, width, height) so bridge.js can lay the charts out in pixels
+    callback layout(string, length, length);
+}

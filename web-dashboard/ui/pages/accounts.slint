@@ -1,0 +1,153 @@
+// Accounts & Settings, built like the concept (c-daylight-atlas/app-accounts.js, the Dashboard sign-in block of
+// app-auth.js, styles.css and auth.css). No page title (the nav names the page), no provider shortcut row.
+// One section per provider from the registry with its accounts and fixed, aligned action slots; then the
+// settings column: Dashboard sign-in, Settings, Update apps, Connection and About with AboutSlint.
+//
+// Widths (the concept's named sizes): below 1280 px the providers fill the page and the settings sit below them
+// in two columns; from 1280 the settings column stands beside the providers (380 px, 420 from 1600, 440 from
+// 2200) and from 1280 to 1439 the source column folds into the identity line; from 2200 the providers split into
+// two columns, the ones with their own sign-in flows first. Every value comes from the AcData global
+// (public/accounts-view.mjs); intent goes out through action(kind, value).
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { Reveal } from "../components/reveal.slint";
+import { AcData, AcProvider } from "accounts/ac-data.slint";
+import { ProviderSection } from "accounts/ac-provider.slint";
+import { SettingsColumn } from "accounts/ac-settings.slint";
+
+component ProviderList inherits VerticalLayout {
+    in property <[AcProvider]> list;
+    in property <int> offset: 0;
+    in property <bool> busy;
+    in property <string> selected-id;
+    in property <bool> show-src;
+    in property <duration> base;
+    callback open-details(string);
+    callback act(string, string);
+    spacing: 16px;
+    alignment: start;
+    for p[i] in root.list: Reveal {
+        delay: root.base + (root.offset + i) * 40ms;
+        ProviderSection {
+            provider: p;
+            busy: root.busy;
+            selected-id: root.selected-id;
+            show-src: root.show-src;
+            open-details(id) => { root.open-details(id); }
+            act(kind, value) => { root.act(kind, value); }
+        }
+    }
+}
+
+export component AccountsPage inherits Rectangle {
+    in property <bool> busy: false;
+    in property <string> selected-id;
+    in property <string> theme-value: "auto";
+    in property <bool> first: false;
+    callback theme-picked(string);
+    callback open-details(string);
+    callback act(string, string);
+
+    property <duration> base: root.first ? 180ms : 40ms;
+    property <bool> show-src: Breakpoints.width < 1280px || Breakpoints.width >= 1440px;
+    property <length> settings-w: Breakpoints.ultra ? 440px : Breakpoints.wide ? 420px : 380px;
+
+    min-height: page.preferred-height;
+    preferred-height: page.preferred-height;
+
+    page := VerticalLayout {
+        alignment: start;
+        if AcData.ready && Breakpoints.compact: VerticalLayout {
+            spacing: 24px;
+            VerticalLayout {
+                spacing: 16px;
+                ProviderList {
+                    list: AcData.col-a;
+                    busy: root.busy;
+                    selected-id: root.selected-id;
+                    show-src: root.show-src;
+                    base: root.base;
+                    open-details(id) => { root.open-details(id); }
+                    act(kind, value) => { root.act(kind, value); }
+                }
+                ProviderList {
+                    list: AcData.col-b;
+                    offset: AcData.col-a.length;
+                    busy: root.busy;
+                    selected-id: root.selected-id;
+                    show-src: root.show-src;
+                    base: root.base;
+                    open-details(id) => { root.open-details(id); }
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+            Reveal {
+                delay: root.base + 80ms;
+                SettingsColumn {
+                    two-col: true;
+                    theme-value: root.theme-value;
+                    busy: root.busy;
+                    theme-picked(v) => { root.theme-picked(v); }
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+        }
+        if AcData.ready && !Breakpoints.compact: HorizontalLayout {
+            spacing: 24px;
+            alignment: stretch;
+            // the providers: one column, or two on ultra-wide screens
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 20px;
+                alignment: stretch;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: start;
+                    spacing: 16px;
+                    ProviderList {
+                        list: AcData.col-a;
+                        busy: root.busy;
+                        selected-id: root.selected-id;
+                        show-src: root.show-src;
+                        base: root.base;
+                        open-details(id) => { root.open-details(id); }
+                        act(kind, value) => { root.act(kind, value); }
+                    }
+                    if !Breakpoints.ultra: ProviderList {
+                        list: AcData.col-b;
+                        offset: AcData.col-a.length;
+                        busy: root.busy;
+                        selected-id: root.selected-id;
+                        show-src: root.show-src;
+                        base: root.base;
+                        open-details(id) => { root.open-details(id); }
+                        act(kind, value) => { root.act(kind, value); }
+                    }
+                }
+                if Breakpoints.ultra: ProviderList {
+                    horizontal-stretch: 1;
+                    list: AcData.col-b;
+                    offset: 1;
+                    busy: root.busy;
+                    selected-id: root.selected-id;
+                    show-src: root.show-src;
+                    base: root.base;
+                    open-details(id) => { root.open-details(id); }
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+            VerticalLayout {
+                width: root.settings-w;
+                alignment: start;
+                Reveal {
+                    delay: root.base + 40ms;
+                    SettingsColumn {
+                        theme-value: root.theme-value;
+                        busy: root.busy;
+                        theme-picked(v) => { root.theme-picked(v); }
+                        act(kind, value) => { root.act(kind, value); }
+                    }
+                }
+            }
+        }
+    }
+}

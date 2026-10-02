@@ -1,0 +1,482 @@
+// Cost by model (4-segment cost bars that grow in sequence, a model detail popover with the I/O ratio) and the
+// model usage donut (tokens or cost, an animated sweep, labels above 5%, a hover readout and the centre total).
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Icon } from "../../components/icon.slint";
+import { IconButton } from "../../components/icon-button.slint";
+import { ProviderMark } from "../../components/mark.slint";
+import { Caps, ValueUnit } from "../../components/text.slint";
+import { AxData, AxModelRow, AxDonutSeg } from "ax-data.slint";
+import { AxColor, AxCard, AxCardHead, AxSeg, AxSegItem, AxTip, AxSwatch, AxLegendEntry } from "ax-common.slint";
+import { AxPopBody } from "ax-head.slint";
+
+// ---------------------------------------------------------------- the model detail popover
+component StatBox inherits Rectangle {
+    in property <string> value;
+    in property <string> label;
+    in property <bool> pct;
+    in property <string> tip;
+    border-radius: 9px;
+    border-width: 1px;
+    border-color: Theme.rule-2;
+    background: Theme.paper-2;
+    min-height: col.preferred-height;
+    col := VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 1px;
+        HorizontalLayout {
+            if root.pct: ValueUnit { value: root.value; size: 17px; weight: 650; unit-scale: 0.96; height: 23px; }
+            if !root.pct: Text { text: root.value; font-family: Type.tab; font-size: 17px; font-weight: 650; color: Theme.ink; min-height: 23px; vertical-alignment: center; AxTip { tip: root.tip; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Text { text: root.label; font-size: 11.5px; color: Theme.ink-3; }
+    }
+}
+
+export component ModelDetail inherits VerticalLayout {
+    in property <AxModelRow> m;
+    callback close();
+    property <bool> grown: !Motion.on;
+    grow := Timer { interval: 32ms; running: !root.grown; triggered => { self.running = false; root.grown = true; } }
+    spacing: 0px;
+    HorizontalLayout {
+        spacing: 10px;
+        VerticalLayout { alignment: start; padding-top: 2px; ProviderMark { provider: root.m.provider; size: 22px; } }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            Text { text: root.m.name; font-size: 14.5px; font-weight: 660; color: Theme.ink; overflow: elide; }
+            Text { text: root.m.sub; font-size: 12px; color: Theme.ink-3; overflow: elide; }
+        }
+        VerticalLayout { alignment: start; IconButton { icon: "close"; small: true; bare: true; hint: "Close"; clicked => { root.close(); } } }
+    }
+    HorizontalLayout {
+        padding-top: 12px;
+        padding-bottom: 4px;
+        spacing: 8px;
+        StatBox { value: root.m.usage; label: "of all tokens"; pct: true; horizontal-stretch: 1; }
+        StatBox { value: root.m.cost; label: "estimated cost"; horizontal-stretch: 1; }
+        StatBox { value: root.m.tok; label: "tokens, all types"; tip: root.m.tok-tip; horizontal-stretch: 1; }
+    }
+    Caps { text: "TOKEN TYPES"; min-height: 32px; vertical-alignment: bottom; }
+    Rectangle { height: 6px; }
+    for t[i] in root.m.types: HorizontalLayout {
+        spacing: 9px;
+        min-height: 22px;
+        VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(t.key); } }
+        Text { text: t.label; width: 112px; font-size: 12.5px; color: t.none ? Theme.ink-3 : Theme.ink; vertical-alignment: center; }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            min-width: 40px;
+            Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.paper-3;
+                clip: true;
+                Rectangle {
+                    x: 0px;
+                    width: parent.width * (root.grown ? t.w : 0) / 100;
+                    animate width { duration: Motion.on ? 640ms : 0ms; delay: Motion.on ? 80ms + i * 60ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    height: 6px;
+                    border-radius: 3px;
+                    background: AxColor.of(t.key);
+                }
+            }
+        }
+        Text {
+            text: t.tok;
+            width: 54px;
+            font-family: Type.tab;
+            font-size: 12.5px;
+            font-weight: t.none ? 500 : 600;
+            color: t.none ? Theme.ink-3 : Theme.ink;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            AxTip { tip: t.tip; }
+        }
+        Text { text: t.cost; width: 84px; font-family: Type.tab; font-size: 12.5px; font-weight: t.none ? 500 : 600; color: t.none ? Theme.ink-3 : Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+    }
+    Caps { text: "INPUT TO OUTPUT RATIO"; min-height: 32px; vertical-alignment: bottom; }
+    Rectangle { height: 6px; }
+    Rectangle {
+        border-radius: 9px;
+        border-width: 1px;
+        border-color: Theme.rule-2;
+        min-height: io.preferred-height;
+        io := VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 4px;
+            Text { text: root.m.io; font-family: Type.tab; font-size: 18px; font-weight: 650; color: Theme.ink; }
+            Text { text: root.m.io-note; font-size: 12.5px; color: Theme.ink-2; wrap: word-wrap; }
+            if root.m.io-quiet != "": Text { text: root.m.io-quiet; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+        }
+    }
+    Rectangle { height: 10px; }
+    Text { text: root.m.rate; font-size: 11.5px; color: Theme.ink-3; wrap: word-wrap; }
+}
+
+// ---------------------------------------------------------------- cost by model
+component CbmRow inherits Rectangle {
+    in property <AxModelRow> m;
+    in property <bool> played;
+    in property <duration> delay;
+    in property <length> name-w;
+    in property <length> gap;
+    in property <length> tok-w;
+    in property <length> cost-w;
+    in property <length> share-w;
+    min-height: 40px;
+    border-radius: 9px;
+    background: ta.has-hover || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    // the fill grows from zero on first view and to the new width when the data changes
+    property <bool> mounted: !Motion.on;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <bool> landed: !Motion.on;
+    land := Timer { interval: root.delay + root.m.idx * 70ms + 820ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
+    property <float> fill: root.played && root.mounted ? root.m.w : 0;
+    animate fill { duration: Motion.on ? 760ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.m.idx * 70ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { pop.show(); }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: root.gap;
+            HorizontalLayout {
+                width: root.name-w;
+                spacing: 9px;
+                VerticalLayout { alignment: center; ProviderMark { provider: root.m.provider; size: 18px; } }
+                Text { text: root.m.name; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                min-width: 100px;
+                track := Rectangle {
+                    height: 14px;
+                    border-radius: 4px;
+                    background: Theme.paper-3;
+                    clip: true;
+                    Rectangle {
+                        x: 0px;
+                        width: track.width * root.fill / 100;
+                        height: 14px;
+                        border-radius: 4px;
+                        clip: true;
+                        HorizontalLayout {
+                            width: track.width * root.m.w / 100;
+                            spacing: 1px;
+                            if root.m.fin > 0: Rectangle { horizontal-stretch: root.m.fin; min-width: 0px; background: AxColor.of("in"); AxTip { tip: root.m.tip-in; clicked => { pop.show(); } } }
+                            if root.m.fout > 0: Rectangle { horizontal-stretch: root.m.fout; min-width: 0px; background: AxColor.of("out"); AxTip { tip: root.m.tip-out; clicked => { pop.show(); } } }
+                            if root.m.fcw > 0: Rectangle { horizontal-stretch: root.m.fcw; min-width: 0px; background: AxColor.of("cw"); AxTip { tip: root.m.tip-cw; clicked => { pop.show(); } } }
+                            if root.m.fcr > 0: Rectangle { horizontal-stretch: root.m.fcr; min-width: 0px; background: AxColor.of("cr"); AxTip { tip: root.m.tip-cr; clicked => { pop.show(); } } }
+                        }
+                    }
+                }
+            }
+            if root.tok-w > 0: Text { text: root.m.tok; width: root.tok-w; font-family: Type.tab; font-size: 13px; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; AxTip { tip: root.m.tok-tip; clicked => { pop.show(); } } }
+            Text { text: root.m.cost; width: root.cost-w; font-family: Type.tab; font-size: 13px; font-weight: 620; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+            HorizontalLayout {
+                width: root.share-w;
+                alignment: end;
+                if root.m.share == "Unavailable": Text { text: root.m.share; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+                if root.m.share != "Unavailable": VerticalLayout { alignment: center; ValueUnit { value: root.m.share; size: 13px; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; height: 18px; } }
+            }
+        }
+    }
+    pop := PopupWindow {
+        x: max(-root.absolute-position.x + 10px, (root.width - 440px) / 2);
+        y: root.height + 8px;
+        width: 440px;
+        height: cbm-body.preferred-height;
+        close-policy: close-on-click-outside;
+        cbm-body := AxPopBody { width: 440px; height: self.preferred-height; pad-y: 14px; ModelDetail { m: root.m; close => { pop.close(); } } }
+    }
+}
+
+export component AxCbmCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    property <bool> tight: Breakpoints.width <= 1360px;
+    property <length> gap: root.tight ? 12px : 14px;
+    // the name column: minmax(150px, 220px) in the concept, from the page width so the layout has no loop
+    property <length> name-w: Breakpoints.width < 1180px ? 180px : root.tight ? 200px : 220px;
+    property <length> tok-w: root.tight ? 60px : 64px;
+    property <length> cost-w: root.tight ? 88px : 92px;
+    property <length> share-w: root.tight ? 52px : 56px;
+    AxCardHead {
+        title: "Cost by model";
+        sub: AxData.cbm.sub;
+        note: AxData.cbm.note;
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: end;
+            horizontal-stretch: 0;
+            for k in ["in", "out", "cw", "cr"]: VerticalLayout {
+                alignment: center;
+                AxLegendEntry { c: AxColor.of(k); label: k == "in" ? "Input" : k == "out" ? "Output" : k == "cw" ? "Cache write" : "Cache read"; }
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-top: 2px;
+        padding-bottom: 6px;
+        spacing: root.gap;
+        Rectangle { width: root.name-w; }
+        Caps { text: "ESTIMATED COST BY TOKEN TYPE"; horizontal-stretch: 1; min-width: 100px; }
+        Caps { text: "TOKENS"; width: root.tok-w; horizontal-alignment: right; }
+        Caps { text: "COST"; width: root.cost-w; horizontal-alignment: right; }
+        Caps { text: "SHARE"; width: root.share-w; horizontal-alignment: right; }
+    }
+    VerticalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-bottom: 10px;
+        for m in AxData.models: CbmRow {
+            m: m;
+            played: root.played;
+            delay: root.delay;
+            name-w: root.name-w;
+            gap: root.gap;
+            tok-w: root.tok-w;
+            cost-w: root.cost-w;
+            share-w: root.share-w;
+        }
+        if AxData.models.length == 0: Text {
+            text: AxData.ready ? AxData.cbm.empty : AxData.head.error != "" ? "Model activity unavailable" : "Loading model activity";
+            font-size: 13px;
+            color: Theme.ink-3;
+            horizontal-alignment: center;
+            min-height: 72px;
+            vertical-alignment: center;
+        }
+    }
+    if AxData.cbm.foot != "": HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-bottom: 14px;
+        Text { text: AxData.cbm.foot; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+    }
+}
+
+// ---------------------------------------------------------------- the donut
+component DonutArc inherits Rectangle {
+    in property <AxDonutSeg> seg;
+    in property <float> sweep;
+    in property <length> size;
+    in property <float> r0;
+    in property <float> r1;
+    in property <bool> dim;
+    in property <bool> morph;
+    property <float> c: root.size / 1px / 2;
+    property <bool> mounted: !Motion.on;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <float> s0: root.seg.a0;
+    property <float> s1: root.mounted ? root.seg.a1 : root.seg.a0;
+    animate s0, s1 { duration: root.morph && Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    property <float> g0: min(root.s0, root.sweep) + 0.01;
+    property <float> g1: min(root.s1, root.sweep) - 0.01;
+    property <int> large: root.g1 - root.g0 > 3.14159265 ? 1 : 0;
+    property <float> x0: root.c + root.r1 * sin(root.g0 * 1rad);
+    property <float> y0: root.c - root.r1 * cos(root.g0 * 1rad);
+    property <float> x1: root.c + root.r1 * sin(root.g1 * 1rad);
+    property <float> y1: root.c - root.r1 * cos(root.g1 * 1rad);
+    property <float> x2: root.c + root.r0 * sin(root.g1 * 1rad);
+    property <float> y2: root.c - root.r0 * cos(root.g1 * 1rad);
+    property <float> x3: root.c + root.r0 * sin(root.g0 * 1rad);
+    property <float> y3: root.c - root.r0 * cos(root.g0 * 1rad);
+    width: root.size;
+    height: root.size;
+    opacity: root.dim ? 0.3 : 1;
+    animate opacity { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    Path {
+        width: root.size;
+        height: root.size;
+        viewbox-width: root.size / 1px;
+        viewbox-height: root.size / 1px;
+        commands: root.g1 - root.g0 > 0.002
+            ? "M\{root.x0} \{root.y0}A\{root.r1} \{root.r1} 0 \{root.large} 1 \{root.x1} \{root.y1}L\{root.x2} \{root.y2}A\{root.r0} \{root.r0} 0 \{root.large} 0 \{root.x3} \{root.y3}Z"
+            : "";
+        fill: AxColor.model(root.seg.provider, root.seg.mix, root.seg.other);
+    }
+}
+
+component DonutLegendRow inherits Rectangle {
+    in property <AxDonutSeg> seg;
+    in property <bool> hot;
+    out property <bool> hovered: ta.has-hover;
+    callback clicked();
+    height: 29px;
+    border-radius: 7px;
+    background: root.hot || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    animate background { duration: Motion.tint(Motion.fast); }
+    ta := AxTip {
+        tip: root.seg.tip;
+        mouse-cursor: root.seg.model != "" ? pointer : default;
+        clicked => { if root.seg.model != "" { pop.show(); } }
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 9px;
+            VerticalLayout { alignment: center; AxSwatch { c: AxColor.model(root.seg.provider, root.seg.mix, root.seg.other); } }
+            Text { text: root.seg.name; font-size: 12.5px; color: Theme.ink; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+            Text { text: root.seg.value; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxTip { tip: root.seg.value-tip; clicked => { if root.seg.model != "" { pop.show(); } } } }
+            HorizontalLayout { width: 52px; alignment: end; VerticalLayout { alignment: center; ValueUnit { value: root.seg.share; size: 12.5px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
+        }
+    }
+    pop := PopupWindow {
+        x: max(-root.absolute-position.x + 10px, (root.width - 440px) / 2);
+        y: root.height + 6px;
+        width: 440px;
+        height: lg-body.preferred-height;
+        close-policy: close-on-click-outside;
+        lg-body := AxPopBody { width: 440px; height: self.preferred-height; visible: root.seg.model != ""; ModelDetail { m: AxData.models[max(0, root.seg-idx)]; close => { pop.close(); } } }
+    }
+    in property <int> seg-idx: -1;
+}
+
+export component AxDonutCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    property <bool> stacked: Breakpoints.width < 1180px;
+    property <length> wrap-w: root.width - 40px;
+    property <length> size: root.stacked ? clamp(round(root.wrap-w * 0.56 / 1px) * 1px, 220px, 260px)
+        : clamp(round(root.wrap-w * (root.wrap-w > 560px ? 0.44 : 0.64) / 1px) * 1px, 220px, 300px);
+    property <float> r1: root.size / 1px / 2 - 42;
+    property <float> r0: root.r1 - max(22, round(root.size / 1px * 0.11));
+    // first view: the arcs sweep in (ease-in-out, never past their share); then toggles morph
+    property <bool> swept: !Motion.on;
+    property <float> sweep: root.played ? 6.2831853 : 0;
+    animate sweep { duration: Motion.on ? Motion.draw + 200ms : 0ms; delay: Motion.on ? root.delay : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    swept-timer := Timer { interval: root.delay + Motion.draw + 260ms; running: root.played && !root.swept; triggered => { self.running = false; root.swept = true; } }
+    property <int> hot: -1;
+    property <int> pop-idx: 0;
+    property <bool> labels-on: root.swept && root.calm;
+    property <bool> calm: true;
+    property <string> mode: AxData.donut.mode;
+    changed mode => { root.calm = false; calm-timer.running = true; }
+    calm-timer := Timer { interval: Motion.slow + 40ms; running: false; triggered => { self.running = false; root.calm = true; } }
+    property <AxDonutSeg> hot-seg: root.hot >= 0 && root.hot < AxData.donut-segs.length ? AxData.donut-segs[root.hot] : { };
+
+    AxCardHead {
+        title: "Model usage";
+        sub: AxData.donut.sub;
+        note: AxData.donut.note;
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            AxSeg {
+                small: true;
+                items: [{ value: "tokens", label: "Tokens" }, { value: "cost", label: "Cost" }];
+                value: AxData.donut-mode;
+                picked(v) => { AxData.action("analytics-donut", v); }
+            }
+        }
+    }
+    body := Rectangle {
+        min-height: root.stacked ? root.size + 12px + legend.preferred-height + 16px : max(root.size, legend.preferred-height) + 22px;
+        vertical-stretch: 1;
+        donut := Rectangle {
+            x: root.stacked ? (parent.width - root.size) / 2 : 20px;
+            y: root.stacked ? 0px : max(0px, (parent.height - 18px - root.size) / 2);
+            width: root.size;
+            height: root.size;
+            // the track
+            Path {
+                width: root.size;
+                height: root.size;
+                viewbox-width: root.size / 1px;
+                viewbox-height: root.size / 1px;
+                commands: "M\{root.size / 1px / 2} \{root.size / 1px / 2 - (root.r0 + root.r1) / 2}A\{(root.r0 + root.r1) / 2} \{(root.r0 + root.r1) / 2} 0 1 1 \{root.size / 1px / 2 - 0.01} \{root.size / 1px / 2 - (root.r0 + root.r1) / 2}Z";
+                stroke: Theme.track;
+                stroke-width: (root.r1 - root.r0) * 1px;
+            }
+            for s[i] in AxData.donut-segs: DonutArc {
+                seg: s;
+                sweep: root.sweep;
+                size: root.size;
+                r0: root.r0;
+                r1: root.r1;
+                morph: root.swept;
+                dim: root.hot >= 0 && root.hot != i;
+            }
+            for s in AxData.donut-segs: Text {
+                property <float> m: (s.a0 + s.a1) / 2;
+                property <float> sn: sin(self.m * 1rad);
+                property <length> lx: root.size / 2 + (root.r1 + 12) * self.sn * 1px;
+                property <length> ly: root.size / 2 - (root.r1 + 12) * cos(self.m * 1rad) * 1px;
+                visible: s.label;
+                opacity: root.labels-on ? 1 : 0;
+                animate opacity { duration: Motion.on ? Motion.med : 0ms; }
+                x: abs(self.sn) < 0.3 ? self.lx - self.preferred-width / 2 : self.sn > 0 ? self.lx : self.lx - self.preferred-width;
+                y: self.ly + 4px - self.font-metrics.ascent;
+                width: self.preferred-width;
+                text: s.share + "%";
+                font-family: Type.mono;
+                font-size: 11px;
+                color: Theme.ink-2;
+            }
+            centre := VerticalLayout {
+                x: 78px;
+                width: root.size - 156px;
+                alignment: center;
+                spacing: 3px;
+                if root.hot < 0: Text { text: AxData.donut.centre; font-family: Type.tab; font-size: 22px; font-weight: 640; color: Theme.ink; horizontal-alignment: center; }
+                if root.hot >= 0: HorizontalLayout { alignment: center; ValueUnit { value: root.hot-seg.share; size: 22px; weight: 640; unit-scale: 0.96; } }
+                Text {
+                    text: root.hot < 0 ? AxData.donut.centre-label : root.hot-seg.name + " · " + root.hot-seg.value + AxData.donut.unit;
+                    font-size: 12px;
+                    color: Theme.ink-3;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            hit := TouchArea {
+                property <float> dx: (self.mouse-x - root.size / 2) / 1px;
+                property <float> dy: (self.mouse-y - root.size / 2) / 1px;
+                mouse-cursor: root.hot >= 0 && root.hot-seg.model != "" ? pointer : default;
+                function track() {
+                    let rr = sqrt(self.dx * self.dx + self.dy * self.dy);
+                    if rr < root.r0 - 2 || rr > root.r1 + 2 || AxData.donut-lut.length == 0 { root.hot = -1; return; }
+                    let deg = mod(atan2(self.dx, -self.dy) / 1deg + 360, 360);
+                    root.hot = AxData.donut-lut[clamp(floor(deg), 0, AxData.donut-lut.length - 1)];
+                }
+                changed mouse-x => { if self.has-hover { self.track(); } }
+                changed mouse-y => { if self.has-hover { self.track(); } }
+                changed has-hover => { if !self.has-hover { root.hot = -1; } }
+                clicked => { if root.hot >= 0 && root.hot-seg.model != "" { root.pop-idx = root.hot-seg.idx; seg-pop.show(); } }
+            }
+            seg-pop := PopupWindow {
+                x: (root.size - 440px) / 2;
+                y: root.size / 2 + 12px;
+                width: 440px;
+                height: seg-body.preferred-height;
+                close-policy: close-on-click-outside;
+                seg-body := AxPopBody { width: 440px; height: self.preferred-height; ModelDetail { m: AxData.models[max(0, root.pop-idx)]; close => { seg-pop.close(); } } }
+            }
+        }
+        legend := VerticalLayout {
+            x: root.stacked ? 16px : 20px + root.size + 22px;
+            y: root.stacked ? root.size + 12px : max(0px, (parent.height - 18px - self.preferred-height) / 2);
+            width: root.stacked ? parent.width - 32px : parent.width - root.size - 62px;
+            spacing: 2px;
+            for s[i] in AxData.donut-segs: DonutLegendRow {
+                seg: s;
+                seg-idx: s.idx;
+                hot: root.hot == i;
+                changed hovered => { if self.hovered { root.hot = i; } else if root.hot == i { root.hot = -1; } }
+            }
+            if AxData.donut-segs.length == 0: Text { text: AxData.ready ? "No model activity in the logs." : ""; font-size: 13px; color: Theme.ink-3; }
+        }
+    }
+}

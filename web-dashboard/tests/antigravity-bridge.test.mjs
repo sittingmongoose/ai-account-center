@@ -43,7 +43,11 @@ test('bridge routes Ubuntu approvals separately, guards Codex, and writes only c
   });
   try {
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-    assert.equal(models.at(-1).antigravityAccounts.length,2); assert.equal(models.at(-1).antigravityAutoEnabled,false);
+    // View model version 2: Antigravity is a generic switchable section.
+    const agSection = () => models.at(-1).sections.find(section => section.id === 'antigravity');
+    assert.equal(models.at(-1).version, 2);
+    assert.equal(agSection().switchable, true); assert.equal(agSection().rows.length, 2); assert.equal(agSection().auto.enabled, false);
+    assert.equal(agSection().rows.find(row => row.profile === 'gmail').active, true); assert.equal(agSection().rows.find(row => row.profile === 'party').active, false);
     const action=window.ccsDashboardAction;
     await action('antigravity-automatic','true'); assert.equal(calls.filter(c=>c.method==='PUT').length,0);
     await action('antigravity-pool','Gemini models (reported group)');
@@ -58,7 +62,8 @@ test('bridge routes Ubuntu approvals separately, guards Codex, and writes only c
     await action('activation-cancel',''); assert.equal(confirmationPosts,0);
     await action('antigravity-activate','party'); await action('activation-confirm',''); await action('activation-confirm','');
     assert.equal(confirmationPosts,1); assert.deepEqual(calls.find(c=>c.path.endsWith('/party/confirm')).body,{hostId:'ubuntu',confirmationToken:token});
-    assert.equal(models.at(-1).antigravityAccounts.find(a=>a.profile==='party').selected,true); assert.equal(models.at(-1).antigravityAccounts.find(a=>a.profile==='party').runtimeVerified,true);
+    assert.equal(agSection().rows.find(row => row.profile === 'party').active, true); assert.equal(agSection().rows.find(row => row.profile === 'party').activeLabel, 'on Ubuntu');
+    assert.equal(agSection().rows.find(row => row.profile === 'gmail').active, false);
     assert.ok(calls.every(c=>c.credentials==='same-origin')); assert.equal(calls.some(c=>c.path.startsWith('/api/codex')&&c.method==='POST'),false);
   } finally { restore(); }
 });

@@ -21,6 +21,6 @@ export function visibleUsageWindows(provider, windows) {
     }
     return true;
   }).map(window => provider === 'qwen' && expiration && /month/i.test(description(window)) && !validDate(window.expiresAt)
-    ? { ...window, expiresAt: expiration }
+    ? { ...window, expiresAt: expiration, planExpiry: true }
     : window);
 }

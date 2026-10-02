@@ -1,0 +1,179 @@
+// Analytics (Daylight Atlas): rebuilt around Usage, the original CCS analytics page improved. Order: header,
+// KPI row, usage trends, then cost by model, model usage, session stats, token breakdown, cache efficiency,
+// the weekday x hour heatmap and daily cost by provider (3 columns from 1600 px, 2 below), then the compact
+// quota history and, at the very bottom, upcoming resets and expiries. Every value comes from the version 3
+// analytics view model in AxData (pages/analytics/ax-data.slint); see README-ARCHITECTURE.md.
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { AxData } from "analytics/ax-data.slint";
+import { AxReveal } from "analytics/ax-common.slint";
+import { AxHeader, AxKpiRow } from "analytics/ax-head.slint";
+import { AxTrendCard } from "analytics/ax-trend.slint";
+import { AxCbmCard, AxDonutCard } from "analytics/ax-models.slint";
+import { AxSessionsCard, AxTokensCard, AxCacheCard } from "analytics/ax-stats.slint";
+import { AxHeatCard, AxDailyCard } from "analytics/ax-time.slint";
+import { AxQuotaCard } from "analytics/ax-quota.slint";
+import { AxAgendaCard } from "analytics/ax-agenda.slint";
+
+export { AxData }
+
+export component AnalyticsPage inherits Rectangle {
+    // the page scroll offset and the window height: a section plays its first view once it is on screen
+    in property <length> scroll;
+    in property <length> view-bottom;
+    in property <length> win-h: 900px;
+    // sections rise in once the first response arrives (or fails: the header then says why)
+    property <bool> armed: AxData.ready || AxData.head.error != "";
+    property <bool> wide3: Breakpoints.width >= 1600px;
+    property <length> gap: Breakpoints.width < 1180px ? 14px : 18px;
+    // first-view memory for the chart grid (it is laid out again when it changes column count)
+    property <bool> s-cbm;
+    property <bool> s-donut;
+    property <bool> s-sess;
+    property <bool> s-tok;
+    property <bool> s-cache;
+    property <bool> s-heat;
+    property <bool> s-daily;
+
+    min-height: page.preferred-height;
+    preferred-height: page.preferred-height;
+
+    page := VerticalLayout {
+        spacing: 0px;
+        AxReveal { armed: true; scroll: root.scroll; view-bottom: root.view-bottom; delay: 40ms; AxHeader { } }
+        Rectangle { height: 20px; }
+        kpis := AxReveal {
+            armed: root.armed;
+            scroll: root.scroll;
+            view-bottom: root.view-bottom;
+            delay: 80ms;
+            AxKpiRow { played: kpis.seen; delay: kpis.play-delay - 40ms; }
+        }
+        Rectangle { height: 18px; }
+        trend := AxReveal {
+            armed: root.armed;
+            scroll: root.scroll;
+            view-bottom: root.view-bottom;
+            delay: 120ms;
+            AxTrendCard { played: trend.seen; delay: trend.play-delay; win-h: root.win-h; }
+        }
+        Rectangle { height: 18px; }
+        if root.wide3: VerticalLayout {
+            spacing: root.gap;
+            HorizontalLayout {
+                spacing: root.gap;
+                cbm3 := AxReveal {
+                    horizontal-stretch: 2; preferred-width: root.gap; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 160ms; already: root.s-cbm;
+                    changed seen => { if self.seen { root.s-cbm = true; } }
+                    AxCbmCard { played: cbm3.seen; delay: cbm3.play-delay; vertical-stretch: 1; }
+                }
+                donut3 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 192ms; already: root.s-donut;
+                    changed seen => { if self.seen { root.s-donut = true; } }
+                    AxDonutCard { played: donut3.seen; delay: donut3.play-delay; vertical-stretch: 1; }
+                }
+            }
+            HorizontalLayout {
+                spacing: root.gap;
+                sess3 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 224ms; already: root.s-sess;
+                    changed seen => { if self.seen { root.s-sess = true; } }
+                    AxSessionsCard { played: sess3.seen; delay: sess3.play-delay; vertical-stretch: 1; }
+                }
+                tok3 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-tok;
+                    changed seen => { if self.seen { root.s-tok = true; } }
+                    AxTokensCard { played: tok3.seen; delay: tok3.play-delay; vertical-stretch: 1; }
+                }
+                cache3 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-cache;
+                    changed seen => { if self.seen { root.s-cache = true; } }
+                    AxCacheCard { played: cache3.seen; delay: cache3.play-delay; vertical-stretch: 1; }
+                }
+            }
+            HorizontalLayout {
+                spacing: root.gap;
+                heat3 := AxReveal {
+                    horizontal-stretch: 2; preferred-width: root.gap; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 320ms; already: root.s-heat;
+                    changed seen => { if self.seen { root.s-heat = true; } }
+                    AxHeatCard { played: heat3.seen; delay: heat3.play-delay; win-h: root.win-h; vertical-stretch: 1; }
+                }
+                daily3 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 352ms; already: root.s-daily;
+                    changed seen => { if self.seen { root.s-daily = true; } }
+                    AxDailyCard { played: daily3.seen; delay: daily3.play-delay; win-h: root.win-h; vertical-stretch: 1; }
+                }
+            }
+        }
+        if !root.wide3: VerticalLayout {
+            spacing: root.gap;
+            cbm2 := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 160ms; already: root.s-cbm;
+                    changed seen => { if self.seen { root.s-cbm = true; } }
+                    AxCbmCard { played: cbm2.seen; delay: cbm2.play-delay; }
+                }
+            HorizontalLayout {
+                spacing: root.gap;
+                donut2 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 192ms; already: root.s-donut;
+                    changed seen => { if self.seen { root.s-donut = true; } }
+                    AxDonutCard { played: donut2.seen; delay: donut2.play-delay; vertical-stretch: 1; }
+                }
+                sess2 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 224ms; already: root.s-sess;
+                    changed seen => { if self.seen { root.s-sess = true; } }
+                    AxSessionsCard { played: sess2.seen; delay: sess2.play-delay; vertical-stretch: 1; }
+                }
+            }
+            HorizontalLayout {
+                spacing: root.gap;
+                tok2 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-tok;
+                    changed seen => { if self.seen { root.s-tok = true; } }
+                    AxTokensCard { played: tok2.seen; delay: tok2.play-delay; vertical-stretch: 1; }
+                }
+                cache2 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-cache;
+                    changed seen => { if self.seen { root.s-cache = true; } }
+                    AxCacheCard { played: cache2.seen; delay: cache2.play-delay; vertical-stretch: 1; }
+                }
+            }
+            heat2 := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 320ms; already: root.s-heat;
+                    changed seen => { if self.seen { root.s-heat = true; } }
+                    AxHeatCard { played: heat2.seen; delay: heat2.play-delay; win-h: root.win-h; }
+                }
+            daily2 := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 352ms; already: root.s-daily;
+                    changed seen => { if self.seen { root.s-daily = true; } }
+                    AxDailyCard { played: daily2.seen; delay: daily2.play-delay; win-h: root.win-h; spans: true; }
+                }
+        }
+        Rectangle { height: 18px; }
+        quota := AxReveal {
+            armed: root.armed;
+            scroll: root.scroll;
+            view-bottom: root.view-bottom;
+            delay: 384ms;
+            AxQuotaCard { played: quota.seen; delay: quota.play-delay; }
+        }
+        Rectangle { height: 18px; }
+        agenda := AxReveal {
+            armed: root.armed;
+            scroll: root.scroll;
+            view-bottom: root.view-bottom;
+            delay: 416ms;
+            AxAgendaCard { played: agenda.seen; delay: agenda.play-delay; }
+        }
+    }
+}

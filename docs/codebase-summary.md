@@ -13,7 +13,7 @@ contracts from the original CCS fork.
 | Codex controls | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [activation](../src/codex-auth/activate-codex-profile.ts), [auto-switch](../src/web-server/services/codex-auto-switch-service.ts) |
 | Analytics | [analytics service](../src/web-server/services/account-analytics-service.ts) |
 | Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts) |
-| Slint scenes/bindings | [dashboard.slint](../web-dashboard/ui/dashboard.slint), [analytics.slint](../web-dashboard/ui/analytics.slint), [lib.rs](../web-dashboard/src/lib.rs) |
+| Slint scenes/bindings | [dashboard.slint](../web-dashboard/ui/dashboard.slint), [analytics.slint](../web-dashboard/ui/analytics.slint), [lib.rs](../web-dashboard/src/lib.rs); map of pages, components, view models and rendering rules: [UI architecture](../web-dashboard/ui/README-ARCHITECTURE.md) |
 | Browser API bridge | [bridge.js](../web-dashboard/public/bridge.js) |
 | Native clients | [macos-bar](../macos-bar/), [windows-bar](../windows-bar/) |
 | Existing-host usage | [Python collectors](../scripts/account-usage/), [browser bridges](../browser-bridge/) |

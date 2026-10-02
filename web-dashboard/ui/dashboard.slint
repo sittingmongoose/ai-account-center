@@ -1,502 +1,808 @@
-import { ScrollView, LineEdit, ComboBox, AboutSlint, Palette } from "std-widgets.slint";
-import { AnalyticsPage, AnalyticsSummaryView, AnalyticsProviderView, AnalyticsMetricView, AnalyticsPointView, AnalyticsAccountView, AnalyticsModelView, AnalyticsChartView, AnalyticsStackPointView } from "analytics.slint";
+// AI Account Center dashboard shell (Slint 1.18.1, Daylight Atlas).
+// The header (logo, navigation, status, Refresh, Update apps, appearance, account menu), page routing
+// with transitions, the overlays (Details slide-over, confirmation dialog, toasts, hover cards) and the
+// sign-in layer. Pages live in pages/, components in components/, tokens in theme.slint and the
+// view-model structs in models.slint. See README-ARCHITECTURE.md.
+import { Palette } from "std-widgets.slint";
+import { Theme, Motion, Type, Breakpoints } from "theme.slint";
+import {
+    MeterView, AmountView, RunView, FootView, ColumnView, AccountRowView, AutoSwitchView, SectionView, ProviderCardView,
+    RegistryView, ChromeView, UpdateView, ToastView, FactView, DetailsView, ProcessView, ConfirmationView,
+    AuthView, StrengthView, AnalyticsHeadView
+} from "models.slint";
+import { Icon } from "components/icon.slint";
+import { AppLogo } from "components/logo.slint";
+import { Caps } from "components/text.slint";
+import { Button } from "components/button.slint";
+import { IconButton } from "components/icon-button.slint";
+import { NavBar } from "components/nav.slint";
+import { MenuPanel, MenuHead, MenuItem, MenuSeparator } from "components/menu.slint";
+import { SlideOver } from "components/slide-over.slint";
+import { Dialog } from "components/dialog.slint";
+import { ToastStack } from "components/toast.slint";
+import { Hover, HoverLayer } from "components/hover-card.slint";
+import { HomePage } from "pages/home.slint";
+import { AnalyticsPage } from "pages/analytics.slint";
+import { AccountsPage } from "pages/accounts.slint";
+import { DetailsPanel } from "pages/details.slint";
+import { SignInLayer } from "shell/signin.slint";
 
-export struct UsageView {
-    label: string, amount: string, percent: float, has-percent: bool,
-    reset: string, reset-compact: string, expiration: string, meta: string,
+// Re-exported so Rust (slint::include_modules!) sees every view-model struct.
+export {
+    MeterView, AmountView, RunView, FootView, ColumnView, AccountRowView, AutoSwitchView, SectionView, ProviderCardView,
+    RegistryView, ChromeView, UpdateView, ToastView, FactView, DetailsView, ProcessView, ConfirmationView,
+    AuthView, StrengthView, AnalyticsHeadView
 }
-export struct AccountView {
-    id: string, profile: string, email: string, plan: string, status: string,
-    active: bool, can-mac: bool, can-windows: bool, five: UsageView,
-    weekly: UsageView, fable: UsageView, show-fable: bool, windows: [UsageView], note: string,
+// The Analytics view model (version 3): Rust fills the AxData global directly.
+export {
+    AxData, AxScopeLine, AxKpi, AxYTick, AxXTick, AxLegendItem, AxBucket, AxTrendPaths, AxTrend, AxModelType,
+    AxModelRow, AxCardText, AxDonutSeg, AxDonut, AxStat, AxSessRow, AxTokRow, AxCache, AxHeatCell, AxHeat, AxBar,
+    AxDaily, AxDay, AxCalendar, AxTick, AxShape, AxLabel, AxDot, AxFocusLegend, AxStopRow, AxStop, AxFocus,
+    AxQuotaRow, AxQuotaGroup, AxAgendaRow
+} from "pages/analytics/ax-data.slint";
+// The Accounts & Settings view model (version 1): Rust fills the AcData global directly.
+export { AcData, AcAction, AcRow, AcProvider, AcAgPolicy, AcPolicy, AcUpdItem, AcUpdHost, AcSignin } from "pages/accounts/ac-data.slint";
+export { SegItem } from "components/segmented.slint";
+
+// The faint cartographic grid behind the pages: 24 px minor and 96 px major lines.
+component PaperGrid inherits Rectangle {
+    property <int> cols: ceil(root.width / 24px) + 1;
+    property <int> rows: ceil(root.height / 24px) + 1;
+    for i in root.cols: Rectangle {
+        x: i * 24px;
+        y: 0px;
+        width: 1px;
+        height: root.height;
+        background: mod(i, 4) == 0 ? Theme.paper-grid-major : Theme.paper-grid-minor;
+    }
+    for j in root.rows: Rectangle {
+        x: 0px;
+        y: j * 24px;
+        width: root.width;
+        height: 1px;
+        background: mod(j, 4) == 0 ? Theme.paper-grid-major : Theme.paper-grid-minor;
+    }
 }
-export struct AntigravityRowView {
-    id: string, profile: string, email: string, plan: string, status: string,
-    selected: bool, runtime-verified: bool, can-activate: bool, five: UsageView, weekly: UsageView, note: string,
-}
-export struct ProcessView { label: string, pid: string, role: string }
-export struct ProviderView {
-    id: string, name: string, glyph: string, identity: string, plan: string,
-    status: string, note: string, source: string, windows: [UsageView],
-}
-export global Colors {
-    in-out property <bool> dark: true;
-    out property <color> page: dark ? #0b1522 : #f4f8fd;
-    out property <color> surface: dark ? #142130 : #ffffff;
-    out property <color> inset: dark ? #101c2a : #f7f9fc;
-    out property <color> border: dark ? #293d52 : #e2e9f2;
-    out property <color> text: dark ? #f2f6ff : #101b36;
-    out property <color> muted: dark ? #a4bad5 : #536b8f;
-    out property <color> blue: #2d91ff;
-    out property <color> track: dark ? #243b52 : #e3ecf7;
-}
-component ActionButton inherits Rectangle {
-    in property <string> text;
-    in property <string> hint;
-    in property <bool> primary: false;
+
+// Update apps: its own header button. Idle shows the arrow and "Update apps"; while a job runs the ring
+// spins and the result count rolls ("Updating 3 of 21"); on finish it morphs to a check for 2 s. The
+// width animates between label widths instead of jumping.
+component UpdateButton inherits Rectangle {
+    in property <UpdateView> data;
     in property <bool> enabled: true;
-    callback pressed();
-    width: 84px; height: 30px;
-    border-radius: 7px;
+    callback clicked();
+
+    property <string> mode: root.data.running ? "run" : root.data.done ? "done" : "idle";
+    property <length> w: row.preferred-width;
+    animate w { duration: Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    // count roll: the old count slides up and out while the new one rises in
+    property <int> shown-count: root.data.count;
+    property <int> prev-count: 0;
+    property <duration> roll-start: 0ms;
+    property <bool> rolling: false;
+    property <float> roll-t: root.rolling ? clamp((animation-tick() - root.roll-start) / 300ms, 0, 1) : 1;
+    property <float> roll-e: 1 - pow(1 - root.roll-t, 3);
+    changed shown-count => {
+        if Motion.on {
+            root.roll-start = animation-tick();
+            root.rolling = true;
+            roll-stop.running = true;
+        } else {
+            root.prev-count = root.shown-count;
+        }
+    }
+    roll-stop := Timer {
+        interval: 320ms;
+        running: false;
+        triggered => { self.running = false; root.rolling = false; root.prev-count = root.shown-count; }
+    }
+
+    height: 34px;
+    min-width: root.w;
+    max-width: root.w;
+    border-radius: 9px;
     border-width: 1px;
-    border-color: root.primary ? #298bfa : Colors.border;
-    background: !root.enabled ? Colors.inset : root.primary ? #1479f5 : touch.has-hover ? Colors.track : Colors.inset;
-    opacity: root.enabled ? 1 : 0.5;
-    accessible-role: button;
-    accessible-label: root.hint == "" ? root.text : root.hint;
-    accessible-action-default => { if root.enabled { root.pressed(); } }
-    Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.text; color: root.primary ? white : Colors.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-    touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.pressed(); } }
-    Tooltip { text: @markdown("\{root.hint}"); }
-}
-component LaunchButton inherits Rectangle {
-    in property <bool> windows: false;
-    in property <bool> enabled: true;
-    in property <string> hint;
-    callback pressed();
-    width: 27px; height: 27px; border-radius: 6px;
-    background: touch.has-hover ? Colors.track : Colors.inset;
-    border-width: 1px; border-color: Colors.border;
-    opacity: root.enabled ? 1 : 0.4;
-    accessible-role: button; accessible-label: root.hint;
-    accessible-action-default => { if root.enabled { root.pressed(); } }
-    Image { x: 6px; y: 6px; width: 15px; height: 15px; source: root.windows ? @image-url("../public/assets/windows.svg") : @image-url("../public/assets/mac.svg"); colorize: root.windows ? Colors.blue : Colors.text; }
-    touch := TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.pressed(); } }
-    Tooltip { text: @markdown("\{root.hint}"); }
-}
-component Metric inherits Rectangle {
-    in property <UsageView> value;
-    in property <string> unavailable: "—";
-    height: 59px; background: transparent;
-    accessible-role: text;
-    accessible-label: root.value.label + " · " + root.value.amount + " · " + (root.value.reset == "" ? "Reset unavailable" : root.value.reset);
-    Text { x: 0px; y: 0px; width: parent.width; height: 15px; text: root.value.has-percent ? root.value.amount : root.unavailable; color: Colors.text; font-size: 11px; overflow: elide; }
-    Rectangle { x: 0px; y: 19px; width: parent.width; height: 6px; border-radius: 3px; background: Colors.track;
-        if root.value.has-percent: Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.value.percent, 0, 100) / 100; height: 6px; border-radius: 3px; background: root.value.percent >= 90 ? #fca45d : Colors.blue; }
-    }
-    Text { x: 0px; y: 29px; width: parent.width; height: 29px; text: root.value.reset-compact != "" ? root.value.reset-compact : root.value.reset == "" ? "Reset unavailable" : root.value.reset; color: Colors.muted; font-size: 9px; wrap: word-wrap; }
-    Tooltip { text: @markdown("\{root.value.label + " · " + root.value.amount + " · " + root.value.reset}"); }
-}
-component AccountTable inherits Rectangle {
-    in property <string> heading;
-    in property <bool> codex: false;
-    in property <[AccountView]> accounts;
-    in property <bool> five-hour-visible: true;
-    in property <bool> busy: false;
-    in property <bool> auto-enabled: false;
-    in property <bool> auto-available: false;
-    in property <string> auto-setting;
-    in property <string> active-email;
-    in property <int> threshold-used: -1;
-    in-out property <string> threshold-value: "—";
-    callback launch(string, string);
-    callback activate(string);
-    callback details(string);
-    callback automatic(bool);
-    callback threshold(string);
-    border-radius: 10px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
-    Rectangle { x: 15px; y: 16px; width: 40px; height: 40px; border-radius: 10px; background: Colors.inset;
-        Image { x: 4px; y: 4px; width: 32px; height: 32px; source: root.codex ? @image-url("../public/assets/provider-codex.png") : @image-url("../public/assets/provider-claude.png"); colorize: root.codex ? Colors.text : transparent; }
-    }
-    Text { x: 65px; y: 18px; height: 23px; text: root.heading; font-size: 20px; font-weight: 700; color: Colors.text; }
-    Text { x: 65px; y: 43px; width: parent.width - 83px; text: root.accounts.length + " accounts" + (root.codex ? (root.active-email == "Active account unavailable" ? " · " : " · ✓ Active: ") + root.active-email : ""); font-size: 10px; color: root.codex ? Colors.blue : Colors.muted; overflow: elide; Tooltip { text: @markdown("\{root.codex ? root.active-email : root.accounts.length + " accounts"}"); } }
-    if root.codex: Rectangle { x: parent.width - 240px; y: 20px; width: 224px; height: 39px;
-        Text { x: 0px; y: 2px; text: "Auto-switch"; color: Colors.muted; font-size: 10px; }
-        Rectangle { x: 75px; y: 0px; width: 35px; height: 20px; border-radius: 10px; background: root.auto-enabled ? Colors.blue : Colors.track;
-            Rectangle { x: root.auto-enabled ? 18px : 3px; y: 3px; width: 14px; height: 14px; border-radius: 7px; background: white; }
-            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; enabled: root.auto-available && !root.busy; mouse-cursor: root.auto-available && !root.busy ? pointer : default; clicked => { root.automatic(!root.auto-enabled); } }
-            Tooltip { text: @markdown("\{"Automatic switching for Codex only; waits until idle"}"); }
-        }
-        ComboBox { x: 118px; y: -3px; width: 105px; height: 29px; model: ["75%", "80%", "85%", "90%", "95%", "99%"]; current-value <=> root.threshold-value; enabled: root.auto-available && !root.busy; selected(value) => { root.threshold(value); }
-            Tooltip { text: @markdown("Switch when the active account reaches this percent used. Waits until idle."); }
-        }
-        Tooltip { text: @markdown("\{root.auto-setting}"); }
-    }
-    Rectangle { x: 1px; y: 72px; width: parent.width - 2px; height: 30px; background: Colors.inset;
-        Text { x: 15px; y: 8px; text: "Account"; color: Colors.muted; font-size: 10px; }
-        if !root.codex || root.five-hour-visible: Text { x: parent.width * (root.codex ? 0.37 : 0.29); y: 8px; width: parent.width * (root.codex ? 0.17 : 0.14); height: 14px; text: "5-hour usage"; color: Colors.muted; font-size: 10px; overflow: elide; }
-        Text { x: parent.width * (root.codex ? 0.57 : 0.46); y: 8px; text: "Weekly usage"; color: Colors.muted; font-size: 10px; }
-        if !root.codex: Text { x: parent.width * 0.63; y: 8px; text: "Fable usage"; color: Colors.muted; font-size: 10px; }
-        Text { x: parent.width * 0.81; y: 8px; text: "Actions"; color: Colors.muted; font-size: 10px; }
-    }
-    for account[index] in root.accounts: Rectangle {
-        x: 1px; y: 103px + index * 76px; width: parent.width - 2px; height: 76px;
-        background: account.active ? Colors.dark ? #193450 : #edf5ff : transparent;
-        Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: Colors.border; }
-        Text { x: 15px; y: 13px; width: parent.width * (root.codex ? 0.34 : 0.27) - 18px; height: 17px; text: account.email; font-size: 11px; font-weight: 600; color: Colors.text; overflow: elide; }
-        Text { x: 15px; y: 35px; width: parent.width * (root.codex ? 0.34 : 0.27) - 18px; height: 14px; text: account.plan + (account.plan == "" ? "" : " · ") + account.status; font-size: 9px; color: account.active ? Colors.blue : Colors.muted; overflow: elide; }
-        if !root.codex || account.five.has-percent: Metric { x: parent.width * (root.codex ? 0.37 : 0.29); y: 12px; width: parent.width * (root.codex ? 0.17 : 0.14); value: account.five; }
-        Metric { x: parent.width * (root.codex ? 0.57 : 0.46); y: 12px; width: parent.width * (root.codex ? 0.17 : 0.14); value: account.weekly; }
-        if !root.codex && account.show-fable: Metric { x: parent.width * 0.63; y: 12px; width: parent.width * 0.14; value: account.fable; unavailable: "Unavailable"; }
-        if !root.codex: HorizontalLayout { x: parent.width * 0.80; y: 14px; width: 90px; spacing: 4px;
-            LaunchButton { enabled: account.can-mac && !root.busy; hint: "Open " + account.email + " on Mac"; pressed => { root.launch(account.profile, "mac"); } }
-            LaunchButton { windows: true; enabled: account.can-windows && !root.busy; hint: "Open " + account.email + " on Windows"; pressed => { root.launch(account.profile, "windows"); } }
-            ActionButton { width: 25px; text: "···"; hint: "All usage and reset times for " + account.email; pressed => { root.details(account.id); } }
-        }
-        if root.codex: VerticalLayout { x: parent.width * 0.79; y: 10px; width: parent.width * 0.19; spacing: 4px;
-            ActionButton { text: account.active ? "✓ Active" : "Activate"; primary: !account.active; enabled: !account.active && account.profile != "" && !root.busy; hint: "Activate " + account.email; pressed => { root.activate(account.profile); } }
-            ActionButton { height: 20px; text: "Details"; hint: "All usage, credits and reset times"; pressed => { root.details(account.id); } }
-        }
-        Tooltip { text: @markdown("\{account.email + " · " + account.note}"); }
-    }
-    if root.accounts.length == 0: Text { x: 18px; y: 140px; text: "Accounts unavailable. Refresh to try again."; font-size: 12px; color: Colors.muted; }
-}
-component UsageBlock inherits Rectangle {
-    in property <UsageView> value;
-    height: 82px;
-    Text { x: 0px; y: 0px; width: parent.width; height: 15px; text: root.value.label; color: Colors.text; font-size: 10px; font-weight: 600; overflow: elide; }
-    Text { x: 0px; y: 19px; width: parent.width; height: 15px; text: root.value.amount; color: Colors.muted; font-size: 10px; overflow: elide; }
-    if root.value.has-percent: Rectangle { x: 0px; y: 38px; width: parent.width; height: 6px; border-radius: 3px; background: Colors.track;
-        Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.value.percent, 0, 100) / 100; height: 6px; border-radius: 3px; background: root.value.percent >= 90 ? #fca45d : Colors.blue; }
-    }
-    Text { x: 0px; y: 50px; width: parent.width; height: 13px; text: root.value.reset; color: Colors.muted; font-size: 9px; overflow: elide; }
-    Text { x: 0px; y: 65px; width: parent.width; height: 13px; text: root.value.expiration + (root.value.expiration != "" && root.value.meta != "" ? " · " : "") + root.value.meta; color: Colors.muted; font-size: 9px; overflow: elide; }
-    Tooltip { text: @markdown("\{root.value.label + " · " + root.value.amount + " · " + root.value.reset + " · " + root.value.expiration + " · " + root.value.meta}"); }
-}
-component HomeUsageBlock inherits Rectangle {
-    in property <UsageView> value;
-    height: 62px;
-    Text { x: 0px; y: 0px; width: parent.width; height: 13px; text: root.value.label; color: Colors.text; font-size: 10px; font-weight: 600; overflow: elide; }
-    Text { x: 0px; y: 14px; width: parent.width; height: 13px; text: root.value.amount; color: Colors.muted; font-size: 10px; overflow: elide; }
-    if root.value.has-percent: Rectangle { x: 0px; y: 29px; width: parent.width; height: 6px; border-radius: 3px; background: Colors.track;
-        Rectangle { x: 0px; y: 0px; width: parent.width * clamp(root.value.percent, 0, 100) / 100; height: 6px; border-radius: 3px; background: root.value.percent >= 90 ? #fca45d : Colors.blue; }
-    }
-    Text { x: 0px; y: 38px; width: parent.width; height: 12px; text: root.value.reset; color: Colors.muted; font-size: 9px; overflow: elide; }
-    Text { x: 0px; y: 50px; width: parent.width; height: 12px; text: root.value.expiration + (root.value.expiration != "" && root.value.meta != "" ? " · " : "") + root.value.meta; color: Colors.muted; font-size: 9px; overflow: elide; }
-    Tooltip { text: @markdown("\{root.value.label + " · " + root.value.amount + " · " + root.value.reset + " · " + root.value.expiration + " · " + root.value.meta}"); }
-}
-component ProviderCard inherits Rectangle {
-    in property <ProviderView> data;
-    callback details(string);
-    border-radius: 10px; background: Colors.surface; border-width: 1px; border-color: Colors.border;
-    Rectangle { x: 16px; y: 15px; width: 36px; height: 36px; border-radius: 9px; background: Colors.inset;
-        if root.data.id == "cursor": Image { width: 30px; height: 30px; x: 3px; y: 3px; image-fit: contain; source: Colors.dark ? @image-url("../public/assets/provider-cursor.png") : @image-url("../public/assets/provider-cursor-light.png"); }
-        if root.data.id == "kimi-code": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-kimi-code.png"); colorize: Colors.text; }
-        if root.data.id == "qwen": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-qwen.png"); }
-        if root.data.id == "zai": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-zai.png"); colorize: Colors.text; }
-        if root.data.id == "antigravity": Image { width: 28px; height: 28px; x: 4px; y: 4px; source: @image-url("../public/assets/provider-antigravity.png"); }
-        if root.data.id == "muse": Image { x: 4px; y: 4px; width: 28px; height: 28px; image-fit: contain; source: @image-url("../public/assets/provider-muse.png"); }
-        if root.data.id == "opencode-go": Image { x: 4px; y: 4px; width: 28px; height: 28px; image-fit: contain; source: @image-url("../public/assets/provider-opencode-go.png"); }
-    }
-    Text { x: 61px; y: 17px; width: parent.width - 96px; text: root.data.name; font-size: 13px; font-weight: 700; color: Colors.text; overflow: elide; }
-    Text { x: 61px; y: 37px; width: parent.width - 85px; text: root.data.status; font-size: 9px; color: Colors.muted; overflow: elide; }
-    ActionButton { x: parent.width - 34px; y: 18px; width: 21px; height: 22px; text: "···"; hint: "All " + root.data.name + " usage and account details"; pressed => { root.details(root.data.id); } }
-    for metric[index] in root.data.windows: HomeUsageBlock { x: 16px; y: 62px + index * 62px; width: parent.width - 32px; value: metric; }
-    if root.data.windows.length == 0: Text { x: 16px; y: 80px; width: parent.width - 32px; text: root.data.note == "" ? "Usage unavailable" : root.data.note; wrap: word-wrap; color: Colors.muted; font-size: 11px; }
-    Text { x: 16px; y: parent.height - 17px; width: parent.width - 32px; height: 10px; text: root.data.source; color: Colors.muted; font-size: 8px; overflow: elide; }
-}
-component AntigravityCard inherits Rectangle {
-    in property <[AntigravityRowView]> accounts;
-    in property <bool> busy;
-    in property <bool> auto-known;
-    in property <bool> auto-enabled;
-    in property <bool> auto-available;
-    in property <bool> settings-available;
-    in property <bool> pool-available;
-    in-out property <string> threshold-label;
-    in-out property <string> pool-label;
-    in property <[string]> pool-options;
-    in property <string> preview;
-    in property <string> auto-setting;
-    in property <string> auto-message;
-    callback action(string, string);
-    border-radius: 11px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
-    Image { x: 16px; y: 15px; width: 26px; height: 26px; source: @image-url("../public/assets/provider-antigravity.png"); }
-    Text { x: 49px; y: 15px; width: parent.width - 90px; height: 18px; text: "Antigravity · Ubuntu"; color: Colors.text; font-size: 13px; font-weight: 700; overflow: elide; }
-    ActionButton { x: parent.width - 34px; y: 14px; width: 21px; height: 22px; text: "···"; hint: "All Antigravity accounts, model quotas, reset times and source details"; pressed => { root.action("details", "antigravity"); } }
-    Text { x: 16px; y: 39px; width: parent.width - 32px; height: 13px; text: root.preview; color: Colors.muted; font-size: 9px; overflow: elide; }
-    ScrollView { x: 10px; y: 53px; width: parent.width - 20px; height: 140px; content-height: max(140px, root.accounts.length * 70px);
-        for account[index] in root.accounts: Rectangle { x: 0px; y: index * 70px; width: parent.width - 8px; height: 67px; border-radius: 6px;
-            background: account.selected ? Colors.track : Colors.inset;
-            Text { x: 7px; y: 4px; width: parent.width - 116px; height: 14px; text: account.email; font-size: 11px; font-weight: account.selected ? 700 : 400; color: Colors.text; overflow: elide;
-                Tooltip { text: @markdown("\{account.email + " · " + account.plan + " · " + account.status + " · " + account.note}"); }
-            }
-            Text { x: 7px; y: 19px; width: parent.width - 116px; height: 12px; text: account.status; font-size: 9px; color: account.selected ? Colors.blue : Colors.muted; overflow: elide; }
-            ActionButton { x: parent.width - 100px; y: 4px; width: 69px; height: 23px; text: account.selected ? "✓ Selected" : "Activate"; primary: !account.selected; enabled: account.can-activate && !root.busy; hint: account.selected ? "Verified selected Ubuntu login; running identity is shown separately" : "Activate " + account.email + " on Ubuntu; review any running processes before stopping"; pressed => { root.action("antigravity-activate", account.profile); } }
-            ActionButton { x: parent.width - 27px; y: 4px; width: 20px; height: 23px; text: "···"; hint: "All actual quotas, reset times and source details for " + account.email; pressed => { root.action("details", account.id); } }
-            Rectangle { x: 7px; y: 33px; width: (parent.width - 21px) / 2; height: 31px;
-                Text { x: 0px; y: 0px; width: parent.width; height: 12px; text: "5h · " + (account.five.has-percent ? account.five.amount : "Unavailable"); color: Colors.text; font-size: 9px; overflow: elide; }
-                Rectangle { x: 0px; y: 15px; width: parent.width; height: 4px; border-radius: 2px; background: Colors.track;
-                    if account.five.has-percent: Rectangle { x: 0px; y: 0px; width: parent.width * clamp(account.five.percent, 0, 100) / 100; height: 4px; border-radius: 2px; background: Colors.blue; }
-                }
-                Text { x: 0px; y: 22px; width: parent.width; height: 11px; text: account.five.has-percent ? account.five.reset : ""; font-size: 9px; color: Colors.muted; overflow: elide; }
-                Tooltip { text: @markdown("\{account.five.label + " · " + account.five.amount + " · " + account.five.reset + " · " + account.five.meta}"); }
-            }
-            Rectangle { x: (parent.width + 7px) / 2; y: 33px; width: (parent.width - 21px) / 2; height: 31px;
-                Text { x: 0px; y: 0px; width: parent.width; height: 12px; text: "Week · " + (account.weekly.has-percent ? account.weekly.amount : "Unavailable"); color: Colors.text; font-size: 9px; overflow: elide; }
-                Rectangle { x: 0px; y: 15px; width: parent.width; height: 4px; border-radius: 2px; background: Colors.track;
-                    if account.weekly.has-percent: Rectangle { x: 0px; y: 0px; width: parent.width * clamp(account.weekly.percent, 0, 100) / 100; height: 4px; border-radius: 2px; background: Colors.blue; }
-                }
-                Text { x: 0px; y: 22px; width: parent.width; height: 11px; text: account.weekly.has-percent ? account.weekly.reset : ""; font-size: 9px; color: Colors.muted; overflow: elide; }
-                Tooltip { text: @markdown("\{account.weekly.label + " · " + account.weekly.amount + " · " + account.weekly.reset + " · " + account.weekly.meta}"); }
-            }
-        }
-        if root.accounts.length == 0: Text { x: 6px; y: 10px; width: parent.width - 12px; height: 80px; text: "Ubuntu profiles unavailable. Existing usage is available in Details. Controls require verified native support."; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
-    }
-    ActionButton { x: 16px; y: 199px; width: 85px; height: 24px; text: !root.auto-known ? "Auto: —" : root.auto-enabled ? "Auto: On" : "Auto: Off"; primary: root.auto-enabled; enabled: root.auto-available && !root.busy; hint: root.auto-message + " · Automatic switching waits for an idle Ubuntu runtime and never accepts a manual stop approval."; pressed => { root.action("antigravity-automatic", root.auto-enabled ? "false" : "true"); } }
-    Text { x: 110px; y: 204px; width: 35px; height: 14px; text: "Used"; color: Colors.muted; font-size: 9px; }
-    ComboBox { x: 146px; y: 197px; width: parent.width - 162px; height: 27px; model: ["75%", "80%", "85%", "90%", "95%", "99%"]; current-value <=> root.threshold-label; enabled: root.settings-available && !root.busy; selected(value) => { root.action("antigravity-threshold", value); } }
-    ComboBox { x: 16px; y: 231px; width: parent.width - 32px; height: 25px; model: root.pool-options; current-value <=> root.pool-label; enabled: root.pool-available && !root.busy; selected(value) => { root.action("antigravity-pool", value); }
-        Tooltip { text: @markdown("\{"Exact reported quota group shared by both accounts; fresh quotas and native identity are rechecked on every decision. " + root.auto-setting + " · " + root.auto-message}"); }
-    }
-}
-export component Dashboard inherits Window {
-    title: "AI Account Center";
-    preferred-width: 1500px; preferred-height: 950px;
-    background: Colors.page;
-    in-out property <bool> dark <=> Colors.dark;
-    init => { Palette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
-    changed dark => { Palette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
-    in-out property <bool> authenticated: false;
-    in-out property <bool> auth-loading: true;
-    in-out property <bool> busy: false;
-    in-out property <bool> auto-enabled: false;
-    in-out property <bool> auto-available: false;
-    in-out property <bool> codex-has-five-hour: false;
-    in-out property <string> auto-setting: "Setting unavailable";
-    in-out property <int> threshold-used: -1;
-    in-out property <string> threshold-label: "—";
-    in-out property <string> auto-message;
-    in-out property <string> active-codex-email: "Active account unavailable";
-    in-out property <string> updated: "Waiting for account data";
-    in-out property <string> message;
-    in-out property <string> username;
-    in-out property <string> password;
-    in-out property <string> update-message;
-    in-out property <bool> update-running: false;
-    in-out property <[AccountView]> claude;
-    in-out property <[AccountView]> codex;
-    in-out property <[ProviderView]> providers;
-    in-out property <[AntigravityRowView]> antigravity-accounts;
-    in-out property <bool> antigravity-auto-known: false;
-    in-out property <bool> antigravity-auto-enabled: false;
-    in-out property <bool> antigravity-auto-available: false;
-    in-out property <bool> antigravity-settings-available: false;
-    in-out property <bool> antigravity-pool-available: false;
-    in-out property <string> antigravity-threshold-label: "—";
-    in-out property <[string]> antigravity-pool-options;
-    in-out property <string> antigravity-pool-label: "Choose quota pool";
-    in-out property <string> antigravity-preview;
-    in-out property <string> antigravity-auto-setting;
-    in-out property <string> antigravity-auto-message;
-    in-out property <bool> details-open: false;
-    in-out property <string> details-title;
-    in-out property <string> details-note;
-    in-out property <[UsageView]> details-windows;
-    in-out property <string> confirmation-product: "Codex";
-    in-out property <bool> confirmation-open: false;
-    in-out property <bool> confirmation-busy: false;
-    in-out property <bool> confirmation-valid: false;
-    in-out property <string> confirmation-target;
-    in-out property <string> confirmation-warning;
-    in-out property <string> confirmation-expires;
-    in-out property <string> confirmation-error;
-    in-out property <[ProcessView]> confirmation-processes;
-    in-out property <string> refresh-interval-label: "Unavailable";
-    in-out property <bool> refresh-interval-known: false;
-    in-out property <string> current-page: "dashboard";
-    in-out property <bool> analytics-loading: false;
-    in-out property <string> analytics-error;
-    in-out property <string> analytics-updated;
-    in-out property <string> analytics-history-note;
-    in-out property <string> analytics-range-value: "Last 7 days";
-    in-out property <string> analytics-provider-value: "All providers";
-    in-out property <string> analytics-account-value: "All accounts";
-    in-out property <string> analytics-metric-value;
-    in-out property <[string]> analytics-provider-options;
-    in-out property <[string]> analytics-account-options;
-    in-out property <[string]> analytics-metric-options;
-    in-out property <[AnalyticsSummaryView]> analytics-summary;
-    in-out property <[AnalyticsProviderView]> analytics-providers;
-    in-out property <[AnalyticsAccountView]> analytics-accounts;
-    in-out property <[AnalyticsMetricView]> analytics-metrics;
-    in-out property <[AnalyticsPointView]> analytics-points;
-    in-out property <[AnalyticsChartView]> analytics-quota-charts;
-    in-out property <string> analytics-overview-note;
-    in-out property <string> analytics-selected-account-note;
-    in-out property <string> analytics-chart-title;
-    in-out property <string> analytics-chart-note;
-    in-out property <string> analytics-chart-start;
-    in-out property <string> analytics-chart-end;
-    in-out property <string> analytics-chart-top;
-    in-out property <string> analytics-chart-middle;
-    in-out property <string> analytics-chart-bottom;
-    in-out property <bool> analytics-chart-has-points: false;
-    in-out property <bool> analytics-metric-percent: false;
-    in-out property <string> analytics-activity-title;
-    in-out property <string> analytics-activity-note;
-    in-out property <string> analytics-activity-chart-top;
-    in-out property <string> analytics-activity-chart-middle;
-    in-out property <string> analytics-activity-chart-bottom;
-    in-out property <string> analytics-activity-chart-start;
-    in-out property <string> analytics-activity-chart-end;
-    in-out property <bool> analytics-activity-has-data: false;
-    in-out property <[AnalyticsSummaryView]> analytics-activity-summary;
-    in-out property <[AnalyticsPointView]> analytics-activity-points;
-    in-out property <[AnalyticsModelView]> analytics-activity-models;
-    in-out property <[AnalyticsMetricView]> analytics-activity-providers;
-    in-out property <string> analytics-activity-interval-value: "Daily";
-    in-out property <[AnalyticsStackPointView]> analytics-activity-stack-points;
-    in-out property <[AnalyticsPointView]> analytics-activity-cost-points;
-    in-out property <string> analytics-activity-cost-top;
-    in-out property <string> analytics-activity-cost-middle;
-    in-out property <string> analytics-activity-cost-bottom;
-    in-out property <string> analytics-activity-model-note;
-    callback action(string, string);
-    property <length> side: root.width >= 1050px ? 168px : 60px;
-    property <length> body-width: root.width - root.side - 30px;
-    property <bool> wide: root.width >= 1200px;
-    property <int> columns: root.width >= 1250px ? 4 : root.width >= 820px ? 2 : 1;
-    property <length> table-height: 103px + max(4, root.claude.length, root.codex.length) * 76px;
-    property <length> top-height: root.wide ? root.table-height : root.table-height * 2 + 14px;
-    property <length> provider-height: 270px;
-    Rectangle { x: 0px; y: 0px; height: 58px; width: parent.width; background: Colors.inset;
-        Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: Colors.border; }
-        Image { x: 22px; y: 17px; width: 25px; height: 25px; source: @image-url("../public/assets/ai-account-center.svg"); }
-        Text { x: 62px; y: 10px; text: "AI Account Center"; color: Colors.text; font-size: 20px; font-weight: 700; }
-        Text { x: 62px; y: 35px; width: max(130px, min(390px, parent.width - 380px)); text: "Active Codex · " + root.active-codex-email; color: Colors.blue; font-size: 10px; overflow: elide; visible: root.authenticated; Tooltip { text: @markdown("\{root.active-codex-email}"); } }
-        Text { x: parent.width - 530px; y: 23px; width: 215px; text: root.updated; color: Colors.muted; font-size: 10px; overflow: elide; visible: parent.width >= 950px; }
-        ActionButton { x: parent.width - 298px; y: 15px; width: 83px; text: "Update apps"; hint: "Update installed apps on Mac, Ubuntu and Windows; updated apps may restart"; enabled: root.authenticated && !root.update-running && !root.busy; pressed => { root.action("update-apps", ""); } }
-        ActionButton { x: parent.width - 205px; y: 15px; width: 34px; text: "↻"; hint: "Refresh account usage"; enabled: root.authenticated && !root.busy; pressed => { root.action("refresh", ""); } }
-        ActionButton { x: parent.width - 160px; y: 15px; width: 34px; text: ""; hint: "Toggle light and dark theme"; pressed => { root.dark = !root.dark; root.action("theme", root.dark ? "dark" : "light"); }
-            Image { x: 9px; y: 7px; width: 16px; height: 16px; source: root.dark ? @image-url("../public/assets/sun.svg") : @image-url("../public/assets/moon.svg"); colorize: Colors.text; }
-        }
-        ActionButton { x: parent.width - 116px; y: 15px; width: 96px; text: root.authenticated ? "Sign out" : "Sign in"; hint: root.authenticated ? "Sign out of AI Account Center" : "Sign in to AI Account Center"; pressed => { if root.authenticated { root.action("logout", ""); } } }
-    }
-    if root.authenticated: Rectangle { x: 0px; y: 58px; width: root.side; height: parent.height - 58px; background: Colors.inset;
-        Rectangle { x: parent.width - 1px; y: 0px; width: 1px; height: parent.height; background: Colors.border; }
-        Rectangle { x: 8px; y: 16px; width: parent.width - 16px; height: 42px; background: root.current-page == "dashboard" ? Colors.dark ? #133257 : #e7f1ff : transparent; border-radius: 7px;
-            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => { root.current-page = "dashboard"; root.action("navigate-dashboard", ""); } }
-            Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.side > 100px ? "⌂   Dashboard" : "⌂"; color: Colors.dark ? white : #1674ea; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-        }
-        Rectangle { x: 8px; y: 66px; width: parent.width - 16px; height: 38px; border-radius: 7px; background: root.current-page == "analytics" ? Colors.dark ? #133257 : #e7f1ff : transparent;
-            Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.side > 100px ? "▥   Analytics" : "▥"; color: root.current-page == "analytics" ? Colors.blue : Colors.muted; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => { root.current-page = "analytics"; root.action("navigate-analytics", ""); } }
-            Tooltip { text: @markdown("Analytics across all accounts and providers"); }
-        }
-        Text { x: 18px; y: 125px; text: root.side > 100px ? "◉   Accounts" : "◉"; color: Colors.muted; font-size: 12px; }
-        TouchArea { x: 0px; y: 111px; width: parent.width; height: 42px; mouse-cursor: pointer; clicked => { root.action("accounts", ""); } }
-        Text { x: 18px; y: 168px; text: root.side > 100px ? "⚙   Settings" : "⚙"; color: Colors.muted; font-size: 12px; }
-        TouchArea { x: 0px; y: 153px; width: parent.width; height: 42px; mouse-cursor: pointer; clicked => { root.action("settings", ""); } }
-    }
-    if root.authenticated && root.current-page == "dashboard": ScrollView {
-        x: root.side; y: 58px; width: parent.width - root.side; height: parent.height - 58px;
-        content-width: root.body-width + 20px;
-        content-height: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 64px;
-        Rectangle { x: 14px; y: 14px; width: root.body-width; height: parent.height;
-            AccountTable { x: 0px; y: 0px; width: root.wide ? (parent.width - 14px) / 2 : parent.width; height: root.table-height; heading: "Claude"; accounts: root.claude; busy: root.busy;
-                launch(id, platform) => { root.action("launch", id + ":" + platform); }
-                details(id) => { root.action("details", id); }
-            }
-            AccountTable { x: root.wide ? (parent.width + 14px) / 2 : 0px; y: root.wide ? 0px : root.table-height + 14px; width: root.wide ? (parent.width - 14px) / 2 : parent.width; height: root.table-height; heading: "Codex"; codex: true; five-hour-visible: root.codex-has-five-hour; active-email: root.active-codex-email; accounts: root.codex; busy: root.busy; auto-enabled: root.auto-enabled; auto-available: root.auto-available; auto-setting: root.auto-setting; threshold-used: root.threshold-used; threshold-value <=> root.threshold-label;
-                activate(id) => { root.action("activate", id); }
-                details(id) => { root.action("details", id); }
-                automatic(enabled) => { root.action("automatic", enabled ? "true" : "false"); }
-                threshold(value) => { root.action("threshold", value); }
-            }
-            for provider[index] in root.providers: Rectangle {
-                x: root.columns == 4 && index >= 4 ? (index - 4) * ((parent.width + 14px) / 3) : mod(index, root.columns) * ((parent.width + 14px) / root.columns);
-                y: root.top-height + 14px + floor(index / root.columns) * (root.provider-height + 14px);
-                width: root.columns == 4 && index >= 4 ? (parent.width - 28px) / 3 : (parent.width - (root.columns - 1) * 14px) / root.columns;
-                height: root.provider-height;
-                if provider.id != "antigravity" || root.antigravity-accounts.length == 0: ProviderCard { x: 0px; y: 0px; width: parent.width; height: parent.height; data: provider;
-                    details(id) => { root.action("details", id); }
-                }
-                if provider.id == "antigravity" && root.antigravity-accounts.length > 0: AntigravityCard { x: 0px; y: 0px; width: parent.width; height: parent.height;
-                    accounts: root.antigravity-accounts; busy: root.busy; auto-known: root.antigravity-auto-known; auto-enabled: root.antigravity-auto-enabled;
-                    auto-available: root.antigravity-auto-available; settings-available: root.antigravity-settings-available; pool-available: root.antigravity-pool-available;
-                    threshold-label <=> root.antigravity-threshold-label; pool-label <=> root.antigravity-pool-label; pool-options: root.antigravity-pool-options;
-                    preview: root.antigravity-preview; auto-setting: root.antigravity-auto-setting; auto-message: root.antigravity-auto-message;
-                    action(action, value) => { root.action(action, value); }
-                }
-            }
-            Text { x: 0px; y: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 8px; width: parent.width; text: root.message == "" ? root.auto-message : root.message; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
-            Text { x: 0px; y: root.top-height + ceil(root.providers.length / root.columns) * (root.provider-height + 14px) + 32px; width: parent.width; text: root.update-message; color: Colors.muted; font-size: 11px; wrap: word-wrap; }
-        }
-    }
-    if root.authenticated && root.current-page == "analytics": AnalyticsPage {
-        x: root.side; y: 58px; width: parent.width - root.side; height: parent.height - 58px;
-        dark: root.dark; loading: root.analytics-loading; error: root.analytics-error;
-        updated: root.analytics-updated; history-note: root.analytics-history-note;
-        range-value <=> root.analytics-range-value; provider-value <=> root.analytics-provider-value;
-        account-value <=> root.analytics-account-value; metric-value <=> root.analytics-metric-value;
-        provider-options: root.analytics-provider-options; account-options: root.analytics-account-options;
-        metric-options: root.analytics-metric-options; summary: root.analytics-summary;
-        providers: root.analytics-providers; accounts: root.analytics-accounts;
-        metrics: root.analytics-metrics; points: root.analytics-points;
-        quota-charts: root.analytics-quota-charts; overview-note: root.analytics-overview-note;
-        selected-account-note: root.analytics-selected-account-note;
-        chart-title: root.analytics-chart-title; chart-note: root.analytics-chart-note;
-        chart-start: root.analytics-chart-start; chart-end: root.analytics-chart-end;
-        chart-top: root.analytics-chart-top; chart-middle: root.analytics-chart-middle; chart-bottom: root.analytics-chart-bottom;
-        chart-has-points: root.analytics-chart-has-points; metric-percent: root.analytics-metric-percent;
-        activity-title: root.analytics-activity-title; activity-note: root.analytics-activity-note;
-        activity-chart-top: root.analytics-activity-chart-top; activity-chart-middle: root.analytics-activity-chart-middle;
-        activity-chart-bottom: root.analytics-activity-chart-bottom; activity-chart-start: root.analytics-activity-chart-start;
-        activity-chart-end: root.analytics-activity-chart-end; activity-has-data: root.analytics-activity-has-data;
-        activity-summary: root.analytics-activity-summary; activity-points: root.analytics-activity-points;
-        activity-models: root.analytics-activity-models; activity-providers: root.analytics-activity-providers;
-        activity-interval-value <=> root.analytics-activity-interval-value;
-        activity-stack-points: root.analytics-activity-stack-points;
-        activity-cost-points: root.analytics-activity-cost-points;
-        activity-cost-top: root.analytics-activity-cost-top; activity-cost-middle: root.analytics-activity-cost-middle;
-        activity-cost-bottom: root.analytics-activity-cost-bottom; activity-model-note: root.analytics-activity-model-note;
-        action(kind, value) => { root.action(kind, value); }
-    }
-    if !root.authenticated: Rectangle {
-        x: max(16px, (parent.width - 420px) / 2); y: max(80px, (parent.height - 330px) / 2); width: min(420px, parent.width - 32px); height: 330px;
-        border-radius: 13px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
-        VerticalLayout { padding: 28px; spacing: 15px;
-            Text { text: root.auth-loading ? "Connecting to AI Account Center…" : "Sign in to AI Account Center"; color: Colors.text; font-size: 24px; font-weight: 700; }
-            Text { text: "Your accounts and subscription usage"; color: Colors.muted; font-size: 12px; }
-            LineEdit { text <=> root.username; placeholder-text: "Username"; enabled: !root.busy && !root.auth-loading; }
-            LineEdit { text <=> root.password; placeholder-text: "Password"; input-type: InputType.password; enabled: !root.busy && !root.auth-loading; accepted => { root.action("login", root.username + "\n" + root.password); } }
-            ActionButton { text: "Sign in"; primary: true; enabled: !root.busy && !root.auth-loading; pressed => { root.action("login", root.username + "\n" + root.password); } }
-            Text { text: root.message; color: #e89479; font-size: 11px; wrap: word-wrap; }
-        }
-    }
-    if root.details-open: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #0009;
-        TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer; clicked => { root.details-open = false; } }
-        Rectangle { x: max(16px, (parent.width - 630px) / 2); y: 80px; width: min(630px, parent.width - 32px); height: min(700px, parent.height - 110px); background: Colors.surface; border-radius: 12px; border-width: 1px; border-color: Colors.border;
-            Text { x: 23px; y: 20px; width: parent.width - 80px; text: root.details-title; color: Colors.text; font-size: 18px; font-weight: 600; overflow: elide; }
-            ActionButton { x: parent.width - 52px; y: 17px; width: 30px; text: "×"; hint: "Close usage details"; pressed => { root.details-open = false; } }
-            Text { x: 23px; y: 51px; width: parent.width - 46px; height: 35px; text: root.details-note; color: Colors.muted; font-size: 10px; wrap: word-wrap; overflow: elide; Tooltip { text: @markdown("\{root.details-note}"); } }
-            if root.details-title == "Settings": Rectangle { x: 23px; y: 93px; width: parent.width - 46px; height: 43px;
-                Text { x: 0px; y: 7px; text: "Usage refresh interval"; color: Colors.text; font-size: 12px; }
-                ComboBox { x: parent.width - 126px; y: 0px; width: 126px; height: 30px; model: ["30s", "60s", "120s", "300s", "600s", "1800s", "3600s"]; current-value <=> root.refresh-interval-label; enabled: root.refresh-interval-known && !root.busy; selected(value) => { root.action("refresh-interval", value); } }
-            }
-            ScrollView { x: 23px; y: root.details-title == "Settings" ? 144px : 95px; width: parent.width - 46px; height: parent.height - (root.details-title == "Settings" ? 164px : 115px); content-height: max(140px, root.details-windows.length * 103px + (root.details-title == "Settings" ? 125px : 0px));
-                for usage[index] in root.details-windows: UsageBlock { x: 0px; y: index * 103px; width: parent.width - 15px; value: usage; }
-                if root.details-title == "Settings": AboutSlint { x: max(0px, (parent.width - 285px) / 2); y: root.details-windows.length * 103px + 12px; width: min(285px, parent.width); height: 108px; }
-                if root.details-windows.length == 0 && root.details-title != "Settings": Text { x: 0px; y: 0px; width: parent.width; text: "No usage limits, balances or reset times were reported."; color: Colors.muted; font-size: 12px; wrap: word-wrap; }
-            }
-        }
-    }
-    if root.confirmation-open: Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height;
-        background: #000b;
-        TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; }
+    clip: true;
+    border-color: root.mode == "run" ? Theme.accent.mix(Theme.rule, 0.4) : root.mode == "done" ? Theme.calm.mix(Theme.rule, 0.45) : ta.has-hover ? Theme.rule-strong : Theme.rule;
+    background: root.mode == "run" ? Theme.accent-soft : ta.has-hover ? Theme.paper-2 : Theme.paper;
+    animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    transform-scale: ta.pressed && root.mode == "idle" ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; }
+    property <color> fg: root.mode == "run" ? Theme.accent-text : root.mode == "done" ? Theme.good-text : Theme.ink;
+
+    row := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 13px;
+        spacing: 8px;
+        alignment: start;
         Rectangle {
-            x: max(12px, (parent.width - 610px) / 2); y: max(68px, (parent.height - 490px) / 2);
-            width: min(610px, parent.width - 24px); height: min(490px, parent.height - 82px);
-            border-radius: 12px; border-width: 1px; border-color: Colors.border; background: Colors.surface;
-            Text { x: 24px; y: 22px; width: parent.width - 48px; text: "Another " + root.confirmation-product + " process is running"; color: Colors.text; font-size: 20px; font-weight: 700; wrap: word-wrap; }
-            Text { x: 24px; y: 57px; width: parent.width - 48px; text: "Switch to " + root.confirmation-target + "?"; color: Colors.blue; font-size: 12px; }
-            Text { x: 24px; y: 83px; width: parent.width - 48px; height: 63px; text: root.confirmation-warning; color: Colors.muted; font-size: 12px; wrap: word-wrap; }
-            Rectangle { x: 24px; y: 151px; width: parent.width - 48px; height: max(80px, parent.height - 300px); border-radius: 8px; border-width: 1px; border-color: Colors.border; background: Colors.inset;
-                ScrollView { x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 20px; content-height: max(50px, root.confirmation-processes.length * 43px);
-                    for process[index] in root.confirmation-processes: Rectangle { x: 0px; y: index * 43px; width: parent.width - 12px; height: 40px;
-                        Text { x: 0px; y: 0px; width: parent.width; text: process.label; color: Colors.text; font-size: 12px; font-weight: 600; overflow: elide; }
-                        Text { x: 0px; y: 21px; width: parent.width; text: "PID " + process.pid + (process.role != "" ? " · " + process.role : ""); color: Colors.muted; font-size: 10px; overflow: elide; }
+            width: 18px;
+            // three glyphs cross-fade with a scale spring
+            Icon {
+                y: (parent.height - 18px) / 2;
+                width: 18px;
+                height: 18px;
+                name: "arrow-down-circle";
+                tint: Theme.ink-2;
+                opacity: root.mode == "idle" ? 1 : 0;
+                transform-scale: root.mode == "idle" ? 1 : 0.55;
+                animate opacity { duration: 180ms; }
+                animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+            }
+            Rectangle {
+                y: (parent.height - 18px) / 2;
+                width: 18px;
+                height: 18px;
+                opacity: root.mode == "run" ? 1 : 0;
+                animate opacity { duration: 180ms; }
+                transform-rotation: root.mode == "run" ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
+                Path {
+                    width: 18px;
+                    height: 18px;
+                    viewbox-width: 24;
+                    viewbox-height: 24;
+                    commands: "M12 3 A9 9 0 1 1 11.99 3";
+                    stroke: root.fg.with-alpha(0.22);
+                    stroke-width: 1.75px;
+                    fill: transparent;
+                }
+                Path {
+                    width: 18px;
+                    height: 18px;
+                    viewbox-width: 24;
+                    viewbox-height: 24;
+                    commands: "M12 3 A9 9 0 0 1 21 12";
+                    stroke: root.fg;
+                    stroke-width: 1.75px;
+                    stroke-line-cap: round;
+                    fill: transparent;
+                }
+            }
+            Icon {
+                y: (parent.height - 18px) / 2;
+                width: 18px;
+                height: 18px;
+                name: "check-circle";
+                tint: Theme.good-text;
+                opacity: root.mode == "done" ? 1 : 0;
+                transform-scale: root.mode == "done" ? 1 : 0.55;
+                animate opacity { duration: 180ms; }
+                animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+            }
+        }
+        Text {
+            text: root.mode == "run" ? "Updating" : root.mode == "done" ? "Apps updated" : "Update apps";
+            font-size: Type.control;
+            font-weight: 580;
+            color: root.fg;
+            vertical-alignment: center;
+        }
+        if root.mode == "run": Rectangle {
+            width: max(roll-new.preferred-width, roll-old.preferred-width);
+            clip: true;
+            roll-old := Text {
+                y: (parent.height - self.preferred-height) / 2 - root.roll-e * parent.height * 0.85;
+                visible: root.rolling;
+                opacity: 1 - root.roll-e;
+                text: root.prev-count;
+                font-family: Type.tab;
+                font-size: Type.control;
+                font-weight: 650;
+                color: root.fg;
+            }
+            roll-new := Text {
+                y: (parent.height - self.preferred-height) / 2 + (1 - root.roll-e) * parent.height * 0.85;
+                opacity: root.roll-e;
+                text: root.shown-count;
+                font-family: Type.tab;
+                font-size: Type.control;
+                font-weight: 650;
+                color: root.fg;
+            }
+        }
+        if root.mode == "run": Text {
+            text: "of " + root.data.total;
+            font-family: Type.tab;
+            font-size: Type.control;
+            color: root.fg;
+            opacity: 0.8;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled && root.mode == "idle";
+        mouse-cursor: root.mode == "idle" && root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            if self.has-hover {
+                Hover.tip("update-apps", self.absolute-position, self.width, self.height, root.data.tip);
+            } else {
+                Hover.leave("update-apps");
+            }
+        }
+    }
+}
+
+component Header inherits Rectangle {
+    in property <string> page;
+    in property <ChromeView> chrome;
+    in property <UpdateView> update;
+    in property <bool> busy;
+    in property <bool> shown;
+    callback navigate(string);
+    callback refresh();
+    callback update-apps();
+    callback theme-picked(int);
+    callback sign-out();
+
+    height: 62px;
+    background: Theme.paper;
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.rule; }
+
+    bar := HorizontalLayout {
+        x: max(0px, (root.width - Breakpoints.max-content) / 2);
+        width: min(root.width, Breakpoints.max-content);
+        y: root.shown ? 0px : -8px;
+        height: root.height;
+        opacity: root.shown ? 1 : 0;
+        animate y { duration: Motion.on ? 460ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        padding-left: Breakpoints.gutter;
+        padding-right: Breakpoints.gutter;
+        spacing: Breakpoints.compact ? 16px : 24px;
+        // Only the spacer stretches, so nothing in the header moves when the status text changes.
+        brand := Rectangle {
+            horizontal-stretch: 0;
+            min-width: brand-row.preferred-width;
+            brand-row := HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    AppLogo {
+                        size: 26px;
+                        transform-rotation: brand-ta.has-hover ? -8deg : 0deg;
+                        transform-scale: brand-ta.has-hover ? 1.06 : 1;
+                        animate transform-rotation, transform-scale { duration: Motion.med; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                    }
+                }
+                if !Breakpoints.compact: Text {
+                    text: "AI Account Center";
+                    font-size: 15.5px;
+                    font-weight: 640;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+            }
+            brand-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.navigate("home"); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        // the concept's .chrome-right: the status line and the controls 8 px apart (the bar keeps 24 px between
+        // the brand, the nav and this group)
+        right := HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 8px;
+            status := Rectangle {
+                horizontal-stretch: 0;
+                // the concept's .status-line keeps 6 px more room before the refresh button
+                min-width: status-row.preferred-width + 6px;
+                status-row := HorizontalLayout {
+                    x: 0px;
+                    width: self.preferred-width;
+                    spacing: 4px;
+                    Text {
+                        text: root.chrome.status-lead;
+                        font-family: Type.tab;
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                    }
+                    if root.chrome.status-strong != "": Text {
+                        text: root.chrome.status-strong;
+                        font-family: Type.tab;
+                        font-size: 12.5px;
+                        font-weight: 580;
+                        color: Theme.ink-2;
+                        vertical-alignment: center;
+                    }
+                    if root.chrome.status-more != "" && Breakpoints.width >= 1440px: Text {
+                        text: "· " + root.chrome.status-more;
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                    }
+                }
+                TouchArea {
+                    changed has-hover => {
+                        if self.has-hover {
+                            Hover.tip("status", self.absolute-position, self.width, self.height, root.chrome.status-tip);
+                        } else {
+                            Hover.leave("status");
+                        }
                     }
                 }
             }
-            Text { x: 24px; y: parent.height - 132px; width: parent.width - 48px; height: 16px; text: root.confirmation-expires; color: Colors.muted; font-size: 10px; }
-            Text { x: 24px; y: parent.height - 108px; width: parent.width - 48px; height: 43px; text: root.confirmation-busy ? "Stopping the listed processes and restoring " + root.confirmation-product + "…" : root.confirmation-error; color: root.confirmation-error != "" ? #ee9a7b : Colors.muted; font-size: 11px; wrap: word-wrap; }
-            HorizontalLayout { x: parent.width - 278px; y: parent.height - 51px; width: 254px; height: 31px; spacing: 12px;
-                ActionButton { text: "Cancel"; enabled: !root.confirmation-busy; hint: "Cancel; keep all " + root.confirmation-product + " processes and accounts unchanged"; pressed => { root.action("activation-cancel", ""); } }
-                ActionButton { width: 160px; text: "Yes, stop and restart"; primary: true; enabled: root.confirmation-valid && !root.confirmation-busy; hint: "Stop the listed processes and switch the " + root.confirmation-product + " account"; pressed => { root.action("activation-confirm", ""); } }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: "refresh";
+                    hint: "Refresh usage now";
+                    spinning: root.chrome.refreshing;
+                    enabled: !root.busy || root.chrome.refreshing;
+                    clicked => { root.refresh(); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                UpdateButton {
+                    data: root.update;
+                    enabled: !root.busy;
+                    clicked => { root.update-apps(); }
+                }
+            }
+            // .chrome-sep: a 22 px hairline with 4 px on each side
+            Rectangle {
+                width: 9px;
+                Rectangle { x: 4px; y: (parent.height - 22px) / 2; width: 1px; height: 22px; background: Theme.rule; }
+            }
+            theme-anchor := Rectangle {
+                width: theme-btn.width;
+                theme-btn := IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Theme.mode == 1 ? "sun" : Theme.mode == 2 ? "moon" : "monitor";
+                    chevron: true;
+                    hint: "Appearance";
+                    pressed-look: theme-pop.is-open;
+                    clicked => { theme-pop.show(); }
+                }
+                theme-pop := PopupWindow {
+                    x: parent.width - 212px;
+                    y: (parent.height + theme-btn.height) / 2 + 8px;
+                    width: 212px;
+                    height: 28px + 3 * 36px + 12px;
+                    close-policy: close-on-click-outside;
+                    MenuPanel {
+                        width: 212px;
+                        height: 28px + 3 * 36px + 12px;
+                        MenuHead { text: "Appearance"; }
+                        MenuItem { icon: "sun"; text: "Light"; checked: Theme.mode == 1; activated => { theme-pop.close(); root.theme-picked(1); } }
+                        MenuItem { icon: "moon"; text: "Dark"; checked: Theme.mode == 2; activated => { theme-pop.close(); root.theme-picked(2); } }
+                        MenuItem { icon: "monitor"; text: "Auto, follows the system"; checked: Theme.mode == 0; activated => { theme-pop.close(); root.theme-picked(0); } }
+                    }
+                }
+            }
+            account-anchor := Rectangle {
+                width: account-btn.width;
+                account-btn := IconButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: "user";
+                    chevron: true;
+                    hint: "Signed-in user";
+                    pressed-look: account-pop.is-open;
+                    clicked => { account-pop.show(); }
+                }
+                account-pop := PopupWindow {
+                    x: parent.width - 260px;
+                    y: (parent.height + account-btn.height) / 2 + 8px;
+                    width: 260px;
+                    height: 70px + 13px + 36px + 12px;
+                    close-policy: close-on-click-outside;
+                    MenuPanel {
+                        width: 260px;
+                        height: 70px + 13px + 36px + 12px;
+                        HorizontalLayout {
+                            height: 70px;
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 11px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    border-radius: 16px;
+                                    border-width: 1px;
+                                    border-color: Theme.rule;
+                                    Icon { x: 6px; y: 6px; name: "user"; tint: Theme.ink-2; width: 20px; height: 20px; }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                Text { text: root.chrome.username != "" ? root.chrome.username : "Owner"; font-size: 13.5px; font-weight: 640; color: Theme.ink; overflow: elide; }
+                                Text {
+                                    text: root.chrome.host != "" ? "Signed in to this dashboard on " + root.chrome.host : "Signed in to this dashboard";
+                                    font-size: Type.small;
+                                    color: Theme.ink-3;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                        MenuSeparator { }
+                        MenuItem { icon: "logout"; text: "Sign out"; activated => { account-pop.close(); root.sign-out(); } }
+                    }
+                }
             }
         }
     }
+}
 
+// A Flickable with a thin draggable scrollbar thumb.
+component PageScroll inherits Rectangle {
+    in property <length> content-height;
+    in-out property <length> content-y <=> flick.content-y;
+    property <length> max-scroll: max(0px, root.content-height - root.height);
+    flick := Flickable {
+        width: root.width;
+        height: root.height;
+        // a hover card belongs to the element under the pointer: scrolling moves that element away
+        changed content-y => { Hover.clear(); }
+        content-width: root.width;
+        content-height: max(root.height, root.content-height);
+        @children
+    }
+    if root.max-scroll > 0: thumb := Rectangle {
+        property <length> thumb-h: max(40px, root.height * root.height / root.content-height);
+        x: root.width - 10px;
+        y: 2px + (-flick.content-y / root.max-scroll) * (root.height - 4px - self.thumb-h);
+        width: 8px;
+        height: self.thumb-h;
+        Rectangle {
+            x: drag.has-hover || drag.pressed ? 1px : 3px;
+            width: drag.has-hover || drag.pressed ? 6px : 4px;
+            height: parent.height;
+            border-radius: 3px;
+            background: drag.pressed ? Theme.ink-3 : Theme.rule-strong;
+            opacity: drag.has-hover || drag.pressed ? 1 : 0.7;
+            animate x, width, opacity { duration: Motion.fast; }
+        }
+        drag := TouchArea {
+            property <length> start-y;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down { self.start-y = flick.content-y; }
+            }
+            moved => {
+                if self.pressed {
+                    flick.content-y = clamp(self.start-y - (self.mouse-y - self.pressed-y) * root.max-scroll / max(1px, root.height - 4px - thumb.thumb-h), -root.max-scroll, 0px);
+                }
+            }
+        }
+    }
+}
+
+export component Dashboard inherits Window {
+    title: "AI Account Center";
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    default-font-family: Type.sans;
+    background: Theme.bg;
+
+    // ---------- bridge-facing state ----------
+    in-out property <int> theme-mode <=> Theme.mode;
+    in-out property <bool> system-dark <=> Theme.system-dark;
+    in-out property <bool> reduced-motion <=> Motion.reduced;
+    in-out property <bool> authenticated: false;
+    in-out property <AuthView> auth: { state: "loading" };
+    in-out property <StrengthView> strength;
+    in-out property <bool> busy: false;
+    in-out property <string> current-page: "home";
+    in-out property <bool> data-ready: false;
+    in-out property <ChromeView> chrome: { status-lead: "Waiting for account data" };
+    in-out property <UpdateView> update: { total: 21 };
+    in-out property <[SectionView]> sections;
+    in-out property <[ProviderCardView]> cards;
+    in-out property <[RegistryView]> registry;
+    in-out property <[ToastView]> toasts;
+    in-out property <string> selected-id;
+    in-out property <bool> details-open: false;
+    in-out property <DetailsView> details;
+    in-out property <ConfirmationView> confirmation;
+    in-out property <[ProcessView]> confirmation-processes;
+    in-out property <string> refresh-interval-label: "60 s";
+    in-out property <bool> refresh-interval-known: false;
+    in-out property <string> username;
+    in-out property <string> password;
+    callback action(string, string);
+    callback toast-dismissed(int);
+
+    // ---------- theme cross-fade (globals cannot animate) ----------
+    property <float> theme-mix: Theme.dark ? 1 : 0;
+    animate theme-mix { duration: Motion.on ? Motion.theme : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    changed theme-mix => {
+        Motion.theme-shift = self.theme-mix > 0.001 && self.theme-mix < 0.999;
+        Theme.mix = self.theme-mix;
+    }
+    property <bool> dark: Theme.dark;
+    changed dark => { Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light; }
+    init => {
+        Theme.mix = self.theme-mix;
+        Breakpoints.width = self.width;
+        Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light;
+        keys.focus();
+    }
+    changed width => { Breakpoints.width = self.width; }
+
+    // The first page of the session loads in more slowly than a page change.
+    property <bool> home-seen: false;
+    seen-timer := Timer {
+        interval: 2s;
+        running: root.data-ready && !root.home-seen;
+        triggered => { self.running = false; root.home-seen = true; }
+    }
+
+    // ---------- page routing with a leave/enter transition ----------
+    property <string> shown-page: "home";
+    property <bool> leaving: false;
+    changed current-page => {
+        Hover.clear();
+        root.close-details();
+        if Motion.on {
+            root.leaving = true;
+            swap-page.running = true;
+        } else {
+            root.shown-page = root.current-page;
+            scroller.content-y = 0px;
+        }
+    }
+    swap-page := Timer {
+        interval: 190ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.shown-page = root.current-page;
+            scroller.content-y = 0px;
+            root.leaving = false;
+        }
+    }
+    function go(page: string) {
+        if page != root.current-page {
+            root.current-page = page;
+            root.action("navigate", page);
+        }
+    }
+    function open-details(id: string) {
+        if id == "" { return; }
+        if root.details-open && id != root.details.id { overlay.swap(); }
+        root.selected-id = id;
+        root.action("details", id);
+    }
+    function close-details() {
+        if root.details-open {
+            root.details-open = false;
+            root.selected-id = "";
+            root.action("details-closed", "");
+        }
+    }
+
+    keys := FocusScope {
+        width: root.width;
+        height: root.height;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                if root.confirmation.open && !root.confirmation.busy {
+                    root.action("activation-cancel", "");
+                    return accept;
+                }
+                if root.details-open {
+                    root.close-details();
+                    return accept;
+                }
+                Hover.clear();
+            }
+            return reject;
+        }
+
+        // ~100 hairlines: a cached layer, redrawn only when the window resizes or the theme changes
+        PaperGrid {
+            width: root.width;
+            height: root.height;
+            cache-rendering-hint: true;
+        }
+        // A click that nothing else takes (the header's empty space, the gaps between sections) closes
+        // Details; a click on a row opens that row instead.
+        TouchArea {
+            width: root.width;
+            height: root.height;
+            enabled: root.details-open;
+            clicked => { root.close-details(); }
+        }
+
+        scroller := PageScroll {
+            y: 62px;
+            width: root.width;
+            height: root.height - 62px;
+            content-height: pages.preferred-height;
+            Rectangle {
+                x: max(0px, (root.width - Breakpoints.max-content) / 2);
+                width: min(root.width, Breakpoints.max-content);
+                height: max(scroller.height, pages.preferred-height);
+                TouchArea {
+                    enabled: root.details-open;
+                    clicked => { root.close-details(); }
+                }
+                pages := VerticalLayout {
+                    padding-left: Breakpoints.gutter;
+                    padding-right: Breakpoints.gutter;
+                    padding-top: 26px;
+                    padding-bottom: 120px;
+                    alignment: start;
+                    y: root.leaving ? -8px : 0px;
+                    opacity: root.leaving ? 0 : 1;
+                    animate y { duration: Motion.on ? 190ms : 0ms; easing: cubic-bezier(0.4, 0, 1, 1); }
+                    animate opacity { duration: Motion.on ? 180ms : 0ms; easing: cubic-bezier(0.4, 0, 1, 1); }
+                    if root.authenticated && root.shown-page == "home": HomePage {
+                        sections: root.sections;
+                        cards: root.cards;
+                        busy: root.busy;
+                        ready: root.data-ready;
+                        selected-id: root.selected-id;
+                        open-details(id) => { root.open-details(id); }
+                        launch(id, target) => { root.action("launch", id + ":" + target); }
+                        activate(kind, profile) => { root.action(kind, profile); }
+                        auto-toggled(id, on) => { root.action(id == "antigravity" ? "antigravity-automatic" : "automatic", on ? "true" : "false"); }
+                        threshold-picked(id, v) => { root.action(id == "antigravity" ? "antigravity-threshold" : "threshold", v); }
+                        go-analytics => { root.go("analytics"); }
+                        go-accounts => { root.go("accounts"); }
+                        first: !root.home-seen;
+                    }
+                    if root.authenticated && root.shown-page == "analytics": AnalyticsPage {
+                        scroll: -scroller.content-y;
+                        view-bottom: root.height;
+                        win-h: root.height;
+                    }
+                    if root.authenticated && root.shown-page == "accounts": AccountsPage {
+                        busy: root.busy;
+                        selected-id: root.selected-id;
+                        first: !root.home-seen;
+                        theme-value: Theme.mode == 1 ? "light" : Theme.mode == 2 ? "dark" : "auto";
+                        theme-picked(v) => {
+                            Theme.mode = v == "light" ? 1 : v == "dark" ? 2 : 0;
+                            root.action("theme", v);
+                        }
+                        open-details(id) => { root.open-details(id); }
+                        act(kind, value) => { root.action(kind, value); }
+                    }
+                }
+            }
+        }
+
+        Header {
+            x: 0px;
+            y: 0px;
+            width: root.width;
+            page: root.current-page;
+            chrome: root.chrome;
+            update: root.update;
+            busy: root.busy;
+            shown: root.authenticated;
+            navigate(p) => { root.go(p); }
+            refresh() => { root.action("refresh", ""); }
+            update-apps() => { root.action("update-apps", ""); }
+            theme-picked(mode) => {
+                Theme.mode = mode;
+                root.action("theme", mode == 1 ? "light" : mode == 2 ? "dark" : "auto");
+            }
+            sign-out() => { root.action("logout", ""); }
+        }
+
+        overlay := SlideOver {
+            view-w: root.width;
+            view-h: root.height;
+            open: root.details-open;
+            close-requested => { root.close-details(); }
+            // Fills the panel's content area (no explicit size: `parent` here would be the SlideOver).
+            DetailsPanel {
+                data: root.details;
+                open: root.details-open;
+                busy: root.busy;
+                close => { root.close-details(); }
+                launch(id, target) => { root.action("launch", id + ":" + target); }
+                activate(kind, profile) => { root.action(kind, profile); }
+                go-accounts => { root.close-details(); root.go("accounts"); }
+            }
+        }
+
+        Dialog {
+            view-w: root.width;
+            view-h: root.height;
+            open: root.confirmation.open;
+            dismissable: !root.confirmation.busy;
+            card-w: 600px;
+            close-requested => { root.action("activation-cancel", ""); }
+            Text {
+                text: "Another " + root.confirmation.product + " process is running";
+                font-size: 20px;
+                font-weight: 640;
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+            Text { text: "Switch to " + root.confirmation.target + "?"; font-size: 13px; color: Theme.accent-text; }
+            Text { text: root.confirmation.warning; font-size: 12.5px; color: Theme.ink-2; wrap: word-wrap; }
+            Rectangle {
+                min-height: 60px;
+                preferred-height: min(220px, root.confirmation-processes.length * 44px + 20px);
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.rule;
+                background: Theme.paper-2;
+                Flickable {
+                    x: 12px;
+                    y: 10px;
+                    width: parent.width - 24px;
+                    height: parent.height - 20px;
+                    content-height: procs.preferred-height;
+                    procs := VerticalLayout {
+                        spacing: 6px;
+                        for p in root.confirmation-processes: VerticalLayout {
+                            Text { text: p.label; font-size: 12.5px; font-weight: 600; color: Theme.ink; overflow: elide; }
+                            Text { text: "PID " + p.pid + (p.role != "" ? " · " + p.role : ""); font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; }
+                        }
+                        if root.confirmation-processes.length == 0: Text { text: "No running processes were listed."; font-size: 12.5px; color: Theme.ink-3; }
+                    }
+                }
+            }
+            Text { text: root.confirmation.expires; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; }
+            Text {
+                text: root.confirmation.busy ? "Stopping the listed processes and restoring " + root.confirmation.product + "…" : root.confirmation.error;
+                font-size: 12.5px;
+                color: root.confirmation.error != "" && !root.confirmation.busy ? Theme.crit-text : Theme.ink-3;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 10px;
+                Button {
+                    text: "Cancel";
+                    enabled: !root.confirmation.busy;
+                    hint: "Keep every " + root.confirmation.product + " process and account unchanged";
+                    clicked => { root.action("activation-cancel", ""); }
+                }
+                Button {
+                    kind: "primary";
+                    text: "Yes, stop and restart";
+                    enabled: root.confirmation.valid && !root.confirmation.busy;
+                    hint: "Stop the listed processes and switch the " + root.confirmation.product + " account";
+                    clicked => { root.action("activation-confirm", ""); }
+                }
+            }
+        }
+
+        ToastStack {
+            x: root.width - self.width - (root.details-open ? overlay.shown-width + 20px : 24px);
+            y: root.height - self.height - 24px;
+            animate x { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            toasts: root.toasts;
+            dismissed(id) => { root.toast-dismissed(id); }
+        }
+
+        HoverLayer {
+            width: root.width;
+            height: root.height;
+            view-w: root.width;
+            view-h: root.height;
+        }
+
+        SignInLayer {
+            width: root.width;
+            height: root.height;
+            shown: !root.authenticated;
+            auth: root.auth;
+            strength: root.strength;
+            busy: root.busy;
+            username <=> root.username;
+            password <=> root.password;
+            submit(user, pass) => { root.action("login", user + "\n" + pass); }
+            create(user, pass, confirm, code) => { root.action("setup", user + "\n" + pass + "\n" + confirm + "\n" + code); }
+            typing(pass, confirm) => { root.action("setup-typing", pass + "\n" + confirm); }
+            recheck => { root.action("auth-recheck", ""); }
+            limit-over => { root.action("login-limit-over", ""); }
+        }
+    }
 }

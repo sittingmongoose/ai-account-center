@@ -1,0 +1,84 @@
+// Select: a button showing the current choice and a chevron; the options open in a PopupWindow.
+import { Theme, Motion, Type } from "../theme.slint";
+import { Icon } from "icon.slint";
+import { MenuPanel, MenuItem } from "menu.slint";
+
+export component Select inherits Rectangle {
+    in property <[string]> options;
+    in-out property <string> value;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <bool> small: false;
+    in property <length> menu-width: max(root.width, 180px);
+    callback selected(string);
+
+    height: root.small ? 28px : 34px;
+    min-width: row.min-width;
+    preferred-width: row.preferred-width;
+    border-radius: root.small ? 7px : 9px;
+    border-width: 1px;
+    border-color: ta.has-hover || pop.is-open ? Theme.rule-strong : Theme.rule;
+    background: pop.is-open ? Theme.paper-3 : ta.has-hover ? Theme.paper-2 : Theme.paper;
+    opacity: root.enabled ? 1 : 0.45;
+    animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    transform-scale: ta.pressed ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; }
+
+    row := HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 10px;
+        spacing: 8px;
+        if root.icon != "": VerticalLayout {
+            alignment: center;
+            Icon { name: root.icon; tint: Theme.ink-3; width: 15px; height: 15px; }
+        }
+        Text {
+            text: root.value;
+            font-family: Type.tab;
+            font-size: root.small ? 12.5px : Type.control;
+            font-weight: 560;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                name: "chev-down";
+                tint: Theme.ink-3;
+                width: 14px;
+                height: 14px;
+                transform-rotation: pop.is-open ? 180deg : 0deg;
+                animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+            }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { pop.show(); }
+    }
+    pop := PopupWindow {
+        x: 0px;
+        y: root.height + 6px;
+        width: root.menu-width;
+        height: root.options.length * 36px + 14px;
+        close-policy: close-on-click-outside;
+        MenuPanel {
+            width: root.menu-width;
+            height: root.options.length * 36px + 14px;
+            for option in root.options: MenuItem {
+                text: option;
+                checked: option == root.value;
+                activated => {
+                    pop.close();
+                    if option != root.value {
+                        root.value = option;
+                        root.selected(option);
+                    }
+                }
+            }
+        }
+    }
+}

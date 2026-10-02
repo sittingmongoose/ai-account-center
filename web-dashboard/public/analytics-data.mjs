@@ -1,4 +1,7 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { mainWindow } from './analytics-quota.mjs';
+
+export { mainWindow };
 
 /** A view of observed quotas. These samples are never summed into token or cost totals. */
 export const ANALYTICS_PROVIDERS = [
@@ -241,6 +244,73 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
     // Legacy single-chart bindings are empty; all histories are rendered by quotaCharts.
     metrics: [], points: [], chartTitle: 'Account histories', chartNote: '', chartHasPoints: false,
     ...activityView(accountId === 'all' ? payload?.activity : { ...payload?.activity, status: 'unavailable', totals: null, message: text(payload?.activity?.message) || 'Local CLI activity cannot be attributed to an individual account.' }, payload?.range, activityInterval),
+    // The quota history (the former Headroom) is one row per account, grouped by provider.
+    // quotaCharts above remain the per-window history data that a row's focus chart reads by key.
+    version: ANALYTICS_VIEW_VERSION,
+    quotaHistory: quotaHistory(accounts, histories, payload?.range, now),
     choices, selection: { providerId, accountId, metricKey: selectedKey },
+  };
+}
+
+export const ANALYTICS_VIEW_VERSION = 3;
+const percentOf = window => usedPercent(window);
+function relativeReset(value, now) {
+  const time = timestamp(value);
+  if (!Number.isFinite(time)) return '';
+  const delta = time - now;
+  if (delta <= 0) return 'reset due';
+  const minutes = Math.floor(delta / 60000), hours = Math.floor(minutes / 60), days = Math.floor(hours / 24);
+  return `resets in ${days >= 1 ? `${days}d ${hours % 24}h` : hours >= 1 ? `${hours}h ${minutes % 60}m` : `${Math.max(1, minutes)}m`}`;
+}
+/** A sparkline path in a 100 x 100 viewbox from a quota plot (gaps are never bridged with invented zeros). */
+export function sparklinePath(points) {
+  return array(points).map((point, index) => `${index ? 'L' : 'M'}${(point.x * 100).toFixed(2)} ${(100 - point.percent).toFixed(2)}`).join(' ');
+}
+/** Quota history rows: every account once, grouped by provider; active state never selects or reorders a row. */
+export function quotaHistory(accounts, histories, range, now = Date.now()) {
+  const groups = [];
+  for (const [provider, label] of ANALYTICS_PROVIDERS) {
+    const rows = array(accounts).filter(account => account.provider === provider).map(account => {
+      const window = mainWindow(account);
+      const key = window ? JSON.stringify(historyIdentity(account, window)) : '';
+      const plot = window ? (histories.find(row => row.key === key)?.plot || buildQuotaPlot(window, range, now)) : null;
+      const current = window ? percentOf(window) : null;
+      return {
+        id: text(account.id), key: key || text(account.id), provider,
+        label: text(account.email) || text(account.label) || 'Account identity unavailable',
+        sub: [text(account.plan), text(account.platform)].filter(Boolean).join(' · '),
+        windowLabel: window ? text(window.label) || 'Usage' : 'No quota reported',
+        hasValue: current !== null, value: current ?? 0, valueText: current === null ? '' : number(current),
+        reset: window ? relativeReset(window.resetAt, now) : '',
+        active: provider === 'codex' && account.isActive === true,
+        spark: plot?.metricPercent ? sparklinePath(plot.points) : '', sparkPoints: plot?.metricPercent ? plot.points.length : 0,
+      };
+    });
+    if (rows.length) groups.push({ provider, label, rows });
+  }
+  return groups;
+}
+/**
+ * The JSON src/analytics.rs reads (version 3). `page` carries the Analytics page: the page state echoed to
+ * the controls, the Usage blocks (analytics-usage.mjs), the quota history with the focus charts of open rows
+ * and the resets agenda (analytics-quota.mjs). The head, KPI and quota-group fields of the earlier seam stay.
+ */
+export function analyticsSlintModel(view, page = null) {
+  const base = {
+    version: ANALYTICS_VIEW_VERSION,
+    head: { updated: text(view?.updated), range: { 'Last 24 hours': '24h', 'Last 7 days': '7d', 'Last 30 days': '30d' }[view?.rangeValue] || '7d', provider: text(view?.providerValue), note: text(view?.historyNote), hasActivity: view?.activityHasData === true },
+    kpis: array(view?.activitySummaries).map(row => ({ key: row.label, label: row.label, value: row.value, sub: row.note })),
+    quotaGroups: array(view?.quotaHistory),
+  };
+  if (!page) return base;
+  const { usage, quota, agenda, state, paths } = page;
+  const { geo, ...trend } = usage.trend;
+  const { range, ...rest } = usage;
+  return {
+    ...base,
+    state: { range: state.range, prov: state.prov, split: !!state.split, cache: !!state.cache, donut: state.donut, heat: state.heat },
+    usage: { ...rest, trend: { ...trend, ...(paths ? { paths } : {}) } },
+    quota,
+    agenda,
   };
 }
