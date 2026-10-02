@@ -2,12 +2,18 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
-import { createPersistentAntigravityRuntime } from './runtime-composition';
+import {
+  createPersistentAntigravityRuntime,
+  type AntigravityRuntimeDependencies,
+} from './runtime-composition';
 import type { AntigravityRuntimeFactory } from './runtime-service';
 import { createAntigravityQuotaWorker } from './quota-worker-transport';
 import { createUbuntuNativeCredentialStore } from './native-credential-transport';
 import { createUbuntuAntigravityDriver } from './ubuntu-driver';
 import { createUbuntuRuntimeBridge } from './ubuntu-runtime-bridge';
+import { AntigravityProfileRegistry } from './registry';
+import { AntigravityError } from './errors';
+import type { AntigravitySwitchDriver } from './types';
 
 /** A native gate receipt must be reviewed and committed before this changes. */
 export const ANTIGRAVITY_NATIVE_RELEASED = false;
@@ -178,18 +184,75 @@ export function readInstalledAntigravityRuntime(
 export function createInstalledAntigravityRuntimeFactory(
   options: {
     home?: string;
+    /** Explicit private composition seams; never dashboard settings or native setup. */
+    collectQuota?: AntigravityRuntimeDependencies['collectQuota'];
+    now?: AntigravityRuntimeDependencies['now'];
+    setTimer?: AntigravityRuntimeDependencies['setTimer'];
+    clearTimer?: AntigravityRuntimeDependencies['clearTimer'];
   } = {}
 ): AntigravityRuntimeFactory {
   const home = path.resolve(options.home ?? os.homedir());
   return (ccsDir) => {
-    const components = createInstalledAntigravityComponents(path.resolve(ccsDir), home);
-    if (!components) return null;
-    const { quotaWorker, driver, bridge } = components;
-    return createPersistentAntigravityRuntime(path.resolve(ccsDir), {
+    if (process.platform !== 'linux') return null;
+    const directory = path.resolve(ccsDir);
+    const components = createInstalledAntigravityComponents(directory, home);
+    if (components) {
+      const { quotaWorker, driver, bridge } = components;
+      return createPersistentAntigravityRuntime(directory, {
+        driver,
+        collectQuota: quotaWorker.collectQuota,
+        observeHost: () => bridge.readHostCensus(),
+      });
+    }
+    // Saved-profile usage does not require a native runtime installation or release.
+    if (!fs.existsSync(path.join(directory, 'antigravity-profiles'))) return null;
+    const registry = new AntigravityProfileRegistry(directory);
+    if (!registry.listProfiles().length) return null;
+    const unsupported = async (): Promise<never> => {
+      throw new AntigravityError('Antigravity native activation is unavailable.');
+    };
+    const driver: AntigravitySwitchDriver = {
+      hostId: 'ubuntu',
+      canProveRuntimeIdentity: async () => false,
+      readCurrentCredential: unsupported,
+      validateCredential: unsupported,
+      inspectProcesses: unsupported,
+      stopProcesses: unsupported,
+      installCredential: unsupported,
+      readStoredIdentity: unsupported,
+      restartProcesses: unsupported,
+      proveRuntimeIdentity: unsupported,
+      rollbackCredential: unsupported,
+      stopOwnedRestarts: unsupported,
+    };
+    const now = options.now ?? Date.now;
+    const runtime = createPersistentAntigravityRuntime(directory, {
       driver,
-      collectQuota: quotaWorker.collectQuota,
-      observeHost: () => bridge.readHostCensus(),
+      collectQuota: options.collectQuota ?? createAntigravityQuotaWorker().collectQuota,
+      observeHost: async () => ({
+        hostId: 'ubuntu',
+        available: false,
+        complete: false,
+        busy: true,
+        manualActivationInProgress: true,
+        sampledAt: new Date(now()).toISOString(),
+      }),
+      now,
+      setTimer: options.setTimer,
+      clearTimer: options.clearTimer,
     });
+    return {
+      ...runtime,
+      activate: async (request) => {
+        if (request.mode !== 'manual' || request.hostId !== 'ubuntu')
+          throw new AntigravityError('Invalid manual activation request.');
+        return {
+          status: 'unsupported-runtime-probe',
+          profileId: request.profileId,
+          hostId: 'ubuntu',
+        };
+      },
+    };
   };
 }
 

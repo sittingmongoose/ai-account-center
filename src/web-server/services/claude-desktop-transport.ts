@@ -1,5 +1,7 @@
 import { execFile } from 'child_process';
 import path from 'path';
+import fs from 'fs';
+import { createHash } from 'crypto';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import {
   CLAUDE_WINDOWS_PROFILE_IDS,
@@ -43,9 +45,16 @@ function checkPath(value: string | undefined, platform: 'mac' | 'windows'): stri
 }
 
 /** Only generated commands and a validated alias are passed to SSH; no client input is accepted. */
-async function runDesktopSsh(host: string, command: string): Promise<string> {
+function runDesktopSsh(host: string, command: string): Promise<string>;
+function runDesktopSsh(host: string, command: string, privateIndexInput: Buffer): Promise<Buffer>;
+async function runDesktopSsh(
+  host: string,
+  command: string,
+  privateIndexInput?: Buffer
+): Promise<string | Buffer> {
+  const privatePipe = privateIndexInput !== undefined;
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       'ssh',
       [
         '-T',
@@ -64,9 +73,9 @@ async function runDesktopSsh(host: string, command: string): Promise<string> {
         command,
       ],
       {
-        encoding: 'utf8',
-        timeout: SSH_TIMEOUT_MS,
-        maxBuffer: MAX_HISTORY_BYTES,
+        encoding: privatePipe ? 'buffer' : 'utf8',
+        timeout: privatePipe ? 30000 : SSH_TIMEOUT_MS,
+        maxBuffer: privatePipe ? MAX_PRIVATE_INDEX_BYTES : MAX_HISTORY_BYTES,
         windowsHide: true,
       },
       (error, stdout) => {
@@ -76,9 +85,19 @@ async function runDesktopSsh(host: string, command: string): Promise<string> {
           );
           return;
         }
+        if (privatePipe ? !Buffer.isBuffer(stdout) : typeof stdout !== 'string') {
+          reject(new ClaudeDesktopTransportError());
+          return;
+        }
         resolve(stdout);
       }
     );
+    if (privateIndexInput) {
+      child.stdin?.on('error', () => {
+        /* SSH exit is handled without private text. */
+      });
+      child.stdin?.end(privateIndexInput);
+    }
   });
 }
 
@@ -159,4 +178,83 @@ export async function readClaudeDesktopUsageHistory(
 
   const contents = await runDesktopSsh(checkHost(launcher.sshHost), command);
   return contents.trim() === MISSING_HISTORY ? null : contents;
+}
+
+const HISTORY_HELPER_MODES = new Set([
+  'closed-check',
+  'collect',
+  'protected-check',
+  'verify-transcripts',
+  'append',
+]);
+const MAX_PRIVATE_INDEX_BYTES = 24 * 1024 * 1024;
+const WRITER_SHA256 = '0b3b4cbb14db144457684bf7683d53bbbc38529d4b92c9c6590ab089eff0c132';
+
+/** Fixed packaged helper, fixed profile IDs and fixed interpreters over the
+ * existing SSH channel. Private index data lives only in stdin/stdout buffers;
+ * neither remote commands nor private history paths are accepted from HTTP.
+ */
+export async function runClaudeHistoryHelper(
+  launcher: ClaudeDesktopLauncher,
+  platform: 'mac' | 'windows',
+  profileId: string,
+  request: Record<string, unknown>
+): Promise<Buffer> {
+  if (
+    !CLAUDE_WINDOWS_PROFILE_IDS.has(profileId) ||
+    request.profileId !== profileId ||
+    request.platform !== platform ||
+    typeof request.mode !== 'string' ||
+    !HISTORY_HELPER_MODES.has(request.mode)
+  ) {
+    throw new ValidationError('Claude history helper is unavailable.');
+  }
+  const scripts = path.resolve(__dirname, '../../../scripts/claude-history');
+  const helper = await fs.promises.readFile(path.join(scripts, 'history_index_remote_v2.py'));
+  if (helper.length > 128 * 1024)
+    throw new ValidationError('Claude history helper is unavailable.');
+  let privateRequest = request;
+  if (request.mode === 'append') {
+    const writer = await fs.promises.readFile(
+      path.join(scripts, 'history_index_transaction_v1.cjs')
+    );
+    if (createHash('sha256').update(writer).digest('hex') !== WRITER_SHA256) {
+      throw new ValidationError('Claude history helper is unavailable.');
+    }
+    privateRequest = { ...request, transactionSource: writer.toString('utf8') };
+  }
+  const bridge =
+    request.mode === 'append'
+      ? await fs.promises.readFile(path.join(scripts, 'history_index_node_bridge_v2.cjs'), 'utf8')
+      : undefined;
+  if (bridge && Buffer.byteLength(bridge) > 128 * 1024)
+    throw new ValidationError('Claude history helper is unavailable.');
+  const input = Buffer.from(
+    JSON.stringify({
+      helperSource: helper.toString('utf8'),
+      nodeBridgeSource: bridge,
+      request: privateRequest,
+    })
+  );
+  if (input.length > MAX_PRIVATE_INDEX_BYTES)
+    throw new ValidationError('Claude history helper is unavailable.');
+  // A short fixed bootstrap keeps Windows command-line length bounded. Only
+  // this process's trusted packaged sources are executed; private data and
+  // sources travel in the existing SSH stdin pipe without temporary files.
+  const code =
+    "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];globals()['__ccs_history_helper_source__']=_s;globals()['__ccs_history_node_bridge_source__']=_p.get('nodeBridgeSource');sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-history-helper','exec'))";
+  let command: string;
+  if (platform === 'mac') {
+    command = `/usr/bin/python3 -c ${quoteShell(code)}`;
+  } else {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "$python = [IO.Path]::Combine($env:USERPROFILE, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
+      'if (-not [IO.File]::Exists($python)) { exit 1 }',
+      `& $python -c '${code.replace(/'/g, "''")}'`,
+      'exit $LASTEXITCODE',
+    ].join('; ');
+    command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  }
+  return runDesktopSsh(checkHost(launcher.sshHost), command, input);
 }

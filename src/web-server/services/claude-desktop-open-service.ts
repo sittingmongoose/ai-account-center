@@ -6,6 +6,10 @@ import {
   listClaudeDesktopProfiles,
 } from './claude-desktop-profile-service';
 import { openClaudeMacLauncher, openClaudeWindowsLauncher } from './claude-desktop-transport';
+import {
+  claudeHistoryOpenHeld,
+  synchronizeClaudeHistoryBeforeOpen,
+} from './claude-history-sync-service';
 
 const pendingOpens = new Map<string, Promise<void>>();
 const recentOpens = new Map<string, number>();
@@ -26,13 +30,35 @@ export async function openClaudeDesktopProfile(
   if (!launcher)
     throw new ConfigError('Claude desktop launcher is not configured for this platform.');
 
+  if (claudeHistoryOpenHeld(id, platform))
+    throw new ConfigError(
+      'Claude history copy is unconfirmed. Verify it has stopped before opening this profile.'
+    );
+
   const key = JSON.stringify([getCcsDir(), id, platform, launcher.sshHost, launcher.launcherPath]);
   const pending = pendingOpens.get(key);
   if (pending) return pending;
   if (Date.now() - (recentOpens.get(key) ?? 0) < 1000) return;
 
-  const opening =
-    platform === 'mac' ? openClaudeMacLauncher(launcher) : openClaudeWindowsLauncher(launcher, id);
+  const opening = (async (): Promise<void> => {
+    // Optional neutral index copy runs within this same coalesced authorized
+    // Open. It never stops an active profile or resumes a Code session.
+    let historySync;
+    try {
+      historySync = await synchronizeClaudeHistoryBeforeOpen(profile, platform);
+    } catch {
+      /* Copy is optional. */
+    }
+    if (
+      claudeHistoryOpenHeld(id, platform) ||
+      historySync?.reason === 'create_only_transaction_unconfirmed'
+    )
+      throw new ConfigError(
+        'Claude history copy is unconfirmed. Verify it has stopped before opening this profile.'
+      );
+    if (platform === 'mac') await openClaudeMacLauncher(launcher);
+    else await openClaudeWindowsLauncher(launcher, id);
+  })();
   pendingOpens.set(key, opening);
   try {
     await opening;
