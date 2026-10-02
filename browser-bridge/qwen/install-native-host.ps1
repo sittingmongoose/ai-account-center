@@ -8,7 +8,8 @@ $ExpectedId = 'clobbdmblhillanldmmjnlpbaafbnklj'
 $SourceRoot = $PSScriptRoot
 $SourceExtension = Join-Path $SourceRoot 'extension'
 $SourceHost = Join-Path $SourceRoot 'native-host\publish'
-$SourceHelpers = Join-Path $SourceRoot 'helpers'
+# The collectors ship once, in the package's scripts/account-usage folder.
+$SourceHelpers = [IO.Path]::GetFullPath((Join-Path $SourceRoot '..\..\scripts\account-usage'))
 $HelperNames = @('plan_common.py', 'plan_usage.py')
 $BinaryName = 'CCS.QwenUsageBridge.exe'
 $Executable = Join-Path $SourceHost $BinaryName
