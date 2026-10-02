@@ -511,15 +511,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 521,
+      "totalThrows": 522,
       "typedThrows": 130,
       "plainThrows": 69,
-      "otherThrows": 322,
-      "adoptionRatio": 0.2495,
+      "otherThrows": 323,
+      "adoptionRatio": 0.249,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 222,
+          "count": 223,
           "typed": 68,
           "plain": 10
         },
@@ -741,7 +741,7 @@
     },
     "largeFiles": {
       "countOver400": 37,
-      "countOver600": 12,
+      "countOver600": 13,
       "topOver400": [
         {
           "file": "src/web-server/model-pricing.ts",
@@ -777,7 +777,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 637
+          "loc": 666
         },
         {
           "file": "src/web-server/services/additional-account-service.ts",
@@ -792,16 +792,16 @@
           "loc": 614
         },
         {
+          "file": "src/web-server/services/claude-desktop-live-service.ts",
+          "loc": 611
+        },
+        {
           "file": "src/web-server/services/account-analytics-projection.ts",
           "loc": 600
         },
         {
           "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
           "loc": 598
-        },
-        {
-          "file": "src/web-server/usage/data-aggregator.ts",
-          "loc": 575
         }
       ]
     }

@@ -9,6 +9,7 @@ import {
   claudeAccount,
 } from '../../../src/web-server/services/account-dashboard-projection';
 import {
+  ClaudeDesktopLiveUsageError,
   getCachedClaudeDesktopLiveUsage,
   getLiveClaudeDesktopUsage,
   invalidateClaudeDesktopLiveUsageCache,
@@ -509,6 +510,84 @@ describe('identity-bound Claude Desktop live usage', () => {
     expect(await getCachedClaudeDesktopLiveUsage('added-profile')).toEqual(live);
     expect(await getLiveClaudeDesktopUsage('gmail')).toBeNull();
     expect(await getCachedClaudeDesktopLiveUsage('gmail')).toBeNull();
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  function remoteScript(call: readonly unknown[]): string {
+    const command = (call[1] as string[]).at(-1)!;
+    return Buffer.from(command.split(' ').at(-1)!, 'base64').toString('utf16le');
+  }
+
+  function argparseFailure(stderr: string): Error {
+    return Object.assign(new Error('Command failed with exit code 2'), { code: 2, stderr });
+  }
+
+  it('retries an old installed collector once with the old argument set', async () => {
+    exec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (
+        error: Error | null,
+        stdout: string,
+        stderr: string
+      ) => void;
+      if (exec.mock.calls.length === 1) {
+        callback(
+          argparseFailure(
+            "claude_usage.py: error: unrecognized arguments: --expected-email 'fixture@example.com'"
+          ),
+          '',
+          "claude_usage.py: error: unrecognized arguments: --expected-email 'fixture@example.com'"
+        );
+      } else {
+        callback(null, output, '');
+      }
+      return {} as childProcess.ChildProcess;
+    });
+    const result = await getLiveClaudeDesktopUsage('gmail');
+    expect(result?.profileId).toBe('gmail');
+    expect(result?.windows[0].usedPercent).toBe(0);
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(remoteScript(exec.mock.calls[0]!)).toContain('--expected-email');
+    const retry = remoteScript(exec.mock.calls[1]!);
+    expect(retry).toContain("--profile 'gmail' --platform 'windows'");
+    expect(retry).not.toContain('--expected-email');
+    expect(retry).not.toContain('--profile-dir');
+  });
+
+  it('reports an outdated collector for a new ID the old copy cannot know', async () => {
+    writeProfiles([{ ...profile, id: 'added-profile', email: 'added@example.com' }]);
+    exec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (
+        error: Error | null,
+        stdout: string,
+        stderr: string
+      ) => void;
+      const stderr = remoteScript(args).includes('--expected-email')
+        ? 'claude_usage.py: error: unrecognized arguments: --expected-email'
+        : "claude_usage.py: error: argument --profile: invalid choice: 'added-profile'";
+      callback(argparseFailure(stderr), '', stderr);
+      return {} as childProcess.ChildProcess;
+    });
+    const failure = await getLiveClaudeDesktopUsage('added-profile').then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(ClaudeDesktopLiveUsageError);
+    expect((failure as ClaudeDesktopLiveUsageError).helperOutdated).toBe(true);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry when exit 2 carries no argparse rejection', async () => {
+    exec.mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (
+        error: Error | null,
+        stdout: string,
+        stderr: string
+      ) => void;
+      const stderr = "/usr/bin/python3: can't open file: [Errno 2] No such file";
+      callback(argparseFailure(stderr), '', stderr);
+      return {} as childProcess.ChildProcess;
+    });
+    expect(await getLiveClaudeDesktopUsage('gmail')).toBeNull();
     expect(exec).toHaveBeenCalledTimes(1);
   });
 

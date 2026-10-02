@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
+import { NetworkError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   CLAUDE_PROFILE_ID_PATTERN,
@@ -360,10 +361,38 @@ function psArgument(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+export class ClaudeDesktopLiveUsageError extends NetworkError {
+  /**
+   * The installed collector rejected even the old argument set with an
+   * argparse usage error (exit 2): it predates the manifest-driven flags and
+   * the requested ID is not in its own table. Reads as "update the usage
+   * helper", like the additional-provider transport. The collector never uses
+   * 2 for a collection outcome; those print a row and exit 0.
+   */
+  readonly helperOutdated: boolean;
+
+  constructor(helperOutdated = false) {
+    super(
+      helperOutdated
+        ? 'Update the usage helper on Windows.'
+        : 'Claude live quota could not be read.'
+    );
+    this.name = 'ClaudeDesktopLiveUsageError';
+    this.helperOutdated = helperOutdated;
+  }
+}
+
 /**
  * Fixed helper path and manifest-resolved profile only; no credential ever
  * traverses SSH stdout. The expected email and profile directory come from the
  * same manifest entry, so the collector holds no hard-coded mapping.
+ *
+ * The installed collector copy may predate the new flags. A first call that
+ * the helper rejects as an argparse usage error is retried once with the old
+ * argument set, which the old copy checks against its own table; only a
+ * second argparse rejection (a new ID the old copy cannot know) reports the
+ * helper as outdated. No verdict is cached, so an updated copy is picked up
+ * by the very next call.
  */
 async function runWindowsHelper(
   sshHost: string,
@@ -375,56 +404,99 @@ async function runWindowsHelper(
     `& $python $helper --provider 'claude' --profile ${psArgument(profileId)}` +
     ` --platform 'windows' --expected-email ${psArgument(expectedEmail)}` +
     (profileDir === undefined ? '' : ` --profile-dir ${psArgument(profileDir)}`);
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "$env:PYTHONIOENCODING = 'utf-8'",
-    "$env:PYTHONUTF8 = '1'",
-    "$helper = [IO.Path]::Combine($HOME, '.ccs', 'account-usage', 'claude_usage.py')",
-    "$venv = [IO.Path]::Combine($HOME, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
-    "$python = if (Test-Path -LiteralPath $venv -PathType Leaf) { $venv } else { 'python.exe' }",
-    helperCall,
-    'exit $LASTEXITCODE',
-  ].join('; ');
-  const command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
-  return new Promise((resolve, reject) => {
-    execFile(
-      'ssh',
-      [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=1',
-        '--',
-        sshHost,
-        command,
-      ],
-      {
-        encoding: 'utf8',
-        timeout: PROCESS_TIMEOUT_MS,
-        maxBuffer: MAX_OUTPUT_BYTES,
-        windowsHide: true,
-      },
-      (error, stdout) => {
-        if (error || Buffer.byteLength(stdout, 'utf8') > MAX_OUTPUT_BYTES) {
-          reject(new Error('Claude live quota could not be read.'));
-        } else {
-          resolve(stdout);
+  const legacyCall =
+    `& $python $helper --provider 'claude' --profile ${psArgument(profileId)}` +
+    ` --platform 'windows'`;
+  const scriptFor = (call: string): string => {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "$env:PYTHONIOENCODING = 'utf-8'",
+      "$env:PYTHONUTF8 = '1'",
+      "$helper = [IO.Path]::Combine($HOME, '.ccs', 'account-usage', 'claude_usage.py')",
+      "$venv = [IO.Path]::Combine($HOME, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
+      "$python = if (Test-Path -LiteralPath $venv -PathType Leaf) { $venv } else { 'python.exe' }",
+      call,
+      'exit $LASTEXITCODE',
+    ].join('; ');
+    return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  };
+  const execute = (command: string): Promise<string> =>
+    new Promise((resolve, reject) => {
+      execFile(
+        'ssh',
+        [
+          '-T',
+          '-o',
+          'BatchMode=yes',
+          '-o',
+          'ConnectTimeout=5',
+          '-o',
+          'ConnectionAttempts=1',
+          '-o',
+          'ServerAliveInterval=5',
+          '-o',
+          'ServerAliveCountMax=1',
+          '--',
+          sshHost,
+          command,
+        ],
+        {
+          encoding: 'utf8',
+          timeout: PROCESS_TIMEOUT_MS,
+          maxBuffer: MAX_OUTPUT_BYTES,
+          windowsHide: true,
+        },
+        (error, stdout, stderr) => {
+          if (error || Buffer.byteLength(stdout, 'utf8') > MAX_OUTPUT_BYTES) {
+            reject(
+              Object.assign(new ClaudeDesktopLiveUsageError(), {
+                // Carried for the argparse check below; never logged or forwarded.
+                sshCode:
+                  error && typeof (error as { code?: unknown }).code === 'number'
+                    ? (error as { code: number }).code
+                    : null,
+                sshStderr: typeof stderr === 'string' ? stderr.slice(0, 4096) : '',
+              })
+            );
+          } else {
+            resolve(stdout);
+          }
         }
-      }
-    );
-  });
+      );
+    });
+  try {
+    return await execute(scriptFor(helperCall));
+  } catch (error) {
+    if (!isArgparseRejection(error)) throw error;
+  }
+  try {
+    return await execute(scriptFor(legacyCall));
+  } catch (error) {
+    if (isArgparseRejection(error)) throw new ClaudeDesktopLiveUsageError(true);
+    throw error;
+  }
+}
+
+/** Exit 2 plus argparse's own wording; anything else is an ordinary failure. */
+function isArgparseRejection(error: unknown): boolean {
+  if (!(error instanceof ClaudeDesktopLiveUsageError)) return false;
+  const detail = error as ClaudeDesktopLiveUsageError & {
+    sshCode?: unknown;
+    sshStderr?: unknown;
+  };
+  return (
+    detail.sshCode === 2 &&
+    typeof detail.sshStderr === 'string' &&
+    /unrecognized arguments|invalid choice/.test(detail.sshStderr)
+  );
 }
 
 /**
  * Read the account's existing Windows Desktop token in its own user context.
  * Errors are intentionally nullable: cached desktop history may still be shown.
+ * The one exception is an outdated installed collector rejecting a new ID,
+ * which throws ClaudeDesktopLiveUsageError with helperOutdated so the
+ * dashboard can say so instead of showing a misleading state.
  */
 export async function getLiveClaudeDesktopUsage(
   profileId: string,
@@ -493,7 +565,13 @@ export async function getLiveClaudeDesktopUsage(
         }
         return usage;
       })
-      .catch(() => null);
+      .then(
+        (usage) => usage,
+        (error) => {
+          if (error instanceof ClaudeDesktopLiveUsageError && error.helperOutdated) throw error;
+          return null;
+        }
+      );
     const entry: CacheEntry = { expiresAt: Infinity, pending: true, failed: false, promise };
     cache.set(key, entry);
     while (cache.size > MAX_CACHE_ENTRIES) {
@@ -501,12 +579,13 @@ export async function getLiveClaudeDesktopUsage(
       if (oldestKey === undefined) break;
       cache.delete(oldestKey);
     }
-    void promise.then((usage) => {
+    const settled = (usage: ClaudeDesktopLiveUsage | null): void => {
       if (cache.get(key) !== entry) return;
       entry.pending = false;
       entry.failed = usage === null;
       entry.expiresAt = Date.now() + (entry.failed ? FAILURE_BACKOFF_MS : CACHE_TTL_MS);
-    });
+    };
+    void promise.then(settled, () => settled(null));
     return promise;
   } catch {
     return null;
