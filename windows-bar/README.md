@@ -41,8 +41,8 @@ cell, "Pending" beside a label), never 0%. A window the dashboard marks `resetPa
 even when this computer's clock is behind. The refresh timer re-checks this on every tick, so a window flips when its
 reset passes while the panel is open. The trays follow only the dashboard's per-provider "Show in tray" switch
 (`providers[].trayVisible`, or `settings.trayHiddenProviders`); "Show on dashboard" (`providers[].visible`) never hides
-anything here. An account the dashboard hides (`accounts[].hidden`, or a tray-only `trayHidden` when a server sends one)
-is left out. Provider ids, Codex profiles,
+anything here. An account is left out when its own "Show in tray" is off (`accounts[].trayHidden`); the dashboard's
+per-account "Show on dashboard" (`accounts[].hidden`) never hides it here, so all four combinations work. Provider ids, Codex profiles,
 Claude profile ids and Antigravity profile ids come from the data and are accepted only when they are URI and path
 safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
 

@@ -95,11 +95,12 @@ public static class FixtureRender
 
             // Hidden providers are honoured; an unknown provider still renders, with the neutral mark.
             var hidden = Clone(fixture);
-            // "Show in tray" off for Kimi Code hides it; "Show on dashboard" off for Muse does not; a hidden account is left out.
+            // "Show in tray" off for Kimi Code hides it; "Show on dashboard" off for Muse does not; an account hidden in the
+            // tray is left out.
             hidden.Settings ??= new AccountRefreshSettings();
             hidden.Settings.TrayHiddenProviders = new() { "kimi-code" };
             hidden.Providers = new() { new DashboardProvider { Id = "muse", Visible = false, TrayVisible = true } };
-            hidden.Accounts.First(account => account.Id == "claude:example-4").Hidden = true;
+            hidden.Accounts.First(account => account.Id == "claude:example-4").TrayHidden = true;
             hidden.Accounts.Add(new DashboardAccount { Id = "newcode:example-1", Provider = "newcode", ProviderLabel = "New Code", Label = "New Code account", Email = "newcode-1@example.com", Platform = "ubuntu", Status = "cached", SampledAt = hidden.UpdatedAt, Windows = new() { new QuotaWindow { Key = "weekly", Label = "Weekly", UsedPercent = 42, WindowMinutes = 10080, Kind = "rate_limit" } } });
             window.ApplyDashboardSample(hidden);
             await Settle(window);

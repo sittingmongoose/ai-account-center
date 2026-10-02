@@ -376,7 +376,7 @@ struct SettingsPanelView: View {
   private func trayHiddenLine(_ dashboard: AccountDashboard?) -> String {
     guard let dashboard else { return "Unavailable" }
     var parts = dashboard.trayHiddenProviders.sorted().map(ProviderMark.name)
-    let accounts = dashboard.hiddenAccounts.filter { !dashboard.trayHiddenProviders.contains($0.provider) }.count
+    let accounts = dashboard.trayHiddenAccounts.filter { !dashboard.trayHiddenProviders.contains($0.provider) }.count
     if accounts > 0 { parts.append("\(accounts) account\(accounts == 1 ? "" : "s")") }
     return parts.isEmpty ? "None" : parts.joined(separator: ", ")
   }

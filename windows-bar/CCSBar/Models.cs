@@ -150,7 +150,8 @@ public sealed class AccountDashboard
 
     /// <summary>Whether the server reports the trays' own visibility ("Show in tray"): providers[].trayVisible or
     /// settings.trayHiddenProviders. Older servers report neither, and every provider then shows.</summary>
-    [JsonIgnore] public bool ReportsTrayVisibility => Providers?.Exists(provider => provider.TrayVisible is not null) == true || Settings?.TrayHiddenProviders is not null;
+    [JsonIgnore] public bool ReportsTrayVisibility => Providers?.Exists(provider => provider.TrayVisible is not null) == true || Settings?.TrayHiddenProviders is not null
+        || Settings?.TrayHiddenAccountIds is not null || Accounts.Exists(account => account.TrayHidden is not null);
 
     /// <summary>Providers hidden in the trays: only "Show in tray" counts (providers[].trayVisible false, or listed in
     /// settings.trayHiddenProviders). "Show on dashboard" (providers[].visible, settings.hiddenProviders) is the
@@ -164,9 +165,13 @@ public sealed class AccountDashboard
         (Providers ?? new List<DashboardProvider>()).Where(provider => provider.Visible == false).Select(provider => provider.Id)
             .Concat(Settings?.HiddenProviders ?? new List<string>()).Where(Formatting.IsSafeId), StringComparer.Ordinal);
 
-    /// <summary>The accounts this tray shows: an account hidden by the server (accounts[].trayHidden when a server sends
-    /// it, else accounts[].hidden from the dashboard's per-account switch) is left out.</summary>
+    /// <summary>The accounts this tray shows: an account hidden in the trays (accounts[].trayHidden, its own "Show in
+    /// tray" or its provider's) is left out. The dashboard's per-account switch (accounts[].hidden) is never read: the
+    /// two are independent (Jared, 2026-10-02).</summary>
     [JsonIgnore] public IEnumerable<DashboardAccount> ShownAccounts => Accounts.Where(account => !account.HiddenInTray);
+
+    /// <summary>Accounts hidden in the trays one by one (their provider is still shown), for Settings' facts.</summary>
+    [JsonIgnore] public int TrayHiddenAccountCount => Accounts.Count(account => account.HiddenInTray && !Hidden.Contains(account.Provider));
 }
 
 /// <summary>One providers[] entry of GET /api/accounts/dashboard (CLIENT API SHEET 4.4).</summary>
@@ -186,6 +191,8 @@ public sealed class AccountRefreshSettings
     public List<string>? HiddenProviders { get; set; }
     public List<string>? TrayHiddenProviders { get; set; }
     public List<string>? HiddenAccountIds { get; set; }
+    /// <summary>Accounts hidden in the trays one by one ("Show in tray" off for that account).</summary>
+    public List<string>? TrayHiddenAccountIds { get; set; }
     public int ValidatedInterval => RefreshIntervalSeconds is >= 30 and <= 3600 ? RefreshIntervalSeconds : 60;
 }
 
@@ -204,14 +211,13 @@ public sealed class DashboardAccount
     public string? FetchedAt { get; set; }
     public string? SampledAt { get; set; }
     public bool IsActive { get; set; }
-    /// <summary>Hidden by the dashboard's per-account switch (settings.hiddenAccountIds); display only, filtered here.</summary>
-    public bool Hidden { get; set; }
-    /// <summary>A tray-only switch, if a later server sends one; it then wins over <see cref="Hidden"/>.</summary>
+    /// <summary>"Show in tray" off for this account or its provider (accounts[].trayHidden); missing means shown. The
+    /// dashboard's accounts[].hidden is deliberately not read.</summary>
     public bool? TrayHidden { get; set; }
     public List<QuotaWindow> Windows { get; set; } = new();
     public AccountCapabilities Capabilities { get; set; } = new();
     [JsonIgnore] public bool HasUsableUsage => Windows.Exists(window => window.HasUsableUsage);
-    [JsonIgnore] public bool HiddenInTray => TrayHidden ?? Hidden;
+    [JsonIgnore] public bool HiddenInTray => TrayHidden == true;
 }
 
 public sealed class QuotaWindow

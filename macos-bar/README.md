@@ -40,7 +40,9 @@ and a footer that floats over the list (Codex auto-switch and threshold, Dashboa
 - **Hidden providers and accounts.** The tray follows the dashboard's "Show in tray" switch, which is independent of
   "Show on dashboard": a provider with `providers[].trayVisible: false` (or listed in `settings.trayHiddenProviders`) is
   left out of the panel, a missing field means visible, and a provider hidden only on the dashboard stays in the tray.
-  An account hidden one by one (`accounts[].hidden`) is left out too. Settings › From the dashboard lists both.
+  An account whose own "Show in tray" is off (`accounts[].trayHidden`) is left out too; its "Show on dashboard"
+  (`accounts[].hidden`) never hides it here, so the two per-account switches stay independent. Settings › From the
+  dashboard lists both.
 - **Meters** are 6 pt tracks with quarter ticks, a severity fill (calm, warning from 80 %, critical from 95 %, and an
   overage cap above 100 %) and the auto-switch notch. Widths and numbers ease out and never pass the reading.
   Reported usage above 100 % stays in the text; only the bar is capped.

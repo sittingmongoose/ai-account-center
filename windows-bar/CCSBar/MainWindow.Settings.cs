@@ -145,8 +145,10 @@ public partial class MainWindow
             var ag = dashboard.AntigravityAutoSwitch;
             kv.Children.Add(Fact("Antigravity auto-switch", ag is null ? "Not reported by this server" : !AntigravitySwitchable(agAccounts) ? "Starts with a second signed-in account" : $"{(ag.Enabled ? "On" : "Off")} · switches at {Formatting.Percent(ag.ThresholdUsedPercent)} used").Row);
             // The trays follow only "Show in tray"; "Show on dashboard" is the dashboard's own switch.
-            var hidden = dashboard.Hidden.Select(provider => Formatting.ProviderName(provider)).ToArray();
-            var (hiddenRow, hiddenValue) = Fact("Hidden in the trays", (!dashboard.ReportsTrayVisibility ? "Not reported by this server" : hidden.Length > 0 ? string.Join(", ", hidden) : "None") + " · ");
+            var hidden = dashboard.Hidden.Select(provider => Formatting.ProviderName(provider)).ToList();
+            var oneByOne = dashboard.TrayHiddenAccountCount;
+            if (oneByOne > 0) hidden.Add(oneByOne + (oneByOne == 1 ? " account" : " accounts"));
+            var (hiddenRow, hiddenValue) = Fact("Hidden in the trays", (!dashboard.ReportsTrayVisibility ? "Not reported by this server" : hidden.Count > 0 ? string.Join(", ", hidden) : "None") + " · ");
             var link = new Hyperlink(new Run("Change in dashboard")) { Foreground = Theme.Brush("AccentText"), TextDecorations = null, Cursor = Cursors.Hand };
             link.Click += (_, _) => OpenDashboard();
             hiddenValue.Inlines.Add(link);

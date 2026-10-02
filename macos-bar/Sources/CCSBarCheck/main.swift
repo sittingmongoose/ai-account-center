@@ -1311,7 +1311,8 @@ private func checkDashboardAdditions() throws {
   try expect(outOfRange.antigravityAutoSwitch == nil, "An out-of-range Antigravity threshold must not be shown as a policy")
 
   // "Show on dashboard" and "Show in tray" are independent (Jared, 2026-10-02): the tray follows only
-  // providers[].trayVisible and settings.trayHiddenProviders, plus accounts[].hidden.
+  // providers[].trayVisible and settings.trayHiddenProviders, plus accounts[].trayHidden, never
+  // providers[].visible or accounts[].hidden.
   var hidden = object
   hidden["hiddenProviders"] = ["kimi-code"]
   let topLevel = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hidden))
@@ -1335,15 +1336,37 @@ private func checkDashboardAdditions() throws {
     && !fromProviders.visibleAccounts.contains { $0.provider == "cursor" }
     && fromProviders.visibleAccounts.contains { $0.provider == "kimi-code" },
     "providers[].trayVisible false hides in the tray; a missing trayVisible is visible; malformed entries are skipped")
-  var oneAccount = object
-  var accounts = (object["accounts"] as! [[String: Any]])
-  let hiddenID = accounts[0]["id"] as! String
-  accounts[0]["hidden"] = true
-  oneAccount["accounts"] = accounts
-  let accountHidden = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: oneAccount))
-  try expect(!accountHidden.visibleAccounts.contains { $0.id == hiddenID } && accountHidden.accounts.count == 8
-    && accountHidden.hiddenAccounts.map(\.id) == [hiddenID] && accountHidden.visibleAccounts.count == 7,
-    "accounts[].hidden leaves only that account out of the tray")
+  // One account's own switches, in all four combinations: [hidden on the dashboard, hidden in the tray].
+  let base = object["accounts"] as! [[String: Any]]
+  let ids = base.prefix(4).map { $0["id"] as! String }
+  let combos: [(Bool, Bool)] = [(false, false), (true, false), (false, true), (true, true)]
+  var fourWays = object
+  fourWays["accounts"] = base.enumerated().map { index, account -> [String: Any] in
+    var row = account
+    if index < combos.count { row["hidden"] = combos[index].0; row["trayHidden"] = combos[index].1 }
+    return row
+  }
+  let perAccount = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: fourWays))
+  let shown = Set(perAccount.visibleAccounts.map(\.id))
+  try expect(shown.contains(ids[0]) && shown.contains(ids[1]) && !shown.contains(ids[2]) && !shown.contains(ids[3])
+    && perAccount.visibleAccounts.count == 6 && perAccount.accounts.count == 8
+    && perAccount.trayHiddenAccounts.map(\.id) == [ids[2], ids[3]],
+    "Each account follows only its own Show in tray: shown in both and dashboard-hidden stay, tray-hidden and both-hidden go")
+  // accounts[].hidden alone (an older dashboard, or "Show on dashboard" off) never hides a tray row.
+  var dashboardHidden = object
+  dashboardHidden["accounts"] = base.map { account -> [String: Any] in var row = account; row["hidden"] = true; return row }
+  let onlyDashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: dashboardHidden))
+  try expect(onlyDashboard.visibleAccounts.count == 8 && onlyDashboard.trayHiddenAccounts.isEmpty,
+    "accounts[].hidden (the dashboard switch) never leaves an account out of the tray")
+  // A provider shown in the tray still drops its own tray-hidden account; a provider hidden in the tray drops all of
+  // its accounts whatever their own switch says.
+  var providerOff = fourWays
+  let firstProvider = base[0]["provider"] as! String
+  providerOff["providers"] = [["id": firstProvider, "visible": true, "trayVisible": false]]
+  let offProvider = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: providerOff))
+  try expect(!offProvider.visibleAccounts.contains { $0.provider == firstProvider }
+    && offProvider.accounts.count == 8,
+    "providers[].trayVisible false hides every account of that provider in the tray")
   inSettings["settings"] = ["refreshIntervalSeconds": 60, "hiddenProviders": "cursor", "trayHiddenProviders": "kimi-code"]
   let badHidden = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: inSettings))
   try expect(badHidden.hiddenProviders.isEmpty && badHidden.trayHiddenProviders.isEmpty && badHidden.visibleAccounts.count == 8,

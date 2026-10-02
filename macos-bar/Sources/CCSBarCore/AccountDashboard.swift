@@ -39,14 +39,15 @@ public struct AccountDashboard: Decodable, Sendable {
     trayHiddenProviders = Set(providers.filter { $0.trayVisible == false }.map(\.id) + (settings?.trayHiddenProviders ?? []))
   }
 
-  /// Accounts the trays show: every account whose provider is shown in the tray and that is not hidden itself
-  /// (`accounts[].hidden`).
+  /// Accounts the trays show: every account whose provider is shown in the tray (`providers[].trayVisible`) and
+  /// that is not hidden in the trays itself (`accounts[].trayHidden`). The dashboard's own switches
+  /// (`providers[].visible`, `accounts[].hidden`) are never read: the two sets are independent (Jared, 2026-10-02).
   public var visibleAccounts: [DashboardAccount] {
-    accounts.filter { !trayHiddenProviders.contains($0.provider) && $0.hidden != true }
+    accounts.filter { !trayHiddenProviders.contains($0.provider) && $0.trayHidden != true }
   }
 
-  /// Accounts hidden one by one in the dashboard (`accounts[].hidden`).
-  public var hiddenAccounts: [DashboardAccount] { accounts.filter { $0.hidden == true } }
+  /// Accounts hidden in the trays (`accounts[].trayHidden`), one by one or with their provider.
+  public var trayHiddenAccounts: [DashboardAccount] { accounts.filter { $0.trayHidden == true } }
 
   /// Codex Activate is offered for an inactive saved profile while no automatic switch is running.
   public func canActivateCodex(_ account: DashboardAccount) -> Bool {
@@ -138,8 +139,9 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   public let isActive: Bool
   public let windows: [AccountQuotaWindow]
   public let capabilities: AccountCapabilities
-  /// Hidden one by one in the dashboard (`accounts[].hidden`): display only, so the trays leave it out.
-  public let hidden: Bool?
+  /// Hidden in the trays (`accounts[].trayHidden`: "Show in tray" off for this account or its provider). The
+  /// dashboard's `accounts[].hidden` is not decoded at all: it never changes what a tray shows. Missing means shown.
+  public let trayHidden: Bool?
 
   public var identity: String { email ?? label }
   public var canOpenOnMac: Bool {
