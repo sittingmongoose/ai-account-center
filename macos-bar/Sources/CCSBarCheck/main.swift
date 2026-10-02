@@ -476,8 +476,9 @@ private func checkSafeHTTPFailures() async throws {
   ])
 
   func failure(_ context: Context, _ status: Int, _ data: Data) async throws -> String {
-    // Authentication retry is intentionally bounded to one extra request.
-    let replies = Array(repeating: MockReply(status, data), count: status == 401 ? 2 : 1)
+    // Authentication retry is intentionally bounded to one extra request. A Claude Open is never repeated, so an
+    // expired session on it is reported instead of re-sent (CONTRACT-serving-misc 4.4).
+    let replies = Array(repeating: MockReply(status, data), count: status == 401 && context != .claudeOpen ? 2 : 1)
     let transport = MockTransport(replies: [context.requestKey: replies])
     let client = AccountsClient(connection: testConnection(), transport: transport)
     do {
@@ -1620,6 +1621,355 @@ private func closedLoopbackPort() -> Int {
     "Login failures map to fixed public reasons")
 }
 
+// MARK: Claude Open progress (CONTRACT-serving-misc 4.4)
+
+/// What one Open reported to its row, in order.
+private final class OpenProgressLog: @unchecked Sendable {
+  private let lock = NSLock()
+  private var values: [ClaudeOpenProgress] = []
+  func add(_ value: ClaudeOpenProgress) { lock.lock(); values.append(value); lock.unlock() }
+  var texts: [String] { lock.lock(); defer { lock.unlock() }; return values.map(\.text) }
+  var all: [ClaudeOpenProgress] { lock.lock(); defer { lock.unlock() }; return values }
+}
+
+/// A check's clock: the poll's sleep advances it, so a three-minute deadline costs no real time.
+private final class OpenClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var current = Date(timeIntervalSince1970: 1_800_000_000)
+  private var steps: [TimeInterval] = []
+  func now() -> Date { lock.lock(); defer { lock.unlock() }; return current }
+  func advance(_ interval: TimeInterval) {
+    lock.lock(); current = current.addingTimeInterval(interval); steps.append(interval); lock.unlock()
+  }
+  var slept: [TimeInterval] { lock.lock(); defer { lock.unlock() }; return steps }
+}
+
+/// Holds one Open inside its poll until the check releases it, so a second Open can be attempted while it runs.
+private final class OpenGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var arrivedFlag = false
+  private var releasedFlag = false
+  var arrived: Bool { lock.lock(); defer { lock.unlock() }; return arrivedFlag }
+  var released: Bool { lock.lock(); defer { lock.unlock() }; return releasedFlag }
+  func release() { lock.lock(); releasedFlag = true; lock.unlock() }
+  /// The poll's sleep: the first call parks here until the check lets it go.
+  func hold() async {
+    markArrived()
+    var waited = 0
+    while !released && waited < 1000 { try? await Task.sleep(nanoseconds: 5_000_000); waited += 1 }
+  }
+
+  private func markArrived() { lock.lock(); arrivedFlag = true; lock.unlock() }
+}
+
+private func openOperationJSON(id: String = "op_fixture_0001", platform: String = "mac", state: String,
+  confirmed: Int? = nil, total: Int? = nil, message: String? = nil) -> String {
+  func number(_ value: Int?) -> String { value.map { "\($0)" } ?? "null" }
+  return "{\"id\":\"\(id)\",\"platform\":\"\(platform)\",\"state\":\"\(state)\","
+    + "\"confirmedCount\":\(number(confirmed)),\"totalCount\":\(number(total)),"
+    + "\"message\":\(message.map { "\"\($0)\"" } ?? "null")}"
+}
+
+private func openProfileJSON(id: String = "gmail", operation: String? = nil) -> String {
+  "{\"id\":\"\(id)\",\"email\":\"\(id)@example.invalid\",\"openOperation\":\(operation ?? "null")}"
+}
+
+/// One `GET /api/claude/desktop-profiles` answer. A profile without a manifest id carries no `openOperation`, exactly
+/// as the server sends it.
+private func openProfilesReply(_ profiles: String) -> MockReply {
+  MockReply(200, Data("{\"profiles\":[\(profiles)]}".utf8))
+}
+
+private let openAcceptedReply = MockReply(202,
+  Data("{\"id\":\"gmail\",\"platform\":\"mac\",\"state\":\"checking\",\"operationId\":\"op_fixture_0001\"}".utf8))
+private let openOKReply = MockReply(200, Data("{\"opened\":true,\"id\":\"gmail\",\"platform\":\"mac\"}".utf8))
+
+/// The production cadence with a check clock, so the three-minute deadline is exact and instant.
+private let openPolling = ClaudeOpenPolling()
+
+private func checkClaudeOpenProgress() async throws {
+  let openPath = "/api/claude/desktop-profiles/gmail/open"
+  let listPath = "/api/claude/desktop-profiles"
+
+  // 1. Today's 200: one POST that opts into the async answer, no profile-list read, and the row ends on "Opened".
+  do {
+    let transport = MockTransport(replies: ["POST \(openPath)": [openOKReply]])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    let outcome = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+      profile: "gmail", platform: "mac", polling: openPolling, sleep: { _ in }, progress: { log.add($0) })
+    try expect(outcome?.opened == true && outcome?.finished == true && outcome?.text == "Opened",
+      "A 200 Open must finish at once as opened")
+    try expect(log.texts == ["Opening", "Opened"], "A 200 Open must show Opening then Opened on the row")
+    let calls = await transport.recorded()
+    let posts = calls.filter { $0.url.path == openPath }
+    try expect(posts.count == 1 && posts[0].method == "POST", "A 200 Open must send exactly one POST")
+    try expect(posts[0].headers["prefer"] == "respond-async",
+      "The Open POST must opt into the progress answer with Prefer: respond-async")
+    let body = try posts[0].jsonBody()
+    try expect(Set(body.keys) == ["platform"] && body["platform"] as? String == "mac",
+      "The Open POST body must select only the platform")
+    try expect(!calls.contains { $0.url.path == listPath }, "A 200 Open must not read the profile list")
+  }
+
+  // 2. 202, polled to opened: the counts the server reports are the counts the row shows.
+  do {
+    let transport = MockTransport(replies: [
+      "POST \(openPath)": [openAcceptedReply],
+      "GET \(listPath)": [
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "checking"))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "copying", confirmed: 3, total: 18))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "copying", confirmed: 18, total: 18))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "opening"))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "opened"))),
+      ],
+    ])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    let clock = OpenClock()
+    let outcome = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+      profile: "gmail", platform: "mac", polling: openPolling, now: { clock.now() },
+      sleep: { clock.advance($0) }, progress: { log.add($0) })
+    try expect(log.texts == ["Opening", "Copying history", "Copying history 3 of 18",
+      "Copying history 18 of 18", "Opening", "Opened"],
+      "A polled Open must show the copy counts, then Opening, then Opened")
+    try expect(outcome?.opened == true && outcome?.finished == true, "A polled Open must end opened")
+    try expect(clock.slept == [1, 1, 1, 1, 1], "A short Open must be read about once a second")
+    let calls = await transport.recorded()
+    try expect(calls.filter { $0.url.path == openPath }.count == 1, "Polling must never repeat the Open POST")
+    let reads = calls.filter { $0.url.path == listPath }
+    try expect(reads.count == 5 && reads.allSatisfy { $0.method == "GET" && $0.url.query == nil && $0.body == nil },
+      "Progress must come from a body-free GET of the profile list")
+  }
+
+  // 3. 202 to failed: the server's own fixed sentence reaches the row, and the Open did not open Claude.
+  do {
+    let transport = MockTransport(replies: [
+      "POST \(openPath)": [openAcceptedReply],
+      "GET \(listPath)": [
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "copying", confirmed: 2, total: 9))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "failed",
+          message: "Claude desktop request timed out."))),
+      ],
+    ])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    let outcome = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+      profile: "gmail", platform: "mac", polling: openPolling, sleep: { _ in }, progress: { log.add($0) })
+    try expect(outcome?.text == "Claude desktop request timed out." && outcome?.finished == true
+      && outcome?.opened == false, "A failed Open must show the server's message and must not read as opened")
+    try expect(log.texts.last == "Claude desktop request timed out.", "A failed Open must end the row's progress")
+    let posts = await transport.recorded()
+    try expect(posts.filter { $0.url.path == openPath }.count == 1,
+      "A failed Open must not be retried")
+  }
+
+  // 4. 202 to blocked_uncertain with no usable message: the fixed client sentence, never a server string.
+  do {
+    let transport = MockTransport(replies: [
+      "POST \(openPath)": [openAcceptedReply],
+      "GET \(listPath)": [
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "blocked_uncertain"))),
+      ],
+    ])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    let outcome = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+      profile: "gmail", platform: "mac", polling: openPolling, sleep: { _ in }, progress: { log.add($0) })
+    try expect(outcome?.text == ClaudeOpenFlow.historyUnconfirmed && outcome?.opened == false,
+      "A blocked_uncertain Open with no message must say the history copy could not be confirmed")
+    // A long or multiline "message" is not a fixed sentence, so the client's own replaces it.
+    try expect(ClaudeOpenFlow.publicMessage(String(repeating: "x", count: 301)) == ClaudeOpenFlow.historyUnconfirmed
+      && ClaudeOpenFlow.publicMessage("line\nFIXTURE_ONLY_PRIVATE") == ClaudeOpenFlow.historyUnconfirmed
+      && ClaudeOpenFlow.publicMessage("") == ClaudeOpenFlow.historyUnconfirmed
+      && ClaudeOpenFlow.publicMessage(nil) == ClaudeOpenFlow.historyUnconfirmed
+      && ClaudeOpenFlow.publicMessage("Claude history copy is unconfirmed.") == "Claude history copy is unconfirmed.",
+      "Only a bounded single-line server sentence may reach the row")
+    try expect(log.all.last?.finished == true, "A blocked_uncertain Open must end the poll")
+  }
+
+  // 5. 409 history_unconfirmed: the fixed sentence, one POST, and no poll.
+  do {
+    let transport = MockTransport(replies: ["POST \(openPath)": [MockReply(409,
+      Data("{\"error\":\"FIXTURE_ONLY_PRIVATE canary\",\"code\":\"history_unconfirmed\"}".utf8))]])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    var thrown: String?
+    do {
+      _ = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+        profile: "gmail", platform: "mac", polling: openPolling, sleep: { _ in }, progress: { log.add($0) })
+      throw CheckFailure(description: "A 409 history_unconfirmed Open must not succeed")
+    } catch let error as BarClientError {
+      guard case .status(409, let text) = error else {
+        throw CheckFailure(description: "A 409 history_unconfirmed Open must keep its status")
+      }
+      thrown = text
+    }
+    try expect(thrown == ClaudeOpenFlow.historyUnconfirmed,
+      "A 409 history_unconfirmed Open must say the history copy could not be confirmed")
+    try expect(!(thrown ?? "").contains("FIXTURE_ONLY"), "A server error string must never reach the row")
+    let calls = await transport.recorded()
+    try expect(calls.filter { $0.url.path == openPath }.count == 1 && !calls.contains { $0.url.path == listPath },
+      "A refused Open must send one POST and read no profile list")
+  }
+
+  // 5b. An expired session on the Open POST is reported, never re-sent: an Open is never repeated.
+  do {
+    let transport = MockTransport(replies: ["POST \(openPath)": [MockReply(401), openAcceptedReply]])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    var status = 0
+    do {
+      _ = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+        profile: "gmail", platform: "mac", polling: openPolling, sleep: { _ in }, progress: { _ in })
+      throw CheckFailure(description: "An Open refused with 401 must not succeed")
+    } catch let error as BarClientError {
+      guard case .status(let actual, _) = error else {
+        throw CheckFailure(description: "An Open refused with 401 must keep its status")
+      }
+      status = actual
+    }
+    let calls = await transport.recorded()
+    try expect(status == 401 && calls.filter { $0.url.path == openPath }.count == 1,
+      "An expired session must never re-send the Open POST")
+  }
+
+  // 6. No terminal state: the poll gives up after three minutes, on the production cadence, without a second POST.
+  do {
+    let checking = openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "checking")))
+    let transport = MockTransport(replies: [
+      "POST \(openPath)": [openAcceptedReply],
+      "GET \(listPath)": Array(repeating: checking, count: 140),
+    ])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    let clock = OpenClock()
+    let outcome = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+      profile: "gmail", platform: "mac", polling: openPolling, now: { clock.now() },
+      sleep: { clock.advance($0) }, progress: { log.add($0) })
+    try expect(outcome?.text == ClaudeOpenFlow.stillWorking && outcome?.finished == true && outcome?.opened == false,
+      "A poll that never ends must say the dashboard is still working on it")
+    let slept = clock.slept
+    try expect(slept.count == 132 && slept.prefix(120).allSatisfy { $0 == 1 } && slept.suffix(12).allSatisfy { $0 == 5 }
+      && slept.reduce(0, +) == 180,
+      "The poll must read every second for two minutes, then every five seconds, and stop at three minutes")
+    try expect(log.texts == ["Opening", "Copying history", ClaudeOpenFlow.stillWorking],
+      "A stuck Open must keep the last text it was given, then say the dashboard is still working on it")
+    let posts = await transport.recorded()
+    try expect(posts.filter { $0.url.path == openPath }.count == 1,
+      "Giving up must never repeat the Open POST")
+  }
+
+  // 7. A second Open for the same account while one runs sends nothing at all, on either platform button.
+  do {
+    let transport = MockTransport(replies: [
+      "POST \(openPath)": [openAcceptedReply],
+      "GET \(listPath)": [
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "copying", confirmed: 1, total: 4))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "opened"))),
+      ],
+    ])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let coordinator = ClaudeOpenCoordinator()
+    let gate = OpenGate()
+    let log = OpenProgressLog()
+    let first = Task {
+      try await ClaudeOpenFlow.run(client: client, coordinator: coordinator, profile: "gmail", platform: "mac",
+        polling: openPolling, sleep: { _ in await gate.hold() }, progress: { log.add($0) })
+    }
+    var waited = 0
+    while !gate.arrived && waited < 1000 { try await Task.sleep(nanoseconds: 5_000_000); waited += 1 }
+    try expect(waited < 1000, "The first Open must reach its poll before the second is attempted")
+    let refused = try await ClaudeOpenFlow.run(client: client, coordinator: coordinator, profile: "gmail",
+      platform: "windows", polling: openPolling, sleep: { _ in }, progress: { _ in })
+    let running = await coordinator.isRunning("gmail")
+    gate.release()
+    let outcome = try await first.value
+    let stillRunning = await coordinator.isRunning("gmail")
+    try expect(refused == nil && running, "A second Open for the same account must be refused while the first runs")
+    try expect(outcome?.opened == true && !stillRunning,
+      "The account must be free again once its Open ends")
+    let calls = await transport.recorded()
+    try expect(calls.filter { $0.url.path == openPath }.count == 1,
+      "A refused second Open must send no POST at all")
+    try expect(calls.filter { $0.url.path == openPath }
+      .allSatisfy { ((try? $0.jsonBody()) ?? [:])["platform"] as? String == "mac" },
+      "The only Open POST must be the first one's")
+  }
+
+  // 8. The poll reads only this Open: another profile's operation, another platform's, or another operation id is
+  //    ignored, and an unknown state adds no text.
+  do {
+    let transport = MockTransport(replies: [
+      "POST \(openPath)": [openAcceptedReply],
+      "GET \(listPath)": [
+        openProfilesReply(openProfileJSON(id: "party",
+          operation: openOperationJSON(state: "opened"))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(platform: "windows", state: "opened"))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(id: "op_other", state: "opened"))),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "fixture_unknown_state"))),
+        openProfilesReply(openProfileJSON(operation: nil)),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "opened"))),
+      ],
+    ])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    let outcome = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+      profile: "gmail", platform: "mac", polling: openPolling, sleep: { _ in }, progress: { log.add($0) })
+    try expect(outcome?.opened == true && log.texts == ["Opening", "Opened"],
+      "Only this profile's, this platform's and this operation's state may end the poll")
+    let reads = await transport.recorded()
+    try expect(reads.filter { $0.url.path == listPath }.count == 6,
+      "An answer that does not match must leave the poll running")
+  }
+
+  // 9. A read that fails never ends the Open: the server keeps the operation and the POST is never replayed.
+  do {
+    let transport = MockTransport(replies: [
+      "POST \(openPath)": [openAcceptedReply],
+      "GET \(listPath)": [MockReply(500), MockReply(200, Data("{\"notProfiles\":true}".utf8)),
+        openProfilesReply(openProfileJSON(operation: openOperationJSON(state: "opened")))],
+    ])
+    let client = AccountsClient(connection: testConnection(), transport: transport)
+    let log = OpenProgressLog()
+    let outcome = try await ClaudeOpenFlow.run(client: client, coordinator: ClaudeOpenCoordinator(),
+      profile: "gmail", platform: "mac", polling: openPolling, sleep: { _ in }, progress: { log.add($0) })
+    try expect(outcome?.opened == true && log.texts == ["Opening", "Opened"],
+      "A failed or unreadable profile-list read must be retried, never answered with an invented state")
+  }
+
+  // 10. The row's text forms, including a copy whose counts are not known yet.
+  func operation(_ state: String, confirmed: Int? = nil, total: Int? = nil, message: String? = nil) throws -> ClaudeOpenOperation {
+    try JSONDecoder().decode(ClaudeOpenOperation.self,
+      from: Data(openOperationJSON(state: state, confirmed: confirmed, total: total, message: message).utf8))
+  }
+  let checking = try operation("checking")
+  let copying = try operation("copying")
+  let copyingCounted = try operation("copying", confirmed: 3, total: 18)
+  let copyingZero = try operation("copying", confirmed: 0, total: 18)
+  let copyingPartial = try operation("copying", confirmed: 3)
+  let opening = try operation("opening")
+  let opened = try operation("opened")
+  let failed = try operation("failed", message: "Claude account could not be opened safely.")
+  let blocked = try operation("blocked_uncertain")
+  let unknown = try operation("fixture_unknown_state")
+  try expect(ClaudeOpenFlow.text(for: checking) == "Copying history"
+    && ClaudeOpenFlow.text(for: copying) == "Copying history"
+    && ClaudeOpenFlow.text(for: copyingCounted) == "Copying history 3 of 18"
+    && ClaudeOpenFlow.text(for: copyingZero) == "Copying history 0 of 18"
+    && ClaudeOpenFlow.text(for: copyingPartial) == "Copying history"
+    && ClaudeOpenFlow.text(for: opening) == "Opening"
+    && ClaudeOpenFlow.text(for: opened) == "Opened"
+    && ClaudeOpenFlow.text(for: failed) == "Claude account could not be opened safely."
+    && ClaudeOpenFlow.text(for: blocked) == ClaudeOpenFlow.historyUnconfirmed
+    && ClaudeOpenFlow.text(for: unknown) == nil,
+    "The row's text must come only from the reported state and counts")
+  try expect(opened.isTerminal && failed.isTerminal && blocked.isTerminal && !checking.isTerminal
+    && !copying.isTerminal && !opening.isTerminal && !unknown.isTerminal,
+    "Only opened, failed and blocked_uncertain end the poll")
+  try expect(opened.isOpened && !failed.isOpened && !blocked.isOpened,
+    "Only the opened state may read as an Open that opened Claude")
+}
+
 // MARK: F6: a reading from before its window's reset is not shown
 
 private func checkResetPending() throws {
@@ -1775,6 +2125,8 @@ do {
   print("PASS readings from before their reset show as new reading pending, never 0%")
   try checkStatusItemToggle()
   print("PASS status-item presses toggle instead of dismissing; presses elsewhere still dismiss")
+  try await checkClaudeOpenProgress()
+  print("PASS Claude Open progress: 200, 202 polling with counts, failed, blocked_uncertain, 409, deadline, one POST")
   print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
   fputs("AI Account Center core check failed: \(error)\n", stderr)

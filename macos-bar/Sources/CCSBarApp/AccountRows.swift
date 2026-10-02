@@ -103,6 +103,10 @@ struct AccountRow: View {
   }
 
   private func meta(_ palette: TrayPalette) -> Text {
+    // A running Claude Open takes the row's secondary line, in the row's own secondary-text style, until it ends.
+    if account.provider == "claude", let progress = model.openProgress[account.id] {
+      return Text(verbatim: progress.text)
+    }
     if account.status == "needs_sign_in" {
       let needed = Text(verbatim: "Sign-in needed").foregroundColor(palette.warnText).fontWeight(.semibold)
       return Text("\(needed) · \(TrayFormat.platformName(account.platform))")
@@ -236,11 +240,14 @@ struct ClaudeOpenPair: View {
         HStack(spacing: 0) {
           ForEach(platforms, id: \.self) { platform in
             let name = platform == "mac" ? "Mac" : "Windows"
-            let enabled = model.busyAction == nil && !model.isRefreshing
+            let running = model.openProgress[account.id]
+            let enabled = model.busyAction == nil && !model.isRefreshing && running?.running != true
             let action = { model.openClaude(account, platform: platform) }
             Button(action: action) {
               ZStack {
-                if model.busyAction == "\(account.id)|\(platform)" { ProgressView().controlSize(.mini) }
+                if model.busyAction == "\(account.id)|\(platform)" || running?.running == true && running?.platform == platform {
+                  ProgressView().controlSize(.mini)
+                }
                 else { PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary) }
               }
               .frame(width: 29, height: 28)
