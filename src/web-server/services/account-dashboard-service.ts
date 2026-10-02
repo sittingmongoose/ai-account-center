@@ -40,6 +40,7 @@ import type {
   ClaudeDashboardPlatform,
   DashboardAccount,
 } from './account-dashboard-types';
+import { markPassedResets } from './account-window-reset';
 
 import {
   ADDITIONAL_PROVIDERS,
@@ -331,6 +332,19 @@ export class AccountDashboardService {
   }
 
   async get(platform: ClaudeDashboardPlatform = 'mac', refresh = false): Promise<AccountDashboard> {
+    const dashboard = await this.read(platform, refresh);
+    // Per response: a window's reset can pass while its sample is still cached.
+    const now = (this.deps.now ?? Date.now)();
+    return {
+      ...dashboard,
+      accounts: dashboard.accounts.map((account) => markPassedResets(account, now)),
+    };
+  }
+
+  private async read(
+    platform: ClaudeDashboardPlatform,
+    refresh: boolean
+  ): Promise<AccountDashboard> {
     const startedAt = Date.now();
     const now = (this.deps.now ?? Date.now)();
     const scope = (this.deps.scope ?? getCcsDir)();

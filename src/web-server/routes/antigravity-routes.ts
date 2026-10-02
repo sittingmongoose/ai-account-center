@@ -19,6 +19,7 @@ import {
   publicDashboardAccount as publicAccount,
   publicDashboardAccount,
 } from '../../antigravity/usage-normalization';
+import { markPassedResets } from '../services/account-window-reset';
 
 export type DashboardOriginGuard = (req: Request) => boolean;
 const AUTO_KEYS = [
@@ -214,7 +215,8 @@ function writeAllowed(req: Request, res: Response, originAllowed: DashboardOrigi
 /** Pass the existing isDashboardWebSocketOriginAllowed guard at integration. */
 export function createAntigravityRouter(
   deps: AntigravityApiDependencies,
-  originAllowed: DashboardOriginGuard
+  originAllowed: DashboardOriginGuard,
+  now: () => number = Date.now
 ): Router {
   const router = createApiRouter();
   router.use((_req, res, next) => {
@@ -249,7 +251,7 @@ export function createAntigravityRouter(
         schemaVersion: 1,
         hostId: 'ubuntu',
         accounts: (await deps.getAccounts({ refresh: req.query.refresh === 'true' })).map(
-          publicAccount
+          (account) => markPassedResets(publicAccount(account), now())
         ),
       });
     } catch {

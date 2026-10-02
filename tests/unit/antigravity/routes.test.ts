@@ -157,8 +157,11 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
   let baseUrl: string;
   let calls: Calls;
   let deps: AntigravityApiDependencies;
+  let now: number;
 
   beforeEach(async () => {
+    // The fixture reading is current unless a test moves the clock past its reset.
+    now = Date.parse(SAMPLE_TIME);
     calls = {
       inventory: 0,
       accounts: [],
@@ -208,7 +211,8 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
       '/api/antigravity',
       createAntigravityRouter(
         deps,
-        (req) => req.get('origin') === baseUrl && req.get('host') === new URL(baseUrl).host
+        (req) => req.get('origin') === baseUrl && req.get('host') === new URL(baseUrl).host,
+        () => now
       )
     );
     server = await new Promise<Server>((resolve) => {
@@ -380,6 +384,19 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
       status: 'cached',
       message: 'Showing the last successful Antigravity usage reading.',
     });
+  });
+
+  test('quota output marks a window whose reset passed after its reading, keeping the reading', async () => {
+    now = Date.parse('2026-10-02T17:00:00.000Z');
+    const response = await request('/profiles/quotas');
+    expect(response.status).toBe(200);
+    expect(response.body.accounts[0].windows[0]).toEqual({
+      ...account().windows[0],
+      resetPassed: true,
+    });
+    now = Date.parse('2026-10-02T16:59:59.999Z');
+    const before = await request('/profiles/quotas');
+    expect(before.body.accounts[0].windows[0]).toEqual(account().windows[0]);
   });
 
   test('quota output filters malformed windows without inventing an hourly interval', async () => {
