@@ -104,6 +104,7 @@ public static class Checks
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
         ResetPendingChecks(report);
         await SignInChangeChecks(report);
+        await ClaudeOpenChecks(report);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
@@ -238,7 +239,7 @@ public static class Checks
             valid &= !(await client.SetAutoSwitch(false)).Enabled;
             var configured = await client.SetAutoSwitch(false, 10);
             valid &= !configured.Enabled && configured.ThresholdPercent == 10;
-            await client.Activate("gmail"); await client.OpenClaudeOnMac("platyr");
+            await client.Activate("gmail"); await client.OpenClaude("platyr", "mac");
             valid &= await CodexSwitchFlow.Run("party", async token => { await client.Activate("party", token); }, confirmation => Task.FromResult(confirmation.Processes[0].Label == "Fixture Codex desktop"));
             bool authRejected = false;
             try { await client.Activate("party", "fixture-session-changed"); }
@@ -499,6 +500,365 @@ public static class Checks
             foreach (var shown in new[] { window, first, third }) if (shown is not null) { shown.AllowClose = true; shown.Close(); }
             try { Directory.Delete(folder, true); } catch { }
         }
+    }
+
+    /// <summary>
+    /// Claude Open progress (CONTRACT-serving-misc 4.4). Every case runs the tray's own Open flow against a loopback
+    /// fixture dashboard, with any connection stored in an isolated temporary folder, never the tray's real store.
+    /// Windows opens go through the backend POST, so the last cases prove no shell URI is started when the dashboard
+    /// cannot be reached.
+    /// </summary>
+    private static async Task ClaudeOpenChecks(CheckReport report)
+    {
+        const string accepted = "{\"id\":\"gmail\",\"platform\":\"mac\",\"state\":\"checking\",\"operationId\":\"op_fixture_0001\"}";
+        const string openedReply = "{\"opened\":true,\"id\":\"gmail\",\"platform\":\"mac\"}";
+        static string Operation(string state, int? confirmed = null, int? total = null, string? message = null, string id = "op_fixture_0001", string platform = "mac") =>
+            "{\"id\":\"" + id + "\",\"platform\":\"" + platform + "\",\"state\":\"" + state + "\","
+            + "\"confirmedCount\":" + (confirmed is int c ? c.ToString() : "null") + ",\"totalCount\":" + (total is int t ? t.ToString() : "null") + ","
+            + "\"message\":" + (message is null ? "null" : "\"" + message + "\"") + "}";
+        static string ProfileList(string? operation, string id = "gmail") =>
+            "{\"profiles\":[{\"id\":\"" + id + "\",\"email\":\"" + id + "@example.invalid\",\"openOperation\":" + (operation ?? "null") + "}]}";
+        static ClaudeOpenOperation Decode(string json) => JsonSerializer.Deserialize<ClaudeDesktopProfile>(
+            "{\"id\":\"gmail\",\"openOperation\":" + json + "}", Formatting.Json)!.OpenOperation!;
+
+        using var fixture = new ClaudeOpenFixture();
+        using var client = new DashboardClient(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-only" });
+        // Sign the fixture session in first, so every Open below is measured as the one POST it is.
+        await client.Verify(TimeSpan.FromSeconds(10), CancellationToken.None);
+        var texts = new List<string>();
+        Func<ClaudeOpenProgress, Task> record = progress => { lock (texts) texts.Add(progress.Text); return Task.CompletedTask; };
+        void Arm(string openBody, int openStatus, string? profileFallback, params string[] profiles)
+        {
+            fixture.OpenReplies.Clear(); fixture.OpenReplies.Add((openStatus, openBody));
+            fixture.ProfileReplies.Clear(); fixture.ResetProfileQueue();
+            foreach (var body in profiles) fixture.ProfileReplies.Add((200, body));
+            fixture.ProfileFallback = profileFallback is null ? (500, "{}") : (200, profileFallback);
+            lock (texts) texts.Clear();
+        }
+        string[] Said() { lock (texts) return texts.ToArray(); }
+
+        // 1. Today's 200: one POST, no profile-list read, and the row ends on "Opened".
+        var posts = fixture.Opens;
+        Arm(openedReply, 200, null);
+        var plain = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Notes["claude_open_200_texts"] = string.Join(" | ", Said());
+        report.Checks["claude_open_200_finishes_at_once"] = plain is { Opened: true, Finished: true, Text: "Opened" }
+            && Said().SequenceEqual(new[] { "Opening", "Opened" })
+            && fixture.Opens - posts == 1 && fixture.ProfileReads == 0;
+        report.Checks["claude_open_post_opts_into_the_async_answer"] = fixture.PreferHeaders.Count == 1
+            && fixture.PreferHeaders[0] == "respond-async" && fixture.OpenBodies.Count == 1
+            && fixture.OpenBodies[0] == "{\"platform\":\"mac\"}";
+
+        // 2. 202, polled to opened: the counts the server reports are the counts the row shows.
+        posts = fixture.Opens;
+        var reads = fixture.ProfileReads;
+        Arm(accepted, 202, null,
+            ProfileList(Operation("checking")),
+            ProfileList(Operation("copying", 3, 18)),
+            ProfileList(Operation("copying", 18, 18)),
+            ProfileList(Operation("opening")),
+            ProfileList(Operation("opened")));
+        var clock = new OpenClock();
+        var polled = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record,
+            new ClaudeOpenPolling(), clock.Now, clock.Advance);
+        report.Notes["claude_open_202_texts"] = string.Join(" | ", Said());
+        report.Checks["claude_open_202_polls_to_opened_with_counts"] = polled is { Opened: true, Finished: true }
+            && Said().SequenceEqual(new[] { "Opening", "Copying history", "Copying history 3 of 18", "Copying history 18 of 18", "Opening", "Opened" })
+            && fixture.Opens - posts == 1 && fixture.ProfileReads - reads == 5
+            && clock.Slept.SequenceEqual(Enumerable.Repeat(TimeSpan.FromSeconds(1), 5));
+
+        // 3. 202 to failed: the server's own fixed sentence reaches the row, and the Open did not open Claude.
+        posts = fixture.Opens;
+        Arm(accepted, 202, null,
+            ProfileList(Operation("copying", 2, 9)),
+            ProfileList(Operation("failed", message: "Claude desktop request timed out.")));
+        var failed = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Notes["claude_open_failed_text"] = failed?.Text ?? "";
+        report.Checks["claude_open_202_failed_shows_the_server_message"] = failed is { Opened: false, Finished: true, Text: "Claude desktop request timed out." }
+            && fixture.Opens - posts == 1;
+
+        // 4. 202 to blocked_uncertain with no usable message: the fixed client sentence, never a server string.
+        Arm(accepted, 202, null, ProfileList(Operation("blocked_uncertain")));
+        var blocked = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Checks["claude_open_202_blocked_uncertain_uses_the_fixed_sentence"] = blocked is { Opened: false, Finished: true }
+            && blocked.Text == ClaudeOpenFlow.HistoryUnconfirmed;
+        report.Checks["claude_open_only_a_bounded_single_line_server_sentence_reaches_the_row"] =
+            ClaudeOpenFlow.PublicMessage(new string('x', 301)) == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage("line\nFIXTURE_ONLY_PRIVATE") == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage("") == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage(null) == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage("Claude history copy is unconfirmed.") == "Claude history copy is unconfirmed.";
+
+        // 5. 409 history_unconfirmed: the fixed sentence, one POST, no poll, and no server string.
+        posts = fixture.Opens;
+        reads = fixture.ProfileReads;
+        Arm("{\"error\":\"FIXTURE_ONLY_PRIVATE canary\",\"code\":\"history_unconfirmed\"}", 409, null);
+        string? refused = null;
+        try { await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling()); }
+        catch (InvalidOperationException error) { refused = error.Message; }
+        report.Notes["claude_open_409_text"] = refused ?? "";
+        report.Checks["claude_open_409_history_unconfirmed_uses_the_fixed_sentence"] =
+            refused is not null && refused == ClaudeOpenFlow.HistoryUnconfirmed
+            && !refused.Contains("FIXTURE_ONLY", StringComparison.Ordinal)
+            && fixture.Opens - posts == 1 && fixture.ProfileReads == reads;
+
+        // 6. No terminal state: the poll gives up after three minutes, on the production cadence, without a second POST.
+        posts = fixture.Opens;
+        reads = fixture.ProfileReads;
+        Arm(accepted, 202, profileFallback: ProfileList(Operation("checking")));
+        var deadline = new OpenClock();
+        var gaveUp = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record,
+            new ClaudeOpenPolling(), deadline.Now, deadline.Advance);
+        var slept = deadline.Slept;
+        report.Measurements["claude_open_poll_reads"] = fixture.ProfileReads - reads;
+        report.Checks["claude_open_poll_gives_up_after_three_minutes"] = gaveUp is { Opened: false, Finished: true }
+            && gaveUp.Text == ClaudeOpenFlow.StillWorking
+            && Said().SequenceEqual(new[] { "Opening", "Copying history", ClaudeOpenFlow.StillWorking })
+            && slept.Length == 132 && slept.Take(120).All(step => step == TimeSpan.FromSeconds(1))
+            && slept.Skip(120).All(step => step == TimeSpan.FromSeconds(5))
+            && slept.Aggregate(TimeSpan.Zero, (total, step) => total + step) == TimeSpan.FromMinutes(3)
+            && fixture.ProfileReads - reads == 132 && fixture.Opens - posts == 1;
+
+        // 7. A second Open for the same account while one runs sends nothing at all, on either platform button.
+        posts = fixture.Opens;
+        Arm(accepted, 202, null, ProfileList(Operation("copying", 1, 4)), ProfileList(Operation("opened")));
+        var coordinator = new ClaudeOpenCoordinator();
+        var gate = new OpenGate();
+        var first = ClaudeOpenFlow.Run(client, "gmail", "mac", coordinator, record, new ClaudeOpenPolling(), null, gate.Hold);
+        var waited = 0;
+        while (!gate.Arrived && waited < 1000) { await Task.Delay(5); waited++; }
+        var running = coordinator.IsRunning("gmail");
+        var second = await ClaudeOpenFlow.Run(client, "gmail", "windows", coordinator, _ => Task.CompletedTask, new ClaudeOpenPolling());
+        gate.Release();
+        var outcome = await first;
+        report.Checks["claude_open_never_sends_a_second_post_while_one_runs"] = waited < 1000 && running
+            && second is null && outcome is { Opened: true } && !coordinator.IsRunning("gmail")
+            && fixture.Opens - posts == 1;
+
+        // 8. The poll reads only this Open: another profile's operation, another platform's, another operation id, a
+        //    failed read, an unreadable body, an unknown state and a missing operation all leave it running.
+        reads = fixture.ProfileReads;
+        Arm(accepted, 202, null,
+            ProfileList(Operation("opened"), id: "party"),
+            ProfileList(Operation("opened", platform: "windows")),
+            ProfileList(Operation("opened", id: "op_other")));
+        fixture.ProfileReplies.Add((500, "{}"));
+        fixture.ProfileReplies.Add((200, "{\"notProfiles\":true}"));
+        fixture.ProfileReplies.Add((200, ProfileList(Operation("fixture_unknown_state"))));
+        fixture.ProfileReplies.Add((200, ProfileList(null)));
+        fixture.ProfileReplies.Add((200, ProfileList(Operation("opened"))));
+        var matched = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Checks["claude_open_reads_only_its_own_operation"] = matched is { Opened: true }
+            && Said().SequenceEqual(new[] { "Opening", "Opened" }) && fixture.ProfileReads - reads == 8;
+
+        // 9. The row's text comes only from the reported state and counts.
+        report.Checks["claude_open_row_text_comes_only_from_the_state"] =
+            ClaudeOpenFlow.TextFor(Decode(Operation("checking"))) == "Copying history"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying"))) == "Copying history"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying", 3, 18))) == "Copying history 3 of 18"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying", 0, 18))) == "Copying history 0 of 18"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying", 3))) == "Copying history"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("opening"))) == "Opening"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("opened"))) == "Opened"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("failed", message: "Claude account could not be opened safely."))) == "Claude account could not be opened safely."
+            && ClaudeOpenFlow.TextFor(Decode(Operation("blocked_uncertain"))) == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.TextFor(Decode(Operation("fixture_unknown_state"))) is null;
+        report.Checks["claude_open_only_terminal_states_end_the_poll"] =
+            Decode(Operation("opened")).IsTerminal && Decode(Operation("failed")).IsTerminal && Decode(Operation("blocked_uncertain")).IsTerminal
+            && !Decode(Operation("checking")).IsTerminal && !Decode(Operation("copying")).IsTerminal
+            && !Decode(Operation("opening")).IsTerminal && !Decode(Operation("fixture_unknown_state")).IsTerminal
+            && Decode(Operation("opened")).IsOpened && !Decode(Operation("failed")).IsOpened;
+        report.Checks["claude_open_requests_reach_only_the_loopback_fixture"] = fixture.Opens > 0 && fixture.Unexpected == 0;
+
+        // 10. Windows: an unreachable dashboard. The Open says so and never starts a shell URI.
+        var folder = Path.Combine(Path.GetTempPath(), "aac-open-check-" + Guid.NewGuid().ToString("N"));
+        var store = Path.Combine(folder, "connection.dpapi");
+        var real = Path.GetFullPath(SecureStore.StateDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        report.Checks["claude_open_checks_use_an_isolated_store"] = !Path.GetFullPath(store).StartsWith(real, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(Path.GetFullPath(store), Path.GetFullPath(SecureStore.SettingsPath), StringComparison.OrdinalIgnoreCase);
+        var launched = new List<string>();
+        var realLaunch = MainWindow.Launch;
+        MainWindow? panel = null, disconnected = null;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            SecureStore.Save(new ConnectionSettings { BaseURL = ClosedLoopbackOrigin(), Username = "fixture", Password = "fixture-only" }, store);
+            // One seam for every shell launch this panel makes, so a zero below is a real zero and not a dead hook.
+            MainWindow.Launch = info => { lock (launched) launched.Add(info.FileName); return null; };
+            panel = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            panel.UseConnectionStoreForCheck(store);
+            var account = new DashboardAccount
+            {
+                Id = "claude:gmail", Provider = "claude", Label = "fixture", Email = "fixture@example.com", Platform = "windows", Status = "ok",
+                Capabilities = new AccountCapabilities { ClaudeProfileId = "gmail", ClaudePlatforms = new List<string> { "mac", "windows" } }
+            };
+            await panel.OpenClaudeForCheck(account, "windows");
+            report.Notes["windows_unreachable_message"] = panel.StatusFlashForCheck ?? "";
+            report.Checks["windows_open_never_starts_a_uri_when_the_dashboard_is_unreachable"] =
+                panel.StatusFlashForCheck == ClaudeOpenFlow.Unreachable && launched.Count == 0 && !panel.OpenRunningForCheck(account.Id);
+            panel.OpenDashboard();
+            report.Checks["windows_launch_seam_is_the_only_shell_launch_path"] = launched.Count == 1
+                && launched[0].StartsWith("http", StringComparison.Ordinal);
+            // No connection at all: the same sentence, and still nothing launched.
+            disconnected = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            await disconnected.OpenClaudeForCheck(account, "windows");
+            report.Checks["windows_open_without_a_connection_says_the_dashboard_is_unreachable"] =
+                disconnected.StatusFlashForCheck == ClaudeOpenFlow.Unreachable && launched.Count == 1;
+        }
+        catch (Exception error)
+        {
+            report.Checks["claude_open_checks_completed"] = false;
+            report.Notes["claude_open_checks"] = error.GetType().Name + ": " + error.Message;
+        }
+        finally
+        {
+            MainWindow.Launch = realLaunch;
+            foreach (var shown in new[] { panel, disconnected }) if (shown is not null) { shown.AllowClose = true; shown.Close(); }
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
+    /// <summary>A check's clock: the poll's sleep advances it, so a three-minute deadline costs no real time.</summary>
+    private sealed class OpenClock
+    {
+        private readonly object gate = new();
+        private readonly List<TimeSpan> steps = new();
+        private DateTimeOffset current = DateTimeOffset.Parse("2026-10-02T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        public DateTimeOffset Now() { lock (gate) return current; }
+        public TimeSpan[] Slept { get { lock (gate) return steps.ToArray(); } }
+        public Task Advance(TimeSpan delay) { lock (gate) { current += delay; steps.Add(delay); } return Task.CompletedTask; }
+    }
+
+    /// <summary>Holds one Open inside its poll until the check releases it, so a second Open can be attempted while it
+    /// runs.</summary>
+    private sealed class OpenGate
+    {
+        private readonly object gate = new();
+        private bool arrived, released;
+        public bool Arrived { get { lock (gate) return arrived; } }
+        public bool Released { get { lock (gate) return released; } }
+        public void Release() { lock (gate) released = true; }
+        public Task Hold(TimeSpan delay)
+        {
+            lock (gate) arrived = true;
+            return Wait();
+        }
+        private async Task Wait()
+        {
+            var waited = 0;
+            while (!Released && waited < 1000) { await Task.Delay(5); waited++; }
+        }
+    }
+
+    /// <summary>A loopback stand-in for the dashboard's Claude Open routes. POST /api/auth/login accepts only
+    /// fixture/fixture-only and sets an HttpOnly cookie; the Open and profile routes need it, so the tray's own session
+    /// handshake is exercised. The Open route answers a scripted status and body and records the Prefer header and the
+    /// request body; the profile list answers a scripted queue, then <see cref="ProfileFallback"/>.</summary>
+    private sealed class ClaudeOpenFixture : IDisposable
+    {
+        private readonly HttpListener listener = new();
+        private readonly object gate = new();
+        private readonly List<string> requests = new();
+        private readonly List<string> preferHeaders = new();
+        private readonly List<string> openBodies = new();
+        private readonly List<(int Status, string Body)> openReplies = new();
+        private readonly List<(int Status, string Body)> profileReplies = new();
+        private int opens, reads, unexpected, index;
+
+        public string Origin { get; }
+        public (int Status, string Body) ProfileFallback { get; set; } = (500, "{}");
+        public List<(int Status, string Body)> OpenReplies => openReplies;
+        public List<(int Status, string Body)> ProfileReplies => profileReplies;
+        /// <summary>Open POSTs the route actually answered, so a 401 handshake is never counted as a second Open.</summary>
+        public int Opens { get { lock (gate) return opens; } }
+        public int ProfileReads { get { lock (gate) return reads; } }
+        public int Unexpected { get { lock (gate) return unexpected; } }
+        public List<string> Requests { get { lock (gate) return requests.ToList(); } }
+        public List<string> PreferHeaders { get { lock (gate) return preferHeaders.ToList(); } }
+        public List<string> OpenBodies { get { lock (gate) return openBodies.ToList(); } }
+        /// <summary>Back to the front of the scripted profile queue, without losing the cumulative read count.</summary>
+        public void ResetProfileQueue() { lock (gate) index = 0; }
+
+        public ClaudeOpenFixture()
+        {
+            var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+            var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+            Origin = $"http://127.0.0.1:{port}";
+            listener.Prefixes.Add(Origin + "/"); listener.Start();
+            _ = Task.Run(Loop);
+        }
+
+        private async Task Loop()
+        {
+            while (true)
+            {
+                HttpListenerContext context;
+                try { context = await listener.GetContextAsync(); } catch { return; }
+                _ = Task.Run(() => Handle(context));
+            }
+        }
+
+        private async Task Handle(HttpListenerContext context)
+        {
+            try
+            {
+                var request = context.Request; var path = request.Url!.AbsolutePath;
+                var signedIn = request.Cookies["fixture-session"]?.Value == "yes";
+                var isOpen = request.HttpMethod == "POST" && path.StartsWith("/api/claude/desktop-profiles/", StringComparison.Ordinal)
+                    && path.EndsWith("/open", StringComparison.Ordinal);
+                int status; string body;
+                if (request.HttpMethod == "POST" && path == "/api/auth/login")
+                {
+                    using var json = JsonDocument.Parse(await Read(request));
+                    if (json.RootElement.GetProperty("username").GetString() == "fixture" && json.RootElement.GetProperty("password").GetString() == "fixture-only")
+                    {
+                        context.Response.SetCookie(new Cookie("fixture-session", "yes", "/") { HttpOnly = true });
+                        (status, body) = (200, "{\"success\":true}");
+                    }
+                    else (status, body) = (401, "{\"error\":\"Invalid credentials\"}");
+                }
+                else if (!signedIn) (status, body) = (401, "{\"error\":\"Authentication required\"}");
+                else if (request.HttpMethod == "GET" && path == "/api/accounts/settings") (status, body) = (200, "{\"refreshIntervalSeconds\":60}");
+                else if (isOpen)
+                {
+                    var sent = await Read(request);
+                    lock (gate)
+                    {
+                        opens++;
+                        preferHeaders.Add(request.Headers["Prefer"] ?? "");
+                        openBodies.Add(sent);
+                        var reply = openReplies.Count > 0 ? openReplies[0] : (Status: 500, Body: "{}");
+                        status = reply.Status; body = reply.Body;
+                    }
+                }
+                else if (request.HttpMethod == "GET" && path == "/api/claude/desktop-profiles")
+                {
+                    lock (gate)
+                    {
+                        var reply = index < profileReplies.Count ? profileReplies[index] : ProfileFallback;
+                        index++; reads++;
+                        status = reply.Status; body = reply.Body;
+                    }
+                }
+                else { lock (gate) unexpected++; (status, body) = (404, "{\"error\":\"Not found\"}"); }
+                lock (gate) requests.Add($"{request.HttpMethod} {path} {status}");
+                var bytes = Encoding.UTF8.GetBytes(body);
+                context.Response.StatusCode = status;
+                context.Response.ContentType = "application/json";
+                context.Response.ContentLength64 = bytes.Length;
+                await context.Response.OutputStream.WriteAsync(bytes);
+                context.Response.Close();
+            }
+            catch { try { context.Response.Abort(); } catch { } }
+        }
+
+        private static async Task<string> Read(HttpListenerRequest request)
+        {
+            using var reader = new StreamReader(request.InputStream);
+            return await reader.ReadToEndAsync();
+        }
+
+        public void Dispose() { try { listener.Stop(); listener.Close(); } catch { } }
     }
 
     private static string ClosedLoopbackOrigin()

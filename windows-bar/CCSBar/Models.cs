@@ -121,6 +121,44 @@ public sealed class AccountCapabilities
     public bool AntigravityCanActivate { get; set; }
 }
 
+/// <summary>The Open progress of one Claude profile, exactly as GET /api/claude/desktop-profiles reports it
+/// (CONTRACT-serving-misc 4.4). Counts and states only: no UUIDs, titles, transcript text, ssh details or paths.</summary>
+public sealed class ClaudeOpenOperation
+{
+    public string Id { get; set; } = "";
+    public string Platform { get; set; } = "";
+    public string State { get; set; } = "";
+    public int? ConfirmedCount { get; set; }
+    public int? TotalCount { get; set; }
+    /// <summary>The server's fixed sentence for blocked_uncertain and failed; null otherwise.</summary>
+    public string? Message { get; set; }
+    /// <summary>opened, failed and blocked_uncertain end the poll; anything else keeps it running.</summary>
+    [JsonIgnore] public bool IsTerminal => State is "opened" or "failed" or "blocked_uncertain";
+    [JsonIgnore] public bool IsOpened => State == "opened";
+}
+
+/// <summary>One row of GET /api/claude/desktop-profiles. A profile without a manifest id carries no openOperation.</summary>
+public sealed class ClaudeDesktopProfile
+{
+    public string? Id { get; set; }
+    public ClaudeOpenOperation? OpenOperation { get; set; }
+}
+
+public sealed class ClaudeDesktopProfileList
+{
+    public List<ClaudeDesktopProfile> Profiles { get; set; } = new();
+}
+
+/// <summary>The Open POST's body: 200 {opened, id, platform} or 202 {id, platform, state, operationId}.</summary>
+public sealed class ClaudeOpenReply
+{
+    public bool Opened { get; set; }
+    public string? Id { get; set; }
+    public string? Platform { get; set; }
+    public string? State { get; set; }
+    public string? OperationId { get; set; }
+}
+
 /// <summary>Antigravity's own automatic switching (thresholdUsedPercent is % USED, unlike Codex).</summary>
 public sealed class AntigravityAutoStatus
 {
@@ -266,7 +304,7 @@ public static class Formatting
     }
 
     /// <summary>A Claude desktop profile id from the dashboard data. No allowlist: any id the server reports is used
-    /// when it is URI and path safe ([A-Za-z0-9_-], 1-64), so ccs-claude://launch/{id} cannot be injected.</summary>
+    /// when it is path safe ([A-Za-z0-9_-], 1-64), so it cannot be injected into the Open route.</summary>
     public static bool IsSafeClaudeProfile(string? id) => IsSafeProfile(id);
 
     /// <summary>Server-reported ids (providers, Antigravity profiles): [A-Za-z0-9][A-Za-z0-9_-]{0,63}.</summary>
