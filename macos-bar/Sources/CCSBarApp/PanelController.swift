@@ -244,9 +244,20 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   private func installDismissMonitors() {
     removeDismissMonitors()
-    // A click in another app or on the desktop closes the panel, like a menu.
-    if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] _ in
-      Task { @MainActor in self?.close() }
+    // A click in another app or on the desktop closes the panel, like a menu. A press on our own
+    // status-item button is not an outside click: the menu bar lives in another process, so this
+    // monitor sees the press before the button action runs. If it closed first, the action would see
+    // a closed panel and reopen it, and the icon could open the panel but never close it.
+    if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
+      let location = NSEvent.mouseLocation
+      let type = event.type
+      Task { @MainActor in
+        guard let self else { return }
+        let buttonActs = type == .leftMouseDown || type == .rightMouseDown
+        if !StatusItemClick.isOutsideClick(at: CGPoint(x: location.x, y: location.y),
+          buttonFrame: self.statusButtonFrame, buttonActs: buttonActs) { return }
+        self.close()
+      }
     }) { monitors.append(monitor) }
     // Escape in the panel (only while it is open; the monitor is removed with it).
     if let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
@@ -262,6 +273,14 @@ final class PanelController: NSObject, NSWindowDelegate {
       object: nil, queue: .main) { [weak self] _ in
       Task { @MainActor in self?.close() }
     })
+  }
+
+  /// Our status-item button's frame in screen coordinates (.zero when it has no window yet,
+  /// which dismisses as before).
+  private var statusButtonFrame: CGRect {
+    guard let button = statusItem.button, let window = button.window else { return .zero }
+    let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
+    return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
   }
 
   private func removeDismissMonitors() {

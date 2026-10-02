@@ -194,7 +194,7 @@ enum PanelSelfTest {
 
   /// Escape as a real key event: straight to the window's responder chain, or through the application
   /// (its local event monitors first), the way a key press arrives.
-  private static func escape(to window: NSWindow, viaApp: Bool) {
+  static func escape(to window: NSWindow, viaApp: Bool) {
     guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
       timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
       characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) else { return }
@@ -208,7 +208,7 @@ enum PanelSelfTest {
   }
 
   /// The event Carbon delivers for a registered hot key, sent to the application target.
-  private static func sendHotKeyPressed() {
+  static func sendHotKeyPressed() {
     var event: EventRef?
     guard CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyPressed), 0,
       EventAttributes(kEventAttributeNone), &event) == noErr, let event else { return }
