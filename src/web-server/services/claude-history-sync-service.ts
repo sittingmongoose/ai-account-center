@@ -7,6 +7,7 @@ import {
   type ClaudeDesktopProfile,
 } from './claude-desktop-profile-service';
 import { runClaudeHistoryHelper } from './claude-desktop-transport';
+import { claudeHistoryOpenHeldWithoutCore } from './claude-history-hold-fallback';
 import { ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 
@@ -109,14 +110,11 @@ export function claudeHistoryOpenHeld(profileId: string, platform: 'mac' | 'wind
     if (!core.PROFILES.has(profileId)) return false;
     return core.pendingMarkerState(getCcsDir(), profileId, platform).held;
   } catch {
-    try {
-      fs.lstatSync(path.join(getCcsDir(), 'claude-history-pending'));
-      return true;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code !== 'ENOENT';
-    }
+    return claudeHistoryOpenHeldWithoutCore(getCcsDir(), profileId, platform);
   }
 }
+
+export { claudeHistoryOpenHeldWithoutCore };
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

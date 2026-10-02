@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
@@ -22,6 +23,12 @@ const SSH_TIMEOUT_MS = 30_000;
 const MAX_HELPER_BYTES = 128 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ROWS = 100_000;
+/**
+ * The packaged helper's SHA-256, pinned like the Claude history writer: only these exact bytes are ever run on the
+ * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
+ */
+export const ANALYTICS_HELPER_SHA256 =
+  '3ca4202100c0e7db7e1068f1017a226aff8ded3943ab1afddcf3c800f75f7428';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -72,12 +79,22 @@ export interface AnalyticsRemoteRequest {
   deadlineMs?: number;
 }
 
-function helperPath(): string {
+export function analyticsHelperPath(): string {
   return path.resolve(__dirname, '../../../scripts/analytics-remote/analytics_usage_remote.py');
 }
 
 function quoteShell(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/** File keys and head/tail fingerprints are SHA-256 hex digests on the helper side; anything else is refused. */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+function cleanText(value: unknown, max: number): value is string {
+  return (
+    typeof value === 'string' && value.length > 0 && value.length <= max && !CONTROL.test(value)
+  );
 }
 
 function nonNegative(value: unknown): value is number {
@@ -90,11 +107,9 @@ function validRow(value: unknown): value is AnalyticsRemoteRow {
   return (
     (row.k === 'omp' || row.k === 'muse' || row.k === 'zcode') &&
     typeof row.f === 'string' &&
-    row.f.length > 0 &&
-    typeof row.m === 'string' &&
-    row.m.length > 0 &&
-    row.m.length <= 160 &&
-    (row.p === undefined || (typeof row.p === 'string' && row.p.length <= 64)) &&
+    SHA256_HEX.test(row.f) &&
+    cleanText(row.m, 160) &&
+    (row.p === undefined || cleanText(row.p, 64)) &&
     typeof row.h === 'string' &&
     /^\d{4}-\d{2}-\d{2} \d{2}:00$/.test(row.h) &&
     nonNegative(row.i) &&
@@ -112,8 +127,8 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
   return (
     nonNegative(print.size) &&
     nonNegative(print.mtimeMs) &&
-    (print.head === undefined || typeof print.head === 'string') &&
-    (print.tail === undefined || typeof print.tail === 'string') &&
+    (print.head === undefined || (typeof print.head === 'string' && SHA256_HEX.test(print.head))) &&
+    (print.tail === undefined || (typeof print.tail === 'string' && SHA256_HEX.test(print.tail))) &&
     (print.walSize === undefined || nonNegative(print.walSize)) &&
     (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs))
   );
@@ -161,7 +176,10 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     if (!prints || typeof prints !== 'object' || Array.isArray(prints))
       throw new AnalyticsRemoteTransportError();
     const entries = Object.entries(prints);
-    if (entries.length > 20_000 || !entries.every(([, print]) => validFingerprint(print)))
+    if (
+      entries.length > 20_000 ||
+      !entries.every(([key, print]) => SHA256_HEX.test(key) && validFingerprint(print))
+    )
       throw new AnalyticsRemoteTransportError();
     parsed[kind] = {
       state:
@@ -207,9 +225,13 @@ export async function runAnalyticsRemoteHelper(
   ) {
     throw new ValidationError('Analytics remote request is invalid.');
   }
-  const helper = await fs.promises.readFile(helperPath(), 'utf8');
-  if (helper.length > MAX_HELPER_BYTES)
+  const helperBytes = await fs.promises.readFile(analyticsHelperPath());
+  if (
+    helperBytes.length > MAX_HELPER_BYTES ||
+    createHash('sha256').update(helperBytes).digest('hex') !== ANALYTICS_HELPER_SHA256
+  )
     throw new ValidationError('Analytics remote helper is unavailable.');
+  const helper = helperBytes.toString('utf8');
   const input = Buffer.from(
     JSON.stringify({
       helperSource: helper,

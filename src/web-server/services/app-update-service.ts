@@ -157,9 +157,15 @@ export class AppUpdateService {
    * it finishes, then every queued app is reported as skipped. Idempotent:
    * a second cancel changes nothing. Never promises an undo.
    */
-  cancel(): { job: AppUpdateJob | null; cancelling: boolean } {
+  cancel(): { job: AppUpdateJob | null; cancelling: boolean; notOwner?: true } {
     if (!this.lockHeld) this.restore();
     if (this.job?.state !== 'running') return { job: this.getStatus().job, cancelling: false };
+    // A running job this process restored from disk belongs to another dashboard process (a deploy overlap): its
+    // flag would never reach the owner's loop, and the owner's next save would erase it. Refuse instead of
+    // acknowledging a cancel that cannot be honoured.
+    if (this.deps.persist !== false && !this.lockHeld) {
+      return { job: this.getStatus().job, cancelling: false, notOwner: true };
+    }
     this.job.cancelRequested = true;
     try {
       this.save();

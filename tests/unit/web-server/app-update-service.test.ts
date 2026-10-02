@@ -167,6 +167,36 @@ describe('fixed app update service', () => {
     expect(second.getStatus().job!.results).toHaveLength(21);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
+  it('refuses a cancel from a process that does not own the running job', async () => {
+    const root = directory();
+    let release!: (value: string) => void;
+    const blocked = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const owner = new AppUpdateService({
+      ccsDir: root,
+      runHost: async (host) => (host === 'ubuntu' ? blocked : payload()),
+    });
+    owner.start();
+    const other = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
+    const refused = other.cancel();
+    expect(refused.cancelling).toBe(false);
+    expect(refused.notOwner).toBe(true);
+    expect(refused.job?.state).toBe('running');
+    expect(refused.job?.cancelRequested).toBe(false);
+    // Nothing was written over the owner's job file.
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(root, 'app-updates/dashboard-job.json'), 'utf8')
+    );
+    expect(saved.job.cancelRequested).toBe(false);
+    // The owner itself still cancels and honours it.
+    expect(owner.cancel().cancelling).toBe(true);
+    release(payload());
+    await finish(owner);
+    expect(owner.getStatus().job!.results.filter((row) => row.status === 'skipped')).toHaveLength(
+      14
+    );
+  });
   it('marks an interrupted persisted job failed without replaying it', () => {
     const root = directory();
     const sub = path.join(root, 'app-updates');

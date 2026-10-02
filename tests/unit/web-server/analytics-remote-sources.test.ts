@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  ANALYTICS_HELPER_SHA256,
+  analyticsHelperPath,
   parseAnalyticsRemoteResponse,
   runAnalyticsRemoteHelper,
 } from '../../../src/web-server/services/analytics-remote-transport';
@@ -18,10 +21,14 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(cache, { recursive: true, force: true }));
 
+// The helper's file keys are SHA-256 hex digests; the server refuses anything else.
+const FILE_1 = 'a1'.repeat(32);
+const DB_1 = 'd1'.repeat(32);
+
 function row(overrides: Record<string, unknown> = {}) {
   return {
     k: 'omp',
-    f: 'file-1',
+    f: FILE_1,
     m: 'deepseek-v4.1-flash',
     h: '2026-10-01 15:00',
     i: 100,
@@ -39,7 +46,7 @@ function response(overrides: Record<string, unknown> = {}) {
     version: 1,
     truncated: false,
     kinds: {
-      omp: { state: 'ok', fingerprints: { 'file-1': { size: 10, mtimeMs: 20 } } },
+      omp: { state: 'ok', fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20 } } },
       muse: { state: 'not_installed', fingerprints: {} },
       zcode: { state: 'ok', fingerprints: {} },
     },
@@ -71,6 +78,29 @@ describe('analytics remote transport', () => {
     ).toThrow();
   });
 
+  it('refuses raw paths, control characters and non-hash fingerprints from the helper', () => {
+    const bad = (overrides: Record<string, unknown>) => () =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response(overrides)));
+    expect(bad({ rows: [row({ f: '/Users/someone/.omp/session.jsonl' })] })).toThrow();
+    expect(bad({ rows: [row({ m: 'model\u001b[31m' })] })).toThrow();
+    expect(bad({ rows: [row({ p: 'provider\n' })] })).toThrow();
+    const prints = (key: string, print: Record<string, unknown>) => ({
+      kinds: {
+        omp: { state: 'ok', fingerprints: { [key]: print } },
+        muse: { state: 'not_installed', fingerprints: {} },
+        zcode: { state: 'ok', fingerprints: {} },
+      },
+    });
+    expect(bad(prints('/tmp/raw-path', { size: 1, mtimeMs: 2 }))).toThrow();
+    expect(bad(prints(FILE_1, { size: 1, mtimeMs: 2, head: 'raw text' }))).toThrow();
+    expect(bad(prints(FILE_1, { size: 1, mtimeMs: 2, tail: 'raw text' }))).toThrow();
+    expect(() =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(response(prints(FILE_1, { size: 1, mtimeMs: 2, head: FILE_1, tail: DB_1 })))
+      )
+    ).not.toThrow();
+  });
+
   it('refuses unsafe ssh aliases and bad requests without running ssh', async () => {
     await expect(
       runAnalyticsRemoteHelper('bad;alias', 'mac', {
@@ -89,6 +119,13 @@ describe('analytics remote transport', () => {
   });
 });
 
+describe('analytics remote helper integrity', () => {
+  it('pins the packaged helper by SHA-256', () => {
+    const bytes = fs.readFileSync(analyticsHelperPath());
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(ANALYTICS_HELPER_SHA256);
+  });
+});
+
 describe('analytics remote sources', () => {
   const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias' });
 
@@ -102,9 +139,9 @@ describe('analytics remote sources', () => {
           JSON.stringify(
             response({
               kinds: {
-                omp: { state: 'ok', fingerprints: { 'file-1': { size: 10, mtimeMs: 20 } } },
+                omp: { state: 'ok', fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20 } } },
               },
-              rows: [row({ f: `file-${platform}` })],
+              rows: [row({ f: (platform === 'mac' ? 'ac' : 'bc').repeat(32) })],
             })
           )
         ),
@@ -126,7 +163,7 @@ describe('analytics remote sources', () => {
     await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
     const changed = response({
       kinds: {
-        omp: { state: 'ok', fingerprints: { 'file-1': { size: 11, mtimeMs: 21 } } },
+        omp: { state: 'ok', fingerprints: { [FILE_1]: { size: 11, mtimeMs: 21 } } },
       },
       rows: [row({ i: 7 })],
     });
@@ -229,11 +266,11 @@ describe('analytics remote sources', () => {
   });
 
   it('keeps the rows of a kind the host could not read', async () => {
-    const zcodeRow = row({ k: 'zcode', f: 'db-1', m: 'GLM-5.3-Flash', c: 0, i: 40 });
+    const zcodeRow = row({ k: 'zcode', f: DB_1, m: 'GLM-5.3-Flash', c: 0, i: 40 });
     const first = response({
       kinds: {
-        omp: { state: 'ok', fingerprints: { 'file-1': { size: 10, mtimeMs: 20 } } },
-        zcode: { state: 'ok', fingerprints: { 'db-1': { size: 5, mtimeMs: 6 } } },
+        omp: { state: 'ok', fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20 } } },
+        zcode: { state: 'ok', fingerprints: { [DB_1]: { size: 5, mtimeMs: 6 } } },
       },
       rows: [row(), zcodeRow],
     });
@@ -244,7 +281,7 @@ describe('analytics remote sources', () => {
     });
     const failed = response({
       kinds: {
-        omp: { state: 'ok', fingerprints: { 'file-1': { size: 10, mtimeMs: 20 } } },
+        omp: { state: 'ok', fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20 } } },
         zcode: { state: 'error', fingerprints: {} },
       },
       rows: [],
@@ -266,10 +303,10 @@ describe('analytics remote sources', () => {
         kinds: {
           zcode: {
             state: 'ok',
-            fingerprints: { 'db-1': { size: 5, mtimeMs: 6, walSize, walMtimeMs: walSize } },
+            fingerprints: { [DB_1]: { size: 5, mtimeMs: 6, walSize, walMtimeMs: walSize } },
           },
         },
-        rows: [row({ k: 'zcode', f: 'db-1', m: 'GLM-5.3-Flash', c: 0, i })],
+        rows: [row({ k: 'zcode', f: DB_1, m: 'GLM-5.3-Flash', c: 0, i })],
       });
     await loadAnalyticsRemoteSources(MIN_DATE, {
       hosts,

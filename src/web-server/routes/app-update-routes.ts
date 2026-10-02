@@ -80,6 +80,15 @@ export function createAppUpdateRouter(service?: AppUpdateService): Router {
     }
     const updater = service ?? getAppUpdateService();
     const outcome = updater.cancel();
+    if (outcome.notOwner) {
+      res.status(409).json({
+        error: 'This update is run by another dashboard process, so it cannot be cancelled here.',
+        code: 'not_owner',
+        job: outcome.job,
+        cancelling: false,
+      });
+      return;
+    }
     res.status(outcome.cancelling ? 202 : 200).json(outcome);
   });
   return router;

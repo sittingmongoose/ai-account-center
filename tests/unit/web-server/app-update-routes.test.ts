@@ -150,6 +150,37 @@ describe('authenticated app updater action', () => {
     expect(await second.json()).toEqual(outcome);
     expect(calls).toBe(1);
   });
+  it('cancel answers 409 not_owner when another dashboard process runs the job', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      Object.assign(req, { session: { authenticated: true } });
+      next();
+    });
+    const stub = {
+      cancel: () => ({ job: null, cancelling: false, notOwner: true as const }),
+    } as unknown as AppUpdateService;
+    app.use('/api/app-updates', createAppUpdateRouter(stub));
+    const other = await new Promise<Server>((resolve) => {
+      const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+    });
+    try {
+      const address = other.address();
+      if (!address || typeof address === 'string') throw new Error('No test port');
+      const origin = `http://127.0.0.1:${address.port}`;
+      const response = await fetch(`${origin}/api/app-updates/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin },
+        body: '{}',
+      });
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.code).toBe('not_owner');
+      expect(body.cancelling).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
+  });
   it('cancel with no running job is a no-op', async () => {
     const response = await cancel();
     expect(response.status).toBe(200);
