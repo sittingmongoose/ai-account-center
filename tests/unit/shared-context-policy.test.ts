@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import SharedManager from '../../src/management/shared-manager';
-import InstanceManager from '../../src/management/instance-manager';
 import type { AccountContextPolicy } from '../../src/auth/account-context';
 
 function getTestCcsDir(): string {
@@ -138,21 +137,6 @@ describe('SharedManager context policy', () => {
     expect(fs.lstatSync(projectsPath).isDirectory()).toBe(true);
     expect(fs.existsSync(projectFile)).toBe(true);
     expect(fs.readFileSync(projectFile, 'utf8')).toBe('shared history');
-  });
-
-  it('serializes concurrent context sync for the same profile', async () => {
-    const instanceMgr = new InstanceManager();
-    const jobs = Array.from({ length: 6 }, () =>
-      instanceMgr.ensureInstance('work', { mode: 'shared', group: 'sprint-a' })
-    );
-
-    await Promise.all(jobs);
-
-    const ccsDir = getTestCcsDir();
-    const projectsPath = path.join(ccsDir, 'instances', 'work', 'projects');
-    const stats = fs.lstatSync(projectsPath);
-
-    expect(stats.isDirectory() || stats.isSymbolicLink()).toBe(true);
   });
 
   it('links advanced continuity artifacts for shared deeper mode', async () => {

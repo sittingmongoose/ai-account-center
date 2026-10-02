@@ -8,7 +8,8 @@ and [usage transport](../../src/web-server/services/additional-usage-transport.t
 
 | Source | Retained owner |
 | --- | --- |
-| Native Claude/Codex usage | [usage collectors](../../src/web-server/usage/), existing native profile services |
+| Native Codex quota | [saved-profile quota collector](../../src/web-server/usage/native-quota-collector.ts), [usage collectors](../../src/web-server/usage/) |
+| Native Claude quota | [Claude Desktop live usage](../../src/web-server/services/claude-desktop-live-service.ts) with the [Python Claude collector](../../scripts/account-usage/claude_usage.py) |
 | Additional desktop/plan usage | [Python collectors](../../scripts/account-usage/) |
 | OpenCode/Muse browser session bridge | [bridge source](../../browser-bridge/opencode-muse/) |
 | Qwen browser/native host bridge | [bridge source](../../browser-bridge/qwen/) |

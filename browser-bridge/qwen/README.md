@@ -22,7 +22,7 @@ Chrome's supported unpublished-extension path is [Developer mode and Load unpack
 
 ## Native helper deployment
 
-Run `install-native-host.ps1 -ValidateOnly` to inspect its fixed package and target paths. Run `install-native-host.ps1 -Install` to copy the published helper and extension to `%LOCALAPPDATA%\CCS\QwenUsageBridge`, update the bundled v2-compatible `plan_common.py`/`plan_usage.py` collectors under `%USERPROFILE%\.ccs\account-usage`, and register the exact `com.ccs.qwen_usage_bridge` native host for the current user's Brave and Chrome. This does not install, enable, reload, or force the extension.
+Run `install-native-host.ps1 -ValidateOnly` to inspect its fixed package and target paths. Run `install-native-host.ps1 -Install` to copy the published helper and extension to `%LOCALAPPDATA%\CCS\QwenUsageBridge`, update the v2-compatible `plan_common.py`/`plan_usage.py` collectors under `%USERPROFILE%\.ccs\account-usage` from the package's `scripts/account-usage` folder (the single source of those collectors; run the installer from the full package, not a copy of this folder alone), and register the exact `com.ccs.qwen_usage_bridge` native host for the current user's Brave and Chrome. This does not install, enable, reload, or force the extension.
 
 The existing Python AI Account Center collectors must already be installed under `%USERPROFILE%\.ccs\account-usage`. The fixed interpreter is `C:\Program Files\Python313\python.exe`; .NET 8 runtime is required and is already present on this Windows computer.
 

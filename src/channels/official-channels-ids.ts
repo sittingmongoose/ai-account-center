@@ -1,12 +1,8 @@
 /**
  * Official Channels IDs (leaf module, no runtime dependencies)
  *
- * Pure helpers extracted from `official-channels-runtime` so that
- * config-loader code can use them without transitively pulling in
- * `claude-detector` / `shell-executor` / `websearch-manager`.
- *
- * The full channel definitions (with display names, plugin specs, env keys,
- * etc.) live in `official-channels-runtime`. This module only owns:
+ * Pure helpers that the config loader uses to read and normalize the
+ * configured official channel IDs. This module only owns:
  * - the canonical ordered list of channel IDs
  * - the type-narrowing predicate
  * - the order-preserving normalizer

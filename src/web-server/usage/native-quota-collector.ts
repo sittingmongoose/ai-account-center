@@ -1,56 +1,33 @@
 /**
- * Native subscription quota collector — the ONLY server-side fetch surface for
- * the user's own Claude Code + Codex subscription quota.
+ * Saved native Codex profile quota collector: the server-side fetch surface for
+ * the subscription quota of the user's saved Codex logins.
  *
- * The macOS bar reads localhost /api/bar/summary and NEVER calls Anthropic or
- * ChatGPT. All upstream traffic originates here, under strict safety controls,
- * because these endpoints are undocumented and hostile to polling (persistent
- * 429s, no Retry-After, first-party-only policy). The controls below exist to
- * protect the user's accounts:
+ * The dashboard, the trays and the Codex auto-switch read this through the
+ * account services and never call ChatGPT themselves. The upstream endpoint is
+ * undocumented and hostile to polling (persistent 429s, no Retry-After), so the
+ * controls below exist to protect the user's accounts:
  *
  *   - long TTL (10 min) on-demand cache, never a tight timer loop
- *   - in-flight coalescing so concurrent /summary calls share one fetch
+ *   - in-flight coalescing so concurrent callers share one fetch
  *   - Retry-After honored; exponential backoff + jitter on 429/5xx
  *   - circuit breaker stops calling after repeated 429s for a cooldown
- *   - serve-stale-on-failure; only omit a row when there is genuinely no data
+ *   - serve-stale-on-failure; a profile with no data is parked, never invented
  *
- * Claude path: reads per-profile .credentials.json, then the per-config-dir
- * Keychain item, and polls api.anthropic.com/api/oauth/usage. If neither source
- * yields credentials the profile is emitted as a parked row (paused:true).
+ * Each saved profile reads its own auth.json (codex-instances/<name>/auth.json,
+ * or ~/.codex/auth.json for the bare default) and polls
+ * chatgpt.com/backend-api/wham/usage with that token and workspace
+ * (fetchCodexQuotaWithToken). Only the bare default may fall back to the local
+ * session logs (getCodexLocalQuota), because those logs belong to ~/.codex.
  *
- * Codex path: PRIMARY = live network (chatgpt.com/backend-api/wham/usage, via
- * fetchCodexQuotaWithToken), FALLBACK = local session logs (getCodexLocalQuota), mirroring
- * the same safety pattern as the Claude path.
- *
- * Multi-profile: each Claude or Codex profile gets its own ProviderState so a
- * 429 on one profile never trips the breaker of another. The active/default
- * profile for each surface is live-polled (paused:false); all other profiles are
- * cache-only (paused:true, force=false hardcoded) so the 2.5s /summary deadline
- * is maintained — at most 2 live upstream calls per /summary regardless of
- * profile count.
- *
- * Claude per-profile reads are file-first with a per-config-dir macOS Keychain
- * fallback (Claude Code stores OAuth tokens in the Keychain by default on
- * macOS). The old global-default Claude reader (readClaudeCredentials) is kept
- * for back-compat but is no longer used by the multi-profile path.
+ * Each profile has its own ProviderState, so a 429 on one profile never trips
+ * the breaker of another. State is keyed by the CCS home as well as the profile
+ * name, and a changed auth file discards the cached quota and cooldowns.
  */
 
-import {
-  readClaudeCredentials,
-  readClaudeCredentialsForConfigDir,
-  getAccessToken,
-  getSubscriptionTier,
-  hasSupportedSubscription,
-  type ClaudeNativeCredentials,
-} from './claude-native-credentials';
-import { fetchClaudeQuotaWithToken } from '../../cliproxy/quota/quota-fetcher-claude';
-import {
-  fetchCodexQuota,
-  fetchCodexQuotaWithToken,
-} from '../../cliproxy/quota/quota-fetcher-codex';
-import { getDefaultAccount, getProviderAccounts } from '../../cliproxy/accounts/query';
+import { fetchCodexQuotaWithToken } from '../../cliproxy/quota/quota-fetcher-codex';
+import { getProviderAccounts } from '../../cliproxy/accounts/query';
 import { getCodexLocalQuota, type CodexLocalQuota } from './codex-local-quota-collector';
-import type { ClaudeQuotaResult, CodexQuotaResult } from '../../cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from '../../cliproxy/quota/quota-types';
 import type { BarSummaryRow, QuotaWindowDetail } from '../routes/bar-routes';
 import { getCodexAdditionalUsageWindows } from './codex-network-extra-windows';
 
@@ -65,12 +42,12 @@ import { resolveCodexProfileDir } from '../../codex-auth/codex-profile-paths';
 // Safety constants (concrete, named, module-level)
 // ============================================================================
 
-/** On-demand cache TTL. Floor is 5 min; we use 10 min because the bar polls
- *  /summary far more often than a hook fires. */
+/** On-demand cache TTL. Floor is 5 min; we use 10 min because the dashboard,
+ *  the trays and the auto-switch ask far more often than a hook fires. */
 const NATIVE_QUOTA_TTL_MS = 600_000; // 10 minutes
 // After a 401/expired result, cache the reauth row and cool the profile down so
 // an expired account is shown dimmed and re-checked at most this often instead
-// of being re-polled (and re-401'd) on every /summary refresh.
+// of being re-polled (and re-401'd) on every dashboard or tray refresh.
 const REAUTH_COOLDOWN_MS = NATIVE_QUOTA_TTL_MS; // 10 minutes
 // Parked rows (no on-disk creds, quotaStatus 'unsupported') re-check on a short
 // TTL — re-statting credentials is cheap, and this lets a profile that the user
@@ -93,51 +70,22 @@ const CB_TRIP_THRESHOLD = 3;
 /** How long the breaker stays open (zero network) once tripped. */
 const CB_COOLDOWN_MS = 900_000; // 15 minutes
 
-// Surface identifiers
-const SURFACE_CLAUDE = 'ccs';
+// Surface identifier
 const SURFACE_CODEX = 'ccsx';
 
-// The "default way of running" a surface — the bare login (e.g. ~/.codex for
-// ccsx), as opposed to a named `ccsx <profile>` profile. Rendered in the Bar as
-// the base command ("ccsx") with a "default" badge, not as a named profile.
+// The "default way of running" a surface: the bare ~/.codex login, as opposed to
+// a named saved profile.
 const DEFAULT_PROFILE = 'default';
 
-// Provider values on the wire (unchanged from before)
-const CLAUDE_NATIVE_PROVIDER = 'claude-code';
+// Provider value on the wire
 const CODEX_NATIVE_PROVIDER = 'codex';
-
-// Keep old names as aliases to avoid breaking the existing global collector path
-const CLAUDE_PROVIDER = CLAUDE_NATIVE_PROVIDER;
-const CODEX_PROVIDER = CODEX_NATIVE_PROVIDER;
 
 // ============================================================================
 // Injectable dependencies (tests inject mocks; never live endpoints in CI)
 // ============================================================================
 
 export interface NativeQuotaDeps {
-  /** Read the native Claude Code credentials (global default path). */
-  readCredentials?: () => ClaudeNativeCredentials | null | Promise<ClaudeNativeCredentials | null>;
-  /**
-   * Read credentials for a specific Claude profile (file-first, Keychain fallback).
-   * Injected so tests never touch real fs or Keychain.
-   * profile: the profile name (e.g. "work"); returns null when absent/unparseable.
-   */
-  readClaudeCredentialsForProfile?: (
-    profile: string
-  ) => ClaudeNativeCredentials | null | Promise<ClaudeNativeCredentials | null>;
-  /** Fetch Claude quota with a directly-supplied native token. */
-  fetchClaudeQuota?: (accessToken: string, accountId?: string) => Promise<ClaudeQuotaResult>;
-  /**
-   * Resolve the default Codex account ID for network quota fetch.
-   * Returns null when no Codex account is configured (bar omits the live path).
-   */
-  getDefaultCodexAccountId?: () => string | null;
-  /**
-   * Fetch Codex quota live from the network.
-   * Injected so tests never hit chatgpt.com.
-   */
-  fetchCodexNetworkQuota?: (accountId: string) => Promise<CodexQuotaResult>;
-  /** Fetch a saved native profile's quota without looking up CLIProxy credentials. */
+  /** Fetch a saved native profile's quota with its own token and workspace. */
   fetchCodexQuotaWithToken?: (accessToken: string, accountId: string) => Promise<CodexQuotaResult>;
   /** Read Codex quota from local session logs (zero network, fallback). */
   getCodexQuota?: () => Promise<CodexLocalQuota | null>;
@@ -147,12 +95,6 @@ export interface NativeQuotaDeps {
    * Returns null when absent/unparseable.
    */
   readCodexNativeAuth?: (profile: string) => NativeCodexAuth | null;
-  /** Enumerate Claude profile names. Injected so tests never touch real fs. */
-  listClaudeProfiles?: () => string[];
-  /** Enumerate Codex profile names (including DEFAULT_PROFILE for bare ~/.codex). */
-  listCodexProfiles?: () => string[];
-  /** Resolve the default Claude profile name. */
-  defaultClaudeProfile?: () => string | null;
   /** Resolve the default Codex profile name. */
   defaultCodexProfile?: () => string | null;
   /** Clock seam for deterministic backoff/TTL/breaker tests. */
@@ -203,36 +145,26 @@ function freshProviderState(): ProviderState {
   };
 }
 
-// Per-profile state maps (key = profile name)
-const claudeProfileStates = new Map<string, ProviderState>();
+// Per-profile state, keyed by CCS home and profile name
 const codexProfileStates = new Map<string, ProviderState>();
 
-function codexScopePrefix(): string {
-  return `${path.resolve(getCcsDir())}\0`;
+function stateKey(profile: string): string {
+  return `${path.resolve(getCcsDir())}\0${profile}`;
 }
 
-function stateKey(map: Map<string, ProviderState>, profile: string): string {
-  return map === codexProfileStates ? `${codexScopePrefix()}${profile}` : profile;
-}
-
-function getState(map: Map<string, ProviderState>, key: string): ProviderState {
-  key = stateKey(map, key);
-  let s = map.get(key);
+function getState(profile: string): ProviderState {
+  const key = stateKey(profile);
+  let s = codexProfileStates.get(key);
   if (!s) {
     s = freshProviderState();
-    map.set(key, s);
+    codexProfileStates.set(key, s);
   }
   return s;
 }
 
-function getProfileState(
-  map: Map<string, ProviderState>,
-  profile: string
-): ProviderState | undefined {
-  const state = map.get(stateKey(map, profile));
-  return map === codexProfileStates && state?.authReader
-    ? validateCodexProfileState(profile, state.authReader).state
-    : state;
+function getProfileState(profile: string): ProviderState | undefined {
+  const state = codexProfileStates.get(stateKey(profile));
+  return state?.authReader ? validateCodexProfileState(profile, state.authReader).state : state;
 }
 
 /** Changed credentials discard quota, pending work, and old-account cooldowns before serving cache. */
@@ -252,11 +184,11 @@ function validateCodexProfileState(
         .update(JSON.stringify([auth.accessToken, auth.accountId]))
         .digest('hex'))
     : 'missing';
-  let state = getState(codexProfileStates, profile);
+  let state = getState(profile);
   if (state.authSignature !== signature) {
     state = freshProviderState();
     state.authSignature = signature;
-    codexProfileStates.set(stateKey(codexProfileStates, profile), state);
+    codexProfileStates.set(stateKey(profile), state);
   }
   state.authReader = reader;
   return { state, auth };
@@ -264,7 +196,6 @@ function validateCodexProfileState(
 
 /** Reset all module state. Tests call this to avoid cross-test pollution. */
 export function resetNativeQuotaState(): void {
-  claudeProfileStates.clear();
   codexProfileStates.clear();
 }
 
@@ -301,128 +232,9 @@ function computeBackoffMs(attempt: number): number {
   return exp + jitter;
 }
 
-/**
- * Best-guess remaining percentage across the 5h + weekly core windows, mirroring
- * the CLIProxy quota-manager derivation: min of remaining across non-overage
- * windows, falling back to all windows if core summary is absent.
- */
-function deriveClaudeQuotaPercentage(quota: ClaudeQuotaResult): number | null {
-  const coreWindows = [quota.coreUsage?.fiveHour, quota.coreUsage?.weekly].filter(
-    (w): w is NonNullable<typeof w> => !!w
-  );
-  if (coreWindows.length > 0) {
-    return Math.min(...coreWindows.map((w) => w.remainingPercent));
-  }
-  const usageWindows = quota.windows.filter((w) => w.rateLimitType !== 'overage');
-  if (usageWindows.length > 0) {
-    return Math.min(...usageWindows.map((w) => w.remainingPercent));
-  }
-  return null;
-}
-
-/** Soonest non-null reset ISO across the two core windows. */
-function deriveClaudeNextReset(quota: ClaudeQuotaResult): string | null {
-  const resets = [quota.coreUsage?.fiveHour?.resetAt, quota.coreUsage?.weekly?.resetAt]
-    .filter((r): r is string => typeof r === 'string')
-    .map((r) => ({ iso: r, ms: new Date(r).getTime() }))
-    .filter((r) => Number.isFinite(r.ms))
-    .sort((a, b) => a.ms - b.ms);
-  return resets.length > 0 ? resets[0].iso : null;
-}
-
-/** Window length in minutes by Claude rate-limit family. */
+/** Window length in minutes for the Codex core windows. */
 const FIVE_HOUR_MINUTES = 300;
 const SEVEN_DAY_MINUTES = 10080;
-
-/**
- * Build the per-window detail for a Claude subscription row.
- *
- * 5h + weekly come from coreUsage (the canonical core summary). Opus/Sonnet
- * weekly splits come from quota.windows[] and only exist on Max plans, so they
- * are omitted entirely when absent. Each window carries BOTH used and remaining
- * percent so the bar never re-derives them.
- */
-function buildClaudeQuotaWindows(quota: ClaudeQuotaResult): QuotaWindowDetail[] {
-  const windows: QuotaWindowDetail[] = [];
-
-  const fiveHour = quota.coreUsage?.fiveHour;
-  if (fiveHour) {
-    windows.push({
-      key: 'five_hour',
-      label: '5h',
-      usedPercent: 100 - fiveHour.remainingPercent,
-      remainingPercent: fiveHour.remainingPercent,
-      resetAt: fiveHour.resetAt,
-      windowMinutes: FIVE_HOUR_MINUTES,
-    });
-  }
-
-  const weekly = quota.coreUsage?.weekly;
-  if (weekly) {
-    windows.push({
-      key: 'seven_day',
-      label: 'week',
-      usedPercent: 100 - weekly.remainingPercent,
-      remainingPercent: weekly.remainingPercent,
-      resetAt: weekly.resetAt,
-      windowMinutes: SEVEN_DAY_MINUTES,
-    });
-  }
-
-  // Opus/Sonnet weekly splits are Max-only; surface them when the API carries
-  // them, otherwise omit so non-Max plans get exactly the two core windows.
-  const splitLabels: Record<string, string> = {
-    seven_day_opus: 'Opus · week',
-    seven_day_sonnet: 'Sonnet · week',
-  };
-  for (const w of quota.windows) {
-    const label = splitLabels[w.rateLimitType];
-    if (!label) continue;
-    windows.push({
-      key: w.rateLimitType,
-      label,
-      usedPercent: w.usedPercent,
-      remainingPercent: w.remainingPercent,
-      resetAt: w.resetAt,
-      windowMinutes: SEVEN_DAY_MINUTES,
-    });
-  }
-
-  return windows;
-}
-
-function buildClaudeRow(
-  quota: ClaudeQuotaResult,
-  tier: string | null,
-  now: number,
-  surface: string,
-  profile: string
-): BarSummaryRow {
-  const quotaWindows = buildClaudeQuotaWindows(quota);
-  return {
-    account_id: `${surface}:${profile}`,
-    provider: CLAUDE_NATIVE_PROVIDER,
-    surface,
-    profile,
-    is_subscription: true,
-    displayName: profile,
-    tier,
-    paused: false,
-    quota_percentage: deriveClaudeQuotaPercentage(quota),
-    quotaStatus: 'ok',
-    next_reset: deriveClaudeNextReset(quota),
-    is_default: false,
-    last_activity_at: null,
-    today_cost: null,
-    health: 'ok',
-    cached: false,
-    fetchedAt: new Date(now).toISOString(),
-    needsReauth: false,
-    // Omit the field entirely (rather than an empty array) when no windows
-    // resolved, so the wire shape stays minimal.
-    ...(quotaWindows.length > 0 ? { quotaWindows } : {}),
-  };
-}
 
 /** Map the Codex local windows into the row's per-window detail shape. */
 function buildCodexQuotaWindows(quota: CodexLocalQuota): QuotaWindowDetail[] {
@@ -474,9 +286,9 @@ function buildCodexRow(
 /**
  * Build the Codex row from a LIVE network quota result.
  *
- * Uses coreUsage (5h/weekly) to produce QuotaWindowDetail entries with the same
- * stable keys as the Claude path. quota_percentage = min remaining across present
- * core windows. next_reset = soonest core resetAt. No staleAsOf on a live result.
+ * Uses coreUsage (5h/weekly) to produce QuotaWindowDetail entries with stable
+ * keys. quota_percentage = min remaining across present core windows.
+ * next_reset = soonest core resetAt. No staleAsOf on a live result.
  */
 function buildCodexNetworkRow(
   quota: CodexQuotaResult,
@@ -510,7 +322,7 @@ function buildCodexNetworkRow(
     });
   }
 
-  // quota_percentage = min remaining across the windows present (mirrors Claude derivation)
+  // quota_percentage = min remaining across the windows present
   const coreWindows = [fiveHour, weekly].filter((w): w is NonNullable<typeof w> => !!w);
   const quotaPercentage =
     coreWindows.length > 0 ? Math.min(...coreWindows.map((w) => w.remainingPercent)) : null;
@@ -560,46 +372,7 @@ function serveCached(state: ProviderState): BarSummaryRow | null {
 }
 
 // ============================================================================
-// Per-profile Claude credentials reader (file-first, Keychain fallback)
-// ============================================================================
-
-/**
- * Read credentials for a specific Claude Code profile (file-first, Keychain fallback).
- *
- * Looks for .credentials.json in the profile's instance directory, then uses
- * the bounded per-config-dir macOS Keychain fallback. If neither yields a
- * parseable credential object, the caller emits a parked row.
- */
-async function readClaudeCredentialsForProfileFromDisk(
-  profile: string,
-  readDefaultCredentials: () =>
-    | ClaudeNativeCredentials
-    | null
-    | Promise<ClaudeNativeCredentials | null> = readClaudeCredentials
-): Promise<ClaudeNativeCredentials | null> {
-  try {
-    const instanceDir = path.join(getCcsDir(), 'instances', profile);
-
-    // The bare `ccs` default login uses the standard global credential lookup:
-    // ~/.claude/.credentials.json, falling back to the single global
-    // "Claude Code-credentials" Keychain item that Claude Code itself maintains.
-    if (profile === DEFAULT_PROFILE && !fs.existsSync(instanceDir)) {
-      return await readDefaultCredentials();
-    }
-
-    // Isolated `ccs auth` instance: <instanceDir>/.credentials.json first, then
-    // the per-config-dir Keychain item Claude Code maintains for this
-    // CLAUDE_CONFIG_DIR ("Claude Code-credentials-<sha256(dir)[0..8]>"). On
-    // macOS Claude Code stores tokens in the Keychain by default, so without
-    // the Keychain read every isolated profile is permanently parked.
-    return await readClaudeCredentialsForConfigDir(instanceDir);
-  } catch {
-    return null;
-  }
-}
-
-// ============================================================================
-// Profile enumeration helpers (production implementations, DI-overridable)
+// Saved profile helpers (production implementations, DI-overridable)
 // ============================================================================
 
 /**
@@ -632,85 +405,6 @@ function readCodexNativeAuthFromDisk(profile: string): NativeCodexAuth | null {
     };
   } catch {
     return null;
-  }
-}
-
-/**
- * List all Claude profiles from the profile registry (merged legacy + unified).
- * Returns [] on any read error so the collector degrades gracefully.
- */
-function listClaudeProfilesFromDisk(): string[] {
-  try {
-    // Import lazily inside function to avoid circular dep and DI override in tests
-    const { ProfileRegistry } = require('../../auth/profile-registry') as {
-      ProfileRegistry: new () => {
-        getAllProfilesMerged: () => Record<string, unknown>;
-      };
-    };
-    const registry = new ProfileRegistry();
-    const profiles = Object.keys(registry.getAllProfilesMerged());
-    // Add the bare `ccs` default login (DEFAULT_PROFILE) when ~/.claude exists --
-    // the default way of running `ccs`, distinct from named `ccs <profile>`
-    // profiles. unshift so it leads before alphabetical sorting downstream.
-    if (fs.existsSync(path.join(os.homedir(), '.claude'))) {
-      if (!profiles.includes(DEFAULT_PROFILE)) profiles.unshift(DEFAULT_PROFILE);
-    }
-    return profiles;
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Resolve the default Claude profile. A registry-designated default wins;
- * otherwise the bare ~/.claude login (DEFAULT_PROFILE) is the default `ccs`.
- */
-function getDefaultClaudeProfileFromDisk(): string | null {
-  try {
-    const { ProfileRegistry } = require('../../auth/profile-registry') as {
-      ProfileRegistry: new () => {
-        getDefaultResolved: () => string | null;
-      };
-    };
-    const registry = new ProfileRegistry();
-    const reg = registry.getDefaultResolved();
-    if (reg) return reg;
-  } catch {
-    // fall through to the bare default below
-  }
-  if (fs.existsSync(path.join(os.homedir(), '.claude'))) return DEFAULT_PROFILE;
-  return null;
-}
-
-/**
- * List all Codex profiles from the registry, plus DEFAULT_PROFILE when the bare
- * ~/.codex/auth.json exists. Returns [] on any read error.
- */
-function listCodexProfilesFromDisk(): string[] {
-  try {
-    const { CodexProfileRegistry } = require('../../codex-auth/codex-profile-registry') as {
-      CodexProfileRegistry: new () => {
-        listProfiles: () => string[];
-        getProfile: (name: string) => { email?: string; account_id?: string };
-      };
-    };
-    const registry = new CodexProfileRegistry();
-    const pausedIdentities = getPausedCodexAccountIdentities();
-    const profiles = registry
-      .listProfiles()
-      .filter(
-        (name) =>
-          !codexProfileMatchesPausedAccount(name, registry.getProfile(name), pausedIdentities)
-      );
-    // Add the bare ~/.codex/auth.json (the default `ccsx` invocation) as the
-    // DEFAULT_PROFILE account when it exists. It is the "default way of running",
-    // distinct from named `ccsx <profile>` profiles.
-    if (fs.existsSync(path.join(os.homedir(), '.codex', 'auth.json'))) {
-      if (!profiles.includes(DEFAULT_PROFILE)) profiles.push(DEFAULT_PROFILE);
-    }
-    return profiles;
-  } catch {
-    return [];
   }
 }
 
@@ -777,38 +471,8 @@ function codexProfileMatchesPausedAccount(
 }
 
 // ============================================================================
-// Per-profile collectors with full safety controls
+// Per-profile collector with full safety controls
 // ============================================================================
-
-/**
- * Tag a row with whether it is the surface's default profile (drives the
- * "active" badge only). The row's own `paused` flag is authoritative for
- * dimming: live/default rows arrive with paused:false, while non-default
- * profiles are served cache-only and dimmed to avoid live-refresh fan-out.
- */
-
-function buildParkedClaudeProfileRow(profile: string, now: number): BarSummaryRow {
-  return {
-    account_id: `${SURFACE_CLAUDE}:${profile}`,
-    provider: CLAUDE_NATIVE_PROVIDER,
-    surface: SURFACE_CLAUDE,
-    profile,
-    is_subscription: true,
-    displayName: profile,
-    tier: null,
-    paused: true,
-    quota_percentage: null,
-    quotaStatus: 'unsupported',
-    next_reset: null,
-    is_default: false,
-    last_activity_at: null,
-    today_cost: null,
-    health: 'ok',
-    cached: false,
-    fetchedAt: new Date(now).toISOString(),
-    needsReauth: true,
-  };
-}
 
 function buildParkedCodexProfileRow(profile: string, now: number): BarSummaryRow {
   return {
@@ -833,42 +497,13 @@ function buildParkedCodexProfileRow(profile: string, now: number): BarSummaryRow
   };
 }
 
-function collectCachedOrParkedProfileRow(
-  map: Map<string, ProviderState>,
-  profile: string,
-  now: number,
-  buildParkedRow: (profile: string, now: number) => BarSummaryRow
-): BarSummaryRow {
-  const state = getState(map, profile);
-  if (state.cachedRow) {
-    return { ...state.cachedRow, cached: true, paused: true };
-  }
-  const parkedRow = buildParkedRow(profile, now);
-  state.cachedRow = parkedRow;
-  state.cachedAt = now;
-  return parkedRow;
-}
-
+/**
+ * Tag a row with whether it is the surface's default profile (drives the
+ * "active" badge only). The row's own `paused` flag stays authoritative for
+ * dimming.
+ */
 function markDefault(row: BarSummaryRow, isDefault: boolean): BarSummaryRow {
   return { ...row, is_default: isDefault };
-}
-
-/**
- * Force paused:true on a non-default row AND its cached copy. Non-default rows
- * always render dimmed (only the default profile is "active"), including the
- * pass where the rotating live slot refreshed them — otherwise the row would
- * flicker active for one poll and dim again on the next.
- */
-function markPausedAndSyncCache(
-  map: Map<string, ProviderState>,
-  profile: string,
-  row: BarSummaryRow
-): BarSummaryRow {
-  const state = getProfileState(map, profile);
-  if (state?.cachedRow) {
-    state.cachedRow = { ...state.cachedRow, paused: true };
-  }
-  return { ...row, paused: true };
 }
 
 /**
@@ -887,209 +522,23 @@ function isCachedRowStaleByReset(state: ProviderState, now: number): boolean {
 }
 
 /**
- * Pick the non-default profile the rotating live slot should refresh this pass:
- * the stalest profile whose cached row is missing, past its TTL, or past its
- * own quota reset, skipping profiles inside a breaker/cooldown window (their
- * collector would refuse the fetch anyway, wasting the slot). Returns null
- * when every profile is fresh.
- */
-function pickRotatingLiveProfile(
-  map: Map<string, ProviderState>,
-  profiles: string[],
-  defaultProfile: string | null,
-  now: number
-): string | null {
-  let picked: string | null = null;
-  let pickedAt = Number.POSITIVE_INFINITY;
-  for (const p of profiles) {
-    if (p === defaultProfile) continue;
-    const state = getProfileState(map, p);
-    if (state && (now < state.breakerOpenUntil || now < state.cooldownUntil)) continue;
-    const cachedRow = state?.cachedRow ?? null;
-    const cachedAt = state?.cachedAt ?? 0;
-    if (cachedRow && state) {
-      const ttl = cachedRow.quotaStatus === 'unsupported' ? PARKED_TTL_MS : NATIVE_QUOTA_TTL_MS;
-      if (now - cachedAt < ttl && !isCachedRowStaleByReset(state, now)) continue;
-    }
-    if (cachedAt < pickedAt) {
-      pickedAt = cachedAt;
-      picked = p;
-    }
-  }
-  return picked;
-}
-
-/**
  * Tag the row with is_default AND write the flag back onto the cached copy. The
  * collector caches a row before the default profile is known (the default is
- * resolved in the enumerator), so without this the cache-fallback path
- * (getCachedNativeAccountRows) would serve the default account with
+ * resolved by the caller), so without this the cache-fallback path
+ * (getCachedCodexProfileQuotaRows) would serve the default account with
  * is_default:false and the UI would stop ordering/tagging it as the default.
  */
 function markDefaultAndSyncCache(
-  map: Map<string, ProviderState>,
   profile: string,
   row: BarSummaryRow,
   isDefault: boolean
 ): BarSummaryRow {
-  const state = getProfileState(map, profile);
+  const state = getProfileState(profile);
   const marked = markDefault(row, isDefault);
   if (state?.cachedRow) {
     state.cachedRow = { ...state.cachedRow, is_default: isDefault };
   }
   return marked;
-}
-
-async function collectClaudeRowForProfile(
-  profile: string,
-  deps: NativeQuotaDeps,
-  force = false
-): Promise<BarSummaryRow | null> {
-  const now = (deps.now ?? Date.now)();
-  const state = getState(claudeProfileStates, profile);
-
-  // Serve from cache while within TTL — force bypasses the short-circuit. Parked
-  // rows (no creds -> quotaStatus 'unsupported') use a short TTL so a fresh login
-  // is picked up within seconds instead of staying dimmed for the full quota TTL.
-  // A row whose own next_reset has passed is stale regardless of TTL — the
-  // quota snapped back at the boundary and the cached values are visibly wrong.
-  if (!force && state.cachedRow) {
-    const ttl = state.cachedRow.quotaStatus === 'unsupported' ? PARKED_TTL_MS : NATIVE_QUOTA_TTL_MS;
-    if (now - state.cachedAt < ttl && !isCachedRowStaleByReset(state, now)) {
-      return serveCached(state);
-    }
-  }
-
-  // Breaker open or cooldown active -> zero network, serve stale (may be null).
-  // Force does NOT bypass the breaker — it protects the account.
-  if (now < state.breakerOpenUntil || now < state.cooldownUntil) {
-    return serveCached(state);
-  }
-
-  // Coalesce: concurrent callers past TTL share one in-flight fetch.
-  if (state.pending) {
-    return state.pending;
-  }
-
-  // For per-profile reads: use the injected seam (file-first, Keychain fallback).
-  const readDefaultCredentials = deps.readCredentials ?? readClaudeCredentials;
-  const readCreds =
-    deps.readClaudeCredentialsForProfile ??
-    ((p: string) => readClaudeCredentialsForProfileFromDisk(p, readDefaultCredentials));
-  const fetchQuota = deps.fetchClaudeQuota ?? fetchClaudeQuotaWithToken;
-  const sleep = deps.sleep ?? defaultSleep;
-
-  state.pending = (async (): Promise<BarSummaryRow | null> => {
-    try {
-      // Yield once so the `state.pending = (...)()` assignment above completes
-      // before any synchronous return below runs the finally that nulls it.
-      // Without this, a sync return (e.g. the no-creds parked path) clears
-      // pending DURING assignment, leaving a stale resolved promise that the
-      // next call's coalescing check would return instead of re-evaluating.
-      await Promise.resolve();
-      const creds = await readCreds(profile);
-
-      // No credentials file found -> emit parked row (needs auth, file absent).
-      // This is the expected case when the profile exists in the registry but the
-      // user has not logged in via 'ccs auth' for this machine or neither the
-      // profile file nor its bounded macOS Keychain fallback yielded credentials.
-      if (!creds) {
-        const parkedRow = buildParkedClaudeProfileRow(profile, now);
-        // Cache the parked row so repeated calls don't re-stat the fs.
-        state.cachedRow = parkedRow;
-        state.cachedAt = now;
-        return parkedRow;
-      }
-
-      // No token / unsupported subscription -> never spend a call, omit the row.
-      if (!hasSupportedSubscription(creds)) {
-        return serveCached(state);
-      }
-      const token = getAccessToken(creds);
-      if (!token) {
-        return serveCached(state);
-      }
-      const tier = getSubscriptionTier(creds);
-
-      const quota = await fetchQuota(token, `${SURFACE_CLAUDE}:${profile}`);
-
-      if (quota.success) {
-        // Success closes the breaker and clears backoff.
-        state.consecutive429 = 0;
-        state.breakerOpenUntil = 0;
-        state.cooldownUntil = 0;
-        state.backoffAttempt = 0;
-        const row = buildClaudeRow(quota, tier, now, SURFACE_CLAUDE, profile);
-        state.cachedRow = row;
-        state.cachedAt = now;
-        return { ...row, cached: false };
-      }
-
-      // 401 -> token expired. Emit a dimmed reauth row so the bar can prompt.
-      // Cache it and open a cooldown so the expired account is NOT re-polled
-      // (and re-401'd) on every refresh; it re-checks after REAUTH_COOLDOWN_MS,
-      // picking up a successful re-auth.
-      if (quota.needsReauth) {
-        const row: BarSummaryRow = {
-          account_id: `${SURFACE_CLAUDE}:${profile}`,
-          provider: CLAUDE_NATIVE_PROVIDER,
-          surface: SURFACE_CLAUDE,
-          profile,
-          is_subscription: true,
-          displayName: profile,
-          tier,
-          paused: true,
-          quota_percentage: null,
-          quotaStatus: 'error',
-          next_reset: null,
-          is_default: false,
-          last_activity_at: null,
-          today_cost: null,
-          health: 'error',
-          cached: false,
-          fetchedAt: new Date(now).toISOString(),
-          needsReauth: true,
-        };
-        state.cachedRow = row;
-        state.cachedAt = now;
-        state.cooldownUntil = now + REAUTH_COOLDOWN_MS;
-        return { ...row, cached: false };
-      }
-
-      // 429 / 5xx / transient. Apply backoff + breaker, then serve stale.
-      const is429 = quota.httpStatus === 429;
-      if (is429) {
-        state.consecutive429 += 1;
-        if (state.consecutive429 >= CB_TRIP_THRESHOLD) {
-          state.breakerOpenUntil = now + CB_COOLDOWN_MS;
-        }
-        const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
-        const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
-        state.cooldownUntil = now + backoff;
-        state.backoffAttempt += 1;
-        // We do NOT sleep-then-retry inside the request path (that would burn
-        // the request budget). The cooldown gates the NEXT call instead.
-        void sleep; // retained as an injectable seam for future inline retry
-      } else if (quota.retryable) {
-        const backoff = computeBackoffMs(state.backoffAttempt);
-        state.cooldownUntil = now + backoff;
-        state.backoffAttempt += 1;
-      }
-
-      // Serve last good row on failure; omit if we never succeeded.
-      return serveCached(state);
-    } catch {
-      // Network/parse rejection -> treat as transient, serve stale.
-      const backoff = computeBackoffMs(state.backoffAttempt);
-      state.cooldownUntil = now + backoff;
-      state.backoffAttempt += 1;
-      return serveCached(state);
-    } finally {
-      state.pending = null;
-    }
-  })();
-
-  return state.pending;
 }
 
 async function collectCodexRowForProfile(
@@ -1121,14 +570,8 @@ async function collectCodexRowForProfile(
     return state.pending;
   }
 
-  // Native profiles supply their own saved token and workspace. The old
-  // account-ID seam is retained for existing injected collector harnesses.
-  const legacyFetchNetwork = deps.fetchCodexNetworkQuota;
-  const fetchNetwork =
-    deps.fetchCodexQuotaWithToken ??
-    (legacyFetchNetwork
-      ? (_token: string, accountId: string) => legacyFetchNetwork(accountId)
-      : fetchCodexQuotaWithToken);
+  // Native profiles supply their own saved token and workspace.
+  const fetchNetwork = deps.fetchCodexQuotaWithToken ?? fetchCodexQuotaWithToken;
   const getCodex = deps.getCodexQuota ?? getCodexLocalQuota;
   const sleep = deps.sleep ?? defaultSleep;
 
@@ -1146,7 +589,7 @@ async function collectCodexRowForProfile(
         // when the auth file is absent (parked profile).
         if (nativeAuth) {
           const quota = await fetchNetwork(nativeAuth.accessToken, nativeAuth.accountId);
-          const currentState = getProfileState(codexProfileStates, profile);
+          const currentState = getProfileState(profile);
           if (currentState !== state) {
             return currentState ? serveCached(currentState) : null;
           }
@@ -1242,7 +685,7 @@ async function collectCodexRowForProfile(
       // ----------------------------------------------------------------
       if (profile === DEFAULT_PROFILE) {
         const localQuota = await getCodex();
-        const currentState = getProfileState(codexProfileStates, profile);
+        const currentState = getProfileState(profile);
         if (currentState !== state) {
           return currentState ? serveCached(currentState) : null;
         }
@@ -1264,7 +707,7 @@ async function collectCodexRowForProfile(
       state.cachedAt = now;
       return parkedRow;
     } catch {
-      const currentState = getProfileState(codexProfileStates, profile);
+      const currentState = getProfileState(profile);
       if (currentState !== state) {
         return currentState ? serveCached(currentState) : null;
       }
@@ -1282,362 +725,14 @@ async function collectCodexRowForProfile(
 }
 
 // ============================================================================
-// Legacy single-profile collectors (unchanged; used by old tests + back-compat)
-// ============================================================================
-
-/**
- * @deprecated Use collectClaudeRowForProfile with the 'default' or appropriate
- * profile name. Kept for backward compatibility with existing tests that stub
- * readCredentials/getDefaultCodexAccountId directly.
- */
-async function collectClaudeRow(
-  deps: NativeQuotaDeps,
-  force = false
-): Promise<BarSummaryRow | null> {
-  const now = (deps.now ?? Date.now)();
-
-  // Use the legacy single-state approach via profile key '__legacy__' to avoid
-  // breaking state isolation with the per-profile maps.
-  const state = getState(claudeProfileStates, '__legacy__');
-
-  // Serve from cache while within TTL — force bypasses TTL short-circuit.
-  if (!force && state.cachedRow && now - state.cachedAt < NATIVE_QUOTA_TTL_MS) {
-    return serveCached(state);
-  }
-
-  // Breaker open or cooldown active -> zero network, serve stale (may be null).
-  if (now < state.breakerOpenUntil || now < state.cooldownUntil) {
-    return serveCached(state);
-  }
-
-  // Coalesce: concurrent callers past TTL share one in-flight fetch.
-  if (state.pending) {
-    return state.pending;
-  }
-
-  const readCredentialsFn = deps.readCredentials ?? readClaudeCredentials;
-  const fetchQuota = deps.fetchClaudeQuota ?? fetchClaudeQuotaWithToken;
-  const sleep = deps.sleep ?? defaultSleep;
-
-  state.pending = (async (): Promise<BarSummaryRow | null> => {
-    try {
-      const creds = await readCredentialsFn();
-      // No token / unsupported subscription -> never spend a call, omit the row.
-      if (!creds || !hasSupportedSubscription(creds)) {
-        return serveCached(state);
-      }
-      const token = getAccessToken(creds);
-      if (!token) {
-        return serveCached(state);
-      }
-      const tier = getSubscriptionTier(creds);
-
-      const quota = await fetchQuota(token, CLAUDE_PROVIDER);
-
-      if (quota.success) {
-        // Success closes the breaker and clears backoff.
-        state.consecutive429 = 0;
-        state.breakerOpenUntil = 0;
-        state.cooldownUntil = 0;
-        state.backoffAttempt = 0;
-        const row = buildClaudeRowLegacy(quota, tier, now);
-        state.cachedRow = row;
-        state.cachedAt = now;
-        return { ...row, cached: false };
-      }
-
-      // 401 -> token expired.
-      if (quota.needsReauth) {
-        const row: BarSummaryRow = {
-          account_id: CLAUDE_PROVIDER,
-          provider: CLAUDE_PROVIDER,
-          displayName: 'Claude Code',
-          tier,
-          paused: false,
-          quota_percentage: null,
-          quotaStatus: 'error',
-          next_reset: null,
-          is_default: false,
-          last_activity_at: null,
-          today_cost: null,
-          health: 'error',
-          cached: false,
-          fetchedAt: new Date(now).toISOString(),
-          needsReauth: true,
-        };
-        return row;
-      }
-
-      // 429 / 5xx / transient.
-      const is429 = quota.httpStatus === 429;
-      if (is429) {
-        state.consecutive429 += 1;
-        if (state.consecutive429 >= CB_TRIP_THRESHOLD) {
-          state.breakerOpenUntil = now + CB_COOLDOWN_MS;
-        }
-        const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
-        const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
-        state.cooldownUntil = now + backoff;
-        state.backoffAttempt += 1;
-        void sleep;
-      } else if (quota.retryable) {
-        const backoff = computeBackoffMs(state.backoffAttempt);
-        state.cooldownUntil = now + backoff;
-        state.backoffAttempt += 1;
-      }
-
-      return serveCached(state);
-    } catch {
-      const backoff = computeBackoffMs(state.backoffAttempt);
-      state.cooldownUntil = now + backoff;
-      state.backoffAttempt += 1;
-      return serveCached(state);
-    } finally {
-      state.pending = null;
-    }
-  })();
-
-  return state.pending;
-}
-
-/** Legacy row builder — no surface/profile/is_subscription fields. */
-function buildClaudeRowLegacy(
-  quota: ClaudeQuotaResult,
-  tier: string | null,
-  now: number
-): BarSummaryRow {
-  const quotaWindows = buildClaudeQuotaWindows(quota);
-  return {
-    account_id: CLAUDE_PROVIDER,
-    provider: CLAUDE_PROVIDER,
-    displayName: 'Claude Code',
-    tier,
-    paused: false,
-    quota_percentage: deriveClaudeQuotaPercentage(quota),
-    quotaStatus: 'ok',
-    next_reset: deriveClaudeNextReset(quota),
-    is_default: false,
-    last_activity_at: null,
-    today_cost: null,
-    health: 'ok',
-    cached: false,
-    fetchedAt: new Date(now).toISOString(),
-    needsReauth: false,
-    ...(quotaWindows.length > 0 ? { quotaWindows } : {}),
-  };
-}
-
-/**
- * Legacy Codex collector — uses the old getDefaultCodexAccountId dep.
- * Kept for backward compatibility with existing tests.
- */
-async function collectCodexRow(
-  deps: NativeQuotaDeps,
-  force = false
-): Promise<BarSummaryRow | null> {
-  const now = (deps.now ?? Date.now)();
-  const state = getState(codexProfileStates, '__legacy__');
-
-  // Serve from cache while within TTL — force bypasses TTL short-circuit.
-  if (!force && state.cachedRow && now - state.cachedAt < NATIVE_QUOTA_TTL_MS) {
-    return serveCached(state);
-  }
-
-  // Breaker open or cooldown active -> skip network, go to LOCAL fallback.
-  const breakerOrCooldownActive = now < state.breakerOpenUntil || now < state.cooldownUntil;
-
-  // Coalesce: concurrent callers past TTL share one in-flight resolution.
-  if (state.pending) {
-    return state.pending;
-  }
-
-  const getDefaultAccountId =
-    deps.getDefaultCodexAccountId ?? (() => getDefaultAccount('codex')?.id ?? null);
-  const fetchNetwork =
-    deps.fetchCodexNetworkQuota ?? ((accountId: string) => fetchCodexQuota(accountId));
-  const getCodex = deps.getCodexQuota ?? getCodexLocalQuota;
-  const sleep = deps.sleep ?? defaultSleep;
-
-  state.pending = (async (): Promise<BarSummaryRow | null> => {
-    try {
-      // Yield once so the `state.pending = (...)()` assignment completes before
-      // any synchronous return below runs the finally that nulls it (otherwise a
-      // sync return leaves a stale resolved promise the next call would reuse).
-      await Promise.resolve();
-      // ----------------------------------------------------------------
-      // PRIMARY: live network fetch (skipped when breaker/cooldown active)
-      // ----------------------------------------------------------------
-      if (!breakerOrCooldownActive) {
-        const accountId = getDefaultAccountId();
-        if (accountId) {
-          const quota = await fetchNetwork(accountId);
-
-          if (quota.success) {
-            state.consecutive429 = 0;
-            state.breakerOpenUntil = 0;
-            state.cooldownUntil = 0;
-            state.backoffAttempt = 0;
-            if (quota.coreUsage?.fiveHour || quota.coreUsage?.weekly) {
-              const row = buildCodexNetworkRowLegacy(quota, now);
-              state.cachedRow = row;
-              state.cachedAt = now;
-              return { ...row, cached: false };
-            }
-            // else: fall through to LOCAL fallback below.
-          } else if (quota.needsReauth) {
-            return {
-              account_id: CODEX_PROVIDER,
-              provider: CODEX_PROVIDER,
-              displayName: 'Codex',
-              tier: null,
-              paused: false,
-              quota_percentage: null,
-              quotaStatus: 'error',
-              next_reset: null,
-              is_default: false,
-              last_activity_at: null,
-              today_cost: null,
-              health: 'error',
-              cached: false,
-              fetchedAt: new Date(now).toISOString(),
-              needsReauth: true,
-            };
-          } else if (quota.httpStatus === 429) {
-            state.consecutive429 += 1;
-            if (state.consecutive429 >= CB_TRIP_THRESHOLD) {
-              state.breakerOpenUntil = now + CB_COOLDOWN_MS;
-            }
-            const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
-            const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
-            state.backoffAttempt += 1;
-            void sleep;
-          } else if (quota.retryable) {
-            const backoff = computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
-            state.backoffAttempt += 1;
-          } else {
-            const backoff = computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
-            state.backoffAttempt += 1;
-          }
-          // Fall through to LOCAL fallback below.
-        }
-      }
-
-      // ----------------------------------------------------------------
-      // LOCAL FALLBACK
-      // ----------------------------------------------------------------
-      const localQuota = await getCodex();
-      if (localQuota) {
-        const row = buildCodexRowLegacy(localQuota, now);
-        state.cachedRow = row;
-        state.cachedAt = now;
-        return { ...row, cached: false };
-      }
-
-      return serveCached(state);
-    } catch {
-      const backoff = computeBackoffMs(state.backoffAttempt);
-      state.cooldownUntil = now + backoff;
-      state.backoffAttempt += 1;
-      return serveCached(state);
-    } finally {
-      state.pending = null;
-    }
-  })();
-
-  return state.pending;
-}
-
-/** Legacy Codex row builder (local quota). */
-function buildCodexRowLegacy(quota: CodexLocalQuota, now: number): BarSummaryRow {
-  const quotaWindows = buildCodexQuotaWindows(quota);
-  return {
-    account_id: CODEX_PROVIDER,
-    provider: CODEX_PROVIDER,
-    displayName: 'Codex',
-    tier: quota.tier,
-    paused: false,
-    quota_percentage: quota.quotaPercentage,
-    quotaStatus: 'ok',
-    next_reset: quota.nextReset,
-    is_default: false,
-    last_activity_at: null,
-    today_cost: null,
-    health: quota.stale ? 'warning' : 'ok',
-    cached: false,
-    fetchedAt: new Date(now).toISOString(),
-    needsReauth: false,
-    ...(quotaWindows.length > 0 ? { quotaWindows } : {}),
-    ...(quota.staleAsOf ? { staleAsOf: quota.staleAsOf } : {}),
-  };
-}
-
-/** Legacy Codex network row builder. */
-function buildCodexNetworkRowLegacy(quota: CodexQuotaResult, now: number): BarSummaryRow {
-  const windows: QuotaWindowDetail[] = [];
-  const fiveHour = quota.coreUsage?.fiveHour;
-  if (fiveHour) {
-    windows.push({
-      key: 'five_hour',
-      label: '5h',
-      usedPercent: 100 - fiveHour.remainingPercent,
-      remainingPercent: fiveHour.remainingPercent,
-      resetAt: fiveHour.resetAt,
-      windowMinutes: FIVE_HOUR_MINUTES,
-    });
-  }
-  const weekly = quota.coreUsage?.weekly;
-  if (weekly) {
-    windows.push({
-      key: 'seven_day',
-      label: 'week',
-      usedPercent: 100 - weekly.remainingPercent,
-      remainingPercent: weekly.remainingPercent,
-      resetAt: weekly.resetAt,
-      windowMinutes: SEVEN_DAY_MINUTES,
-    });
-  }
-  const coreWindows = [fiveHour, weekly].filter((w): w is NonNullable<typeof w> => !!w);
-  const quotaPercentage =
-    coreWindows.length > 0 ? Math.min(...coreWindows.map((w) => w.remainingPercent)) : null;
-  const resets = coreWindows
-    .map((w) => w.resetAt)
-    .filter((r): r is string => typeof r === 'string')
-    .map((r) => ({ iso: r, ms: new Date(r).getTime() }))
-    .filter((r) => Number.isFinite(r.ms))
-    .sort((a, b) => a.ms - b.ms);
-  const nextReset = resets.length > 0 ? resets[0].iso : null;
-  return {
-    account_id: CODEX_PROVIDER,
-    provider: CODEX_PROVIDER,
-    displayName: 'Codex',
-    tier: quota.planType ?? null,
-    paused: false,
-    quota_percentage: quotaPercentage,
-    quotaStatus: 'ok',
-    next_reset: nextReset,
-    is_default: false,
-    last_activity_at: null,
-    today_cost: null,
-    health: 'ok',
-    cached: false,
-    fetchedAt: new Date(now).toISOString(),
-    needsReauth: false,
-    ...(windows.length > 0 ? { quotaWindows: windows } : {}),
-  };
-}
-
-// ============================================================================
 // Public entry point
 // ============================================================================
 
 /**
  * Retrieve saved Codex profiles for the dashboard without polling unrelated
  * providers or the bare ~/.codex login. Two workers bound concurrent upstream
- * requests; each profile still owns the same TTL, in-flight coalescing, and
- * cooldown as the bar collector. A caller may serve cache while this completes.
+ * requests; each profile owns its TTL, in-flight coalescing, and cooldown.
+ * A caller may serve cache while this completes.
  */
 export async function getCodexProfileQuotaRows(
   profiles: string[],
@@ -1655,9 +750,7 @@ export async function getCodexProfileQuotaRows(
         () => null
       );
       if (row) {
-        rows.push(
-          markDefaultAndSyncCache(codexProfileStates, profile, row, profile === defaultProfile)
-        );
+        rows.push(markDefaultAndSyncCache(profile, row, profile === defaultProfile));
       }
     }
   };
@@ -1668,204 +761,8 @@ export async function getCodexProfileQuotaRows(
 /** Only known saved-profile cache entries; never invent or persist an unread login row. */
 export function getCachedCodexProfileQuotaRows(profiles: string[]): BarSummaryRow[] {
   return profiles.flatMap((profile) => {
-    const state = getProfileState(codexProfileStates, profile);
+    const state = getProfileState(profile);
     const row = state ? serveCached(state) : null;
     return row ? [row] : [];
   });
-}
-
-/**
- * Build native subscription rows for /summary. The active profile plus one
- * rotating stale profile per provider can fetch live; the remaining rows use
- * cache. Legacy injected harnesses retain their original single-profile path.
- * Force bypasses active-profile TTL, while breakers and cooldowns still apply.
- */
-export async function getNativeAccountRows(
-  deps: NativeQuotaDeps = {},
-  opts?: { force?: boolean }
-): Promise<BarSummaryRow[]> {
-  const force = opts?.force ?? false;
-
-  // Multi-profile enumeration is the DEFAULT (production) behavior. The legacy
-  // single-profile path is retained ONLY for backward-compat with old tests that
-  // inject readCredentials / getDefaultCodexAccountId and assert the original
-  // single-row output. Those harnesses never inject the enumeration seams; the
-  // new multi-profile tests pair both seams, and production injects neither — so
-  // everything except the legacy harness takes the multi-profile path below.
-  const hasProfileEnumeration =
-    deps.listClaudeProfiles !== undefined ||
-    deps.listCodexProfiles !== undefined ||
-    deps.defaultClaudeProfile !== undefined ||
-    deps.defaultCodexProfile !== undefined;
-
-  const isLegacyTestHarness =
-    !hasProfileEnumeration &&
-    (deps.readCredentials !== undefined || deps.getDefaultCodexAccountId !== undefined);
-
-  if (!isLegacyTestHarness) {
-    return getNativeAccountRowsMultiProfile(deps, force);
-  }
-
-  // Legacy path: backward-compatible with old tests that only inject
-  // readCredentials / getDefaultCodexAccountId. Produces the old single-row
-  // output (account_id='claude-code'/'codex', no surface/profile).
-  const [claude, codex] = await Promise.all([
-    collectClaudeRow(deps, force).catch(() => null),
-    collectCodexRow(deps, force).catch(() => null),
-  ]);
-
-  const rows: BarSummaryRow[] = [];
-  if (claude) rows.push(claude);
-  if (codex) rows.push(codex);
-  return rows;
-}
-
-async function getNativeAccountRowsMultiProfile(
-  deps: NativeQuotaDeps,
-  force: boolean
-): Promise<BarSummaryRow[]> {
-  const listClaude = deps.listClaudeProfiles ?? listClaudeProfilesFromDisk;
-  const listCodex = deps.listCodexProfiles ?? listCodexProfilesFromDisk;
-  const defaultClaude = deps.defaultClaudeProfile ?? getDefaultClaudeProfileFromDisk;
-  const defaultCodex = deps.defaultCodexProfile ?? getDefaultCodexProfileFromDisk;
-
-  const claudeProfiles = (() => {
-    try {
-      return listClaude();
-    } catch {
-      return [];
-    }
-  })();
-  const codexProfiles = (() => {
-    try {
-      return listCodex();
-    } catch {
-      return [];
-    }
-  })();
-  const claudeDefault = (() => {
-    try {
-      return defaultClaude();
-    } catch {
-      return null;
-    }
-  })();
-  const codexDefault = (() => {
-    try {
-      return defaultCodex();
-    } catch {
-      return null;
-    }
-  })();
-
-  const tasks: Promise<BarSummaryRow | null>[] = [];
-  const results: (BarSummaryRow | null)[] = [];
-  const now = (deps.now ?? Date.now)();
-
-  // Preserve the safety budget: the active/default profile for each surface is
-  // live-polled every pass, plus ONE rotating live slot for the stalest
-  // non-default profile. All other profiles are cache-only (or parked), so one
-  // /summary request triggers at most two Claude and two Codex live upstream
-  // calls regardless of configured profile count — every account converges to
-  // real quota within a few polls without per-profile fan-out.
-  const claudeRotating = pickRotatingLiveProfile(
-    claudeProfileStates,
-    claudeProfiles,
-    claudeDefault,
-    now
-  );
-  const codexRotating = pickRotatingLiveProfile(
-    codexProfileStates,
-    codexProfiles,
-    codexDefault,
-    now
-  );
-
-  for (const p of claudeProfiles) {
-    const isDefault = p === claudeDefault;
-    if (!isDefault && p !== claudeRotating) {
-      results.push(
-        markDefaultAndSyncCache(
-          claudeProfileStates,
-          p,
-          collectCachedOrParkedProfileRow(claudeProfileStates, p, now, buildParkedClaudeProfileRow),
-          false
-        )
-      );
-      continue;
-    }
-    tasks.push(
-      collectClaudeRowForProfile(
-        p,
-        deps,
-        force || claudeProfileStates.get(p)?.cachedRow?.quotaStatus === 'unsupported'
-      )
-        .then((r) => {
-          if (!r) return null;
-          const marked = markDefaultAndSyncCache(claudeProfileStates, p, r, isDefault);
-          return isDefault ? marked : markPausedAndSyncCache(claudeProfileStates, p, marked);
-        })
-        .catch(() => null)
-    );
-  }
-
-  for (const p of codexProfiles) {
-    const isDefault = p === codexDefault;
-    if (!isDefault && p !== codexRotating) {
-      results.push(
-        markDefaultAndSyncCache(
-          codexProfileStates,
-          p,
-          collectCachedOrParkedProfileRow(codexProfileStates, p, now, buildParkedCodexProfileRow),
-          false
-        )
-      );
-      continue;
-    }
-    tasks.push(
-      collectCodexRowForProfile(
-        p,
-        deps,
-        force || getProfileState(codexProfileStates, p)?.cachedRow?.quotaStatus === 'unsupported'
-      )
-        .then((r) => {
-          if (!r) return null;
-          const marked = markDefaultAndSyncCache(codexProfileStates, p, r, isDefault);
-          return isDefault ? marked : markPausedAndSyncCache(codexProfileStates, p, marked);
-        })
-        .catch(() => null)
-    );
-  }
-
-  results.push(...(await Promise.all(tasks)));
-  const rows = results.filter((r): r is BarSummaryRow => r !== null);
-
-  // Sort by (surface, profile) for stable ordering.
-  return rows.sort((a, b) => {
-    const sa = (a.surface ?? '') + ':' + (a.profile ?? '');
-    const sb = (b.surface ?? '') + ':' + (b.profile ?? '');
-    return sa.localeCompare(sb);
-  });
-}
-
-/**
- * Last-known native rows from cache, WITHOUT any fetch (instant, no network).
- *
- * Used as a non-blocking fallback by /summary: when a forced live re-pull
- * overruns the native side-load budget, the response serves these cached rows
- * instead of dropping the Claude/Codex cards entirely. The in-flight fetch keeps
- * warming the cache, so the next poll shows the fresh values.
- */
-export function getCachedNativeAccountRows(): BarSummaryRow[] {
-  const rows: BarSummaryRow[] = [];
-  for (const state of claudeProfileStates.values()) {
-    if (state.cachedRow) rows.push({ ...state.cachedRow, cached: true });
-  }
-  const prefix = codexScopePrefix();
-  for (const key of codexProfileStates.keys()) {
-    if (!key.startsWith(prefix)) continue;
-    const state = getProfileState(codexProfileStates, key.slice(prefix.length));
-    if (state?.cachedRow) rows.push({ ...state.cachedRow, cached: true });
-  }
-  return rows;
 }
