@@ -23,7 +23,8 @@ const label = provider => PROVIDER_LABELS[provider] || 'This provider';
  */
 export const requests = Object.freeze({
   registry: () => ({ method: 'GET', path: '/api/accounts/registry' }),
-  visibility: (hiddenProviders, hiddenAccountIds) => ({ method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: [...hiddenProviders], hiddenAccountIds: [...hiddenAccountIds] } }),
+  // only the list that changed: the server merges a partial body, so a list another browser saved is kept
+  visibility: hiddenProviders => ({ method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: [...hiddenProviders] } }),
   trayVisibility: trayHiddenProviders => ({ method: 'PUT', path: '/api/accounts/visibility', body: { trayHiddenProviders: [...trayHiddenProviders] } }),
   addCodex: profileName => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'codex', profileName } }),
   addClaude: (profileId, name) => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId, ...(name ? { label: name } : {}) } }),
@@ -227,6 +228,14 @@ export function errorText(error, ctx = {}) {
   if (status === 404) return t('Not found', 'It may have been removed already. The list is refreshed.');
   if (error?.network) return t('Dashboard unreachable', 'The dashboard did not answer. Check the connection and try again.');
   return t('That did not work', 'Try again.');
+}
+
+/** A refused sign-out in plain words, never the server's sentence: this browser is still signed in. */
+export function signOutFailureText(error) {
+  if (error?.network) return { title: 'Not signed out', body: 'The dashboard did not answer, so this browser is still signed in. Check the connection and try again.' };
+  // a refusal with its own code says why (a 4xx); a failure on the dashboard itself, coded or not, says so plainly
+  if (text(error?.payload?.code) && finite(error?.status) && error.status < 500) { const t = errorText(error); return { title: t.title, body: t.body }; }
+  return { title: 'Not signed out', body: 'Sign-out failed on the dashboard. Try again.' };
 }
 
 /** A finished or failed sign-in job in plain words (SignInJob.error.code). */

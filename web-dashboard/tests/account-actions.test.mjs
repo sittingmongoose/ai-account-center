@@ -1,13 +1,14 @@
 // What each control sends and what each answer means (public/account-actions.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText } from '../public/account-actions.mjs';
+import { requests, errorText, jobErrorText, unavailableText, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, copyText, signOutFailureText } from '../public/account-actions.mjs';
 
 const err = (status, code, extra = {}) => ({ status, payload: { error: 'server sentence', code, ...extra } });
 
 test('every request goes to the route and body the CLIENT API SHEET names', () => {
   assert.deepEqual(requests.registry(), { method: 'GET', path: '/api/accounts/registry' });
-  assert.deepEqual(requests.visibility(['kimi-code'], ['codex:a']), { method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:a'] } });
+  // only the list that changed: the server merges a partial body, so hidden account ids set elsewhere stay
+  assert.deepEqual(requests.visibility(['kimi-code']), { method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: ['kimi-code'] } });
   assert.deepEqual(requests.trayVisibility(['zai']).body, { trayHiddenProviders: ['zai'] });
   assert.deepEqual(requests.addCodex('codex-4').body, { provider: 'codex', profileName: 'codex-4' });
   assert.deepEqual(requests.addClaude('party', '').body, { provider: 'claude', profileId: 'party' });
@@ -122,4 +123,20 @@ test('copying a code falls back to a selection where the async clipboard is miss
   let written = '';
   assert.equal(await copyText('XY', doc, { clipboard: { writeText: async v => { written = v; } } }), true);
   assert.equal(written, 'XY');
+});
+
+test('a refused sign-out is said in the page\'s own words, never the server\'s sentence', () => {
+  const failed = { title: 'Not signed out', body: 'Sign-out failed on the dashboard. Try again.' };
+  // a codeless 500 (express's "Failed to logout") and a coded one both read as a failure on the dashboard
+  assert.deepEqual(signOutFailureText({ status: 500, payload: { error: 'Failed to logout' } }), failed);
+  assert.deepEqual(signOutFailureText({ status: 500, payload: { error: 'x', code: 'internal_error' } }), failed);
+  assert.deepEqual(signOutFailureText({ status: 502, payload: null }), failed);
+  assert.deepEqual(signOutFailureText(null), failed);
+  assert.match(signOutFailureText({ network: true, status: 0, payload: null }).body, /did not answer, so this browser is still signed in/);
+  // a refusal with its own code says why
+  assert.equal(signOutFailureText(err(403, 'origin_required')).title, 'Refused for safety');
+  for (const value of [{ status: 500, payload: { error: 'Failed to logout' } }, err(403, 'origin_required')]) {
+    const t = signOutFailureText(value);
+    assert.doesNotMatch(`${t.title} ${t.body}`, /Failed to logout|server sentence/);
+  }
 });

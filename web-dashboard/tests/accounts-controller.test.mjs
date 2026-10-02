@@ -2,13 +2,13 @@
 // names, and every answer (success or error code) ends in the state and words the page shows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAccountsController, JOB_POLL_MS, LEGACY_HIDDEN_KEY } from '../public/accounts-controller.mjs';
+import { createAccountsController, JOB_POLL_MS, LEGACY_HIDDEN_KEY, MUTATING_ACTIONS } from '../public/accounts-controller.mjs';
 import { flowView, lineView } from '../public/accounts-view.mjs';
 
 const refusal = (status, code, extra = {}) => Object.assign(new Error(code), { status, payload: { error: 'fixed sentence', code, ...extra }, headers: { get: () => null } });
 
 /** A fake server: `routes` maps "METHOD path" to an answer, a function of the body, or a list used in order. */
-function harness({ routes = {}, data = null, storage = null } = {}) {
+function harness({ routes = {}, data = null, storage = null, networkChanged } = {}) {
   const sent = [], toasts = [], timers = [];
   let dashboard = data || { schemaVersion: 1, accounts: [], settings: { hiddenProviders: [], hiddenAccountIds: [], visibilityAvailable: true }, providers: [] };
   let strengthView = null, opened = null, copied = null, refreshes = 0;
@@ -18,7 +18,8 @@ function harness({ routes = {}, data = null, storage = null } = {}) {
     let route = routes[key];
     if (Array.isArray(route)) route = route.length > 1 ? route.shift() : route[0];
     if (route === undefined) throw refusal(404, 'not_found');
-    const value = typeof route === 'function' ? route(req.body) : route;
+    // a route may answer later (a Promise), to hold a request in flight
+    const value = await (typeof route === 'function' ? route(req.body) : route);
     if (value instanceof Error) throw value;
     return { status: value?.status ?? 200, payload: value?.payload ?? value };
   };
@@ -34,6 +35,7 @@ function harness({ routes = {}, data = null, storage = null } = {}) {
     schedule: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     cancel: () => {},
     storage,
+    ...(networkChanged ? { networkChanged } : {}),
   });
   return {
     ctl, sent, toasts, timers,
@@ -50,6 +52,7 @@ const memoryStorage = (init = {}) => {
   return { getItem: k => map.has(k) ? map.get(k) : null, setItem: (k, v) => map.set(k, String(v)), removeItem: k => map.delete(k), map };
 };
 const last = list => list[list.length - 1];
+const flush = () => new Promise(resolve => setImmediate(resolve));
 
 test('Show on dashboard and Show in tray save on the server and update the page without a reload', async () => {
   // the server answers with every saved list; a body may update one list and leave the others (tray route)
@@ -57,7 +60,9 @@ test('Show on dashboard and Show in tray save on the server and update the page 
   const h = harness({ routes: { 'PUT /api/accounts/visibility': body => Object.assign(saved, body) && { ...saved } },
     data: { schemaVersion: 1, accounts: [{ id: 'kimi-code:usage', provider: 'kimi-code' }], providers: [{ id: 'kimi-code', visible: true }], settings: { hiddenProviders: ['zai'], hiddenAccountIds: ['codex:x'], trayHiddenProviders: [] } } });
   assert.equal(await h.ctl.handle('accounts-show', 'kimi-code:hide'), true);
-  assert.deepEqual(h.sent[0], { method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: ['zai', 'kimi-code'], hiddenAccountIds: ['codex:x'] } });
+  // only hiddenProviders is sent: hidden account ids another browser saved are never overwritten
+  assert.deepEqual(h.sent[0], { method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: ['zai', 'kimi-code'] } });
+  assert.deepEqual(h.dashboard.settings.hiddenAccountIds, ['codex:x']);
   assert.deepEqual(h.dashboard.settings.hiddenProviders, ['zai', 'kimi-code']);
   assert.equal(h.dashboard.providers[0].visible, false);
   assert.equal(h.dashboard.accounts[0].hidden, true);
@@ -79,11 +84,51 @@ test('Show on dashboard and Show in tray save on the server and update the page 
   assert.equal(old.sent.length, 0);
 });
 
+test('visibility saves run one at a time, each from the lists the save before it left; the toggles wait for them', async () => {
+  const saved = { hiddenProviders: [], hiddenAccountIds: ['codex:x'], trayHiddenProviders: [] };
+  const gates = [];
+  const h = harness({
+    routes: {
+      'PUT /api/accounts/visibility': body => new Promise(resolve => gates.push(() => resolve({ ...Object.assign(saved, body) }))),
+      'POST /api/accounts/zai%3Ausage/recheck': { account: { id: 'zai:usage', status: 'ok' } },
+    },
+    data: { schemaVersion: 1, accounts: [{ id: 'zai:usage', provider: 'zai' }], providers: [{ id: 'zai', visible: true }, { id: 'kimi-code', visible: true }], settings: { ...saved } },
+  });
+  // two quick toggles: one save is sent, the other waits for it
+  const first = h.ctl.handle('accounts-show', 'zai:hide');
+  const second = h.ctl.handle('accounts-show', 'kimi-code:hide');
+  await flush();
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(h.sent[0].body, { hiddenProviders: ['zai'] });
+  assert.deepEqual(h.ctl.state.visPending, ['show:zai', 'show:kimi-code']);
+  // another action ending meanwhile clears its own busy slot, not the visibility saves
+  await h.ctl.handle('recheck', 'zai:usage');
+  assert.equal(h.ctl.state.busyAct, '');
+  assert.deepEqual(h.ctl.state.visPending, ['show:zai', 'show:kimi-code']);
+  gates.shift()();
+  await first;
+  await flush();
+  // the second save starts from what the first one saved, so neither choice is lost
+  assert.equal(h.sent.filter(r => r.method === 'PUT').length, 2);
+  assert.deepEqual(last(h.sent.filter(r => r.method === 'PUT')).body, { hiddenProviders: ['zai', 'kimi-code'] });
+  assert.deepEqual(h.ctl.state.visPending, ['show:kimi-code']);
+  gates.shift()();
+  await second;
+  assert.deepEqual(h.ctl.state.visPending, []);
+  assert.deepEqual(h.dashboard.settings.hiddenProviders, ['zai', 'kimi-code']);
+  assert.deepEqual(h.dashboard.settings.hiddenAccountIds, ['codex:x']);
+  // a failed save releases its toggle too, and the next one still runs
+  const bad = harness({ routes: { 'PUT /api/accounts/visibility': [refusal(500, 'visibility_write_failed'), body => ({ ...body, hiddenAccountIds: [], trayHiddenProviders: [] })] } });
+  await Promise.all([bad.ctl.handle('accounts-show', 'zai:hide'), bad.ctl.handle('accounts-show', 'qwen:hide')]);
+  assert.deepEqual(bad.ctl.state.visPending, []);
+  assert.deepEqual(bad.sent.map(r => r.body), [{ hiddenProviders: ['zai'] }, { hiddenProviders: ['qwen'] }]);
+});
+
 test('a browser-only "Show on dashboard" choice moves to the server once, then the browser copy is cleared', async () => {
   const storage = memoryStorage({ [LEGACY_HIDDEN_KEY]: JSON.stringify(['kimi-code', 'nope']) });
   const h = harness({ storage, routes: { 'PUT /api/accounts/visibility': body => body } });
   assert.equal(await h.ctl.migrateLocalHidden(), true);
-  assert.deepEqual(h.sent[0].body, { hiddenProviders: ['kimi-code'], hiddenAccountIds: [] });
+  assert.deepEqual(h.sent[0].body, { hiddenProviders: ['kimi-code'] });
   assert.equal(storage.map.has(LEGACY_HIDDEN_KEY), false);
   assert.equal(await h.ctl.migrateLocalHidden(), false);
   assert.equal(h.sent.length, 1);
@@ -181,6 +226,69 @@ test('Codex Add and Sign in again: every refusal ends in plain words, and Cancel
   await lost.tick();
   assert.equal(lost.ctl.state.flows.codex.job.state, 'failed');
   assert.match(flowView('codex', lost.ctl.state.flows.codex).error, /restarted/);
+});
+
+test('a sign-in still running after a reload, or started in another browser, opens again from the registry', async () => {
+  const job = { id: 'job_cccccccccccccccc', provider: 'codex', kind: 'device-code', mode: 'add', accountId: null, profileName: 'codex-3', platform: 'ubuntu', state: 'waiting', verification: { url: 'https://auth.openai.com/codex/device', userCode: 'WXYZ-98765', expiresAt: null }, result: null, error: null };
+  const again = { ...job, id: 'job_dddddddddddddddd', provider: 'muse', mode: 'signin-again', accountId: 'muse:usage', profileName: null, platform: 'mac' };
+  const registry = { providers: [], accounts: [], jobs: [job, again, { ...job, id: 'job_eeeeeeeeeeeeeeee', provider: 'nope' }], trash: [] };
+  const h = harness({ routes: {
+    'GET /api/accounts/registry': registry,
+    [`GET /api/accounts/signin-jobs/${job.id}`]: job,
+    [`POST /api/accounts/signin-jobs/${job.id}/cancel`]: { ...job, state: 'cancelled' },
+  }, data: { accounts: [{ id: 'muse:usage', provider: 'muse', email: 'muse@example.test' }], settings: {} } });
+  await h.ctl.loadRegistry();
+  const flow = h.ctl.state.flows.codex;
+  assert.deepEqual([flow.type, flow.step, flow.name, flow.job.id], ['job-add', 'job', 'codex-3', job.id]);
+  // the code and Cancel are back on the page, and the job is polled again
+  const view = flowView('codex', flow);
+  assert.equal(view.codeText, 'WXYZ-98765');
+  assert.ok(view.actions.some(a => a.act === 'flow-cancel'));
+  assert.ok(h.timers.some(t => t.ms === JOB_POLL_MS));
+  // a Sign in again job opens as one, named by its account; a provider the page does not know is left alone
+  const muse = h.ctl.state.flows.muse;
+  assert.deepEqual([muse.type, muse.accountId, muse.email, muse.job.id], ['job-again', 'muse:usage', 'muse@example.test', again.id]);
+  assert.equal(h.ctl.state.flows.nope, undefined);
+  // a second read keeps the open flow as it is
+  const serial = h.ctl.state.flows.codex.serial;
+  await h.ctl.loadRegistry();
+  assert.equal(h.ctl.state.flows.codex.serial, serial);
+  // Cancel stops it on the server; a registry read that still lists it never opens it again
+  await h.ctl.handle('flow-cancel', 'codex');
+  assert.equal(h.ctl.state.flows.codex, undefined);
+  await h.ctl.loadRegistry();
+  assert.equal(h.ctl.state.flows.codex, undefined);
+  // an open flow of the same provider is never replaced by a registry read
+  const naming = harness({ routes: { 'GET /api/accounts/registry': registry } });
+  await naming.ctl.handle('add', 'codex');
+  await naming.ctl.loadRegistry();
+  assert.equal(naming.ctl.state.flows.codex.step, 'name');
+});
+
+test('Add or Sign in again while a sign-in runs shows the running one instead of a refusal that points at nothing', async () => {
+  const job = { id: 'job_ffffffffffffffff', provider: 'codex', kind: 'device-code', mode: 'add', accountId: null, profileName: 'codex-3', platform: 'ubuntu', state: 'waiting', verification: { url: 'https://auth.openai.com/codex/device', userCode: 'WXYZ-98765', expiresAt: null }, result: null, error: null };
+  const h = harness({ routes: {
+    'POST /api/accounts/add': refusal(409, 'job_running', { jobId: job.id }),
+    [`GET /api/accounts/signin-jobs/${job.id}`]: job,
+    'POST /api/accounts/codex%3Aone/signin-again': refusal(409, 'job_running', { jobId: job.id }),
+  }, data: { accounts: [{ id: 'codex:one', provider: 'codex', capabilities: { codexProfile: 'one' } }], settings: {} } });
+  await h.ctl.handle('add', 'codex');
+  await h.ctl.handle('flow-submit', 'codex\ncodex-9\n');
+  assert.deepEqual(h.sent.map(r => `${r.method} ${r.path}`), ['POST /api/accounts/add', `GET /api/accounts/signin-jobs/${job.id}`]);
+  const flow = h.ctl.state.flows.codex;
+  assert.deepEqual([flow.type, flow.step, flow.job.id, flow.name, flow.error], ['job-add', 'job', job.id, 'codex-3', null]);
+  assert.equal(flowView('codex', flow).codeText, 'WXYZ-98765');
+  assert.equal(last(h.toasts).title, 'A sign-in was already running');
+  // from a row's Sign in again too
+  await h.ctl.handle('flow-cancel', 'codex');
+  await h.ctl.handle('signin-again', 'codex:one');
+  assert.equal(h.ctl.state.flows.codex.job.id, job.id);
+  // a job that ended meanwhile: the refusal in plain words, nothing opened
+  const ended = harness({ routes: { 'POST /api/accounts/add': refusal(409, 'job_running', { jobId: job.id }), [`GET /api/accounts/signin-jobs/${job.id}`]: { ...job, state: 'cancelled' } } });
+  await ended.ctl.handle('add', 'codex');
+  await ended.ctl.handle('flow-submit', 'codex\ncodex-9\n');
+  assert.equal(ended.ctl.state.flows.codex.step, 'name');
+  assert.match(ended.ctl.state.flows.codex.error.title, /already running/);
 });
 
 test('a supervised sign-in sends the pasted code once', async () => {
@@ -414,6 +522,21 @@ test('the Dashboard sign-in block: other browsers, network trust, devices and si
   }
 });
 
+test('Turn off hands the saved trust to the bridge, so the sign-in page note follows it', async () => {
+  const seen = [];
+  const network = { trustLocalNetwork: true, trustedNetworks: [], connection: { peer: '192.168.50.20', trusted: true }, canTurnOn: false };
+  const h = harness({ networkChanged: async view => { seen.push(view); }, routes: {
+    'PUT /api/auth/network': body => ({ ...network, trustLocalNetwork: body.trustLocalNetwork, connection: { ...network.connection, trusted: body.trustLocalNetwork } }),
+    'GET /api/auth/session': {}, 'GET /api/auth/devices': { devices: [] }, 'GET /api/auth/network': { ...network, trustLocalNetwork: false, connection: { ...network.connection, trusted: false } },
+  } });
+  await h.ctl.handle('network-off', '');
+  assert.deepEqual(seen.map(v => [v.trustLocalNetwork, v.connection.trusted]), [[false, false]]);
+  // a refused change hands nothing over
+  const refused = harness({ networkChanged: async view => { seen.push(view); }, routes: { 'PUT /api/auth/network': refusal(403, 'loopback_required') } });
+  await refused.ctl.handle('network-on', '');
+  assert.equal(seen.length, 1);
+});
+
 test('the password change: local checks, the server answer, the toast that names the trays, and every refusal', async () => {
   const devices = [{ id: 'dev_1', name: 'Mac tray', platform: 'mac' }, { id: 'dev_2', name: 'Windows tray', platform: 'windows' }];
   const h = harness({ routes: {
@@ -466,4 +589,22 @@ test('the password change: local checks, the server answer, the toast that names
 test('the actions this controller does not own fall through to bridge.js', async () => {
   const h = harness();
   for (const action of ['activate', 'launch', 'logout', 'refresh', 'theme', 'details']) assert.equal(await h.ctl.handle(action, ''), false);
+});
+
+test('the actions that send a change are named, so a pending account switch can hold them', async () => {
+  const h = harness();
+  for (const action of MUTATING_ACTIONS) assert.equal(await h.ctl.handle(action, ''), true, `${action} is this controller's`);
+  // opening or closing a flow, typing, copying and cancelling a sign-in stay live and send no change
+  const local = ['add', 'add-key', 'replace-key', 'refuse', 'line-cancel', 'pw-toggle', 'pw-typing', 'flow-copy', 'flow-open-url', 'flow-cancel', 'flow-done'];
+  for (const action of local) assert.equal(MUTATING_ACTIONS.has(action), false, action);
+  const quiet = harness();
+  await quiet.ctl.handle('add', 'codex');
+  await quiet.ctl.handle('add', 'zai');
+  await quiet.ctl.handle('replace-key', 'zai:acct:1');
+  await quiet.ctl.handle('pw-toggle', '');
+  await quiet.ctl.handle('pw-typing', 'a\nb');
+  await quiet.ctl.handle('refuse', 'codex:one\nlast_account');
+  await quiet.ctl.handle('line-cancel', 'codex:one');
+  await quiet.ctl.handle('flow-cancel', 'codex');
+  assert.deepEqual(quiet.sent, []);
 });

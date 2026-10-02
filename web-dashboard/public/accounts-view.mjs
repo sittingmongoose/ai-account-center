@@ -152,11 +152,14 @@ function sourceLines(provider, account, reg) {
   return [def.src, platformLabel(account.platform)];
 }
 
-/** A Claude profile that is a computer's default desktop profile (its own app-data folder named "Claude"). */
+/**
+ * A Claude profile that is a computer's default desktop profile: marked `isDefault`, or its app-data folder is
+ * named "Claude" (any case: both hosts' file systems ignore it). The server applies the same rule.
+ */
 export function claudeDefaultProfile(profile) {
   if (!profile || typeof profile !== 'object') return false;
-  const base = path => text(path).replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-  return [profile.mac, profile.windows].some(launcher => launcher && (launcher.isDefault === true || base(launcher.profilePath) === 'Claude'));
+  const base = path => text(path).replace(/[\\/]+$/, '').split(/[\\/]/).pop().toLowerCase();
+  return [profile.mac, profile.windows].some(launcher => launcher && (launcher.isDefault === true || base(launcher.profilePath) === 'claude'));
 }
 
 /** The remove control for a row: live, refused (reason under the row on click), or coming. */
@@ -667,6 +670,9 @@ export function transportNote(transport, check = null) {
   return 'This address is plain HTTP, so the password crosses your network unencrypted.';
 }
 
+/** True when a GET /api/auth/network answer says whether the trust is on. */
+const networkKnown = net => !!net && typeof net === 'object' && typeof net.trustLocalNetwork === 'boolean';
+
 /** "This connection: 192.168.50.20, trusted local network" (GET /api/auth/network or /check). */
 export function networkView(net, check, transport, busyAct = '') {
   const source = net || (check ? { trustLocalNetwork: check.trustedLocalNetwork === true, connection: check.connection, canTurnOn: transport === 'loopback' } : null);
@@ -757,7 +763,7 @@ function signinFacts(ctx, now) {
 function connectionFacts(ctx) {
   const transport = ctx.transport || 'http';
   const hours = Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
-  const trusted = ctx.signin?.network?.trustLocalNetwork === true || ctx.check?.trustedLocalNetwork === true;
+  const trusted = networkKnown(ctx.signin?.network) ? ctx.signin.network.trustLocalNetwork === true : ctx.check?.trustedLocalNetwork === true;
   return [
     { label: 'Dashboard', value: text(ctx.origin) || 'Unknown', mono: true },
     { label: 'Transport', value: transport === 'https' ? 'HTTPS' : transport === 'loopback' ? 'This computer only' : trusted ? 'Plain HTTP on your trusted local network' : 'Plain HTTP on your network' },
@@ -771,7 +777,8 @@ function connectionFacts(ctx) {
  * ctx: { now, profiles, platform, antigravityInventory, antigravityAuto, refreshSeconds, refreshKnown, updateJob,
  *        username, host, origin, transport, sessionHours, signedInAt, serverVersion, openProgress,
  *        registry (GET /api/accounts/registry), flows ({provider: state}), lines ({rowId|trash:id: state}),
- *        busyAct, check (GET /api/auth/check), signin ({ session, devices, network, pw, busy }) }
+ *        busyAct, visPending (visibility saves waiting), check (GET /api/auth/check),
+ *        signin ({ session, devices, network, pw, busy }) }
  */
 export function accountsViewModel(data, ctx = {}) {
   const now = ctx.now ?? Date.now();
@@ -790,7 +797,9 @@ export function accountsViewModel(data, ctx = {}) {
   const agAccounts = accounts.filter(account => account.provider === 'antigravity');
   const agSection = home.sections.find(section => section.id === 'antigravity');
   const ag = antigravityPolicy(data, c, agSection, agAccounts);
-  const trustNote = c.check?.connection?.trusted === true || c.signin?.network?.connection?.trusted === true ? TRUSTED_NOTE : '';
+  // GET /api/auth/network (read with the block, and after Turn off) is newer than the check read at sign-in
+  const trustNote = (networkKnown(c.signin?.network) ? c.signin.network.connection?.trusted === true : c.check?.connection?.trusted === true) ? TRUSTED_NOTE : '';
+  const visWaiting = prefix => (Array.isArray(c.visPending) ? c.visPending : []).some(key => String(key).startsWith(prefix));
 
   const providers = PROVIDER_REGISTRY.map(entry => {
     const def = ACCOUNT_KINDS[entry.id];
@@ -835,10 +844,10 @@ export function accountsViewModel(data, ctx = {}) {
       column: COL_A.includes(entry.id) ? 'a' : 'b',
       visible: !hiddenServer,
       hiddenNote: hiddenServer ? 'Hidden on the dashboard' : '',
-      toggleEnabled: visibilityOk && !c.busyAct?.startsWith?.('show:'),
+      toggleEnabled: visibilityOk && !visWaiting('show:'),
       toggleTip: visibilityOk ? 'Saved on the dashboard: every browser follows this choice.' : 'The saved choices could not be read safely, so changing them waits for the next refresh.',
       trayVisible: trayKnown ? !trayHidden.has(entry.id) : true,
-      trayEnabled: trayKnown && visibilityOk && !c.busyAct?.startsWith?.('tray:'),
+      trayEnabled: trayKnown && visibilityOk && !visWaiting('tray:'),
       trayComing: !trayKnown,
       trayTip: trayKnown ? 'Saved on the dashboard: the Mac and Windows trays follow this choice.' : 'Showing or hiding a provider in the trays is not on this server yet.',
       switchable: SWITCHABLE.includes(entry.id), canSwitch, slots: def.slots, actsMin: def.actsMin,

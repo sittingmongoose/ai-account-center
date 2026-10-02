@@ -2,8 +2,8 @@ import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure } from './auth-view.mjs';
-import { createAccountsController } from './accounts-controller.mjs';
-import { copyText } from './account-actions.mjs';
+import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
+import { copyText, signOutFailureText } from './account-actions.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
 import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
 import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
@@ -132,6 +132,13 @@ const accounts = createAccountsController({
   copy: value => copyText(value),
   open: url => { try { globalThis.open?.(url, '_blank', 'noopener'); } catch {} },
   storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
+  // Turn off (or on): the saved check follows at once, then is read again (secureTransport moves with it)
+  networkChanged: async net => {
+    if (authCheck && net && typeof net.trustLocalNetwork === 'boolean') {
+      authCheck = { ...authCheck, trustedLocalNetwork: net.trustLocalNetwork, ...(net.connection && typeof net.connection === 'object' ? { connection: net.connection } : {}) };
+    }
+    await refreshAuthCheck();
+  },
 });
 
 // Claude "Open" progress (claude-open.mjs): one POST that asks for the 202 answer, then read-only polling of the
@@ -180,7 +187,7 @@ function renderAccounts() {
       refreshing: false,
       refreshSeconds: refreshIntervalSeconds, refreshKnown: refreshSettingsKnown, updateJob,
       origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
-      registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, check: authCheck, signin: st.signin,
+      registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin,
     }));
     if (e2e) globalThis.__aacLastAccounts = vm;
     set_accounts(JSON.stringify(vm));
@@ -475,13 +482,52 @@ function showSetup(extra = {}) {
     ...extra,
   });
 }
+/** GET /api/auth/check again; the copy in hand stays when it cannot be read. */
+async function refreshAuthCheck() {
+  try { const status = await request('/api/auth/check'); if (status && typeof status === 'object') authCheck = status; } catch {}
+}
+/**
+ * The sign-in page after a sign-out or an ended session. It is drawn at once from the check in hand, then the
+ * check is read again: local network trust may have been turned off since sign-in (here or in another browser),
+ * and the note under the form must say how the password travels now.
+ */
+function showSignedOut(state, extra) {
+  auth(false, state, extra);
+  const shown = transportNote(transport, authCheck);
+  void refreshAuthCheck().then(() => {
+    if (!authenticated && authState === state && transportNote(transport, authCheck) !== shown) auth(false, state, extra);
+  });
+}
 /** The server no longer knows this browser's session: say whether it ran out, ended early or was revoked. */
 function sessionEnded(reason = endedReason(signedInAt(globalThis.localStorage), sessionHours) || 'ended') {
   forgetSignIn(globalThis.localStorage);
   claudeOpen.reset();
   accounts.reset();
   const banner = expiredBanner(reason, sessionHours);
-  auth(false, 'expired', { bannerTitle: banner.title, bannerBody: banner.body });
+  showSignedOut('expired', { bannerTitle: banner.title, bannerBody: banner.body });
+}
+/**
+ * Sign out. It is never held by a running save or Claude Open (`busy`), only by a switch confirmation that is
+ * waiting on screen. A failure is said in the page's own words, and this browser then stays signed in.
+ */
+async function signOut() {
+  if (pendingActivation()) { toast('info', 'Finish the account switch first', 'Confirm or cancel the switch, then sign out.'); return; }
+  if (accounts.state.signin.busy === 'logout') return;
+  accounts.state.signin.busy = 'logout'; renderAccounts();
+  try { await mutation('/api/auth/logout', {}); }
+  catch (error) {
+    accounts.state.signin.busy = ''; renderAccounts();
+    // a session another browser already signed out is signed out here too
+    if (error?.payload?.code !== 'session_revoked') {
+      if (authenticated) { const t = signOutFailureText(error); failure(t.body, t.title); }
+      return;
+    }
+  }
+  forgetSignIn(globalThis.localStorage);
+  analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
+  claudeOpen.reset();
+  accounts.reset();
+  showSignedOut('default', { notice: true, message: 'Signed out.' });
 }
 async function enterDashboard() {
   await loadSettings(); await refresh(true); await updateStatus();
@@ -595,23 +641,12 @@ window.ccsDashboardAction = async (action, value) => {
       return;
     }
     if (!authenticated) return;
-    // Accounts & Settings: sign-in and sign-out controls, show and hide, the password, trays and the network
+    if (action === 'logout') { await signOut(); return; }
+    // Accounts & Settings: sign-in and sign-out controls, show and hide, the password, trays and the network.
+    // A change waits while an account-switch confirmation is pending, as every action here did before.
+    if (MUTATING_ACTIONS.has(action) && pendingActivation()) { toast('info', 'Finish the account switch first', 'Confirm or cancel the switch, then try again.'); return; }
     if (await accounts.handle(action, value)) return;
     if (busy || pendingActivation()) return;
-    if (action === 'logout') {
-      accounts.state.signin.busy = 'logout'; renderAccounts();
-      try { await mutation('/api/auth/logout', {}); }
-      catch (error) {
-        accounts.state.signin.busy = ''; renderAccounts();
-        // a session another browser already signed out is signed out here too
-        if (error?.payload?.code !== 'session_revoked') throw error;
-      }
-      forgetSignIn(globalThis.localStorage);
-      analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
-      claudeOpen.reset();
-      accounts.reset();
-      auth(false, 'default', { notice: true, message: 'Signed out.' }); return;
-    }
     if (action === 'refresh') { await refresh(true); if (currentPage === 'analytics') await refreshAnalytics(true); return; }
     if (action === 'launch') {
       const [id, target] = value.split(':');
@@ -629,7 +664,7 @@ window.ccsDashboardAction = async (action, value) => {
       setBusy(true);
       try { outcome = await claudeOpen.start(id, target); }
       finally { setBusy(false); }
-      if (outcome === 'opened') toast('info', `Opening Claude on ${target === 'mac' ? 'Mac' : 'Windows'}`, 'It opens in its own desktop profile.');
+      if (outcome === 'opened' && authenticated) toast('info', `Opening Claude on ${target === 'mac' ? 'Mac' : 'Windows'}`, 'It opens in its own desktop profile.');
       return;
     }
     if (action === 'activate') {

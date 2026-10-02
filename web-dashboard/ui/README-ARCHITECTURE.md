@@ -189,18 +189,24 @@ policies, Update apps hosts and their lines).
   the CLI missing, one account only), "refused" (dimmed but clickable: the click opens the reason under the row,
   act `refuse`), or "coming" only when the server has no flow or route for it yet (`not_implemented`, a tray
   toggle before the server stores it, Delete now in the trash). A computer's default Claude profile (`isDefault`,
-  or a profile folder named exactly "Claude") is always refused, whatever the server reports.
+  or a profile folder named "Claude" in any case; the server applies the same rule) is always refused, whatever
+  the server reports. While an account-switch confirmation is pending, the kinds that send a change
+  (`MUTATING_ACTIONS` in accounts-controller.mjs) and Sign out wait, with a toast; opening, closing, typing,
+  copying and cancelling a sign-in stay live. Sign out is never held by a running save or Claude Open.
 - **Flows** (`flowView`, ui/pages/accounts/ac-flow.slint): one panel under a section, opened by Add, Sign in
   again, Replace key or a footer Sign in: the step bar, the title and body, one field (profile name, a masked API
   key with an optional label, a pasted code), the verification page and code with Copy and Open, the waiting
   spinner, success or the error in plain words, and its buttons. The panel's height eases open and between steps;
   each step slides in 10 px and fades. A key or code stays in Slint until it is submitted, is sent once, and the
-  field is cleared at once. Sign-in jobs are polled every 2 s (accounts-controller.mjs).
+  field is cleared at once. Sign-in jobs are polled every 2 s (accounts-controller.mjs). A job still running on
+  the server (`GET /api/accounts/registry` `jobs[]`) opens its flow again after a reload or in another browser,
+  unless this page closed it; a 409 `job_running` with its `jobId` opens the running job instead of a refusal.
 - **Lines under rows** (`lineView`, `RowLine`): a remove or restore confirmation with the server's effect
   sentences and the one-use token, a refusal with its reason, or a request in flight; a removed row fades while
   it keeps its place. The Claude trash lists each profile with Restore and when it is deleted for good.
 - **Show on dashboard / Show in tray**: saved on the server (`PUT /api/accounts/visibility`); every browser
-  follows. A choice an older build saved in this browser (`localStorage['aac-hidden-providers']`) moves to the
+  follows. Each save sends only its own list (the server merges partial bodies), the saves run one at a time
+  from the lists the one before saved, and the toggles wait on `visPending`, not on the shared busy slot. A choice an older build saved in this browser (`localStorage['aac-hidden-providers']`) moves to the
   server once and is then cleared. Home honours `settings.hiddenProviders` and `settings.hiddenAccountIds`. Show in
   tray is live once the dashboard response carries `settings.trayHiddenProviders`.
 - **E2E probes** (components/probe.slint): with `?e2e` in the address, bridge.js answers `probe_tick()` with
@@ -208,7 +214,9 @@ policies, Update apps hosts and their lines).
   Slint, so a CDP harness can click real controls and check them by pixels. Without `?e2e` nothing is reported.
 - **Settings column**: Dashboard sign-in (signed in as, connection, this session and other browsers from
   `GET /api/auth/session` with Sign out other browsers; the trusted local network line and note from
-  `GET /api/auth/network` with Turn off, and Turn on only on the dashboard computer; the password change with
+  `GET /api/auth/network` with Turn off, and Turn on only on the dashboard computer (the saved
+  `GET /api/auth/check` follows the change, and is read again at every sign-out and ended session, so the
+  sign-in page's note says how the password travels now); the password change with
   its strength meter, "Also sign out other browsers" and a toast that names the paired trays that stay signed
   in; paired trays from `GET /api/auth/devices` with Revoke and Sign out all devices, each with an inline
   confirmation; Sign out), Settings (Light/Dark/Auto, the usage refresh slider: any whole number of seconds from 30

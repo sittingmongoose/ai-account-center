@@ -145,6 +145,10 @@ test('Claude rows open on Mac or Windows; Remove is live, and a computer\'s defa
   assert.equal(row(refused, 'claude:b').actions[2].value, 'claude:b\naccount_protected');
   assert.equal(claudeDefaultProfile({ windows: { profilePath: 'C:\\Users\\x\\AppData\\Roaming\\Claude' } }), true);
   assert.equal(claudeDefaultProfile({ windows: { profilePath: 'C:\\Users\\x\\AppData\\Roaming\\Claude-party' } }), false);
+  // both hosts ignore case, so "claude" (and a trailing separator) names the same folder
+  assert.equal(claudeDefaultProfile({ mac: { profilePath: '/Users/x/Library/Application Support/claude/' } }), true);
+  assert.equal(claudeDefaultProfile({ windows: { profilePath: 'C:\\Users\\x\\AppData\\Roaming\\CLAUDE\\' } }), true);
+  assert.equal(claudeDefaultProfile({ mac: { profilePath: '/Users/x/Claude/party' } }), false);
   assert.equal(claudeDefaultProfile({ mac: { isDefault: true } }), true);
   // with Claude Remove off on the server it is "coming", never live
   const off = accountsViewModel(data([claude('a')], { providers: providers({ claude: { capabilities: { remove: false, add: false }, signIn: { available: false, unavailableReason: 'not_implemented' } } }) }), { now, profiles, registry: registry([reg('claude:a', 'claude', { actions: { remove: false } })]) });
@@ -250,6 +254,11 @@ test('"Show on dashboard" and "Show in tray" are saved on the server; the tray t
   assert.deepEqual([k.trayVisible, k.trayEnabled, k.trayComing], [true, false, true]);
   const tray = accountsViewModel(data([kimi], { providers: providers(), settings: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: ['kimi-code'] } }), { now });
   assert.deepEqual([provider(tray, 'kimi-code').trayVisible, provider(tray, 'kimi-code').trayEnabled, provider(tray, 'kimi-code').trayComing, provider(tray, 'kimi-code').visible], [false, true, false, true]);
+  // a save waiting or in flight holds the toggles of its kind only, whatever else is busy
+  const waiting = accountsViewModel(data([kimi], { providers: providers(), settings: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] } }), { now, visPending: ['show:zai'], busyAct: '' });
+  assert.deepEqual([provider(waiting, 'kimi-code').toggleEnabled, provider(waiting, 'kimi-code').trayEnabled], [false, true]);
+  const trayWaiting = accountsViewModel(data([kimi], { providers: providers(), settings: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] } }), { now, visPending: ['tray:zai'], busyAct: 'recheck:zai:usage' });
+  assert.deepEqual([provider(trayWaiting, 'kimi-code').toggleEnabled, provider(trayWaiting, 'kimi-code').trayEnabled], [true, false]);
   // an unreadable visibility file keeps the toggles from saving over it
   const broken = accountsViewModel(data([kimi], { settings: { hiddenProviders: [], visibilityAvailable: false } }), { now });
   assert.equal(provider(broken, 'kimi-code').toggleEnabled, false);
@@ -325,6 +334,16 @@ test('connection facts and the sign-in block say only what the browser and serve
   assert.equal(vm.signin.revokeAllEnabled, true);
   assert.equal(vm.connection[0].value, 'http://192.0.2.10:3000');
   assert.equal(vm.connection[1].value, 'Plain HTTP on your trusted local network');
+  // after Turn off, the network answer (newer) wins over the check read at sign-in
+  const turnedOff = accountsViewModel(data([account()]), { now, transport: 'http', check: { trustedLocalNetwork: true, connection: { peer: '192.168.50.20', trusted: true } },
+    signin: { ...signin, network: { ...signin.network, trustLocalNetwork: false, connection: { peer: '192.168.50.20', trusted: false } } } });
+  assert.equal(turnedOff.connection[1].value, 'Plain HTTP on your network');
+  assert.equal(provider(turnedOff, 'codex').flow.note, '');
+  const turnedOffFlow = accountsViewModel(data([account()]), { now, transport: 'http', check: { trustedLocalNetwork: true, connection: { peer: '192.168.50.20', trusted: true } },
+    flows: { zai: { type: 'key-add', step: 'key' } }, signin: { ...signin, network: { ...signin.network, trustLocalNetwork: false, connection: { peer: '192.168.50.20', trusted: false } } } });
+  assert.notEqual(provider(turnedOffFlow, 'zai').flow.note, TRUSTED_NOTE);
+  const stillOn = accountsViewModel(data([account()]), { now, transport: 'http', check: { trustedLocalNetwork: true, connection: { peer: '192.168.50.20', trusted: true } }, flows: { zai: { type: 'key-add', step: 'key' } } });
+  assert.equal(provider(stillOn, 'zai').flow.note, TRUSTED_NOTE);
   // without a trusted connection the password form stays closed and says why
   const untrusted = accountsViewModel(data([account()]), { now, transport: 'http', signin: { ...signin, session: { ...signin.session, secureTransport: false }, network: { ...signin.network, trustLocalNetwork: false, connection: { peer: '192.168.50.20', trusted: false } } } });
   assert.equal(untrusted.signin.passwordCan, false);

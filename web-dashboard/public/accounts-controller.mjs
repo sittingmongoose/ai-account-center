@@ -15,6 +15,8 @@
 //   copy(text) -> Promise<boolean>, open(url)   the code and the verification page
 //   schedule(fn, ms) / cancel(id), now()        timers and the clock (fake in tests)
 //   storage                                     localStorage, for the one-time migration of "Show on dashboard"
+//   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
+//                                               GET /api/auth/check follows it (the sign-in page's note)
 import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, PROVIDER_LABELS } from './account-actions.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord } from './view-model.mjs';
@@ -27,21 +29,37 @@ const text = value => typeof value === 'string' ? value : '';
 const label = provider => PROVIDER_LABELS[provider] || 'This provider';
 const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 const REFUSALS = new Set(['account_active', 'account_default', 'account_protected', 'last_account', 'activation_running', 'signin_running', 'app_running', 'app_state_unknown']);
+/**
+ * The actions that send a change. While an account-switch confirmation is pending, bridge.js holds these (the
+ * page did before this controller existed); the local ones (open or close a flow, copy the code, type, cancel a
+ * sign-in) stay live.
+ */
+export const MUTATING_ACTIONS = Object.freeze(new Set([
+  'accounts-show', 'accounts-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
+  'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'others-out', 'network-off',
+  'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all',
+]));
 
 export function createAccountsController(deps) {
   const {
     call, changed = () => {}, toast = () => {}, refresh = async () => {}, data = () => null, setData = () => {},
     strength = () => {}, copy = async () => false, open = () => {}, schedule = setTimeout, cancel = clearTimeout,
-    now = Date.now, storage = null,
+    now = Date.now, storage = null, networkChanged = async () => {},
   } = deps;
   const state = {
     registry: null,
     flows: {},
     lines: {},
     busyAct: '',
+    // "Show on dashboard" and "Show in tray" saves queued or in flight: 'show:<provider>' and 'tray:<provider>'
+    visPending: [],
     signin: { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' },
   };
   const timers = {};
+  // sign-in jobs this page closed (Cancel, Done, Close): a registry read never opens them again
+  const dismissedJobs = new Set();
+  // visibility saves run one at a time, each from the lists the one before it saved
+  let visibilityChain = Promise.resolve();
   let serial = 0;
   let migrated = false;
 
@@ -60,7 +78,42 @@ export function createAccountsController(deps) {
       // an older server has no registry: the page then draws only what the dashboard response says
       if (error?.status !== 404) state.registry = state.registry || null;
     }
+    resumeJobs();
     changed();
+  }
+  /**
+   * A sign-in still running on the server that this page shows no flow for (the page was reloaded, or the
+   * sign-in was started in another browser) opens its flow again, so its code, its status and Cancel are
+   * never lost while the job waits.
+   */
+  function resumeJobs() {
+    for (const job of Array.isArray(state.registry?.jobs) ? state.registry.jobs : []) resumeJob(job);
+  }
+  /** Follows a running job in its provider's flow. `replace` lets it take over a flow that is open. */
+  function resumeJob(job, replace = false) {
+    const provider = text(job?.provider), id = text(job?.id);
+    if (!PROVIDERS.includes(provider) || !id || jobFinished(job)) return false;
+    const open = state.flows[provider];
+    if (open?.job?.id === id) return true;
+    if (!replace && (open || dismissedJobs.has(id))) return false;
+    const again = job.mode === 'signin-again';
+    const accountId = text(job.accountId) || null;
+    startJob(provider, { serial: ++serial, provider, type: again ? 'job-again' : 'job-add', accountId, name: text(job.profileName), email: again ? nameOf(accountId) : '' }, job);
+    return true;
+  }
+  /**
+   * A 409 `job_running` names the sign-in that is already running for this provider or account: the page shows
+   * that one (its code and Cancel) instead of a refusal that points at nothing.
+   */
+  async function adoptRunning(provider, error) {
+    const jobId = text(error?.payload?.jobId);
+    if (error?.payload?.code !== 'job_running' || !jobId) return false;
+    try {
+      const { payload } = await call(requests.job(jobId));
+      if (payload?.provider !== provider || !resumeJob(payload, true)) return false;
+    } catch { return false; }
+    toast('info', 'A sign-in was already running', `It is shown under ${label(provider)}. Finish it or cancel it before starting another.`);
+    return true;
   }
   async function loadSignin() {
     const s = state.signin;
@@ -99,31 +152,49 @@ export function createAccountsController(deps) {
       accounts: Array.isArray(current.accounts) ? current.accounts.map(a => ({ ...a, hidden: hidden.has(a.provider) || hiddenIds.has(a.id) })) : current.accounts,
     });
   }
-  async function setShown(provider, show) {
-    if (!PROVIDERS.includes(provider)) return;
-    const { hiddenProviders, hiddenAccountIds } = lists();
-    const next = new Set(hiddenProviders);
-    if (show) next.delete(provider); else next.add(provider);
-    state.busyAct = `show:${provider}`; changed();
-    try {
-      const { payload } = await call(requests.visibility([...next], hiddenAccountIds));
-      applyVisibility(payload);
-      toast('info', show ? `${label(provider)} shown on the dashboard` : `${label(provider)} hidden from the dashboard`, 'Saved on the dashboard: every browser follows this choice.');
-    } catch (error) { fail(error, { provider }); }
-    finally { state.busyAct = ''; changed(); }
+  /** Runs one visibility save after the ones before it; the chain itself never rejects. */
+  function serialVisibility(task) {
+    const run = visibilityChain.then(task);
+    visibilityChain = run.catch(() => {});
+    return run;
   }
-  async function setTrayShown(provider, show) {
-    const settings = data()?.settings || {};
-    if (!PROVIDERS.includes(provider) || !Array.isArray(settings.trayHiddenProviders)) return;
-    const next = new Set(settings.trayHiddenProviders);
-    if (show) next.delete(provider); else next.add(provider);
-    state.busyAct = `tray:${provider}`; changed();
-    try {
-      const { payload } = await call(requests.trayVisibility([...next]));
-      applyVisibility(payload);
-      toast('info', show ? `${label(provider)} shown in the trays` : `${label(provider)} hidden from the trays`, 'Saved on the dashboard: the Mac and Windows trays follow on their next refresh.');
-    } catch (error) { fail(error, { provider }); }
-    finally { state.busyAct = ''; changed(); }
+  /**
+   * One toggle's save. Its key stays in `visPending` (the toggles wait) until it is saved; another action ending
+   * meanwhile does not release them. Each save reads the lists the save before it left, and sends only its own.
+   */
+  function queueVisibility(key, task) {
+    state.visPending = [...state.visPending, key]; changed();
+    return serialVisibility(task).catch(() => {}).finally(() => {
+      const at = state.visPending.indexOf(key);
+      if (at >= 0) state.visPending = [...state.visPending.slice(0, at), ...state.visPending.slice(at + 1)];
+      changed();
+    });
+  }
+  function setShown(provider, show) {
+    if (!PROVIDERS.includes(provider)) return;
+    return queueVisibility(`show:${provider}`, async () => {
+      const next = new Set(lists().hiddenProviders);
+      if (show) next.delete(provider); else next.add(provider);
+      try {
+        const { payload } = await call(requests.visibility([...next]));
+        applyVisibility(payload);
+        toast('info', show ? `${label(provider)} shown on the dashboard` : `${label(provider)} hidden from the dashboard`, 'Saved on the dashboard: every browser follows this choice.');
+      } catch (error) { fail(error, { provider }); }
+    });
+  }
+  function setTrayShown(provider, show) {
+    if (!PROVIDERS.includes(provider) || !Array.isArray(data()?.settings?.trayHiddenProviders)) return;
+    return queueVisibility(`tray:${provider}`, async () => {
+      const current = data()?.settings?.trayHiddenProviders;
+      if (!Array.isArray(current)) return;
+      const next = new Set(current);
+      if (show) next.delete(provider); else next.add(provider);
+      try {
+        const { payload } = await call(requests.trayVisibility([...next]));
+        applyVisibility(payload);
+        toast('info', show ? `${label(provider)} shown in the trays` : `${label(provider)} hidden from the trays`, 'Saved on the dashboard: the Mac and Windows trays follow on their next refresh.');
+      } catch (error) { fail(error, { provider }); }
+    });
   }
   /**
    * Once: a "Show on dashboard" choice an older build saved in this browser moves to the server, then the
@@ -138,10 +209,12 @@ export function createAccountsController(deps) {
     if (!settings || settings.visibilityAvailable === false) return false;
     migrated = true;
     if (!local.length) { try { storage.removeItem(LEGACY_HIDDEN_KEY); } catch {} return false; }
-    const { hiddenProviders, hiddenAccountIds } = lists();
-    const union = [...new Set([...hiddenProviders, ...local])];
     try {
-      if (union.length !== hiddenProviders.length) applyVisibility((await call(requests.visibility(union, hiddenAccountIds))).payload);
+      await serialVisibility(async () => {
+        const { hiddenProviders } = lists();
+        const union = [...new Set([...hiddenProviders, ...local])];
+        if (union.length !== hiddenProviders.length) applyVisibility((await call(requests.visibility(union))).payload);
+      });
       try { storage.removeItem(LEGACY_HIDDEN_KEY); } catch {}
       changed();
       return true;
@@ -151,7 +224,12 @@ export function createAccountsController(deps) {
   // ------------------------------------------------------------ flows
   function setFlow(provider, flow) { if (flow) state.flows[provider] = { serial: ++serial, ...flow, provider }; else delete state.flows[provider]; changed(); }
   function stopPolling(provider) { if (timers[provider]) { cancel(timers[provider]); delete timers[provider]; } }
-  function closeFlow(provider) { stopPolling(provider); delete state.flows[provider]; changed(); }
+  function closeFlow(provider) {
+    stopPolling(provider);
+    const id = text(state.flows[provider]?.job?.id);
+    if (id) dismissedJobs.add(id);
+    delete state.flows[provider]; changed();
+  }
   function takenProfiles(provider) {
     return accountsOf(provider).map(a => text(a.capabilities?.codexProfile) || text(a.label)).concat((state.registry?.accounts || []).filter(a => a.provider === provider).map(a => text(a.label)));
   }
@@ -220,7 +298,7 @@ export function createAccountsController(deps) {
       if (!followAnswer(provider, answer, base)) toast('info', `${label(provider)}`, 'Nothing to do for this account.');
     } catch (error) {
       if (error?.payload?.code === 'account_active') state.lines[id] = { kind: 'refused', code: 'account_active_signin' };
-      else fail(error, { provider, what: 'signin-again' });
+      else if (!(await adoptRunning(provider, error))) fail(error, { provider, what: 'signin-again' });
     } finally { state.busyAct = ''; changed(); }
   }
   /** Footer "Sign in" of an app or browser-session provider: add its one account first when it has none. */
@@ -258,7 +336,10 @@ export function createAccountsController(deps) {
       try {
         const answer = await call(provider === 'codex' ? requests.addCodex(name) : requests.addSupervised(provider, name));
         if (!followAnswer(provider, answer, { ...state.flows[provider], name })) put({ busy: false });
-      } catch (error) { put({ busy: false, error: errorText(error, { provider, name }) }); }
+      } catch (error) {
+        if (await adoptRunning(provider, error)) return;
+        put({ busy: false, error: errorText(error, { provider, name }) });
+      }
       return;
     }
     if (flow.type === 'claude-add' && flow.step === 'name') {
@@ -415,6 +496,7 @@ export function createAccountsController(deps) {
     try {
       const { payload } = await call(requests.setNetwork(on));
       s.network = payload || s.network;
+      try { await networkChanged(s.network); } catch {}
       toast('info', on ? 'Local network trusted' : 'Local network trust turned off',
         on ? 'Passwords, keys and sign-in codes may now cross your home network without encryption.'
           : 'Password changes, keys, sign-in codes and tray pairing now work only on the dashboard computer itself.');
@@ -516,7 +598,8 @@ export function createAccountsController(deps) {
   }
   function reset() {
     for (const p of Object.keys(timers)) stopPolling(p);
-    state.registry = null; state.flows = {}; state.lines = {}; state.busyAct = '';
+    dismissedJobs.clear();
+    state.registry = null; state.flows = {}; state.lines = {}; state.busyAct = ''; state.visPending = [];
     state.signin = { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' };
   }
   return { state, handle, loadRegistry, loadSignin, loadAll, migrateLocalHidden, reset, pollJob, applyVisibility };
