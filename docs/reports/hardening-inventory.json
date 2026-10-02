@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1196,
-    "filesAffected": 118,
+    "totalOccurrences": 1229,
+    "filesAffected": 121,
     "hotpathOccurrences": 522,
     "hotpathFilesAffected": 68,
     "topHotpathFiles": [
@@ -185,21 +185,8 @@
         "markers": []
       },
       {
-        "file": "src/cliproxy/accounts/__tests__/account-safety-quota-exhaustion.test.ts",
-        "count": 48,
-        "calls": [
-          "existsSync",
-          "mkdirSync",
-          "mkdtempSync",
-          "readFileSync",
-          "rmSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/antigravity/registry.ts",
-        "count": 45,
+        "count": 54,
         "calls": [
           "closeSync",
           "existsSync",
@@ -214,6 +201,19 @@
           "rmdirSync",
           "rmSync",
           "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/cliproxy/accounts/__tests__/account-safety-quota-exhaustion.test.ts",
+        "count": 48,
+        "calls": [
+          "existsSync",
+          "mkdirSync",
+          "mkdtempSync",
+          "readFileSync",
+          "rmSync",
           "writeFileSync"
         ],
         "markers": []
@@ -519,21 +519,21 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 533,
+      "totalThrows": 577,
       "typedThrows": 133,
       "plainThrows": 70,
-      "otherThrows": 330,
-      "adoptionRatio": 0.2495,
+      "otherThrows": 374,
+      "adoptionRatio": 0.2305,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 224,
+          "count": 234,
           "typed": 70,
           "plain": 10
         },
         {
           "subdomain": "antigravity",
-          "count": 117,
+          "count": 151,
           "typed": 0,
           "plain": 0
         },
@@ -601,8 +601,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 33,
-      "totalSourceFiles": 394,
-      "coverageRatio": 0.0838,
+      "totalSourceFiles": 399,
+      "coverageRatio": 0.0827,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -628,7 +628,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 114,
+          "count": 115,
           "withLogger": 12
         },
         {
@@ -638,13 +638,18 @@
         },
         {
           "subdomain": "commands",
-          "count": 32,
+          "count": 33,
           "withLogger": 1
         },
         {
           "subdomain": "cliproxy/quota",
           "count": 31,
           "withLogger": 5
+        },
+        {
+          "subdomain": "antigravity",
+          "count": 27,
+          "withLogger": 0
         },
         {
           "subdomain": "codex-auth",
@@ -654,11 +659,6 @@
         {
           "subdomain": "config",
           "count": 26,
-          "withLogger": 0
-        },
-        {
-          "subdomain": "antigravity",
-          "count": 24,
           "withLogger": 0
         },
         {
@@ -779,6 +779,10 @@
           "loc": 871
         },
         {
+          "file": "src/antigravity/registry.ts",
+          "loc": 853
+        },
+        {
           "file": "src/cliproxy/accounts/account-safety.ts",
           "loc": 787
         },
@@ -789,10 +793,6 @@
         {
           "file": "src/auth/profile-detector.ts",
           "loc": 767
-        },
-        {
-          "file": "src/antigravity/registry.ts",
-          "loc": 750
         },
         {
           "file": "src/config/migration-manager.ts",
