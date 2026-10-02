@@ -256,13 +256,14 @@ describe('native local analytics activity', () => {
       'ok',
       'Native fixture'
     );
-    expect(result.totals).toEqual({
+    expect(result.totals).toMatchObject({
       inputTokens: 300,
       outputTokens: 10,
       cacheCreationTokens: 4,
       cacheReadTokens: 6,
       estimatedCostUsd: 0.015,
     });
+    expect(result.totals?.costByType).not.toBeNull();
     expect(
       result.providers.map((row) => [
         row.provider,

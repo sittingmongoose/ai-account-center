@@ -159,6 +159,7 @@ describe('account quota analytics', () => {
       accountCount: 14,
       availableAccounts: 14,
       activeCodexAccountId: 'codex:c',
+      activeAccountIds: { codex: 'codex:c', antigravity: null },
       sampleCount: 14,
     });
     expect(result.providers).toHaveLength(9);
@@ -183,7 +184,13 @@ describe('account quota analytics', () => {
     });
     const result = await service.get({ ...QUERY, provider: 'codex', account: first.id });
     expect(result.accounts.map((row) => row.id)).toEqual([first.id]);
-    expect(result.providers.map((row) => row.provider)).toEqual(['codex']);
+    // The provider list stays stable under filters; its counts follow the account filter.
+    expect(
+      result.providers.map((row) => [row.provider, row.accountCount, row.hasQuotaHistory])
+    ).toEqual([
+      ['codex', 1, true],
+      ['qwen', 0, true],
+    ]);
     expect(result.activity.totals).toBeNull();
     const mismatch = await service.get({ ...QUERY, provider: 'qwen', account: first.id });
     expect(mismatch.accounts).toEqual([]);

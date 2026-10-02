@@ -7,6 +7,14 @@ import { listAccountInstancePaths } from '../../management/instance-directory';
 import { CCSError } from '../../errors/error-types';
 import { resolveCodexConfigPaths } from './compatible-cli-config-paths';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
+import {
+  accountAnalyticsActivityCoverage,
+  defaultAccountAnalyticsPricing,
+  memoiseAccountAnalyticsPricing,
+  projectAccountAnalyticsActivity,
+  type AccountAnalyticsPricingLookup,
+  type SourceData,
+} from './account-analytics-projection';
 import type {
   UsageWorkerRequest,
   UsageWorkerResult,
@@ -14,15 +22,20 @@ import type {
 } from '../usage/worker-client';
 import type {
   AccountAnalyticsActivity,
-  AccountAnalyticsActivityTotals,
+  AccountAnalyticsActivityCoverage,
   AccountAnalyticsQuery,
 } from './account-analytics-types';
 
-interface SourceData {
-  provider: 'claude' | 'codex';
-  data: UsageWorkerResult[];
-  fetchedAt: string;
-}
+export {
+  accountAnalyticsActivityCoverage,
+  defaultAccountAnalyticsPricing,
+  memoiseAccountAnalyticsPricing,
+  projectAccountAnalyticsActivity,
+  type AccountAnalyticsPricingLookup,
+  type SourceData,
+} from './account-analytics-projection';
+export { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
+
 interface ActivityState {
   fetchedAt: number;
   pending: Promise<void> | null;
@@ -30,6 +43,8 @@ interface ActivityState {
   manualRefreshPending: boolean;
   sources: SourceData[];
   partial: boolean;
+  /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
+  pricing: AccountAnalyticsPricingLookup;
 }
 export interface AccountAnalyticsActivityDeps {
   loadWorker?: (request: UsageWorkerRequest) => Promise<UsageWorkerResult>;
@@ -38,19 +53,18 @@ export interface AccountAnalyticsActivityDeps {
   scope?: () => string;
   responseBudgetMs?: number;
   refreshIntervalSeconds?: () => number;
+  pricing?: AccountAnalyticsPricingLookup;
 }
+
+/** The public activity plus internal coverage facts the analytics service strips before sending. */
+export type AccountAnalyticsActivityResult = AccountAnalyticsActivity & {
+  coverage?: AccountAnalyticsActivityCoverage;
+};
 
 const MAX_DIRECTORIES = 24;
 const MAX_ROWS = 100_000;
 const MAX_WORKER_TIME_MS = 20_000;
 const MAX_COLLECTION_TIME_MS = 60_000;
-const FIELDS = [
-  'inputTokens',
-  'outputTokens',
-  'cacheCreationTokens',
-  'cacheReadTokens',
-  'estimatedCostUsd',
-] as const;
 
 /** Unlike legacy merged caches, each worker keeps the native tool dimension. */
 export function loadAccountAnalyticsWorker(
@@ -125,158 +139,6 @@ function localRequests(): Array<{ provider: 'claude' | 'codex'; request: UsageWo
       request: { kind: 'codex', codexHome, cacheDir: path.join(ccsDir, 'cache'), activity },
     });
   return requests;
-}
-
-function empty(): AccountAnalyticsActivityTotals {
-  return {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheCreationTokens: 0,
-    cacheReadTokens: 0,
-    estimatedCostUsd: 0,
-  };
-}
-function finite(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
-}
-function totals(value: {
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-  cost?: number;
-  totalCost?: number;
-}): AccountAnalyticsActivityTotals {
-  return {
-    inputTokens: finite(value.inputTokens),
-    outputTokens: finite(value.outputTokens),
-    cacheCreationTokens: finite(value.cacheCreationTokens),
-    cacheReadTokens: finite(value.cacheReadTokens),
-    estimatedCostUsd: finite(value.totalCost ?? value.cost),
-  };
-}
-function add(target: AccountAnalyticsActivityTotals, value: AccountAnalyticsActivityTotals): void {
-  for (const field of FIELDS) {
-    const next = target[field] + value[field];
-    if (Number.isFinite(next)) target[field] = next;
-  }
-}
-
-export function projectAccountAnalyticsActivity(
-  sources: SourceData[],
-  query: AccountAnalyticsQuery,
-  from: number,
-  to: number,
-  status: AccountAnalyticsActivity['status'],
-  message: string
-): AccountAnalyticsActivity {
-  const base: AccountAnalyticsActivity = {
-    status,
-    scope: 'ubuntu-local-cli',
-    timezone: 'UTC',
-    accountAttribution: 'unavailable',
-    costBasis: 'estimated-api-equivalent',
-    fetchedAt: sources.map((source) => source.fetchedAt).sort()[0] ?? null,
-    message,
-    totals: null,
-    providers: [],
-    byDay: [],
-    byHour: [],
-    models: [],
-  };
-  if (query.account !== 'all')
-    return {
-      ...base,
-      status: 'unavailable',
-      message:
-        'Local CLI logs do not reliably identify a subscription account. Select all accounts to view local activity; account quota history remains available.',
-    };
-  const selected = sources.filter(
-    (source) => query.provider === 'all' || query.provider === source.provider
-  );
-  if (selected.length === 0)
-    return {
-      ...base,
-      status: status === 'loading' ? 'loading' : 'unavailable',
-      message:
-        query.provider !== 'all' && query.provider !== 'claude' && query.provider !== 'codex'
-          ? 'This provider reports quota and balance observations; local token and session history is not available.'
-          : message,
-    };
-  base.fetchedAt = selected.map((source) => source.fetchedAt).sort()[0] ?? null;
-  const dayBuckets = new Map<string, AccountAnalyticsActivity['byDay'][number]>();
-  const hourBuckets = new Map<string, AccountAnalyticsActivity['byHour'][number]>();
-  const modelBuckets = new Map<string, AccountAnalyticsActivity['models'][number]>();
-  const combined = empty();
-  for (const source of selected) {
-    const sourceTotals = empty();
-    let usageEvents = 0;
-    const sessions = new Set<string>();
-    for (const result of source.data) {
-      for (const hour of result.hourly) {
-        if (!/^\d{4}-\d{2}-\d{2} \d{2}:00$/.test(hour.hour)) continue;
-        const epoch = Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`);
-        if (!Number.isFinite(epoch) || epoch < from || epoch > to) continue;
-        const values = totals(hour);
-        add(sourceTotals, values);
-        const dayKey = `${source.provider}:${hour.hour.slice(0, 10)}`;
-        const day = dayBuckets.get(dayKey) ?? {
-          date: hour.hour.slice(0, 10),
-          provider: source.provider,
-          ...empty(),
-        };
-        add(day, values);
-        dayBuckets.set(dayKey, day);
-        const hourKey = `${source.provider}:${hour.hour}`;
-        const bucket = hourBuckets.get(hourKey) ?? {
-          hour: `${hour.hour.replace(' ', 'T')}:00Z`,
-          provider: source.provider,
-          ...empty(),
-        };
-        add(bucket, values);
-        hourBuckets.set(hourKey, bucket);
-        usageEvents += finite(hour.requestCount);
-        for (const model of hour.modelBreakdowns ?? []) {
-          if (
-            typeof model.modelName !== 'string' ||
-            model.modelName.length > 160 ||
-            /[\u0000-\u001f\u007f]/.test(model.modelName)
-          )
-            continue;
-          const key = `${source.provider}:${model.modelName}`;
-          const existing = modelBuckets.get(key) ?? {
-            model: model.modelName,
-            provider: source.provider,
-            ...empty(),
-          };
-          add(existing, totals(model));
-          modelBuckets.set(key, existing);
-        }
-      }
-      for (const session of result.session) {
-        const lastActivity = Date.parse(session.lastActivity);
-        if (lastActivity >= from && lastActivity <= to && typeof session.sessionId === 'string')
-          sessions.add(session.sessionId);
-      }
-    }
-    add(combined, sourceTotals);
-    base.providers.push({
-      provider: source.provider,
-      label: source.provider === 'claude' ? 'Claude Code logs' : 'Codex logs',
-      totals: sourceTotals,
-      usageEvents,
-      sessionCount: sessions.size,
-    });
-  }
-  return {
-    ...base,
-    totals: combined,
-    byDay: [...dayBuckets.values()].sort((a, b) => a.date.localeCompare(b.date)),
-    byHour: [...hourBuckets.values()].sort((a, b) => a.hour.localeCompare(b.hour)),
-    models: [...modelBuckets.values()]
-      .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
-      .slice(0, 30),
-  };
 }
 
 export class AccountAnalyticsActivityService {
@@ -356,8 +218,13 @@ export class AccountAnalyticsActivityService {
       }
     }
     state.sources = updated;
+    state.pricing = this.snapshotPricing();
     state.partial = failed || requests.length >= MAX_DIRECTORIES + 1;
     state.fetchedAt = now;
+  }
+
+  private snapshotPricing(): AccountAnalyticsPricingLookup {
+    return memoiseAccountAnalyticsPricing(this.deps.pricing ?? defaultAccountAnalyticsPricing);
   }
 
   private startCollection(state: ActivityState): void {
@@ -384,8 +251,10 @@ export class AccountAnalyticsActivityService {
   async get(
     query: AccountAnalyticsQuery,
     from: number,
-    to: number
-  ): Promise<AccountAnalyticsActivity> {
+    to: number,
+    options: { tz?: string } = {}
+  ): Promise<AccountAnalyticsActivityResult> {
+    const tz = options.tz ?? 'UTC';
     const scope = (this.deps.scope ?? getCcsDir)();
     let state = this.states.get(scope);
     if (!state) {
@@ -396,6 +265,7 @@ export class AccountAnalyticsActivityService {
         manualRefreshPending: false,
         sources: [],
         partial: false,
+        pricing: this.snapshotPricing(),
       };
       this.states.set(scope, state);
       while (this.states.size > 8) {
@@ -409,14 +279,20 @@ export class AccountAnalyticsActivityService {
       (query.account !== 'all' ||
         (query.provider !== 'all' && query.provider !== 'claude' && query.provider !== 'codex'))
     )
-      return projectAccountAnalyticsActivity(
-        [],
-        query,
-        from,
-        to,
-        'unavailable',
-        'Local activity is unavailable for this selection.'
-      );
+      return {
+        ...projectAccountAnalyticsActivity(
+          [],
+          query,
+          from,
+          to,
+          'unavailable',
+          'Local activity is unavailable for this selection.',
+          { tz }
+        ),
+        // Already-read history still says which providers have activity, so
+        // the provider list stays stable while a quota-only filter is chosen.
+        coverage: accountAnalyticsActivityCoverage(state.sources, from, to),
+      };
     if (query.refresh === true && !state.manualRefreshPending) {
       state.generation++;
       state.manualRefreshPending = true;
@@ -462,7 +338,7 @@ export class AccountAnalyticsActivityService {
         ? ` All available records have been read; ${unfinishedFiles} local log files end with unfinished records and will be checked for changes.`
         : ` ${completedFiles} of ${totalFiles} local log files have been read; remaining files resume from saved positions on the next check.`
       : '';
-    return projectAccountAnalyticsActivity(
+    const activity = projectAccountAnalyticsActivity(
       state.sources,
       query,
       from,
@@ -477,8 +353,10 @@ export class AccountAnalyticsActivityService {
             : state.partial
               ? 'The available local records are shown while the bounded history scan continues; some sources may be unavailable. Cost is an API-equivalent estimate, not a subscription charge.' +
                 scanProgress
-              : 'Local Ubuntu CLI activity, across accounts, for UTC hourly buckets starting in this range. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.'
+              : `Local Ubuntu CLI activity, across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
+      { tz, pricing: state.pricing }
     );
+    return { ...activity, coverage: accountAnalyticsActivityCoverage(state.sources, from, to) };
   }
 }
 
@@ -486,8 +364,9 @@ let service: AccountAnalyticsActivityService | undefined;
 export function getAccountAnalyticsActivity(
   query: AccountAnalyticsQuery,
   from: number,
-  to: number
-): Promise<AccountAnalyticsActivity> {
+  to: number,
+  options: { tz?: string } = {}
+): Promise<AccountAnalyticsActivityResult> {
   service ??= new AccountAnalyticsActivityService();
-  return service.get(query, from, to);
+  return service.get(query, from, to, options);
 }
