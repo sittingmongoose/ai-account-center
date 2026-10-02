@@ -19,8 +19,9 @@ import {
  * GET and PUT /api/accounts/visibility (CONTRACT-registry-lifecycle section 4).
  * A browser session is required; the PUT also needs the dashboard Origin,
  * application/json, a strict body of at most 8 KB and no query string. The PUT
- * body may name any non-empty subset of `hiddenProviders`, `hiddenAccountIds`
- * and `trayHiddenProviders`; a list it leaves out is unchanged.
+ * body may name any non-empty subset of `hiddenProviders`, `hiddenAccountIds`,
+ * `trayHiddenProviders` and `trayHiddenAccountIds`; a list it leaves out is
+ * unchanged, so the dashboard and tray switches never change each other.
  * Errors are `{error, code}` with fixed sentences and never echo input.
  */
 const MAX_BODY_BYTES = 8 * 1024;
@@ -35,6 +36,7 @@ export interface AccountVisibilityRouterDeps {
     hiddenProviders: number;
     hiddenAccountIds: number;
     trayHiddenProviders: number;
+    trayHiddenAccountIds: number;
   }) => void;
 }
 
@@ -98,7 +100,7 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
         res,
         400,
         'invalid_body',
-        'Send hiddenProviders or trayHiddenProviders with known providers and at most 128 valid ids.'
+        'Send visibility lists with known providers and at most 128 valid ids each.'
       );
       return;
     }
@@ -119,6 +121,7 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
       hiddenProviders: saved.hiddenProviders.length,
       hiddenAccountIds: saved.hiddenAccountIds.length,
       trayHiddenProviders: saved.trayHiddenProviders.length,
+      trayHiddenAccountIds: saved.trayHiddenAccountIds.length,
     };
     // The change is saved; a failed log line or hint never changes the answer.
     try {

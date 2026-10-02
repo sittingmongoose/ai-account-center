@@ -101,9 +101,17 @@ export interface DashboardAccount {
   /**
    * Display only: the provider is hidden or this id is in hiddenAccountIds.
    * A hidden account is still collected and still an auto-switch candidate.
-   * Always set on GET /api/accounts/dashboard rows.
+   * Always set on GET /api/accounts/dashboard rows. The dashboard follows
+   * this; the trays never do.
    */
   hidden?: boolean;
+  /**
+   * Display only, for the trays: the provider is in trayHiddenProviders or
+   * this id is in trayHiddenAccountIds. Independent of `hidden`: hiding on
+   * the dashboard never sets it and hiding in the trays never sets `hidden`.
+   * Always set on GET /api/accounts/dashboard rows.
+   */
+  trayHidden?: boolean;
 }
 
 /** How a provider's accounts are signed in (CONTRACT-registry-lifecycle section 2). */
@@ -171,6 +179,8 @@ export interface AccountDashboardSettings {
   hiddenAccountIds?: string[];
   /** Always set by the dashboard service; empty when no provider is hidden in the trays. */
   trayHiddenProviders?: DashboardProvider[];
+  /** Always set by the dashboard service; accounts the trays leave out, independent of hiddenAccountIds. */
+  trayHiddenAccountIds?: string[];
   /**
    * False when the visibility file exists but could not be read safely. The
    * lists are then the last good read of this server (never re-shown as

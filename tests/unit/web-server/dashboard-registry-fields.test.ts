@@ -119,7 +119,12 @@ function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
     hasAntigravityProfiles: () => false,
     readVisibility: async () => ({
       state: 'ok',
-      visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
+      visibility: {
+        hiddenProviders: [],
+        hiddenAccountIds: [],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: [],
+      },
     }),
     ...extra,
   };
@@ -319,6 +324,7 @@ describe('visibility in the dashboard DTO', () => {
             hiddenProviders: ['zai'],
             hiddenAccountIds: ['codex:gmail', 'claude:retired-profile'],
             trayHiddenProviders: [],
+            trayHiddenAccountIds: [],
           },
         }),
       })
@@ -328,6 +334,7 @@ describe('visibility in the dashboard DTO', () => {
       hiddenProviders: ['zai'],
       hiddenAccountIds: ['codex:gmail', 'claude:retired-profile'],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
       visibilityAvailable: true,
     });
     // Hiding on the dashboard only leaves trayVisible true.
@@ -363,6 +370,7 @@ describe('visibility in the dashboard DTO', () => {
             hiddenProviders: [],
             hiddenAccountIds: [],
             trayHiddenProviders: ['zai', 'qwen'],
+            trayHiddenAccountIds: [],
           },
         }),
       })
@@ -372,6 +380,7 @@ describe('visibility in the dashboard DTO', () => {
       hiddenProviders: [],
       hiddenAccountIds: [],
       trayHiddenProviders: ['zai', 'qwen'],
+      trayHiddenAccountIds: [],
       visibilityAvailable: true,
     });
     // Hiding in the tray only leaves visible true, and no row becomes hidden.
@@ -386,6 +395,75 @@ describe('visibility in the dashboard DTO', () => {
     expect(dashboard.accounts.some((account) => account.hidden)).toBe(false);
   });
 
+  it('hides one account on the dashboard and in the trays independently, in all four combinations', async () => {
+    const all = (await new AccountDashboardService(deps()).get('mac')).accounts.map(
+      (account) => account.id
+    );
+    expect(all.length).toBeGreaterThanOrEqual(4);
+    const [shown, dashboardOnly, trayOnly, hiddenBoth] = all;
+    const dashboard = await new AccountDashboardService(
+      deps({
+        readVisibility: async () => ({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: [],
+            hiddenAccountIds: [dashboardOnly, hiddenBoth],
+            trayHiddenProviders: [],
+            trayHiddenAccountIds: [trayOnly, hiddenBoth],
+          },
+        }),
+      })
+    ).get('mac');
+    const flags = (id: string) => {
+      const account = dashboard.accounts.find((row) => row.id === id);
+      return [id, account?.hidden, account?.trayHidden];
+    };
+    // [id, hidden on the dashboard, hidden in the trays]
+    expect(flags(shown)).toEqual([shown, false, false]);
+    expect(flags(dashboardOnly)).toEqual([dashboardOnly, true, false]);
+    expect(flags(trayOnly)).toEqual([trayOnly, false, true]);
+    expect(flags(hiddenBoth)).toEqual([hiddenBoth, true, true]);
+    expect(dashboard.settings.hiddenAccountIds).toEqual([dashboardOnly, hiddenBoth]);
+    expect(dashboard.settings.trayHiddenAccountIds).toEqual([trayOnly, hiddenBoth]);
+    // Every other row is shown in both, every row stays in the list, and the provider switches are untouched.
+    expect(dashboard.accounts.map((account) => account.id)).toEqual(all);
+    expect(
+      dashboard.accounts
+        .filter((account) => ![dashboardOnly, trayOnly, hiddenBoth].includes(account.id))
+        .every((account) => account.hidden === false && account.trayHidden === false)
+    ).toBe(true);
+    expect((dashboard.providers ?? []).every((entry) => entry.visible && entry.trayVisible)).toBe(
+      true
+    );
+  });
+
+  it('marks a tray-hidden provider trayHidden and never hidden, and a dashboard-hidden one the reverse', async () => {
+    const dashboard = await new AccountDashboardService(
+      deps({
+        readVisibility: async () => ({
+          state: 'ok',
+          visibility: {
+            hiddenProviders: ['codex'],
+            hiddenAccountIds: [],
+            trayHiddenProviders: ['zai'],
+            trayHiddenAccountIds: [],
+          },
+        }),
+      })
+    ).get('mac');
+    const rows = (provider: string) =>
+      dashboard.accounts
+        .filter((account) => account.provider === provider)
+        .map((account) => [account.hidden, account.trayHidden]);
+    expect(rows('codex').length).toBeGreaterThan(0);
+    expect(rows('zai').length).toBeGreaterThan(0);
+    expect(rows('codex').every(([hidden, tray]) => hidden === true && tray === false)).toBe(true);
+    expect(rows('zai').every(([hidden, tray]) => hidden === false && tray === true)).toBe(true);
+    const provider = (id: string) => dashboard.providers?.find((entry) => entry.id === id);
+    expect([provider('codex')?.visible, provider('codex')?.trayVisible]).toEqual([false, true]);
+    expect([provider('zai')?.visible, provider('zai')?.trayVisible]).toEqual([true, false]);
+  });
+
   it('says when the visibility file could not be read, and hides nothing', async () => {
     const dashboard = await new AccountDashboardService(
       deps({ readVisibility: async () => ({ state: 'unavailable' }) })
@@ -394,6 +472,7 @@ describe('visibility in the dashboard DTO', () => {
       hiddenProviders: [],
       hiddenAccountIds: [],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
       visibilityAvailable: false,
     });
     expect(dashboard.accounts.some((account) => account.hidden)).toBe(false);
@@ -418,6 +497,7 @@ describe('an unreadable visibility file after a good read', () => {
           hiddenProviders: ['zai'],
           hiddenAccountIds: ['codex:gmail'],
           trayHiddenProviders: ['qwen'],
+          trayHiddenAccountIds: [],
         },
       }),
       async () => ({ state: 'unavailable' }),
@@ -426,7 +506,12 @@ describe('an unreadable visibility file after a good read', () => {
       },
       async () => ({
         state: 'ok',
-        visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
+        visibility: {
+          hiddenProviders: [],
+          hiddenAccountIds: [],
+          trayHiddenProviders: [],
+          trayHiddenAccountIds: [],
+        },
       }),
     ];
     let index = 0;
@@ -440,6 +525,7 @@ describe('an unreadable visibility file after a good read', () => {
       hiddenProviders: ['zai'],
       hiddenAccountIds: ['codex:gmail'],
       trayHiddenProviders: ['qwen'],
+      trayHiddenAccountIds: [],
       visibilityAvailable: true,
     });
     const expected = ['codex:gmail', 'zai:usage', 'zai:acct:9f2c41d0'];
@@ -452,6 +538,7 @@ describe('an unreadable visibility file after a good read', () => {
           hiddenProviders: ['zai'],
           hiddenAccountIds: ['codex:gmail'],
           trayHiddenProviders: ['qwen'],
+          trayHiddenAccountIds: [],
           visibilityAvailable: false,
         },
       });
@@ -466,6 +553,7 @@ describe('an unreadable visibility file after a good read', () => {
     expect(repaired.settings).toMatchObject({
       hiddenProviders: [],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
       visibilityAvailable: true,
     });
     expect(repaired.providers?.find((entry) => entry.id === 'qwen')?.trayVisible).toBe(true);
@@ -487,6 +575,7 @@ describe('an unreadable visibility file after a good read', () => {
                   hiddenProviders: current === '/tmp/aac-scope-a' ? ['zai'] : [],
                   hiddenAccountIds: [],
                   trayHiddenProviders: [],
+                  trayHiddenAccountIds: [],
                 },
               },
       })
@@ -498,12 +587,14 @@ describe('an unreadable visibility file after a good read', () => {
     expect((await service.get('mac')).settings).toMatchObject({
       hiddenProviders: [],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
       visibilityAvailable: false,
     });
     scope = '/tmp/aac-scope-a';
     expect((await service.get('mac')).settings).toMatchObject({
       hiddenProviders: ['zai'],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
       visibilityAvailable: false,
     });
   });
@@ -524,6 +615,7 @@ describe('a slow visibility read', () => {
                   hiddenProviders: ['zai' as const],
                   hiddenAccountIds: [],
                   trayHiddenProviders: [],
+                  trayHiddenAccountIds: [],
                 },
               }),
       })

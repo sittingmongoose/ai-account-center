@@ -104,6 +104,7 @@ export function entryView(
       email: row.email ?? null,
       platform: entry.platform,
       hidden: row.hidden,
+      trayHidden: row.trayHidden,
       lifecycle: row.lifecycle,
     },
     credentialView(entry, key),

@@ -539,6 +539,8 @@ export class AccountDashboardService {
     ]);
     const hiddenProviders = new Set<string>(visibility.hiddenProviders);
     const hiddenAccountIds = new Set(visibility.hiddenAccountIds);
+    const trayHiddenProviders = new Set<string>(visibility.trayHiddenProviders);
+    const trayHiddenAccountIds = new Set(visibility.trayHiddenAccountIds);
     // Validate saved credential revisions on every response, including dashboard
     // cache hits. This synchronous cache projection never starts a provider call.
     if (registeredAntigravity) {
@@ -618,6 +620,9 @@ export class AccountDashboardService {
           ),
           // Display only: hidden rows stay in the list, collected and switchable.
           hidden: hiddenProviders.has(current.provider) || hiddenAccountIds.has(current.id),
+          // The trays' own switches; never derived from the dashboard's.
+          trayHidden:
+            trayHiddenProviders.has(current.provider) || trayHiddenAccountIds.has(current.id),
         },
       ];
     });
@@ -629,6 +634,7 @@ export class AccountDashboardService {
         hiddenProviders: [...visibility.hiddenProviders],
         hiddenAccountIds: [...visibility.hiddenAccountIds],
         trayHiddenProviders: [...visibility.trayHiddenProviders],
+        trayHiddenAccountIds: [...visibility.trayHiddenAccountIds],
         visibilityAvailable: visibility.available,
       },
       providers: buildDashboardProviders(

@@ -45,10 +45,16 @@ only `--account <id> --credential <kind>` and `--key-id`, `--capsule-id` or
 (an older helper) shows the account as unavailable with "Update the usage helper
 on <host>". See the [registry](../../src/web-server/services/account-registry-v2.ts).
 
-The display-only visibility file `account-visibility.json` (0600) holds
-`hiddenProviders` and `hiddenAccountIds`. Hidden accounts are still collected and
-still auto-switch candidates; the dashboard marks them `hidden` and lists every
-provider in `providers[]` with `visible`. An unreadable file is never treated as
+The display-only visibility file `account-visibility.json` (0600) holds two
+independent pairs of lists: `hiddenProviders` and `hiddenAccountIds` for the
+dashboard, `trayHiddenProviders` and `trayHiddenAccountIds` for the Mac and
+Windows trays. Changing one pair never changes the other, so an account can be
+shown in both, hidden only from the dashboard, hidden only from the trays, or
+hidden from both. Hidden accounts are still collected and still auto-switch
+candidates; the dashboard marks each row `hidden` (dashboard) and `trayHidden`
+(trays) and lists every provider in `providers[]` with `visible` and
+`trayVisible`. The dashboard follows only `visible` and `hidden`; the trays
+follow only `trayVisible` and `trayHidden`. An unreadable file is never treated as
 empty: the dashboard keeps the last good lists, sets `settings.visibilityAvailable`
 to false, and shows nothing hidden only when it has never read the file. Every
 private store refuses a folder that others can write.

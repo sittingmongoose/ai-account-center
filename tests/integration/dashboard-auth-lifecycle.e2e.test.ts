@@ -710,10 +710,10 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     const put = await browser.send('PUT', '/api/accounts/visibility', saved);
     expect(put.status).toBe(200);
     // The store answers with every list; the ones this body left out read empty.
-    expect(put.body).toEqual({ ...saved, trayHiddenProviders: [] });
+    expect(put.body).toEqual({ ...saved, trayHiddenProviders: [], trayHiddenAccountIds: [] });
     const get = await browser.send('GET', '/api/accounts/visibility');
     expect(get.status).toBe(200);
-    expect(get.body).toEqual({ ...saved, trayHiddenProviders: [] });
+    expect(get.body).toEqual({ ...saved, trayHiddenProviders: [], trayHiddenAccountIds: [] });
 
     const dashboard = await browser.send(
       'GET',
@@ -734,6 +734,45 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     }
     for (const account of body.accounts) {
       if (account.provider === 'kimi-code') expect(account.hidden).toBe(true);
+    }
+  });
+
+  it('case 8b: per-account Show on dashboard and Show in tray are independent in all four combinations', async () => {
+    const ctx = await startE2E();
+    const browser = await setupFresh(ctx);
+    const id = 'codex:e2e-acct';
+    const read = async () => {
+      const get = await browser.send('GET', '/api/accounts/visibility');
+      expect(get.status).toBe(200);
+      const dashboard = await browser.send(
+        'GET',
+        '/api/accounts/dashboard?platform=mac&refresh=false'
+      );
+      expect(dashboard.status).toBe(200);
+      const settings = (dashboard.body as { settings: Record<string, string[]> }).settings;
+      // The dashboard DTO carries exactly what the store saved.
+      expect(settings.hiddenAccountIds).toEqual(get.body.hiddenAccountIds);
+      expect(settings.trayHiddenAccountIds).toEqual(get.body.trayHiddenAccountIds);
+      return get.body as Record<string, string[]>;
+    };
+    const steps: Array<[string, Record<string, string[]>, boolean, boolean]> = [
+      ['shown in both', { hiddenAccountIds: [], trayHiddenAccountIds: [] }, false, false],
+      ['hidden only from the dashboard', { hiddenAccountIds: [id] }, true, false],
+      ['hidden from both', { trayHiddenAccountIds: [id] }, true, true],
+      ['hidden only from the tray', { hiddenAccountIds: [] }, false, true],
+      ['shown in both again', { trayHiddenAccountIds: [] }, false, false],
+    ];
+    for (const [name, body, dashboard, tray] of steps) {
+      const put = await browser.send('PUT', '/api/accounts/visibility', body);
+      expect([name, put.status]).toEqual([name, 200]);
+      const saved = await read();
+      expect([
+        name,
+        saved.hiddenAccountIds.includes(id),
+        saved.trayHiddenAccountIds.includes(id),
+      ]).toEqual([name, dashboard, tray]);
+      expect(saved.hiddenProviders).toEqual([]);
+      expect(saved.trayHiddenProviders).toEqual([]);
     }
   });
 

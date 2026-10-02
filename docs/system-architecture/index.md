@@ -63,8 +63,10 @@ jobs triggered explicitly, never from startup or routine polling.
 The dashboard response lists every supported provider in `providers[]` (labels,
 order, sign-in kind, live availability and capabilities) from one
 [server table](../../src/web-server/services/dashboard-provider-registry.ts), and marks
-each account `hidden` from the [visibility store](../../src/web-server/services/account-visibility.ts).
-`GET`/`PUT /api/accounts/visibility` read and replace that store; a saved change
+each account `hidden` (dashboard) and `trayHidden` (trays) from the
+[visibility store](../../src/web-server/services/account-visibility.ts).
+`GET`/`PUT /api/accounts/visibility` read and update that store (a `PUT` names any of
+its four lists and leaves the others as they are); a saved change
 sends `{"type":"accounts-changed"}` to the signed-in `/ws` clients as a hint to re-read.
 
 The [lifecycle routes](../../src/web-server/routes/account-lifecycle-routes.ts) under

@@ -117,7 +117,7 @@ describe('account visibility on the real server', () => {
       socket.once('message', (data) => resolve(String(data)))
     );
     const body = { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:lexxmariah'] };
-    const saved = { ...body, trayHiddenProviders: [] };
+    const saved = { ...body, trayHiddenProviders: [], trayHiddenAccountIds: [] };
     const response = await fetch(`${base}/api/accounts/visibility`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Origin: base, Cookie: cookie },
@@ -146,6 +146,7 @@ describe('account visibility on the real server', () => {
       hiddenProviders: [],
       hiddenAccountIds: [],
       trayHiddenProviders: ['qwen'],
+      trayHiddenAccountIds: [],
     });
     // Pair a tray and read the dashboard DTO with its device token.
     const pair = await fetch(`${base}/api/auth/devices/pair`, {
@@ -178,6 +179,38 @@ describe('account visibility on the real server', () => {
         (entry) => typeof entry.visible === 'boolean' && typeof entry.trayVisible === 'boolean'
       )
     ).toBe(true);
+    // The per-account tray list reaches the tray too, and leaves the dashboard lists alone.
+    const accountPut = await fetch(`${base}/api/accounts/visibility`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Origin: base, Cookie: cookie },
+      body: JSON.stringify({ trayHiddenAccountIds: ['codex:party'] }),
+    });
+    expect(accountPut.status).toBe(200);
+    expect(await accountPut.json()).toEqual({
+      hiddenProviders: [],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['qwen'],
+      trayHiddenAccountIds: ['codex:party'],
+    });
+    const again = await fetch(`${base}/api/accounts/dashboard`, {
+      headers: { Authorization: `Bearer ${paired.token}` },
+    });
+    expect(again.status).toBe(200);
+    const settings = ((await again.json()) as { settings?: Record<string, unknown> }).settings;
+    expect(settings?.trayHiddenAccountIds).toEqual(['codex:party']);
+    expect(settings?.hiddenAccountIds).toEqual([]);
+    // A tray can read the lists but never change them.
+    const trayPut = await fetch(`${base}/api/accounts/visibility`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: base,
+        Authorization: `Bearer ${paired.token}`,
+      },
+      body: JSON.stringify({ trayHiddenAccountIds: [] }),
+    });
+    expect(trayPut.status).toBe(403);
+    expect(((await trayPut.json()) as { code?: string }).code).toBe('device_scope');
   }, 20_000);
 
   // The 415 case is in account-visibility.test.ts: under bun, an unread text/plain

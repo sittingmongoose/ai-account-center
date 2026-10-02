@@ -196,7 +196,12 @@ function deps(overrides: AccountDashboardDeps = {}): AccountDashboardDeps {
     refreshIntervalSeconds: () => 60,
     readVisibility: async () => ({
       state: 'ok',
-      visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
+      visibility: {
+        hiddenProviders: [],
+        hiddenAccountIds: [],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: [],
+      },
     }),
     ...overrides,
   };
@@ -451,6 +456,7 @@ describe('consolidated account dashboard', () => {
       hiddenProviders: [],
       hiddenAccountIds: [],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
       visibilityAvailable: true,
     });
     now += 60_000;

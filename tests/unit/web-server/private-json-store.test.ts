@@ -112,6 +112,7 @@ describe.skipIf(!posix)('private store folder', () => {
         hiddenProviders: ['zai'],
         hiddenAccountIds: [],
         trayHiddenProviders: [],
+        trayHiddenAccountIds: [],
       })
     ).rejects.toThrow();
     await expect(updateAccountRegistry(dir, (registry) => registry)).rejects.toThrow();

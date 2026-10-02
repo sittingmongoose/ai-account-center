@@ -97,7 +97,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/native-quota-collector.ts` | 768 |
 | `src/auth/profile-detector.ts` | 767 |
 | `src/web-server/services/account-analytics-activity.ts` | 691 |
-| `src/web-server/services/account-dashboard-service.ts` | 668 |
+| `src/web-server/services/account-dashboard-service.ts` | 674 |
 | `src/web-server/services/additional-account-service.ts` | 636 |
 | `src/cliproxy/services/usage-compatibility-transformer.ts` | 632 |
 | `src/web-server/services/account-analytics-projection.ts` | 629 |

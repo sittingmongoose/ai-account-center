@@ -168,7 +168,10 @@ export interface RegistryAccountView {
   email: string | null;
   platform: DashboardPlatform;
   credential: CredentialView | null;
+  /** Hidden on the dashboard (the provider or this account). */
   hidden: boolean;
+  /** Hidden in the trays (the provider or this account); independent of `hidden`. */
+  trayHidden: boolean;
   lifecycle: NonNullable<DashboardAccount['lifecycle']>;
   actions: AccountActions;
   removeRefusal: string | null;
@@ -189,6 +192,7 @@ export function credentialView(entry: RegistryAccount, key: StoredKeyInfo | null
 export function accountView(
   row: Pick<DashboardAccount, 'id' | 'provider' | 'label' | 'email' | 'platform'> & {
     hidden?: boolean;
+    trayHidden?: boolean;
     lifecycle?: DashboardAccount['lifecycle'];
   },
   credential: CredentialView | null,
@@ -203,6 +207,7 @@ export function accountView(
     platform: row.platform,
     credential,
     hidden: row.hidden === true,
+    trayHidden: row.trayHidden === true,
     lifecycle: row.lifecycle ?? { state: 'ready', jobId: null },
     actions,
     removeRefusal,

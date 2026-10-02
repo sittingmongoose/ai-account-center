@@ -40,12 +40,18 @@ describe('account visibility store', () => {
     const dir = ccsDir();
     expect(await readAccountVisibility(dir)).toEqual({
       state: 'ok',
-      visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
+      visibility: {
+        hiddenProviders: [],
+        hiddenAccountIds: [],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: [],
+      },
     });
     const saved = await writeAccountVisibility(dir, {
       hiddenProviders: ['kimi-code'],
       hiddenAccountIds: ['codex:lexxmariah', 'plan-opencode-go-console-mac-0123456789ab'],
       trayHiddenProviders: ['qwen'],
+      trayHiddenAccountIds: ['codex:party'],
     });
     const file = path.join(dir, ACCOUNT_VISIBILITY_FILE);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
@@ -69,7 +75,7 @@ describe('account visibility store', () => {
         0o600,
       ],
       [JSON.stringify({ version: 1, hiddenProviders: [], hiddenAccountIds: ids(129) }), 0o600],
-      [' '.repeat(16 * 1024 + 1), 0o600],
+      [' '.repeat(32 * 1024 + 1), 0o600],
       // The tray list is validated exactly like the dashboard provider list.
       [
         JSON.stringify({
@@ -100,6 +106,43 @@ describe('account visibility store', () => {
       ],
       // The tray key does not replace a required key.
       [JSON.stringify({ version: 1, hiddenProviders: [], trayHiddenProviders: [] }), 0o600],
+      // The tray id list is validated exactly like the dashboard id list.
+      [
+        JSON.stringify({
+          version: 1,
+          hiddenProviders: [],
+          hiddenAccountIds: [],
+          trayHiddenAccountIds: 'codex:party',
+        }),
+        0o600,
+      ],
+      [
+        JSON.stringify({
+          version: 1,
+          hiddenProviders: [],
+          hiddenAccountIds: [],
+          trayHiddenAccountIds: ['not an id'],
+        }),
+        0o600,
+      ],
+      [
+        JSON.stringify({
+          version: 1,
+          hiddenProviders: [],
+          hiddenAccountIds: [],
+          trayHiddenAccountIds: ids(129),
+        }),
+        0o600,
+      ],
+      [
+        JSON.stringify({
+          version: 1,
+          hiddenProviders: [],
+          trayHiddenProviders: [],
+          trayHiddenAccountIds: [],
+        }),
+        0o600,
+      ],
     ] as const) {
       fs.writeFileSync(file, contents);
       fs.chmodSync(file, mode);
@@ -115,6 +158,7 @@ describe('account visibility store', () => {
       hiddenProviders: [],
       hiddenAccountIds: [],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: [],
     });
     expect(fs.lstatSync(file).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe(valid);
@@ -139,9 +183,10 @@ describe('account visibility store', () => {
         hiddenProviders: ['qwen'],
         hiddenAccountIds: ['zai:usage'],
         trayHiddenProviders: ['zai'],
+        trayHiddenAccountIds: [],
       },
     });
-    // A file written before the tray list existed keeps reading, with nothing tray-hidden.
+    // A file written before the tray lists existed keeps reading, with nothing tray-hidden.
     fs.writeFileSync(
       file,
       JSON.stringify({ version: 1, hiddenProviders: ['qwen'], hiddenAccountIds: [] }),
@@ -149,7 +194,32 @@ describe('account visibility store', () => {
     );
     expect(await readAccountVisibility(dir)).toEqual({
       state: 'ok',
-      visibility: { hiddenProviders: ['qwen'], hiddenAccountIds: [], trayHiddenProviders: [] },
+      visibility: {
+        hiddenProviders: ['qwen'],
+        hiddenAccountIds: [],
+        trayHiddenProviders: [],
+        trayHiddenAccountIds: [],
+      },
+    });
+    // A file from the provider-only tray build (three lists) keeps reading too.
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        hiddenProviders: [],
+        hiddenAccountIds: [],
+        trayHiddenProviders: ['qwen'],
+      }),
+      { mode: 0o600 }
+    );
+    expect(await readAccountVisibility(dir)).toEqual({
+      state: 'ok',
+      visibility: {
+        hiddenProviders: [],
+        hiddenAccountIds: [],
+        trayHiddenProviders: ['qwen'],
+        trayHiddenAccountIds: [],
+      },
     });
   });
 
@@ -169,6 +239,12 @@ describe('account visibility store', () => {
     expect(parseVisibilityBody({ trayHiddenProviders: ['qwen', 'qwen'] })).toEqual({
       trayHiddenProviders: ['qwen'],
     });
+    expect(parseVisibilityBody({ trayHiddenAccountIds: ['codex:gmail', 'codex:gmail'] })).toEqual({
+      trayHiddenAccountIds: ['codex:gmail'],
+    });
+    expect(
+      parseVisibilityBody({ trayHiddenAccountIds: ids(128) })?.trayHiddenAccountIds
+    ).toHaveLength(128);
     expect(
       parseVisibilityBody({ hiddenProviders: [], hiddenAccountIds: ids(128) })?.hiddenAccountIds
     ).toHaveLength(128);
@@ -195,6 +271,12 @@ describe('account visibility store', () => {
       { trayHiddenProviders: [42] },
       { trayHiddenProviders: Array.from({ length: 33 }, () => 'qwen') },
       { trayHiddenProviders: [], nope: [] },
+      { trayHiddenAccountIds: ids(129) },
+      { trayHiddenAccountIds: ['codex'] },
+      { trayHiddenAccountIds: ['Codex:party'] },
+      { trayHiddenAccountIds: ['codex:party/../x'] },
+      { trayHiddenAccountIds: [42] },
+      { trayHiddenAccountIds: 'codex:party' },
     ]) {
       expect(parseVisibilityBody(body)).toBeNull();
     }
@@ -261,6 +343,7 @@ describe('GET and PUT /api/accounts/visibility', () => {
       hiddenProviders: ['kimi-code'],
       hiddenAccountIds: ['codex:lexxmariah'],
       trayHiddenProviders: ['qwen'],
+      trayHiddenAccountIds: ['codex:party'],
     };
     const response = await put(body);
     expect(response.status).toBe(200);
@@ -272,8 +355,11 @@ describe('GET and PUT /api/accounts/visibility', () => {
     expect(await read.json()).toEqual(body);
     expect(fs.statSync(path.join(dir, ACCOUNT_VISIBILITY_FILE)).mode & 0o777).toBe(0o600);
     expect(changes()).toBe(1);
-    expect(audits).toEqual([{ hiddenProviders: 1, hiddenAccountIds: 1, trayHiddenProviders: 1 }]);
+    expect(audits).toEqual([
+      { hiddenProviders: 1, hiddenAccountIds: 1, trayHiddenProviders: 1, trayHiddenAccountIds: 1 },
+    ]);
     expect(JSON.stringify(audits)).not.toContain('lexxmariah');
+    expect(JSON.stringify(audits)).not.toContain('party');
   });
 
   it('updates one list without touching the others', async () => {
@@ -288,25 +374,36 @@ describe('GET and PUT /api/accounts/visibility', () => {
       hiddenProviders: [],
       hiddenAccountIds: [],
       trayHiddenProviders: ['qwen', 'zai'],
+      trayHiddenAccountIds: [],
     });
     expect((await put({ hiddenProviders: ['kimi-code'] })).status).toBe(200);
     expect(await get()).toEqual({
       hiddenProviders: ['kimi-code'],
       hiddenAccountIds: [],
       trayHiddenProviders: ['qwen', 'zai'],
+      trayHiddenAccountIds: [],
     });
     expect((await put({ hiddenAccountIds: ['codex:lexxmariah'] })).status).toBe(200);
     expect(await get()).toEqual({
       hiddenProviders: ['kimi-code'],
       hiddenAccountIds: ['codex:lexxmariah'],
       trayHiddenProviders: ['qwen', 'zai'],
+      trayHiddenAccountIds: [],
     });
-    // An empty tray list clears only the tray list.
+    expect((await put({ trayHiddenAccountIds: ['codex:party'] })).status).toBe(200);
+    expect(await get()).toEqual({
+      hiddenProviders: ['kimi-code'],
+      hiddenAccountIds: ['codex:lexxmariah'],
+      trayHiddenProviders: ['qwen', 'zai'],
+      trayHiddenAccountIds: ['codex:party'],
+    });
+    // An empty tray list clears only that tray list.
     expect((await put({ trayHiddenProviders: [] })).status).toBe(200);
     expect(await get()).toEqual({
       hiddenProviders: ['kimi-code'],
       hiddenAccountIds: ['codex:lexxmariah'],
       trayHiddenProviders: [],
+      trayHiddenAccountIds: ['codex:party'],
     });
   });
 
@@ -354,6 +451,9 @@ describe('GET and PUT /api/accounts/visibility', () => {
       { trayHiddenProviders: ['PRIVATE'] },
       { trayHiddenProviders: 'qwen' },
       { trayHiddenProviders: Array.from({ length: 33 }, () => 'qwen') },
+      { trayHiddenAccountIds: ['PRIVATE id'] },
+      { trayHiddenAccountIds: ids(129) },
+      { trayHiddenAccountIds: 'codex:party' },
       {},
       [],
     ]) {
@@ -402,11 +502,20 @@ describe('GET and PUT /api/accounts/visibility', () => {
     });
     expect(fs.readFileSync(file, 'utf8')).toBe(unsafe);
     expect(fs.statSync(file).mode & 0o777).toBe(0o644);
-    // A full PUT replaces and repairs the file, exactly as before.
+    // A partial PUT naming the old three lists is still partial now: nothing is written.
+    const threeLists = await put({
+      hiddenProviders: ['zai'],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['qwen'],
+    });
+    expect(threeLists.status).toBe(500);
+    expect(fs.readFileSync(file, 'utf8')).toBe(unsafe);
+    // A full PUT (all four lists) replaces and repairs the file, exactly as before.
     const full = await put({
       hiddenProviders: ['zai'],
       hiddenAccountIds: [],
       trayHiddenProviders: ['qwen'],
+      trayHiddenAccountIds: [],
     });
     expect(full.status).toBe(200);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
@@ -416,7 +525,42 @@ describe('GET and PUT /api/accounts/visibility', () => {
       hiddenProviders: ['zai'],
       hiddenAccountIds: [],
       trayHiddenProviders: ['qwen'],
+      trayHiddenAccountIds: [],
     });
+  });
+
+  it('keeps the per-account dashboard and tray switches independent in all four combinations', async () => {
+    const { url, put } = await fixture();
+    const get = async () => {
+      const read = await fetch(url, { headers: { 'x-test-session': 'true' } });
+      expect(read.status).toBe(200);
+      return read.json();
+    };
+    const id = 'codex:party';
+    // [dashboard hidden, tray hidden] for one account, reached one switch at a time.
+    const steps: Array<[string, Record<string, string[]>, boolean, boolean]> = [
+      ['shown in both', { hiddenAccountIds: [] }, false, false],
+      ['hidden only from the dashboard', { hiddenAccountIds: [id] }, true, false],
+      ['hidden from both', { trayHiddenAccountIds: [id] }, true, true],
+      ['hidden only from the tray', { hiddenAccountIds: [] }, false, true],
+      ['shown in both again', { trayHiddenAccountIds: [] }, false, false],
+      ['hidden only from the tray, directly', { trayHiddenAccountIds: [id] }, false, true],
+      ['hidden from both, from the tray state', { hiddenAccountIds: [id] }, true, true],
+      ['hidden only from the dashboard, from both', { trayHiddenAccountIds: [] }, true, false],
+    ];
+    for (const [name, body, dashboard, tray] of steps) {
+      const response = await put(body);
+      expect([name, response.status]).toEqual([name, 200]);
+      const saved = await get();
+      expect([
+        name,
+        saved.hiddenAccountIds.includes(id),
+        saved.trayHiddenAccountIds.includes(id),
+      ]).toEqual([name, dashboard, tray]);
+      // The provider lists are never touched by an account switch.
+      expect(saved.hiddenProviders).toEqual([]);
+      expect(saved.trayHiddenProviders).toEqual([]);
+    }
   });
 
   it('pushes accounts-changed to every open /ws client after a saved change', async () => {
