@@ -128,9 +128,15 @@ export component Meter inherits Rectangle {
     in property <bool> hot: false;
     // Who the reading belongs to, for the hover card ("Claude · claude-1@example.com").
     in property <string> owner-label;
+    // A threshold the user is still choosing (the section's stepper): the notch slides there before the
+    // setting is saved. -1 keeps the reported notch.
+    in property <float> notch-override: -1;
+    // The reading changed after the load-in (a refresh): the row flashes softly.
+    callback value-changed();
 
     property <float> target: root.data.has-value ? root.data.value : 0;
     property <bool> swept: false;
+    changed target => { if root.swept { root.value-changed(); } }
     // A meter created together with its data (first load, a new row) first renders at 0 and starts
     // its sweep one frame later; otherwise it would appear at its final value without animating.
     property <bool> mounted: !Motion.on;
@@ -170,9 +176,10 @@ export component Meter inherits Rectangle {
             overflow: elide;
         }
         if root.show-label && !root.inline: Rectangle { height: 4px; }
+        // Inline: the label takes the free width and the value sits at the right end. Otherwise the value,
+        // "used" and any caption sit at the start and "x% over" at the right end.
         top := HorizontalLayout {
             spacing: 6px;
-            alignment: start;
             if root.inline: Text {
                 text: root.data.label;
                 font-size: 12.5px;
@@ -181,7 +188,13 @@ export component Meter inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
+            if root.inline && root.data.has-value && root.data.caption != "": VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
+            }
             if root.data.has-value: ValueUnit {
+                horizontal-stretch: 0;
                 value: root.number;
                 size: root.value-size;
                 ink: Theme.sev-text(root.sev);
@@ -189,10 +202,12 @@ export component Meter inherits Rectangle {
             }
             if root.data.has-value && root.show-unit && !root.compact && !root.inline: VerticalLayout {
                 alignment: end;
+                horizontal-stretch: 0;
                 Text { text: "used"; font-size: Type.small; color: Theme.ink-3; }
             }
-            if root.data.has-value && root.data.caption != "": VerticalLayout {
+            if !root.inline && root.data.has-value && root.data.caption != "": VerticalLayout {
                 alignment: center;
+                horizontal-stretch: 0;
                 Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
             }
             if !root.data.has-value: Text {
@@ -201,10 +216,12 @@ export component Meter inherits Rectangle {
                 font-weight: 520;
                 color: Theme.ink-3;
                 vertical-alignment: center;
+                horizontal-stretch: 0;
             }
-            if root.data.has-value && root.data.over-text != "" && !root.compact && !root.inline: Rectangle { horizontal-stretch: 1; }
+            if !root.inline: Rectangle { horizontal-stretch: 1; }
             if root.data.has-value && root.data.over-text != "" && !root.compact && !root.inline: VerticalLayout {
                 alignment: end;
+                horizontal-stretch: 0;
                 ValueUnit { value: root.data.over-text; unit: "% over"; size: 12px; weight: 640; ink: Theme.over-text; unit-scale: 1; unit-gap: 0px; }
             }
         }
@@ -213,7 +230,7 @@ export component Meter inherits Rectangle {
             has-value: root.data.has-value;
             shown: root.anim;
             target: root.target;
-            notch: root.data.notch;
+            notch: root.notch-override >= 0 && root.data.notch >= 0 ? root.notch-override : root.data.notch;
             notch-faint: root.data.notch-faint;
             notch-off: root.data.notch-off;
             compact: root.compact;
@@ -225,6 +242,8 @@ export component Meter inherits Rectangle {
         if root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): HorizontalLayout {
             spacing: 10px;
             Text {
+                min-height: 17.5px;
+                vertical-alignment: center;
                 text: root.data.has-value ? root.data.reset : root.data.na-sub;
                 font-family: Type.tab;
                 font-size: Type.small;
@@ -234,6 +253,8 @@ export component Meter inherits Rectangle {
                 horizontal-stretch: 1;
             }
             if root.data.amount != "" && !root.compact: Text {
+                min-height: 17.5px;
+                vertical-alignment: center;
                 text: root.data.amount;
                 font-family: Type.tab;
                 font-size: Type.small;

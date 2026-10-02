@@ -72,6 +72,9 @@ const unitAmount = (value, unit) => {
   return nf2.format(value) + (u ? ` ${u}` : '');
 };
 const compactAmount = value => Math.abs(value) >= 1e6 ? nfCompact.format(value) : nf2.format(value);
+/** A run of text in a line that mixes weights ("**4** accounts · desktop profiles"); tone '' | 'good' | 'warn'. */
+export const run = (value, strong = false, tone = '') => ({ text: String(value), strong: !!strong, tone });
+const STALE_MS = 30 * 60_000;
 
 // ---------------------------------------------------------------- windows
 export const usedPercent = w => finite(w?.usedPercent) && w.usedPercent >= 0 ? w.usedPercent
@@ -95,13 +98,13 @@ export function windowLabel(provider, w) {
   const p = period(w);
   if (provider === 'antigravity') return `${/^gemini/i.test(text(w.key)) ? 'Gemini' : 'Claude and GPT'} ${p === '5h' ? '5-hour' : 'weekly'}`;
   if (provider === 'cursor') return { 'plan-reported': 'Included', autoPercentUsed: 'Cursor models', apiPercentUsed: 'Other models' }[w.key] || text(w.label);
-  if (provider === 'zai') return { 'usage-1': '5-hour tokens', 'usage-2': 'Weekly tokens', 'usage-3': 'Monthly requests' }[w.key] || text(w.label);
+  if (provider === 'zai') return { 'usage-1': '5h tokens', 'usage-2': 'Weekly tokens', 'usage-3': 'Monthly requests' }[w.key] || text(w.label);
   if (provider === 'codex' || provider === 'claude' || provider === 'kimi-code' || provider === 'opencode-go' || provider === 'muse' || provider === 'qwen') return PERIOD_LABEL[p] || text(w.label) || 'Usage';
   return text(w.label) || 'Usage';
 }
 export function fullWindowLabel(provider, w) {
-  if (isFable(w)) return 'Fable weekly usage';
-  if (provider === 'codex') return { week: 'Weekly usage', '5h': '5-hour usage' }[text(w.label)] || `${windowLabel(provider, w)} usage`;
+  if (isFable(w)) return 'Fable weekly';
+  if (provider === 'codex') return { week: 'Weekly', '5h': '5-hour' }[text(w.label)] || text(w.label) || windowLabel(provider, w);
   if (provider === 'claude') return { 'Five-hour usage': '5-hour usage' }[text(w.label)] || text(w.label) || 'Usage';
   return text(w.label) || 'Usage';
 }
@@ -120,7 +123,7 @@ export function meterView(account, w, { now = Date.now(), notch = null, notchFai
   const hasValue = value !== null && w?.unlimited !== true;
   const unit = text(w?.unit);
   const amount = finite(w?.used) && finite(w?.limit) && w.limit > 0
-    ? `${compactAmount(w.used)} of ${compactAmount(w.limit)}${unit ? ` ${unit}` : ''}` : '';
+    ? `${nfCompact.format(w.used)} of ${compactAmount(w.limit)}${unit ? ` ${unit}` : ''}` : '';
   return {
     key: `${account?.id || ''}|${text(w?.key) || 'missing'}`,
     label: label || (w ? windowLabel(account?.provider, w) : 'Usage'),
@@ -148,10 +151,11 @@ export function meterView(account, w, { now = Date.now(), notch = null, notchFai
 const emptyCell = (account, key) => ({ key: '', label: '', fullLabel: '', hasValue: false, value: 0, valueText: '', overText: '', reset: '', resetExact: '', resetSoon: false, naText: '', naSub: '', amount: '', left: '', sampled: '', source: '', caption: '', captionTip: '', notch: null, notchFaint: false, notchOff: false });
 
 /** Packs, balances, credits and spend as an AmountView. */
-export function amountView(account, w, now = Date.now()) {
+export function amountView(account, w, now = Date.now(), { noExpiry = false } = {}) {
   const unit = text(w.unit);
-  const label = text(w.label).replace(/^Additional credit pack/i, 'Credit pack').replace(/^Listed active credit packs/i, 'Active packs listed');
-  const expires = exact(w.expiresAt, 'Expires ');
+  const label = text(w.label).replace(/^Additional credit pack/i, 'Credit pack').replace(/^Listed active credit packs/i, 'Active packs listed')
+    .replace(/^Rate-limit resets available/i, 'Rate-limit resets left');
+  const expires = noExpiry ? '' : exact(w.expiresAt, 'Expires ');
   let value = '', suffix = '', sub = '', icon = 'wallet', spent = false;
   if (/pack/i.test(text(w.label)) && finite(w.limit)) {
     icon = 'pack';
@@ -188,15 +192,53 @@ export function amountView(account, w, now = Date.now()) {
   return { key: `${account.id}|${text(w.key)}`, label: label || 'Balance', value, unit: suffix, sub, icon, spent };
 }
 
-function codexAmountsLine(account) {
+/** Codex credits and banked resets of one account, as runs with the figures in bold ("**62.5K** credits · **1** banked"). */
+function codexAmountsRuns(account) {
   const windows = visibleUsageWindows('codex', account.windows);
   const credits = windows.find(w => w.key === 'credits_balance' || (w.kind === 'balance' && w.unit === 'credits'));
   const banked = windows.find(w => /^banked[_-]?resets/i.test(text(w.key)));
   const parts = [];
-  if (credits) parts.push(credits.enabled === false ? 'Credits off' : finite(credits.remaining) ? `${nfCompact.format(credits.remaining)} credits` : '');
-  if (banked && finite(banked.remaining)) parts.push(`${nf2.format(banked.remaining)} banked`);
-  return parts.filter(Boolean).join(' · ');
+  if (credits) {
+    if (credits.enabled === false) parts.push([run('Credits off')]);
+    else if (finite(credits.remaining)) parts.push([run(credits.remaining >= 10000 ? nfCompact.format(credits.remaining) : nf2.format(credits.remaining), true), run(' credits')]);
+  }
+  if (banked && finite(banked.remaining)) parts.push([run(nf2.format(banked.remaining), true), run(' banked')]);
+  return parts.flatMap((part, index) => index ? [run(' · '), ...part] : part);
 }
+const runsText = runs => runs.map(r => r.text).join('');
+/** The larger of an account's 5-hour and weekly use: the Codex switch point compares this with the threshold. */
+function codexPeak(account) {
+  const values = visibleUsageWindows('codex', account?.windows).filter(w => (w.key === 'five_hour' || w.key === 'seven_day') && usedPercent(w) !== null).map(usedPercent);
+  return values.length ? Math.max(...values) : null;
+}
+/** The inline question before activating an account that is already past the switch point. */
+function confirmRuns(peak, threshold, autoOn) {
+  return [run(`${valueText(peak)}% used`, true, 'warn'), run(`, above the ${valueText(threshold)}% switch point.${autoOn ? ' Auto-switch would move off it again on its next check.' : ''} Activate anyway?`)];
+}
+/** Codex footer: what auto-switch is doing about the active account, in the concept's words. */
+function codexFoot(accounts, auto, known, threshold, now) {
+  const short = account => shortIdentity(account);
+  const active = accounts.find(account => account.isActive === true);
+  const checked = validDate(auto?.lastCheckedAt) ? relative(auto.lastCheckedAt, now) : 'never';
+  const when = `Checked ${checked}${Number.isInteger(auto?.pollIntervalSeconds) ? ` · every ${intervalLabel(auto.pollIntervalSeconds)}` : ''}`;
+  const foot = (runs, warn = false) => ({ shown: true, warn, runs, when: known ? when : '' });
+  if (!accounts.length) return { shown: false, warn: false, runs: [], when: '' };
+  if (!known) return foot([run(text(auto?.message) || 'Automatic switching status unavailable')]);
+  if (!active) return foot([run('No Codex account is active')], true);
+  const peak = codexPeak(active);
+  if (peak !== null && peak >= threshold) {
+    if (auto.enabled !== true) return foot([run(short(active), true), run(` is above ${valueText(threshold)}% used; auto-switch is off, so it stays active until you switch`)], true);
+    const next = accounts.filter(account => account !== active).map(account => ({ account, peak: codexPeak(account) }))
+      .filter(row => row.peak !== null && row.peak < threshold).sort((a, b) => a.peak - b.peak)[0]?.account;
+    return foot(next
+      ? [run(short(active), true), run(` is above the ${valueText(threshold)}% switch point; auto-switch moves to `), run(short(next), true), run(' on the next check')]
+      : [run(short(active), true), run(` is above the ${valueText(threshold)}% switch point and no other account is below it`)], true);
+  }
+  if (auto.enabled !== true) return foot([run('Auto-switch is off; the active account changes only when you press Activate')]);
+  if (text(auto.message)) return foot([run(text(auto.message))], ['error', 'no_candidate', 'no_fresh_quota'].includes(auto.outcome));
+  return foot([run(short(active), true), run(` is below the ${valueText(threshold)}% switch point${peak !== null ? ` at ${valueText(peak)}% used` : ''}`)]);
+}
+const noFoot = () => ({ shown: false, warn: false, runs: [], when: '' });
 
 const visibleMeters = account => visibleUsageWindows(account.provider, account.windows).filter(isMeterWindow);
 const visibleAmounts = account => visibleUsageWindows(account.provider, account.windows).filter(w => !isMeterWindow(w));
@@ -241,14 +283,16 @@ function claudeSection(accounts, profiles, platform, now) {
       active: false, activeLabel: '', setup: false, canActivate: false, activateKind: '', activateHint: '',
       canMac: !!launcher?.mac?.canOpen,
       canWindows: launcher?.windows?.canOpen === true || (platform === 'windows' && !!launcher?.windows?.launchUri),
-      amountsLine: '', cells,
+      amountsLine: '', amountsRuns: [], confirm: false, confirmRuns: [], cells,
     };
   });
   return {
-    id: 'claude', kind: 'claude', label: 'Claude', longLabel: 'Claude', switchable: false,
+    id: 'claude', kind: 'claude', label: 'Claude', longLabel: 'Claude', switchable: false, canSwitch: false,
     meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'} · desktop profiles`,
+    metaRuns: [run(rows.length, true), run(` ${rows.length === 1 ? 'account' : 'accounts'} · desktop profiles`)],
+    foot: noFoot(),
     activeId: '', activeLabel: '', empty: 'No Claude accounts are reported yet.',
-    auto: { known: false, enabled: false, available: false, canEnable: false, thresholdUsed: null, thresholdLabel: '', setting: '', message: '', example: false },
+    auto: { known: false, shown: false, enabled: false, available: false, canEnable: false, thresholdUsed: null, thresholdLabel: '', min: 50, max: 99, pool: '', offRuns: [], setting: '', message: '', example: false },
     columns, rows,
   };
 }
@@ -273,6 +317,9 @@ function codexSection(accounts, data, now) {
     if (!weekly) weeklyCell.key = `${account.id}|seven_day`;
     cells.push(weeklyCell);
     const profile = account.capabilities?.codexProfile || '';
+    const amountsRuns = codexAmountsRuns(account);
+    const peak = codexPeak(account);
+    const above = known && account.isActive !== true && peak !== null && peak >= threshold;
     return {
       id: account.id, provider: 'codex', profile,
       email: text(account.email) || text(account.label) || 'Account identity unavailable', plan: text(account.plan),
@@ -281,17 +328,21 @@ function codexSection(accounts, data, now) {
       active: account.isActive === true, activeLabel: `on ${platformLabel(account.platform)}`, setup: false,
       canActivate: account.isActive !== true && !!profile, activateKind: 'activate',
       activateHint: profile ? `Make ${text(account.email) || 'this account'} the active Codex account` : 'This account has no Codex profile to activate',
-      canMac: false, canWindows: false, amountsLine: codexAmountsLine(account), cells,
+      canMac: false, canWindows: false, amountsLine: runsText(amountsRuns), amountsRuns,
+      confirm: above, confirmRuns: above ? confirmRuns(peak, threshold, auto?.enabled === true) : [], cells,
     };
   });
   return {
-    id: 'codex', kind: 'switchable', label: 'Codex', longLabel: 'Codex', switchable: true,
+    id: 'codex', kind: 'switchable', label: 'Codex', longLabel: 'Codex', switchable: true, canSwitch: rows.length > 1,
     meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}${active ? ` · ${shortIdentity(active)} active` : ''}`,
+    metaRuns: [run(rows.length, true), run(` ${rows.length === 1 ? 'account' : 'accounts'} · `), ...(active ? [run(shortIdentity(active), true, 'good'), run(' active')] : [run('none active')])],
+    foot: codexFoot(accounts, auto, known, threshold, now),
     activeId: active?.id || '', activeLabel: active ? text(active.email) || text(active.label) : '',
     empty: 'No Codex accounts are reported yet.',
     auto: {
-      known, enabled: auto?.enabled === true, available: known && auto?.activationInProgress !== true, canEnable: known,
+      known, shown: true, enabled: auto?.enabled === true, available: known && auto?.activationInProgress !== true, canEnable: known,
       thresholdUsed: threshold, thresholdLabel: known ? `${valueText(threshold)}%` : '—',
+      min: known ? Math.min(50, threshold) : 50, max: 99, pool: '', offRuns: [],
       setting: known ? `${valueText(threshold)}% used · checks every ${auto.pollIntervalSeconds}s` : 'Setting unavailable',
       message: text(auto?.message) || 'Automatic switching status unavailable.', example: false,
     },
@@ -313,6 +364,10 @@ function antigravitySection(accounts, data, inventory, autoStatus, now) {
     const nativeRow = bound.get(account.id);
     const active = nativeRow?.selected === true;
     const notchFor = w => status?.enabled === true && status.requestedPoolId && w.poolId === status.requestedPoolId ? status.thresholdUsedPercent : null;
+    // The switch point reads the windows of the pool the policy watches.
+    const poolUse = status?.requestedPoolId ? visibleMeters(account).filter(w => w.poolId === status.requestedPoolId && usedPercent(w) !== null).map(usedPercent) : [];
+    const peak = poolUse.length ? Math.max(...poolUse) : null;
+    const above = !!status && !active && peak !== null && peak >= status.thresholdUsedPercent;
     const cells = keys.map(({ key }) => {
       const w = visibleMeters(account).find(row => row.key === key);
       const cell = meterView(account, w, { now, notch: w ? notchFor(w) : null, notchFaint: !active });
@@ -327,18 +382,26 @@ function antigravitySection(accounts, data, inventory, autoStatus, now) {
       active, activeLabel: active ? (nativeRow.runtimeVerified ? 'on Ubuntu' : 'on Ubuntu, running unverified') : '',
       setup: false, canActivate: nativeRow?.canActivate === true, activateKind: 'antigravity-activate',
       activateHint: nativeRow?.canActivate ? `Activate ${text(account.email)} on Ubuntu; running programs are listed for review first` : 'Ubuntu activation needs a verified login and runtime',
-      canMac: false, canWindows: false, amountsLine: '', cells,
+      canMac: false, canWindows: false, amountsLine: '', amountsRuns: [],
+      confirm: above, confirmRuns: above ? confirmRuns(peak, status.thresholdUsedPercent, status.enabled === true) : [], cells,
     };
   });
   const activeRow = rows.find(row => row.active);
+  const policyShown = rows.filter(row => !row.setup).length > 1;
+  const pool = native.antigravityPoolLabel && native.antigravityPoolLabel !== 'Choose quota pool' ? native.antigravityPoolLabel : '';
   return {
-    id: 'antigravity', kind: 'switchable', label: 'Antigravity', longLabel: 'Google Antigravity CLI', switchable: true,
+    id: 'antigravity', kind: 'switchable', label: 'Antigravity', longLabel: 'Google Antigravity CLI', switchable: true, canSwitch: policyShown,
     meta: `Google Antigravity CLI · ${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}`,
+    metaRuns: [run('Google Antigravity CLI · '), run(rows.length, true), run(` ${rows.length === 1 ? 'account' : 'accounts'}`)],
+    foot: noFoot(),
     activeId: activeRow?.id || '', activeLabel: activeRow?.email || '', empty: 'No Antigravity accounts are reported yet.',
     auto: {
-      known: native.antigravityAutoKnown, enabled: native.antigravityAutoEnabled, available: native.antigravityAutoAvailable,
+      known: native.antigravityAutoKnown, shown: policyShown, enabled: native.antigravityAutoEnabled, available: native.antigravityAutoAvailable,
       canEnable: native.antigravityCanEnable, thresholdUsed: status ? status.thresholdUsedPercent : null,
       thresholdLabel: native.antigravityThresholdLabel,
+      min: status ? Math.min(50, status.thresholdUsedPercent) : 50, max: 99, pool,
+      // Switching moves between Antigravity accounts, so the policy starts once a second account is signed in.
+      offRuns: policyShown ? [] : [run('Auto-switch '), run('off', true), run(' · needs a second account')],
       setting: native.antigravityAutoSetting,
       message: rows.length < 2 ? 'Automatic switching needs a second Antigravity account.' : native.antigravityAutoMessage,
       example: false,
@@ -354,15 +417,33 @@ function providerCards(accounts, hidden, now) {
     .sort((a, b) => order.get(a.provider) - order.get(b.provider) || text(a.id).localeCompare(text(b.id)))
     .map(account => {
       const provider = PROVIDER_REGISTRY.find(row => row.id === account.provider);
-      const meters = visibleMeters(account).filter(w => usedPercent(w) !== null).slice(0, 3).map(w => meterView(account, w, { now }));
+      const label = provider?.label || text(account.providerLabel);
+      // Up to three meters; a window with no reading is drawn as unavailable, never as zero. The rest stay in Details.
+      const windows = visibleMeters(account).slice(0, 3);
+      const meters = windows.map(w => meterView(account, w, { now }));
+      const planExpiry = visibleMeters(account).find(w => w.planExpiry && validDate(w.expiresAt));
+      // Packs that all expire together say so once instead of on every line.
+      const amountWindows = visibleAmounts(account);
+      const packs = amountWindows.filter(w => /pack/i.test(text(w.label)) && validDate(w.expiresAt));
+      const sameExpiry = packs.length > 1 && packs.every(w => w.expiresAt === packs[0].expiresAt);
+      const sampledAt = account.sampledAt || account.fetchedAt;
+      const normal = account.status === 'ok' || account.status === 'cached';
+      const stale = validDate(sampledAt) && now - Date.parse(sampledAt) > STALE_MS;
+      // The plan without the provider's own name ("Muse Code High Usage" reads "High Usage").
+      const plan = planLabel(text(account.plan).replace(new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'), ''));
       return {
-        id: account.id, provider: account.provider, accountId: account.id, label: provider?.label || text(account.providerLabel),
-        identity: text(account.email) || text(account.label) || 'Identity unavailable', plan: text(account.plan),
+        id: account.id, provider: account.provider, accountId: account.id, label,
+        identity: text(account.email) || text(account.label) || 'Identity unavailable', plan,
         status: statusWord(account),
-        source: [account.status === 'cached' ? `Cached · sampled ${relative(account.sampledAt || account.fetchedAt, now)}` : statusWord(account), text(account.source)].filter(Boolean).join(' · '),
+        source: [account.status === 'cached' ? `Cached · sampled ${relative(sampledAt, now)}` : statusWord(account), text(account.source)].filter(Boolean).join(' · '),
+        flag: !normal ? statusWord(account) : stale ? 'Stale' : '',
+        sampled: validDate(sampledAt) ? `sampled ${relative(sampledAt, now)}` : 'never sampled',
+        platform: platformLabel(account.platform),
+        planNote: planExpiry ? exact(planExpiry.expiresAt, 'Plan subscription ends ') : '',
+        packsNote: sameExpiry ? exact(packs[0].expiresAt, `All ${packs.length} packs expire `) : '',
         note: text(account.message) || (meters.length ? '' : 'Usage unavailable'),
         meters,
-        amounts: visibleAmounts(account).map(w => amountView(account, w, now)),
+        amounts: amountWindows.map(w => amountView(account, w, now, { noExpiry: sameExpiry && packs.includes(w) })),
       };
     });
 }
@@ -437,6 +518,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     id: account.id, provider: account.provider,
     title: text(account.email) || text(account.label) || 'Account identity unavailable',
     sub: [provider?.label || text(account.providerLabel), planLabel(text(account.plan)), state].filter(Boolean).join(' · '),
+    subLead: [provider?.label || text(account.providerLabel), planLabel(text(account.plan))].filter(Boolean).join(' · '),
     state, active: !!row?.active, switchable, canActivate: !!row?.canActivate, activateKind: row?.activateKind || '',
     profile: row?.profile || profile, canMac: !!row?.canMac, canWindows: !!row?.canWindows,
     note: missingFable ? 'Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.' : '',

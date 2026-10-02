@@ -31,6 +31,7 @@ struct Models {
     section_rows: Nested<AccountRowView>,
     section_columns: Nested<ColumnView>,
     row_cells: Nested<MeterView>,
+    runs: Nested<RunView>,
     cards: Rc<VecModel<ProviderCardView>>,
     card_meters: Nested<MeterView>,
     card_amounts: Nested<AmountView>,
@@ -51,6 +52,7 @@ impl Models {
             section_rows: Nested::default(),
             section_columns: Nested::default(),
             row_cells: Nested::default(),
+            runs: Nested::default(),
             cards: Rc::new(VecModel::default()),
             card_meters: Nested::default(),
             card_amounts: Nested::default(),
@@ -160,6 +162,23 @@ impl From<AmountDto> for AmountView {
 
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+struct RunDto {
+    text: String,
+    strong: bool,
+    tone: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct FootDto {
+    shown: bool,
+    warn: bool,
+    runs: Vec<RunDto>,
+    when: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 struct ColumnDto {
     key: String,
     label: String,
@@ -186,6 +205,9 @@ struct RowDto {
     can_mac: bool,
     can_windows: bool,
     amounts_line: String,
+    amounts_runs: Vec<RunDto>,
+    confirm: bool,
+    confirm_runs: Vec<RunDto>,
     cells: Vec<MeterDto>,
 }
 
@@ -193,27 +215,37 @@ struct RowDto {
 #[serde(default, rename_all = "camelCase")]
 struct AutoDto {
     known: bool,
+    shown: bool,
     enabled: bool,
     available: bool,
     can_enable: bool,
     threshold_used: Option<i32>,
     threshold_label: String,
+    min: Option<i32>,
+    max: Option<i32>,
+    pool: String,
+    off_runs: Vec<RunDto>,
     setting: String,
     message: String,
     example: bool,
 }
-impl From<AutoDto> for AutoSwitchView {
-    fn from(v: AutoDto) -> Self {
-        Self {
-            known: v.known,
-            enabled: v.enabled,
-            available: v.available,
-            can_enable: v.can_enable,
-            threshold_used: v.threshold_used.unwrap_or(-1),
-            threshold_label: v.threshold_label.into(),
-            setting: v.setting.into(),
-            message: v.message.into(),
-            example: v.example,
+impl AutoDto {
+    fn into_view(self, off_runs: ModelRc<RunView>) -> AutoSwitchView {
+        AutoSwitchView {
+            known: self.known,
+            shown: self.shown,
+            enabled: self.enabled,
+            available: self.available,
+            can_enable: self.can_enable,
+            threshold_used: self.threshold_used.unwrap_or(-1),
+            threshold_label: self.threshold_label.into(),
+            min: self.min.unwrap_or(50),
+            max: self.max.unwrap_or(99),
+            pool: self.pool.into(),
+            off_runs,
+            setting: self.setting.into(),
+            message: self.message.into(),
+            example: self.example,
         }
     }
 }
@@ -226,11 +258,14 @@ struct SectionDto {
     label: String,
     long_label: String,
     meta: String,
+    meta_runs: Vec<RunDto>,
     switchable: bool,
+    can_switch: bool,
     active_id: String,
     active_label: String,
     empty: String,
     auto: AutoDto,
+    foot: FootDto,
     columns: Vec<ColumnDto>,
     rows: Vec<RowDto>,
 }
@@ -246,6 +281,11 @@ struct CardDto {
     plan: String,
     status: String,
     source: String,
+    flag: String,
+    sampled: String,
+    platform: String,
+    plan_note: String,
+    packs_note: String,
     note: String,
     meters: Vec<MeterDto>,
     amounts: Vec<AmountDto>,
@@ -328,6 +368,7 @@ struct DetailsDto {
     provider: String,
     title: String,
     sub: String,
+    sub_lead: String,
     state: String,
     active: bool,
     switchable: bool,
@@ -389,9 +430,31 @@ fn meter_key(m: &MeterView) -> SharedString {
     m.key.clone()
 }
 
+/// A persistent nested model of text runs, so an unchanged line keeps its elements.
+fn sync_runs(
+    m: &mut Models,
+    owner: &str,
+    runs: Vec<RunDto>,
+    live: &mut Vec<String>,
+) -> ModelRc<RunView> {
+    live.push(owner.to_string());
+    m.runs.sync(
+        owner,
+        runs.into_iter()
+            .map(|r| RunView {
+                text: r.text.into(),
+                strong: r.strong,
+                tone: r.tone.into(),
+            })
+            .collect(),
+        |r: &RunView| r.text.clone(),
+    )
+}
+
 fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
     let mut live_sections = Vec::new();
     let mut live_rows = Vec::new();
+    let mut live_runs = Vec::new();
     let mut sections = Vec::with_capacity(v.sections.len());
     for section in v.sections {
         live_sections.push(section.id.clone());
@@ -403,6 +466,18 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 &owner,
                 row.cells.into_iter().map(MeterView::from).collect(),
                 meter_key,
+            );
+            let amounts_runs = sync_runs(
+                m,
+                &format!("amounts|{owner}"),
+                row.amounts_runs,
+                &mut live_runs,
+            );
+            let confirm_runs = sync_runs(
+                m,
+                &format!("confirm|{owner}"),
+                row.confirm_runs,
+                &mut live_runs,
             );
             rows.push(AccountRowView {
                 id: row.id.into(),
@@ -423,6 +498,9 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 can_mac: row.can_mac,
                 can_windows: row.can_windows,
                 amounts_line: row.amounts_line.into(),
+                amounts_runs,
+                confirm: row.confirm,
+                confirm_runs,
                 cells,
             });
         }
@@ -442,18 +520,45 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 .collect(),
             |c: &ColumnView| c.key.clone(),
         );
+        let meta_runs = sync_runs(
+            m,
+            &format!("meta|{}", section.id),
+            section.meta_runs,
+            &mut live_runs,
+        );
+        let foot_runs = sync_runs(
+            m,
+            &format!("foot|{}", section.id),
+            section.foot.runs,
+            &mut live_runs,
+        );
+        let mut auto = section.auto;
+        let off_runs = sync_runs(
+            m,
+            &format!("off|{}", section.id),
+            std::mem::take(&mut auto.off_runs),
+            &mut live_runs,
+        );
         sections.push(SectionView {
             id: section.id.into(),
             kind: section.kind.into(),
             label: section.label.into(),
             long_label: section.long_label.into(),
             meta: section.meta.into(),
+            meta_runs,
             count,
             switchable: section.switchable,
+            can_switch: section.can_switch,
             active_id: section.active_id.into(),
             active_label: section.active_label.into(),
             empty: section.empty.into(),
-            auto: section.auto.into(),
+            auto: auto.into_view(off_runs),
+            foot: FootView {
+                shown: section.foot.shown,
+                warn: section.foot.warn,
+                runs: foot_runs,
+                when: section.foot.when.into(),
+            },
             columns,
             rows,
         });
@@ -462,6 +567,7 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
     m.section_rows.retain(&live_sections);
     m.section_columns.retain(&live_sections);
     m.row_cells.retain(&live_rows);
+    m.runs.retain(&live_runs);
 
     let mut live_cards = Vec::new();
     let mut cards = Vec::with_capacity(v.cards.len());
@@ -486,6 +592,11 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
             plan: card.plan.into(),
             status: card.status.into(),
             source: card.source.into(),
+            flag: card.flag.into(),
+            sampled: card.sampled.into(),
+            platform: card.platform.into(),
+            plan_note: card.plan_note.into(),
+            packs_note: card.packs_note.into(),
             note: card.note.into(),
             meters,
             amounts,
@@ -690,6 +801,7 @@ pub fn show_details(json: &str) -> Result<(), JsValue> {
                     provider: v.provider.into(),
                     title: v.title.into(),
                     sub: v.sub.into(),
+                    sub_lead: v.sub_lead.into(),
                     state: v.state.into(),
                     active: v.active,
                     switchable: v.switchable,

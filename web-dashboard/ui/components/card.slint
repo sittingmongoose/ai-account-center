@@ -22,11 +22,13 @@ export component Card inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> flash: false;
     in property <length> pad: 18px;
+    in property <length> pad-top: root.pad;
+    in property <length> pad-bottom: root.pad;
     out property <bool> hovered: ta.has-hover;
     callback clicked();
 
-    min-height: body.min-height + 2 * root.pad;
-    preferred-height: body.preferred-height + 2 * root.pad;
+    min-height: body.min-height + root.pad-top + root.pad-bottom;
+    preferred-height: body.preferred-height + root.pad-top + root.pad-bottom;
     min-width: body.min-width + 2 * root.pad;
 
     surface := Rectangle {
@@ -39,7 +41,8 @@ export component Card inherits Rectangle {
         border-width: 1px;
         border-color: root.selected ? Theme.sel-line : root.hovered && root.clickable ? Theme.rule-strong : Theme.rule;
         background: root.flash ? Theme.flash : root.selected ? Theme.sel-fill : Theme.paper;
-        animate background { duration: Motion.tint(600ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        // a flash lands at once and fades back over 620 ms
+        animate background { duration: Motion.tint(root.flash ? 0ms : 620ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate border-color { duration: Motion.tint(Motion.fast); }
         drop-shadow-color: root.hovered && root.clickable ? Theme.shadow-2 : Theme.shadow-1;
         drop-shadow-blur: root.hovered && root.clickable ? 28px : 3px;
@@ -51,7 +54,10 @@ export component Card inherits Rectangle {
             mouse-cursor: root.clickable ? pointer : default;
             clicked => { root.clicked(); }
             body := VerticalLayout {
-                padding: root.pad;
+                padding-left: root.pad;
+                padding-right: root.pad;
+                padding-top: root.pad-top;
+                padding-bottom: root.pad-bottom;
                 spacing: 0px;
                 @children
             }

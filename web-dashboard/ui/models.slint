@@ -38,6 +38,14 @@ export struct AmountView {
     spent: bool,
 }
 
+// A run of text in a line that mixes weights ("**4** accounts · desktop profiles").
+// tone: "" (inherit), "good" (the active account's name), "warn".
+export struct RunView {
+    text: string,
+    strong: bool,
+    tone: string,
+}
+
 export struct ColumnView {
     key: string,
     label: string,
@@ -62,19 +70,37 @@ export struct AccountRowView {
     can-mac: bool,
     can-windows: bool,
     amounts-line: string,
+    amounts-runs: [RunView],
+    // Activating this account asks first: it is already past the section's switch point.
+    confirm: bool,
+    confirm-runs: [RunView],
     cells: [MeterView],
 }
 
 export struct AutoSwitchView {
     known: bool,
+    // false: the section header shows `off-runs` ("Auto-switch off · needs a second account") instead of the control.
+    shown: bool,
     enabled: bool,
     available: bool,
     can-enable: bool,
     threshold-used: int,
     threshold-label: string,
+    min: int,
+    max: int,
+    pool: string,
+    off-runs: [RunView],
     setting: string,
     message: string,
     example: bool,
+}
+
+// A section footer line (Codex: what auto-switch is doing about the active account).
+export struct FootView {
+    shown: bool,
+    warn: bool,
+    runs: [RunView],
+    when: string,
 }
 
 // A provider section on Home: Claude (desktop profiles) or a switchable provider (Codex, Antigravity).
@@ -84,12 +110,16 @@ export struct SectionView {
     label: string,
     long-label: string,
     meta: string,
+    meta-runs: [RunView],
     count: int,
     switchable: bool,
+    // More than one account it could switch between: rows show Activate.
+    can-switch: bool,
     active-id: string,
     active-label: string,
     empty: string,
     auto: AutoSwitchView,
+    foot: FootView,
     columns: [ColumnView],
     rows: [AccountRowView],
 }
@@ -104,6 +134,12 @@ export struct ProviderCardView {
     plan: string,
     status: string,
     source: string,
+    // Footer: a warning word ("Stale", "Sign-in needed"), "sampled 39s ago" and the platform.
+    flag: string,
+    sampled: string,
+    platform: string,
+    plan-note: string,
+    packs-note: string,
     note: string,
     meters: [MeterView],
     amounts: [AmountView],
@@ -159,6 +195,7 @@ export struct DetailsView {
     provider: string,
     title: string,
     sub: string,
+    sub-lead: string,
     state: string,
     active: bool,
     switchable: bool,

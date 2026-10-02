@@ -118,7 +118,10 @@ test('meters keep raw overage and at most two decimals; packs, balances and spen
   const card = dashboardViewModel(data([qwen]), { now }).cards[0];
   assert.deepEqual(card.meters.map(m => m.label), ['Monthly']);
   assert.equal(card.amounts.length, 1); assert.equal(card.amounts[0].label, 'Credit pack 1'); assert.equal(card.amounts[0].value, '0'); assert.equal(card.amounts[0].spent, true);
-  assert.equal(JSON.stringify(card).includes('Plan subscription'), false);
+  // The subscription is never a row of its own: its end date is the card's one-line note (the concept's
+  // "Plan subscription ends ..."), taken from the expiry the monthly window carries.
+  assert.equal([...card.meters, ...card.amounts].some(row => /subscription/i.test(row.label)), false);
+  assert.match(card.planNote, /^Plan subscription ends /);
   assert.equal(amountView(account(), { key: 'credits_balance', label: 'Extra usage credits', kind: 'balance', remaining: 62500, unit: 'credits' }).value, '62,500 credits');
   assert.equal(amountView(account(), { key: 'extra_usage', label: 'Extra usage', kind: 'extra_usage', enabled: false, limit: 50, unit: 'USD' }).value, 'Off');
   const zai = account({ id: 'zai:a', provider: 'zai', windows: [window({ key: 'usage-2', label: 'Weekly · Tokens' }), { key: 'reset-packs-5h', label: 'Available 5-hour reset packs', kind: 'balance', unit: 'packs', remaining: 0 }] });
@@ -157,4 +160,64 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
   assert.deepEqual(updateViewModel({ state: 'running', activePlatform: 'mac', results: [{ status: 'updated' }, { status: 'current' }] }), { running: true, done: false, count: 2, total: 21, tip: 'Updating apps on Mac · running apps may restart', summary: '2 results' });
   assert.equal(updateViewModel({ state: 'completed', results: [{ status: 'failed' }] }, { done: true }).done, true);
   assert.equal(updateViewModel(null).count, 0);
+});
+
+test('Home headers, footer and the inline confirmation read the data truthfully (W2)', () => {
+  const runs = list => list.map(r => (r.strong ? `*${r.text}*` : r.text)).join('');
+  const a = account({ id: 'codex:a', email: 'a@example.test', isActive: true, windows: [window({ usedPercent: 9 })], capabilities: { codexProfile: 'a' } });
+  const b = account({ id: 'codex:b', email: 'b@example.test', windows: [window({ usedPercent: 99 }), { key: 'credits_balance', label: 'Extra usage credits', kind: 'balance', unit: 'credits', remaining: 62500 }, { key: 'banked_resets_0', label: 'Banked resets', kind: 'balance', unit: 'resets', remaining: 1 }], capabilities: { codexProfile: 'b' } });
+  const c = account({ id: 'codex:c', email: 'c@example.test', windows: [window({ usedPercent: 16 })], capabilities: { codexProfile: 'c' } });
+  const vm = dashboardViewModel(data([a, b, c, claude('m', 'max', [window()])], { codexAutoSwitch: { enabled: true, thresholdPercent: 5, pollIntervalSeconds: 60, outcome: 'healthy', message: 'The active Codex account has enough remaining quota.', activationInProgress: false, lastCheckedAt: at(-1) } }), { now });
+  const codex = section(vm, 'codex');
+  assert.equal(runs(codex.metaRuns), '*3* accounts · *a* active');
+  assert.equal(codex.metaRuns.find(r => r.text === 'a').tone, 'good');
+  assert.equal(runs(section(vm, 'claude').metaRuns), '*1* account · desktop profiles');
+  assert.equal(codex.canSwitch, true);
+  assert.equal(codex.auto.shown, true); assert.equal(codex.auto.min, 50); assert.equal(codex.auto.max, 99);
+  // the footer keeps the backend's own words while the active account is below the switch point
+  assert.deepEqual(codex.foot, { shown: true, warn: false, runs: [{ text: 'The active Codex account has enough remaining quota.', strong: false, tone: '' }], when: 'Checked 1m ago · every 1 min' });
+  // activating an account past the switch point asks first, with its real figure; below it, it does not
+  assert.equal(codex.rows[1].confirm, true); assert.equal(codex.rows[2].confirm, false); assert.equal(codex.rows[0].confirm, false);
+  assert.equal(runs(codex.rows[1].confirmRuns), '*99% used*, above the 95% switch point. Auto-switch would move off it again on its next check. Activate anyway?');
+  assert.equal(runs(codex.rows[1].amountsRuns), '*62.5K* credits · *1* banked');
+  assert.equal(codex.rows[1].amountsLine, '62.5K credits · 1 banked');
+  // the active account past the point: the footer warns and names the account auto-switch moves to
+  const hot = data([account({ ...a, windows: [window({ usedPercent: 97 })] }), b, c]);
+  let foot = section(dashboardViewModel(hot, { now }), 'codex').foot;
+  assert.equal(foot.warn, true); assert.equal(runs(foot.runs), '*a* is above the 95% switch point; auto-switch moves to *c* on the next check');
+  hot.codexAutoSwitch = { ...hot.codexAutoSwitch, enabled: false };
+  foot = section(dashboardViewModel(hot, { now }), 'codex').foot;
+  assert.equal(runs(foot.runs), '*a* is above 95% used; auto-switch is off, so it stays active until you switch');
+  // unknown auto-switch status: no confirm is invented and the footer says so
+  const unknown = section(dashboardViewModel(data([a, b], { codexAutoSwitch: null }), { now }), 'codex');
+  assert.equal(unknown.rows[1].confirm, false); assert.equal(unknown.auto.known, false);
+  assert.equal(runs(unknown.foot.runs), 'Automatic switching status unavailable'); assert.equal(unknown.foot.when, '');
+  // one account: nothing to switch between
+  assert.equal(section(dashboardViewModel(data([a]), { now }), 'codex').canSwitch, false);
+  // one Antigravity account: the policy waits for a second one and says so instead of drawing a control
+  const ag = section(dashboardViewModel(data([account({ id: 'antigravity:a', provider: 'antigravity', email: 'ag@example.test', windows: [window({ key: 'gemini-weekly', label: 'Gemini Models · Weekly' })], capabilities: {} })]), { now }), 'antigravity');
+  assert.equal(ag.canSwitch, false); assert.equal(ag.auto.shown, false);
+  assert.equal(runs(ag.auto.offRuns), 'Auto-switch *off* · needs a second account');
+  assert.equal(runs(ag.metaRuns), 'Google Antigravity CLI · *1* account');
+});
+
+test('provider cards carry the concept footer, plan note and shared pack expiry without inventing readings (W2)', () => {
+  const qwen = account({ id: 'qwen:a', provider: 'qwen', email: 'q@example.test', plan: 'pro', platform: 'windows', status: 'cached', sampledAt: at(-2), windows: [
+    window({ key: 'monthly', label: 'Monthly', usedPercent: 25.061, windowMinutes: null, used: 45109.83, limit: 180000, unit: 'credits' }),
+    window({ key: 'subscription', label: 'Plan subscription', usedPercent: null, remainingPercent: null, expiresAt: at(60 * 24 * 19) }),
+    window({ key: 'addon-pack-1', label: 'Additional credit pack 1', kind: 'balance', usedPercent: null, remaining: 20000, limit: 20000, unit: 'credits', expiresAt: at(60 * 24 * 7) }),
+    window({ key: 'addon-pack-2', label: 'Additional credit pack 2', kind: 'balance', usedPercent: null, remaining: 0, limit: 20000, unit: 'credits', expiresAt: at(60 * 24 * 7) }),
+  ] });
+  const muse = account({ id: 'muse:a', provider: 'muse', email: 'm@example.test', plan: 'Muse Code High Usage', platform: 'mac', status: 'cached', sampledAt: at(-120), windows: [window({ key: 'weekly', label: 'Weekly', usedPercent: null, remainingPercent: null })] });
+  const kimi = account({ id: 'kimi-code:a', provider: 'kimi-code', email: 'k@example.test', plan: null, status: 'needs_sign_in', windows: [window({ key: 'weekly', label: 'Weekly' })] });
+  const [k, m, q] = ['kimi-code', 'muse', 'qwen'].map(p => dashboardViewModel(data([qwen, muse, kimi]), { now }).cards.find(card => card.provider === p));
+  assert.equal(q.plan, 'Pro'); assert.equal(q.flag, ''); assert.equal(q.sampled, 'sampled 2m ago'); assert.equal(q.platform, 'Windows');
+  assert.match(q.planNote, /^Plan subscription ends /);
+  assert.match(q.packsNote, /^All 2 packs expire /);
+  assert.equal(q.amounts.every(row => !/Expires/.test(row.sub)), true, 'the shared expiry is said once');
+  assert.equal(q.meters[0].amount, '45.11K of 180,000 credits');
+  // the provider's own name is not repeated as the plan; an old sample is flagged, an unread window stays unavailable
+  assert.equal(m.plan, 'High Usage'); assert.equal(m.flag, 'Stale');
+  assert.equal(m.meters.length, 1); assert.equal(m.meters[0].hasValue, false); assert.equal(m.meters[0].naText, 'Unavailable');
+  assert.equal(k.plan, ''); assert.equal(k.flag, 'Sign-in needed');
 });
