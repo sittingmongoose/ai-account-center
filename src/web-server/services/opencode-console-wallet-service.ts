@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
+import { ConfigError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
@@ -148,14 +149,42 @@ function normalize(contents: string): DashboardAccount | null {
   };
 }
 
+export function opencodeWalletSourceFile(ccsDir: string): string {
+  return path.join(ccsDir, 'opencode-console-wallet-source.json');
+}
+
 async function readSourceFile(ccsDir: string): Promise<string | null> {
   try {
-    const file = path.join(ccsDir, 'opencode-console-wallet-source.json');
+    const file = opencodeWalletSourceFile(ccsDir);
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) return null;
     return await fs.readFile(file, 'utf8');
   } catch {
     return null;
+  }
+}
+
+/**
+ * The stored wallet source for Remove's fingerprint: the opt-in source file
+ * contents, or null when absent or unreadable. Never throws.
+ */
+export async function readOpencodeWalletSource(ccsDir: string): Promise<string | null> {
+  return readSourceFile(ccsDir);
+}
+
+/**
+ * Delete the stored wallet source (the opt-in file only; the browser
+ * extension's session is never touched). Returns true when a file was
+ * removed, false when none existed. Throws on any other failure.
+ */
+export async function deleteOpencodeWalletSource(ccsDir: string): Promise<boolean> {
+  const file = opencodeWalletSourceFile(ccsDir);
+  try {
+    await fs.unlink(file);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw new ConfigError('The console wallet source could not be removed safely.');
   }
 }
 

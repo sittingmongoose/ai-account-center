@@ -808,12 +808,61 @@ describe('remove with a confirmation token', () => {
     expect([spare.status, spare.body.code]).toEqual([409, 'account_default']);
   });
 
-  it('keeps wallets out of Remove and answers 404 for an Antigravity profile not saved', async () => {
+  it('answers 404 for an Antigravity profile not saved', async () => {
     const f = await fixture();
-    const wallet = await f.request('POST', '/plan-opencode-go-console-mac-0123456789ab/remove', {});
-    expect([wallet.status, wallet.body.code]).toEqual([409, 'not_implemented']);
     const missing = await f.request('POST', '/antigravity:profile:party/remove', {});
     expect([missing.status, missing.body.code]).toEqual([404, 'unknown_account']);
+  });
+
+  it('removes a console wallet by deleting its stored source, never the browser session', async () => {
+    const f = await fixture();
+    const id = 'plan-opencode-go-console-mac-0123456789ab';
+    const sourceFile = path.join(ccsDir, 'opencode-console-wallet-source.json');
+    fs.writeFileSync(
+      sourceFile,
+      JSON.stringify({ version: 1, platform: 'mac', sshHost: 'fixture-mac' })
+    );
+    const ask = await f.request('POST', `/${id}/remove`, {});
+    expect(ask.status).toBe(200);
+    const confirmation = ask.body.confirmation as { token: string; effects: string[] };
+    expect(confirmation.effects).toEqual([
+      'The console wallet is no longer read by the dashboard.',
+      'Its sign-in in the browser is not changed.',
+    ]);
+    const commit = await f.request('POST', `/${id}/remove`, {
+      confirmationToken: confirmation.token,
+    });
+    expect(commit.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+    expect(fs.existsSync(sourceFile)).toBe(false);
+    // A second commit with the same token is stale.
+    const again = await f.request('POST', `/${id}/remove`, {
+      confirmationToken: confirmation.token,
+    });
+    expect([again.status, again.body.code]).toEqual([409, 'confirmation_stale']);
+    expect(f.audits.find(([event]) => event === 'accounts.remove')?.[1]).toMatchObject({
+      provider: 'opencode-go',
+      kind: 'browser-session',
+      trashed: false,
+    });
+  });
+
+  it('wallet Remove is stale when its stored source changes between prepare and commit', async () => {
+    const f = await fixture();
+    const id = 'plan-opencode-go-console-mac-0123456789ab';
+    const sourceFile = path.join(ccsDir, 'opencode-console-wallet-source.json');
+    fs.writeFileSync(
+      sourceFile,
+      JSON.stringify({ version: 1, platform: 'mac', sshHost: 'fixture-mac' })
+    );
+    const ask = await f.request('POST', `/${id}/remove`, {});
+    const token = (ask.body.confirmation as { token: string }).token;
+    fs.writeFileSync(
+      sourceFile,
+      JSON.stringify({ version: 1, platform: 'mac', sshHost: 'other-mac' })
+    );
+    const commit = await f.request('POST', `/${id}/remove`, { confirmationToken: token });
+    expect([commit.status, commit.body.code]).toEqual([409, 'confirmation_stale']);
+    expect(fs.existsSync(sourceFile)).toBe(true);
   });
 });
 
@@ -1155,7 +1204,7 @@ describe('registry, re-check, open, label and trash', () => {
     expect(byId('cursor:usage')).toMatchObject({ actions: { open: ['mac'], signInAgain: true } });
     expect(byId('claude:party')).toMatchObject({ actions: { remove: false, open: ['mac'] } });
     expect(byId('plan-opencode-go-console-mac-0123456789ab')).toMatchObject({
-      actions: { signInAgain: true, remove: false },
+      actions: { signInAgain: true, remove: true },
     });
     expect(secure.body.trash).toEqual([]);
     expect((secure.body.jobs as unknown[]).length).toBe(1);
