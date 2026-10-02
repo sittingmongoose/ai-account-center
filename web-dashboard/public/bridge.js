@@ -10,6 +10,7 @@ import { usageView, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGE
 import { quotaView, agendaView, QUOTA_PROVIDERS } from './analytics-quota.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
+import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -57,13 +58,8 @@ function withLocalHidden(next) {
   const hidden = new Set([...hiddenProviders(next), ...localHidden]);
   return { ...next, settings: { ...(next.settings || {}), hiddenProviders: [...hidden] } };
 }
-const PAGES = ['home', 'analytics', 'accounts'];
-/** URL state: ?view=home|analytics|accounts. The legacy /analytics path and ?view=analytics still work. */
-function pageFromLocation() {
-  const view = new URLSearchParams(location.search).get('view');
-  if (location.pathname === '/analytics' || view === 'analytics') return 'analytics';
-  return PAGES.includes(view) ? view : 'home';
-}
+/** URL state: the page routes /, /analytics and /accounts (page-route.mjs); ?view= still works as an alias. */
+function pageFromLocation() { return pageFromUrl(location.pathname, location.search); }
 let currentPage = pageFromLocation();
 const analyticsSelection = { range: '7d', provider: 'all', account: 'all', metricKey: '', activityInterval: 'Daily' };
 // The Analytics page state (version 3). Every number and label is computed in analytics-*.mjs from the response.
@@ -423,7 +419,7 @@ function navigate(page, { replace = false } = {}) {
   if (!PAGES.includes(page)) page = 'home';
   currentPage = page;
   set_current_page(page);
-  const url = page === 'home' ? location.pathname === '/analytics' ? '/' : location.pathname : `${location.pathname === '/analytics' ? '/' : location.pathname}?view=${page}`;
+  const url = pagePath(page);
   try { globalThis.history?.[replace ? 'replaceState' : 'pushState']?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) void refreshAnalytics();
   if (page === 'accounts' && authenticated) renderAccounts();

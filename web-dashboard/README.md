@@ -8,7 +8,8 @@ The production account dashboard is a real Slint UI compiled from
 (light, dark and auto themes, embedded Instrument Sans and Martian Mono, Lucide
 icons, official provider marks and the Apex Soft logo). `public/bridge.js`
 supplies browser session authentication, same-origin API requests, URL state
-(`?view=home|analytics|accounts`) and asynchronous updates; it does not render
+(the page routes `/`, `/analytics` and `/accounts`, with `?view=` as an alias)
+and asynchronous updates; it does not render
 the dashboard. `public/view-model.mjs` turns the API responses into the version 2
 view model that `src/lib.rs` writes into persistent Slint models in place, so
 changed readings animate. [ui/README-ARCHITECTURE.md](ui/README-ARCHITECTURE.md)

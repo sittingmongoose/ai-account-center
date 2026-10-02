@@ -207,8 +207,9 @@ The real login screen. bridge.js builds `AuthView` with the words from public/au
 
 ### URL state
 
-`?view=home|analytics|accounts` (the legacy `/analytics` path and `?view=analytics` still open Analytics);
-bridge.js pushes the state on navigation and follows `popstate`.
+The page routes `/`, `/analytics` and `/accounts` (also `/accounts/<provider>`; the server sends `/settings` to
+`/accounts`), read and written by public/page-route.mjs. `?view=home|analytics|accounts` still works as an alias.
+bridge.js pushes the path on navigation and follows `popstate`.
 
 ## Theme
 
