@@ -25,7 +25,7 @@ public sealed class CheckReport
     public bool ReadOnly { get; set; } = true;
 }
 
-public static class Checks
+public static partial class Checks
 {
     public static async Task<CheckReport> Run()
     {
@@ -94,7 +94,7 @@ public static class Checks
         report.Checks["cached_window_missing_sample_time_stays_unknown"] = Formatting.WindowSample(new QuotaWindow { Status = "cached" }.SampledAt) == "Sample time unavailable" && Formatting.WindowSample("invalid") == "Sample time unavailable";
         report.Checks["profile_path_and_uri_injection_rejected"] = !Formatting.IsSafeProfile("../gmail") && !Formatting.IsSafeProfile("gmail?x=1") && !Formatting.IsSafeClaudeProfile("gmail/../../") && !Formatting.IsSafeClaudeProfile("me?x=1") && !Formatting.IsSafeClaudeProfile("") && !Formatting.IsSafeClaudeProfile(null) && !Formatting.IsSafeClaudeProfile("-leading") && !Formatting.IsSafeClaudeProfile(new string('a', 65));
         // No allowlist: any id the dashboard reports is launched when it is URI and path safe.
-        report.Checks["claude_launch_ids_follow_the_data"] = new[] { "platyr", "gmail", "party", "me", "claude-example-1", "work_2" }.All(Formatting.IsSafeClaudeProfile);
+        report.Checks["claude_launch_ids_follow_the_data"] = new[] { "fixture-a", "fixture-b", "me", "claude-example-1", "work_2" }.All(Formatting.IsSafeClaudeProfile);
         NewBehaviourChecks(report);
         report.Checks["connection_with_path_rejected"] = RejectConnection("http://127.0.0.1:3000/account");
         report.Checks["cleartext_remote_connection_rejected"] = RejectConnection("http://example.com");
@@ -104,6 +104,8 @@ public static class Checks
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
         ResetPendingChecks(report);
         await SignInChangeChecks(report);
+        await ClaudeOpenChecks(report);
+        await PairingChecks(report);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
@@ -223,7 +225,7 @@ public static class Checks
                 }
                 else
                 {
-                    valid &= request.HttpMethod == "POST" && path is "/api/codex/profiles/gmail/activate" or "/api/claude/desktop-profiles/platyr/open";
+                    valid &= request.HttpMethod == "POST" && path is "/api/codex/profiles/gmail/activate" or "/api/claude/desktop-profiles/fixture-a/open";
                     payload = new { success = true };
                 }
                 var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, Formatting.Json);
@@ -238,7 +240,7 @@ public static class Checks
             valid &= !(await client.SetAutoSwitch(false)).Enabled;
             var configured = await client.SetAutoSwitch(false, 10);
             valid &= !configured.Enabled && configured.ThresholdPercent == 10;
-            await client.Activate("gmail"); await client.OpenClaudeOnMac("platyr");
+            await client.Activate("gmail"); await client.OpenClaude("fixture-a", "mac");
             valid &= await CodexSwitchFlow.Run("party", async token => { await client.Activate("party", token); }, confirmation => Task.FromResult(confirmation.Processes[0].Label == "Fixture Codex desktop"));
             bool authRejected = false;
             try { await client.Activate("party", "fixture-session-changed"); }
@@ -266,10 +268,17 @@ public static class Checks
         report.Checks["max_plan_detection_for_fable"] = new[] { "max", "Max", "max_5x", "Max 20x", "claude_max" }.All(Formatting.IsMaxPlan) && !new[] { "pro", "maximum", "", null }.Any(Formatting.IsMaxPlan);
         var mixed = new[] { "zai", "newcode", "codex", "claude", "antigravity", "zai" }.Select(provider => new DashboardAccount { Provider = provider }).ToArray();
         report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
-        var hiddenTop = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"hiddenProviders\":[\"kimi-code\",\"../x\"]}", Formatting.Json)!;
-        var hiddenNested = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"qwen\"]}}", Formatting.Json)!;
+        // The trays honour only "Show in tray" (providers[].trayVisible, settings.trayHiddenProviders); "Show on
+        // dashboard" (providers[].visible, settings.hiddenProviders) never hides anything here.
+        var trayHidden = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"providers\":[{\"id\":\"kimi-code\",\"visible\":true,\"trayVisible\":false},{\"id\":\"qwen\",\"visible\":false,\"trayVisible\":true},{\"id\":\"zai\",\"visible\":false},{\"id\":\"../x\",\"trayVisible\":false}]}", Formatting.Json)!;
+        var trayHiddenNested = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"muse\"],\"trayHiddenProviders\":[\"qwen\"]}}", Formatting.Json)!;
+        var dashboardOnly = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"muse\"]},\"providers\":[{\"id\":\"muse\",\"visible\":false}]}", Formatting.Json)!;
         var hiddenNone = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{}}", Formatting.Json)!;
-        report.Checks["hidden_providers_honoured_when_present"] = hiddenTop.Hidden.SetEquals(new[] { "kimi-code" }) && hiddenNested.Hidden.SetEquals(new[] { "qwen" }) && hiddenNone.Hidden.Count == 0 && !hiddenNone.ReportsHidden && hiddenTop.ReportsHidden;
+        report.Checks["tray_visibility_follows_show_in_tray_only"] = trayHidden.Hidden.SetEquals(new[] { "kimi-code" }) && trayHiddenNested.Hidden.SetEquals(new[] { "qwen" })
+            && dashboardOnly.Hidden.Count == 0 && dashboardOnly.HiddenOnDashboard.SetEquals(new[] { "muse" }) && !dashboardOnly.ReportsTrayVisibility
+            && hiddenNone.Hidden.Count == 0 && !hiddenNone.ReportsTrayVisibility && trayHidden.ReportsTrayVisibility && trayHiddenNested.ReportsTrayVisibility;
+        var accountsHidden = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"codexAutoSwitch\":{},\"accounts\":[{\"id\":\"codex:a\",\"provider\":\"codex\",\"hidden\":true},{\"id\":\"codex:b\",\"provider\":\"codex\"},{\"id\":\"claude:c\",\"provider\":\"claude\",\"hidden\":true,\"trayHidden\":false}]}", Formatting.Json)!;
+        report.Checks["hidden_accounts_from_the_server_are_left_out"] = accountsHidden.ShownAccounts.Select(account => account.Id).SequenceEqual(new[] { "codex:b", "claude:c" });
         var antigravity = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"isActive\":true,\"capabilities\":{\"antigravityProfileId\":\"a\",\"antigravityHostIds\":[\"ubuntu\"],\"antigravityCanActivate\":true}}],\"codexAutoSwitch\":{},\"antigravityAutoSwitch\":{\"enabled\":true,\"thresholdUsedPercent\":90,\"activationInProgress\":false}}", Formatting.Json)!;
         report.Checks["antigravity_dto_decoded"] = antigravity.Accounts[0].Capabilities.AntigravityProfileId == "a" && antigravity.Accounts[0].Capabilities.AntigravityCanActivate && antigravity.AntigravityAutoSwitch?.ThresholdUsedPercent == 90 && antigravity.AntigravityAutoSwitch.Enabled;
         var proposal = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!;
@@ -288,7 +297,7 @@ public static class Checks
         var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", Capabilities = new AccountCapabilities { CodexProfile = "b" }, Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
         var tooltip = Formatting.TrayTooltip(dashboard);
         report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex: codex-2, 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
-            && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · not connected" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
+            && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · Not paired" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
             && Formatting.TrayTooltip(new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = new string('x', 200) + "@example.com", Windows = { new QuotaWindow { Key = "seven_day", UsedPercent = 1 } } } } }).Length <= 127;
         report.Checks["value_easing_never_overshoots"] = Motion.NeverOvershoots(Motion.Out) && Motion.NeverOvershoots(Motion.InOut) && !Motion.NeverOvershoots(Motion.Spring);
         report.Checks["severity_ramp_matches_dashboard"] = Theme.Severity(79.99) == "calm" && Theme.Severity(80) == "warn" && Theme.Severity(95) == "crit" && Theme.Severity(100) == "crit" && Theme.Severity(100.01) == "over" && Theme.Severity(null) == "na" && Theme.Severity(double.NaN) == "na";
@@ -379,6 +388,11 @@ public static class Checks
             report.Checks["reset_pending_reads_window_sample_before_account_sample"] = Formatting.PendingReset(older, Window(past, "2026-10-02T11:45:00Z")) is null && Formatting.PendingReset(newer, Window(past, "2026-10-02T10:30:00Z")) == resetAt;
             report.Checks["reset_pending_leaves_amounts_unlimited_and_disabled"] = Formatting.PendingReset(older, new QuotaWindow { Key = "credits", Kind = "balance", Remaining = 4, ResetAt = past }) is null
                 && Formatting.PendingReset(older, new QuotaWindow { Key = "x", Unlimited = true, ResetAt = past }) is null && Formatting.PendingReset(older, new QuotaWindow { Key = "y", Enabled = false, ResetAt = past }) is null;
+            // The server's own mark (MISC's resetPassed) is honoured even when this computer's clock is behind the reset.
+            var serverMarked = Window(future); serverMarked.ResetPassed = true;
+            report.Checks["reset_pending_honours_the_servers_reset_passed"] = Formatting.PendingReset(newer, serverMarked) == DateTimeOffset.Parse(future, System.Globalization.CultureInfo.InvariantCulture)
+                && JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"five_hour\",\"usedPercent\":12,\"resetAt\":\"2026-10-02T11:00:00Z\",\"resetPassed\":true}", Formatting.Json)!.ResetPassed == true
+                && Formatting.PendingReset(older, new QuotaWindow { Key = "credits", Kind = "balance", Remaining = 4, ResetAt = past, ResetPassed = true }) is null;
             var forms = Formatting.PendingForms(resetAt);
             report.Checks["reset_pending_text_names_the_reset_and_no_number"] = forms[0] == Formatting.ResetAt(resetAt) + " · new reading pending" && forms[0].StartsWith("Reset at ", StringComparison.Ordinal)
                 && forms.All(form => !form.Contains('%')) && Formatting.ResetPendingLong(resetAt).EndsWith(" · new reading pending", StringComparison.Ordinal);
@@ -475,9 +489,9 @@ public static class Checks
                 && !File.Exists(firstRunStore) && fresh.ClientForCheck is null && fresh.ConnectionForCheck is null;
             var firstOk = await fresh.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
             report.Checks["first_run_success_saves_the_verified_connection"] = firstOk is null && SecureStore.Load(firstRunStore) is { Password: "fixture-new" } && fresh.ClientForCheck is not null;
-            // Other stored members (a device token from a later pairing) survive a verified Change exactly.
+            // Other stored members (fields a later version may add) survive a verified Change exactly.
             var withToken = Path.Combine(folder, "with-token", "connection.dpapi");
-            using (var token = JsonDocument.Parse("{\"deviceToken\":\"fixture-device-token\",\"pairedAt\":1}"))
+            using (var token = JsonDocument.Parse("{\"futureSetting\":\"kept\",\"futureCount\":1}"))
                 SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-old", Extra = token.RootElement.EnumerateObject().ToDictionary(item => item.Name, item => item.Value.Clone()) }, withToken);
             var paired = third = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
             paired.UseConnectionStoreForCheck(withToken);
@@ -485,8 +499,8 @@ public static class Checks
             var pairedOk = await paired.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
             var reloaded = SecureStore.Load(withToken);
             report.Checks["sign_in_change_keeps_other_stored_members_exactly"] = pairedFailed is not null && pairedOk is null && reloaded is { Password: "fixture-new" }
-                && reloaded.Extra?["deviceToken"].GetString() == "fixture-device-token" && reloaded.Extra?["pairedAt"].GetInt32() == 1
-                && SecureStore.StoredKeysForCheck(withToken).OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(new[] { "baseURL", "deviceToken", "pairedAt", "password", "username" });
+                && reloaded.Extra?["futureSetting"].GetString() == "kept" && reloaded.Extra?["futureCount"].GetInt32() == 1
+                && SecureStore.StoredKeysForCheck(withToken).OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(new[] { "baseURL", "futureCount", "futureSetting", "password", "username" });
             report.Checks["sign_in_requests_reach_only_the_loopback_fixtures"] = fixture.Requests.Count > 0 && fixture.Unexpected == 0;
         }
         catch (Exception error)
@@ -499,6 +513,365 @@ public static class Checks
             foreach (var shown in new[] { window, first, third }) if (shown is not null) { shown.AllowClose = true; shown.Close(); }
             try { Directory.Delete(folder, true); } catch { }
         }
+    }
+
+    /// <summary>
+    /// Claude Open progress (CONTRACT-serving-misc 4.4). Every case runs the tray's own Open flow against a loopback
+    /// fixture dashboard, with any connection stored in an isolated temporary folder, never the tray's real store.
+    /// Windows opens go through the backend POST, so the last cases prove no shell URI is started when the dashboard
+    /// cannot be reached.
+    /// </summary>
+    private static async Task ClaudeOpenChecks(CheckReport report)
+    {
+        const string accepted = "{\"id\":\"gmail\",\"platform\":\"mac\",\"state\":\"checking\",\"operationId\":\"op_fixture_0001\"}";
+        const string openedReply = "{\"opened\":true,\"id\":\"gmail\",\"platform\":\"mac\"}";
+        static string Operation(string state, int? confirmed = null, int? total = null, string? message = null, string id = "op_fixture_0001", string platform = "mac") =>
+            "{\"id\":\"" + id + "\",\"platform\":\"" + platform + "\",\"state\":\"" + state + "\","
+            + "\"confirmedCount\":" + (confirmed is int c ? c.ToString() : "null") + ",\"totalCount\":" + (total is int t ? t.ToString() : "null") + ","
+            + "\"message\":" + (message is null ? "null" : "\"" + message + "\"") + "}";
+        static string ProfileList(string? operation, string id = "gmail") =>
+            "{\"profiles\":[{\"id\":\"" + id + "\",\"email\":\"" + id + "@example.invalid\",\"openOperation\":" + (operation ?? "null") + "}]}";
+        static ClaudeOpenOperation Decode(string json) => JsonSerializer.Deserialize<ClaudeDesktopProfile>(
+            "{\"id\":\"gmail\",\"openOperation\":" + json + "}", Formatting.Json)!.OpenOperation!;
+
+        using var fixture = new ClaudeOpenFixture();
+        using var client = new DashboardClient(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-only" });
+        // Sign the fixture session in first, so every Open below is measured as the one POST it is.
+        await client.Verify(TimeSpan.FromSeconds(10), CancellationToken.None);
+        var texts = new List<string>();
+        Func<ClaudeOpenProgress, Task> record = progress => { lock (texts) texts.Add(progress.Text); return Task.CompletedTask; };
+        void Arm(string openBody, int openStatus, string? profileFallback, params string[] profiles)
+        {
+            fixture.OpenReplies.Clear(); fixture.OpenReplies.Add((openStatus, openBody));
+            fixture.ProfileReplies.Clear(); fixture.ResetProfileQueue();
+            foreach (var body in profiles) fixture.ProfileReplies.Add((200, body));
+            fixture.ProfileFallback = profileFallback is null ? (500, "{}") : (200, profileFallback);
+            lock (texts) texts.Clear();
+        }
+        string[] Said() { lock (texts) return texts.ToArray(); }
+
+        // 1. Today's 200: one POST, no profile-list read, and the row ends on "Opened".
+        var posts = fixture.Opens;
+        Arm(openedReply, 200, null);
+        var plain = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Notes["claude_open_200_texts"] = string.Join(" | ", Said());
+        report.Checks["claude_open_200_finishes_at_once"] = plain is { Opened: true, Finished: true, Text: "Opened" }
+            && Said().SequenceEqual(new[] { "Opening", "Opened" })
+            && fixture.Opens - posts == 1 && fixture.ProfileReads == 0;
+        report.Checks["claude_open_post_opts_into_the_async_answer"] = fixture.PreferHeaders.Count == 1
+            && fixture.PreferHeaders[0] == "respond-async" && fixture.OpenBodies.Count == 1
+            && fixture.OpenBodies[0] == "{\"platform\":\"mac\"}";
+
+        // 2. 202, polled to opened: the counts the server reports are the counts the row shows.
+        posts = fixture.Opens;
+        var reads = fixture.ProfileReads;
+        Arm(accepted, 202, null,
+            ProfileList(Operation("checking")),
+            ProfileList(Operation("copying", 3, 18)),
+            ProfileList(Operation("copying", 18, 18)),
+            ProfileList(Operation("opening")),
+            ProfileList(Operation("opened")));
+        var clock = new OpenClock();
+        var polled = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record,
+            new ClaudeOpenPolling(), clock.Now, clock.Advance);
+        report.Notes["claude_open_202_texts"] = string.Join(" | ", Said());
+        report.Checks["claude_open_202_polls_to_opened_with_counts"] = polled is { Opened: true, Finished: true }
+            && Said().SequenceEqual(new[] { "Opening", "Copying history", "Copying history 3 of 18", "Copying history 18 of 18", "Opening", "Opened" })
+            && fixture.Opens - posts == 1 && fixture.ProfileReads - reads == 5
+            && clock.Slept.SequenceEqual(Enumerable.Repeat(TimeSpan.FromSeconds(1), 5));
+
+        // 3. 202 to failed: the server's own fixed sentence reaches the row, and the Open did not open Claude.
+        posts = fixture.Opens;
+        Arm(accepted, 202, null,
+            ProfileList(Operation("copying", 2, 9)),
+            ProfileList(Operation("failed", message: "Claude desktop request timed out.")));
+        var failed = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Notes["claude_open_failed_text"] = failed?.Text ?? "";
+        report.Checks["claude_open_202_failed_shows_the_server_message"] = failed is { Opened: false, Finished: true, Text: "Claude desktop request timed out." }
+            && fixture.Opens - posts == 1;
+
+        // 4. 202 to blocked_uncertain with no usable message: the fixed client sentence, never a server string.
+        Arm(accepted, 202, null, ProfileList(Operation("blocked_uncertain")));
+        var blocked = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Checks["claude_open_202_blocked_uncertain_uses_the_fixed_sentence"] = blocked is { Opened: false, Finished: true }
+            && blocked.Text == ClaudeOpenFlow.HistoryUnconfirmed;
+        report.Checks["claude_open_only_a_bounded_single_line_server_sentence_reaches_the_row"] =
+            ClaudeOpenFlow.PublicMessage(new string('x', 301)) == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage("line\nFIXTURE_ONLY_PRIVATE") == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage("") == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage(null) == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.PublicMessage("Claude history copy is unconfirmed.") == "Claude history copy is unconfirmed.";
+
+        // 5. 409 history_unconfirmed: the fixed sentence, one POST, no poll, and no server string.
+        posts = fixture.Opens;
+        reads = fixture.ProfileReads;
+        Arm("{\"error\":\"FIXTURE_ONLY_PRIVATE canary\",\"code\":\"history_unconfirmed\"}", 409, null);
+        string? refused = null;
+        try { await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling()); }
+        catch (InvalidOperationException error) { refused = error.Message; }
+        report.Notes["claude_open_409_text"] = refused ?? "";
+        report.Checks["claude_open_409_history_unconfirmed_uses_the_fixed_sentence"] =
+            refused is not null && refused == ClaudeOpenFlow.HistoryUnconfirmed
+            && !refused.Contains("FIXTURE_ONLY", StringComparison.Ordinal)
+            && fixture.Opens - posts == 1 && fixture.ProfileReads == reads;
+
+        // 6. No terminal state: the poll gives up after three minutes, on the production cadence, without a second POST.
+        posts = fixture.Opens;
+        reads = fixture.ProfileReads;
+        Arm(accepted, 202, profileFallback: ProfileList(Operation("checking")));
+        var deadline = new OpenClock();
+        var gaveUp = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record,
+            new ClaudeOpenPolling(), deadline.Now, deadline.Advance);
+        var slept = deadline.Slept;
+        report.Measurements["claude_open_poll_reads"] = fixture.ProfileReads - reads;
+        report.Checks["claude_open_poll_gives_up_after_three_minutes"] = gaveUp is { Opened: false, Finished: true }
+            && gaveUp.Text == ClaudeOpenFlow.StillWorking
+            && Said().SequenceEqual(new[] { "Opening", "Copying history", ClaudeOpenFlow.StillWorking })
+            && slept.Length == 132 && slept.Take(120).All(step => step == TimeSpan.FromSeconds(1))
+            && slept.Skip(120).All(step => step == TimeSpan.FromSeconds(5))
+            && slept.Aggregate(TimeSpan.Zero, (total, step) => total + step) == TimeSpan.FromMinutes(3)
+            && fixture.ProfileReads - reads == 132 && fixture.Opens - posts == 1;
+
+        // 7. A second Open for the same account while one runs sends nothing at all, on either platform button.
+        posts = fixture.Opens;
+        Arm(accepted, 202, null, ProfileList(Operation("copying", 1, 4)), ProfileList(Operation("opened")));
+        var coordinator = new ClaudeOpenCoordinator();
+        var gate = new OpenGate();
+        var first = ClaudeOpenFlow.Run(client, "gmail", "mac", coordinator, record, new ClaudeOpenPolling(), null, gate.Hold);
+        var waited = 0;
+        while (!gate.Arrived && waited < 1000) { await Task.Delay(5); waited++; }
+        var running = coordinator.IsRunning("gmail");
+        var second = await ClaudeOpenFlow.Run(client, "gmail", "windows", coordinator, _ => Task.CompletedTask, new ClaudeOpenPolling());
+        gate.Release();
+        var outcome = await first;
+        report.Checks["claude_open_never_sends_a_second_post_while_one_runs"] = waited < 1000 && running
+            && second is null && outcome is { Opened: true } && !coordinator.IsRunning("gmail")
+            && fixture.Opens - posts == 1;
+
+        // 8. The poll reads only this Open: another profile's operation, another platform's, another operation id, a
+        //    failed read, an unreadable body, an unknown state and a missing operation all leave it running.
+        reads = fixture.ProfileReads;
+        Arm(accepted, 202, null,
+            ProfileList(Operation("opened"), id: "party"),
+            ProfileList(Operation("opened", platform: "windows")),
+            ProfileList(Operation("opened", id: "op_other")));
+        fixture.ProfileReplies.Add((500, "{}"));
+        fixture.ProfileReplies.Add((200, "{\"notProfiles\":true}"));
+        fixture.ProfileReplies.Add((200, ProfileList(Operation("fixture_unknown_state"))));
+        fixture.ProfileReplies.Add((200, ProfileList(null)));
+        fixture.ProfileReplies.Add((200, ProfileList(Operation("opened"))));
+        var matched = await ClaudeOpenFlow.Run(client, "gmail", "mac", new ClaudeOpenCoordinator(), record, new ClaudeOpenPolling());
+        report.Checks["claude_open_reads_only_its_own_operation"] = matched is { Opened: true }
+            && Said().SequenceEqual(new[] { "Opening", "Opened" }) && fixture.ProfileReads - reads == 8;
+
+        // 9. The row's text comes only from the reported state and counts.
+        report.Checks["claude_open_row_text_comes_only_from_the_state"] =
+            ClaudeOpenFlow.TextFor(Decode(Operation("checking"))) == "Copying history"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying"))) == "Copying history"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying", 3, 18))) == "Copying history 3 of 18"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying", 0, 18))) == "Copying history 0 of 18"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("copying", 3))) == "Copying history"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("opening"))) == "Opening"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("opened"))) == "Opened"
+            && ClaudeOpenFlow.TextFor(Decode(Operation("failed", message: "Claude account could not be opened safely."))) == "Claude account could not be opened safely."
+            && ClaudeOpenFlow.TextFor(Decode(Operation("blocked_uncertain"))) == ClaudeOpenFlow.HistoryUnconfirmed
+            && ClaudeOpenFlow.TextFor(Decode(Operation("fixture_unknown_state"))) is null;
+        report.Checks["claude_open_only_terminal_states_end_the_poll"] =
+            Decode(Operation("opened")).IsTerminal && Decode(Operation("failed")).IsTerminal && Decode(Operation("blocked_uncertain")).IsTerminal
+            && !Decode(Operation("checking")).IsTerminal && !Decode(Operation("copying")).IsTerminal
+            && !Decode(Operation("opening")).IsTerminal && !Decode(Operation("fixture_unknown_state")).IsTerminal
+            && Decode(Operation("opened")).IsOpened && !Decode(Operation("failed")).IsOpened;
+        report.Checks["claude_open_requests_reach_only_the_loopback_fixture"] = fixture.Opens > 0 && fixture.Unexpected == 0;
+
+        // 10. Windows: an unreachable dashboard. The Open says so and never starts a shell URI.
+        var folder = Path.Combine(Path.GetTempPath(), "aac-open-check-" + Guid.NewGuid().ToString("N"));
+        var store = Path.Combine(folder, "connection.dpapi");
+        var real = Path.GetFullPath(SecureStore.StateDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        report.Checks["claude_open_checks_use_an_isolated_store"] = !Path.GetFullPath(store).StartsWith(real, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(Path.GetFullPath(store), Path.GetFullPath(SecureStore.SettingsPath), StringComparison.OrdinalIgnoreCase);
+        var launched = new List<string>();
+        var realLaunch = MainWindow.Launch;
+        MainWindow? panel = null, disconnected = null;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            SecureStore.Save(new ConnectionSettings { BaseURL = ClosedLoopbackOrigin(), Username = "fixture", Password = "fixture-only" }, store);
+            // One seam for every shell launch this panel makes, so a zero below is a real zero and not a dead hook.
+            MainWindow.Launch = info => { lock (launched) launched.Add(info.FileName); return null; };
+            panel = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            panel.UseConnectionStoreForCheck(store);
+            var account = new DashboardAccount
+            {
+                Id = "claude:gmail", Provider = "claude", Label = "fixture", Email = "fixture@example.com", Platform = "windows", Status = "ok",
+                Capabilities = new AccountCapabilities { ClaudeProfileId = "gmail", ClaudePlatforms = new List<string> { "mac", "windows" } }
+            };
+            await panel.OpenClaudeForCheck(account, "windows");
+            report.Notes["windows_unreachable_message"] = panel.StatusFlashForCheck ?? "";
+            report.Checks["windows_open_never_starts_a_uri_when_the_dashboard_is_unreachable"] =
+                panel.StatusFlashForCheck == ClaudeOpenFlow.Unreachable && launched.Count == 0 && !panel.OpenRunningForCheck(account.Id);
+            panel.OpenDashboard();
+            report.Checks["windows_launch_seam_is_the_only_shell_launch_path"] = launched.Count == 1
+                && launched[0].StartsWith("http", StringComparison.Ordinal);
+            // No connection at all: the same sentence, and still nothing launched.
+            disconnected = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            await disconnected.OpenClaudeForCheck(account, "windows");
+            report.Checks["windows_open_without_a_connection_says_the_dashboard_is_unreachable"] =
+                disconnected.StatusFlashForCheck == ClaudeOpenFlow.Unreachable && launched.Count == 1;
+        }
+        catch (Exception error)
+        {
+            report.Checks["claude_open_checks_completed"] = false;
+            report.Notes["claude_open_checks"] = error.GetType().Name + ": " + error.Message;
+        }
+        finally
+        {
+            MainWindow.Launch = realLaunch;
+            foreach (var shown in new[] { panel, disconnected }) if (shown is not null) { shown.AllowClose = true; shown.Close(); }
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
+    /// <summary>A check's clock: the poll's sleep advances it, so a three-minute deadline costs no real time.</summary>
+    private sealed class OpenClock
+    {
+        private readonly object gate = new();
+        private readonly List<TimeSpan> steps = new();
+        private DateTimeOffset current = DateTimeOffset.Parse("2026-10-02T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        public DateTimeOffset Now() { lock (gate) return current; }
+        public TimeSpan[] Slept { get { lock (gate) return steps.ToArray(); } }
+        public Task Advance(TimeSpan delay) { lock (gate) { current += delay; steps.Add(delay); } return Task.CompletedTask; }
+    }
+
+    /// <summary>Holds one Open inside its poll until the check releases it, so a second Open can be attempted while it
+    /// runs.</summary>
+    private sealed class OpenGate
+    {
+        private readonly object gate = new();
+        private bool arrived, released;
+        public bool Arrived { get { lock (gate) return arrived; } }
+        public bool Released { get { lock (gate) return released; } }
+        public void Release() { lock (gate) released = true; }
+        public Task Hold(TimeSpan delay)
+        {
+            lock (gate) arrived = true;
+            return Wait();
+        }
+        private async Task Wait()
+        {
+            var waited = 0;
+            while (!Released && waited < 1000) { await Task.Delay(5); waited++; }
+        }
+    }
+
+    /// <summary>A loopback stand-in for the dashboard's Claude Open routes. POST /api/auth/login accepts only
+    /// fixture/fixture-only and sets an HttpOnly cookie; the Open and profile routes need it, so the tray's own session
+    /// handshake is exercised. The Open route answers a scripted status and body and records the Prefer header and the
+    /// request body; the profile list answers a scripted queue, then <see cref="ProfileFallback"/>.</summary>
+    private sealed class ClaudeOpenFixture : IDisposable
+    {
+        private readonly HttpListener listener = new();
+        private readonly object gate = new();
+        private readonly List<string> requests = new();
+        private readonly List<string> preferHeaders = new();
+        private readonly List<string> openBodies = new();
+        private readonly List<(int Status, string Body)> openReplies = new();
+        private readonly List<(int Status, string Body)> profileReplies = new();
+        private int opens, reads, unexpected, index;
+
+        public string Origin { get; }
+        public (int Status, string Body) ProfileFallback { get; set; } = (500, "{}");
+        public List<(int Status, string Body)> OpenReplies => openReplies;
+        public List<(int Status, string Body)> ProfileReplies => profileReplies;
+        /// <summary>Open POSTs the route actually answered, so a 401 handshake is never counted as a second Open.</summary>
+        public int Opens { get { lock (gate) return opens; } }
+        public int ProfileReads { get { lock (gate) return reads; } }
+        public int Unexpected { get { lock (gate) return unexpected; } }
+        public List<string> Requests { get { lock (gate) return requests.ToList(); } }
+        public List<string> PreferHeaders { get { lock (gate) return preferHeaders.ToList(); } }
+        public List<string> OpenBodies { get { lock (gate) return openBodies.ToList(); } }
+        /// <summary>Back to the front of the scripted profile queue, without losing the cumulative read count.</summary>
+        public void ResetProfileQueue() { lock (gate) index = 0; }
+
+        public ClaudeOpenFixture()
+        {
+            var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+            var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+            Origin = $"http://127.0.0.1:{port}";
+            listener.Prefixes.Add(Origin + "/"); listener.Start();
+            _ = Task.Run(Loop);
+        }
+
+        private async Task Loop()
+        {
+            while (true)
+            {
+                HttpListenerContext context;
+                try { context = await listener.GetContextAsync(); } catch { return; }
+                _ = Task.Run(() => Handle(context));
+            }
+        }
+
+        private async Task Handle(HttpListenerContext context)
+        {
+            try
+            {
+                var request = context.Request; var path = request.Url!.AbsolutePath;
+                var signedIn = request.Cookies["fixture-session"]?.Value == "yes";
+                var isOpen = request.HttpMethod == "POST" && path.StartsWith("/api/claude/desktop-profiles/", StringComparison.Ordinal)
+                    && path.EndsWith("/open", StringComparison.Ordinal);
+                int status; string body;
+                if (request.HttpMethod == "POST" && path == "/api/auth/login")
+                {
+                    using var json = JsonDocument.Parse(await Read(request));
+                    if (json.RootElement.GetProperty("username").GetString() == "fixture" && json.RootElement.GetProperty("password").GetString() == "fixture-only")
+                    {
+                        context.Response.SetCookie(new Cookie("fixture-session", "yes", "/") { HttpOnly = true });
+                        (status, body) = (200, "{\"success\":true}");
+                    }
+                    else (status, body) = (401, "{\"error\":\"Invalid credentials\"}");
+                }
+                else if (!signedIn) (status, body) = (401, "{\"error\":\"Authentication required\"}");
+                else if (request.HttpMethod == "GET" && path == "/api/accounts/settings") (status, body) = (200, "{\"refreshIntervalSeconds\":60}");
+                else if (isOpen)
+                {
+                    var sent = await Read(request);
+                    lock (gate)
+                    {
+                        opens++;
+                        preferHeaders.Add(request.Headers["Prefer"] ?? "");
+                        openBodies.Add(sent);
+                        var reply = openReplies.Count > 0 ? openReplies[0] : (Status: 500, Body: "{}");
+                        status = reply.Status; body = reply.Body;
+                    }
+                }
+                else if (request.HttpMethod == "GET" && path == "/api/claude/desktop-profiles")
+                {
+                    lock (gate)
+                    {
+                        var reply = index < profileReplies.Count ? profileReplies[index] : ProfileFallback;
+                        index++; reads++;
+                        status = reply.Status; body = reply.Body;
+                    }
+                }
+                else { lock (gate) unexpected++; (status, body) = (404, "{\"error\":\"Not found\"}"); }
+                lock (gate) requests.Add($"{request.HttpMethod} {path} {status}");
+                var bytes = Encoding.UTF8.GetBytes(body);
+                context.Response.StatusCode = status;
+                context.Response.ContentType = "application/json";
+                context.Response.ContentLength64 = bytes.Length;
+                await context.Response.OutputStream.WriteAsync(bytes);
+                context.Response.Close();
+            }
+            catch { try { context.Response.Abort(); } catch { } }
+        }
+
+        private static async Task<string> Read(HttpListenerRequest request)
+        {
+            using var reader = new StreamReader(request.InputStream);
+            return await reader.ReadToEndAsync();
+        }
+
+        public void Dispose() { try { listener.Stop(); listener.Close(); } catch { } }
     }
 
     private static string ClosedLoopbackOrigin()

@@ -18,7 +18,7 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Instrument Sans (OFL), static faces with tabular digits frozen in; see Resources/Fonts/README.md. -->
+    <!-- Instrument Sans and Martian Mono (OFL), static faces; see Resources/Fonts/README.md. -->
     <Resource Include="Resources/Fonts/*.ttf" />
     <!-- Apex Soft: the plated app icon (exe, window, shortcuts) and notification-area art for light and dark taskbars. -->
     <EmbeddedResource Include="Resources/Icons/*.ico" LogicalName="CCSBar.Icons.%(Filename)%(Extension)" />
@@ -28,6 +28,7 @@
     <Content Include="Resources/Providers/THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Resources/Providers/sources.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Resources/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Resources/Fonts/OFL-MartianMono.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Sanitized example.com fixture for the offline render checks (the render-fixture mode). -->
     <EmbeddedResource Include="Fixtures/dashboard.json" LogicalName="CCSBar.Fixtures.dashboard.json" />
   </ItemGroup>

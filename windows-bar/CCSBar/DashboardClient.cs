@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -10,6 +11,12 @@ namespace CCSBar;
 
 internal enum DashboardRequestKind { General, Usage, AutoSwitch, ClaudeOpen, CodexActivation, AntigravityActivation, AntigravityAutoSwitch }
 
+/// <summary>
+/// The dashboard's tray routes. A paired tray (connection version 2) sends its device key as
+/// <c>Authorization: Bearer</c> on every request and never uses the cookie sign-in: a 401 with a device code
+/// (device_revoked, device_expired, invalid_token) is a sign-out (<see cref="DeviceSignedOutException"/>), never retried
+/// and never answered with the password. A version 1 tray keeps today's cookie sign-in with its saved password.
+/// </summary>
 public sealed class DashboardClient : IDisposable
 {
     private readonly ConnectionSettings settings;
@@ -17,13 +24,17 @@ public sealed class DashboardClient : IDisposable
     private readonly SemaphoreSlim loginGate = new(1, 1);
     private DateTimeOffset lastLoginAttempt = DateTimeOffset.MinValue;
     private readonly Uri origin;
+    private volatile string? deviceToken;
     public Uri BaseURL => origin;
+    /// <summary>Signs in with a device key rather than a password.</summary>
+    public bool Paired => deviceToken is not null;
 
     public DashboardClient(ConnectionSettings settings)
     {
         this.settings = settings;
         origin = settings.Validate();
-        var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        deviceToken = settings.IsPaired ? settings.DeviceToken : null;
+        var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false, UseCookies = !settings.IsPaired };
         http = new HttpClient(handler) { BaseAddress = origin, Timeout = TimeSpan.FromSeconds(90) };
         http.DefaultRequestHeaders.Add("Origin", origin.GetLeftPart(UriPartial.Authority));
         http.DefaultRequestHeaders.Add("Accept", "application/json");
@@ -74,15 +85,87 @@ public sealed class DashboardClient : IDisposable
         return Request<JsonElement>(HttpMethod.Post, path, body, profileId, retryAuthentication: confirmationToken is null, requestKind: DashboardRequestKind.AntigravityActivation);
     }
 
-    public Task<JsonElement> OpenClaudeOnMac(string profile)
+    /// <summary>Claude "Open on Mac" and "Open on Windows". `Prefer: respond-async` opts into the 202 progress answer;
+    /// without it the server waits and answers 200. One Open is one POST: the only re-send is the session handshake
+    /// after a 401, which the launcher never saw.</summary>
+    public async Task<ClaudeOpenStart> OpenClaude(string profile, string platform)
     {
-        if (!Formatting.IsSafeClaudeProfile(profile)) throw new ArgumentException("Choose a configured Claude account.");
-        return Request<JsonElement>(HttpMethod.Post, "api/claude/desktop-profiles/" + Uri.EscapeDataString(profile) + "/open", new { platform = "mac" }, requestKind: DashboardRequestKind.ClaudeOpen);
+        if (!Formatting.IsSafeClaudeProfile(profile) || platform is not ("mac" or "windows"))
+            throw new ArgumentException("Choose a configured Claude account.");
+        var path = "api/claude/desktop-profiles/" + Uri.EscapeDataString(profile) + "/open";
+        object body = new { platform };
+        var response = await Send(HttpMethod.Post, path, body, prefer: RespondAsync);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            // A paired tray's 401 is a sign-out: the Open is never sent again. A version 1 tray renews its cookie once;
+            // the refused POST was answered by the sign-in check before the Open route ran, so this is not a replay.
+            if (Paired) { using (response) throw await DeviceSignedOutException.From(response); }
+            response.Dispose();
+            await Login();
+            response = await Send(HttpMethod.Post, path, body, prefer: RespondAsync);
+        }
+        using (response)
+        {
+            var reply = await Decode<ClaudeOpenReply>(response, requestKind: DashboardRequestKind.ClaudeOpen);
+            return new ClaudeOpenStart(response.StatusCode == HttpStatusCode.Accepted, reply.OperationId ?? "");
+        }
+    }
+
+    /// <summary>The Claude desktop profile list, read while an Open runs for its openOperation progress. It is on the
+    /// tray's device-token allowlist and carries no UUIDs, titles, transcript text, ssh details or paths.</summary>
+    public async Task<IReadOnlyList<ClaudeDesktopProfile>> ClaudeDesktopProfiles()
+    {
+        var list = await Request<ClaudeDesktopProfileList>(HttpMethod.Get, "api/claude/desktop-profiles");
+        return list.Profiles;
+    }
+
+    /// <summary>GET /api/auth/devices/me: the key works, and when it should next be rotated.</summary>
+    public async Task<DeviceRecord> DeviceMe()
+    {
+        if (!Paired) throw new InvalidOperationException("This tray is not paired.");
+        return await Request<DeviceRecord>(HttpMethod.Get, "api/auth/devices/me");
+    }
+
+    /// <summary>POST /api/auth/devices/me/rotate (section 7). Null when the dashboard defers it (403
+    /// secure_transport_required: this connection is not trusted right now); the current key keeps working.</summary>
+    public async Task<RotatedKey?> Rotate()
+    {
+        if (!Paired) throw new InvalidOperationException("This tray is not paired.");
+        using var response = await Send(HttpMethod.Post, "api/auth/devices/me/rotate", null);
+        if (response.StatusCode == HttpStatusCode.Unauthorized) throw await DeviceSignedOutException.From(response);
+        var answer = await AuthApi.Read(response);
+        if (response.StatusCode == HttpStatusCode.Forbidden && answer.Code == "secure_transport_required") return null;
+        if (!answer.Ok) throw new InvalidOperationException("The device key could not be rotated now. The current key keeps working.");
+        var token = answer.Text("token");
+        if (!DeviceTokenFormat.IsToken(token)) throw new InvalidOperationException("The dashboard returned an unreadable device key.");
+        return new RotatedKey(token!, answer.Text("rotateAfter"));
+    }
+
+    /// <summary>DELETE /api/auth/devices/me: Disconnect. True when the dashboard revoked the key, or it was already
+    /// signed out (a 401 device code).</summary>
+    public async Task<bool> Disconnect()
+    {
+        if (!Paired) return true;
+        using var response = await Send(HttpMethod.Delete, "api/auth/devices/me", null);
+        if (response.StatusCode == HttpStatusCode.NoContent) return true;
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return await DeviceSignedOutException.From(response) is DeviceSignedOutException { IsDeviceCode: true };
+        }
+        return false;
+    }
+
+    /// <summary>After a rotation is saved: the next request uses the new key (written to disk before its first use).</summary>
+    public void UseToken(string token)
+    {
+        if (!DeviceTokenFormat.IsToken(token)) throw new ArgumentException("The device key is not valid.");
+        deviceToken = token;
     }
 
     private async Task<T> Request<T>(HttpMethod method, string path, object? body = null, string? confirmationProfile = null, bool retryAuthentication = true, DashboardRequestKind requestKind = DashboardRequestKind.General)
     {
         using var first = await Send(method, path, body);
+        if (first.StatusCode == HttpStatusCode.Unauthorized && Paired) throw await DeviceSignedOutException.From(first);
         if (first.StatusCode != HttpStatusCode.Unauthorized) return await Decode<T>(first, confirmationProfile, requestKind);
         if (!retryAuthentication)
             throw new InvalidOperationException("The dashboard session changed. Activate again to review a new confirmation.");
@@ -139,10 +222,15 @@ public sealed class DashboardClient : IDisposable
         catch (JsonException) { return false; }
     }
 
-    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body, CancellationToken cancel = default)
+    /// <summary>The RFC 7240 preference that asks the Open route for its 202 progress answer.</summary>
+    private const string RespondAsync = "respond-async";
+
+    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body, CancellationToken cancel = default, string? prefer = null)
     {
         var request = new HttpRequestMessage(method, path);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body, Formatting.Json), Encoding.UTF8, "application/json");
+        if (prefer is not null) request.Headers.TryAddWithoutValidation("Prefer", prefer);
+        if (deviceToken is { } token) request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         return SendAndDispose(request, cancel);
     }
 
@@ -154,6 +242,7 @@ public sealed class DashboardClient : IDisposable
 
     private async Task Login()
     {
+        if (Paired) throw new InvalidOperationException("Dashboard sign-in needs attention. Check Settings.");
         await loginGate.WaitAsync();
         try
         {
@@ -216,7 +305,7 @@ public sealed class DashboardClient : IDisposable
         if (!response.IsSuccessStatusCode)
         {
             string? publicCode = null, publicReason = null;
-            if (requestKind == DashboardRequestKind.CodexActivation)
+            if (requestKind is DashboardRequestKind.CodexActivation or DashboardRequestKind.ClaudeOpen)
             {
                 try
                 {
@@ -286,6 +375,8 @@ public sealed class DashboardClient : IDisposable
         }
         if (kind == DashboardRequestKind.ClaudeOpen)
         {
+            // The guarded history copy could not be confirmed, so Claude was not opened (CONTRACT-serving-misc 4.4).
+            if (status == HttpStatusCode.Conflict && code == "history_unconfirmed") return ClaudeOpenFlow.HistoryUnconfirmed;
             if (status is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable) return "Claude could not be opened on the selected computer. Check its profile setup and connection.";
             if (status == HttpStatusCode.NotFound) return "The selected Claude profile is not available on that computer.";
         }
@@ -307,6 +398,49 @@ public sealed class DashboardClient : IDisposable
     }
 
     public void Dispose() { http.Dispose(); loginGate.Dispose(); }
+}
+
+/// <summary>GET /api/auth/devices/me.</summary>
+public sealed class DeviceRecord
+{
+    public string Id { get; set; } = "";
+    public string? Name { get; set; }
+    public string? Platform { get; set; }
+    public string? PairedAt { get; set; }
+    public string? RotateAfter { get; set; }
+    public string? IdleExpiresAt { get; set; }
+}
+
+public sealed record RotatedKey(string Token, string? RotateAfter);
+
+/// <summary>
+/// A 401 on a device key (contract section 9): device_revoked, device_expired or invalid_token. The tray deletes the
+/// key, stops polling and shows its signed-out screen; it never retries on its own. A 401 without a device code (an
+/// older server's auth_required) is not one of these: <see cref="IsDeviceCode"/> is false and nothing is deleted.
+/// </summary>
+public sealed class DeviceSignedOutException : Exception
+{
+    public string Code { get; }
+    /// <summary>Who and when, if a later dashboard says so in the 401 body (revokedReason, revokedAt, revokedBy).</summary>
+    public string? RevokedReason { get; }
+    public string? RevokedAt { get; }
+    public string? RevokedBy { get; }
+    public bool IsDeviceCode => Code is "device_revoked" or "device_expired" or "invalid_token";
+
+    public DeviceSignedOutException(string code, string? reason = null, string? at = null, string? by = null)
+        : base(code == "device_expired" ? "This tray's device key expired. Pair it again." : "This tray was signed out. Pair it again.")
+    { Code = code; RevokedReason = reason; RevokedAt = at; RevokedBy = by; }
+
+    public static async Task<Exception> From(HttpResponseMessage response)
+    {
+        var answer = await AuthApi.Read(response);
+        if (answer.Code is "device_revoked" or "device_expired" or "invalid_token")
+        {
+            var by = answer.Text("revokedBy");
+            return new DeviceSignedOutException(answer.Code, answer.Text("revokedReason"), answer.Text("revokedAt"), by is { Length: > 0 and <= 64 } ? by : null);
+        }
+        return new InvalidOperationException("Dashboard sign-in needs attention. Check Settings.");
+    }
 }
 
 /// <summary>A connection check that failed before anything was saved; the message is fixed client text.</summary>

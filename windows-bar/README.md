@@ -8,7 +8,8 @@ dashboard, with a WinForms `NotifyIcon` in the notification area. It follows the
 The panel is 760 logical pixels wide (850 tall), clamped to the monitor's work area, and opens above the taskbar:
 
 - **Header:** the Apex Soft mark, "AI Account Center" and one status line ("9 of 9 reporting · cached · updated
-  3:15 PM"; hover for the relative time and any providers hidden on the dashboard).
+  3:15 PM"; hover for the relative time and any providers hidden in the trays). Before pairing it says "Not paired",
+  then "Pairing", "Securing this tray" or "Signed out".
 - **Claude, Codex, Antigravity:** one card each with column captions over the meters. Claude shows 5-hour, Weekly and,
   for Max plans only, Fable (`seven_day_fable`; "Not reported yet" when a Max account has no Fable window; Pro accounts
   get no Fable cell). Each Claude row ends with the Open on Mac / Open on Windows pair.
@@ -36,11 +37,27 @@ time in the tooltip and details. A compact meter's reset takes the longest form 
 then "5h 15m", then "5h"); the exact time is always in its tooltip. Once a window's `resetAt` has passed, a reading
 sampled before it (the window's own `sampledAt`, else the account's; or no sample time at all) is not shown: the meter
 is drawn as unavailable with no number and reads "Reset at 5:15 AM · new reading pending" (shorter forms in a narrow
-cell, "Pending" beside a label), never 0%. The refresh timer re-checks this on every tick, so a window flips when its
-reset passes while the panel is open. Providers listed in `hiddenProviders` (top level, or in `settings`) are left out
-when the dashboard reports them; until then Settings says the server does not report them. Provider ids, Codex profiles,
+cell, "Pending" beside a label), never 0%. A window the dashboard marks `resetPassed: true` (F6) is shown the same way
+even when this computer's clock is behind. The refresh timer re-checks this on every tick, so a window flips when its
+reset passes while the panel is open. The trays follow only the dashboard's per-provider "Show in tray" switch
+(`providers[].trayVisible`, or `settings.trayHiddenProviders`); "Show on dashboard" (`providers[].visible`) never hides
+anything here. An account the dashboard hides (`accounts[].hidden`, or a tray-only `trayHidden` when a server sends one)
+is left out. Provider ids, Codex profiles,
 Claude profile ids and Antigravity profile ids come from the data and are accepted only when they are URI and path
 safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
+
+Claude "Open on Mac" and "Open on Windows" both POST `/api/claude/desktop-profiles/:id/open` with
+`Prefer: respond-async`. The tray never starts a `ccs-claude://` URI itself, so a guarded history copy cannot be
+bypassed; when the dashboard cannot be reached the Open says "Can't reach the dashboard. Try again." and launches
+nothing. A 200 is today's finished Open. A 202 turns into a read-poll of `GET /api/claude/desktop-profiles` once a
+second (every five seconds after two minutes, giving up after three), and the account row's secondary line shows the
+reported `openOperation` in its own style: "Copying history 3 of 18", then "Opening", then "Opened". `failed` and
+`blocked_uncertain` show the server's fixed sentence, or "History copy could not be confirmed. Claude was not
+opened.", which is also what a 409 `history_unconfirmed` says; three minutes without a terminal state says "Still
+working on the dashboard. Check again shortly." Those sentences go to the footer status, which is where every other
+error already shows. Both platform buttons rest for the whole Open, so a second one never starts for the same account,
+and the POST is never repeated: not for a poll, not after an expired session, and never resumed after a restart. A read
+that fails while polling never ends the Open; the poll just tries again.
 
 ## Look and motion
 
@@ -63,21 +80,83 @@ safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
   panel's palette and font, with Windows 11 rounded corners. The tooltip carries usage: "AI Account Center · Codex:
   codex-2, 91% weekly left".
 
+## Sign-in and pairing
+
+The tray signs in once and then keeps its own device key (CONTRACT-auth-devices sections 5 to 10). The sign-in screen
+replaces the list inside the same panel, as the trays concept draws it: a 372 px Atlas paper card on a graticule, the
+atlas motif behind it (nine summit contours, the Apex mark, 25/50/75 figures and a survey scale bar), the dashboard's
+type, focus halo, three-layer primary button, error shake and success hand-off. It covers every state of the brief:
+
+1. **First run:** the dashboard address (empty, placeholder `http://`; a missing scheme gets `http://`), then the
+   username and password, "Pairs as Windows tray on <this PC>".
+2. **Setup code:** a dashboard with no sign-in yet: username, password with a strength meter, confirm, and the one-time
+   `XXXX-XXXX` code from the server's terminal; "Create sign-in and pair".
+3. **Pairing:** four steps tick through (password checked, device key issued, saving the key, forgetting the password).
+4. **Not on your local network:** plain HTTP carries the password only to a local address, so a public, CGNAT,
+   link-local or unknown address (the tray resolves the name and checks every address) is refused before anything is
+   sent, with "Use the dashboard's local address" and "Or connect through your home VPN first". The same screen shows
+   when the dashboard itself does not trust this computer ("The dashboard sees this PC at ...").
+5. **Pairing turned off:** the dashboard's "Trust this local network" is off; Try again asks once more. A tray without
+   a device key (new, signed out, or still on its version 1 password) is also offered "Use password": the password
+   sign-in it always had, verified before it is saved, so a changed dashboard password can be entered while pairing
+   waits. A paired tray is never offered it.
+6. **Wrong password** with the tries left, and 7. **rate limited** with a countdown and the button rested.
+8. **Unreachable** or **wrong address** (answered, but not as AI Account Center); the saved connection is untouched.
+9. **Securing this tray:** a stored version 1 password is traded for a key by itself (below).
+10. **Signed out:** revoked from the dashboard, Sign out all devices (with who, when the dashboard says so), or not
+    used for 90 days; the username is filled in and Pair again pairs anew. The tray never retries on its own.
+11. **Success:** the button turns calm with its check, the bar fills, and the list loads in underneath.
+
+Pairing is `POST /api/auth/devices/pair` with the password, this PC's name, `platform: windows` and an install id. The
+new key must work once (`GET /api/auth/devices/me` with `Authorization: Bearer`) before anything is saved, and a
+working connection is never replaced by one that has not. The new key's first check is asked again after a network
+error (twice, after 1 and 3 seconds). From the moment the pair request is sent until its answer is finished, Cancel and
+Escape rest and Settings' Re-pair and Disconnect wait: the dashboard replaces this install's record (and so revokes a
+Re-pair's current key) as soon as it answers, before the new key is ever used, so the answer is always finished. When
+a Re-pair's new key still gets no answer, the tray asks whether its current key survived: if it did (another dashboard
+answered the pair) nothing is saved; if it did not, the new key is the only one that can work, so it is saved and used
+and the next refresh proves it. A pair request that got no answer is handled the same way: never sent (nothing
+listening), the connection is unchanged; cut off after the dashboard replaced the key, the tray is signed out and says
+so; no answer either, the screen says the current key may have been replaced. The key is stored with DPAPI in the same file, scope and
+entropy as before (`%LOCALAPPDATA%\CCS Bar\connection.dpapi`), as version 2 JSON with no password:
+`{ version: 2, baseURL, username, deviceId, deviceToken, installId, pairedAt, rotateAfter }`. Every tray route then
+carries the key as a bearer token and the cookie sign-in is never used. A dashboard that predates pairing (no
+trusted-local-network rule, or no pair route) keeps today's password sign-in, verified before it is saved.
+
+- **Rotation:** once `rotateAfter` has passed the tray calls `POST /api/auth/devices/me/rotate` on a good poll (at
+  most hourly, re-reading `devices/me` every six hours) and writes the new key atomically before its first use. A
+  rotation the dashboard defers (this connection not trusted right now) keeps the current key.
+- **Signed out remotely:** any 401 `device_revoked`, `device_expired` or `invalid_token` deletes the key (the file
+  keeps the address and username and why), stops polling and shows the signed-out screen; the tooltip says
+  "Signed out". A 503 `auth_store_unavailable` or a network error is not a sign-out.
+- **Upgrade from version 1 (section 8):** on launch, at most once per launch and every 24 hours, when the dashboard can
+  pair this computer: the version 1 file is copied to `connection.v1-rollback.dpapi` (same bytes, with its time set to
+  now, because a Windows copy keeps the source's time and the 24 hours count from the migration), the tray pairs with
+  the stored credentials, writes version 2 and calls `devices/me`. On 200 the rollback is deleted; on a 401 device
+  code version 1 comes back from the rollback and the cookie sign-in stays; on a network error both are kept and the
+  check runs again on the next poll (the rollback never lives longer than 24 hours).
+
 ## Settings
 
 Settings opens inside the panel with a visible X; the gear toggles it (and stays pressed while it is open) and Escape
 closes it before a second Escape hides the panel. The gear also works on the sign-in screen: Settings slides over it,
-and X or Escape return to it. It holds Appearance (Light / Dark / Auto), Connection (who is signed
-in, the dashboard address and Change), Start with Windows (the installer's logon task), Keyboard shortcut, read-only
-facts from the dashboard (refresh interval, Codex and Antigravity auto-switch, hidden providers, address) and About
-(version, third-party notices, Quit).
+and X or Escape return to it. It holds Appearance (Light / Dark / Auto), Connection, Start with Windows (the
+installer's logon task), Keyboard shortcut, read-only facts from the dashboard (refresh interval, Codex and Antigravity
+auto-switch, providers hidden in the trays, address) and About (version, third-party notices, Quit).
 
-Sign-in and Change verify before they save. Connect builds a temporary client from the entered address and login,
-signs in (`POST /api/auth/login`) and reads `GET /api/accounts/settings` with that session. Only when both work is the
-connection written to the DPAPI store (same file, entropy and JSON, with any other stored members kept as they were)
-and the running client replaced. A wrong address,
-a rejected login, a timeout (15 s) or Cancel (or Escape) while it checks keeps the saved connection and the running
-client as they were, and the reason shows under the form.
+**Connection** reads "Paired as Windows tray, last synced 20s ago", then this PC and the saved address, then "This
+connection: 192.168.50.31, trusted local network" (or "not trusted"), as the dashboard sees this computer right now
+(`GET /api/auth/check`, read when Settings opens), so you can confirm once that the home VPN counts. **Re-pair** opens
+the password step with Cancel: the current key keeps working until Pair is pressed, and pairing again with the same
+install id revokes the old key. **Disconnect** asks inline, then calls `DELETE /api/auth/devices/me`, forgets the
+key and shows the first-run screen with "Disconnected at ..." and the last address filled in; when the dashboard cannot
+be reached nothing changes. A tray still on a version 1 password says so and offers Pair, whose screen reads "Sign in to
+pair this tray": the saved password keeps working until pairing finishes, and Cancel changes nothing.
+
+The version 1 password sign-in (a dashboard without pairing) verifies before it saves: a temporary client signs in
+(`POST /api/auth/login`) and reads `GET /api/accounts/settings`; only when both work is the connection written and the
+running client replaced. A blank password keeps the saved one only for the same dashboard; it is never sent to a new
+address.
 
 ## Reopening the tray
 
@@ -135,12 +214,15 @@ For unattended setup, pipe a private JSON object containing `baseURL`, `username
 dotnet CCSBar.dll --configure-stdin
 ```
 
-Input is never echoed and only DPAPI ciphertext is written to `%LOCALAPPDATA%\CCS Bar\connection.dpapi`. Do not place
-this JSON in the source tree or in command-line arguments. Session cookies stay in memory. HTTP is accepted for local
-network origins; other origins require HTTPS. Device pairing (a revocable device key instead of the password) waits for
-the dashboard's pairing routes; until then a dashboard password change needs a new sign-in in Settings.
+It pairs at once and stores only the device key, as the install id already stored there when there is one (so a
+reinstall replaces its own device record instead of leaving one behind); when the dashboard cannot pair this computer (no pairing yet, local
+network trust off, not reachable) it stores the version 1 password sign-in as before. Input is never echoed and only
+DPAPI ciphertext is written to `%LOCALAPPDATA%\CCS Bar\connection.dpapi`. Do not place this JSON in the source tree or
+in command-line arguments. HTTP is accepted for local network origins; other origins require HTTPS.
 
-- `--check <report>`: offline checks; the report holds no account emails or authentication data.
+- `--check <report>`: offline checks; the report holds no account emails or authentication data. Its windows never
+  write the real `preferences.json` (the pairing checks keep theirs in their temporary folder), with or without
+  `AAC_TRAY_STATE_DIR`.
 - `--check-live <report>`: reads the configured dashboard without mutation (provider counts, id validation).
 - `--render-fixture <dir> [light|dark]`: renders the real panel from the bundled sanitized fixture
   (`CCSBar/Fixtures/dashboard.json`, example.com identities) to PNGs, with Settings, details, a switch, two Antigravity
@@ -150,8 +232,25 @@ the dashboard's pairing routes; until then a dashboard password change needs a n
   (hidden or shown) leave no theme handlers behind, and an idle panel, shown or hidden, uses no CPU. It never connects
   anywhere.
 - `--render-proof <png>`: renders the live panel against the configured dashboard without a second tray instance.
+- `--e2e <step> <dir>`: one live end-to-end step against a sandbox dashboard (pair, wrong-password, pairing-off,
+  reads, rotate, revoked, pair-again, disconnect, migrate, migrate-aged, repair-held, password-off, configure-twice),
+  driven through the sign-in screen's own fields and button.
+  It refuses to run unless `AAC_TRAY_STATE_DIR` names an isolated folder; credentials arrive on stdin and reports carry
+  states, titles, store key names and status codes only.
 
-No test activates a real Codex, Antigravity or Claude account.
+The render checks also show each of the sign-in screen's states directly (light and dark) and check its title, which
+regions it opens, that the card fits above the footer, that no single-line text is cut off and that the primary's label
+is centred. The pairing checks drive the screen against a loopback fixture dashboard: every state and flow above,
+verify-before-save, rotation, remote sign-out, Re-pair (Cancel and Escape held once Pair is pressed, a new key's check
+asked again, a new key that never answers, a pair request never sent, an answer lost), Disconnect (and a rotation still
+out when it lands), the version 1 upgrade and its rollback (including a version 1 file weeks old), Pair from Settings on
+a version 1 tray, the password option while pairing is off, setup with the code, the fallback for a dashboard without
+pairing, and `--configure-stdin` (run twice, one device record). The render checks also draw the paired Settings ›
+Connection card and Disconnect's inline confirm.
+
+No test activates a real Codex, Antigravity or Claude account, or pairs with a real dashboard. The Claude Open checks run the tray's own flow against a
+loopback fixture dashboard with the connection in an isolated temporary store, and prove that no shell launch happens
+when the dashboard cannot be reached.
 
 ## Branding compatibility
 

@@ -17,6 +17,13 @@ public static class SecureStore
         ? isolated : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CCS Bar");
     public static readonly string SettingsPath = Path.Combine(StateDirectory, "connection.dpapi");
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("CCSBar/dashboard-connection/v1");
+    /// <summary>The stored JSON: members that are not set are left out, so a version 1 file keeps exactly
+    /// {baseURL, username, password} and a version 2 file never carries a password.</summary>
+    private static readonly JsonSerializerOptions StoreJson = new(Formatting.Json) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
+
+    /// <summary>The version 1 rollback copy kept next to the store while a migration's new device key has not yet
+    /// worked once (CONTRACT-auth-devices section 8): same DPAPI scope and entropy, because it is the same bytes.</summary>
+    public static string RollbackPath(string path) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, "connection.v1-rollback.dpapi");
 
     [StructLayout(LayoutKind.Sequential)] private struct DataBlob { public int Length; public IntPtr Data; }
     [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -35,11 +42,52 @@ public static class SecureStore
         try
         {
             var settings = JsonSerializer.Deserialize<ConnectionSettings>(decrypted, Formatting.Json);
-            settings?.Validate();
+            settings?.ValidateStored();
             return settings;
         }
         finally { CryptographicOperations.ZeroMemory(decrypted); }
     }
+
+    /// <summary>Migration step 1: copies the version 1 file, byte for byte, to the rollback file. Its 24 hours count from
+    /// now: a Windows copy keeps the source's last-write time, so without the stamp a version 1 file written weeks ago
+    /// would make the rollback count as expired the moment it is made (review B5N finding 2).</summary>
+    public static void KeepRollback(string path)
+    {
+        var rollback = RollbackPath(path);
+        var temporary = rollback + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.Copy(path, temporary, true);
+            File.SetLastWriteTimeUtc(temporary, DateTime.UtcNow);
+            File.Move(temporary, rollback, true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    /// <summary>A 401 device code on the first check: the version 1 file goes back exactly as it was.</summary>
+    public static void RestoreRollback(string path)
+    {
+        var rollback = RollbackPath(path);
+        if (!File.Exists(rollback)) return;
+        File.Move(rollback, path, true);
+    }
+
+    public static void DeleteRollback(string path)
+    {
+        var rollback = RollbackPath(path);
+        if (File.Exists(rollback)) File.Delete(rollback);
+    }
+
+    /// <summary>The rollback file's age since <see cref="KeepRollback"/> made it, or null when there is none (it never
+    /// lives longer than 24 hours).</summary>
+    public static TimeSpan? RollbackAge(string path)
+    {
+        var rollback = RollbackPath(path);
+        return File.Exists(rollback) ? DateTime.UtcNow - File.GetLastWriteTimeUtc(rollback) : null;
+    }
+
+    /// <summary>The rollback copy, read for the restore decision only (the checks also read it).</summary>
+    public static ConnectionSettings? LoadRollback(string path) => File.Exists(RollbackPath(path)) ? Load(RollbackPath(path)) : null;
 
     public static void Save(ConnectionSettings settings) => Save(settings, SettingsPath);
 
@@ -47,8 +95,9 @@ public static class SecureStore
     /// DPAPI scope and entropy whatever the path.</summary>
     public static void Save(ConnectionSettings settings, string path)
     {
-        settings.Validate();
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(settings, Formatting.Json);
+        settings.ValidateStored();
+        if (settings.IsPaired && settings.HasPassword) throw new ArgumentException("A paired connection never stores the password.");
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(settings, StoreJson);
         try
         {
             var encrypted = Transform(bytes, true);

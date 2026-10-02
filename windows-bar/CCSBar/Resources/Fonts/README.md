@@ -22,3 +22,11 @@ python3 -m venv venv && ./venv/bin/pip install fonttools opentype-feature-freeze
 curl -Lo InstrumentSans-VF.ttf "https://github.com/google/fonts/raw/main/ofl/instrumentsans/InstrumentSans%5Bwdth,wght%5D.ttf"
 ./venv/bin/python ../../../scripts/build-fonts.py   # writes the five TTFs next to the variable font
 ```
+
+## Martian Mono (sign-in screen)
+
+`MartianMono-Regular.ttf` (family "Martian Mono", weight 400, width 87.5) is a static instance of the dashboard's own
+subset `web-dashboard/ui/fonts/MartianMono.ttf` (google/fonts `ofl/martianmono`, SIL Open Font License 1.1, see
+`OFL-MartianMono.txt`), cut with `fontTools.varLib.instancer` at `wght=400` because WPF does not read variation axes.
+The sign-in screen uses it for paths, the setup code and the atlas motif's elevation and scale figures, as the
+dashboard does.

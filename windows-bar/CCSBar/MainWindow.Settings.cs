@@ -35,6 +35,9 @@ public partial class MainWindow
         Motion.To(SettingsShift, TranslateTransform.XProperty, 0, 340, Motion.Out, from: width);
         Motion.To(ListShift, TranslateTransform.XProperty, -28, 340, Motion.Out);
         Motion.To(ListLayer, OpacityProperty, 0, 240, Motion.Out);
+        // The sign-in screen recedes the same way under Settings.
+        Motion.To(SignInShift, TranslateTransform.XProperty, -28, 340, Motion.Out);
+        Motion.To(SignInLayer, OpacityProperty, 0, 240, Motion.Out);
         int i = 0;
         foreach (var card in SettingsPanel.Children.OfType<FrameworkElement>())
         {
@@ -56,6 +59,8 @@ public partial class MainWindow
         var width = Math.Max(1, Body.ActualWidth);
         Motion.To(ListShift, TranslateTransform.XProperty, 0, animate ? 340 : 0, Motion.Out);
         Motion.To(ListLayer, OpacityProperty, 1, animate ? 240 : 0, Motion.Out);
+        Motion.To(SignInShift, TranslateTransform.XProperty, 0, animate ? 340 : 0, Motion.Out);
+        if (signInVisible) Motion.To(SignInLayer, OpacityProperty, 1, animate ? 240 : 0, Motion.Out);
         Motion.To(SettingsShift, TranslateTransform.XProperty, width, animate ? 220 : 0, Motion.In, completed: (_, _) =>
         {
             if (!settingsVisible) SettingsLayer.Visibility = Visibility.Collapsed;
@@ -84,34 +89,7 @@ public partial class MainWindow
         };
         SettingsPanel.Children.Add(SettingCard(Row("Appearance", "Auto follows the Windows app mode.", appearance)));
 
-        // Connection: today's password login (device pairing waits for the dashboard), stored with DPAPI.
-        var connectionCard = new StackPanel();
-        connectionCard.Children.Add(Ui.Text("Connection", 13, "Ink", FontWeights.SemiBold));
-        var device = new Grid { Margin = new Thickness(0, 9, 0, 0) };
-        device.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
-        device.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        device.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var deviceIcon = new Border { Width = 34, Height = 34, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), BorderBrush = Theme.Brush("Rule"), Child = Icons.Icon("monitor", 18, Theme.Brush("Ink2")) };
-        device.Children.Add(deviceIcon);
-        var words = new StackPanel { Margin = new Thickness(12, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center };
-        var who = new TextBlock { FontSize = 13, Foreground = Theme.Brush("Ink"), TextTrimming = TextTrimming.CharacterEllipsis };
-        var where = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), Margin = new Thickness(0, 1, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
-        if (client is not null && connection is not null)
-        {
-            who.Inlines.Add(new Run("Signed in as ")); who.Inlines.Add(new Run(connection.Username) { FontWeight = FontWeights.SemiBold });
-            where.Inlines.Add(new Run(dashboard is null ? "Connecting" : staleSample ? "Last refresh failed" : "Connected") { Foreground = Theme.Brush(staleSample ? "WarnText" : "GoodText"), FontWeight = FontWeights.SemiBold });
-            where.Inlines.Add(new Run(" · " + client.BaseURL.GetLeftPart(UriPartial.Authority) + (dashboard is null ? "" : " · last synced " + Formatting.Relative(dashboard.UpdatedAt))));
-        }
-        else { who.Inlines.Add(new Run("Not connected") { FontWeight = FontWeights.SemiBold }); where.Text = "Sign in with your dashboard username and password to see usage."; }
-        words.Children.Add(who); words.Children.Add(where);
-        Grid.SetColumn(words, 1); device.Children.Add(words);
-        var change = Ui.Button(client is null ? "Sign in" : "Change", client is null ? "AtlasPrimaryButton" : "AtlasButton");
-        change.VerticalAlignment = VerticalAlignment.Center;
-        change.Click += (_, _) => { CloseSettings(animate: false); ShowSignIn(firstRun: client is null); };
-        Grid.SetColumn(change, 2); device.Children.Add(change);
-        connectionCard.Children.Add(device);
-        connectionCard.Children.Add(Note("shield", "Your dashboard sign-in is stored with Windows data protection for your user. After a dashboard password change, sign in here again. Provider credentials stay on the AI Account Center server."));
-        SettingsPanel.Children.Add(SettingCard(connectionCard));
+        SettingsPanel.Children.Add(SettingCard(ConnectionCard()));
 
         // Start with Windows: the installer's logon task.
         var startup = StartupTask.Enabled();
@@ -165,8 +143,9 @@ public partial class MainWindow
             var agAccounts = dashboard.Accounts.Where(account => account.Provider == "antigravity").ToArray();
             var ag = dashboard.AntigravityAutoSwitch;
             kv.Children.Add(Fact("Antigravity auto-switch", ag is null ? "Not reported by this server" : !AntigravitySwitchable(agAccounts) ? "Starts with a second signed-in account" : $"{(ag.Enabled ? "On" : "Off")} · switches at {Formatting.Percent(ag.ThresholdUsedPercent)} used").Row);
+            // The trays follow only "Show in tray"; "Show on dashboard" is the dashboard's own switch.
             var hidden = dashboard.Hidden.Select(provider => Formatting.ProviderName(provider)).ToArray();
-            var (hiddenRow, hiddenValue) = Fact("Hidden on the dashboard", (!dashboard.ReportsHidden ? "Not reported by this server" : hidden.Length > 0 ? string.Join(", ", hidden) : "None") + " · ");
+            var (hiddenRow, hiddenValue) = Fact("Hidden in the trays", (!dashboard.ReportsTrayVisibility ? "Not reported by this server" : hidden.Length > 0 ? string.Join(", ", hidden) : "None") + " · ");
             var link = new Hyperlink(new Run("Change in dashboard")) { Foreground = Theme.Brush("AccentText"), TextDecorations = null, Cursor = Cursors.Hand };
             link.Click += (_, _) => OpenDashboard();
             hiddenValue.Inlines.Add(link);
@@ -192,7 +171,7 @@ public partial class MainWindow
         notices.Click += (_, _) =>
         {
             var file = Path.Combine(AppContext.BaseDirectory, "Resources", "Providers", "THIRD-PARTY-NOTICES.txt");
-            if (File.Exists(file)) Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            if (File.Exists(file)) Launch(new ProcessStartInfo(file) { UseShellExecute = true });
         };
         aboutButtons.Children.Add(notices);
         var quit = Ui.Button("Quit", "GhostButton", Icons.Icon("power", 14, Theme.Brush("Ink3")));
@@ -201,6 +180,136 @@ public partial class MainWindow
         Grid.SetColumn(aboutButtons, 2); about.Children.Add(aboutButtons);
         SettingsPanel.Children.Add(SettingCard(about));
     }
+
+    /// <summary>
+    /// Settings › Connection. Paired: "Paired as Windows tray, last synced …", the computer and the saved address, and
+    /// "This connection: …" as the dashboard sees it (GET /api/auth/check, read when Settings opens), with Re-pair and
+    /// Disconnect (an inline confirm). A version 1 tray says it still uses its saved password and offers Pair; an
+    /// unpaired tray offers Pair.
+    /// </summary>
+    private FrameworkElement ConnectionCard()
+    {
+        var card = new StackPanel { Uid = "settings-connection" };
+        card.Children.Add(Ui.Text("Connection", 13, "Ink", FontWeights.SemiBold));
+        var device = new Grid { Margin = new Thickness(0, 9, 0, 0) };
+        device.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+        device.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        device.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var paired = client is { Paired: true } && connection is { IsPaired: true };
+        var deviceIcon = new Border { Width = 34, Height = 34, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), BorderBrush = Theme.Brush("Rule"), VerticalAlignment = VerticalAlignment.Top, Child = Icons.Icon(client is null ? "unplug" : "monitor", 18, Theme.Brush("Ink2")) };
+        device.Children.Add(deviceIcon);
+        var words = new StackPanel { Margin = new Thickness(12, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center };
+        var who = new TextBlock { FontSize = 13, Foreground = Theme.Brush("Ink"), TextTrimming = TextTrimming.CharacterEllipsis, Uid = "settings-connection-who" };
+        var where = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), Margin = new Thickness(0, 1, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Uid = "settings-connection-where" };
+        words.Children.Add(who); words.Children.Add(where);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var confirm = new Border { Uid = "settings-disconnect-confirm" };
+        string note;
+        if (paired && client is not null && connection is not null)
+        {
+            who.Inlines.Add(new Run("Paired as ")); who.Inlines.Add(new Run("Windows tray") { FontWeight = FontWeights.SemiBold });
+            who.Inlines.Add(new Run(dashboard is null ? (staleSample ? ", last refresh failed" : ", syncing") : ", last synced " + Formatting.Relative(dashboard.UpdatedAt)));
+            where.Text = "On " + Environment.MachineName + " · " + client.BaseURL.GetLeftPart(UriPartial.Authority);
+            var via = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), Margin = new Thickness(0, 1, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Text = "This connection: checking", Uid = "settings-this-connection" };
+            words.Children.Add(via);
+            FillConnectionLine(via, client.BaseURL);
+            // While a pair request's answer is being finished, neither may start: it could undo what that answer did.
+            var repair = Ui.Button("Re-pair"); repair.Uid = "settings-repair"; repair.IsEnabled = !pairHeld;
+            repair.Click += (_, _) => { if (pairHeld) return; CloseSettings(animate: false); ShowSignIn(SignInState.Password, repair: true); };
+            var disconnect = Ui.Button("Disconnect"); disconnect.Foreground = Theme.Brush("CritText"); disconnect.Margin = new Thickness(8, 0, 0, 0); disconnect.Uid = "settings-disconnect"; disconnect.IsEnabled = !pairHeld;
+            disconnect.Click += (_, _) => { if (!pairHeld) confirm.Child = DisconnectConfirm(confirm); };
+            buttons.Children.Add(repair); buttons.Children.Add(disconnect);
+            note = "This tray signs in with its own device key, not your password, so changing the dashboard password keeps it signed in. Revoking it in the dashboard signs it out.";
+        }
+        else if (client is not null && connection is not null)
+        {
+            who.Inlines.Add(new Run("Signed in as ")); who.Inlines.Add(new Run(connection.Username) { FontWeight = FontWeights.SemiBold }); who.Inlines.Add(new Run(" with a saved password"));
+            where.Inlines.Add(new Run(dashboard is null ? "Connecting" : staleSample ? "Last refresh failed" : "Connected") { Foreground = Theme.Brush(staleSample ? "WarnText" : "GoodText"), FontWeight = FontWeights.SemiBold });
+            where.Inlines.Add(new Run(" · " + client.BaseURL.GetLeftPart(UriPartial.Authority) + (dashboard is null ? "" : " · last synced " + Formatting.Relative(dashboard.UpdatedAt))));
+            var pair = Ui.Button("Pair", "AtlasPrimaryButton"); pair.Uid = "settings-pair"; pair.IsEnabled = !pairHeld;
+            // A version 1 tray pairs from here: the saved password keeps working until pairing finishes (Upgrade).
+            pair.Click += (_, _) => { if (pairHeld) return; CloseSettings(animate: false); ShowSignIn(SignInState.Password, repair: true); };
+            buttons.Children.Add(pair);
+            note = "This tray still signs in with your saved dashboard password, kept with Windows data protection. Pair gives it its own device key and deletes the password.";
+        }
+        else
+        {
+            who.Inlines.Add(new Run(SignInStatus ?? "Not paired") { FontWeight = FontWeights.SemiBold });
+            where.Text = "Pair with your dashboard username and password to see usage.";
+            var pair = Ui.Button("Pair", "AtlasPrimaryButton"); pair.Uid = "settings-pair";
+            pair.Click += (_, _) => { CloseSettings(); if (!signInVisible) ShowSignIn(SignInState.FirstRun); };
+            buttons.Children.Add(pair);
+            note = "The device key is kept with Windows data protection, readable only by your Windows account. Provider credentials stay on the AI Account Center server.";
+        }
+        Grid.SetColumn(words, 1); device.Children.Add(words);
+        Grid.SetColumn(buttons, 2); device.Children.Add(buttons);
+        card.Children.Add(device);
+        card.Children.Add(confirm);
+        card.Children.Add(Note("shield", note));
+        return card;
+    }
+
+    /// <summary>"This connection: 192.168.50.31, trusted local network" (or "not trusted"), as the dashboard sees this
+    /// computer right now, so the owner can confirm once that the home VPN counts.</summary>
+    private async void FillConnectionLine(TextBlock line, Uri origin)
+    {
+        if (ConnectionLineForRender is { } given) { line.Text = ConnectionLine(given); return; }
+        try
+        {
+            using var api = new AuthApi(origin, TimeSpan.FromSeconds(5));
+            var check = await api.Check();
+            line.Text = ConnectionLine(check);
+        }
+        catch { line.Text = "This connection: the dashboard did not answer"; }
+    }
+
+    /// <summary>Renders only: the dashboard's view of this computer, given instead of asked, so a render sends nothing.</summary>
+    internal AuthCheck? ConnectionLineForRender { get; set; }
+
+    internal static string ConnectionLine(AuthCheck check)
+    {
+        if (check.Connection is not { } seen) return "This connection: not reported by this dashboard";
+        var peer = seen.Peer.Length is > 0 and <= 64 && seen.Peer.All(c => char.IsAsciiHexDigit(c) || c is ':' or '.') ? seen.Peer : "unknown";
+        if (peer is "127.0.0.1" or "::1") return "This connection: this computer";
+        if (seen.Trusted) return $"This connection: {peer}, trusted local network";
+        return check.SecureTransport ? $"This connection: {peer}, secure connection" : $"This connection: {peer}, not trusted";
+    }
+
+    /// <summary>Disconnect asks inline first (the concept's confirm line), then revokes and forgets the key.</summary>
+    private FrameworkElement DisconnectConfirm(Border slot)
+    {
+        var line = new Grid { Uid = "settings-disconnect-line" };
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(23) });
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // The gap sits outside the box, so the confirm keeps clear of the "This connection" line above it.
+        var box = new Border { Background = Theme.Brush("CritSoft"), BorderBrush = Theme.Brush("CritLine"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 9, 10, 9), Margin = new Thickness(0, 10, 0, 0), Child = line };
+        var glyph = Icons.Icon("unplug", 15, Theme.Brush("CritText")); glyph.VerticalAlignment = VerticalAlignment.Center; glyph.HorizontalAlignment = HorizontalAlignment.Left;
+        line.Children.Add(glyph);
+        var text = Ui.Text("Disconnect this Windows tray? The dashboard revokes its device key and the tray forgets it. Pairing again needs the dashboard password.", 12, "Ink2", wrap: true);
+        text.VerticalAlignment = VerticalAlignment.Center; text.Uid = "settings-disconnect-text";
+        Grid.SetColumn(text, 1); line.Children.Add(text);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        var cancel = Ui.Button("Cancel", "GhostButton"); cancel.Uid = "settings-disconnect-cancel";
+        cancel.Click += (_, _) => slot.Child = null;
+        var yes = Ui.Button("Disconnect", "AtlasPrimaryButton"); yes.Margin = new Thickness(6, 0, 0, 0); yes.Uid = "settings-disconnect-yes";
+        yes.Background = Theme.Brush("Crit"); yes.BorderBrush = Theme.Brush("Crit"); yes.Tag = Theme.Brush("CritText"); yes.Foreground = Theme.Brush("AccentInk");
+        yes.Click += async (_, _) =>
+        {
+            yes.IsEnabled = cancel.IsEnabled = false;
+            text.Text = "Disconnecting";
+            var failure = await DisconnectTray();
+            if (failure is null) return;
+            text.Text = failure; text.Foreground = Theme.Brush("CritText");
+            yes.IsEnabled = cancel.IsEnabled = true;
+        };
+        actions.Children.Add(cancel); actions.Children.Add(yes);
+        Grid.SetColumn(actions, 2); line.Children.Add(actions);
+        return box;
+    }
+
+    /// <summary>Checks only: the Settings Connection card's buttons and lines, by Uid.</summary>
+    internal FrameworkElement? SettingsElement(string uid) => FixtureRender.FindUid(SettingsPanel, uid);
 
     private static Segmented Segment((string, string, string?)[] options, string value) => new(options, value);
 
@@ -252,77 +361,7 @@ public partial class MainWindow
         return row;
     }
 
-    // ------------------------------------------------------------------ sign-in
-
-    /// <summary>First run (or Change): the dashboard address, username and password. Connect checks them against
-    /// the dashboard first and saves them with DPAPI only once they work (<see cref="SubmitConnection"/>).</summary>
-    public void ShowSignIn(bool firstRun)
-    {
-        // A Change opened again over a running check (Settings slides over the sign-in screen) starts over.
-        CancelConnectionCheck();
-        signInVisible = true;
-        SignInPanel.Children.Clear();
-        var top = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 14) };
-        var logo = Icons.Logo(44, Theme.Brush("Ink")); logo.HorizontalAlignment = HorizontalAlignment.Center; top.Children.Add(logo);
-        var title = Ui.Text(firstRun ? "Connect this Windows PC to AI Account Center" : "Change the dashboard connection", 18, "Ink", FontWeights.SemiBold);
-        title.HorizontalAlignment = HorizontalAlignment.Center; title.Margin = new Thickness(0, 12, 0, 0); top.Children.Add(title);
-        var intro = Ui.Text("Sign in with your dashboard username and password.", 12.5, "Ink3", wrap: true);
-        intro.HorizontalAlignment = HorizontalAlignment.Center; intro.TextAlignment = TextAlignment.Center; intro.Margin = new Thickness(0, 6, 0, 0); top.Children.Add(intro);
-        SignInPanel.Children.Add(top);
-        var url = Field("Dashboard address", new TextBox { Text = connection?.BaseURL ?? new ConnectionSettings().BaseURL });
-        var user = Field("Username", new TextBox { Text = connection?.Username ?? "" });
-        var password = Field("Password", new PasswordBox());
-        if (connection is not null) password.Hint.Text = "Leave blank to keep the saved password.";
-        var http = Note("info", "This address uses plain HTTP on your network, so the password crosses it unencrypted when the tray signs in. Use HTTPS or an SSH tunnel where you can.");
-        http.Uid = "http-connection-warning";
-        void UpdateHttp() => http.Visibility = Uri.TryCreate(((TextBox)url.Input).Text.Trim(), UriKind.Absolute, out var origin) && origin.Scheme == Uri.UriSchemeHttp ? Visibility.Visible : Visibility.Collapsed;
-        ((TextBox)url.Input).TextChanged += (_, _) => UpdateHttp(); UpdateHttp();
-        SignInPanel.Children.Add(url.Element); SignInPanel.Children.Add(user.Element); SignInPanel.Children.Add(password.Element);
-        SignInPanel.Children.Add(http);
-        SignInPanel.Children.Add(Note("shield", "Saved with Windows data protection for your user once the dashboard accepts it. Provider credentials stay on the AI Account Center server."));
-        var error = Ui.Text("", 12, "CritText", wrap: true); error.Margin = new Thickness(0, 8, 0, 0); error.MinHeight = 15; error.Uid = "sign-in-error";
-        SignInPanel.Children.Add(error);
-        var actions = new Grid { Margin = new Thickness(0, 10, 0, 0) };
-        actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-        actions.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
-        var connectLabel = firstRun ? "Connect" : "Save and connect";
-        var connect = Ui.Button(connectLabel, "AtlasPrimaryButton"); connect.Height = 34; connect.IsDefault = true; connect.Uid = "sign-in-connect";
-        // Cancel stops a running check (the saved connection stays as it was); otherwise it closes a Change.
-        // On first run there is nothing to go back to, so it shows only while a check runs.
-        var cancel = Ui.Button("Cancel"); cancel.Height = 34; cancel.Uid = "sign-in-cancel";
-        cancel.Click += (_, _) => { if (CheckingConnection) CancelConnectionCheck(); else if (client is not null) CloseSignIn(); };
-        actions.Children.Add(cancel);
-        actions.Children.Add(connect);
-        void Layout(bool checking)
-        {
-            var showCancel = client is not null || checking;
-            cancel.Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed;
-            Grid.SetColumn(connect, showCancel ? 2 : 0); Grid.SetColumnSpan(connect, showCancel ? 1 : 3);
-            connect.Content = checking ? "Checking the connection" : connectLabel;
-            connect.IsEnabled = !checking;
-            url.Input.IsEnabled = user.Input.IsEnabled = password.Input.IsEnabled = !checking;
-        }
-        Layout(false);
-        SignInPanel.Children.Add(actions);
-        connect.Click += async (_, _) =>
-        {
-            if (CheckingConnection) return;
-            error.Text = "";
-            Layout(true);
-            var failure = await SubmitConnection(((TextBox)url.Input).Text, ((TextBox)user.Input).Text, ((PasswordBox)password.Input).Password);
-            Layout(false);
-            if (failure is not null) { error.Text = failure; return; }
-            ((PasswordBox)password.Input).Clear();
-            CloseSignIn();
-            RenderFooter(); UpdateStatus(); SampleChanged?.Invoke();
-            await Refresh(true);
-        };
-        SignInLayer.Visibility = Visibility.Visible;
-        SignInLayer.Opacity = 0; Motion.To(SignInLayer, OpacityProperty, 1, 260);
-        RenderFooter(); UpdateStatus();
-        Dispatcher.BeginInvoke(new Action(() => (string.IsNullOrEmpty(((TextBox)url.Input).Text) ? url.Input : string.IsNullOrEmpty(((TextBox)user.Input).Text) ? user.Input : password.Input).Focus()), System.Windows.Threading.DispatcherPriority.Input);
-    }
+    // ------------------------------------------------------------------ the version 1 password sign-in (verify, then save)
 
     /// <summary>Where a verified connection is saved: the DPAPI store (<see cref="SecureStore.SettingsPath"/>), or a
     /// fixture file in an isolated folder for the checks.</summary>
@@ -350,8 +389,11 @@ public partial class MainWindow
         ConnectionSettings candidate;
         try
         {
-            // A blank password keeps the saved one: it is checked again with the new address and username.
-            candidate = new ConnectionSettings { BaseURL = address.Trim(), Username = username.Trim(), Password = password.Length > 0 ? password : connection?.Password ?? "", Extra = connection?.Extra };
+            // A blank password keeps the saved one, but only for the same dashboard: it is never sent to a new address
+            // (DEPLOY-REVIEW-1 F4). It is checked again with the address and username.
+            var keep = password.Length == 0 && connection?.Password is { Length: > 0 } saved && ConnectionSettings.SameOrigin(address, connection.BaseURL) ? saved : null;
+            if (password.Length == 0 && keep is null) return "Enter the password for this dashboard. " + unchanged;
+            candidate = new ConnectionSettings { BaseURL = address.Trim(), Username = username.Trim(), Password = password.Length > 0 ? password : keep, Extra = connection?.Extra };
             candidate.Validate();
         }
         catch (ArgumentException invalid) { return invalid.Message; }
@@ -368,6 +410,8 @@ public partial class MainWindow
             connection = candidate; client = verified; verified = null;
             connectionGeneration++;
             dashboard = null; staleSample = false; lastFailure = DateTimeOffset.MinValue; statusFlash = null;
+            // The replaced connection's Open stops reading it and its row rests; it is never resumed.
+            openProgress.Clear();
             previous?.Dispose();
             return null;
         }
@@ -381,20 +425,4 @@ public partial class MainWindow
         }
     }
 
-    private void CloseSignIn()
-    {
-        signInVisible = false;
-        Motion.To(SignInLayer, OpacityProperty, 0, 200, completed: (_, _) => { if (!signInVisible) SignInLayer.Visibility = Visibility.Collapsed; });
-    }
-
-    private sealed record FieldParts(FrameworkElement Element, Control Input, TextBlock Hint);
-
-    private static FieldParts Field(string label, Control input)
-    {
-        var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
-        var caption = Ui.Text(label, 12, "Ink2", FontWeights.Medium); caption.Margin = new Thickness(0, 0, 0, 5); panel.Children.Add(caption);
-        panel.Children.Add(input);
-        var hint = Ui.Text("", 11.5, "Ink3"); hint.Margin = new Thickness(0, 3, 0, 0); panel.Children.Add(hint);
-        return new FieldParts(panel, input, hint);
-    }
 }

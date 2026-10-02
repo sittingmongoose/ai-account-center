@@ -16,8 +16,17 @@ public sealed class Preferences
 {
     public string Theme { get; set; } = "auto";
     public bool Hotkey { get; set; } = true;
+    /// <summary>When this tray last tried to trade a stored password for a device key (contract section 8: at most once
+    /// per launch and every 24 hours). Not a secret.</summary>
+    public string? LastPairAttempt { get; set; }
 
     public static string DefaultPath => Path.Combine(SecureStore.StateDirectory, "preferences.json");
+    /// <summary>Where <see cref="Save"/> writes when no path is given: null is the tray's own file. The pairing checks give
+    /// their windows a file in their isolated folder.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] internal string? StorePath { get; init; }
+    /// <summary>A check's, a render's or the E2E driver's copy without a file of its own (its window does not load the
+    /// real connection): Save writes nothing, so running the checks never rewrites the real preferences.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] internal bool Detached { get; set; }
 
     public ThemeMode Mode => Theme switch { "light" => ThemeMode.Light, "dark" => ThemeMode.Dark, _ => ThemeMode.Auto };
 
@@ -40,7 +49,8 @@ public sealed class Preferences
     {
         try
         {
-            var file = path ?? DefaultPath;
+            var file = path ?? StorePath ?? (Detached ? null : DefaultPath);
+            if (file is null) return;
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             var temporary = file + ".tmp-" + Guid.NewGuid().ToString("N");
             File.WriteAllText(temporary, JsonSerializer.Serialize(this, Formatting.Json));
@@ -72,6 +82,14 @@ public static class Theme
         ["Platter"] = ("#E8EDF9", "#1F2B3A"), ["PlatterLine"] = ("#612552CC", "#6186ABFF"), ["AccentLine"] = ("#87A0DA", "#516995"), ["ActiveHover"] = ("#0D2552CC", "#0D86ABFF"),
         ["WarnSoft"] = ("#F7F4EC", "#242928"), ["WarnLine"] = ("#D3C4A5", "#635B40"), ["CritSoft"] = ("#F8F1F0", "#232328"), ["CritLine"] = ("#D6B8B6", "#5C4243"),
         ["Shadow"] = ("#2615202B", "#66000000"),
+        // Sign-in screen (trays/tray.css, the sign-in block): contours, elevation figures, scale bar, graticule,
+        // the focus halo (accent 24%), the ink on the calm success fill, and the hover and match mixes.
+        ["SiCt"] = ("#CDD6DD", "#2B3946"), ["SiCtIdx"] = ("#B6C1CB", "#3A4958"), ["SiElev"] = ("#95A2AE", "#5B6876"),
+        ["SiCtOk"] = ("#94A9D7", "#4A6085"), ["SiCtIdxOk"] = ("#6684CC", "#647FB4"),
+        ["SiSbPaper"] = ("#FBFCFD", "#151E26"), ["SiSbInk"] = ("#63717F", "#8794A2"),
+        ["PgMinor"] = ("#0915202B", "#06E6ECF2"), ["PgMajor"] = ("#1115202B", "#0BE6ECF2"),
+        ["SiOnCalm"] = ("#FFFFFF", "#0B1A17"), ["Halo"] = ("#3D2552CC", "#3D86ABFF"), ["HaloBad"] = ("#38CF4127", "#38FF6D50"),
+        ["AccentHover"] = ("#234CB9", "#92B3FD"), ["OkMatch"] = ("#4F9F96", "#42A197"),
     };
 
     private static readonly Dictionary<string, SolidColorBrush> brushes = new();
@@ -150,6 +168,8 @@ public static class Theme
     // Instrument Sans (static, tnum frozen into every face) and its SemiCondensed SemiBold numeral face.
     public static readonly FontFamily Sans = new(new Uri("pack://application:,,,/CCSBar;component/"), "./Resources/Fonts/#Instrument Sans");
     public static readonly FontFamily Numerals = new(new Uri("pack://application:,,,/CCSBar;component/"), "./Resources/Fonts/#Instrument Sans SemiCondensed");
+    // Martian Mono (static Regular cut at the dashboard's 87.5 width): paths, the setup code and the motif's figures.
+    public static readonly FontFamily Mono = new(new Uri("pack://application:,,,/CCSBar;component/"), "./Resources/Fonts/#Martian Mono");
 }
 
 /// <summary>Theme state for bindings. WPF listens to it through a weak event manager, so short-lived elements (rows

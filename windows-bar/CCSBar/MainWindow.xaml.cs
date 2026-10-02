@@ -31,7 +31,7 @@ public partial class MainWindow : Window
     private AccountDashboard? dashboard;
     private readonly DispatcherTimer timer;
     private readonly Preferences preferences;
-    private bool busy, staleSample, settingsVisible, signInVisible, confirmationVisible, popupOpen, openedOnce;
+    private bool busy, staleSample, settingsVisible, signInVisible, confirmationVisible, popupOpen, openedOnce, signInEntered;
     private readonly HashSet<string> expanded = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Meter> meters = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double?> shownAtHide = new(StringComparer.Ordinal);
@@ -51,6 +51,13 @@ public partial class MainWindow : Window
     private int connectionGeneration;
     /// <summary>The windows drawn as "new reading pending" (F6), so the timer redraws only when one flips.</summary>
     private string pendingResets = "";
+    /// <summary>The Claude Open now running for an account, keyed by account id, as its row's calm secondary text.
+    /// The entry is removed once the Open ends, so the row returns to its plan, platform and sample time.</summary>
+    private readonly Dictionary<string, ClaudeOpenProgress> openProgress = new(StringComparer.Ordinal);
+    /// <summary>One Open per Claude account: a second click while one runs sends nothing at all.</summary>
+    private readonly ClaudeOpenCoordinator openCoordinator = new();
+    /// <summary>How often a running Open is read: 1 s, then every 5 s after two minutes, giving up after three.</summary>
+    private readonly ClaudeOpenPolling openPolling = new();
 
     /// <summary>Raised after every new sample or connection change (the tray tooltip follows it).</summary>
     public event Action? SampleChanged;
@@ -67,6 +74,9 @@ public partial class MainWindow : Window
     public MainWindow(Preferences? preferences = null, bool loadConnection = true)
     {
         this.preferences = preferences ?? new Preferences();
+        // A window that does not load the real connection (a check, a render, the E2E driver) never writes the real
+        // preferences either, unless it was given a file of its own.
+        if (!loadConnection && this.preferences.StorePath is null) this.preferences.Detached = true;
         InitializeComponent();
         FontFamily = Theme.Sans;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Ideal);
@@ -84,6 +94,9 @@ public partial class MainWindow : Window
         RefreshButton.ToolTip = Ui.Tip("Refresh usage");
         SettingsButton.Content = Spinner("settings", gearTurn, 16);
         SettingsButton.ToolTip = Ui.Tip("Settings");
+        QuitButton.Content = Icons.Icon("power", 16, Theme.Brush("Ink2"));
+        QuitButton.ToolTip = Ui.Tip("Quit AI Account Center");
+        System.Windows.Automation.AutomationProperties.SetName(QuitButton, "Quit AI Account Center");
         System.Windows.Automation.AutomationProperties.SetName(RefreshButton, "Refresh usage");
         System.Windows.Automation.AutomationProperties.SetName(SettingsButton, "Settings");
         PaintFade(); Theme.Changed += PaintFade;
@@ -91,19 +104,24 @@ public partial class MainWindow : Window
         Deactivated += (_, _) => { if (!confirmationVisible && !popupOpen && !signInVisible) HidePopup(); };
         PreviewKeyDown += OnPreviewKeyDown;
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
-        timer.Tick += async (_, _) => { ReevaluateResets(); await Refresh(false); };
+        // While the sign-in screen shows (Re-pair, Securing) the list is not polled behind it.
+        timer.Tick += async (_, _) => { ReevaluateResets(); if (!signInVisible) await Refresh(false); };
         if (loadConnection)
         {
             timer.Start();
             try
             {
                 connection = SecureStore.Load();
-                if (connection is not null) client = new DashboardClient(connection);
+                // A version 2 file without a key (signed out remotely, or Disconnect) opens on the sign-in screen.
+                if (connection is { IsSignedOut: false }) client = new DashboardClient(connection);
             }
+            // A stored file the tray no longer accepts (such as plain HTTP outside the local network) is not a locked one:
+            // say why, in the client's own words.
+            catch (ArgumentException invalid) { statusFlash = "The saved connection can't be used. " + invalid.Message; }
             catch { statusFlash = "The stored connection could not be unlocked. Sign in again."; }
         }
         RenderFooter();
-        if (client is null && loadConnection) ShowSignIn(firstRun: true);
+        if (client is null && loadConnection) ShowSignIn(connection is { IsSignedOut: true } stub ? StateFor(stub) : SignInState.FirstRun, entrance: false);
         UpdateStatus();
     }
 
@@ -114,19 +132,31 @@ public partial class MainWindow : Window
         client = new DashboardClient(connection);
         timer.Stop(); RenderFooter();
     }
+    /// <summary>Fixture renders only: a paired loopback connection that is never requested (Settings › Connection).</summary>
+    internal void UsePairedFixtureConnection()
+    {
+        connection = new ConnectionSettings { Version = 2, BaseURL = "http://127.0.0.1:3000", Username = "fixture", DeviceId = "dev_0000000000000000", DeviceToken = "aacd_" + new string('A', 43), InstallId = "00000000-0000-4000-8000-000000000000" };
+        client = new DashboardClient(connection);
+        timer.Stop(); RenderFooter();
+    }
     /// <summary>Checks only: a connection read from an isolated fixture store, which a verified Change replaces.</summary>
     internal void UseConnectionStoreForCheck(string path)
     {
         ConnectionStorePath = path;
-        connection = SecureStore.Load(path);
+        connection = File.Exists(path) ? SecureStore.Load(path) : null;
         client?.Dispose();
-        client = connection is null ? null : new DashboardClient(connection);
+        client = connection is null || connection.IsSignedOut ? null : new DashboardClient(connection);
         timer.Stop(); RenderFooter();
     }
+    internal ConnectionSettings? StoredConnectionForCheck => connection;
+    internal Preferences PreferencesForCheck => preferences;
     internal void ToggleDetailsForCheck(string id) => ToggleDetails(id);
     internal Border? PlatterFor(string provider) => platters.TryGetValue(provider, out var platter) ? platter : null;
     internal void SetRefreshingForCheck(bool spinning) => SetRefreshing(spinning);
     internal bool RefreshSpinning => refreshTurn.HasAnimatedProperties;
+    internal Task OpenClaudeForCheck(DashboardAccount account, string platform) => OpenClaude(account, platform);
+    internal string? StatusFlashForCheck => statusFlash;
+    internal bool OpenRunningForCheck(string accountId) => OpenRunning(accountId);
 
     private static FrameworkElement Spinner(string icon, RotateTransform turn, double size)
     {
@@ -153,6 +183,7 @@ public partial class MainWindow : Window
         if (!wasVisible)
         {
             Show(); PlayOpen();
+            if (signInVisible && signInView is not null && !signInEntered) { signInEntered = true; signInView.PlayEntrance(true); }
             if (busy) SetRefreshing(true);
             // A sample that arrived while the panel was hidden had no layout yet: place the selected-row platter now.
             Dispatcher.BeginInvoke(new Action(() => { PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
@@ -227,12 +258,24 @@ public partial class MainWindow : Window
     {
         if (e.Key != Key.Escape) return;
         e.Handled = true;
+        Escape();
+    }
+
+    /// <summary>Escape, in order: a popup, Settings, a connection check, then the sign-in screen, then the panel.</summary>
+    private void Escape()
+    {
         if (openPopup is { IsOpen: true }) { openPopup.IsOpen = false; return; }
         if (settingsVisible) { CloseSettings(); return; }
         if (connectionCheck is not null) { CancelConnectionCheck(); return; }
-        if (signInVisible && client is not null) { CloseSignIn(); return; }
+        // Re-pair, Pair and Change from Settings: Escape is Cancel (the current connection keeps working) until the pair
+        // request is sent; from then on it is ignored, so the answer is never abandoned. Anywhere else on the sign-in
+        // screen, including a migration that runs by itself, Escape only hides the panel.
+        if (signInVisible && signInView?.Model.HasCurrent == true && client is not null) { if (!pairHeld) SiAlt(); return; }
         HidePopup();
     }
+
+    /// <summary>Checks only: Escape as the key handler runs it (the checks' windows are never shown).</summary>
+    internal void EscapeForCheck() => Escape();
 
     // ------------------------------------------------------------------ data
 
@@ -244,13 +287,16 @@ public partial class MainWindow : Window
         statusFlash = dashboard is null ? "Loading accounts" : "Refreshing usage";
         UpdateStatus();
         var generation = connectionGeneration;
+        var sampled = false;
         try
         {
             var sample = await client.Dashboard(force);
-            if (generation == connectionGeneration) ApplyDashboardSample(sample);
+            if (generation == connectionGeneration) { ApplyDashboardSample(sample); sampled = true; lastGoodSample = DateTimeOffset.UtcNow; }
         }
         catch (Exception error) when (generation == connectionGeneration)
         {
+            // A 401 device code: the tray was signed out remotely. No retry, no stale list: the signed-out screen.
+            if (error is DeviceSignedOutException { IsDeviceCode: true } signedOut) { busy = false; SetRefreshing(false); SignedOutRemotely(signedOut); return; }
             lastFailure = DateTimeOffset.UtcNow;
             statusFlash = DisplayError(error);
             if (dashboard is null) RenderEmpty("Usage is unavailable", "Check the dashboard connection in Settings, or try Refresh.");
@@ -259,7 +305,14 @@ public partial class MainWindow : Window
         catch (Exception) { /* The old connection's request, replaced by a verified Change while it ran. */ }
         finally { FinishRequest(); }
         // A Change landed while this sample was in flight: read the new connection now.
-        if (generation != connectionGeneration) await Refresh(true);
+        if (generation != connectionGeneration) { await Refresh(true); return; }
+        if (sampled && client is { Paired: true })
+        {
+            // A pending migration's rollback, and the device key's rotation (section 7), ride on a good poll.
+            try { await SettleRollback(); await MaintainDeviceKey(); }
+            catch (Exception error) when (generation == connectionGeneration) { HandledSignOut(error); }
+            catch (Exception) { }
+        }
     }
 
     /// <summary>Shows a sample. Used by Refresh and by the offline fixture renderer.</summary>
@@ -309,17 +362,18 @@ public partial class MainWindow : Window
     {
         StatusText.Inlines.Clear();
         if (statusFlash is not null) { StatusText.Inlines.Add(new Run(statusFlash)); StatusText.ToolTip = null; return; }
-        if (client is null) { StatusText.Inlines.Add(new Run("Not connected")); return; }
+        if (SignInStatus is { } signIn) { StatusText.Inlines.Add(new Run(signIn)); StatusText.ToolTip = null; return; }
+        if (client is null) { StatusText.Inlines.Add(new Run("Not paired")); return; }
         if (dashboard is null) { StatusText.Inlines.Add(new Run("Connecting")); return; }
         var hidden = dashboard.Hidden;
-        var providers = dashboard.Accounts.GroupBy(account => account.Provider).Where(group => !hidden.Contains(group.Key)).ToArray();
+        var providers = dashboard.ShownAccounts.GroupBy(account => account.Provider).Where(group => !hidden.Contains(group.Key)).ToArray();
         var reporting = providers.Count(group => group.Any(account => account.Status is "ok" or "cached" && account.HasUsableUsage || account.Status == "ok"));
         var cached = providers.All(group => group.All(account => account.Status != "ok"));
         StatusText.Inlines.Add(new Run($"{reporting} of {providers.Length}") { Foreground = Theme.Brush("Ink2"), FontWeight = FontWeights.Medium });
         StatusText.Inlines.Add(new Run(" reporting · " + (cached ? "cached" : "live") + " · updated " + (DateTimeOffset.TryParse(dashboard.UpdatedAt, out var at) ? Formatting.Clock(at) : "time unavailable")));
         if (staleSample) StatusText.Inlines.Add(new Run(" · refresh failed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold });
         var hiddenNames = hidden.Select(provider => Formatting.ProviderName(provider)).ToArray();
-        StatusText.ToolTip = Ui.Tip($"Updated {Formatting.Relative(dashboard.UpdatedAt)}. Every reading is the dashboard's sample." + (hiddenNames.Length > 0 ? " Hidden on the dashboard: " + string.Join(", ", hiddenNames) + "." : ""));
+        StatusText.ToolTip = Ui.Tip($"Updated {Formatting.Relative(dashboard.UpdatedAt)}. Every reading is the dashboard's sample." + (hiddenNames.Length > 0 ? " Hidden in the trays: " + string.Join(", ", hiddenNames) + "." : ""));
     }
 
     // ------------------------------------------------------------------ rendering
@@ -335,20 +389,22 @@ public partial class MainWindow : Window
         ContentPanel.Children.Clear();
         if (staleSample) ContentPanel.Children.Add(StaleBanner());
         var hidden = dashboard.Hidden;
-        foreach (var provider in Formatting.ProviderOrder(dashboard.Accounts))
+        var shown = dashboard.ShownAccounts.ToList();
+        foreach (var provider in Formatting.ProviderOrder(shown))
         {
             if (hidden.Contains(provider)) continue;
-            var accounts = dashboard.Accounts.Where(account => account.Provider == provider).ToArray();
+            var accounts = shown.Where(account => account.Provider == provider).ToArray();
             ContentPanel.Children.Add(provider is "claude" or "codex" or "antigravity" ? AccountSection(provider, accounts) : ProviderCard(provider, accounts));
         }
         if (dashboard.Accounts.Count == 0) RenderEmpty("No accounts found", "Your signed-in accounts appear here when AI Account Center discovers them.");
+        else if (ContentPanel.Children.Count == (staleSample ? 1 : 0)) RenderEmpty("Every provider is hidden in the trays", "Turn on Show in tray for a provider in the dashboard's Accounts and Settings.");
         RenderFooter();
         if (busy || staleSample) DisableMutations();
         Dispatcher.BeginInvoke(new Action(() => { ContentScroll.ScrollToVerticalOffset(offset); PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
     }
 
     /// <summary>Every window now drawn as "new reading pending" (F6), as one comparable string.</summary>
-    private static string PendingResets(AccountDashboard sample) => string.Join("\n", sample.Accounts.SelectMany(account =>
+    private static string PendingResets(AccountDashboard sample) => string.Join("\n", sample.ShownAccounts.SelectMany(account =>
         account.Windows.Where(window => Formatting.PendingReset(account, window) is not null).Select(window => account.Id + "|" + window.Key)));
 
     /// <summary>The refresh timer's first step (F6): a window whose reset passes while the panel is open turns into
@@ -552,7 +608,7 @@ public partial class MainWindow : Window
         var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         var email = Ui.Text(account.Email ?? account.Label, 13, "Ink", active ? FontWeights.SemiBold : FontWeights.Medium, trim: true);
         identity.Children.Add(email);
-        identity.Children.Add(RowMeta(account));
+        identity.Children.Add(RowMeta(account, OpenText(account.Id)));
         identity.ToolTip = Ui.Tip(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan), Formatting.PlatformName(account.Platform), account.SampledAt is null ? "" : "sampled " + Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part))));
         Grid.SetColumn(identity, 2); grid.Children.Add(identity);
         if (account.Status == "needs_sign_in" && !Meters(account).Any())
@@ -572,8 +628,10 @@ public partial class MainWindow : Window
         return RowShell(grid, account.Id, separator, active, () => ToggleDetails(account.Id), "View every usage window, balance and reset for " + (account.Email ?? account.Label), columns.Count);
     }
 
-    private static TextBlock RowMeta(DashboardAccount account)
+    /// <summary>The row's secondary line. A Claude Open in progress takes it, in the same style, until it ends.</summary>
+    private static TextBlock RowMeta(DashboardAccount account, string? openText)
     {
+        if (openText is not null) return Ui.Text(openText, 11.5, "Ink3", trim: true);
         var parts = new[] { Formatting.PlanLabel(account.Plan), Formatting.PlatformName(account.Platform), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part));
         var text = Ui.Text(string.Join(" · ", parts), 11.5, "Ink3", trim: true);
         if (account.Status == "needs_sign_in") { text.Text = ""; text.Inlines.Add(new Run("Sign-in needed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold }); text.Inlines.Add(new Run(" · " + Formatting.PlatformName(account.Platform))); }
@@ -663,10 +721,12 @@ public partial class MainWindow : Window
             var id = account.Capabilities.ClaudeProfileId;
             if (!Formatting.IsSafeClaudeProfile(id)) return null;
             var pair = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+            // Both platform buttons rest for the whole Open, so no second one starts for this account.
+            var openRunning = OpenRunning(account.Id);
             foreach (var platform in new[] { "mac", "windows" }.Where(account.Capabilities.ClaudePlatforms.Contains))
             {
                 var name = platform == "mac" ? "Mac" : "Windows";
-                var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush("Ink2")), ToolTip = Ui.Tip("Open " + (account.Email ?? account.Label) + " in Claude on " + name), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation" };
+                var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush("Ink2")), ToolTip = Ui.Tip("Open " + (account.Email ?? account.Label) + " in Claude on " + name), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation", IsEnabled = !openRunning };
                 System.Windows.Automation.AutomationProperties.SetName(button, "Open on " + name);
                 button.Click += async (_, _) => await OpenClaude(account, platform);
                 pair.Children.Add(button);
@@ -1039,7 +1099,7 @@ public partial class MainWindow : Window
             {
                 var name = platform == "mac" ? "Mac" : "Windows";
                 var button = Ui.Button("Open on " + name, icon: Icons.PlatformGlyph(platform, 14, Theme.Brush("Ink2")));
-                button.Margin = new Thickness(0, 0, 8, 0); button.Uid = "mutation";
+                button.Margin = new Thickness(0, 0, 8, 0); button.Uid = "mutation"; button.IsEnabled = !OpenRunning(account.Id);
                 button.Click += async (_, _) => await OpenClaude(account, platform);
                 actions.Children.Add(button);
             }
@@ -1157,11 +1217,21 @@ public partial class MainWindow : Window
 
     private void RenderFooter()
     {
+        // Before pairing (and while the sign-in screen shows) the footer keeps Settings and Quit, so nothing is out of
+        // reach: a note, the gear and the power button, as the concept's unpaired footer.
+        var unpaired = client is null || signInVisible;
+        DashboardButton.Visibility = RefreshButton.Visibility = unpaired ? Visibility.Collapsed : Visibility.Visible;
+        QuitButton.Visibility = unpaired ? Visibility.Visible : Visibility.Collapsed;
         DashboardButton.IsEnabled = client is not null;
         RefreshButton.IsEnabled = client is not null && !busy;
-        if (client is null || dashboard is null)
+        if (unpaired)
         {
-            AutoSwitchPanel.Content = Ui.Text(client is null ? "Usage appears after you connect this tray" : "Loading accounts", 12, "Ink3");
+            AutoSwitchPanel.Content = Ui.Text(SignInFootNote, 12, "Ink3", trim: true);
+            return;
+        }
+        if (dashboard is null)
+        {
+            AutoSwitchPanel.Content = Ui.Text("Loading accounts", 12, "Ink3");
             return;
         }
         var status = dashboard.CodexAutoSwitch;
@@ -1235,16 +1305,80 @@ public partial class MainWindow : Window
 
     // ------------------------------------------------------------------ actions
 
+    /// <summary>Claude "Open on Mac" and "Open on Windows": both go through the backend POST, so a guarded history
+    /// copy can never be bypassed. The local ccs-claude:// URI is never started, not even when the dashboard cannot be
+    /// reached. A 202 turns into a read-poll whose progress the row shows; the Open buttons rest for the whole poll
+    /// and no second Open starts for the same account.</summary>
     private async Task OpenClaude(DashboardAccount account, string platform)
     {
-        await Action(async () =>
+        var id = account.Capabilities.ClaudeProfileId;
+        if (!Formatting.IsSafeClaudeProfile(id)) { FlashStatus("Choose a configured Claude account."); return; }
+        if (OpenRunning(account.Id)) return;
+        var target = client;
+        // No connection at all: the Open says the dashboard cannot be reached and launches nothing.
+        if (target is null) { FlashStatus(ClaudeOpenFlow.Unreachable); return; }
+        var generation = connectionGeneration;
+        SetOpenProgress(account.Id, new ClaudeOpenProgress(platform, ClaudeOpenFlow.Starting, false, false));
+        ClaudeOpenProgress? outcome;
+        try
         {
-            var id = account.Capabilities.ClaudeProfileId;
-            if (!Formatting.IsSafeClaudeProfile(id)) throw new InvalidOperationException("Choose a configured Claude account.");
-            if (platform == "mac") { if (client is not null) await client.OpenClaudeOnMac(id!); }
-            else Process.Start(new ProcessStartInfo("ccs-claude://launch/" + id) { UseShellExecute = true });
-        }, "Opening " + ShortName(account) + " in Claude on " + (platform == "mac" ? "Mac" : "Windows") + ".", refresh: false);
+            outcome = await ClaudeOpenFlow.Run(target, id!, platform, openCoordinator,
+                progress => { if (generation == connectionGeneration) SetOpenProgress(account.Id, progress); return Task.CompletedTask; },
+                openPolling, () => DateTimeOffset.UtcNow,
+                async delay =>
+                {
+                    await Task.Delay(delay);
+                    // A verified Change replaced the connection: stop reading it, and never resume after it.
+                    if (generation != connectionGeneration) throw new OperationCanceledException();
+                });
+        }
+        catch (Exception error)
+        {
+            SetOpenProgress(account.Id, null);
+            // A replaced connection ends the Open quietly. Anything else: an Open the dashboard never answered says
+            // so, and Windows never starts the URI itself instead.
+            if (generation != connectionGeneration) return;
+            if (HandledSignOut(error)) return;
+            FlashStatus(Unreachable(error) ? ClaudeOpenFlow.Unreachable : DisplayError(error));
+            return;
+        }
+        // A replaced connection ends the Open quietly: its row rests and nothing is flashed.
+        if (generation != connectionGeneration) { SetOpenProgress(account.Id, null); return; }
+        // Nothing came back: another Open for this Claude profile refused it. This account's row rests again; an Open
+        // that is really running belongs to its own account's entry.
+        if (outcome is null) { SetOpenProgress(account.Id, null); return; }
+        if (!outcome.Opened) { SetOpenProgress(account.Id, null); FlashStatus(outcome.Text); return; }
+        FlashStatus("Opening " + ShortName(account) + " in Claude on " + (platform == "mac" ? "Mac" : "Windows") + ".");
+        // "Opened" stays on the row for the same four seconds as the footer's own note, then the row rests.
+        ClearOpenProgressLater(account.Id);
     }
+
+    private string? OpenText(string accountId) => openProgress.TryGetValue(accountId, out var progress) ? progress.Text : null;
+    private bool OpenRunning(string accountId) => openProgress.TryGetValue(accountId, out var progress) && progress.Running;
+
+    /// <summary>One Open's progress on its row: the secondary line shows it and the Open buttons rest until it ends.
+    /// The rows are rebuilt exactly as a new sample rebuilds them, so meters and the platter keep their places.</summary>
+    private void SetOpenProgress(string accountId, ClaudeOpenProgress? progress)
+    {
+        if (progress is null) openProgress.Remove(accountId); else openProgress[accountId] = progress;
+        RenderDashboard();
+    }
+
+    private void ClearOpenProgressLater(string accountId)
+    {
+        var clear = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+        clear.Tick += (_, _) =>
+        {
+            clear.Stop();
+            if (openProgress.TryGetValue(accountId, out var progress) && progress.Finished) SetOpenProgress(accountId, null);
+        };
+        clear.Start();
+    }
+
+    private void FlashStatus(string text) { statusFlash = text; UpdateStatus(); ClearFlashLater(); }
+
+    /// <summary>The dashboard never answered: refused, name not resolved, or timed out.</summary>
+    private static bool Unreachable(Exception error) => error is System.Net.Http.HttpRequestException or OperationCanceledException;
 
     private async Task ActivateCodex(DashboardAccount account)
     {
@@ -1290,6 +1424,7 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
+            if (error is DeviceSignedOutException { IsDeviceCode: true } signedOut) { busy = false; SignedOutRemotely(signedOut); return; }
             statusFlash = DisplayError(error);
             if (dashboard is not null) staleSample = true;
         }
@@ -1313,6 +1448,7 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
+            if (error is DeviceSignedOutException { IsDeviceCode: true } signedOut) { busy = false; SignedOutRemotely(signedOut); return; }
             statusFlash = DisplayError(error);
             if (refresh && dashboard is not null) staleSample = true;
         }
@@ -1369,7 +1505,12 @@ public partial class MainWindow : Window
         if (settingsVisible) CloseSettings(); else OpenSettings();
     }
     private void DashboardClicked(object sender, RoutedEventArgs e) => OpenDashboard();
-    public void OpenDashboard() { if (client is not null) Process.Start(new ProcessStartInfo(client.BaseURL.ToString()) { UseShellExecute = true }); }
+    private void QuitClicked(object sender, RoutedEventArgs e) => QuitRequested?.Invoke();
+    public void OpenDashboard() { if (client is not null) Launch(new ProcessStartInfo(client.BaseURL.ToString()) { UseShellExecute = true }); }
+
+    /// <summary>Every shell launch this panel makes, in one place. The checks replace it to prove a Claude Open never
+    /// starts a ccs-claude:// URI, not even when the dashboard cannot be reached.</summary>
+    internal static Func<ProcessStartInfo, Process?> Launch { get; set; } = static info => Process.Start(info);
 
     protected override void OnClosing(CancelEventArgs e)
     {
