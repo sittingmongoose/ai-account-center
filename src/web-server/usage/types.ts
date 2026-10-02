@@ -20,7 +20,7 @@ export interface ModelBreakdown {
   cost: number;
   /**
    * USD of `cost` priced only at the unknown-model fallback rate: tokens with no logged
-   * cost and no listed rate. Absent from readers that never price at the fallback.
+   * cost and no listed rate. Absent when zero, and from readers that never price at the fallback.
    */
   fallbackCost?: number;
 }

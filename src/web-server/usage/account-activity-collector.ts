@@ -327,8 +327,10 @@ export function aggregateRows(
         (unlogged.read / 1_000_000) * rates.cacheReadPerMillion;
       model.cost = (bucket.loggedCost.get(key) ?? 0) + listed;
       // The part priced only at the unknown-model fallback: no logged cost and no listed rate.
-      model.fallbackCost = resolved.source === 'fallback' ? listed : 0;
+      // Present only when nonzero, so listed-rate rows keep their exact shape.
+      if (resolved.source === 'fallback' && listed > 0) model.fallbackCost = listed;
     }
+    const fallbackCost = modelBreakdowns.reduce((sum, item) => sum + (item.fallbackCost ?? 0), 0);
     modelBreakdowns.sort((left, right) => right.cost - left.cost);
     return {
       source,
@@ -338,7 +340,7 @@ export function aggregateRows(
       cacheReadTokens: modelBreakdowns.reduce((sum, item) => sum + item.cacheReadTokens, 0),
       cost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
       totalCost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
-      fallbackCost: modelBreakdowns.reduce((sum, item) => sum + (item.fallbackCost ?? 0), 0),
+      ...(fallbackCost > 0 && { fallbackCost }),
       modelsUsed: getModelsUsed(modelBreakdowns),
       modelBreakdowns,
     };

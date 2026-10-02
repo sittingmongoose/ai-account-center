@@ -162,8 +162,8 @@ describe('omp and muse account activity', () => {
     const unpriced = data.hourly.find((hour) => hour.hour === '2026-10-01 14:00');
     const unlogged = (1000 / 1e6) * 3 + (200 / 1e6) * 15 + (400 / 1e6) * 3.75 + (3000 / 1e6) * 0.3;
     expect(logged?.cost).toBeCloseTo(0.25, 9);
-    expect(logged?.fallbackCost).toBe(0);
-    expect(logged?.modelBreakdowns[0].fallbackCost).toBe(0);
+    expect(logged?.fallbackCost).toBeUndefined();
+    expect(logged?.modelBreakdowns[0].fallbackCost).toBeUndefined();
     expect(unpriced?.cost).toBeCloseTo(unlogged, 9);
     expect(unpriced?.fallbackCost).toBeCloseTo(unlogged, 9);
   });
