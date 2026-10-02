@@ -15,6 +15,7 @@ import {
   authMiddleware,
   createSessionMiddleware,
   getDashboardWebSocketRejectionStatus,
+  isApiRequestPath,
   isDashboardWebSocketUpgradeAllowed,
 } from './middleware/auth-middleware';
 import { requestLoggingMiddleware } from './middleware/request-logging-middleware';
@@ -61,6 +62,8 @@ const logger = createLogger('web-server');
  */
 export async function startServer(options: ServerOptions): Promise<ServerInstance> {
   const app = express();
+  // Routes answer only to their canonical spelling; set before the first app.use.
+  app.set('case sensitive routing', true);
   const server = http.createServer(app);
   const wss = new WebSocketServer({
     noServer: true,
@@ -111,7 +114,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       res.sendFile(path.join(staticDir, 'index.html'));
       return;
     }
-    if (req.path.startsWith('/api/')) {
+    if (isApiRequestPath(req.path)) {
       res.status(404).json({ error: 'API endpoint was not found.' });
       return;
     }

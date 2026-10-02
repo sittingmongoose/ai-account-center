@@ -1,6 +1,6 @@
 /** Native bar process-identity probe and shared native quota snapshot types. */
 
-import { Router } from 'express';
+import { createApiRouter } from './api-router';
 
 /**
  * Per-window quota detail for native subscription rows (Claude/Codex).
@@ -114,7 +114,7 @@ export interface BarSummaryRow {
   staleAsOf?: string | null;
 }
 
-const barRoutes = Router();
+const barRoutes = createApiRouter();
 
 // Access and nonce-bound HMAC validation run in the authenticated API aggregator.
 // This liveness response never reads account state or starts provider collection.

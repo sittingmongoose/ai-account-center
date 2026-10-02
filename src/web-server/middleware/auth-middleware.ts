@@ -26,8 +26,36 @@ declare module 'express-session' {
   }
 }
 
-/** Public paths that bypass auth (lowercase for case-insensitive matching) */
-const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/setup', '/api/health'];
+/** Public API routes, relative to the /api mount (lowercase for case-insensitive matching). */
+const PUBLIC_API_ROUTES = ['/auth/login', '/auth/check', '/auth/setup', '/health'];
+
+/** The same public routes as full request paths. */
+const PUBLIC_PATHS = PUBLIC_API_ROUTES.map((route) => `/api${route}`);
+
+/** Exact match (an optional trailing slash allowed), never a prefix, ignoring letter case. */
+function isPublicPath(requestPath: string, publicPaths: readonly string[]): boolean {
+  const pathLower = requestPath.toLowerCase();
+  return publicPaths.some(
+    (publicPath) => pathLower === publicPath || pathLower === `${publicPath}/`
+  );
+}
+
+/**
+ * Whether a request path is API traffic, in any letter case. Express matches
+ * routes case-insensitively unless case-sensitive routing is enabled, so a
+ * case-sensitive test here could let /API/... reach an API router unguarded.
+ */
+export function isApiRequestPath(requestPath: string): boolean {
+  const pathLower = requestPath.toLowerCase();
+  return pathLower === '/api' || pathLower.startsWith('/api/');
+}
+
+function rejectWithoutSession(req: Request, res: Response, next: NextFunction): void {
+  if (req.session?.authenticated === true) {
+    return next();
+  }
+  res.status(401).json({ error: 'Authentication required' });
+}
 
 /** Path to persistent session secret file */
 function getSessionSecretPath() {
@@ -121,24 +149,56 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     return next();
   }
 
-  // Allow public paths (case-insensitive)
-  const pathLower = req.path.toLowerCase();
-  if (PUBLIC_PATHS.some((p) => pathLower.startsWith(p))) {
+  // Allow static assets and SPA routes (non-API, in any letter case)
+  if (!isApiRequestPath(req.path)) {
     return next();
   }
 
-  // Allow static assets and SPA routes (non-API)
-  if (!req.path.startsWith('/api/')) {
+  // Allow public paths (case-insensitive, exact)
+  if (isPublicPath(req.path, PUBLIC_PATHS)) {
     return next();
   }
 
-  // Check session
-  if (req.session?.authenticated) {
+  rejectWithoutSession(req, res, next);
+}
+
+/**
+ * The same session guard, installed on the /api router itself so that every
+ * request reaching an API route passes it whatever the casing of its mount
+ * path. Inside the router, req.path is relative to /api.
+ */
+export function apiAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (!isDashboardAuthEnabled()) {
     return next();
   }
 
-  // Unauthorized
+  if (isPublicPath(req.path, PUBLIC_API_ROUTES)) {
+    return next();
+  }
+
+  rejectWithoutSession(req, res, next);
+}
+
+/**
+ * Route-level access check that does not rely on the global guards.
+ * With dashboard auth enabled it requires an authenticated session (401);
+ * with auth disabled it keeps the existing localhost-only rule (403).
+ */
+export function requireDashboardSession(
+  req: Request,
+  res: Response,
+  localAccessError?: string
+): boolean {
+  if (!isDashboardAuthEnabled()) {
+    return requireLocalAccessWhenAuthDisabled(req, res, localAccessError);
+  }
+
+  if (req.session?.authenticated === true) {
+    return true;
+  }
+
   res.status(401).json({ error: 'Authentication required' });
+  return false;
 }
 
 export function isLoopbackRemoteAddress(value: string | undefined): boolean {

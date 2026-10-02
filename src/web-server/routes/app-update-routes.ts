@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import type { Router } from 'express';
+import { createApiRouter } from './api-router';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import {
   AppUpdateBusyError,
@@ -7,7 +8,7 @@ import {
 } from '../services/app-update-service';
 
 export function createAppUpdateRouter(service?: AppUpdateService): Router {
-  const router = Router();
+  const router = createApiRouter();
   router.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     if (req.session?.authenticated !== true) {

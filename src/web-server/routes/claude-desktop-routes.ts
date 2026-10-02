@@ -1,8 +1,8 @@
-import { Router } from 'express';
+import { createApiRouter } from './api-router';
 import { ConfigError, ProfileError } from '../../errors/error-types';
 import {
   isDashboardWebSocketOriginAllowed,
-  requireLocalAccessWhenAuthDisabled,
+  requireDashboardSession,
 } from '../middleware/auth-middleware';
 import {
   CLAUDE_WINDOWS_PROFILE_IDS,
@@ -12,10 +12,10 @@ import { openClaudeDesktopProfile } from '../services/claude-desktop-open-servic
 import { ClaudeDesktopTransportError } from '../services/claude-desktop-transport';
 import { getClaudeDesktopUsage } from '../services/claude-desktop-usage-service';
 
-const router = Router();
+const router = createApiRouter();
 
 router.get('/desktop-profiles', async (req, res): Promise<void> => {
-  if (!requireLocalAccessWhenAuthDisabled(req, res)) return;
+  if (!requireDashboardSession(req, res)) return;
   try {
     res.json({ profiles: await listClaudeDesktopProfileMetadata() });
   } catch {
@@ -24,7 +24,7 @@ router.get('/desktop-profiles', async (req, res): Promise<void> => {
 });
 
 router.get('/desktop-profiles/usage', async (req, res): Promise<void> => {
-  if (!requireLocalAccessWhenAuthDisabled(req, res)) return;
+  if (!requireDashboardSession(req, res)) return;
   const platform = req.query.platform;
   if (platform !== 'mac' && platform !== 'windows') {
     res.status(400).json({ error: 'Select a valid Claude desktop platform.' });

@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import type { Router } from 'express';
+import { createApiRouter } from './api-router';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { rescheduleAccountAnalyticsSampling } from '../services/account-analytics-service';
 import {
@@ -15,7 +16,7 @@ interface SettingsRouterDeps {
 }
 
 export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}): Router {
-  const router = Router();
+  const router = createApiRouter();
   router.use('/settings', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     if (req.session?.authenticated !== true) {

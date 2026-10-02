@@ -5,11 +5,13 @@
  * mounting each domain router at its appropriate path.
  */
 
-import { Router } from 'express';
 import {
+  apiAuthMiddleware,
   isDashboardWebSocketOriginAllowed,
+  requireDashboardSession,
   requireLocalAccessWhenAuthDisabled,
 } from '../middleware/auth-middleware';
+import { apiErrorHandler, createApiRouter } from './api-router';
 import {
   BAR_AUTH_NONCE_HEADER,
   BAR_AUTH_TOKEN_HEADER,
@@ -29,8 +31,8 @@ import authRoutes from './auth-routes';
 import claudeDesktopRoutes from './claude-desktop-routes';
 import barRoutes from './bar-routes';
 
-// Create the main API router
-export const apiRoutes = Router();
+// Create the main API router (case-sensitive; handler errors stay in the request)
+export const apiRoutes = createApiRouter();
 
 const REMOTE_WRITE_ACCESS_ERROR =
   'Remote dashboard writes require localhost access when dashboard auth is disabled.';
@@ -50,10 +52,14 @@ function isMutationMethod(method: string): boolean {
   );
 }
 
+// The session guard runs on the /api mount itself, so no casing of the mount
+// path can reach a route without it. Public routes: auth login/check/setup, health.
+apiRoutes.use(apiAuthMiddleware);
+
 apiRoutes.use((req, res, next) => {
   // Guard the exact Bar path segment for every method, including retired paths.
   if (req.path === '/bar' || req.path.startsWith('/bar/')) {
-    if (requireLocalAccessWhenAuthDisabled(req, res, BAR_LOCAL_ACCESS_ERROR)) {
+    if (requireDashboardSession(req, res, BAR_LOCAL_ACCESS_ERROR)) {
       if (!isDashboardWebSocketOriginAllowed(req)) {
         res.status(403).json({ error: 'Native bar probes require the dashboard origin.' });
         return;
@@ -93,3 +99,6 @@ apiRoutes.use('/bar', barRoutes);
 
 // Public process liveness compatibility; no configuration details or repair actions.
 apiRoutes.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+// Must stay last: a failed API request ends as a generic 500 in its own response.
+apiRoutes.use(apiErrorHandler);

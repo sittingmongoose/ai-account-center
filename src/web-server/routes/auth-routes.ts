@@ -3,28 +3,41 @@
  * Handles login, logout, session check, and setup status.
  */
 
-import { Router, type Request, type Response } from 'express';
+import type { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 
 import type { DashboardAuthConfig } from '../../config/unified-config-types';
 import { isLoopbackRemoteAddress, loginRateLimiter } from '../middleware/auth-middleware';
 import { getDashboardAuthConfig } from '../../config/config-loader-facade';
+import { createApiRouter } from './api-router';
+
+/** Login field bounds; bcrypt reads only the first 72 bytes of a password. */
+const MAX_USERNAME_LENGTH = 256;
+const MAX_PASSWORD_LENGTH = 1024;
 
 /**
  * Timing-safe string comparison to prevent timing attacks.
  * Returns true if strings match, false otherwise.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
+  // Compare UTF-8 bytes: strings of equal length can differ in byte length,
+  // and crypto.timingSafeEqual throws on buffers of different lengths.
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  if (left.length !== right.length) {
     // Still compare to avoid length-based timing leak
-    crypto.timingSafeEqual(Buffer.from(a), Buffer.from(a));
+    crypto.timingSafeEqual(left, left);
     return false;
   }
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return crypto.timingSafeEqual(left, right);
 }
 
-const router = Router();
+function isLoginField(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength;
+}
+
+const router = createApiRouter();
 
 export type DashboardAccessMode = 'open' | 'login' | 'setup';
 
@@ -78,9 +91,15 @@ export function resolveDashboardAccessState(
  * Rate limited: 5 attempts per 15 minutes.
  */
 router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
-  const { username, password } = req.body;
+  const body: unknown = req.body;
+  const fields: Record<string, unknown> =
+    body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  const { username, password } = fields;
 
-  if (!username || !password) {
+  if (
+    !isLoginField(username, MAX_USERNAME_LENGTH) ||
+    !isLoginField(password, MAX_PASSWORD_LENGTH)
+  ) {
     res.status(400).json({ error: 'Username and password required' });
     return;
   }
@@ -100,9 +119,17 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  // Verify credentials (timing-safe comparison for username)
-  const usernameMatch = timingSafeEqual(username, authConfig.username);
-  const passwordMatch = await bcrypt.compare(password, authConfig.password_hash);
+  // Verify credentials (timing-safe comparison for username). A comparison
+  // that fails is a failed login, never an error that leaves the request.
+  let usernameMatch = false;
+  let passwordMatch = false;
+  try {
+    usernameMatch = timingSafeEqual(username, authConfig.username);
+    passwordMatch = await bcrypt.compare(password, authConfig.password_hash);
+  } catch {
+    usernameMatch = false;
+    passwordMatch = false;
+  }
 
   if (!usernameMatch || !passwordMatch) {
     res.status(401).json({ error: 'Invalid credentials' });

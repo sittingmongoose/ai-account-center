@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
-import { Router } from 'express';
+import { createApiRouter } from './api-router';
 import {
   isDashboardWebSocketOriginAllowed,
-  requireLocalAccessWhenAuthDisabled,
+  requireDashboardSession,
 } from '../middleware/auth-middleware';
 import {
   getCodexAuthProfilesSummary,
@@ -19,13 +19,14 @@ import {
   isCodexAutoSwitchSettings,
 } from '../services/codex-auto-switch-service';
 
-const router = Router();
-// H6: email is PII — require localhost access when dashboard auth is disabled.
+const router = createApiRouter();
+// H6: email is PII. Each route checks the session itself (localhost access when
+// dashboard auth is disabled) instead of relying on the global guard alone.
 const CODEX_PROFILES_ACCESS_ERROR =
   'Codex auth profiles endpoint requires localhost access when dashboard auth is disabled.';
 
 router.get('/profiles', async (req: Request, res: Response): Promise<void> => {
-  if (!requireLocalAccessWhenAuthDisabled(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
+  if (!requireDashboardSession(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
     return;
   }
   try {
@@ -36,7 +37,7 @@ router.get('/profiles', async (req: Request, res: Response): Promise<void> => {
 });
 
 router.get('/profiles/quotas', async (req: Request, res: Response): Promise<void> => {
-  if (!requireLocalAccessWhenAuthDisabled(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
+  if (!requireDashboardSession(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
     return;
   }
   try {
@@ -83,7 +84,7 @@ router.put('/profiles/auto-switch', (req: Request, res: Response): void => {
 });
 
 router.post('/profiles/:name/activate', async (req: Request, res: Response): Promise<void> => {
-  if (!requireLocalAccessWhenAuthDisabled(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
+  if (!requireDashboardSession(req, res, CODEX_PROFILES_ACCESS_ERROR)) {
     return;
   }
   // Apply the dashboard's same-origin policy to writes even when auth is enabled.

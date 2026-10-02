@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import type { Router } from 'express';
+import { createApiRouter } from './api-router';
 import { getAccountDashboard } from '../services/account-dashboard-service';
 import type {
   AccountDashboard,
@@ -10,7 +11,7 @@ export interface AccountDashboardRouterDeps {
 }
 
 export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = {}): Router {
-  const router = Router();
+  const router = createApiRouter();
   router.get('/dashboard', async (req, res): Promise<void> => {
     if (req.session?.authenticated !== true) {
       res.status(401).json({ error: 'Authentication required' });

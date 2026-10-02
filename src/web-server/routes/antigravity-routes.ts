@@ -1,5 +1,6 @@
 import { AntigravityError } from '../../antigravity/errors';
-import { Router, type Request, type Response } from 'express';
+import type { Request, Response, Router } from 'express';
+import { createApiRouter } from './api-router';
 import { isAntigravityAutoSwitchSettingsPatch } from '../../antigravity/auto-switch/settings';
 import { ANTIGRAVITY_AUTO_SWITCH_MESSAGES } from '../../antigravity/auto-switch/monitor';
 import type { AntigravityAutoSwitchOutcome } from '../../antigravity/auto-switch/types';
@@ -215,7 +216,7 @@ export function createAntigravityRouter(
   deps: AntigravityApiDependencies,
   originAllowed: DashboardOriginGuard
 ): Router {
-  const router = Router();
+  const router = createApiRouter();
   router.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     next();

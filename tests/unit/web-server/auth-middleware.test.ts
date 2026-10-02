@@ -10,9 +10,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { getDashboardAuthConfig } from '../../../src/config/unified-config-loader';
 import {
+  apiAuthMiddleware,
+  authMiddleware,
+  isApiRequestPath,
   isDashboardWebSocketOriginAllowed,
   getDashboardWebSocketRejectionStatus,
   isDashboardWebSocketUpgradeAllowed,
+  requireDashboardSession,
 } from '../../../src/web-server/middleware/auth-middleware';
 import { runWithScopedConfigDir } from '../../../src/utils/config-manager';
 
@@ -93,72 +97,168 @@ describe('Dashboard Auth', () => {
     });
   });
 
-  describe('public paths', () => {
-    const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/check', '/api/auth/setup', '/api/health'];
-
-    it('identifies public paths correctly', () => {
-      const isPublicPath = (path: string) =>
-        PUBLIC_PATHS.some((p) => path.toLowerCase().startsWith(p));
-
-      expect(isPublicPath('/api/auth/login')).toBe(true);
-      expect(isPublicPath('/api/auth/check')).toBe(true);
-      expect(isPublicPath('/api/auth/setup')).toBe(true);
-      expect(isPublicPath('/api/health')).toBe(true);
-      expect(isPublicPath('/api/profiles')).toBe(false);
-      expect(isPublicPath('/api/config')).toBe(false);
+  // These call the real middleware; the HTTP regression suite in
+  // api-auth-hardening.test.ts covers the same rules through startServer().
+  function runGuard(
+    guard: typeof authMiddleware,
+    requestPath: string,
+    authenticated = false
+  ): { passed: boolean; status: number | null; body: unknown } {
+    const outcome = { passed: false, status: null as number | null, body: undefined as unknown };
+    const req = {
+      path: requestPath,
+      session: { authenticated },
+      socket: { remoteAddress: '127.0.0.1' },
+      headers: { host: '127.0.0.1:3000' },
+    };
+    const res = {
+      status(code: number) {
+        outcome.status = code;
+        return this;
+      },
+      json(body: unknown) {
+        outcome.body = body;
+        return this;
+      },
+    };
+    guard(req as never, res as never, () => {
+      outcome.passed = true;
     });
+    return outcome;
+  }
 
-    it('handles case-insensitive paths', () => {
-      const isPublicPath = (path: string) =>
-        PUBLIC_PATHS.some((p) => path.toLowerCase().startsWith(p));
-
-      expect(isPublicPath('/API/AUTH/LOGIN')).toBe(true);
-      expect(isPublicPath('/Api/Health')).toBe(true);
+  describe('isApiRequestPath', () => {
+    it('treats every letter case of the /api mount as API traffic', () => {
+      for (const requestPath of ['/api', '/api/', '/API/codex/profiles', '/Api/x', '/aPI/bar']) {
+        expect(isApiRequestPath(requestPath)).toBe(true);
+      }
+      for (const requestPath of ['/', '/login', '/apix', '/dashboard.wasm', '/codex/api/']) {
+        expect(isApiRequestPath(requestPath)).toBe(false);
+      }
     });
   });
 
-  describe('session configuration', () => {
-    it('session timeout converts to milliseconds correctly', () => {
-      const hours = 24;
-      const maxAge = hours * 60 * 60 * 1000;
-
-      expect(maxAge).toBe(86400000); // 24 hours in ms
+  describe('authMiddleware (global guard)', () => {
+    it('passes every request when dashboard auth is disabled', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+      expect(runGuard(authMiddleware, '/API/codex/profiles').passed).toBe(true);
+      expect(runGuard(authMiddleware, '/api/codex/profiles').passed).toBe(true);
     });
 
-    it('custom session timeout works', () => {
-      const hours = 8;
-      const maxAge = hours * 60 * 60 * 1000;
+    it('keeps the public routes public in any letter case, exactly', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+      for (const requestPath of [
+        '/api/auth/login',
+        '/api/auth/check',
+        '/api/auth/setup',
+        '/api/health',
+        '/api/health/',
+        '/API/AUTH/LOGIN',
+        '/Api/Health',
+      ]) {
+        expect({ requestPath, passed: runGuard(authMiddleware, requestPath).passed }).toEqual({
+          requestPath,
+          passed: true,
+        });
+      }
+      for (const requestPath of ['/api/auth/login-history', '/api/health/fix', '/api/auth']) {
+        expect({ requestPath, status: runGuard(authMiddleware, requestPath).status }).toEqual({
+          requestPath,
+          status: 401,
+        });
+      }
+    });
 
-      expect(maxAge).toBe(28800000); // 8 hours in ms
+    it('requires a session for API paths in any letter case', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+      for (const requestPath of [
+        '/api/codex/profiles',
+        '/API/codex/profiles',
+        '/Api/claude/desktop-profiles',
+        '/aPi/accounts/dashboard',
+        '/API',
+      ]) {
+        const outcome = runGuard(authMiddleware, requestPath);
+        expect({ requestPath, passed: outcome.passed, status: outcome.status }).toEqual({
+          requestPath,
+          passed: false,
+          status: 401,
+        });
+        expect(outcome.body).toEqual({ error: 'Authentication required' });
+        expect(runGuard(authMiddleware, requestPath, true).passed).toBe(true);
+      }
+    });
+
+    it('leaves static assets and SPA routes to the static handler', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+      for (const requestPath of ['/', '/login', '/dashboard.wasm', '/apix']) {
+        expect(runGuard(authMiddleware, requestPath).passed).toBe(true);
+      }
     });
   });
 
-  describe('auth flow logic', () => {
-    it('bypasses auth when disabled', () => {
-      const shouldSkip = true;
-      expect(shouldSkip).toBe(true);
+  describe('apiAuthMiddleware (guard on the /api router)', () => {
+    it('checks paths relative to the mount', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+      for (const requestPath of ['/auth/login', '/auth/check', '/auth/setup', '/health']) {
+        expect(runGuard(apiAuthMiddleware, requestPath).passed).toBe(true);
+      }
+      for (const requestPath of ['/codex/profiles', '/CODEX/profiles', '/bar/auth', '/']) {
+        expect(runGuard(apiAuthMiddleware, requestPath).status).toBe(401);
+        expect(runGuard(apiAuthMiddleware, requestPath, true).passed).toBe(true);
+      }
     });
 
-    it('requires auth when enabled', () => {
-      const authConfig = {
-        enabled: true,
-        username: 'admin',
-        password_hash: '$2b$10$test',
+    it('passes every request when dashboard auth is disabled', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+      expect(runGuard(apiAuthMiddleware, '/codex/profiles').passed).toBe(true);
+    });
+  });
+
+  describe('requireDashboardSession', () => {
+    function check(remoteAddress: string, authenticated: boolean) {
+      const outcome = { status: null as number | null, body: undefined as unknown };
+      const req = {
+        session: { authenticated },
+        socket: { remoteAddress },
+        headers: { host: '127.0.0.1:3000' },
       };
-      const shouldSkip = !authConfig.enabled;
-      expect(shouldSkip).toBe(false);
+      const res = {
+        status(code: number) {
+          outcome.status = code;
+          return this;
+        },
+        json(body: unknown) {
+          outcome.body = body;
+          return this;
+        },
+      };
+      const allowed = requireDashboardSession(req as never, res as never, 'local only');
+      return { allowed, ...outcome };
+    }
+
+    it('requires an authenticated session when dashboard auth is enabled', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+      expect(check('127.0.0.1', false)).toEqual({
+        allowed: false,
+        status: 401,
+        body: { error: 'Authentication required' },
+      });
+      expect(check('203.0.113.42', true)).toEqual({
+        allowed: true,
+        status: null,
+        body: undefined,
+      });
     });
 
-    it('validates username match', () => {
-      const authConfig = { username: 'admin' };
-      const usernameMatch = 'admin' === authConfig.username;
-      expect(usernameMatch).toBe(true);
-    });
-
-    it('rejects wrong username', () => {
-      const authConfig = { username: 'admin' };
-      const usernameMatch = 'wrong' === authConfig.username;
-      expect(usernameMatch).toBe(false);
+    it('keeps localhost-only access when dashboard auth is disabled', () => {
+      process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+      expect(check('127.0.0.1', false).allowed).toBe(true);
+      expect(check('203.0.113.42', true)).toEqual({
+        allowed: false,
+        status: 403,
+        body: { error: 'local only' },
+      });
     });
   });
 
@@ -261,18 +361,6 @@ describe('Dashboard Auth', () => {
       expect(isDashboardWebSocketOriginAllowed(request)).toBe(false);
       expect(isDashboardWebSocketUpgradeAllowed(request)).toBe(false);
       expect(getDashboardWebSocketRejectionStatus(request)).toBe(403);
-    });
-  });
-
-  describe('rate limiting config', () => {
-    it('rate limit window is 15 minutes', () => {
-      const windowMs = 15 * 60 * 1000;
-      expect(windowMs).toBe(900000);
-    });
-
-    it('max attempts is 5', () => {
-      const maxAttempts = 5;
-      expect(maxAttempts).toBe(5);
     });
   });
 });
