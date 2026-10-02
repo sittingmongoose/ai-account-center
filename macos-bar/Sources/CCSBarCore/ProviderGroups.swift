@@ -12,12 +12,14 @@ public struct ProviderGroup: Identifiable, Sendable {
 
 extension AccountDashboard {
   public var providerGroups: [ProviderGroup] {
-    let grouped = Dictionary(grouping: accounts, by: \.provider)
+    let shown = visibleAccounts
+    let grouped = Dictionary(grouping: shown, by: \.provider)
+    // Today's tray order: the three account sections, then the other providers.
     let preferredOrder = [
-      "claude", "codex", "cursor", "muse", "antigravity", "kimi-code", "qwen", "zai", "opencode-go",
+      "claude", "codex", "antigravity", "cursor", "muse", "kimi-code", "qwen", "zai", "opencode-go",
     ]
     var providers = preferredOrder.filter { grouped[$0] != nil }
-    for account in accounts where !providers.contains(account.provider) {
+    for account in shown where !providers.contains(account.provider) {
       providers.append(account.provider)
     }
 
@@ -77,7 +79,7 @@ extension AccountDashboard {
   private static func groupLabel(_ provider: String, fallback: String) -> String {
     switch provider {
     case "muse": return "Muse Code"
-    case "antigravity": return "Google Antigravity CLI"
+    case "antigravity": return "Antigravity"
     case "qwen": return "Qwen Token Plan"
     case "zai": return "Z.ai Coding Plan"
     case "opencode-go": return "OpenCode Go"

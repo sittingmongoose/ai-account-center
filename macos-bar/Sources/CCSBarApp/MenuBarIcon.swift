@@ -1,55 +1,46 @@
+import SwiftUI
 import AppKit
+import CCSBarCore
 
-/// Menu-bar icon style. `color` shows the full CCS mark; `mono` uses a template
-/// silhouette that macOS auto-tints black/white to match the menu bar.
-enum BarIconStyle: String, CaseIterable {
-  case color
-  case mono
+/// The Apex Soft menu-bar template glyph (16 pt, tinted by macOS) and the status item's content.
+enum MenuBarIcon {
+  @MainActor static var template: NSImage {
+    let image = TrayAssets.image("MenuBarTemplate")?.copy() as? NSImage
+      ?? NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: "AI Account Center")
+      ?? NSImage()
+    image.size = NSSize(width: 16, height: 16)
+    image.isTemplate = true
+    return image
+  }
 }
 
-/// Loads the CCS icon assets bundled into the .app (Contents/Resources) and
-/// hands back correctly-sized NSImages. Falls back to an SF Symbol when running
-/// from `swift run` (no bundle), so the app is always usable in dev.
-enum MenuBarIcon {
-  static let defaultsKey = "ccsbar.iconStyle"
+/// The glyph plus the chosen account's percentage. The number rolls to its new value with an ease-out,
+/// so it never passes the reading.
+struct StatusItemLabel: View {
+  @ObservedObject var model: AccountsViewModel
+  @ObservedObject var prefs: TrayPreferences
 
-  static func loadStyle() -> BarIconStyle {
-    let raw = UserDefaults.standard.string(forKey: defaultsKey) ?? BarIconStyle.color.rawValue
-    return BarIconStyle(rawValue: raw) ?? .color
+  var body: some View {
+    let reading = model.menuBarReading(prefs)
+    HStack(spacing: 4) {
+      Image(nsImage: MenuBarIcon.template).renderingMode(.template)
+      if let reading {
+        Text(reading.text)
+          .font(Font(NSFont.menuBarFont(ofSize: 0)).weight(.medium))
+          .monospacedDigit()
+          .contentTransition(.numericText(value: reading.value))
+          .fixedSize()
+      }
+    }
+    .foregroundStyle(.primary)
+    .padding(.horizontal, 4)
+    .frame(height: NSStatusBar.system.thickness)
+    .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .trayValue(duration: 0.5), value: reading?.value)
+    .fixedSize()
   }
+}
 
-  static func saveStyle(_ style: BarIconStyle) {
-    UserDefaults.standard.set(style.rawValue, forKey: defaultsKey)
-  }
-
-  /// The status-bar label image at ~18pt for the given style.
-  static func statusImage(_ style: BarIconStyle) -> NSImage {
-    let asset = style == .mono ? "MenuBarTemplate" : "MenuBarColor"
-    let image = bundleImage(asset) ?? sfSymbol("gauge.with.dots.needle.bottom.50percent")
-    image.size = NSSize(width: 18, height: 18)
-    image.isTemplate = (style == .mono)
-    return image
-  }
-
-  /// The color CCS mark for the dropdown header at ~24pt.
-  static func headerImage() -> NSImage {
-    let image = bundleImage("HeaderLogo") ?? sfSymbol("gauge.with.dots.needle.bottom.50percent")
-    image.size = NSSize(width: 24, height: 24)
-    image.isTemplate = false
-    return image
-  }
-
-  private static func bundleImage(_ name: String) -> NSImage? {
-    guard
-      let url = Bundle.main.url(forResource: name, withExtension: "png"),
-      let image = NSImage(contentsOf: url)
-    else { return nil }
-    return image
-  }
-
-  private static func sfSymbol(_ name: String) -> NSImage {
-    NSImage(systemSymbolName: name, accessibilityDescription: "AI Account Center")
-      ?? NSImage(systemSymbolName: "circle", accessibilityDescription: "AI Account Center")
-      ?? NSImage()
-  }
+/// A hosting view that leaves every click to the status item's own button.
+final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

@@ -78,7 +78,8 @@ public actor AccountsClient {
     return request
   }
 
-  private func request(_ path: String, method: String = "GET", body: Data? = nil, confirmationProfile: String? = nil, retryUnauthorized: Bool = true) async throws -> Data {
+  private func request(_ path: String, method: String = "GET", body: Data? = nil, confirmationProfile: String? = nil,
+    antigravityProfile: String? = nil, retryUnauthorized: Bool = true) async throws -> Data {
     try await login()
     var (data, response) = try await transport.send(makeRequest(path, method: method, body: body))
     if response.statusCode == 401 {
@@ -94,11 +95,16 @@ public actor AccountsClient {
       let confirmation = conflict.confirmation, confirmation.isValid(for: profile) {
       throw BarClientError.codexConfirmation(confirmation)
     }
+    if response.statusCode == 409, let profile = antigravityProfile,
+      let offer = AntigravitySwitchConfirmation.parse(data, profile: profile) {
+      throw BarClientError.antigravityConfirmation(offer)
+    }
     guard (200..<300).contains(response.statusCode) else {
       let publicCode = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
       throw BarClientError.status(response.statusCode, Self.publicError(status: response.statusCode, path: path,
         codexActivation: confirmationProfile != nil, code: publicCode?["code"] as? String,
-        reason: publicCode?["reason"] as? String))
+        reason: publicCode?["reason"] as? String,
+        antigravityActivation: antigravityProfile != nil, activationStatus: publicCode?["status"] as? String))
     }
     return data
   }
@@ -106,7 +112,26 @@ public actor AccountsClient {
   /// Only fixed client copy and recognized public codes may reach the UI.
   /// Server error/message strings can contain private paths or credential data.
   private static func publicError(status: Int, path: String, codexActivation: Bool,
-    code: String?, reason: String?) -> String {
+    code: String?, reason: String?, antigravityActivation: Bool = false, activationStatus: String? = nil) -> String {
+    if antigravityActivation {
+      // Only the dashboard's fixed activation status words select a message; its text never does.
+      switch activationStatus {
+      case "busy": return "Antigravity is busy on Ubuntu. Activate again when it is idle."
+      case "deferred": return "Antigravity activation is deferred on Ubuntu. Refresh its native status before trying again."
+      case "unsupported-runtime-probe": return "The Ubuntu Antigravity runtime could not be verified. Account switching is unavailable."
+      case "stale-confirmation": return "This Antigravity confirmation is no longer valid. Activate again to review the running programs."
+      case "confirmation-required": return "Antigravity programs are running on Ubuntu. Activate again to review them."
+      case "invalid-profile": return "The selected Antigravity profile has no valid saved login."
+      case "failed-rolled-back": return "Antigravity could not switch accounts on Ubuntu. The previous state was restored."
+      case "recovery-required": return "Antigravity activation needs recovery on Ubuntu. Account switching is unavailable."
+      default: break
+      }
+      if status == 500 { return "Antigravity account activation failed safely. Refresh the account list before retrying." }
+    }
+    if path == "api/antigravity/auto-switch" {
+      if status == 400 { return "The Antigravity switching settings were rejected. Refresh and try again." }
+      if status == 500 { return "Antigravity automatic switching settings could not be saved safely." }
+    }
     if codexActivation {
       if status == 409 && code == "busy" {
         if reason == "activation_running" { return "Another Codex account activation is already running. Wait for it to finish." }
@@ -167,6 +192,42 @@ public actor AccountsClient {
     }
     _ = try await request("api/codex/profiles/\(profile)/activate", method: "POST",
       body: JSONSerialization.data(withJSONObject: body), confirmationProfile: profile, retryUnauthorized: confirmationToken == nil)
+  }
+
+  /// Manual Antigravity activation on the shared Ubuntu runtime. Running programs come back as
+  /// `BarClientError.antigravityConfirmation`, which only an explicit Confirm may answer.
+  @discardableResult
+  public func activateAntigravity(profile: String) async throws -> AntigravityActivationResult {
+    guard isProfileIdentifier(profile) else { throw BarClientError.invalidConnection }
+    let data = try await request("api/antigravity/profiles/\(profile)/activate", method: "POST",
+      body: JSONSerialization.data(withJSONObject: ["hostId": "ubuntu"]), antigravityProfile: profile)
+    guard let result = AntigravityActivationResult.parse(data, profile: profile) else { throw BarClientError.decoding }
+    return result
+  }
+
+  /// Sends a reviewed one-use token once. It is never replayed after an authentication failure.
+  @discardableResult
+  public func confirmAntigravity(profile: String, confirmationToken: String) async throws -> AntigravityActivationResult {
+    guard isProfileIdentifier(profile), AntigravitySwitchConfirmation.isToken(confirmationToken)
+    else { throw BarClientError.invalidConnection }
+    let data = try await request("api/antigravity/profiles/\(profile)/confirm", method: "POST",
+      body: JSONSerialization.data(withJSONObject: ["hostId": "ubuntu", "confirmationToken": confirmationToken]),
+      antigravityProfile: profile, retryUnauthorized: false)
+    guard let result = AntigravityActivationResult.parse(data, profile: profile) else { throw BarClientError.decoding }
+    return result
+  }
+
+  /// Antigravity's own policy: `thresholdUsedPercent` is percent USED (Codex stores percent remaining).
+  @discardableResult
+  public func setAntigravityAutomaticSwitching(enabled: Bool? = nil, thresholdUsedPercent: Int? = nil) async throws -> Data {
+    var body: [String: Any] = [:]
+    if let enabled { body["enabled"] = enabled }
+    if let thresholdUsedPercent {
+      guard (1...99).contains(thresholdUsedPercent) else { throw BarClientError.invalidConnection }
+      body["thresholdUsedPercent"] = thresholdUsedPercent
+    }
+    guard !body.isEmpty else { throw BarClientError.invalidConnection }
+    return try await request("api/antigravity/auto-switch", method: "PUT", body: JSONSerialization.data(withJSONObject: body))
   }
 
   public func openClaude(profile: String, platform: String = "mac") async throws {
