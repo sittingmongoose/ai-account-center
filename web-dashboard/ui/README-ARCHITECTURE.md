@@ -279,12 +279,12 @@ spinners and skeleton shimmer read `animation-tick()` only while they are active
 | select.slint | `Select` | PopupWindow menu |
 | menu.slint | `MenuPanel`, `MenuHead`, `MenuItem`, `MenuSeparator` | for PopupWindow menus |
 | meter.slint | `Meter`, `MeterBar` | gradient fill, severity, ticks, threshold notch, overage segment, dashed unavailable track, no-overshoot sweep, count-up, hover card, `clicked` forwards to the row |
-| card.slint | `Plate`, `Card` | Card lifts 2 px with a larger shadow on hover; its body sits inside its TouchArea |
+| card.slint | `Plate`, `Card`, `HoverShadow` | Plate's content and Card's body are cached layers; Card lifts 2 px and `HoverShadow` (a static large shadow) fades in behind it on hover; its body sits inside its TouchArea |
 | reveal.slint | `Reveal` | load-in rise |
 | hover-card.slint | `Hover` (global), `HoverLayer` | custom hover card and tooltips, 90 ms intent, glides between targets |
 | skeleton.slint | `Skeleton` | shimmer only while `active` |
 | toast.slint | `ToastStack` | spring up, countdown bar, fade, slot closes, then `toast-dismissed(id)` removes the row |
-| slide-over.slint | `SlideOver` | the scrim only tints and lets clicks through (as in the concept): a row click swaps the content (`swap()`), the window's background TouchAreas close it on any other click, Escape closes it |
+| slide-over.slint | `SlideOver` | the scrim only tints and lets clicks through (as in the concept): a row click swaps the content (`swap()`), any other click closes it (the window's background TouchAreas, and bridge.js `closeDetailsOnOutsideClicks` for clicks a button or card takes), Escape closes it |
 | dialog.slint | `Dialog` | scrim + rising card; `dismissable` |
 | field.slint | `Field` | text and password fields with show/hide |
 | nav.slint | `NavBar` | the indicator glides between the three items |
@@ -345,6 +345,31 @@ Gotchas found while building Accounts & Settings and sign-in (W4):
 - A Toggle assigns its own `on` when clicked, which ends a plain binding: re-assign it from a `changed` handler
   on the model value (`ProviderSection.shown`, `PolicyRow.on`).
 - `StyledText` with `@markdown` mixes weights in a wrapping line (the pairing note, the limited banner's time).
+
+Gotchas found in the W5 review (concept comparison and performance):
+- **Line boxes.** The concept's CSS sets line-height 1.45 (numbers in meters 1); Slint Text uses the font's own
+  1.22 em box. Rows, heads and footers therefore set `min-height` on their Texts (13.5 px 19.5, 12.5 px 18,
+  12 px 17.5, 16 px titles 23, 18 px 26, 11 px captions 15-16) and padding that includes the 1 px hairline the
+  CSS border adds outside the padding. `ValueUnit.box-h` gives a number its line-height-1 box, and `Meter.top-h`
+  is the concept's measured value line (20.7, inline 19.2, compact 17.5). Accounts rows are 61 px apart, Home
+  rows 90, as in the concept.
+- **A layout's paddings are already in its preferred size.** `Card` used to add them again, which made every
+  provider card 28 px taller and spread the extra into its meters.
+- **`opacity` and `cache-rendering-hint` are ignored on a component's root element** (the compiler only warns).
+  Put them on an inner element (Plate wraps its children in `content`) or set them where the component is used.
+- **Cached layers** (`cache-rendering-hint`) reuse their texture only while their size is unchanged. A size
+  change allocates a new texture, and the framebuffer check that follows waits for the GPU: 0.1-0.3 s a frame on
+  SwiftShader. Keep a cached layer's bounds stable: an AxCard whose hover readout (with its shadow) moves with
+  the pointer sets `cached: false`, and the trend card caches only its plot (`chart-layer`).
+- **Never animate `drop-shadow-*`.** Each change re-blurs a new shadow texture (same cost as above); fade a
+  static second shadow instead (`HoverShadow`).
+- **Opacity 0 still draws.** Give faded-out groups `visible: self.opacity > 0.005` (the trend's hidden token
+  bands were tessellated every frame).
+- **Missed redraws.** A state change pushed from JavaScript could stay unpainted until the next pointer event
+  (seen at 1920 px and wider: the sign-in page kept "Connecting to AI Account Center…"). The push arrives
+  outside winit's event loop; Slint's redraw request starts its frame-throttle timer, but a sleeping loop with
+  no timer scheduled never runs it. `wake()` in lib.rs (called by `with_ui` and the other entry points)
+  requests a redraw and posts an empty `invoke_from_event_loop` so the loop wakes and schedules the timer.
 
 ## Pages
 

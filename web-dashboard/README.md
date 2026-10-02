@@ -56,7 +56,9 @@ page as file:// or configure a cross-origin API URL.
   never as zero. Fable appears only for Claude Max plans, from the
   `seven_day_fable` window ("Not reported yet" when absent).
 - Details (a slide-over opened by clicking any account row or card; closed by a
-  click outside it or Escape) retain every visible quota window, credit balance,
+  click anywhere outside it, including header buttons, nested row actions and
+  Analytics cards, or Escape; a click on another row swaps it to that account)
+  retain every visible quota window, credit balance,
   numeric amount, unlimited/enabled state, reset date and separate expiration
   date. Product display exclusions remove Codex Chat pass, attach Qwen
   subscription expiration to monthly usage, and hide empty Z.ai reset-pack
@@ -107,6 +109,41 @@ page as file:// or configure a cross-origin API URL.
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
 
+## Rendering performance
+
+The FemtoVG renderer redraws the whole canvas for every frame, so the dashboard
+keeps per-frame work small, which matters most on software WebGL (Chrome's
+SwiftShader on a machine without a GPU):
+
+- Nothing animates while idle: spinners, the update-progress bar, the sign-in
+  sweep and the skeleton shimmer read `animation-tick()` only while they are
+  active, and the browser requests no frames once the page settles.
+- Static surfaces render into cached layers (`cache-rendering-hint`): the paper
+  grid, Home's sections and provider cards, the Accounts & Settings sections and
+  settings groups, the Analytics KPI cards and every Analytics card whose
+  content does not follow the pointer. The usage-trends card caches its axes,
+  gridlines and data paths in their own layer, so the crosshair only blits it.
+  A layer re-renders only while something inside it changes.
+- Hover lifts fade in a second, static shadow (`HoverShadow`) instead of
+  animating a shadow's blur or colour, which would make the renderer blur a new
+  shadow texture on every frame.
+- Value animations (meter widths, count-ups, chart draws) use the ease-out
+  curve only; a filmed refresh moves every meter monotonically to its new value.
+
+Measured on the Ubuntu VM in headless Chrome with SwiftShader at 1440 x 900
+(2026-10-02, median per animation): the page's own work per frame (WebAssembly
+and JavaScript) is 5-11 ms for scrolling and hovering and about 17 ms while
+Details slides in, and frames arrive every 47-90 ms (11-21 fps), a rate set by
+SwiftShader's rasterising rather than by the page. Before the cached layers and
+static hover shadows, a hover in Analytics took 250-300 ms a frame (4 fps) and
+Home's scrolling about 20 ms of page work a frame. Hardware-accelerated browsers
+are far faster; the VM figure is the floor.
+
+Every state push from `bridge.js` (`with_ui` and the other entry points in
+`src/lib.rs`) asks for a frame and wakes winit's event loop, so a change that
+arrives while the loop sleeps is painted at once instead of at the next pointer
+event.
+
 ## Validation
 
 ```sh
@@ -124,6 +161,13 @@ focus-chart label placement and the resets agenda), the version 1 Accounts &
 Settings model (registry sections, fixed slots, live versus coming actions,
 local visibility, Update apps results, the refresh scale) and the sign-in
 rules (strength hint, first-run checks, limiter headers, ended sessions).
+
+Visual checks use the sanitized fixture preview in
+`~/PM-Experiments/ccs-accounts-20260930/worktrees/preview/` (see its README):
+it serves `dist/ui` with the concept's fixture data and screenshots it in
+headless Chrome with SwiftShader WebGL. Compare against the approved Daylight
+Atlas concept (`redesign-concepts-20261001/c-daylight-atlas/`) at 1024 x 700,
+1440 x 900, 1920 x 1080 and 2560 x 1440, light and dark.
 
 For automated Chromium DPI checks, launch a disposable browser with
 `--force-device-scale-factor=N` and a new context with `device_scale_factor=N`
