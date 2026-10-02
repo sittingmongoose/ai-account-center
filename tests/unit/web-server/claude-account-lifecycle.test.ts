@@ -244,7 +244,12 @@ describe('Claude Remove and trash', () => {
   it('refuses the default launcher, a running app and an unknown app state', async () => {
     const { hosts, lifecycle } = setup();
     const gmail = await lifecycle.findProfile('gmail');
-    expect(await lifecycle.removeRefusal(gmail as never, true)).toBe('account_default');
+    expect(await lifecycle.removeRefusal(gmail as never, true)).toBe('account_protected');
+    // even a caller that skips the refusal cannot remove a computer's default profile
+    await expect(lifecycle.remove(gmail as never)).rejects.toMatchObject({
+      code: 'account_protected',
+    });
+    expect(hosts.calls.filter((call) => call.startsWith('trash'))).toEqual([]);
     const party = await lifecycle.findProfile('party');
     hosts.running.add('C:\\Users\\x\\AppData\\Roaming\\Claude-party');
     expect(await lifecycle.removeRefusal(party as never, true)).toBe('app_running');

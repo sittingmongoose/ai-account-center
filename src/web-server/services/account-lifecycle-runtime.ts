@@ -14,13 +14,23 @@ import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './sig
  * maintenance (staging sweep, orphan-key sweep, trash purge).
  *
  * Claude Add, Remove and Restore are implemented against a host transport,
- * but they stay off here until the contract's prerequisite ships (the Windows
- * launcher helper and the usage helper reading profile ids from the inventory
- * instead of their hard-coded lists) and a supervised dry run on both hosts is
- * approved. While off, the Claude add, remove and restore routes answer 409
- * `not_implemented`, and the dashboard advertises neither.
+ * but they stay off by default until the contract's prerequisite ships (the
+ * Windows launcher helper and the usage helper reading profile ids from the
+ * inventory instead of their hard-coded lists) and a supervised dry run on both
+ * hosts is approved. While off, the Claude add, remove and restore routes
+ * answer 409 `not_implemented`, and the dashboard advertises neither.
+ *
+ * `CCS_CLAUDE_HOST_LIFECYCLE=on` in the server's environment turns them on for
+ * that process only: the supervised dry run, or a sandbox whose ssh aliases
+ * reach fake hosts. Nothing else turns them on; any other value leaves them off.
+ * A computer's default Claude profile is refused (`account_protected`) either way.
  */
 export const CLAUDE_HOST_LIFECYCLE_ENABLED = false;
+export function claudeHostLifecycleEnabled(
+  environment: Record<string, string | undefined> = process.env
+): boolean {
+  return CLAUDE_HOST_LIFECYCLE_ENABLED || environment.CCS_CLAUDE_HOST_LIFECYCLE === 'on';
+}
 const DAY_MS = 24 * 60 * 60_000;
 
 const logger = createLogger('account-lifecycle');
@@ -113,7 +123,7 @@ export function getClaudeLifecycle(): ClaudeAccountLifecycle {
   claude ??= new ClaudeAccountLifecycle({
     ccsDir: getCcsDir,
     transport: new SshClaudeHostTransport(),
-    enabled: CLAUDE_HOST_LIFECYCLE_ENABLED,
+    enabled: claudeHostLifecycleEnabled(),
   });
   return claude;
 }

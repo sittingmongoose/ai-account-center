@@ -10,7 +10,10 @@ import {
   type AccountDashboardDeps,
 } from '../../../src/web-server/services/account-dashboard-service';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
-import { lifecycleProviderFacts } from '../../../src/web-server/services/account-lifecycle-runtime';
+import {
+  claudeHostLifecycleEnabled,
+  lifecycleProviderFacts,
+} from '../../../src/web-server/services/account-lifecycle-runtime';
 
 const NOW = '2026-10-02T08:00:00.000Z';
 
@@ -144,6 +147,19 @@ describe('lifecycle provider facts', () => {
     expect(facts.flows?.codex).toBe('tool_missing');
     expect(facts.flows?.claude).toBeUndefined();
     expect(facts.remove?.claude).toBe(true);
+  });
+});
+
+describe('the Claude host steps switch', () => {
+  it('is off by default and on only for CCS_CLAUDE_HOST_LIFECYCLE=on in that environment', () => {
+    expect(claudeHostLifecycleEnabled({})).toBe(false);
+    for (const value of ['1', 'true', 'ON', 'yes', ' on', '']) {
+      expect([value, claudeHostLifecycleEnabled({ CCS_CLAUDE_HOST_LIFECYCLE: value })]).toEqual([
+        value,
+        false,
+      ]);
+    }
+    expect(claudeHostLifecycleEnabled({ CCS_CLAUDE_HOST_LIFECYCLE: 'on' })).toBe(true);
   });
 });
 
