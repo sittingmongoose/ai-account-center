@@ -122,3 +122,154 @@ same-user socket/PTY workflows, original status-line preservation, partial
 adoption rollback, cached quota boundaries and foreign replacements. They do not
 prove native Antigravity sign-in, the second account, automatic switching or an
 actual native update. Those live checks remain required before release.
+
+## Saved profiles: add, sign in again and remove
+
+Saved profiles live in the private registry (`~/.ccs/antigravity-profiles/`,
+credential generations in `~/.ccs/antigravity-instances/<profile>/ubuntu/`).
+Each save keeps the current credential plus one previous copy; older owned
+generations are deleted.
+
+### Add or sign in again from a terminal on Ubuntu
+
+```bash
+ai-account-center antigravity signin <profile>
+```
+
+A new name adds a profile; a saved name signs that profile in again. Run it in
+an interactive terminal on Ubuntu; SSH from the Mac or Windows is fine. The
+official CLI starts inside a private sign-in home: bubblewrap with user, PID,
+IPC and UTS namespaces, the root read-only, an owned folder bound over
+`~/.gemini`, a private session bus so the real Secret Service is out of reach,
+an allowlisted environment and browser stubs. The user chooses **Google OAuth**,
+opens the link in a browser, signs in to the Google account for that profile
+and pastes the code back into the CLI. The command never reads the link, the
+code or the screen. As soon as the new credential file is complete, the CLI is
+stopped (before any task can be typed), the credential is checked with Google,
+and it is saved. The live login, history and settings are never touched, and
+the private sign-in folder is removed after every attempt.
+
+- Add refuses a name already used, a 17th profile and a Google account already
+  saved in another profile.
+- Sign in again keeps the same Google account (email and subject) and is
+  refused for the live login, because a later switch saves the live login back
+  into that profile. Switch to another profile first.
+- A running switch (the registry's transaction lock) refuses both.
+
+The command needs `/usr/bin/bwrap`, `/usr/bin/dbus-run-session` and an
+unprivileged user namespace; its preflight checks them with one harmless
+`/bin/true` probe and never starts the CLI on failure.
+
+The dashboard serves the same flow as a terminal fallback (CONTRACT-registry-
+lifecycle 6.2 and 6.6). `providers[].signIn` for Antigravity reads
+`available: false` with `unavailableReason: 'preflight_failed'` (or
+`'tool_missing'` without the CLI). `POST /api/accounts/add` with
+`{provider: 'antigravity', profileName}` and `POST
+/api/accounts/antigravity:profile:<id>/signin-again` check their refusals and
+then answer 409 `preflight_failed` with
+`fallback: {kind: 'terminal', host: 'ubuntu', command: 'ai-account-center antigravity signin <id>'}`;
+`GET /api/accounts/signin-command?provider=antigravity&profile=<id>` returns
+`{host: 'ubuntu', command}`. An in-browser supervised sign-in is not served:
+the CLI's first-run screens (theme, login method) need the user's own keys and
+were never observed by an automated driver.
+
+### Remove
+
+`POST /api/accounts/antigravity:profile:<id>/remove` (with `{}` and then
+`{confirmationToken}`) deletes that profile's saved snapshot and its own
+credential files only. It never logs out and never touches the live login or
+shared history. It refuses the live login (the same saved bytes, else the same
+verified Google identity), the registry's runtime-verified active profile, a
+held transaction lock or pending switch, and a running sign-in. A live-login
+check that cannot run refuses with 500 `remove_failed`.
+
+### Reading status
+
+A reading that cannot be bound to the saved account it was taken for is an
+`error` row with `statusReason: 'identity_unbound'` and is not a switch target.
+Any other failed reading stays a switch target; activation makes its own proof.
+
+## Releasing account switching
+
+Switching is closed in this build by four independent gates:
+
+| Gate | Where | Closed state |
+| --- | --- | --- |
+| Dashboard native release | `src/antigravity/production-runtime.ts`, `ANTIGRAVITY_NATIVE_RELEASED` | `false`: every activation answers `unsupported-runtime-probe` |
+| Runtime release | `scripts/antigravity/runtime/release.json`, `nativeActivationReleased` and `nativeProofReceiptSha256` | `false` and `null`: install and adoption refuse, `agy` runs unmanaged |
+| Runtime installation and adoption | `~/.ccs/antigravity-switching/runtime-installation.json`, the bundle, the PATH blocks, the status-line hook and `ai-account-center-antigravity.service` | not installed |
+| Automatic switching | the `enabled` setting (`PUT /api/antigravity/auto-switch`) | `false` (default) |
+
+Both saved profiles (`gmail` and `party`) must already be in the registry;
+`ai-account-center antigravity signin <profile>` adds a missing one.
+
+### Exact steps to open the gates
+
+Run these on Ubuntu as the dashboard user, with Antigravity idle (no `agy`
+process). `$PKG` is the installed package,
+`~/.local/lib/node_modules/@sittingmongoose/ai-account-center`.
+
+`ai-account-center antigravity status` reports each gate (read-only, no
+credential, no network) and names the next step; run it before step 1 and
+after each step.
+
+1. Read-only preflight. Stop if any check fails.
+   - `sha256sum ~/.local/bin/agy` prints
+     `0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029` (agy
+     1.2.14, the version the runtime was reviewed against).
+   - `pgrep -u "$USER" -x agy` prints nothing.
+   - `python3 -I "$PKG/scripts/antigravity/install_runtime.py" --plan` prints
+     `"nativeActivationReleased": false` and `"installed": false`.
+   - `GET /api/antigravity/profiles` lists `gmail` and `party`, both
+     `available: true`.
+2. Release commit, on the branch that is deployed next:
+   - Write the release receipt (who approved, when, the preflight results; no
+     secret) and take its SHA-256 as `<receipt>`.
+   - In `scripts/antigravity/runtime/release.json` set
+     `"nativeActivationReleased": true` and
+     `"nativeProofReceiptSha256": "<receipt>"`.
+   - In `scripts/antigravity/runtime/runtime-manifest.json` set the `release.json`
+     row to the new `sha256sum scripts/antigravity/runtime/release.json`
+     (`python3 -c "import sys; sys.path.insert(0, 'scripts/antigravity'); from pathlib import Path; from install_runtime import verify_public_sources; verify_public_sources(Path('scripts/antigravity/runtime'))"`
+     must then pass).
+   - In `src/antigravity/production-runtime.ts` set
+     `ANTIGRAVITY_NATIVE_RELEASED = true`.
+   - The two tests that pin the closed gate change with it:
+     `tests/unit/antigravity/production-native-pin.test.ts` and
+     `tests/unit/antigravity/production-usage-only.test.ts`
+     (`expect(ANTIGRAVITY_NATIVE_RELEASED).toBe(true)`).
+   - Run the gates, build, `npm pack`, install the package and restart
+     `ccs-dashboard` with the approved commands.
+3. Install the runtime bundle (it downloads the two hashed parser wheels from
+   PyPI): `python3 -I "$PKG/scripts/antigravity/install_runtime.py" --apply`.
+4. Adopt it: `python3 -I "$PKG/scripts/antigravity/adopt_runtime.py"`. This adds
+   the PATH block to `~/.bashrc` and `~/.profile`, multiplexes the status-line
+   command in `~/.gemini/antigravity-cli/settings.json`, and enables and starts
+   `ai-account-center-antigravity.service`. Originals are journaled in
+   `~/.ccs/antigravity-switching/runtime-adoption.json`.
+5. `systemctl --user restart ccs-dashboard`: the dashboard picks the installed
+   runtime only at start.
+6. Verify: `ai-account-center antigravity status` shows both gates open, the
+   runtime installed and adopted and its service socket present, and
+   `GET /api/antigravity/profiles` reports `activationSupported: true`.
+   New shells resolve `agy` to the managed launcher
+   (`command -v agy` is `~/.local/share/ai-account-center/antigravity-runtime/bin/agy`).
+7. Live test (approved for the orchestrator only): with no `agy` running,
+   `POST /api/antigravity/profiles/party/activate` with `{"hostId": "ubuntu"}`
+   answers 200 `{"status": "active"}`; then the same for `gmail`. A
+   `confirmation-required` answer (managed idle sessions) is confirmed with
+   `POST /api/antigravity/profiles/<id>/confirm` and its token. Any other
+   answer means switching stays off: roll back.
+8. Automatic switching, after the live test passed:
+   `PUT /api/antigravity/auto-switch` with
+   `{"enabled": true, "requestedPoolId": "<a pool both accounts report>"}`
+   (threshold default 95% used).
+
+### Rollback
+
+`python3 -I "$PKG/scripts/antigravity/adopt_runtime.py" --rollback` restores
+the shell profiles and status line and disables the service. Reinstall the
+previous dashboard package (its gates are closed) and restart `ccs-dashboard`.
+The installed bundle and descriptor stay inert while the dashboard gate is
+closed. Saved profiles and the live login are unchanged by every step above
+except the approved activations themselves.
