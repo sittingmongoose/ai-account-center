@@ -15,6 +15,8 @@ from types import SimpleNamespace
 
 SOURCE = Path(__file__).resolve().parents[1] / "native-host"
 sys.path.insert(0, str(SOURCE))
+# The bridge ships no Muse module of its own; it uses the collector's copy.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts/account-usage"))
 import host
 import opencode_console as core
 

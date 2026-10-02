@@ -1,5 +1,6 @@
 """Independent dashboard/bar processes share a private Muse request budget."""
 import importlib
+import importlib.util
 import copy
 import datetime as dt
 import io
@@ -439,9 +440,28 @@ class ProviderObservationTimeTests(unittest.TestCase):
             identity.assert_called_once()
             native_request.assert_not_called()
 
-    def test_shipped_helper_is_byte_identical(self):
-        self.assertEqual((ROOT / "scripts/account-usage/muse_console.py").read_bytes(),
-                         (ROOT / "browser-bridge/opencode-muse/native-host/muse_console.py").read_bytes())
+    def test_bridge_ships_no_second_muse_module_and_installs_the_collector_copy(self):
+        bridge = ROOT / "browser-bridge/opencode-muse"
+        self.assertEqual(sorted(path.name for path in bridge.rglob("muse_console.py")), [])
+        spec = importlib.util.spec_from_file_location("muse_install_macos", bridge / "install-macos.py")
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            version = type("Completed", (), {"stdout": "0.16.3\n"})()
+            with patch.object(installer.sys, "platform", "darwin"), \
+                    patch.object(installer.Path, "home", return_value=home), \
+                    patch.object(installer.subprocess, "run", return_value=version) as run:
+                result = installer.install()
+            self.assertTrue(result["installed"])
+            self.assertEqual(run.call_count, 1)
+            shared = (ROOT / "scripts/account-usage/muse_console.py").read_bytes()
+            for installed in (home / ".ccs/account-usage/muse_console.py",
+                              home / ".ccs/opencode-usage-bridge/native-host/muse_console.py"):
+                self.assertEqual(installed.read_bytes(), shared)
+                self.assertEqual(installed.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((home / ".ccs/opencode-usage-bridge/native-host/host.py").read_bytes(),
+                             (bridge / "native-host/host.py").read_bytes())
 
 
 class RetryTests(unittest.TestCase):

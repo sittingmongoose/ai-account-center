@@ -41,7 +41,7 @@ def install():
     os.chmod(root, 0o700)
     for directory, filenames in {
         "extension": ["manifest.json", "bridge-core.mjs", "service-worker.mjs", "popup.html", "popup.css", "popup.mjs"],
-        "native-host": ["opencode_console.py", "muse_console.py", "host.py"],
+        "native-host": ["opencode_console.py", "host.py"],
     }.items():
         target = root / directory
         if target.is_symlink():
@@ -54,7 +54,14 @@ def install():
                 raise ValueError()
             shutil.copyfile(source / directory / filename, path)
             os.chmod(path, 0o600)
-    muse_source = source / "native-host/muse_console.py"
+    # One shared Muse module: the package's collector copy. host.py imports it
+    # from ~/.ccs/account-usage first; the native-host copy keeps the layout.
+    muse_source = source.parents[1] / "scripts/account-usage/muse_console.py"
+    module = root / "native-host/muse_console.py"
+    if module.is_symlink():
+        raise ValueError()
+    shutil.copyfile(muse_source, module)
+    os.chmod(module, 0o600)
     launcher = root / "native-host/launch-host.sh"
     if launcher.is_symlink():
         raise ValueError()
