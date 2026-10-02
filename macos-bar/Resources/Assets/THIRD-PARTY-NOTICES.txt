@@ -1,9 +1,21 @@
 Provider artwork attribution
 
-Provider artwork identifies the corresponding services. Product names and marks remain their respective owners' trademarks.
+Provider artwork identifies the corresponding services. Product names and marks remain their respective owners' trademarks. Every mark is shown unmodified; see PROVIDER-SOURCES.md for each source and SHA-256.
+
+Claude: official Claude Spark from the Anthropic press kit. Claude and the Claude Spark are Anthropic trademarks.
+Codex: official OpenAI Blossom (black and white) from the OpenAI brand pack. OpenAI and the Blossom are OpenAI trademarks.
+Google Antigravity: official symbol from antigravity.google. Google Antigravity is a Google trademark.
+Cursor: official 2D cube from cursor.com/brand. Cursor is an Anysphere trademark.
+Muse Code: Meta's publisher symbol from dev.meta.ai. Meta and the Meta symbol are Meta Platforms trademarks.
+Kimi Code: the official Kimi app icon from the Kimi Code documentation. Kimi is a Moonshot AI trademark.
+Qwen Token Plan: the official Qwen Cloud symbol from docs.qwencloud.com. Qwen and Qwen Cloud are Alibaba Cloud trademarks.
+Z.ai Coding Plan: the official Z mark from chat.z.ai. Z.ai is a Zhipu AI trademark.
+OpenCode Go: official OpenCode brand-page logos from anomalyco/opencode.
+
+Platform glyphs (Apple, Windows): Simple Icons, CC0-1.0 (https://github.com/simple-icons/simple-icons). The Apple logo is an Apple Inc. trademark and the Windows logo a Microsoft trademark; both are used only as platform indicators.
 
 OpenCode
-Official OpenCode dark-surface mark from anomalyco/opencode commit 63cf236140b11c15cd645e90a7ded77bdc2193b4.
+Official OpenCode light-surface and dark-surface marks from anomalyco/opencode commit aa481b8f5652f5576c55f914a64ed270e7daa7e0.
 
 MIT License
 
@@ -26,12 +38,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-Cursor
-Official default 2D cube from https://cursor.com/brand and its published Cursor brand archive. Vendor trademark artwork; no separate open-source asset license was found.
-
-Qwen
-Official favicon published by https://qwen.ai (Alibaba Qwen). Vendor trademark artwork; no separate asset license was found.
-
-Muse Code (Meta publisher mark)
-Unchanged official https://dev.meta.ai/favicon.ico pixels, extracted to PNG. The installed Muse launcher is byte-identical to https://api.meta.ai/muse-launcher.sh and embeds api.meta.ai/muse-code endpoints; the official product page is https://dev.meta.ai/products/muse-code. No distinct Muse product icon is published. Meta trademark artwork, governed by https://www.meta.com/brand/resources/meta/company-brand/.

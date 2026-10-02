@@ -6,13 +6,78 @@ public struct AccountDashboard: Decodable, Sendable {
   public let accounts: [DashboardAccount]
   public let codexAutoSwitch: CodexAutoSwitch
   public let settings: AccountRefreshSettings?
+  /// Antigravity's own automatic-switching policy (thresholdUsedPercent is % USED). A missing or
+  /// malformed value is ignored rather than failing the whole dashboard.
+  public let antigravityAutoSwitch: AntigravityAutoSwitch?
+  /// Providers hidden in the dashboard's Accounts & Settings. Honoured when the DTO carries them,
+  /// either as a top-level `hiddenProviders` array or inside `settings`; empty otherwise.
+  public let hiddenProviders: Set<String>
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion, updatedAt, accounts, codexAutoSwitch, settings, antigravityAutoSwitch, hiddenProviders
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    updatedAt = try container.decode(String.self, forKey: .updatedAt)
+    accounts = try container.decode([DashboardAccount].self, forKey: .accounts)
+    codexAutoSwitch = try container.decode(CodexAutoSwitch.self, forKey: .codexAutoSwitch)
+    settings = try container.decodeIfPresent(AccountRefreshSettings.self, forKey: .settings)
+    let antigravity = (try? container.decodeIfPresent(AntigravityAutoSwitch.self, forKey: .antigravityAutoSwitch)) ?? nil
+    antigravityAutoSwitch = antigravity?.isValid == true ? antigravity : nil
+    let topLevel = (try? container.decodeIfPresent([String].self, forKey: .hiddenProviders)) ?? nil
+    hiddenProviders = Set((topLevel ?? []) + (settings?.hiddenProviders ?? []))
+  }
+
+  /// Accounts the trays show: every account whose provider is not hidden on the dashboard.
+  public var visibleAccounts: [DashboardAccount] {
+    hiddenProviders.isEmpty ? accounts : accounts.filter { !hiddenProviders.contains($0.provider) }
+  }
+
+  /// Codex Activate is offered for an inactive saved profile while no automatic switch is running.
+  public func canActivateCodex(_ account: DashboardAccount) -> Bool {
+    account.canActivate && !codexAutoSwitch.activationInProgress
+  }
+
+  /// Antigravity Activate needs a second account to switch to, a runtime-verified Ubuntu profile and no
+  /// activation already running, manual or automatic.
+  public func canActivateAntigravity(_ account: DashboardAccount) -> Bool {
+    account.canActivateAntigravity && antigravityAutoSwitch?.activationInProgress != true
+      && visibleAccounts.filter { $0.provider == "antigravity" }.count >= 2
+  }
 }
 
 public struct AccountRefreshSettings: Decodable, Sendable {
   public let refreshIntervalSeconds: Int
+  public let hiddenProviders: [String]?
   public var validatedInterval: TimeInterval {
     TimeInterval((30...3600).contains(refreshIntervalSeconds) ? refreshIntervalSeconds : 60)
   }
+
+  private enum CodingKeys: String, CodingKey { case refreshIntervalSeconds, hiddenProviders }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    refreshIntervalSeconds = try container.decode(Int.self, forKey: .refreshIntervalSeconds)
+    hiddenProviders = (try? container.decodeIfPresent([String].self, forKey: .hiddenProviders)) ?? nil
+  }
+}
+
+/// Antigravity automatic switching as the dashboard reports it (Ubuntu only).
+public struct AntigravityAutoSwitch: Decodable, Sendable {
+  public let enabled: Bool
+  /// Percentage USED, unlike Codex's remaining-percent threshold.
+  public let thresholdUsedPercent: Int
+  public let pollIntervalSeconds: Int?
+  public let requestedPoolId: String?
+  public let outcome: String?
+  public let message: String?
+  public let activationInProgress: Bool?
+  public let lastCheckedAt: String?
+  public let lastSwitchedAt: String?
+
+  public var isValid: Bool { (1...99).contains(thresholdUsedPercent) }
 }
 
 public struct CodexAutoSwitch: Decodable, Sendable {
@@ -48,12 +113,28 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
     provider == "claude" && capabilities.claudeProfileId != nil && capabilities.claudePlatforms.contains("mac")
   }
   public var canActivate: Bool { provider == "codex" && capabilities.codexProfile != nil && !isActive }
+  /// The Antigravity profile the switch routes address, when it is a safe identifier.
+  public var antigravityProfile: String? {
+    guard provider == "antigravity", let id = capabilities.antigravityProfileId,
+      id.range(of: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\z", options: .regularExpression) != nil
+    else { return nil }
+    return id
+  }
+  /// Antigravity activation is offered only when the dashboard says the Ubuntu runtime can do it.
+  public var canActivateAntigravity: Bool {
+    antigravityProfile != nil && !isActive && status != "needs_sign_in"
+      && capabilities.antigravityCanActivate == true
+      && capabilities.antigravityHostIds == ["ubuntu"]
+  }
 }
 
 public struct AccountCapabilities: Decodable, Sendable {
   public let codexProfile: String?
   public let claudeProfileId: String?
   public let claudePlatforms: [String]
+  public let antigravityProfileId: String?
+  public let antigravityHostIds: [String]?
+  public let antigravityCanActivate: Bool?
 }
 
 public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
@@ -73,6 +154,8 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
   public let enabled: Bool?
   public let status: String?
   public let sampledAt: String?
+  /// Antigravity quota pool this window belongs to, exactly as the adapter reported it.
+  public let poolId: String?
   public var id: String { key }
 
   public var clampedUsedPercent: Double? {

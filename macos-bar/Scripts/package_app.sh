@@ -43,10 +43,11 @@ cp "$BIN" "$APP/Contents/MacOS/$EXEC_NAME"
 sed "s/__VERSION__/$VERSION/g" "$ROOT/Resources/Info.plist" > "$APP/Contents/Info.plist"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 
-# Bundle the CCS icon assets (menu-bar color/template + header logo) so
-# Bundle.main can resolve them at runtime.
+# Bundle the Apex Soft logo (menu-bar template, header mark, About icons) and the
+# official provider and platform marks so Bundle.main can resolve them at runtime.
 if [[ -d "$ROOT/Resources/Assets" ]]; then
   cp "$ROOT/Resources/Assets/"*.png "$APP/Contents/Resources/" 2>/dev/null || true
+  cp "$ROOT/Resources/Assets/"*.svg "$APP/Contents/Resources/" 2>/dev/null || true
   for notice in PROVIDER-SOURCES.md THIRD-PARTY-NOTICES.txt; do
     if [[ -f "$ROOT/Resources/Assets/$notice" ]]; then
       cp "$ROOT/Resources/Assets/$notice" "$APP/Contents/Resources/$notice"

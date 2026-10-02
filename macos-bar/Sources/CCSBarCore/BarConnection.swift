@@ -40,6 +40,7 @@ public enum BarClientError: LocalizedError {
   case rateLimited
   case status(Int, String?)
   case codexConfirmation(CodexSwitchConfirmation)
+  case antigravityConfirmation(AntigravitySwitchConfirmation)
   case nonHTTPResponse
   case decoding
 
@@ -52,6 +53,7 @@ public enum BarClientError: LocalizedError {
     case .rateLimited: return "AI Account Center login is temporarily limited. Try again in 15 minutes."
     case .status(let code, let message): return message ?? "AI Account Center returned HTTP \(code)."
     case .codexConfirmation: return "Running Codex programs require confirmation before switching."
+    case .antigravityConfirmation: return "Running Antigravity programs require confirmation before switching."
     case .nonHTTPResponse: return "AI Account Center did not return an HTTP response."
     case .decoding: return "The AI Account Center account data could not be read."
     }
