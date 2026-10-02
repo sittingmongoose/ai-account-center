@@ -81,7 +81,8 @@ public actor AccountsClient {
     loginBlockedUntil = nil
   }
 
-  private func makeRequest(_ path: String, method: String = "GET", body: Data? = nil) -> URLRequest {
+  private func makeRequest(_ path: String, method: String = "GET", body: Data? = nil,
+    headers: [String: String] = [:]) -> URLRequest {
     let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
     var components = URLComponents(url: connection.baseURL.appendingPathComponent(String(parts[0])), resolvingAgainstBaseURL: false)!
     if parts.count == 2 { components.percentEncodedQuery = String(parts[1]) }
@@ -93,18 +94,27 @@ public actor AccountsClient {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.setValue(connection.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin")
     }
+    for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
     return request
   }
 
   private func request(_ path: String, method: String = "GET", body: Data? = nil, confirmationProfile: String? = nil,
-    antigravityProfile: String? = nil, retryUnauthorized: Bool = true) async throws -> Data {
+    antigravityProfile: String? = nil, retryUnauthorized: Bool = true, headers: [String: String] = [:]) async throws -> Data {
+    try await exchange(path, method: method, body: body, confirmationProfile: confirmationProfile,
+      antigravityProfile: antigravityProfile, retryUnauthorized: retryUnauthorized, headers: headers).data
+  }
+
+  /// One request with its status, for the callers whose next step depends on it (the Claude Open's 200 or 202).
+  private func exchange(_ path: String, method: String = "GET", body: Data? = nil, confirmationProfile: String? = nil,
+    antigravityProfile: String? = nil, retryUnauthorized: Bool = true,
+    headers: [String: String] = [:]) async throws -> (data: Data, status: Int) {
     try await login()
-    var (data, response) = try await transport.send(makeRequest(path, method: method, body: body))
+    var (data, response) = try await transport.send(makeRequest(path, method: method, body: body, headers: headers))
     if response.statusCode == 401 {
       authenticated = false
       if retryUnauthorized {
         try await login()
-        (data, response) = try await transport.send(makeRequest(path, method: method, body: body))
+        (data, response) = try await transport.send(makeRequest(path, method: method, body: body, headers: headers))
       }
     }
     if response.statusCode == 409, let profile = confirmationProfile,
@@ -124,7 +134,7 @@ public actor AccountsClient {
         reason: publicCode?["reason"] as? String,
         antigravityActivation: antigravityProfile != nil, activationStatus: publicCode?["status"] as? String))
     }
-    return data
+    return (data, response.statusCode)
   }
 
   /// Only fixed client copy and recognized public codes may reach the UI.
@@ -172,6 +182,8 @@ public actor AccountsClient {
       }
     }
     if path.hasPrefix("api/claude/desktop-profiles/") && path.hasSuffix("/open") {
+      // The guarded history copy could not be confirmed, so Claude was not opened (CONTRACT-serving-misc 4.4).
+      if status == 409 && code == "history_unconfirmed" { return ClaudeOpenFlow.historyUnconfirmed }
       if [502, 503].contains(status) { return "Claude could not be opened on the selected computer. Check its profile setup and connection." }
       if status == 404 { return "The selected Claude profile is not available on that computer." }
     }
@@ -248,10 +260,25 @@ public actor AccountsClient {
     return try await request("api/antigravity/auto-switch", method: "PUT", body: JSONSerialization.data(withJSONObject: body))
   }
 
-  public func openClaude(profile: String, platform: String = "mac") async throws {
+  /// Claude "Open on Mac" and "Open on Windows". `Prefer: respond-async` opts into the 202 progress answer; without
+  /// it the server waits and answers 200. The POST is sent once: an expired session is never re-sent as a second
+  /// Open, exactly as a one-use confirmation token is not.
+  @discardableResult
+  public func openClaude(profile: String, platform: String = "mac") async throws -> ClaudeOpenStart {
     guard ["platyr", "gmail", "party", "me"].contains(profile), ["mac", "windows"].contains(platform)
     else { throw BarClientError.invalidConnection }
-    try await write("api/claude/desktop-profiles/\(profile)/open", body: ["platform": platform])
+    let (data, status) = try await exchange("api/claude/desktop-profiles/\(profile)/open", method: "POST",
+      body: JSONSerialization.data(withJSONObject: ["platform": platform]), retryUnauthorized: false,
+      headers: ["Prefer": "respond-async"])
+    guard status == 202 else { return .opened }
+    let accepted = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    return .accepted(operationId: accepted?["operationId"] as? String ?? "", state: accepted?["state"] as? String ?? "checking")
+  }
+
+  /// The Claude desktop profile list, read while an Open runs for its `openOperation` progress. It is on the tray's
+  /// device-token allowlist and carries no UUIDs, titles, transcript text, ssh details or paths.
+  public func claudeDesktopProfiles() async throws -> [ClaudeDesktopProfile] {
+    try await get("api/claude/desktop-profiles", as: ClaudeDesktopProfileList.self).profiles
   }
 
   private func isProfileIdentifier(_ value: String) -> Bool {

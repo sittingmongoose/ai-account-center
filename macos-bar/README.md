@@ -54,6 +54,19 @@ Controls are limited to opening configured Claude profiles on Mac or Windows, sa
 Antigravity profiles on the shared Ubuntu runtime, and the two automatic-switching policies. Footer controls open the
 dashboard, refresh and toggle Settings; the header menu offers Settings, About and Quit.
 
+Claude "Open on Mac" and "Open on Windows" both POST `/api/claude/desktop-profiles/:id/open` with
+`Prefer: respond-async`. A 200 is today's finished Open. A 202 turns into a read-poll of
+`GET /api/claude/desktop-profiles` once a second (every five seconds after two minutes, giving up after three), and
+the account row's secondary line shows the reported `openOperation` in its own style: "Copying history 3 of 18", then
+"Opening", then "Opened". `failed` and `blocked_uncertain` show the server's fixed sentence, or "History copy could
+not be confirmed. Claude was not opened.", which is also what a 409 `history_unconfirmed` says; three minutes without
+a terminal state says "Still working on the dashboard. Check again shortly." Those sentences go to the panel's warning
+banner, which is where every other error already shows. Both platform glyphs rest for the whole Open, so a second one
+never starts for the same account, and the POST is never repeated: not for a poll, not after an expired session, and
+never resumed after a restart. A read that fails while polling never ends the Open; the poll just tries again.
+`swift run ccs-bar-check` covers every one of these paths against mock transports, including the poll's exact cadence
+and deadline.
+
 ## Opening the panel
 
 - Click the Apex glyph in the menu bar.

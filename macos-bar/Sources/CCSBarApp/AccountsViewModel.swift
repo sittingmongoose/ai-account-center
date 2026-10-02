@@ -55,6 +55,13 @@ final class AccountsViewModel: ObservableObject {
   /// The windows now drawn as "new reading pending" (F6), so the timer redraws only when one flips.
   private var pendingResets = Set<String>()
   private var timer: Timer?
+  /// The Claude Open now running for an account, keyed by account id, as its row's calm secondary text. The entry is
+  /// removed once the Open ends, so the row returns to its plan, platform and sample time.
+  @Published private(set) var openProgress: [String: ClaudeOpenProgress] = [:]
+  /// One Open per Claude account: a second click while one runs sends nothing at all.
+  private let openCoordinator = ClaudeOpenCoordinator()
+  /// How often a running Open is read: 1 s, then every 5 s after two minutes, giving up after three.
+  private let openPolling = ClaudeOpenPolling()
 
   /// The first-run connect screen with no connection file and no network, for offline renders.
   init(previewWithoutConnection: Bool) {
@@ -99,6 +106,8 @@ final class AccountsViewModel: ObservableObject {
   func configure() {
     pendingCodexSwitch = nil
     pendingAntigravitySwitch = nil
+    // A reload never resumes an Open: its progress lived only in memory.
+    openProgress = [:]
     connected = false
     do {
       try session.load()
@@ -126,6 +135,8 @@ final class AccountsViewModel: ObservableObject {
     connectionGeneration += 1
     pendingCodexSwitch = nil
     pendingAntigravitySwitch = nil
+    // The replaced connection's Open stops reading it and its row rests (the generation check drops both).
+    openProgress = [:]
     connection = session.connection
     connected = false
     message = nil
@@ -323,10 +334,51 @@ final class AccountsViewModel: ObservableObject {
 
   // MARK: Claude and Codex automatic switching
 
+  /// Claude "Open on Mac" and "Open on Windows". The POST goes out once with `Prefer: respond-async`; a 202 turns
+  /// into a read-poll of the profile list whose progress the row shows, and a 200 is today's finished Open. The row's
+  /// actions stay disabled for the whole poll, and no second Open starts for the same account.
   func openClaude(_ account: DashboardAccount, platform: String = "mac") {
     guard account.provider == "claude", let profile = account.capabilities.claudeProfileId,
-      account.capabilities.claudePlatforms.contains(platform) else { return }
-    perform(id: "\(account.id)|\(platform)") { client in try await client.openClaude(profile: profile, platform: platform) }
+      account.capabilities.claudePlatforms.contains(platform), let client else { return }
+    guard openProgress[account.id]?.running != true, busyAction == nil, !hasPendingConfirmation else { return }
+    let key = account.id
+    let generation = connectionGeneration
+    openProgress[key] = ClaudeOpenProgress(platform: platform, text: ClaudeOpenFlow.starting, finished: false, opened: false)
+    Task { @MainActor in
+      var outcome: ClaudeOpenProgress?
+      var failure: String?
+      do {
+        outcome = try await ClaudeOpenFlow.run(client: client, coordinator: openCoordinator, profile: profile,
+          platform: platform, polling: openPolling, sleep: { interval in
+            try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            // A verified Change replaced the connection: stop reading it, and never resume after it.
+            let current = await MainActor.run { self.connectionGeneration }
+            guard generation == current else { throw CancellationError() }
+          }, progress: { value in await self.report(key: key, generation: generation, value) })
+      } catch { failure = error.localizedDescription }
+      guard generation == connectionGeneration else { openProgress[key] = nil; return }
+      // Nothing came back: the POST failed, or another Open for this Claude profile refused it. Either way this
+      // account's row rests again; an Open that is really running belongs to its own account's entry.
+      guard let outcome else {
+        openProgress[key] = nil
+        if let failure { message = failure }
+        return
+      }
+      if outcome.opened {
+        // "Opened" stays on the row while the new sample is read, then the row returns to its own secondary text.
+        await refresh()
+        if generation == connectionGeneration { openProgress[key] = nil }
+      } else {
+        openProgress[key] = nil
+        message = outcome.text
+      }
+    }
+  }
+
+  /// One Open's progress on its row, dropped when a verified Change replaced the connection while it ran.
+  private func report(key: String, generation: Int, _ value: ClaudeOpenProgress) {
+    guard generation == connectionGeneration else { return }
+    openProgress[key] = value
   }
 
   func toggleAutomaticSwitching(_ enabled: Bool) {
