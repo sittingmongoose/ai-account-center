@@ -7,6 +7,7 @@ import Carbon.HIToolbox
 final class GlobalHotKey {
   static let signature: OSType = 0x4141_4354 // "AACT"
   private var hotKey: EventHotKeyRef?
+  var isRegistered: Bool { hotKey != nil }
   private var handler: EventHandlerRef?
   private let action: () -> Void
 

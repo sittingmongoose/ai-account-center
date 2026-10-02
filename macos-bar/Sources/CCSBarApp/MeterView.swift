@@ -191,6 +191,7 @@ struct ResetLabel: View {
         HStack(spacing: 4) {
           Image(systemName: "clock").font(.system(size: 10.5, weight: .medium))
           Text(text).font(.system(size: 11.5, weight: soon ? .medium : .regular)).monospacedDigit().lineLimit(1)
+            .minimumScaleFactor(0.8)
         }
         .foregroundStyle(soon ? palette.label : palette.label2)
         .help(TrayFormat.longReset(iso))

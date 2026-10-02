@@ -54,6 +54,15 @@ struct PanelRootView: View {
       .id(state.openGeneration)
       .background { if state.staticRender { PreviewGlass() } }
       .environment(\.trayStaticRender, state.staticRender)
+      .modifier(PreviewActiveControls(enabled: state.staticRender))
+  }
+}
+
+/// Offline renders draw controls as they look in the key panel, not in an inactive window.
+struct PreviewActiveControls: ViewModifier {
+  let enabled: Bool
+  func body(content: Content) -> some View {
+    if enabled { content.environment(\.controlActiveState, .key) } else { content }
   }
 }
 

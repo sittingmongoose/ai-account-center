@@ -16,6 +16,9 @@ enum CCSBarMain {
     if arguments.count == 4, arguments[1] == "--check-native-packs" {
       PreviewRenderer.checkNativePacks(input: arguments[2], output: arguments[3])
     }
+    if arguments.count == 3, arguments[1] == "--self-test" {
+      PanelSelfTest.run(input: arguments[2])
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -26,7 +29,7 @@ enum CCSBarMain {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private var controller: PanelController?
+  var controller: PanelController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     let prefs = TrayPreferences.shared

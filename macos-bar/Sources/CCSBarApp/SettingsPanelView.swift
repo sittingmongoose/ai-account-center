@@ -124,7 +124,7 @@ struct SettingsPanelView: View {
             .frame(width: 30, height: 30).contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Circle())
+        .glassControl(circle: true)
         .glassEffectID("settings-x", in: glass)
         .glassEffectTransition(state.reduceMotion ? .identity : .materialize)
         .hoverHelp("Close settings (Esc)", id: "settings-close", action: close)

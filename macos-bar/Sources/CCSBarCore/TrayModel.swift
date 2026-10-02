@@ -162,12 +162,17 @@ public struct MenuBarReading: Sendable, Equatable {
     let value = mode == .left ? max(0, 100 - tightest.1) : tightest.1
     let text = "\(TrayFormat.number(value))%"
     let who = account.identity.split(separator: "@").first.map(String.init) ?? account.identity
-    let span = TrayColumns.shortLabel(provider: provider, tightest.0).lowercased()
+    let label = TrayColumns.shortLabel(provider: provider, tightest.0)
+    let span = ["Weekly": "weekly", "Monthly": "monthly"][label] ?? label
     return MenuBarReading(value: value, text: text, detail: "\(who) \(span): \(text) \(mode == .left ? "left" : "used")")
   }
 }
 
 public enum TrayFormat {
+  /// Offline renders pin "now" to the fixture's capture time so countdowns read as they did then.
+  nonisolated(unsafe) public static var referenceNow: Date?
+  public static var now: Date { referenceNow ?? Date() }
+
   /// Up to two decimals, never padded.
   public static func number(_ value: Double) -> String {
     value.formatted(.number.precision(.fractionLength(0...2)))
@@ -194,14 +199,14 @@ public enum TrayFormat {
     return "\(max(1, Int(total)))s"
   }
 
-  public static func relative(_ date: Date?, now: Date = Date()) -> String {
+  public static func relative(_ date: Date?, now: Date = TrayFormat.now) -> String {
     guard let date else { return "time unavailable" }
     let elapsed = now.timeIntervalSince(date)
     return elapsed < 10 ? "just now" : "\(duration(elapsed)) ago"
   }
 
   /// Row form: a countdown, or the clock time once the reset is under a day away.
-  public static func shortReset(_ iso: String?, now: Date = Date()) -> String? {
+  public static func shortReset(_ iso: String?, now: Date = TrayFormat.now) -> String? {
     guard let date = AccountFormatting.date(iso) else { return nil }
     let remaining = date.timeIntervalSince(now)
     if remaining <= 0 { return "due" }
@@ -210,14 +215,14 @@ public enum TrayFormat {
   }
 
   /// Details form: the date, time and countdown.
-  public static func longReset(_ iso: String?, now: Date = Date()) -> String {
+  public static func longReset(_ iso: String?, now: Date = TrayFormat.now) -> String {
     guard let date = AccountFormatting.date(iso) else { return "No reset reported" }
     let remaining = date.timeIntervalSince(now)
     let stamp = date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
     return "Resets \(stamp) · \(remaining <= 0 ? "due" : duration(remaining))"
   }
 
-  public static func isSoon(_ iso: String?, now: Date = Date()) -> Bool {
+  public static func isSoon(_ iso: String?, now: Date = TrayFormat.now) -> Bool {
     guard let date = AccountFormatting.date(iso) else { return false }
     return date.timeIntervalSince(now) < 7200
   }

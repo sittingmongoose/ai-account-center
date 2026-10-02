@@ -170,7 +170,8 @@ struct AccountRow: View {
       ClaudeOpenPair(model: model, account: account)
     case "codex":
       if account.isActive {
-        ActiveLabel(platform: account.platform, draw: open.activeAtOpen["codex"] != nil && open.activeAtOpen["codex"] != account.id)
+        ActiveLabel(platform: account.platform, draw: open.activeAtOpen["codex"] != nil && open.activeAtOpen["codex"] != account.id,
+          probe: "slot|active-\(account.id)")
       } else if account.canActivate {
         ActivateButton(title: "Activate", busy: model.busyAction == account.id,
           enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation,
@@ -186,7 +187,8 @@ struct AccountRow: View {
   @ViewBuilder private func antigravityAction(_ palette: TrayPalette) -> some View {
     let anyActive = sectionAccounts.contains(where: \.isActive)
     if account.isActive {
-      ActiveLabel(platform: account.platform, draw: open.activeAtOpen["antigravity"] != nil && open.activeAtOpen["antigravity"] != account.id)
+      ActiveLabel(platform: account.platform, draw: open.activeAtOpen["antigravity"] != nil && open.activeAtOpen["antigravity"] != account.id,
+        probe: "slot|active-\(account.id)")
     } else if account.status == "needs_sign_in" {
       ActivateButton(title: "Finish setup", help: "Finish the supervised login in the dashboard's Accounts and Settings",
         id: "finish-setup-\(account.id)") { model.openDashboard() }
@@ -212,10 +214,19 @@ struct ClaudeOpenPair: View {
   @ObservedObject var model: AccountsViewModel
   let account: DashboardAccount
   @Namespace private var glass
+  @Environment(\.trayStaticRender) private var staticRender
 
   var body: some View {
     let platforms = account.capabilities.claudeProfileId == nil ? [] : account.capabilities.claudePlatforms.filter { ["mac", "windows"].contains($0) }
-    if !platforms.isEmpty {
+    if !platforms.isEmpty && staticRender {
+      HStack(spacing: 0) {
+        ForEach(platforms, id: \.self) { platform in
+          PlatformGlyph(platform: platform, size: 13).foregroundStyle(.primary)
+            .frame(width: 29, height: 28)
+            .hoverHelp("Open \(account.identity) in Claude on \(platform == "mac" ? "Mac" : "Windows")", id: "claude-\(platform)-\(account.id)")
+        }
+      }.padding(.horizontal, 1).glassControl()
+    } else if !platforms.isEmpty {
       GlassEffectContainer(spacing: 6) {
         HStack(spacing: 0) {
           ForEach(platforms, id: \.self) { platform in
@@ -283,7 +294,7 @@ struct SectionHeader: View {
   @ViewBuilder private func captions(_ palette: TrayPalette) -> some View {
     ForEach(layout.columns, id: \.key) { column in
       Text(column.label).font(.system(size: 11, weight: .medium)).foregroundStyle(palette.label2)
-        .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+        .lineLimit(1).minimumScaleFactor(0.85).frame(maxWidth: .infinity, alignment: .leading)
     }
     Color.clear.frame(width: layout.slot, height: 1)
     Color.clear.frame(width: layout.tail, height: 1)

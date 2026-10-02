@@ -43,13 +43,16 @@ private struct CheckShape: Shape {
 struct ActiveLabel: View {
   let platform: String
   var draw = false
+  var probe = ""
   var body: some View {
     withPalette { palette in
       HStack(spacing: TrayMetrics.checkGap) {
-        CheckCircle(draw: draw)
+        CheckCircle(draw: draw).alignmentProbe("\(probe)|icon")
         VStack(alignment: .leading, spacing: 0) {
           Text("Active").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(palette.label)
+            .alignmentProbe("\(probe)|label")
           Text("on \(TrayFormat.platformName(platform))").font(.system(size: 11)).foregroundStyle(palette.label2)
+            .alignmentProbe("\(probe)|sub")
         }
         .lineLimit(1)
       }
@@ -93,6 +96,7 @@ struct ActivateButton: View {
         HStack(spacing: 6) {
           if busy { ProgressView().controlSize(.mini) }
           Text(title).font(.system(size: 12.5, weight: .medium)).foregroundStyle(enabled ? palette.label : palette.label3)
+            .alignmentProbe("slot|\(id)|label")
         }
         .padding(.horizontal, busy ? 12 : TrayMetrics.activateInset)
         .frame(height: 26)
@@ -100,6 +104,7 @@ struct ActivateButton: View {
       }
       .buttonStyle(.plain)
       .glassControl()
+      .alignmentProbe("slot|\(id)|icon")
       .disabled(!enabled || busy)
       .hoverHelp(help, id: id, action: enabled ? action : nil)
     }

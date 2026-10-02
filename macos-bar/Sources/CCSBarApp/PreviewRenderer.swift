@@ -34,8 +34,9 @@ enum PreviewRenderer {
     NSApplication.shared.setActivationPolicy(.prohibited)
     let appearance = NSAppearance(named: options.appearance == "dark" ? .darkAqua : .aqua)
     NSApplication.shared.appearance = appearance
+    TrayFormat.referenceNow = AccountFormatting.date(dashboard.updatedAt)
     let model = AccountsViewModel(preview: dashboard)
-    let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "aac.preview.\(UUID().uuidString)") ?? .standard)
+    let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard)
     let state = PanelState()
     state.staticRender = true
     state.panelWidth = options.width
@@ -110,7 +111,10 @@ enum PreviewRenderer {
       NSColor.black.withAlphaComponent(dark ? 0.55 : 0.14).setStroke()
       path.lineWidth = 0.5
       path.stroke()
+      NSGraphicsContext.saveGraphicsState()
+      path.addClip()
       content.draw(in: panelRect)
+      NSGraphicsContext.restoreGraphicsState()
       image.unlockFocus()
       guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { throw BarClientError.decoding }
       let pixels = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(canvasSize.width * scale), pixelsHigh: Int(canvasSize.height * scale),
@@ -220,9 +224,28 @@ enum PreviewRenderer {
         let target = hit(point, label: view.identifier?.rawValue ?? "nested")
         return !(target is DetailsRowButton)
       }
-      let passed = missingHelp.isEmpty && labelled && rowCountsPassed && geometryPassed && fullRowPassed && nestedPassed
+      // Selected-row alignment: in every switchable section, the check's left edge must sit on the Activate
+      // capsule's left edge and "Active" on the "Activate" label's x, within 0.5 pt.
+      var alignment: [[String: Any]] = []
+      var alignmentPassed = true
+      for provider in ["codex", "antigravity"] {
+        let ids = visible.filter { $0.provider == provider }.map(\.id)
+        func edges(_ part: String) -> [CGFloat] {
+          ids.compactMap { id in
+            AlignmentProbe.frames["slot|activate-\(id)|\(part)"]?.minX ?? AlignmentProbe.frames["slot|active-\(id)|\(part)"]?.minX
+          }
+        }
+        let icons = edges("icon"), labels = edges("label")
+        let subs = ids.compactMap { AlignmentProbe.frames["slot|active-\($0)|sub"]?.minX }
+        let spread = { (values: [CGFloat]) -> CGFloat in (values.max() ?? 0) - (values.min() ?? 0) }
+        let ok = icons.count >= 2 ? spread(icons) <= 0.5 && spread(labels + subs) <= 0.5 : true
+        alignmentPassed = alignmentPassed && ok
+        alignment.append(["section": provider, "slots": icons.count, "iconLeftEdges": icons.map { Double($0) },
+          "labelLeftEdges": labels.map { Double($0) }, "secondaryLeftEdges": subs.map { Double($0) }, "passed": ok])
+      }
+      let passed = missingHelp.isEmpty && labelled && rowCountsPassed && geometryPassed && fullRowPassed && nestedPassed && alignmentPassed
       let result: [String: Any] = [
-        "passed": passed, "helpTags": help.map { ["id": $0.identifier?.rawValue ?? "", "text": $0.presenter.text] },
+        "passed": passed, "activeAlignment": alignment, "activeAlignmentPassed": alignmentPassed, "helpTags": help.map { ["id": $0.identifier?.rawValue ?? "", "text": $0.presenter.text] },
         "missingHelpTags": missingHelp, "helpTagsLabelled": labelled,
         "accountRows": accountRows.count, "expectedAccountRows": sectionAccounts.count,
         "providerRows": providerRows.count, "expectedProviderRows": otherGroups.count,

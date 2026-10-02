@@ -1064,6 +1064,349 @@ private func checkCodexCompactFullDashboardDTO() throws {
     "Provider grouping must preserve every account, the active Codex identity, and its exact account compact cores")
 }
 
+// MARK: Antigravity switching routes (commit 9cf75fbe)
+
+private func antigravityOffer(profile: String = "agy-two", token: String = "agy_fixture_token_0123456789",
+  expires: Date = Date().addingTimeInterval(120), email: String = "antigravity-2@example.invalid",
+  processes: [[String: Any]] = [["pid": 4321, "role": "cli", "label": "FIXTURE_ONLY_SERVER_LABEL"]]) -> [String: Any] {
+  [
+    "status": "confirmation-required", "profileId": profile, "hostId": "ubuntu", "email": email,
+    "confirmation": [
+      "token": token, "expiresAt": ISO8601DateFormatter().string(from: expires), "profileId": profile,
+      "hostId": "ubuntu", "email": email, "warning": "FIXTURE_ONLY_SERVER_WARNING", "processes": processes,
+    ] as [String: Any],
+  ]
+}
+
+private func checkAntigravityClient() async throws {
+  let activated = try JSONSerialization.data(withJSONObject: [
+    "status": "active", "profileId": "agy-two", "hostId": "ubuntu", "email": "antigravity-2@example.invalid",
+  ])
+  let transport = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/activate": [MockReply(200, activated)]])
+  let client = AccountsClient(connection: testConnection(), transport: transport)
+  let result = try await client.activateAntigravity(profile: "agy-two")
+  try expect(result.status == "active" && result.profileId == "agy-two" && result.email == "antigravity-2@example.invalid",
+    "A verified Antigravity activation must report the requested profile")
+  let call = (await transport.recorded()).first { $0.url.path == "/api/antigravity/profiles/agy-two/activate" }
+  try expect(call?.method == "POST" && call?.headers["origin"] == "http://ccs.invalid:3000"
+    && call?.headers["content-type"] == "application/json",
+    "Antigravity activation must be a same-origin JSON POST")
+  let activateBody = try call?.jsonBody()
+  try expect(activateBody.map { $0.count == 1 && $0["hostId"] as? String == "ubuntu" } == true,
+    "Antigravity activation must address only the Ubuntu host and send no token")
+
+  // Running programs: a one-use offer that only an explicit confirm may answer.
+  let offerTransport = MockTransport(replies: [
+    "POST /api/antigravity/profiles/agy-two/activate": [MockReply(409, try JSONSerialization.data(withJSONObject: antigravityOffer()))],
+  ])
+  let offerClient = AccountsClient(connection: testConnection(), transport: offerTransport)
+  do {
+    _ = try await offerClient.activateAntigravity(profile: "agy-two")
+    throw CheckFailure(description: "A running-program response must not activate")
+  } catch BarClientError.antigravityConfirmation(let offer) {
+    try expect(offer.profileId == "agy-two" && offer.email == "antigravity-2@example.invalid" && offer.isValid(for: "agy-two"),
+      "The Antigravity offer must be bound to the requested profile and identity")
+    try expect(offer.processes.count == 1 && offer.processes[0].pid == 4321 && offer.processes[0].label == "Antigravity CLI",
+      "Process labels must come from the fixed client table, never the server's text")
+    try expect(!AntigravitySwitchConfirmation.warning.contains("FIXTURE_ONLY"),
+      "The confirmation warning must be the fixed client copy")
+  }
+  let offerCalls = await offerTransport.recorded()
+  try expect(offerCalls.filter { $0.url.path.hasSuffix("/activate") }.count == 1,
+    "An offer must wait for consent without a second request")
+
+  // Offers that do not describe exactly what will stop are refused with fixed guidance.
+  let rejected: [[String: Any]] = [
+    antigravityOffer(profile: "agy-other"),
+    antigravityOffer(token: "short"),
+    antigravityOffer(expires: Date().addingTimeInterval(-5)),
+    antigravityOffer(processes: [["pid": 0, "role": "cli"]]),
+    antigravityOffer(processes: [["pid": 12, "role": "FIXTURE_ONLY_ROLE"]]),
+  ]
+  for body in rejected {
+    let bad = MockTransport(replies: [
+      "POST /api/antigravity/profiles/agy-two/activate": [MockReply(409, try JSONSerialization.data(withJSONObject: body))],
+    ])
+    do {
+      _ = try await AccountsClient(connection: testConnection(), transport: bad).activateAntigravity(profile: "agy-two")
+      throw CheckFailure(description: "A malformed Antigravity offer unexpectedly activated")
+    } catch BarClientError.status(let status, let message) {
+      try expect(status == 409 && message == "Antigravity programs are running on Ubuntu. Activate again to review them.",
+        "A malformed offer must become fixed guidance, never consent")
+    }
+  }
+
+  // Confirm sends the token once and never retries it after an authentication failure.
+  let confirmed = try JSONSerialization.data(withJSONObject: ["status": "active", "profileId": "agy-two", "hostId": "ubuntu"])
+  let confirmTransport = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/confirm": [MockReply(200, confirmed)]])
+  try await AccountsClient(connection: testConnection(), transport: confirmTransport)
+    .confirmAntigravity(profile: "agy-two", confirmationToken: "agy_fixture_token_0123456789")
+  let confirmCall = (await confirmTransport.recorded()).first { $0.url.path.hasSuffix("/confirm") }
+  let confirmBody = try confirmCall?.jsonBody()
+  try expect(confirmBody.map { $0.count == 2 && $0["hostId"] as? String == "ubuntu"
+    && $0["confirmationToken"] as? String == "agy_fixture_token_0123456789" } == true,
+    "Confirm must send exactly the host and the reviewed token")
+  let expired = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/confirm": [MockReply(401)]])
+  do {
+    try await AccountsClient(connection: testConnection(), transport: expired)
+      .confirmAntigravity(profile: "agy-two", confirmationToken: "agy_fixture_token_0123456789")
+    throw CheckFailure(description: "An unauthorized confirm unexpectedly succeeded")
+  } catch BarClientError.status(let status, _) {
+    try expect(status == 401, "An unauthorized confirm must surface the expired session")
+  }
+  let expiredCalls = await expired.recorded()
+  try expect(expiredCalls.filter { $0.url.path.hasSuffix("/confirm") }.count == 1,
+    "A consumed confirmation token must never be replayed")
+  for bad in ["", "has spaces in it 1234567", String(repeating: "a", count: 257)] {
+    try await expectError(.invalidConnection, "Invalid confirmation tokens must be rejected locally") {
+      try await AccountsClient(connection: testConnection(), transport: MockTransport())
+        .confirmAntigravity(profile: "agy-two", confirmationToken: bad)
+    }
+  }
+  try await expectError(.invalidConnection, "Unsafe Antigravity profile identifiers must be rejected locally") {
+    _ = try await AccountsClient(connection: testConnection(), transport: MockTransport()).activateAntigravity(profile: "../x")
+  }
+
+  // Fixed public guidance chosen only by the dashboard's activation status word.
+  let canary = "FIXTURE_ONLY_PRIVATE_ERROR_CANARY /fixture/private"
+  let statuses: [(Int, String, String)] = [
+    (409, "busy", "Antigravity is busy on Ubuntu. Activate again when it is idle."),
+    (409, "deferred", "Antigravity activation is deferred on Ubuntu. Refresh its native status before trying again."),
+    (409, "unsupported-runtime-probe", "The Ubuntu Antigravity runtime could not be verified. Account switching is unavailable."),
+    (409, "stale-confirmation", "This Antigravity confirmation is no longer valid. Activate again to review the running programs."),
+    (400, "invalid-profile", "The selected Antigravity profile has no valid saved login."),
+    (500, "failed-rolled-back", "Antigravity could not switch accounts on Ubuntu. The previous state was restored."),
+    (500, "recovery-required", "Antigravity activation needs recovery on Ubuntu. Account switching is unavailable."),
+    (500, "FIXTURE_ONLY_UNKNOWN", "Antigravity account activation failed safely. Refresh the account list before retrying."),
+  ]
+  for (status, word, expected) in statuses {
+    let body = try JSONSerialization.data(withJSONObject: ["status": word, "error": canary, "profileId": "agy-two", "hostId": "ubuntu"])
+    let failing = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/activate": [MockReply(status, body)]])
+    do {
+      _ = try await AccountsClient(connection: testConnection(), transport: failing).activateAntigravity(profile: "agy-two")
+      throw CheckFailure(description: "A failed Antigravity activation unexpectedly succeeded")
+    } catch BarClientError.status(let actual, let message) {
+      try expect(actual == status && message == expected && !(message ?? "").contains("FIXTURE_ONLY"),
+        "Antigravity failures must map to fixed guidance without server text")
+    }
+  }
+  let wrongProfile = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/activate": [MockReply(200, try JSONSerialization.data(
+    withJSONObject: ["status": "active", "profileId": "agy-one", "hostId": "ubuntu"]))]])
+  try await expectError(.decoding, "A success for another profile must not count as this activation") {
+    _ = try await AccountsClient(connection: testConnection(), transport: wrongProfile).activateAntigravity(profile: "agy-two")
+  }
+
+  // Antigravity's own automatic switching: % used, Ubuntu only, validated locally.
+  let autoTransport = MockTransport()
+  let autoClient = AccountsClient(connection: testConnection(), transport: autoTransport)
+  _ = try await autoClient.setAntigravityAutomaticSwitching(enabled: true)
+  _ = try await autoClient.setAntigravityAutomaticSwitching(thresholdUsedPercent: 90)
+  let puts = (await autoTransport.recorded()).filter { $0.url.path == "/api/antigravity/auto-switch" }
+  try expect(puts.count == 2 && puts.allSatisfy { $0.method == "PUT" && $0.headers["origin"] == "http://ccs.invalid:3000" },
+    "Antigravity automatic settings must be same-origin PUTs")
+  let firstPut = try puts[0].jsonBody(), secondPut = try puts[1].jsonBody()
+  try expect(firstPut.count == 1 && firstPut["enabled"] as? Bool == true
+    && secondPut.count == 1 && secondPut["thresholdUsedPercent"] as? Int == 90,
+    "Each Antigravity settings change must send only the changed field")
+  for value in [0, 100] {
+    try await expectError(.invalidConnection, "Out-of-range Antigravity thresholds must be rejected locally") {
+      _ = try await autoClient.setAntigravityAutomaticSwitching(thresholdUsedPercent: value)
+    }
+  }
+  try await expectError(.invalidConnection, "An empty Antigravity settings change must be rejected locally") {
+    _ = try await autoClient.setAntigravityAutomaticSwitching()
+  }
+}
+
+// MARK: Dashboard additions: Antigravity policy, capabilities, hidden providers
+
+private func checkDashboardAdditions() throws {
+  var object = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  let prototype = (object["accounts"] as! [[String: Any]])[0]
+  func account(_ id: String, _ provider: String, active: Bool = false, capabilities: [String: Any] = [:]) -> [String: Any] {
+    var value = prototype
+    value["id"] = id
+    value["provider"] = provider
+    value["isActive"] = active
+    var caps = prototype["capabilities"] as! [String: Any]
+    for (key, item) in capabilities { caps[key] = item }
+    value["capabilities"] = caps
+    return value
+  }
+  object["accounts"] = [
+    account("claude-a", "claude"), account("codex-a", "codex", active: true),
+    account("agy-a", "antigravity", active: true, capabilities: ["antigravityProfileId": "agy-a", "antigravityHostIds": ["ubuntu"], "antigravityCanActivate": true]),
+    account("agy-b", "antigravity", capabilities: ["antigravityProfileId": "agy-b", "antigravityHostIds": ["ubuntu"], "antigravityCanActivate": true]),
+    account("agy-c", "antigravity", capabilities: ["antigravityProfileId": "../c", "antigravityHostIds": ["ubuntu"], "antigravityCanActivate": true]),
+    account("agy-d", "antigravity", capabilities: ["antigravityProfileId": "agy-d", "antigravityHostIds": ["mac"], "antigravityCanActivate": true]),
+    account("kimi-a", "kimi-code"), account("cursor-a", "cursor"),
+  ]
+  object["antigravityAutoSwitch"] = [
+    "enabled": false, "thresholdUsedPercent": 95, "pollIntervalSeconds": 60, "requestedPoolId": NSNull(),
+    "outcome": "disabled", "message": "Fixture", "activationInProgress": false,
+  ] as [String: Any]
+  let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  try expect(dashboard.antigravityAutoSwitch?.thresholdUsedPercent == 95 && dashboard.antigravityAutoSwitch?.enabled == false,
+    "A reported Antigravity policy must decode with its % used threshold")
+  try expect(dashboard.hiddenProviders.isEmpty && dashboard.visibleAccounts.count == 8,
+    "Without hidden providers in the DTO, every provider stays visible")
+  let byID = Dictionary(uniqueKeysWithValues: dashboard.accounts.map { ($0.id, $0) })
+  try expect(byID["agy-a"]?.canActivateAntigravity == false && byID["agy-b"]?.canActivateAntigravity == true
+    && byID["agy-c"]?.canActivateAntigravity == false && byID["agy-d"]?.canActivateAntigravity == false,
+    "Antigravity Activate needs an inactive account, a safe profile id and the Ubuntu host")
+  try expect(dashboard.providerGroups.map(\.id) == ["claude", "codex", "antigravity", "cursor", "kimi-code"],
+    "Tray order must place Antigravity after Codex, then the other providers")
+
+  var malformed = object
+  malformed["antigravityAutoSwitch"] = ["enabled": "yes", "thresholdUsedPercent": 400]
+  let lenient = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: malformed))
+  try expect(lenient.antigravityAutoSwitch == nil && lenient.accounts.count == 8,
+    "A malformed Antigravity policy must be ignored without losing the dashboard")
+  malformed["antigravityAutoSwitch"] = ["enabled": true, "thresholdUsedPercent": 100]
+  let outOfRange = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: malformed))
+  try expect(outOfRange.antigravityAutoSwitch == nil, "An out-of-range Antigravity threshold must not be shown as a policy")
+
+  var hidden = object
+  hidden["hiddenProviders"] = ["kimi-code"]
+  let topLevel = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hidden))
+  try expect(topLevel.hiddenProviders == ["kimi-code"] && !topLevel.visibleAccounts.contains { $0.provider == "kimi-code" }
+    && !topLevel.providerGroups.contains { $0.id == "kimi-code" } && topLevel.accounts.count == 8,
+    "Providers hidden on the dashboard must close up in the tray while raw accounts stay intact")
+  var inSettings = object
+  inSettings["settings"] = ["refreshIntervalSeconds": 60, "hiddenProviders": ["cursor"]]
+  let fromSettings = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: inSettings))
+  try expect(fromSettings.hiddenProviders == ["cursor"] && fromSettings.settings?.validatedInterval == 60,
+    "Hidden providers inside settings must be honoured without changing the refresh interval")
+  inSettings["settings"] = ["refreshIntervalSeconds": 60, "hiddenProviders": "cursor"]
+  let badHidden = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: inSettings))
+  try expect(badHidden.hiddenProviders.isEmpty, "A malformed hidden-provider list must be a no-op")
+}
+
+// MARK: Tray presentation rules
+
+private func checkTrayPresentation() throws {
+  func window(_ key: String, _ label: String, _ values: [String: Any] = [:]) -> [String: Any] {
+    var result: [String: Any] = [
+      "key": key, "label": label, "usedPercent": NSNull(), "remainingPercent": NSNull(), "resetAt": NSNull(),
+      "windowMinutes": NSNull(), "used": NSNull(), "limit": NSNull(), "unit": NSNull(),
+    ]
+    for (name, value) in values { result[name] = value }
+    return result
+  }
+  let original = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  let prototype = (original["accounts"] as! [[String: Any]])[0]
+  func account(_ id: String, _ provider: String, plan: String?, windows: [[String: Any]], active: Bool = false,
+    email: String? = nil) -> [String: Any] {
+    var value = prototype
+    value["id"] = id
+    value["provider"] = provider
+    value["plan"] = plan.map { $0 as Any } ?? NSNull()
+    value["windows"] = windows
+    value["isActive"] = active
+    value["email"] = email.map { $0 as Any } ?? NSNull()
+    return value
+  }
+  func decode(_ object: [String: Any]) throws -> DashboardAccount {
+    try JSONDecoder().decode(DashboardAccount.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let claudeWindows = [
+    window("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    window("seven_day", "Weekly usage", ["usedPercent": 34]),
+    window("seven_day_opus", "Weekly Opus usage", ["usedPercent": 56]),
+    window("seven_day_fable", "Weekly Fable usage", ["usedPercent": 0]),
+  ]
+  let max = try decode(account("claude-max", "claude", plan: "Max 20x", windows: claudeWindows))
+  guard case .window(let fable) = max.fableCell, fable.key == "seven_day_fable", fable.meterUsedPercent == 0 else {
+    throw CheckFailure(description: "Claude Max must show its real Fable reading, zero included")
+  }
+  try expect(max.fiveHourWindow?.key == "five_hour" && max.weeklyWindow?.key == "seven_day",
+    "Claude columns must use the exact five_hour and seven_day windows, not a model-scoped one")
+  guard case .notReported = try decode(account("claude-max-none", "claude", plan: "max", windows: Array(claudeWindows.prefix(3)))).fableCell
+  else { throw CheckFailure(description: "A Max account without a Fable window must read Not reported yet, never zero") }
+  guard case .notApplicable = try decode(account("claude-pro", "claude", plan: "Pro", windows: claudeWindows)).fableCell
+  else { throw CheckFailure(description: "Pro accounts get no Fable cell in the tray") }
+  let maximal = try decode(account("claude-maxim", "claude", plan: "Maximal", windows: claudeWindows))
+  try expect(!maximal.isMaxPlan,
+    "Only real Max plan names count as Max")
+
+  let codex = try decode(account("codex-pro", "codex", plan: "pro", windows: [
+    window("additional_requests", "5h extra", ["windowMinutes": 300, "usedPercent": 70]),
+    window("seven_day", "week", ["usedPercent": 9, "windowMinutes": 10080]),
+  ], active: true, email: "codex-2@example.invalid"))
+  try expect(codex.fiveHourWindow == nil && codex.weeklyWindow?.meterUsedPercent == 9,
+    "No Codex 5-hour cell may appear unless the exact five_hour window is reported")
+
+  var object = original
+  object["accounts"] = [
+    account("codex-pro", "codex", plan: "pro", windows: [
+      window("five_hour", "5h", ["usedPercent": 40.5]), window("seven_day", "week", ["usedPercent": 9]),
+    ], active: true, email: "codex-2@example.invalid"),
+    account("agy-a", "antigravity", plan: "Google AI Pro", windows: [
+      window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0.0886, "windowMinutes": 10080]),
+      window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 0, "windowMinutes": 300]),
+      window("3p-weekly", "Claude and GPT models · Weekly", ["remainingPercent": 82, "windowMinutes": 10080]),
+    ], active: true, email: "antigravity-1@example.invalid"),
+    account("cursor-a", "cursor", plan: "pro", windows: [
+      window("plan-reported", "Included usage", ["usedPercent": 1.4461]),
+      window("plan", "Plan spend", ["usedPercent": 33.35, "kind": "spend"]),
+    ]),
+  ]
+  let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  let left = MenuBarReading.make(dashboard: dashboard, source: .codex, mode: .left)
+  try expect(left?.text == "\(TrayFormat.number(59.5))%" && left?.detail.hasPrefix("codex-2 5-hour:") == true,
+    "The menu bar must show the active Codex account's tightest canonical window as % left")
+  try expect(MenuBarReading.make(dashboard: dashboard, source: .codex, mode: .used)?.value == 40.5,
+    "% used must show the reading itself")
+  let agy = MenuBarReading.make(dashboard: dashboard, source: .antigravity, mode: .used)
+  try expect(agy?.value == 18 && agy?.detail.contains("Claude and GPT weekly") == true,
+    "Antigravity's menu-bar reading must use its reported columns, including a remaining-only window")
+  try expect(MenuBarReading.make(dashboard: dashboard, source: .none, mode: .left) == nil,
+    "Logo only must show no percentage")
+  try expect(TrayColumns.antigravity(dashboard.accounts.filter { $0.provider == "antigravity" }).map(\.key)
+    == ["gemini-5h", "gemini-weekly", "3p-weekly"], "Antigravity columns must follow the reported buckets in concept order")
+  let cursor = dashboard.accounts.first { $0.provider == "cursor" }!
+  try expect(cursor.glanceMeters.map(\.key) == ["plan-reported"]
+    && TrayColumns.shortLabel(provider: "cursor", cursor.glanceMeters[0]) == "Included",
+    "Spend and balances are amounts, not meters; Cursor captions follow the concept")
+  let summary = TrayStatusSummary(dashboard: dashboard)
+  try expect(summary.providers == 3 && summary.reporting == 0 && summary.allCached,
+    "The status line must count only providers that actually report")
+
+  // Numbers: at most two decimals, the percent in the number's own run, no invented zero.
+  try expect(TrayFormat.decimals(9) == 0 && TrayFormat.decimals(0.0886) == 2 && TrayFormat.decimals(25.06101) == 2
+    && TrayFormat.decimals(1.5) == 1, "Count-ups keep the reading's own decimal places, at most two")
+  try expect(TrayFormat.number(0.0886) == 0.09.formatted(.number.precision(.fractionLength(0...2))),
+    "Readings round to at most two decimals")
+  let unknown = try decode(account("muse", "muse", plan: nil, windows: [window("weekly", "Weekly")]))
+  try expect(unknown.visibleWindows[0].meterUsedPercent == nil && MeterSeverity.of(nil) == .unavailable,
+    "A missing reading stays unavailable, never zero")
+  try expect(MeterSeverity.of(79.99) == .calm && MeterSeverity.of(80) == .warn && MeterSeverity.of(95) == .crit
+    && MeterSeverity.of(100) == .crit && MeterSeverity.of(100.5) == .over, "Severity thresholds are 80, 95 and over 100")
+  let now = Date(timeIntervalSince1970: 1_790_000_000)
+  try expect(TrayFormat.duration(2 * 86_400 + 4 * 3600 + 59) == "2d 4h" && TrayFormat.duration(3 * 3600 + 5 * 60) == "3h 5m"
+    && TrayFormat.duration(59) == "59s", "Countdowns use the concept's d/h/m form")
+  try expect(TrayFormat.relative(now.addingTimeInterval(-5), now: now) == "just now"
+    && TrayFormat.relative(now.addingTimeInterval(-39), now: now) == "39s ago"
+    && TrayFormat.relative(nil, now: now) == "time unavailable", "Sample ages read plainly")
+  let iso = ISO8601DateFormatter()
+  try expect(TrayFormat.shortReset(iso.string(from: now.addingTimeInterval(-60)), now: now) == "due"
+    && TrayFormat.shortReset(iso.string(from: now.addingTimeInterval(6 * 86_400 + 14 * 3600 + 30)), now: now) == "6d 14h"
+    && TrayFormat.shortReset(nil, now: now) == nil, "Row resets show a countdown, due, or nothing when unreported")
+  try expect(TrayFormat.longReset(nil, now: now) == "No reset reported", "Details never invent a reset")
+
+  // Value motion never overshoots: the ease-out curve stays within 0...1 and only rises.
+  var previous = 0.0
+  for step in 0...200 {
+    let value = TrayMotion.progress(Double(step) / 200)
+    try expect(value >= previous - 1e-9 && value <= 1 + 1e-9, "Value easing must be monotonic and never pass its target")
+    previous = value
+  }
+  try expect(abs(TrayMotion.progress(1) - 1) < 1e-6 && TrayMotion.progress(0) < 1e-6, "Value easing must start at 0 and end at 1")
+  try expect(TrayMotion.valueCurve.y1 <= 1 && TrayMotion.valueCurve.y2 <= 1, "Control points above 1 would overshoot")
+  try expect(TrayMotion.fillFraction(120) == 1 && TrayMotion.fillFraction(-3) == 0 && TrayMotion.fillFraction(nil) == 0
+    && TrayMotion.fillFraction(42) == 0.42, "Meter fills are capped at the track; text keeps the real value")
+}
+
 private func printJSON(_ object: [String: Any]) throws {
   let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
   print(String(decoding: data, as: UTF8.self))
@@ -1125,6 +1468,12 @@ do {
   print("PASS private connection file and origin validation")
   try checkCodexCompactFullDashboardDTO()
   print("PASS complete Codex dashboard DTO, exact compact cores, no aliases, raw Details, and provider isolation")
+  try await checkAntigravityClient()
+  print("PASS Antigravity activation, one-use confirmation, fixed guidance, and % used automatic settings")
+  try checkDashboardAdditions()
+  print("PASS Antigravity policy and capabilities, tray order, and dashboard-hidden providers")
+  try checkTrayPresentation()
+  print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
   print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
   fputs("AI Account Center core check failed: \(error)\n", stderr)

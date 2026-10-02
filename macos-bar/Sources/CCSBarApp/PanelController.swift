@@ -19,11 +19,11 @@ final class PanelController: NSObject, NSWindowDelegate {
   let model: AccountsViewModel
   let prefs: TrayPreferences
   let state = PanelState()
-  private let statusItem: NSStatusItem
-  private var panel: TrayPanel?
+  let statusItem: NSStatusItem
+  private(set) var panel: TrayPanel?
   private var hosting: NSHostingView<PanelRootView>?
-  private var statusHosting: PassthroughHostingView<StatusItemLabel>?
-  private var hotKey: GlobalHotKey?
+  private(set) var statusHosting: PassthroughHostingView<StatusItemLabel>?
+  private(set) var hotKey: GlobalHotKey?
   private var monitors: [Any] = []
   private var observers: [NSObjectProtocol] = []
   private var cancellables: Set<AnyCancellable> = []

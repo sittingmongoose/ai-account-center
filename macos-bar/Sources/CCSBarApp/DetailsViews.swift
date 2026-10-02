@@ -258,7 +258,7 @@ struct QwenPacksButton: View {
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
       }
       .buttonStyle(.plain)
-      .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .glassControl(.rounded(14))
       .hoverHelp("Every Qwen credit pack, with what is left and when it expires", id: "qwen-packs", action: action)
       .popover(isPresented: $showPacks, arrowEdge: .bottom) {
         QwenPacksPopover(packs: packs, showAccount: showAccount, maxHeight: maxHeight)

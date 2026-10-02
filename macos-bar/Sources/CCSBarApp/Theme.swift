@@ -147,21 +147,46 @@ extension View {
   func groupPlatter(padding: CGFloat = TrayMetrics.groupInset) -> some View { modifier(GroupPlatter(padding: padding)) }
 }
 
-/// Interactive glass for a control: capsule or circle, with the system hover and press response.
+enum GlassShape { case capsule, circle, rounded(CGFloat) }
+
+/// Interactive glass for a control: capsule, circle or rounded rectangle, with the system hover and
+/// press response. Offline renders cannot capture system glass, so they draw the concept's glass-control
+/// tokens instead (a translucent body, a hairline edge and a specular top line).
 struct GlassControl: ViewModifier {
-  var circle = false
+  var shape: GlassShape = .capsule
   var tint: Color? = nil
+  @Environment(\.trayStaticRender) private var staticRender
+  @Environment(\.colorScheme) private var scheme
+
   func body(content: Content) -> some View {
-    if circle {
-      content.glassEffect(Glass.regular.tint(tint).interactive(), in: Circle())
+    switch shape {
+    case .capsule: apply(content, Capsule())
+    case .circle: apply(content, Circle())
+    case .rounded(let radius): apply(content, RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+  }
+
+  @ViewBuilder private func apply<S: Shape>(_ content: Content, _ shape: S) -> some View {
+    if staticRender {
+      let dark = scheme == .dark
+      content
+        .background(shape.fill(Color.white.opacity(dark ? 0.11 : 0.52)))
+        .background(shape.fill(tint ?? .clear))
+        .overlay(shape.stroke(Color.black.opacity(dark ? 0.40 : 0.10), lineWidth: 0.5))
+        .overlay(shape.stroke(LinearGradient(colors: [Color.white.opacity(dark ? 0.35 : 0.9), .clear],
+          startPoint: .top, endPoint: .center), lineWidth: 0.75))
+        .shadow(color: .black.opacity(dark ? 0.25 : 0.08), radius: 3, y: 1)
     } else {
-      content.glassEffect(Glass.regular.tint(tint).interactive(), in: Capsule())
+      content.glassEffect(Glass.regular.tint(tint).interactive(), in: shape)
     }
   }
 }
 
 extension View {
-  func glassControl(circle: Bool = false, tint: Color? = nil) -> some View { modifier(GlassControl(circle: circle, tint: tint)) }
+  func glassControl(circle: Bool = false, tint: Color? = nil) -> some View {
+    modifier(GlassControl(shape: circle ? .circle : .capsule, tint: tint))
+  }
+  func glassControl(_ shape: GlassShape, tint: Color? = nil) -> some View { modifier(GlassControl(shape: shape, tint: tint)) }
 }
 
 /// Value animation: ease-out only, so no meter, number or platter passes its reading.
@@ -193,4 +218,30 @@ struct PanelScroll<Content: View>: View {
       ScrollView { content() }.scrollIndicators(.hidden)
     }
   }
+}
+
+/// Records laid-out frames during offline checks, so alignment can be measured rather than eyeballed.
+@MainActor
+enum AlignmentProbe {
+  static var frames: [String: CGRect] = [:]
+}
+
+private struct AlignmentProbeModifier: ViewModifier {
+  let id: String
+  @Environment(\.trayStaticRender) private var staticRender
+  func body(content: Content) -> some View {
+    if staticRender {
+      content.background(GeometryReader { geometry in
+        Color.clear
+          .onAppear { AlignmentProbe.frames[id] = geometry.frame(in: .global) }
+          .onChange(of: geometry.frame(in: .global)) { _, frame in AlignmentProbe.frames[id] = frame }
+      })
+    } else {
+      content
+    }
+  }
+}
+
+extension View {
+  func alignmentProbe(_ id: String) -> some View { modifier(AlignmentProbeModifier(id: id)) }
 }
