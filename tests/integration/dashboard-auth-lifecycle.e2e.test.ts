@@ -30,7 +30,8 @@ import path from 'path';
 import { startServer } from '../../src/web-server';
 import { createEmptyUnifiedConfig } from '../../src/config/unified-config-types';
 import { saveUnifiedConfig } from '../../src/config/unified-config-loader';
-import { invalidateConfigCache } from '../../src/config/config-loader-facade';
+import { invalidateConfigCache, mutateConfig } from '../../src/config/config-loader-facade';
+import { invalidateDashboardNetworkSettings } from '../../src/web-server/services/dashboard-network-config';
 import { loginRateLimiter } from '../../src/web-server/middleware/auth-middleware';
 import { setTrustedProxyResolver } from '../../src/web-server/middleware/secure-transport';
 import { resetAuthRateLimitsForTests } from '../../src/web-server/routes/auth-rate-limits';
@@ -379,6 +380,33 @@ async function loginFresh(
   const response = await jar.send('POST', '/api/auth/login', { username, password });
   expect(response.status).toBe(200);
   return jar;
+}
+
+/** True when this VM can reach its own LAN address (the trusted-network cases need it). */
+async function lanReachable(lanBase: string): Promise<boolean> {
+  try {
+    const probe = await fetch(`${lanBase}/api/auth/check`);
+    await probe.text().catch(() => undefined);
+    return probe.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/** The temporary config.yaml of a running E2E server, read back from disk. */
+function configYamlText(ctx: E2E): string {
+  return fs.readFileSync(path.join(ctx.ccsDir, 'config.yaml'), 'utf8');
+}
+
+/** Write `dashboard_network` through the real loader, as editing config.yaml would. */
+function writeDashboardNetwork(block: {
+  trust_local_network: boolean;
+  trusted_networks?: string[];
+}): void {
+  mutateConfig((config) => {
+    config.dashboard_network = { ...block };
+  });
+  invalidateDashboardNetworkSettings();
 }
 
 describe('dashboard auth lifecycle e2e (real HTTP)', () => {
@@ -883,5 +911,308 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     expect(lanLogin.status).toBe(200);
   });
 
-  it.todo('trusted local network accepts private peers');
+  it('case 12: trust off by default: LAN password change and pair refused, login works', async () => {
+    const ctx = await startE2E('0.0.0.0');
+    await setupFresh(ctx);
+    const lanBase = ctx.lanBase as string;
+    if (!(await lanReachable(lanBase))) {
+      console.log(`[e2e] LAN ${LAN_ADDRESS} unreachable; skipping non-loopback assertions`);
+      return;
+    }
+
+    const lanBrowser = new Jar(lanBase, lanBase);
+    const login = await lanBrowser.send('POST', '/api/auth/login', {
+      username: USERNAME,
+      password: PASSWORD,
+    });
+    expect(login.status).toBe(200);
+
+    const change = await lanBrowser.send('POST', '/api/auth/password', {
+      currentPassword: PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+    expect(change.status).toBe(403);
+    expect(change.body.code).toBe('secure_transport_required');
+
+    const pair = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      { username: USERNAME, password: PASSWORD, deviceName: 'e2e-lan-off', platform: 'mac' },
+      { origin: '' }
+    );
+    expect(pair.status).toBe(403);
+    expect(pair.body.code).toBe('secure_transport_required');
+
+    const check = await lanBrowser.send('GET', '/api/auth/check');
+    expect(check.status).toBe(200);
+    expect(check.body.trustedLocalNetwork).toBe(false);
+    expect(check.body.connection).toMatchObject({ peer: LAN_ADDRESS, trusted: false });
+  });
+
+  it('case 13: turning trust on from the LAN is refused; from loopback it works and persists', async () => {
+    const ctx = await startE2E('0.0.0.0');
+    const browser = await setupFresh(ctx);
+    const lanBase = ctx.lanBase as string;
+    if (!(await lanReachable(lanBase))) {
+      console.log(`[e2e] LAN ${LAN_ADDRESS} unreachable; skipping non-loopback assertions`);
+      return;
+    }
+
+    const lanBrowser = new Jar(lanBase, lanBase);
+    const login = await lanBrowser.send('POST', '/api/auth/login', {
+      username: USERNAME,
+      password: PASSWORD,
+    });
+    expect(login.status).toBe(200);
+
+    const network = await lanBrowser.send('GET', '/api/auth/network');
+    expect(network.status).toBe(200);
+    expect(network.body).toMatchObject({ trustLocalNetwork: false, canTurnOn: false });
+
+    const refused = await lanBrowser.send('PUT', '/api/auth/network', { trustLocalNetwork: true });
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe('loopback_required');
+
+    const allowed = await browser.send('PUT', '/api/auth/network', { trustLocalNetwork: true });
+    expect(allowed.status).toBe(200);
+    expect(allowed.body).toMatchObject({ trustLocalNetwork: true, canTurnOn: true });
+
+    await settleAuthWrites();
+    expect(configYamlText(ctx)).toContain('trust_local_network: true');
+
+    const reread = await browser.send('GET', '/api/auth/network');
+    expect(reread.status).toBe(200);
+    expect(reread.body).toMatchObject({ trustLocalNetwork: true });
+  });
+
+  it('case 14: with trust on, password change, pair, Bearer, rotate and key add work from the LAN', async () => {
+    const ctx = await startE2E('0.0.0.0');
+    const browser = await setupFresh(ctx);
+    const lanBase = ctx.lanBase as string;
+    if (!(await lanReachable(lanBase))) {
+      console.log(`[e2e] LAN ${LAN_ADDRESS} unreachable; skipping non-loopback assertions`);
+      return;
+    }
+    const on = await browser.send('PUT', '/api/auth/network', { trustLocalNetwork: true });
+    expect(on.status).toBe(200);
+
+    const lanBrowser = new Jar(lanBase, lanBase);
+    const login = await lanBrowser.send('POST', '/api/auth/login', {
+      username: USERNAME,
+      password: PASSWORD,
+    });
+    expect(login.status).toBe(200);
+
+    const check = await lanBrowser.send('GET', '/api/auth/check');
+    expect(check.status).toBe(200);
+    expect(check.body.trustedLocalNetwork).toBe(true);
+    expect(check.body.connection).toMatchObject({ peer: LAN_ADDRESS, trusted: true });
+
+    const pair = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      { username: USERNAME, password: PASSWORD, deviceName: 'e2e-lan-trusted', platform: 'mac' },
+      { origin: '' }
+    );
+    expect(pair.status).toBe(201);
+    const token = pair.body.token as string;
+    expect(token).toMatch(/^aacd_[A-Za-z0-9_-]{43}$/);
+
+    const device = new Jar(lanBase, null).withBearer(token);
+    const me = await device.send('GET', '/api/auth/devices/me');
+    expect(me.status).toBe(200);
+    expect(me.body).toMatchObject({ platform: 'mac' });
+
+    const rotate = await device.send('POST', '/api/auth/devices/me/rotate', {});
+    expect(rotate.status).toBe(200);
+    const rotated = rotate.body.token as string;
+    expect(rotated).toMatch(/^aacd_[A-Za-z0-9_-]{43}$/);
+    expect(rotated).not.toBe(token);
+
+    const key = 'zai-LAN-trust-key-1234-ab90';
+    const added = await lanBrowser.send('POST', '/api/accounts/add', {
+      provider: 'zai',
+      key,
+      label: 'LAN key',
+    });
+    expect(added.status).toBe(201);
+    const credential = (added.body.account as Record<string, unknown>).credential as Record<
+      string,
+      unknown
+    >;
+    expect(credential).toMatchObject({ kind: 'aac-key', last4: 'ab90' });
+    expect(JSON.stringify(added.body)).not.toContain(key);
+
+    const change = await lanBrowser.send('POST', '/api/auth/password', {
+      currentPassword: PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+    expect(change.status).toBe(200);
+    expect(change.body).toMatchObject({ ok: true });
+  });
+
+  it('case 15: turning trust off from a LAN session works; sensitive routes refused again', async () => {
+    const ctx = await startE2E('0.0.0.0');
+    const browser = await setupFresh(ctx);
+    const lanBase = ctx.lanBase as string;
+    if (!(await lanReachable(lanBase))) {
+      console.log(`[e2e] LAN ${LAN_ADDRESS} unreachable; skipping non-loopback assertions`);
+      return;
+    }
+    const on = await browser.send('PUT', '/api/auth/network', { trustLocalNetwork: true });
+    expect(on.status).toBe(200);
+
+    const lanBrowser = new Jar(lanBase, lanBase);
+    const login = await lanBrowser.send('POST', '/api/auth/login', {
+      username: USERNAME,
+      password: PASSWORD,
+    });
+    expect(login.status).toBe(200);
+
+    const pairWhileOn = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      { username: USERNAME, password: PASSWORD, deviceName: 'e2e-lan-before-off', platform: 'mac' },
+      { origin: '' }
+    );
+    expect(pairWhileOn.status).toBe(201);
+
+    const off = await lanBrowser.send('PUT', '/api/auth/network', { trustLocalNetwork: false });
+    expect(off.status).toBe(200);
+    expect(off.body).toMatchObject({ trustLocalNetwork: false });
+
+    const change = await lanBrowser.send('POST', '/api/auth/password', {
+      currentPassword: PASSWORD,
+      newPassword: NEW_PASSWORD,
+    });
+    expect(change.status).toBe(403);
+    expect(change.body.code).toBe('secure_transport_required');
+
+    const pair = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      { username: USERNAME, password: PASSWORD, deviceName: 'e2e-lan-after-off', platform: 'mac' },
+      { origin: '' }
+    );
+    expect(pair.status).toBe(403);
+    expect(pair.body.code).toBe('secure_transport_required');
+
+    const check = await lanBrowser.send('GET', '/api/auth/check');
+    expect(check.body).toMatchObject({
+      trustedLocalNetwork: false,
+      connection: { trusted: false },
+    });
+  });
+
+  it('case 16: X-Forwarded-For and X-Forwarded-Proto from the LAN do not change the trust decision', async () => {
+    const ctx = await startE2E('0.0.0.0');
+    const browser = await setupFresh(ctx);
+    const lanBase = ctx.lanBase as string;
+    if (!(await lanReachable(lanBase))) {
+      console.log(`[e2e] LAN ${LAN_ADDRESS} unreachable; skipping non-loopback assertions`);
+      return;
+    }
+
+    // Off: spoofing a loopback or public address must not grant trust.
+    for (const spoofed of ['127.0.0.1', '203.0.113.9']) {
+      const check = await new Jar(lanBase, lanBase).send('GET', '/api/auth/check', undefined, {
+        'x-forwarded-for': spoofed,
+        'x-forwarded-proto': 'https',
+      });
+      expect(check.status).toBe(200);
+      expect(check.body).toMatchObject({
+        trustedLocalNetwork: false,
+        connection: { peer: LAN_ADDRESS, trusted: false },
+      });
+    }
+    const spoofedPairOff = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      { username: USERNAME, password: PASSWORD, deviceName: 'e2e-lan-spoof-off', platform: 'mac' },
+      { origin: '', 'x-forwarded-for': '127.0.0.1', 'x-forwarded-proto': 'https' }
+    );
+    expect(spoofedPairOff.status).toBe(403);
+    expect(spoofedPairOff.body.code).toBe('secure_transport_required');
+
+    // On: spoofing a public or loopback address must not deny trust.
+    const on = await browser.send('PUT', '/api/auth/network', { trustLocalNetwork: true });
+    expect(on.status).toBe(200);
+    for (const spoofed of ['203.0.113.9', '127.0.0.1']) {
+      const check = await new Jar(lanBase, lanBase).send('GET', '/api/auth/check', undefined, {
+        'x-forwarded-for': spoofed,
+      });
+      expect(check.status).toBe(200);
+      expect(check.body).toMatchObject({
+        trustedLocalNetwork: true,
+        connection: { peer: LAN_ADDRESS, trusted: true },
+      });
+    }
+    const spoofedPairOn = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      {
+        username: USERNAME,
+        password: PASSWORD,
+        deviceName: 'e2e-lan-spoof-on',
+        platform: 'windows',
+      },
+      { origin: '', 'x-forwarded-for': '203.0.113.9', 'x-forwarded-proto': 'http' }
+    );
+    expect(spoofedPairOn.status).toBe(201);
+  });
+
+  it('case 17: a custom trusted_networks list decides the LAN peer, covering VPN subnets', async () => {
+    const ctx = await startE2E('0.0.0.0');
+    const browser = await setupFresh(ctx);
+    const lanBase = ctx.lanBase as string;
+    if (!(await lanReachable(lanBase))) {
+      console.log(`[e2e] LAN ${LAN_ADDRESS} unreachable; skipping non-loopback assertions`);
+      return;
+    }
+
+    // A WireGuard-client subnet that excludes the LAN: the LAN peer is not trusted.
+    writeDashboardNetwork({ trust_local_network: true, trusted_networks: ['10.6.0.0/24'] });
+    const excluded = await new Jar(lanBase, lanBase).send('GET', '/api/auth/check');
+    expect(excluded.status).toBe(200);
+    expect(excluded.body).toMatchObject({
+      trustedLocalNetwork: true,
+      connection: { peer: LAN_ADDRESS, trusted: false },
+    });
+    const pairExcluded = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      { username: USERNAME, password: PASSWORD, deviceName: 'e2e-lan-excluded', platform: 'mac' },
+      { origin: '' }
+    );
+    expect(pairExcluded.status).toBe(403);
+    expect(pairExcluded.body.code).toBe('secure_transport_required');
+
+    const viewExcluded = await browser.send('GET', '/api/auth/network');
+    expect(viewExcluded.status).toBe(200);
+    expect(viewExcluded.body).toMatchObject({ trustedNetworks: ['10.6.0.0/24'] });
+
+    // Adding the LAN range trusts the peer again, with the VPN subnet still listed.
+    writeDashboardNetwork({
+      trust_local_network: true,
+      trusted_networks: ['10.6.0.0/24', '192.168.0.0/16'],
+    });
+    const included = await new Jar(lanBase, lanBase).send('GET', '/api/auth/check');
+    expect(included.status).toBe(200);
+    expect(included.body).toMatchObject({
+      trustedLocalNetwork: true,
+      connection: { peer: LAN_ADDRESS, trusted: true },
+    });
+    const pairIncluded = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      { username: USERNAME, password: PASSWORD, deviceName: 'e2e-lan-included', platform: 'mac' },
+      { origin: '' }
+    );
+    expect(pairIncluded.status).toBe(201);
+
+    await settleAuthWrites();
+    const saved = configYamlText(ctx);
+    expect(saved).toContain('10.6.0.0/24');
+    expect(saved).toContain('192.168.0.0/16');
+  });
 });
