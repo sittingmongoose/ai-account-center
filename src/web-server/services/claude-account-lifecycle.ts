@@ -279,12 +279,24 @@ export class ClaudeAccountLifecycle {
       purgeAfter: stamp(now + CLAUDE_TRASH_DAYS * DAY_MS),
       state: 'trashed',
     };
+    // The trash record is written first: if dropping the entry fails after it, the
+    // record is taken out again, so the profile is never missing from both.
     try {
-      await updateTrash(this.ccsDir(), async (entries) => {
-        await this.dropFromStore(profile);
-        return { next: [...entries, entry], result: undefined };
-      });
+      await updateTrash(this.ccsDir(), async (entries) => ({
+        next: [...entries, entry],
+        result: undefined,
+      }));
     } catch {
+      await putBack();
+      throw new ClaudeLifecycleError('remove_failed');
+    }
+    try {
+      await this.dropFromStore(profile);
+    } catch {
+      await updateTrash(this.ccsDir(), async (entries) => ({
+        next: entries.filter((candidate) => candidate.trashId !== entry.trashId),
+        result: undefined,
+      })).catch(() => undefined);
       await putBack();
       throw new ClaudeLifecycleError('remove_failed');
     }

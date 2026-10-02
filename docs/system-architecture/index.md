@@ -51,7 +51,10 @@ or a loopback tunnel, [`isSecureTransport`](../../src/web-server/middleware/secu
 Destructive actions take a one-use [confirmation token](../../src/web-server/services/account-confirmations.ts)
 bound to the session and to the reviewed state. Codex sign-ins run as in-memory
 [jobs](../../src/web-server/services/signin-jobs.ts) whose state is pushed to `/ws` as
-`{"type":"signin-job"}` (without the code for sockets on a plain transport) and polled.
+`{"type":"signin-job"}` to browser sessions only (without the code or email for sockets
+on a plain transport) and polled. Once the login is being installed, a cancel or the
+timeout no longer ends the job at once: the install checks the stop under the
+activation lock and the job ends cancelled only if nothing was saved.
 
 A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
 is tracked as an operation, and the profile list reports its progress as

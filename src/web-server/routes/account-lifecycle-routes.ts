@@ -82,8 +82,11 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
   let cached: LifecycleEnv | null = null;
   const env = () => (deps.env ? deps.env() : (cached ??= defaultLifecycleEnv()));
   const guard = accountRouteGuard();
-  // Only account-shaped segments reach the account routes; any other path under
-  // /api/accounts keeps its JSON 404. A malformed account id is 400 invalid_account.
+  // The action routes (`/:id/<action>`) own their whole path shape, so any id
+  // there is checked after the guard: malformed is 400 invalid_account, unknown
+  // is 404 unknown_account. A bare `PATCH /:id` could be any other path under
+  // /api/accounts, so only account-shaped segments reach it; the rest keep the
+  // JSON 404.
   const accountPath = (req: Request, _res: Response, next: NextFunction) => {
     const id = req.params.id ?? '';
     next(id.includes(':') || id.startsWith('plan-opencode-go-console-') ? undefined : 'route');
@@ -174,31 +177,26 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
   );
   router.post(
     '/:id/signin-again',
-    accountPath,
     guard,
     write((req, body) => signInAgain(env(), req.params.id, body, context(req)))
   );
   router.put(
     '/:id/key',
-    accountPath,
     guard,
     write((req, body) => replaceKey(env(), req.params.id, body, context(req)))
   );
   router.post(
     '/:id/remove',
-    accountPath,
     guard,
     write((req, body) => removeAccount(env(), req.params.id, body, context(req)))
   );
   router.post(
     '/:id/open',
-    accountPath,
     guard,
     write((req, body) => openApp(env(), req.params.id, body))
   );
   router.post(
     '/:id/recheck',
-    accountPath,
     guard,
     write((req, body) => recheck(env(), req.params.id, body))
   );

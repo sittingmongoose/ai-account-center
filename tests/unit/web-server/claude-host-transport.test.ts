@@ -187,6 +187,12 @@ describe('Windows host script', () => {
     expect(script).toContain("$id = 'party'");
     expect(script).toContain("Join-Path $trashRoot 'party-20261002T080000Z'");
     expect(script).toContain(`$profile = Check-Profile '${launcher.profilePath}'`);
+    // Letters beyond ASCII still pass the allowlist.
+    expect(
+      windowsHostScript('state', {
+        launcher: { ...launcher, profilePath: 'C:\\Users\\José\\AppData\\Roaming\\Claude-party' },
+      })
+    ).toContain("Check-Profile 'C:\\Users\\José\\AppData\\Roaming\\Claude-party'");
     expect(script).toContain('[IO.Directory]::Move($profile, $target)');
     expect(script).toContain("Done @{ result = 'cross_volume' }");
     const create = windowsHostScript('create', { profileId: 'work2' });
@@ -199,6 +205,13 @@ describe('Windows host script', () => {
       "C:\\x\\Claude-a'; Remove-Item C:\\",
       'C:\\x\\$env:TEMP',
       'C:\\x\\`n',
+      // PowerShell also ends a single-quoted string at the typographic single quotes.
+      'C:\\x\\Claude-a\u2018; Remove-Item C:\\',
+      'C:\\x\\Claude-a\u2019; Remove-Item C:\\',
+      'C:\\x\\Claude-a\u201a; exit',
+      'C:\\x\\Claude-a\u201b; exit',
+      'C:\\x\\Claude-a\u201c\u201d',
+      'C:\\x\\Claude\r\nexit',
     ]) {
       expect(() =>
         windowsHostScript('state', { launcher: { ...launcher, profilePath } })

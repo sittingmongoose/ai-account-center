@@ -1,13 +1,19 @@
 import { CONFIRMATION_TOKEN_PATTERN, stateFingerprint } from './account-confirmations';
 import { isKeyProvider } from './account-key-store';
-import { LifecycleHttpError, type ResolvedAccount } from './account-lifecycle-accounts';
 import {
+  LifecycleHttpError,
+  readAdditionalEntries,
+  type ResolvedAccount,
+} from './account-lifecycle-accounts';
+import {
+  keyQueue,
   resolveIn,
+  serialized,
   type LifecycleContext,
   type LifecycleEnv,
   type LifecycleResult,
 } from './account-lifecycle-env';
-import { updateAccountRegistry } from './account-registry-v2';
+import { updateAccountRegistry, type RegistryAccount } from './account-registry-v2';
 import { ClaudeLifecycleError } from './claude-account-lifecycle';
 import { TRASH_ID } from './claude-account-stores';
 import { CodexLifecycleError } from './codex-account-lifecycle';
@@ -16,7 +22,8 @@ import { CodexLifecycleError } from './codex-account-lifecycle';
  * Remove and trash (CONTRACT-registry-lifecycle 6.7 and 6.8). One route, two
  * calls: `{}` returns a confirmation token with fixed effect sentences, and
  * `{confirmationToken}` performs the removal. Every refusal is checked at both
- * calls; the token is bound to the session and to the reviewed state.
+ * calls; the token is bound to the session and to the reviewed state. A
+ * refusal check that cannot run refuses (500 `remove_failed`), never passes.
  */
 const PLATFORM_NAMES = { ubuntu: 'Ubuntu', mac: 'Mac', windows: 'Windows' } as const;
 const STATUS: Record<string, number> = {
@@ -97,33 +104,72 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
             `Its sign-in on ${PLATFORM_NAMES[entry.platform]} is not changed.`,
           ],
       refusal: async () => (running() ? 'signin_running' : null),
-      fingerprint: async () =>
-        stateFingerprint({
-          id: entry.id,
-          platform: entry.platform,
-          sshHost: entry.sshHost,
-          credential: entry.credential,
-        }),
-      commit: async () => {
-        if (keyed && entry.credential.kind === 'aac-key' && isKeyProvider(entry.provider)) {
-          const store = env.keyStore({ platform: entry.platform, sshHost: entry.sshHost });
-          if (!store) throw new LifecycleHttpError(500, 'remove_failed');
-          await store.delete(entry.provider, entry.credential.keyId).catch(() => {
-            throw new LifecycleHttpError(500, 'remove_failed');
-          });
-        }
-        await updateAccountRegistry(env.ccsDir(), (current) => ({
-          ...current,
-          accounts: current.accounts.filter((candidate) => candidate.id !== entry.id),
-        })).catch(() => {
-          throw new LifecycleHttpError(500, 'remove_failed');
-        });
-        return { trashId: null, purgeAfter: null };
-      },
+      fingerprint: async () => reviewedEntry(entry),
+      // In the provider's key queue, so a Replace key can never write the key back
+      // after this deleted it (the queue also holds Add and the orphan-key sweep).
+      commit: () => serialized(keyQueue(entry.provider), () => removeAdditional(env, entry)),
     };
   }
   // Antigravity snapshots (Codex's registry lane) and console wallets.
   throw new LifecycleHttpError(409, 'not_implemented');
+}
+
+function reviewedEntry(entry: RegistryAccount): string {
+  return stateFingerprint({
+    id: entry.id,
+    platform: entry.platform,
+    sshHost: entry.sshHost,
+    credential: entry.credential,
+  });
+}
+
+/**
+ * The additional-provider remove, inside the provider's queue: the entry is
+ * resolved again, dropped from the registry, and only then is its key deleted.
+ * A key that cannot be deleted puts the entry back where it was, so the reply
+ * "Nothing was changed" holds.
+ */
+async function removeAdditional(
+  env: LifecycleEnv,
+  reviewed: RegistryAccount
+): Promise<{ trashId: null; purgeAfter: null }> {
+  const { entries } = await readAdditionalEntries(env.ccsDir());
+  const entry = entries.find((candidate) => candidate.id === reviewed.id);
+  // Removed, or its store changed, since the user reviewed it.
+  if (!entry || reviewedEntry(entry) !== reviewedEntry(reviewed)) {
+    throw new LifecycleHttpError(409, 'confirmation_stale');
+  }
+  const credential = entry.credential;
+  const keyed = credential.kind === 'aac-key' && isKeyProvider(entry.provider);
+  const store = keyed ? env.keyStore({ platform: entry.platform, sshHost: entry.sshHost }) : null;
+  if (keyed && !store) throw new LifecycleHttpError(500, 'remove_failed');
+  let position = -1;
+  await updateAccountRegistry(env.ccsDir(), (current) => {
+    position = current.accounts.findIndex((candidate) => candidate.id === entry.id);
+    if (position < 0) throw new LifecycleHttpError(409, 'confirmation_stale');
+    return {
+      ...current,
+      accounts: current.accounts.filter((candidate) => candidate.id !== entry.id),
+    };
+  }).catch((error) => {
+    throw error instanceof LifecycleHttpError
+      ? error
+      : new LifecycleHttpError(500, 'remove_failed');
+  });
+  if (store && credential.kind === 'aac-key' && isKeyProvider(entry.provider)) {
+    try {
+      await store.delete(entry.provider, credential.keyId);
+    } catch {
+      await updateAccountRegistry(env.ccsDir(), (current) => {
+        if (current.accounts.some((candidate) => candidate.id === entry.id)) return current;
+        const accounts = [...current.accounts];
+        accounts.splice(Math.min(position, accounts.length), 0, entry);
+        return { ...current, accounts };
+      }).catch(() => undefined);
+      throw new LifecycleHttpError(500, 'remove_failed');
+    }
+  }
+  return { trashId: null, purgeAfter: null };
 }
 
 function mapError(error: unknown): LifecycleHttpError {
@@ -155,7 +201,14 @@ export async function removeAccount(
   }
   const plan = planFor(env, account);
   const refused = async () => {
-    const code = await plan.refusal().catch(() => null);
+    let code: string | null;
+    try {
+      code = await plan.refusal();
+    } catch {
+      // A safety check that could not run is never a pass.
+      env.audit('accounts.remove.refused', { provider: account.provider, code: 'remove_failed' });
+      throw new LifecycleHttpError(500, 'remove_failed');
+    }
     if (code) {
       env.audit('accounts.remove.refused', { provider: account.provider, code });
       throw new LifecycleHttpError(409, code);

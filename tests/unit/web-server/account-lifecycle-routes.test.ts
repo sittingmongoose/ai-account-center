@@ -14,6 +14,7 @@ import path from 'path';
 import { CodexProfileRegistry } from '../../../src/codex-auth/codex-profile-registry';
 import { invalidateCodexAuthProfilesCache } from '../../../src/codex-auth/codex-auth-dashboard-service';
 import { createAccountLifecycleRouter } from '../../../src/web-server/routes/account-lifecycle-routes';
+import { relabel } from '../../../src/web-server/services/account-lifecycle-extras';
 import { AccountConfirmationStore } from '../../../src/web-server/services/account-confirmations';
 import type {
   AccountDashboard,
@@ -128,6 +129,8 @@ interface Fixture {
   opened: string[];
   changes: () => number;
   setProbe: (status: DashboardAccount['status']) => void;
+  /** Hold every probe until the promise resolves (null: answer at once). */
+  setProbeGate: (gate: Promise<void> | null) => void;
   advance: (ms: number) => void;
   request: (
     method: string,
@@ -143,6 +146,7 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
   const opened: string[] = [];
   let changes = 0;
   let probeStatus: DashboardAccount['status'] = 'ok';
+  let probeGate: Promise<void> | null = null;
   let now = Date.parse('2026-10-02T08:00:00Z');
   const runner = new SignInJobRunner({
     spawn: () => ({
@@ -189,13 +193,11 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
     providerFacts: facts,
     getDashboard: async (context): Promise<AccountDashboard> => {
       const accounts = [
-        ...new CodexProfileRegistry()
-          .listProfiles()
-          .map((name) =>
-            row(`codex:${name}`, {
-              capabilities: { codexProfile: name, claudeProfileId: null, claudePlatforms: [] },
-            })
-          ),
+        ...new CodexProfileRegistry().listProfiles().map((name) =>
+          row(`codex:${name}`, {
+            capabilities: { codexProfile: name, claudeProfileId: null, claudePlatforms: [] },
+          })
+        ),
         row('claude:party', {
           capabilities: { codexProfile: null, claudeProfileId: 'party', claudePlatforms: ['mac'] },
         }),
@@ -221,6 +223,7 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
     },
     probe: async (source) => {
       probes.push(source);
+      if (probeGate) await probeGate;
       return { ...row(source.account?.id ?? `${source.provider}:usage`), status: probeStatus };
     },
     refreshAdditional: async (id) => row(id, { status: 'cached' }),
@@ -260,6 +263,9 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
     changes: () => changes,
     setProbe: (status) => {
       probeStatus = status;
+    },
+    setProbeGate: (gate) => {
+      probeGate = gate;
     },
     advance: (ms) => {
       now += ms;
@@ -336,12 +342,29 @@ describe('lifecycle route scope and guards', () => {
 
   it('leaves other /api/accounts paths to the 404 and rejects malformed ids', async () => {
     const f = await fixture();
+    // A bare PATCH could be any other path under /api/accounts.
+    expect((await f.request('PATCH', '/nope', {})).status).toBe(404);
+    // The action routes own their path shape: any malformed id there is 400, after the guard.
     for (const [method, route] of [
-      ['PATCH', '/nope'],
       ['POST', '/nope/remove'],
       ['PUT', '/dashboard/key'],
+      ['POST', '/nope/signin-again'],
+      ['POST', '/nope/open'],
+      ['POST', '/nope/recheck'],
+      ['POST', '/codex:..%2f..%2fx/remove'],
     ]) {
-      expect((await f.request(method, route, {})).status).toBe(404);
+      const malformed = await f.request(
+        method,
+        route,
+        route.endsWith('/open') ? { platform: 'mac' } : {}
+      );
+      expect([route, malformed.status, malformed.body.code]).toEqual([
+        route,
+        400,
+        'invalid_account',
+      ]);
+      const anonymous = await f.request(method, route, {}, { 'x-test-session': '' });
+      expect([route, anonymous.status]).toEqual([route, 401]);
     }
     const malformed = await f.request('POST', '/codex:..%2f..%2fx/remove', {});
     expect([malformed.status, malformed.body.code]).toEqual([400, 'invalid_account']);
@@ -545,6 +568,203 @@ describe('remove with a confirmation token', () => {
   });
 });
 
+async function until(check: () => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function registryIds(): string[] {
+  return JSON.parse(
+    fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'), 'utf8')
+  ).accounts.map((entry: { id: string }) => entry.id);
+}
+
+describe('remove races and failures', () => {
+  it('serializes Remove behind a running Replace key: no key is ever written back', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    const keysDir = path.join(ccsDir, 'account-usage', 'keys');
+    const token = (
+      (await f.request('POST', `/${id}/remove`, {})).body.confirmation as {
+        token: string;
+      }
+    ).token;
+    let open: () => void = () => undefined;
+    f.setProbeGate(
+      new Promise<void>((resolve) => {
+        open = resolve;
+      })
+    );
+    const probesBefore = f.probes.length;
+    const replacing = f.request('PUT', `/${id}/key`, { key: 'zai-NEW-key-9999' });
+    await until(() => f.probes.length > probesBefore);
+    let removedAt = 0;
+    const removing = f
+      .request('POST', `/${id}/remove`, { confirmationToken: token })
+      .then((response) => {
+        removedAt = Date.now();
+        return response;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The remove waits in the provider's key queue while the probe runs.
+    expect(removedAt).toBe(0);
+    expect(registryIds()).toContain(id);
+    open();
+    f.setProbeGate(null);
+    const [replaced, removed] = await Promise.all([replacing, removing]);
+    expect(replaced.status).toBe(200);
+    expect(removed.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+    expect(files(keysDir)).toEqual([]);
+    expect(registryIds()).not.toContain(id);
+    // The other order: a Replace key queued behind a Remove finds no account and writes nothing.
+    const second = await f.request('POST', '/add', { provider: 'zai', key: 'zai-SECOND-key-0001' });
+    const secondId = String((second.body.account as { id: string }).id);
+    const secondToken = (
+      (await f.request('POST', `/${secondId}/remove`, {})).body.confirmation as { token: string }
+    ).token;
+    const [gone, late] = await Promise.all([
+      f.request('POST', `/${secondId}/remove`, { confirmationToken: secondToken }),
+      f.request('PUT', `/${secondId}/key`, { key: 'zai-THIRD-key-0002' }),
+    ]);
+    expect(gone.status).toBe(200);
+    expect([200, 404]).toContain(late.status);
+    expect(files(keysDir)).toEqual([]);
+    expect(registryIds()).not.toContain(secondId);
+  });
+
+  it('puts the entry back when the key cannot be deleted, so nothing changed', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    const before = registryIds();
+    const keysDir = path.join(ccsDir, 'account-usage', 'keys');
+    const keyFiles = files(keysDir);
+    const token = (
+      (await f.request('POST', `/${id}/remove`, {})).body.confirmation as {
+        token: string;
+      }
+    ).token;
+    const realStore = f.env.keyStore;
+    f.env.keyStore = (location) => {
+      const store = realStore(location);
+      return store
+        ? Object.assign(Object.create(Object.getPrototypeOf(store)), store, {
+            delete: async () => {
+              throw new Error('disk error at /private/path');
+            },
+          })
+        : null;
+    };
+    const failed = await f.request('POST', `/${id}/remove`, { confirmationToken: token });
+    expect([failed.status, failed.body.code]).toEqual([500, 'remove_failed']);
+    expect(JSON.stringify(failed.body)).not.toContain('/private/path');
+    expect(registryIds()).toEqual(before);
+    expect(files(keysDir)).toEqual(keyFiles);
+  });
+
+  it('refuses when a refusal check throws, at prepare and at commit', async () => {
+    const f = await fixture();
+    codexProfile('gmail');
+    codexProfile('party');
+    codexProfile('spare');
+    let broken = true;
+    f.env.codex = () =>
+      new CodexAccountLifecycle({
+        codexHome,
+        codexCli: () => '/fake/codex',
+        env: {},
+        activeProfile: async () => {
+          if (broken) throw new Error('summary unreadable');
+          return null;
+        },
+      });
+    const prepare = await f.request('POST', '/codex:spare/remove', {});
+    expect([prepare.status, prepare.body.code]).toEqual([500, 'remove_failed']);
+    broken = false;
+    const token = (
+      (await f.request('POST', '/codex:spare/remove', {})).body.confirmation as {
+        token: string;
+      }
+    ).token;
+    broken = true;
+    const commit = await f.request('POST', '/codex:spare/remove', { confirmationToken: token });
+    // At commit the fingerprint or the refusal check throws: either way nothing is removed.
+    expect(commit.status).toBe(500);
+    expect(new CodexProfileRegistry().listProfiles().sort()).toEqual(['gmail', 'party', 'spare']);
+    expect(f.audits).toContainEqual([
+      'accounts.remove.refused',
+      { provider: 'codex', code: 'remove_failed' },
+    ]);
+    expect(f.audits.some(([event]) => event === 'accounts.remove')).toBe(false);
+  });
+
+  it('answers too_many_accounts at the 64-account total', async () => {
+    const f = await fixture();
+    const entry = (provider: string, index: number, credential: Record<string, string>) => ({
+      id: `${provider}:acct:${String(index).padStart(8, '0')}`,
+      provider,
+      platform: 'ubuntu',
+      sshHost: null,
+      label: null,
+      credential,
+      createdAt: null,
+      createdBy: 'dashboard',
+    });
+    const hex = (index: number) => String(index).padStart(8, '0');
+    const accounts = [
+      ...Array.from({ length: 16 }, (_, i) =>
+        entry('kimi-code', i, { kind: 'aac-key', keyId: hex(i) })
+      ),
+      ...Array.from({ length: 16 }, (_, i) =>
+        entry('opencode-go', i, { kind: 'aac-key', keyId: hex(i) })
+      ),
+      ...Array.from({ length: 16 }, (_, i) =>
+        entry('muse', i, { kind: 'config-home', homeId: hex(i) })
+      ),
+      // zai stays one under its own limit of 16, so only the total of 64 is reached.
+      ...Array.from({ length: 15 }, (_, i) => entry('zai', i, { kind: 'aac-key', keyId: hex(i) })),
+      entry('antigravity', 0, { kind: 'antigravity-profile', profileId: 'party' }),
+    ];
+    fs.writeFileSync(
+      path.join(ccsDir, 'account-usage-accounts.json'),
+      JSON.stringify({ version: 2, accounts }),
+      { mode: 0o600 }
+    );
+    expect(registryIds()).toHaveLength(64);
+    const before = fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'));
+    const cursor = await f.request('POST', '/add', { provider: 'cursor' });
+    expect([cursor.status, cursor.body.code]).toEqual([409, 'too_many_accounts']);
+    const key = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    expect([key.status, key.body.code]).toEqual([409, 'too_many_accounts']);
+    expect(fs.readFileSync(path.join(ccsDir, 'account-usage-accounts.json'))).toEqual(before);
+    expect(files(path.join(ccsDir, 'account-usage', 'keys'))).toEqual([]);
+  });
+
+  it('answers 404 when an account is removed between the label lookup and the write', async () => {
+    const f = await fixture();
+    const added = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((added.body.account as { id: string }).id);
+    // The lookup sees the account; the write sees the registry after a Remove committed.
+    const other = path.join(root, 'after-remove', '.ccs');
+    fs.mkdirSync(path.dirname(other), { recursive: true });
+    fs.cpSync(ccsDir, other, { recursive: true });
+    const registryFile = path.join(other, 'account-usage-accounts.json');
+    const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    registry.accounts = registry.accounts.filter((entry: { id: string }) => entry.id !== id);
+    fs.writeFileSync(registryFile, JSON.stringify(registry), { mode: 0o600 });
+    let calls = 0;
+    const env = { ...f.env, ccsDir: () => (calls++ === 0 ? ccsDir : other) };
+    await expect(
+      relabel(env, id, { label: 'Late' }, { secure: true, sessionKey: 'x' })
+    ).rejects.toMatchObject({ status: 404, code: 'unknown_account' });
+    expect(JSON.parse(fs.readFileSync(registryFile, 'utf8'))).toEqual(registry);
+  });
+});
+
 describe('sign-in and guides', () => {
   it('starts a Codex device-code job and allows one per provider', async () => {
     const f = await fixture();
@@ -577,6 +797,8 @@ describe('sign-in and guides', () => {
     expect(read.body).toMatchObject({ id: job.id, state: 'starting' });
     const code = await f.request('POST', `/signin-jobs/${job.id}/code`, { code: 'abc' });
     expect([code.status, code.body.code]).toEqual([409, 'code_not_expected']);
+    const malformed = await f.request('POST', `/signin-jobs/${job.id}/code`, { code: 'a b' });
+    expect([malformed.status, malformed.body.code]).toEqual([400, 'invalid_body']);
     const cancelled = await f.request('POST', `/signin-jobs/${job.id}/cancel`, {});
     expect(cancelled.body).toMatchObject({ state: 'cancelled' });
     const restarted = await f.request('GET', '/signin-jobs/job_00000000000000ff');

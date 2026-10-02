@@ -40,6 +40,7 @@ import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
 import { attachDashboardEventServer } from './dashboard-events';
 import { isSecureTransport } from './middleware/secure-transport';
+import { authKind } from './middleware/request-auth';
 import {
   startAccountLifecycleMaintenance,
   stopAccountLifecycleMaintenance,
@@ -225,9 +226,13 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   let antigravityRuntime: AntigravityRuntime | null = null;
-  // Account changes and sign-in jobs reach /ws clients as hints; a job's code
-  // goes only to sockets that connected over a secure transport.
-  const detachDashboardEvents = attachDashboardEventServer(wss, { isSecure: isSecureTransport });
+  // Account changes and sign-in jobs reach /ws clients as hints. A job goes only
+  // to browser sessions, and its code only to those that connected over a
+  // secure transport. The upgrade request carries the session (see above).
+  const detachDashboardEvents = attachDashboardEventServer(wss, {
+    isSecure: isSecureTransport,
+    authKind: (request) => authKind(request as express.Request),
+  });
 
   // Combined cleanup function
   const cleanup = () => {

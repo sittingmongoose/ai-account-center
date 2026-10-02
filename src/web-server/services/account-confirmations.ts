@@ -11,6 +11,8 @@ import { createHash, randomBytes } from 'crypto';
  *   user reviewed. Any difference at consume time is stale.
  * - TTL 120 s. One-shot: the record is deleted on the first consume attempt,
  *   whether it succeeds or not. At most 32 are pending; the oldest is evicted.
+ *   One session holds at most 8 of them and evicts only its own oldest, so it
+ *   cannot push other sessions' tokens out.
  * - Tokens are never logged.
  */
 export type ConfirmationAction = 'remove' | 'trash-restore' | 'signin-again-active';
@@ -31,6 +33,7 @@ export interface IssuedConfirmation {
 
 export const CONFIRMATION_TTL_MS = 120_000;
 export const MAX_PENDING_CONFIRMATIONS = 32;
+export const MAX_PENDING_PER_SESSION = 8;
 export const CONFIRMATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 interface PendingConfirmation extends ConfirmationBinding {
@@ -56,8 +59,12 @@ export class AccountConfirmationStore {
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  private prune(now: number): void {
+  private prune(now: number, session: string): void {
     for (const [key, record] of this.pending) if (record.expiresAt <= now) this.pending.delete(key);
+    const own = [...this.pending].filter(([, record]) => record.sessionKey === session);
+    for (const [key] of own.slice(0, Math.max(0, own.length - MAX_PENDING_PER_SESSION + 1))) {
+      this.pending.delete(key);
+    }
     while (this.pending.size >= MAX_PENDING_CONFIRMATIONS) {
       const oldest = this.pending.keys().next().value;
       if (oldest === undefined) break;
@@ -67,7 +74,7 @@ export class AccountConfirmationStore {
 
   issue(binding: ConfirmationBinding): IssuedConfirmation {
     const now = this.now();
-    this.prune(now);
+    this.prune(now, binding.sessionKey);
     const token = randomBytes(32).toString('base64url');
     const expiresAt = now + CONFIRMATION_TTL_MS;
     this.pending.set(digest(token), { ...binding, expiresAt });

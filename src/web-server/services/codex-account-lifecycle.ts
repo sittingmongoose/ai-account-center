@@ -22,8 +22,19 @@ import {
 } from '../../codex-auth/codex-auth-dashboard-service';
 import { detectCodexCli } from '../../targets/codex-detector';
 import { stateFingerprint } from './account-confirmations';
-import { SignInJobError, type SignInFlowSpec } from './signin-jobs';
-import { readCodexLogin, type CodexLoginIdentity } from './codex-login-file';
+import {
+  SignInJobError,
+  SignInJobStopped,
+  type SignInCompleteControl,
+  type SignInFlowSpec,
+} from './signin-jobs';
+import {
+  liveCodexLoginIs,
+  readCodexLogin,
+  sameCodexIdentity,
+  sameText as same,
+  type CodexLoginIdentity,
+} from './codex-login-file';
 
 export { readCodexLogin, type CodexLoginIdentity } from './codex-login-file';
 
@@ -35,10 +46,16 @@ export { readCodexLogin, type CodexLoginIdentity } from './codex-login-file';
  *   private staging folder `codex-instances/.staging-<jobId>` (0700, with the
  *   shared config.toml linked when it exists). The native `~/.codex` login is
  *   never written: only the activation lock file lives there.
- * - Add refuses an email already saved in another profile; Sign in again
- *   refuses a different email or ChatGPT account. Then, under the activation
- *   lock, Add renames the staging folder into place and registers it, and Sign
- *   in again replaces the profile's auth.json atomically.
+ * - Add refuses an email already saved in another profile. Sign in again
+ *   applies Codex's activation identity rules (codex-activation-identity.ts):
+ *   the new login must carry a workspace claim, keep the known ChatGPT
+ *   account, and keep any known person (user id, or subject plus issuer); the
+ *   email must match too. Then, under the activation lock, Add renames the
+ *   staging folder into place and registers it, and Sign in again (after a
+ *   fresh check that the profile is not the live login) replaces the
+ *   profile's auth.json atomically.
+ * - A stop requested by the job runner (cancel, shutdown) is checked under the
+ *   activation lock before anything is committed.
  * - Remove uses the same staged delete as `codex-auth remove`, and refuses the
  *   live active profile, the saved default while others exist, and the last
  *   profile.
@@ -102,10 +119,6 @@ export interface CodexLifecycleDeps {
   activationLocked?: () => Promise<boolean>;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-}
-
-function same(a: string | null | undefined, b: string | null | undefined): boolean {
-  return typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 }
 
 export class CodexAccountLifecycle {
@@ -231,7 +244,7 @@ export class CodexAccountLifecycle {
   private flow(
     mode: 'add' | 'signin-again',
     name: string,
-    complete: (jobId: string) => Promise<CodexLoginIdentity>
+    complete: (jobId: string, control: SignInCompleteControl) => Promise<CodexLoginIdentity>
   ): SignInFlowSpec {
     return {
       provider: 'codex',
@@ -243,13 +256,24 @@ export class CodexAccountLifecycle {
       allowedOrigins: CODEX_DEVICE_AUTH_ORIGINS,
       timeoutMs: CODEX_DEVICE_CODE_TIMEOUT_MS,
       prepare: (jobId) => this.prepareStaging(jobId),
-      complete: async (jobId) => {
-        const login = await complete(jobId);
+      complete: async (jobId, control) => {
+        const login = await complete(jobId, control);
         invalidateCodexAuthProfilesCache();
         return { accountId: `codex:${name}`, email: login.email, plan: login.plan };
       },
       cleanup: (jobId) => fs.rm(this.stagingDir(jobId), { recursive: true, force: true }),
     };
+  }
+
+  /** Runs `task` under the activation lock, unless the job was stopped first. */
+  private async commitUnderLock<T>(
+    control: SignInCompleteControl,
+    task: () => Promise<T>
+  ): Promise<T> {
+    return this.underActivationLock(async () => {
+      if (control.stopped()) throw new SignInJobStopped();
+      return task();
+    });
   }
 
   private async underActivationLock<T>(task: () => Promise<T>): Promise<T> {
@@ -270,14 +294,14 @@ export class CodexAccountLifecycle {
 
   /** Add: device-code sign-in into staging, then rename into `codex-instances/<name>`. */
   addFlow(name: string): SignInFlowSpec {
-    return this.flow('add', name, async (jobId) => {
+    return this.flow('add', name, async (jobId, control) => {
       const staging = this.stagingDir(jobId);
       const login = await readCodexLogin(path.join(staging, 'auth.json'));
       if (!login) throw new SignInJobError('write_failed');
       if (await this.otherProfileWithEmail(login.email, null)) {
         throw new SignInJobError('duplicate_identity');
       }
-      return this.underActivationLock(async () => {
+      return this.commitUnderLock(control, async () => {
         if (await this.nameInUse(name)) throw new SignInJobError('write_failed');
         const target = this.profileDir(name);
         await fs.rename(staging, target);
@@ -298,9 +322,9 @@ export class CodexAccountLifecycle {
     });
   }
 
-  /** Sign in again: same email and ChatGPT account only; the saved auth.json is replaced atomically. */
+  /** Sign in again: the same account and person only; the saved auth.json is replaced atomically. */
   signInAgainFlow(name: string): SignInFlowSpec {
-    return this.flow('signin-again', name, async (jobId) => {
+    return this.flow('signin-again', name, async (jobId, control) => {
       const login = await readCodexLogin(path.join(this.stagingDir(jobId), 'auth.json'));
       if (!login) throw new SignInJobError('write_failed');
       const registry = this.registry();
@@ -308,20 +332,21 @@ export class CodexAccountLifecycle {
       const authPath = path.join(this.profileDir(name), 'auth.json');
       const saved = await readCodexLogin(authPath);
       const meta = registry.getProfile(name);
+      if (!sameCodexIdentity(saved, meta, login)) throw new SignInJobError('identity_mismatch');
       const knownEmail = saved?.email ?? meta.email ?? null;
-      const knownAccount = saved?.accountId ?? meta.account_id ?? null;
-      if (
-        (knownEmail !== null && !same(knownEmail, login.email)) ||
-        (knownAccount !== null && login.accountId !== null && knownAccount !== login.accountId)
-      ) {
-        throw new SignInJobError('identity_mismatch');
-      }
       if (knownEmail === null && (await this.otherProfileWithEmail(login.email, name))) {
         throw new SignInJobError('duplicate_identity');
       }
-      return this.underActivationLock(async () => {
-        // Activation copies the live login back into the active profile, which would undo this.
-        if ((await this.activeProfile()) === name) throw new SignInJobError('write_failed');
+      return this.commitUnderLock(control, async () => {
+        // Activation copies the live login back into the active profile, which would undo
+        // this. Another process may have activated it a moment ago: no cached answer counts.
+        invalidateCodexAuthProfilesCache();
+        if (
+          (await this.activeProfile()) === name ||
+          (await liveCodexLoginIs(this.codexHome(), login.email))
+        ) {
+          throw new SignInJobError('write_failed');
+        }
         const content = await fs.readFile(path.join(this.stagingDir(jobId), 'auth.json'));
         const temporary = `${authPath}.tmp.${process.pid}.${jobId}`;
         try {

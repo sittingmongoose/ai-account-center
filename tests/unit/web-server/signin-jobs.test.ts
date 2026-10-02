@@ -7,6 +7,8 @@ import {
   SignInJobConflict,
   SignInJobError,
   SignInJobRunner,
+  SignInJobStopped,
+  type SignInCompleteControl,
   type SignInFlowSpec,
   type SignInJob,
 } from '../../../src/web-server/services/signin-jobs';
@@ -109,6 +111,31 @@ function spec(overrides: Partial<SignInFlowSpec> = {}) {
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+function gate() {
+  let open: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
+/**
+ * A `complete` that waits at its lock until released, then commits unless a
+ * stop was requested first (the contract every real flow follows).
+ */
+function lockedComplete() {
+  const lock = gate();
+  const state = { entered: false, committed: false };
+  const complete = async (_jobId: string, control: SignInCompleteControl) => {
+    state.entered = true;
+    await lock.promise;
+    if (control.stopped()) throw new SignInJobStopped();
+    state.committed = true;
+    return { accountId: 'codex:codex-4', email: 'new@example.com', plan: 'pro' };
+  };
+  return { lock, state, complete };
+}
 
 describe('SignInJobRunner', () => {
   it('parses the URL and code into waiting, then succeeds after a clean exit', async () => {
@@ -313,6 +340,152 @@ describe('SignInJobRunner', () => {
     await tick();
     device.processes[0].emit(OUTPUT);
     expect(device.runner.submitCode(deviceJob.id, 'abc')).toBe('not_expected');
+  });
+
+  it('a cancel during verifying waits for the install, which stops before committing', async () => {
+    const h = harness();
+    const locked = lockedComplete();
+    const { value, calls } = spec({ complete: locked.complete });
+    const job = h.runner.start(value);
+    await tick();
+    h.processes[0].emit(OUTPUT);
+    h.processes[0].exit(0);
+    await tick();
+    expect(locked.state.entered).toBe(true);
+    // The install phase: no timer can end the job any more.
+    expect(h.timers.every((timer) => timer.cancelled)).toBe(true);
+    expect(h.runner.cancel(job.id)).toMatchObject({ state: 'verifying' });
+    await tick();
+    expect(h.runner.get(job.id)).toMatchObject({ state: 'verifying' });
+    // Cleanup never runs while the install still works in the staging folder.
+    expect(calls.cleanup).toBe(0);
+    locked.lock.open();
+    await tick();
+    await tick();
+    expect(h.runner.get(job.id)).toMatchObject({
+      state: 'cancelled',
+      result: null,
+      error: null,
+    });
+    expect(locked.state.committed).toBe(false);
+    expect(calls.cleanup).toBe(1);
+    expect(h.finished.map((finished) => finished.state)).toEqual(['cancelled']);
+  });
+
+  it('a timeout or shutdown during verifying never ends the job under a running install', async () => {
+    const h = harness();
+    const locked = lockedComplete();
+    const { value, calls } = spec({ complete: locked.complete });
+    const job = h.runner.start(value);
+    await tick();
+    h.processes[0].emit(OUTPUT);
+    h.processes[0].exit(0);
+    await tick();
+    // Approved at minute 14:59: the 15-minute timer is off once the install starts.
+    expect(h.timers.find((timer) => timer.ms === 15 * 60_000)?.cancelled).toBe(true);
+    h.fire(15 * 60_000);
+    expect(h.runner.get(job.id)).toMatchObject({ state: 'verifying' });
+    expect(calls.cleanup).toBe(0);
+    locked.lock.open();
+    await tick();
+    await tick();
+    expect(h.runner.get(job.id)).toMatchObject({
+      state: 'succeeded',
+      result: { accountId: 'codex:codex-4' },
+    });
+    expect(calls.cleanup).toBe(1);
+
+    // Even a timer callback that ran late only asks the install to stop: the job ends
+    // after the install settles, as expired with nothing committed.
+    const late = harness();
+    const held = lockedComplete();
+    const lateRun = spec({ complete: held.complete });
+    const lateJob = late.runner.start(lateRun.value);
+    await tick();
+    late.processes[0].emit(OUTPUT);
+    late.processes[0].exit(0);
+    await tick();
+    for (const timer of late.timers) timer.callback();
+    expect(late.runner.get(lateJob.id)).toMatchObject({ state: 'verifying' });
+    expect(lateRun.calls.cleanup).toBe(0);
+    held.lock.open();
+    await tick();
+    await tick();
+    expect(late.runner.get(lateJob.id)).toMatchObject({
+      state: 'expired',
+      error: { code: 'timeout' },
+    });
+    expect(held.state.committed).toBe(false);
+    expect(lateRun.calls.cleanup).toBe(1);
+
+    const stopped = harness();
+    const second = lockedComplete();
+    const run = spec({ complete: second.complete });
+    const other = stopped.runner.start(run.value);
+    await tick();
+    stopped.processes[0].emit(OUTPUT);
+    stopped.processes[0].exit(0);
+    await tick();
+    stopped.runner.shutdown();
+    expect(stopped.runner.get(other.id)).toMatchObject({ state: 'verifying' });
+    second.lock.open();
+    await tick();
+    await tick();
+    expect(stopped.runner.get(other.id)).toMatchObject({
+      state: 'failed',
+      error: { code: 'server_restarted' },
+    });
+    expect(second.state.committed).toBe(false);
+    expect(run.calls.cleanup).toBe(1);
+  });
+
+  it('reports an install that committed before the cancel as succeeded', async () => {
+    const h = harness();
+    const committed = gate();
+    const job = h.runner.start(
+      spec({
+        complete: async () => {
+          await committed.promise;
+          return { accountId: 'codex:codex-4', email: 'new@example.com', plan: 'pro' };
+        },
+      }).value
+    );
+    await tick();
+    h.processes[0].emit(OUTPUT);
+    h.processes[0].exit(0);
+    await tick();
+    h.runner.cancel(job.id);
+    committed.open();
+    await tick();
+    await tick();
+    expect(h.runner.get(job.id)).toMatchObject({ state: 'succeeded' });
+    expect(h.finished.map((finished) => finished.state)).toEqual(['succeeded']);
+  });
+
+  it('a cancel during prepare runs cleanup only after prepare has settled', async () => {
+    const h = harness();
+    const prepared = gate();
+    const order: string[] = [];
+    const { value } = spec({
+      prepare: async () => {
+        await prepared.promise;
+        order.push('prepared');
+        return { file: '/fake/codex', args: [], env: {}, pty: true };
+      },
+      cleanup: async () => {
+        order.push('cleanup');
+      },
+    });
+    const job = h.runner.start(value);
+    await tick();
+    expect(h.runner.cancel(job.id)).toMatchObject({ state: 'cancelled' });
+    await tick();
+    expect(order).toEqual([]);
+    prepared.open();
+    await tick();
+    await tick();
+    expect(order).toEqual(['prepared', 'cleanup']);
+    expect(h.processes).toHaveLength(0);
   });
 
   it('lays running sign-in-again jobs over their accounts and stops everything on shutdown', async () => {

@@ -188,6 +188,30 @@ export class LocalKeyStore implements KeyStoreBackend {
     }
   }
 
+  /** Key ids of this provider's regular key files, with their modification times. */
+  async keyFiles(provider: KeyProvider): Promise<Array<{ keyId: string; modifiedAt: number }>> {
+    if (!isKeyProvider(provider)) return [];
+    let names: string[];
+    try {
+      names = await fs.readdir(this.directory);
+    } catch {
+      return [];
+    }
+    const pattern = new RegExp(`^${provider}-([a-f0-9]{8})\\.json$`);
+    const found: Array<{ keyId: string; modifiedAt: number }> = [];
+    for (const name of names) {
+      const keyId = pattern.exec(name)?.[1];
+      if (!keyId) continue;
+      try {
+        const stat = await fs.lstat(path.join(this.directory, name));
+        if (stat.isFile()) found.push({ keyId, modifiedAt: stat.mtimeMs });
+      } catch {
+        /* Gone in between. */
+      }
+    }
+    return found;
+  }
+
   async fingerprints(provider: KeyProvider): Promise<Set<string>> {
     const found = new Set<string>();
     let names: string[];

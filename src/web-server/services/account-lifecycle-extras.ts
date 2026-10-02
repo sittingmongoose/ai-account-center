@@ -6,7 +6,8 @@ import {
   type LifecycleEnv,
   type LifecycleResult,
 } from './account-lifecycle-env';
-import { updateAccountRegistry, type RegistryAccount } from './account-registry-v2';
+import { updateAccountRegistry } from './account-registry-v2';
+import { SIGNIN_CODE_PATTERN } from './signin-jobs';
 import {
   entryView,
   invalid,
@@ -35,15 +36,22 @@ export async function relabel(
   const name = label(body.label);
   const account = await resolveIn(env, id);
   if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
-  const registry = await updateAccountRegistry(env.ccsDir(), (current) => ({
-    ...current,
-    accounts: current.accounts.map((entry) =>
-      entry.id === id ? { ...entry, label: name } : entry
-    ),
-  })).catch(() => {
-    throw new LifecycleHttpError(500, 'write_failed');
+  const registry = await updateAccountRegistry(env.ccsDir(), (current) => {
+    // Removed between the lookup and the write: nothing to label.
+    if (!current.accounts.some((entry) => entry.id === id)) {
+      throw new LifecycleHttpError(404, 'unknown_account');
+    }
+    return {
+      ...current,
+      accounts: current.accounts.map((entry) =>
+        entry.id === id ? { ...entry, label: name } : entry
+      ),
+    };
+  }).catch((error) => {
+    throw error instanceof LifecycleHttpError ? error : new LifecycleHttpError(500, 'write_failed');
   });
-  const entry = registry.accounts.find((candidate) => candidate.id === id) as RegistryAccount;
+  const entry = registry.accounts.find((candidate) => candidate.id === id);
+  if (!entry) throw new LifecycleHttpError(404, 'unknown_account');
   env.onChanged();
   return {
     status: 200,
@@ -152,7 +160,8 @@ export function submitJobCode(
 ): LifecycleResult {
   secure(context);
   keys(body, ['code']);
-  if (typeof body.code !== 'string') throw invalid();
+  // A malformed code is a bad body (400), not a job that is not waiting (409).
+  if (typeof body.code !== 'string' || !SIGNIN_CODE_PATTERN.test(body.code)) throw invalid();
   const job = env.runner().submitCode(jobId, body.code);
   if (job === null) throw new LifecycleHttpError(404, 'unknown_job');
   if (job === 'not_expected') throw new LifecycleHttpError(409, 'code_not_expected');

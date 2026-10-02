@@ -8,7 +8,10 @@ import { spawn, type ChildProcess } from 'child_process';
  * With `pty: true` the CLI runs on a pseudo-terminal, for tools that need a
  * TTY. Node has no PTY of its own, so a small fixed Python program (the
  * standard `pty` module) allocates one, turns echo off, relays bytes, and
- * forwards SIGTERM to the CLI's own session. Either way the child is the
+ * forwards SIGTERM to the CLI's own session. The CLI runs in its own session
+ * (pty.fork calls setsid), out of reach of a signal to the relay's group, so
+ * the relay itself sends the CLI's group SIGKILL one second after the SIGTERM
+ * (before this side's own SIGKILL ends the relay). Either way the child is the
  * leader of a new process group, and `kill` signals the whole group.
  */
 export interface SignInCommand {
@@ -33,6 +36,8 @@ export interface SignInProcessHandle {
 export type SignInSpawner = (command: SignInCommand) => SignInProcessHandle;
 
 const KILL_GRACE_MS = 2_000;
+/** The relay's own grace before it SIGKILLs the CLI; shorter than KILL_GRACE_MS. */
+const RELAY_KILL_GRACE_S = 1;
 export const PTY_PYTHON = '/usr/bin/python3';
 
 /** Fixed relay program; its argv after `-c <program>` is the CLI argv. */
@@ -56,11 +61,21 @@ export const PTY_RELAY_PROGRAM = [
   "    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 160, 0, 0))",
   'except Exception:',
   '    pass',
+  'def force(signum, frame):',
+  '    try:',
+  '        os.killpg(pid, signal.SIGKILL)',
+  '    except Exception:',
+  '        pass',
+  'stopping = []',
   'def stop(signum, frame):',
   '    try:',
   '        os.killpg(pid, signal.SIGTERM)',
   '    except Exception:',
   '        pass',
+  '    if not stopping:',
+  '        stopping.append(True)',
+  '        signal.signal(signal.SIGALRM, force)',
+  `        signal.setitimer(signal.ITIMER_REAL, ${RELAY_KILL_GRACE_S})`,
   'for name in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):',
   '    signal.signal(name, stop)',
   'source = sys.stdin.fileno()',

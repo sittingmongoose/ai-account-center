@@ -6,6 +6,20 @@ import {
   type SignInProcessHandle,
   type SignInSpawner,
 } from './signin-process';
+import {
+  SIGNIN_CODE_PATTERN,
+  SIGNIN_ERROR_MESSAGES,
+  SignInJobError,
+  SignInJobConflict,
+  type RestartedSignInJob,
+  type SignInFlowSpec,
+  type SignInJob,
+  type SignInJobErrorCode,
+  type SignInJobProvider,
+  type SignInJobState,
+} from './signin-job-types';
+
+export * from './signin-job-types';
 
 /**
  * The sign-in job runner (CONTRACT-registry-lifecycle section 6.6).
@@ -17,117 +31,13 @@ import {
  * - A first-output timeout (30 s) or an unrecognized answer fails the job with
  *   `unexpected_output`; the overall timeout ends it as `expired`. Cancel,
  *   timeout and shutdown kill the CLI's whole process group.
+ * - Once the CLI has exited 0 the job installs the login (`complete`). From
+ *   then on its timers are off, and a cancel or shutdown only asks it to stop:
+ *   `complete` checks that request under its own lock before it commits, and
+ *   the job ends as cancelled only if nothing was installed. `cleanup` runs
+ *   only after `prepare` or `complete` has settled, so it never races them.
  * - A finished job stays readable for 10 minutes.
  */
-export type SignInJobProvider = 'codex' | 'muse' | 'antigravity';
-export type SignInJobKind = 'device-code' | 'supervised-cli';
-export type SignInJobMode = 'add' | 'signin-again';
-export type SignInJobState =
-  | 'starting'
-  | 'waiting'
-  | 'awaiting_code'
-  | 'verifying'
-  | 'succeeded'
-  | 'failed'
-  | 'expired'
-  | 'cancelled';
-export type SignInJobErrorCode =
-  | 'tool_missing'
-  | 'unexpected_output'
-  | 'identity_mismatch'
-  | 'duplicate_identity'
-  | 'timeout'
-  | 'provider_denied'
-  | 'write_failed'
-  | 'server_restarted';
-
-export interface SignInJob {
-  id: string;
-  provider: SignInJobProvider;
-  kind: SignInJobKind;
-  mode: SignInJobMode;
-  accountId: string | null;
-  profileName: string | null;
-  platform: 'ubuntu' | 'mac';
-  state: SignInJobState;
-  verification: null | { url: string; userCode: string | null; expiresAt: string | null };
-  result: null | { accountId: string; email: string | null; plan: string | null };
-  error: null | { code: SignInJobErrorCode; message: string };
-  startedAt: string;
-  updatedAt: string;
-  expiresAt: string;
-}
-
-/** What a job id the server never issued reads as: it began before a restart. */
-export interface RestartedSignInJob {
-  id: string;
-  provider: null;
-  kind: null;
-  mode: null;
-  accountId: null;
-  profileName: null;
-  platform: null;
-  state: 'failed';
-  verification: null;
-  result: null;
-  error: { code: 'server_restarted'; message: string };
-  startedAt: null;
-  updatedAt: string;
-  expiresAt: null;
-}
-
-export const SIGNIN_ERROR_MESSAGES: Readonly<Record<SignInJobErrorCode, string>> = Object.freeze({
-  tool_missing: 'The sign-in tool is not installed on this server.',
-  unexpected_output:
-    'The sign-in tool answered in a way this page does not recognize. Nothing was changed.',
-  identity_mismatch: 'That sign-in belongs to a different account. Nothing was changed.',
-  duplicate_identity: 'That account is already saved in another profile. Nothing was changed.',
-  timeout: 'The sign-in was not finished in time. Nothing was changed.',
-  provider_denied: 'The sign-in was not approved, or its code expired. Nothing was changed.',
-  write_failed: 'The new sign-in could not be saved safely. Nothing was changed.',
-  server_restarted: 'The server restarted, so this sign-in stopped. Start it again.',
-});
-
-export const JOB_ID_PATTERN = /^job_[a-f0-9]{16}$/;
-/** URL-safe characters plus `/` (Google authorization codes look like `4/0Ab...`); one line only. */
-export const SIGNIN_CODE_PATTERN = /^[A-Za-z0-9._~/-]{1,2048}$/;
-
-export class SignInJobError extends Error {
-  constructor(readonly code: SignInJobErrorCode) {
-    super(SIGNIN_ERROR_MESSAGES[code]);
-    this.name = 'SignInJobError';
-  }
-}
-
-export class SignInJobConflict extends Error {
-  constructor(
-    readonly code: 'job_running' | 'too_many_jobs',
-    readonly jobId: string | null
-  ) {
-    super(code === 'job_running' ? 'A sign-in is already running.' : 'Too many sign-ins running.');
-    this.name = 'SignInJobConflict';
-  }
-}
-
-export interface SignInFlowSpec {
-  provider: SignInJobProvider;
-  kind: SignInJobKind;
-  mode: SignInJobMode;
-  accountId: string | null;
-  profileName: string | null;
-  platform: 'ubuntu' | 'mac';
-  allowedOrigins: readonly string[];
-  timeoutMs: number;
-  /** Runs once the id is reserved: staging folders, then the fixed command. */
-  prepare(jobId: string): Promise<SignInCommand>;
-  /** After the CLI exits 0: verify the identity and install the login. */
-  complete(
-    jobId: string
-  ): Promise<{ accountId: string; email: string | null; plan: string | null }>;
-  /** Always runs once when the job ends, whatever the outcome. */
-  cleanup(jobId: string): Promise<void>;
-}
-
 export type TimerScheduler = (callback: () => void, ms: number) => () => void;
 
 export interface SignInJobRunnerDeps {
@@ -159,6 +69,12 @@ interface JobRecord {
   timers: Array<() => void>;
   finishedAt: number | null;
   codeSent: boolean;
+  /** The running `prepare` or `complete`; cleanup waits for it. */
+  busy: Promise<unknown> | null;
+  /** True while `complete` installs the login: the job cannot be ended from outside. */
+  installing: boolean;
+  /** How the job ends if `complete` stops before committing (cancel or shutdown during install). */
+  stop: { state: 'cancelled' | 'failed' | 'expired'; code: SignInJobErrorCode | null } | null;
 }
 
 const defaultTimer: TimerScheduler = (callback, ms) => {
@@ -243,6 +159,9 @@ export class SignInJobRunner {
       timers: [],
       finishedAt: null,
       codeSent: false,
+      busy: null,
+      installing: false,
+      stop: null,
     };
     this.jobs.set(id, record);
     this.issued.add(id);
@@ -252,7 +171,7 @@ export class SignInJobRunner {
       this.issued.delete(oldest);
     }
     record.timers.push(
-      this.timer(() => this.finish(record, 'expired', 'timeout'), spec.timeoutMs),
+      this.timer(() => this.requestStop(record, 'expired', 'timeout'), spec.timeoutMs),
       this.timer(() => {
         if (record.job.state === 'starting') this.finish(record, 'failed', 'unexpected_output');
       }, this.deps.firstOutputTimeoutMs ?? 30_000)
@@ -264,12 +183,16 @@ export class SignInJobRunner {
 
   private async launch(record: JobRecord): Promise<void> {
     let command: SignInCommand;
+    const preparing = Promise.resolve().then(() => record.spec.prepare(record.job.id));
+    record.busy = preparing;
     try {
-      command = await record.spec.prepare(record.job.id);
+      command = await preparing;
     } catch (error) {
+      if (record.busy === preparing) record.busy = null;
       this.finish(record, 'failed', error instanceof SignInJobError ? error.code : 'write_failed');
       return;
     }
+    if (record.busy === preparing) record.busy = null;
     if (record.finishedAt !== null) return;
     let child: SignInProcessHandle;
     try {
@@ -321,16 +244,50 @@ export class SignInJobRunner {
       this.finish(record, 'failed', 'provider_denied');
       return;
     }
+    // Install phase: no timer may end the job while the login is being installed.
+    for (const cancel of record.timers.splice(0)) cancel();
+    record.installing = true;
     this.update(record, 'verifying');
+    const completing = Promise.resolve().then(() =>
+      record.spec.complete(record.job.id, { stopped: () => record.stop !== null })
+    );
+    record.busy = completing;
+    let outcome:
+      | { ok: true; result: { accountId: string; email: string | null; plan: string | null } }
+      | { ok: false; error: unknown };
     try {
-      const result = await record.spec.complete(record.job.id);
-      if (record.finishedAt !== null) return;
-      record.job.result = { ...result };
-      if (!record.job.accountId) record.job.accountId = result.accountId;
-      this.finish(record, 'succeeded', null);
+      outcome = { ok: true, result: await completing };
     } catch (error) {
+      outcome = { ok: false, error };
+    }
+    record.busy = null;
+    record.installing = false;
+    if (record.finishedAt !== null) return;
+    if (outcome.ok) {
+      // Committed: a stop that arrived after the commit point does not undo it.
+      record.job.result = { ...outcome.result };
+      if (!record.job.accountId) record.job.accountId = outcome.result.accountId;
+      this.finish(record, 'succeeded', null);
+    } else if (record.stop) {
+      this.finish(record, record.stop.state, record.stop.code);
+    } else {
+      const error = outcome.error;
       this.finish(record, 'failed', error instanceof SignInJobError ? error.code : 'write_failed');
     }
+  }
+
+  /** End the job now, or, while it installs, ask `complete` to stop before it commits. */
+  private requestStop(
+    record: JobRecord,
+    state: 'cancelled' | 'failed' | 'expired',
+    code: SignInJobErrorCode | null
+  ): void {
+    if (record.finishedAt !== null) return;
+    if (record.installing) {
+      record.stop ??= { state, code };
+      return;
+    }
+    this.finish(record, state, code);
   }
 
   private update(record: JobRecord, state: SignInJobState): void {
@@ -357,9 +314,12 @@ export class SignInJobRunner {
     } catch {
       /* Audit is best effort. */
     }
-    void Promise.resolve()
-      .then(() => record.spec.cleanup(record.job.id))
-      .catch(() => undefined);
+    // Never while prepare or complete still works in the staging folder.
+    const settled = (record.busy ?? Promise.resolve()).then(
+      () => undefined,
+      () => undefined
+    );
+    void settled.then(() => record.spec.cleanup(record.job.id)).catch(() => undefined);
   }
 
   private emit(record: JobRecord): void {
@@ -394,10 +354,14 @@ export class SignInJobRunner {
     };
   }
 
+  /**
+   * Cancel a job. While it installs the login the job keeps `verifying` and
+   * ends as cancelled only if `complete` stops before committing.
+   */
   cancel(id: string): SignInJob | null {
     const record = this.jobs.get(id);
     if (!record) return null;
-    this.finish(record, 'cancelled', null);
+    this.requestStop(record, 'cancelled', null);
     return copy(record.job);
   }
 
@@ -453,6 +417,6 @@ export class SignInJobRunner {
 
   /** Server shutdown: stop every CLI; nothing resumes after a restart. */
   shutdown(): void {
-    for (const record of this.running()) this.finish(record, 'failed', 'server_restarted');
+    for (const record of this.running()) this.requestStop(record, 'failed', 'server_restarted');
   }
 }

@@ -335,8 +335,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 226,
-    "filesAffected": 81,
+    "totalMarkers": 228,
+    "filesAffected": 82,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -516,16 +516,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 506,
-      "typedThrows": 131,
+      "totalThrows": 514,
+      "typedThrows": 132,
       "plainThrows": 70,
-      "otherThrows": 305,
-      "adoptionRatio": 0.2589,
+      "otherThrows": 312,
+      "adoptionRatio": 0.2568,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 209,
-          "typed": 68,
+          "count": 217,
+          "typed": 69,
           "plain": 10
         },
         {
@@ -598,8 +598,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 28,
-      "totalSourceFiles": 377,
-      "coverageRatio": 0.0743,
+      "totalSourceFiles": 381,
+      "coverageRatio": 0.0735,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -625,7 +625,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 98,
+          "count": 101,
           "withLogger": 7
         },
         {
@@ -645,7 +645,7 @@
         },
         {
           "subdomain": "codex-auth",
-          "count": 26,
+          "count": 27,
           "withLogger": 9
         },
         {

@@ -310,6 +310,23 @@ describe('Claude Remove and trash', () => {
     expect(await lifecycle.listTrash()).toEqual([]);
   });
 
+  it('takes the trash record out again when the inventory entry cannot be dropped', async () => {
+    const { ccsDir, hosts, lifecycle } = setup();
+    const party = await lifecycle.findProfile('party');
+    // The inventory becomes unreadable after the review, so dropping its entry fails.
+    const file = path.join(ccsDir, 'claude-desktop-profiles.json');
+    fs.writeFileSync(file, '{ not json');
+    await expect(lifecycle.remove(party as never)).rejects.toMatchObject({
+      code: 'remove_failed',
+    });
+    expect(hosts.calls).toEqual(['trash:mac', 'trash:windows', 'restore:windows', 'restore:mac']);
+    expect(hosts.data.mac.has('/fake/mac/Claude-party')).toBe(true);
+    expect(hosts.data.windows.has('C:\\Users\\x\\AppData\\Roaming\\Claude-party')).toBe(true);
+    // Never missing from both: no trash record was left behind for the untouched entry.
+    expect(await lifecycle.listTrash()).toEqual([]);
+    expect(fs.readFileSync(file, 'utf8')).toBe('{ not json');
+  });
+
   it('restores everything within 30 days, and refuses an id that was reused', async () => {
     const { hosts, lifecycle, inventory } = setup();
     const party = await lifecycle.findProfile('party');

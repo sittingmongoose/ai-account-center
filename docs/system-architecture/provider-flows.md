@@ -60,8 +60,10 @@ the key on stdin only. The API returns only the last four characters and a
 fingerprint. A new key is checked once by the collector: a rejected key is deleted
 again, a network failure keeps it as unverified. Codex accounts are added or signed
 in again with `codex login --device-auth` in a private staging folder, never in the
-native `~/.codex`; the identity must be new (Add) or unchanged (Sign in again), and
-the active, default and last profiles cannot be removed. Claude profile creation and
+native `~/.codex`; the identity must be new (Add) or unchanged (Sign in again, which
+uses the workspace and person rules of `codex-activation-identity.ts` and a fresh read
+of the live login), and the active, default and last profiles cannot be removed. Key
+files that no account names are swept after an hour. Claude profile creation and
 removal into a 30-day trash are implemented against a host transport but stay off
 until the Windows launcher and the usage helper read profile ids from the inventory.
 

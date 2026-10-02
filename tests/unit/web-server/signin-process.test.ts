@@ -100,6 +100,41 @@ describe('spawnSignInProcess', () => {
     }
   });
 
+  it('kills a CLI that ignores SIGTERM and SIGHUP within the grace period', async () => {
+    const { dir, pidFile } = setup();
+    const stubborn = path.join(dir, 'stubborn.py');
+    fs.writeFileSync(
+      stubborn,
+      [
+        'import os, signal, sys, time',
+        'for name in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):',
+        '    signal.signal(name, signal.SIG_IGN)',
+        'open(sys.argv[1], "w").write(str(os.getpid()))',
+        'print("https://auth.openai.com/codex/device", flush=True)',
+        'while True:',
+        '    time.sleep(0.1)',
+      ].join('\n')
+    );
+    const child = spawnSignInProcess({
+      file: '/usr/bin/python3',
+      args: [stubborn, pidFile],
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      pty: true,
+    });
+    let exited = false;
+    child.onExit(() => {
+      exited = true;
+    });
+    await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').length > 0);
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    expect(alive(pid)).toBe(true);
+    const started = Date.now();
+    child.kill();
+    await until(() => !alive(pid), 5_000);
+    expect(Date.now() - started).toBeLessThan(4_000);
+    await until(() => exited);
+  });
+
   it('passes input to the CLI without echoing it back', async () => {
     const { script, pidFile } = setup();
     const child = spawnSignInProcess({

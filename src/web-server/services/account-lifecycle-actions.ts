@@ -15,6 +15,7 @@ import {
   type ResolvedAccount,
 } from './account-lifecycle-accounts';
 import {
+  keyQueue,
   providerAccountCount,
   resolveIn,
   serialized,
@@ -27,6 +28,7 @@ import {
   registrySource,
   updateAccountRegistry,
   MAX_ACCOUNTS_PER_PROVIDER,
+  MAX_REGISTRY_ACCOUNTS,
   type RegistryAccount,
 } from './account-registry-v2';
 import { ClaudeLifecycleError } from './claude-account-lifecycle';
@@ -140,6 +142,9 @@ export async function addAccount(
       if (current.accounts.some((entry) => entry.provider === provider)) {
         throw new LifecycleHttpError(409, 'single_account_provider');
       }
+      if (current.accounts.length >= MAX_REGISTRY_ACCOUNTS) {
+        throw new LifecycleHttpError(409, 'too_many_accounts');
+      }
       return {
         ...current,
         accounts: [
@@ -186,13 +191,14 @@ async function addApiKey(
   await assertCanAdd(env, provider, context);
   const store = env.keyStore({ platform: 'ubuntu', sshHost: null });
   if (!store) throw new LifecycleHttpError(500, 'key_store_unavailable');
-  return serialized(`key:${provider}`, async () => {
+  return serialized(keyQueue(provider), async () => {
     if ((await store.fingerprints(provider)).has(keyFingerprint(secret))) {
       throw new LifecycleHttpError(409, 'duplicate_key');
     }
     const { entries } = await readAdditionalEntries(env.ccsDir());
     if (
-      entries.filter((entry) => entry.provider === provider).length >= MAX_ACCOUNTS_PER_PROVIDER
+      entries.filter((entry) => entry.provider === provider).length >= MAX_ACCOUNTS_PER_PROVIDER ||
+      entries.length >= MAX_REGISTRY_ACCOUNTS
     ) {
       throw new LifecycleHttpError(409, 'too_many_accounts');
     }
@@ -219,13 +225,17 @@ async function addApiKey(
       accounts: current.accounts.filter((candidate) => candidate.id !== entry.id),
     });
     try {
-      await updateAccountRegistry(env.ccsDir(), (current) => ({
-        ...current,
-        accounts: [...current.accounts, entry],
-      }));
-    } catch {
+      await updateAccountRegistry(env.ccsDir(), (current) => {
+        if (current.accounts.length >= MAX_REGISTRY_ACCOUNTS) {
+          throw new LifecycleHttpError(409, 'too_many_accounts');
+        }
+        return { ...current, accounts: [...current.accounts, entry] };
+      });
+    } catch (error) {
       await store.delete(provider, keyId).catch(() => undefined);
-      throw new LifecycleHttpError(500, 'write_failed');
+      throw error instanceof LifecycleHttpError
+        ? error
+        : new LifecycleHttpError(500, 'write_failed');
     }
     const reading = await env.probe(registrySource(entry));
     if (reading.status === 'needs_sign_in') {
@@ -241,6 +251,26 @@ async function addApiKey(
       body: { account: entryView(entry, info, true, { email: reading.email }), check },
     };
   });
+}
+
+/** The account's entry as the registry has it now (inside its key queue); 404 once it is gone. */
+async function currentKeyEntry(
+  env: LifecycleEnv,
+  reviewed: RegistryAccount
+): Promise<{ entry: RegistryAccount; entries: RegistryAccount[] }> {
+  const { entries } = await readAdditionalEntries(env.ccsDir());
+  const entry = entries.find((candidate) => candidate.id === reviewed.id);
+  if (
+    !entry ||
+    entry.credential.kind !== 'aac-key' ||
+    reviewed.credential.kind !== 'aac-key' ||
+    entry.credential.keyId !== reviewed.credential.keyId ||
+    entry.platform !== reviewed.platform ||
+    entry.sshHost !== reviewed.sshHost
+  ) {
+    throw new LifecycleHttpError(404, 'unknown_account');
+  }
+  return { entry, entries };
 }
 
 /** PUT /api/accounts/:id/key */
@@ -264,13 +294,26 @@ export async function replaceKey(
   const keyId = entry.credential.keyId;
   const store = env.keyStore({ platform: entry.platform, sshHost: entry.sshHost });
   if (!store) throw new LifecycleHttpError(409, 'not_configured');
-  return serialized(`key:${provider}`, async () => {
+  // In the provider's key queue, which a Remove of this account also takes.
+  return serialized(keyQueue(provider), async () => {
+    const { entries } = await currentKeyEntry(env, entry);
     const own = await store.info(provider, keyId);
     const others = await store.fingerprints(provider);
     if (own) others.delete(own.fingerprint);
     if (others.has(keyFingerprint(secret))) throw new LifecycleHttpError(409, 'duplicate_key');
-    // Probe the new key under a temporary id; the account's own file changes only after.
-    const trialId = newKeyId();
+    // Probe the new key under a temporary id that no account and no file uses; the
+    // account's own file changes only after.
+    const taken = new Set(
+      entries.flatMap((candidate) =>
+        candidate.provider === provider && candidate.credential.kind === 'aac-key'
+          ? [candidate.credential.keyId]
+          : []
+      )
+    );
+    let trialId = newKeyId();
+    while (taken.has(trialId) || (await store.info(provider, trialId)) !== null) {
+      trialId = newKeyId();
+    }
     try {
       await store.put(provider, trialId, secret);
     } catch {
@@ -283,6 +326,8 @@ export async function replaceKey(
       const reading = await env.probe(registrySource(trial));
       if (reading.status === 'needs_sign_in') throw new LifecycleHttpError(422, 'key_rejected');
       check = reading.status === 'ok' || reading.status === 'cached' ? 'ok' : 'unverified';
+      // The account must still exist before its key is written (never a key without an account).
+      await currentKeyEntry(env, entry);
       info = await store.put(provider, keyId, secret).catch(() => {
         throw new LifecycleHttpError(500, 'key_store_unavailable');
       });

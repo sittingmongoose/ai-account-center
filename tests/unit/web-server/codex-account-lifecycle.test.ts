@@ -27,25 +27,44 @@ let ccsDir: string;
 let codexHome: string;
 let sharedConfig: string;
 
-function token(email: string, accountId: string, plan = 'pro'): string {
+interface Principal {
+  userId?: string;
+  sub?: string;
+  iss?: string;
+}
+
+function token(
+  email: string,
+  accountId: string | null,
+  plan = 'pro',
+  principal: Principal = {}
+): string {
   const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   return [
     part({ alg: 'none' }),
     part({
       email,
+      ...(principal.sub ? { sub: principal.sub } : {}),
+      ...(principal.iss ? { iss: principal.iss } : {}),
       'https://api.openai.com/auth': {
         chatgpt_plan_type: plan,
-        chatgpt_account_id: accountId,
+        ...(accountId === null ? {} : { chatgpt_account_id: accountId }),
+        ...(principal.userId ? { chatgpt_user_id: principal.userId } : {}),
       },
     }),
     'sig',
   ].join('.');
 }
 
-function login(email: string, accountId: string, nonce = 'a'): string {
+function login(
+  email: string,
+  accountId: string | null,
+  nonce = 'a',
+  principal: Principal = {}
+): string {
   return JSON.stringify({
     tokens: {
-      id_token: token(email, accountId),
+      id_token: token(email, accountId, 'pro', principal),
       access_token: `access-${nonce}`,
       refresh_token: `refresh-${nonce}`,
     },
@@ -91,8 +110,13 @@ function lifecycle(extra: ConstructorParameters<typeof CodexAccountLifecycle>[0]
 }
 
 /** A runner whose fake CLI prints the device prompt, writes `auth` into CODEX_HOME and exits 0. */
-function fakeRunner(auth: string | null, commands: SignInCommand[] = []) {
+function fakeRunner(
+  auth: string | null,
+  commands: SignInCommand[] = [],
+  deps: ConstructorParameters<typeof SignInJobRunner>[0] = {}
+) {
   return new SignInJobRunner({
+    ...deps,
     spawn: (command) => {
       commands.push(command);
       let onData: (chunk: string) => void = () => undefined;
@@ -116,6 +140,22 @@ function fakeRunner(auth: string | null, commands: SignInCommand[] = []) {
       }, 5);
       return handle;
     },
+  });
+}
+
+async function until(check: () => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/** Hold the native activation lock as another process (an activation) would. */
+function holdActivationLock(): Promise<() => Promise<void>> {
+  return lockfile.lock(codexHome, {
+    realpath: false,
+    lockfilePath: path.join(codexHome, '.ccs-activation.lock'),
   });
 }
 
@@ -206,6 +246,56 @@ describe('Codex Add', () => {
     ).toMatchObject({ state: 'failed', error: { code: 'tool_missing' } });
     expect(fs.readdirSync(path.join(ccsDir, 'codex-instances'))).toEqual([]);
   });
+
+  it('a cancel while the install waits for the activation lock installs nothing', async () => {
+    addProfile('gmail', 'gmail@example.com');
+    const release = await holdActivationLock();
+    const runner = fakeRunner(login('new@example.com', 'acct-new', 'new'));
+    const job = runner.start(lifecycle().addFlow('codex-4'));
+    try {
+      await until(() => (runner.get(job.id) as SignInJob).state === 'verifying');
+      expect(runner.cancel(job.id)).toMatchObject({ state: 'verifying' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The staging folder is still there: cleanup waits for the install to settle.
+      expect(instances()).toEqual([`${CODEX_STAGING_PREFIX}${job.id}`, 'gmail']);
+    } finally {
+      await release();
+    }
+    expect(await finished(runner, job.id)).toMatchObject({ state: 'cancelled', result: null });
+    expect(instances()).toEqual(['gmail']);
+    expect(new CodexProfileRegistry().listProfiles()).toEqual(['gmail']);
+  });
+
+  it('a timeout while the install waits never races it: the profile lands whole', async () => {
+    addProfile('gmail', 'gmail@example.com');
+    const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+    const runner = fakeRunner(login('new@example.com', 'acct-new', 'new'), [], {
+      setTimer: (callback) => {
+        const timer = { callback, cancelled: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+    });
+    const release = await holdActivationLock();
+    const job = runner.start(lifecycle().addFlow('codex-4'));
+    try {
+      await until(() => (runner.get(job.id) as SignInJob).state === 'verifying');
+      // The 15-minute timer was switched off when the install began.
+      for (const timer of timers) if (!timer.cancelled) timer.callback();
+      expect(runner.get(job.id)).toMatchObject({ state: 'verifying' });
+    } finally {
+      await release();
+    }
+    expect(await finished(runner, job.id)).toMatchObject({ state: 'succeeded' });
+    expect(instances()).toEqual(['codex-4', 'gmail']);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(ccsDir, 'codex-instances', 'codex-4', 'auth.json'), 'utf8')
+      ).tokens.access_token
+    ).toBe('access-new');
+  });
 });
 
 describe('Codex Sign in again', () => {
@@ -241,6 +331,74 @@ describe('Codex Sign in again', () => {
       expect(done).toMatchObject({ state: 'failed', error: { code: 'identity_mismatch' } });
       expect(fs.readFileSync(authPath)).toEqual(before);
     }
+  });
+
+  it('needs the known ChatGPT account and keeps a known person (Codex activation rules)', async () => {
+    const principal = { userId: 'user-party', sub: 'auth0|party', iss: 'https://auth.openai.com' };
+    addProfile('party', 'party@example.com', 'acct-party');
+    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
+    fs.writeFileSync(authPath, login('party@example.com', 'acct-party', 'party', principal));
+    const before = fs.readFileSync(authPath);
+    for (const auth of [
+      // No workspace claim: the known account cannot be confirmed.
+      login('party@example.com', null, 'x', principal),
+      // Same email and workspace, another person.
+      login('party@example.com', 'acct-party', 'x', { ...principal, userId: 'user-other' }),
+      login('party@example.com', 'acct-party', 'x', { ...principal, sub: 'auth0|other' }),
+    ]) {
+      const runner = fakeRunner(auth);
+      const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+      expect(done).toMatchObject({ state: 'failed', error: { code: 'identity_mismatch' } });
+      expect(fs.readFileSync(authPath)).toEqual(before);
+    }
+    const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed', principal));
+    const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+    expect(done).toMatchObject({ state: 'succeeded' });
+    expect(JSON.stringify(done)).not.toContain('user-party');
+  });
+
+  it('checks the registry account id when the saved login cannot be read', async () => {
+    addProfile('party', 'party@example.com', 'acct-party');
+    new CodexProfileRegistry().updateProfile('party', { account_id: 'acct-party' });
+    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
+    fs.writeFileSync(authPath, '{"tokens":{}}');
+    for (const auth of [
+      login('party@example.com', 'acct-other'),
+      login('party@example.com', null),
+    ]) {
+      const runner = fakeRunner(auth);
+      const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+      expect(done).toMatchObject({ state: 'failed', error: { code: 'identity_mismatch' } });
+      expect(fs.readFileSync(authPath, 'utf8')).toBe('{"tokens":{}}');
+    }
+  });
+
+  it('reads the live login fresh under the lock, never a cached active profile', async () => {
+    addProfile('party', 'party@example.com', 'acct-party');
+    addProfile('gmail', 'gmail@example.com');
+    const subject = lifecycle();
+    // The dashboard summary is cached while nothing is active ...
+    expect(await subject.activeProfile()).toBeNull();
+    // ... then another process activates party without telling this one.
+    fs.copyFileSync(
+      path.join(ccsDir, 'codex-instances', 'party', 'auth.json'),
+      path.join(codexHome, 'auth.json')
+    );
+    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
+    const before = fs.readFileSync(authPath);
+    const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+    const done = await finished(runner, runner.start(subject.signInAgainFlow('party')).id);
+    expect(done).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
+    expect(fs.readFileSync(authPath)).toEqual(before);
+    // A native login that cannot be read is not proof of another account either.
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), '{"OPENAI_API_KEY":"x"}');
+    const unreadable = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+    const refused = await finished(
+      unreadable,
+      unreadable.start(lifecycle().signInAgainFlow('party')).id
+    );
+    expect(refused).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
+    expect(fs.readFileSync(authPath)).toEqual(before);
   });
 
   it('will not install a new login into the live active profile', async () => {

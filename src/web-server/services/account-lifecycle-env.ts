@@ -144,18 +144,4 @@ export function signInState(env: LifecycleEnv, provider: DashboardProvider, secu
 }
 
 /** One in-process queue per name, so two key writes for one provider never interleave. */
-const queues = new Map<string, Promise<void>>();
-
-export function serialized<T>(name: string, task: () => Promise<T>): Promise<T> {
-  const previous = queues.get(name) ?? Promise.resolve();
-  const result = previous.then(task);
-  const tail = result.then(
-    () => undefined,
-    () => undefined
-  );
-  queues.set(name, tail);
-  void tail.then(() => {
-    if (queues.get(name) === tail) queues.delete(name);
-  });
-  return result;
-}
+export { keyQueue, serialized } from './account-lifecycle-queue';

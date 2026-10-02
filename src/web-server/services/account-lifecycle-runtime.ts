@@ -1,16 +1,17 @@
 import { getCcsDir } from '../../utils/config-manager';
 import { createLogger } from '../../services/logging';
-import { broadcastDashboardEvent } from '../dashboard-events';
+import { broadcastDashboardEvent, type DashboardEventClient } from '../dashboard-events';
+import { sweepOrphanKeys } from './account-key-sweep';
 import { ClaudeAccountLifecycle } from './claude-account-lifecycle';
 import { SshClaudeHostTransport } from './claude-host-transport';
 import { CodexAccountLifecycle } from './codex-account-lifecycle';
 import type { ProviderRegistryFacts } from './dashboard-provider-registry';
-import { SignInJobRunner, type SignInJob } from './signin-jobs';
+import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './signin-jobs';
 
 /**
  * The lifecycle runtime: one sign-in job runner, the Codex and Claude flows,
  * the provider facts the dashboard advertises, and the startup and daily
- * maintenance (staging sweep, trash purge).
+ * maintenance (staging sweep, orphan-key sweep, trash purge).
  *
  * Claude Add, Remove and Restore are implemented against a host transport,
  * but they stay off here until the contract's prerequisite ships (the Windows
@@ -24,9 +25,24 @@ const DAY_MS = 24 * 60 * 60_000;
 
 const logger = createLogger('account-lifecycle');
 
-/** A job as a client on a plain transport sees it: no verification URL or code. */
-export function redactSignInJob<T extends { verification: unknown }>(job: T): T {
-  return { ...job, verification: null };
+/** A job as a client on a plain transport sees it: no verification URL or code, no email. */
+export function redactSignInJob<
+  T extends { verification: unknown; result: null | { email: string | null } },
+>(job: T): T {
+  return { ...job, verification: null, result: job.result ? { ...job.result, email: null } : null };
+}
+
+/**
+ * The /ws copy of a job for one client (contract 6.6): browser sessions only,
+ * never a device token or an unknown client; redacted unless the socket
+ * connected over a secure transport.
+ */
+export function signInJobEvent(
+  job: SignInJob,
+  client: DashboardEventClient
+): { type: 'signin-job'; job: SignInJob } | null {
+  if (client.authKind !== 'session') return null;
+  return { type: 'signin-job', job: client.secure ? job : redactSignInJob(job) };
 }
 
 export function auditLifecycle(event: string, data: Record<string, unknown>): void {
@@ -61,13 +77,14 @@ let runner: SignInJobRunner | null = null;
 let codex: CodexAccountLifecycle | null = null;
 let claude: ClaudeAccountLifecycle | null = null;
 
-export function getSignInJobRunner(): SignInJobRunner {
-  runner ??= new SignInJobRunner({
+/** A runner wired like the server's: the /ws push, the audit line and the accounts-changed hint. */
+export function createSignInJobRunner(
+  deps: Omit<SignInJobRunnerDeps, 'onChange' | 'onFinish'> = {}
+): SignInJobRunner {
+  return new SignInJobRunner({
+    ...deps,
     onChange: (job: SignInJob) => {
-      broadcastDashboardEvent((client) => ({
-        type: 'signin-job',
-        job: client.secure ? job : redactSignInJob(job),
-      }));
+      broadcastDashboardEvent((client) => signInJobEvent(job, client));
     },
     onFinish: (job) => {
       // Values never; the account is named by provider and mode only.
@@ -80,6 +97,10 @@ export function getSignInJobRunner(): SignInJobRunner {
       if (job.state === 'succeeded') notifyAccountsChanged();
     },
   });
+}
+
+export function getSignInJobRunner(): SignInJobRunner {
+  runner ??= createSignInJobRunner();
   return runner;
 }
 
@@ -132,6 +153,12 @@ let maintenance: ReturnType<typeof setInterval> | null = null;
 async function runMaintenance(): Promise<void> {
   try {
     await getCodexLifecycle().sweepStaging();
+  } catch {
+    /* Retried at the next sweep. */
+  }
+  try {
+    const count = await sweepOrphanKeys(getCcsDir());
+    if (count > 0) auditLifecycle('accounts.keys.swept', { count });
   } catch {
     /* Retried at the next sweep. */
   }

@@ -47,7 +47,13 @@ export interface ClaudeHostTransport {
 export type ClaudeHostRunner = (sshHost: string, command: string, input: string) => Promise<string>;
 
 const TRASH_NAME = /^[a-z][a-z0-9-]{1,31}-\d{8}T\d{6}Z$/;
-const SAFE_PATH = /^[^'"`$\u0000-\u001f\u007f]{1,1024}$/;
+/**
+ * A host path that may sit inside a PowerShell single-quoted string: letters,
+ * marks, digits, spaces and the punctuation Windows paths use. Every quote
+ * PowerShell honours (ASCII and the U+2018-U+201E typographic ones), `$`, the
+ * backtick and control characters are outside it.
+ */
+const SAFE_PATH = /^[\p{L}\p{M}\p{N} _.,()[\]{}\\/:+@#&=!%~;-]{1,1024}$/u;
 
 export class ClaudeHostError extends NetworkError {
   constructor() {

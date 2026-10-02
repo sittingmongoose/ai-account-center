@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'http';
 import { WebSocket, type WebSocketServer } from 'ws';
+import type { RequestAuthKind } from './middleware/request-auth';
 import type { SignInJob } from './services/signin-jobs';
 
 /**
@@ -8,16 +9,21 @@ import type { SignInJob } from './services/signin-jobs';
  * auth is off) are connected. A message is a hint to re-read the API, never
  * the data itself; clients keep polling.
  *
- * A sign-in job can carry a device code, so it is built per client: a socket
- * whose upgrade did not arrive over a secure transport receives the job
- * without its verification block (CONTRACT-registry-lifecycle section 1 rule 5).
+ * A sign-in job can carry a device code, so it is built per client from what
+ * the socket's upgrade request proved: who connected (a browser session, a
+ * device token or nobody) and whether it came over a secure transport
+ * (CONTRACT-registry-lifecycle section 1 rule 5 and section 6.6).
  */
 export type DashboardEvent = { type: 'accounts-changed' } | { type: 'signin-job'; job: SignInJob };
 
 export interface DashboardEventClient {
   /** isSecureTransport() of the socket's upgrade request. */
   secure: boolean;
+  /** authKind() of the socket's upgrade request; null when unknown or signed out. */
+  authKind: RequestAuthKind;
 }
+
+const UNKNOWN_CLIENT: DashboardEventClient = Object.freeze({ secure: false, authKind: null });
 
 type EventSource = DashboardEvent | ((client: DashboardEventClient) => DashboardEvent | null);
 
@@ -27,6 +33,8 @@ const clients = new WeakMap<WebSocket, DashboardEventClient>();
 export interface DashboardEventServerOptions {
   /** Classify each connection when it opens; without it every client counts as not secure. */
   isSecure?: (request: IncomingMessage) => boolean;
+  /** Who opened each connection; without it every client counts as unknown (null). */
+  authKind?: (request: IncomingMessage) => RequestAuthKind;
 }
 
 /** Register a server's clients; returns the detach function for shutdown. */
@@ -42,7 +50,14 @@ export function attachDashboardEventServer(
     } catch {
       secure = false;
     }
-    clients.set(socket, { secure });
+    let kind: RequestAuthKind = null;
+    try {
+      const value = options.authKind?.(request) ?? null;
+      kind = value === 'session' || value === 'device' ? value : null;
+    } catch {
+      kind = null;
+    }
+    clients.set(socket, { secure, authKind: kind });
   };
   wss.on('connection', onConnection);
   return () => {
@@ -63,7 +78,7 @@ export function broadcastDashboardEvent(source: EventSource): number {
       let event: DashboardEvent | null;
       try {
         event =
-          typeof source === 'function' ? source(clients.get(client) ?? { secure: false }) : source;
+          typeof source === 'function' ? source(clients.get(client) ?? UNKNOWN_CLIENT) : source;
       } catch {
         event = null;
       }
