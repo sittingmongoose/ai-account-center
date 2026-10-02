@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
 import type { ClaudeDesktopProfile } from './claude-desktop-profile-service';
 import { runClaudeHistoryHelper } from './claude-desktop-transport';
+import { ValidationError } from '../../errors/error-types';
 
 export interface ClaudeHistorySyncPolicy {
   version: 1;
@@ -195,7 +196,7 @@ export async function loadClaudeHistoryPolicy(
 
 function decodeSnapshot(value: unknown): PrivateSnapshot {
   if (!object(value) || !Array.isArray(value.records) || value.records.length > 200)
-    throw new Error('snapshot_unavailable');
+    throw new ValidationError('snapshot_unavailable');
   let total = 0;
   const records = value.records.map((row: unknown): PrivateRecord => {
     if (
@@ -207,11 +208,11 @@ function decodeSnapshot(value: unknown): PrivateSnapshot {
       row.base64.length > 2_666_668 ||
       !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(row.base64)
     )
-      throw new Error('snapshot_unavailable');
+      throw new ValidationError('snapshot_unavailable');
     const bytes = Buffer.from(row.base64, 'base64');
     total += bytes.length;
     if (bytes.length > 2_000_000 || total > 16_000_000 || hash(bytes) !== row.sha256)
-      throw new Error('snapshot_unavailable');
+      throw new ValidationError('snapshot_unavailable');
     return { name: row.name, bytes, sha256: row.sha256 };
   });
   return { ...value, records } as PrivateSnapshot;
@@ -253,7 +254,7 @@ export async function synchronizeClaudeHistoryBeforeOpen(
       fields: Record<string, unknown> = {}
     ): Promise<unknown> => {
       const launcher = profile[target];
-      if (!launcher) throw new Error('helper_unavailable');
+      if (!launcher) throw new ValidationError('helper_unavailable');
       const data = await runClaudeHistoryHelper(launcher, target, id, {
         mode,
         profileId: id,
@@ -262,12 +263,12 @@ export async function synchronizeClaudeHistoryBeforeOpen(
         expectedEmail: profile.email,
         ...fields,
       });
-      if (data.length > MAX_HELPER_BYTES) throw new Error('helper_unavailable');
+      if (data.length > MAX_HELPER_BYTES) throw new ValidationError('helper_unavailable');
       const response: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
       // The fixed helper emits canonical ASCII-only append receipts. Reject
       // duplicate keys, trailing data and other malformed acknowledgements.
       if (mode === 'append' && !data.equals(Buffer.from(JSON.stringify(response))))
-        throw new Error('helper_unavailable');
+        throw new ValidationError('helper_unavailable');
       return response;
     };
     return await loadCore().synchronizeBeforeProfileOpen({
@@ -297,15 +298,15 @@ export async function synchronizeClaudeHistoryBeforeOpen(
         appendCreateOnly: async (payload) => {
           const currentPolicy = await loadClaudeHistoryPolicy(profile);
           if (!currentPolicy || JSON.stringify(currentPolicy) !== JSON.stringify(policy))
-            throw new Error('policy_changed');
-          if (!object(payload)) throw new Error('helper_unavailable');
+            throw new ValidationError('policy_changed');
+          if (!object(payload)) throw new ValidationError('helper_unavailable');
           let marker: ReturnType<HistoryCore['armPendingMarker']>;
           try {
             marker = loadCore().armPendingMarker(getCcsDir(), id, platform);
           } catch {
             // No remote append was invoked. Existing/unknown markers hold Open;
             // lack of private marker storage alone skips this optional copy.
-            if (claudeHistoryOpenHeld(id, platform)) throw new Error('append_pending');
+            if (claudeHistoryOpenHeld(id, platform)) throw new ValidationError('append_pending');
             return {
               status: 'refused',
               createdCount: 0,
