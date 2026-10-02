@@ -79,6 +79,8 @@ public static class Theme
     public static bool IsDark { get; private set; }
     public static ThemeMode Mode { get; private set; } = ThemeMode.Auto;
     public static event Action? Changed;
+    /// <summary>Handlers on Changed (the render checks assert it stays bounded across refreshes).</summary>
+    internal static int SubscriberCount => Changed?.GetInvocationList().Length ?? 0;
 
     public static SolidColorBrush Brush(string key)
     {
@@ -129,6 +131,7 @@ public static class Theme
             RetintStop(brush.GradientStops[0], Color(soft, dark), animate && changed);
             RetintStop(brush.GradientStops[1], Color(strong, dark), animate && changed);
         }
+        ThemeFlags.Instance.Raise();
         Changed?.Invoke();
     }
 
@@ -147,6 +150,17 @@ public static class Theme
     // Instrument Sans (static, tnum frozen into every face) and its SemiCondensed SemiBold numeral face.
     public static readonly FontFamily Sans = new(new Uri("pack://application:,,,/CCSBar;component/"), "./Resources/Fonts/#Instrument Sans");
     public static readonly FontFamily Numerals = new(new Uri("pack://application:,,,/CCSBar;component/"), "./Resources/Fonts/#Instrument Sans SemiCondensed");
+}
+
+/// <summary>Theme state for bindings. WPF listens to it through a weak event manager, so short-lived elements (rows
+/// rebuilt on every sample) can follow Light and Dark without a static handler that would keep them alive.</summary>
+public sealed class ThemeFlags : System.ComponentModel.INotifyPropertyChanged
+{
+    public static readonly ThemeFlags Instance = new();
+    public Visibility LightOnly => Theme.IsDark ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility DarkOnly => Theme.IsDark ? Visibility.Visible : Visibility.Collapsed;
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    internal void Raise() => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(string.Empty));
 }
 
 /// <summary>Windows light/dark settings: the app mode drives Auto, the system (taskbar) mode picks the tray icon.</summary>

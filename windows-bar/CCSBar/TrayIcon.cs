@@ -39,6 +39,10 @@ public sealed class TrayIcon : IDisposable
         return new Icon(stream, new Size(size, size));
     }
 
+    /// <summary>The plated Apex Soft app icon (scripts/build-app-icon.py): the exe, window and shortcut icon, legible on
+    /// any background. The bare glyphs below are notification-area art only.</summary>
+    public static Stream AppIconStream() => typeof(TrayIcon).Assembly.GetManifestResourceStream("CCSBar.Icons.AppIcon.ico") ?? throw new InvalidOperationException("App icon resource missing.");
+
     /// <summary>Apex Soft taskbar art: TrayLight.ico (dark ink) for a light taskbar, TrayDark.ico for a dark one.</summary>
     public static Stream IconStream(bool lightTaskbar)
     {

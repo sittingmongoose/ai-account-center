@@ -26,6 +26,8 @@ public partial class MainWindow
         SettingsButton.IsChecked = true;
         Motion.To(gearTurn, RotateTransform.AngleProperty, 60, 420, Motion.Spring);
         RenderSettings();
+        // Over the sign-in screen, its form (and its Enter-to-connect default button) rests until Settings closes.
+        SignInLayer.IsEnabled = false;
         SettingsLayer.Visibility = Visibility.Visible;
         var width = Math.Max(1, Body.ActualWidth > 0 ? Body.ActualWidth : Width);
         Motion.To(SettingsShift, TranslateTransform.XProperty, 0, 340, Motion.Out, from: width);
@@ -47,6 +49,7 @@ public partial class MainWindow
         if (!settingsVisible) return;
         settingsVisible = false;
         SettingsButton.IsChecked = false;
+        SignInLayer.IsEnabled = true;
         Motion.To(gearTurn, RotateTransform.AngleProperty, 0, animate ? 420 : 0, Motion.Spring);
         var width = Math.Max(1, Body.ActualWidth);
         Motion.To(ListShift, TranslateTransform.XProperty, 0, animate ? 340 : 0, Motion.Out);

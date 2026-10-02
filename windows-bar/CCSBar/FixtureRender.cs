@@ -61,6 +61,7 @@ public static class FixtureRender
             report.Checks[$"{name}_fable_on_max_only"] = Fable(window);
             report.Checks[$"{name}_provider_order_today"] = Order(window, new[] { "section:claude", "section:codex", "section:antigravity", "provider:cursor", "provider:muse", "provider:kimi-code", "provider:qwen", "provider:zai", "provider:opencode-go" });
             report.Checks[$"{name}_tabular_instrument_sans_resolves"] = FontResolves();
+            report.Checks[$"{name}_section_columns_and_names_aligned"] = Columns(window, measures, name);
 
             // Switch: codex-3 becomes active; the platter moves to it and the alignment still holds.
             var switched = Clone(fixture);
@@ -77,6 +78,8 @@ public static class FixtureRender
             first.Capabilities.AntigravityProfileId = "example-1"; first.Capabilities.AntigravityCanActivate = true; first.Capabilities.AntigravityHostIds = new() { "ubuntu" };
             var second = Clone(new AccountDashboard { Accounts = { first } }).Accounts[0];
             second.Id = "antigravity:example-2"; second.Email = "antigravity-2@example.com"; second.Label = "Antigravity account 2"; second.IsActive = true; second.Capabilities.AntigravityProfileId = "example-2";
+            // A same-day reset beside a two-decimal value: the tightest compact cell (live data showed "5:1...").
+            second.Windows.First(window => window.Key == "gemini-weekly").ResetAt = capturedAt.AddHours(5).AddMinutes(15).ToString("O");
             twoAg.Accounts.Insert(twoAg.Accounts.IndexOf(first) + 1, second);
             twoAg.AntigravityAutoSwitch = new AntigravityAutoStatus { Enabled = true, ThresholdUsedPercent = 95, PollIntervalSeconds = 60 };
             window.ApplyDashboardSample(twoAg);
@@ -84,6 +87,11 @@ public static class FixtureRender
             SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-two.png"));
             report.Checks[$"{name}_antigravity_active_aligned"] = Aligned(window, "antigravity", measures, name + "_ag") && SameLine(measures, name + "_ag_button", name + "_before_button");
             report.Checks[$"{name}_antigravity_platter_on_active_row"] = PlatterOn(window, "antigravity", "row:antigravity:example-2", measures, name + "_ag");
+            report.Checks[$"{name}_antigravity_two_columns_and_names_aligned"] = Columns(window, measures, name + "_ag2");
+            var compact = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Compact && meter.IsVisible).ToArray();
+            var tight = compact.FirstOrDefault(meter => meter.Key == "antigravity:example-2|gemini-weekly");
+            report.Notes[$"{name}_tight_reset_shown"] = tight?.ResetShown ?? "missing";
+            report.Checks[$"{name}_compact_resets_shown_whole"] = tight is not null && compact.All(meter => !meter.ResetClipped);
 
             // Hidden providers are honoured; an unknown provider still renders, with the neutral mark.
             var hidden = Clone(fixture);
@@ -113,6 +121,15 @@ public static class FixtureRender
             report.Checks[$"{name}_escape_closes_settings"] = !window.SettingsOpen && window.SettingsButton.IsChecked == false;
             window.OpenSettings(); window.CloseSettings();
             report.Checks[$"{name}_gear_toggles_settings"] = !window.SettingsOpen;
+            // The real controls: a gear click opens Settings (pressed), a second click closes it; the X closes it.
+            Click(window.SettingsButton); await Settle(window);
+            var gearOpened = window.SettingsOpen && window.SettingsButton.IsChecked == true;
+            Click(window.SettingsButton); await Settle(window);
+            report.Checks[$"{name}_gear_click_opens_then_closes"] = gearOpened && !window.SettingsOpen && window.SettingsButton.IsChecked == false;
+            Click(window.SettingsButton); await Settle(window);
+            if (FindUid(window.SettingsPanel, "settings-close") is Button close) Click(close);
+            await Settle(window);
+            report.Checks[$"{name}_x_click_closes_settings"] = !window.SettingsOpen && window.SettingsButton.IsChecked == false && FindUid(window.SettingsPanel, "settings-close") is not null;
             PressEscape(window);
             report.Checks[$"{name}_escape_then_hides_panel"] = !window.IsVisible;
 
@@ -133,11 +150,16 @@ public static class FixtureRender
             signIn.Show(); signIn.ShowSignIn(firstRun: true);
             await Settle(signIn);
             SavePng(signIn, Path.Combine(directory, $"signin-{name}.png"));
+            // The gear works on the sign-in screen: Settings slides over it (its form rests), Escape returns to it.
+            Click(signIn.SettingsButton); await Settle(signIn);
+            var overSignIn = signIn.SettingsOpen && signIn.Body.Children.IndexOf(signIn.SettingsLayer) > signIn.Body.Children.IndexOf(signIn.SignInLayer) && !signIn.SignInLayer.IsEnabled;
+            PressEscape(signIn); await Settle(signIn);
+            report.Checks[$"{name}_settings_opens_over_sign_in_and_returns"] = overSignIn && !signIn.SettingsOpen && signIn.SignInLayer.IsVisible && signIn.SignInLayer.IsEnabled && signIn.IsVisible;
             signIn.AllowClose = true; signIn.Close();
             window.AllowClose = true; window.Close();
         }
-        report.Checks["tray_tooltip_reports_active_codex_weekly_left"] = Formatting.TrayTooltip(fixture) == "AI Account Center · Codex codex-2: 91% weekly left";
-        if (only is null || only.Equals("light", StringComparison.OrdinalIgnoreCase)) await MotionChecks(report, fixture, measures);
+        report.Checks["tray_tooltip_reports_active_codex_weekly_left"] = Formatting.TrayTooltip(fixture) == "AI Account Center · Codex: codex-2, 91% weekly left";
+        if (only is null || only.Equals("light", StringComparison.OrdinalIgnoreCase)) { await MotionChecks(report, fixture, measures); await RuntimeChecks(report, fixture, measures); }
         foreach (var (key, value) in measures) report.Measurements[key] = Math.Round(value, 3);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
@@ -182,6 +204,62 @@ public static class FixtureRender
             measures["motion_platter_from"] = startY; measures["motion_platter_target"] = target; measures["motion_platter_max"] = ySamples.Max(); measures["motion_platter_final"] = shift.Y;
             report.Checks["meter_eases_to_value_without_overshoot"] = Math.Abs(startShown - 9) < 0.01 && shownSamples.Max() <= 63 + 1e-6 && Math.Abs(meter.Shown - 63) < 0.01 && monotonic(shownSamples, true) && shownSamples.Distinct().Count() > 3;
             report.Checks["platter_glides_without_overshoot"] = target > startY && ySamples.Max() <= target + 1e-6 && Math.Abs(shift.Y - target) < 0.5 && monotonic(ySamples, true) && ySamples.Distinct().Count() > 3;
+        }
+        finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }
+    }
+
+    /// <summary>Refreshes must not pile up theme handlers (hidden or shown), and an idle panel must not use the CPU:
+    /// nothing animates or polls between samples, shown or hidden.</summary>
+    private static async Task RuntimeChecks(CheckReport report, AccountDashboard fixture, Dictionary<string, double> measures)
+    {
+        Motion.Enabled = true;
+        Theme.Apply(ThemeMode.Light, animate: false);
+        var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false) { ShowActivated = false, Width = 760, Height = 850 };
+        try
+        {
+            window.UseFixtureConnection();
+            window.ApplyDashboardSample(Clone(fixture));
+            await Settle(window);
+            GC.Collect(); GC.WaitForPendingFinalizers();
+            var hiddenBefore = Theme.SubscriberCount;
+            for (int i = 0; i < 20; i++) { window.ApplyDashboardSample(Clone(fixture)); await Settle(window); }
+            GC.Collect(); GC.WaitForPendingFinalizers();
+            var hiddenAfter = Theme.SubscriberCount;
+            window.ShowPanel();
+            await Settle(window); await Task.Delay(1500);
+            var shownBefore = Theme.SubscriberCount;
+            for (int i = 0; i < 20; i++) { window.ApplyDashboardSample(Clone(fixture)); await Settle(window); }
+            await Task.Delay(1500);
+            GC.Collect(); GC.WaitForPendingFinalizers();
+            var shownAfter = Theme.SubscriberCount;
+            measures["theme_handlers_hidden_before"] = hiddenBefore; measures["theme_handlers_hidden_after_20"] = hiddenAfter;
+            measures["theme_handlers_shown_before"] = shownBefore; measures["theme_handlers_shown_after_20"] = shownAfter;
+            report.Checks["theme_handlers_bounded_across_refreshes"] = hiddenAfter <= hiddenBefore && shownAfter <= shownBefore;
+
+            async Task<double> IdlePercent()
+            {
+                var process = System.Diagnostics.Process.GetCurrentProcess();
+                process.Refresh(); var cpu = process.TotalProcessorTime; var clock = System.Diagnostics.Stopwatch.StartNew();
+                await Task.Delay(4000);
+                process.Refresh();
+                return (process.TotalProcessorTime - cpu).TotalMilliseconds / clock.Elapsed.TotalMilliseconds * 100;
+            }
+            // A refresh while hidden (the 60 s background sample) runs no spin; a visible panel spins.
+            window.HidePopup();
+            window.SetRefreshingForCheck(true); var spunHidden = window.RefreshSpinning; window.SetRefreshingForCheck(false);
+            window.ShowPanel(); await Settle(window);
+            window.SetRefreshingForCheck(true); var spunShown = window.RefreshSpinning; window.SetRefreshingForCheck(false);
+            report.Checks["refresh_spins_only_while_visible"] = !spunHidden && spunShown;
+            // Let the last motion and the runtime's own warm-up (tiered JIT of the 40 renders above) finish first.
+            await Task.Delay(3000);
+            var shownA = await IdlePercent(); var shownB = await IdlePercent();
+            window.HidePopup();
+            await Task.Delay(1000);
+            var hiddenA = await IdlePercent(); var hiddenB = await IdlePercent();
+            var shownIdle = Math.Min(shownA, shownB); var hiddenIdle = Math.Min(hiddenA, hiddenB);
+            measures["idle_cpu_percent_shown_4s_a"] = shownA; measures["idle_cpu_percent_shown_4s_b"] = shownB;
+            measures["idle_cpu_percent_hidden_4s_a"] = hiddenA; measures["idle_cpu_percent_hidden_4s_b"] = hiddenB;
+            report.Checks["idle_panel_uses_no_cpu"] = shownIdle < 1.5 && hiddenIdle < 1.5;
         }
         finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }
     }
@@ -233,6 +311,10 @@ public static class FixtureRender
         encoder.Save(output);
     }
 
+    /// <summary>A real click: ButtonBase.OnClick (a ToggleButton toggles first, then raises Click).</summary>
+    private static void Click(System.Windows.Controls.Primitives.ButtonBase button) =>
+        typeof(System.Windows.Controls.Primitives.ButtonBase).GetMethod("OnClick", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(button, null);
+
     private static void PressEscape(Window window)
     {
         var source = PresentationSource.FromVisual(window);
@@ -283,6 +365,25 @@ public static class FixtureRender
         }
         measures[tag + "_check"] = X(check, window); measures[tag + "_active_text"] = X(text, window);
         return ok;
+    }
+
+    /// <summary>Every account section's name starts on one x, and the first meter (and its caption) starts on one x,
+    /// whatever the number of meters.</summary>
+    private static bool Columns(MainWindow window, Dictionary<string, double> measures, string tag)
+    {
+        var names = new List<double>(); var meters = new List<double>();
+        foreach (var provider in new[] { "claude", "codex", "antigravity" })
+        {
+            var section = FindUid(window.ContentPanel, "section:" + provider);
+            if (section is null) return false;
+            var nameBlock = All(section).FirstOrDefault(element => element.Uid == "section-name");
+            if (nameBlock is null) return false;
+            names.Add(X(nameBlock, window));
+            var first = All(section).OfType<Meter>().Where(meter => meter.IsVisible).Select(meter => X(meter, window)).DefaultIfEmpty(double.NaN).Min();
+            meters.Add(first);
+            measures[$"{tag}_{provider}_name_x"] = names[^1]; measures[$"{tag}_{provider}_first_meter_x"] = first;
+        }
+        return names.Max() - names.Min() <= 0.5 && meters.Max() - meters.Min() <= 0.5;
     }
 
     private static bool SameLine(Dictionary<string, double> measures, string a, string b) => measures.TryGetValue(a, out var x) && measures.TryGetValue(b, out var y) && Math.Abs(x - y) <= 0.5;

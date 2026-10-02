@@ -25,7 +25,7 @@ $results['guard_accepts_background'] = Accepts '--background'
 $results['guard_rejects_other_arguments'] = -not (Accepts '--evil') -and -not (Accepts '--background --check x') -and -not (Accepts '"C:\other.exe"')
 $installer = Get-Content -Raw (Join-Path $PSScriptRoot 'Install.ps1')
 $results['installer_creates_desktop_shortcut'] = $installer -match "GetFolderPath\('Desktop'\)" -and $installer -match 'Desktop-AI Account Center\.lnk'
-$results['installer_sets_shortcut_icon'] = $installer -match 'IconLocation' -and $installer -match 'TrayLight\.ico' -and $installer -match 'TrayDark\.ico'
+$results['installer_sets_shortcut_icon'] = $installer -match 'IconLocation' -and $installer -match 'Resources\\Icons\\AppIcon\.ico' -and $installer -notmatch 'Tray(Light|Dark)\.ico'
 $results['installer_starts_task_in_background'] = $installer -match "-Argument '--background'"
 $passed = -not ($results.Values -contains $false)
 [PSCustomObject]@{ passed = $passed; checks = $results } | ConvertTo-Json -Depth 3

@@ -84,23 +84,28 @@ public partial class App : System.Windows.Application
                 proof.Show();
                 await proof.Refresh(false);
                 proof.UpdateLayout();
-                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+                // Let the Loaded-priority work (the selected-row platter placement) run before the capture.
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+                proof.UpdateLayout();
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 FixtureRender.SavePng(proof, args[1]);
                 proof.AllowClose = true;
                 Shutdown(0); return;
             }
 
+            var background = args.Contains("--background");
             instance = new Mutex(true, "Local\\CCSBar-Windows-v1", out ownsInstance);
             showRequest = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\CCSBar-Windows-show-v1");
             if (!ownsInstance)
             {
                 // Launching again (Start menu, desktop shortcut) shows the running tray's panel. Let it take the
-                // foreground: this process was started by the user, so it may pass that right on.
-                AllowSetForegroundWindow(-1);
-                showRequest.Set(); Shutdown(0); return;
+                // foreground: this process was started by the user, so it may pass that right on. A background start
+                // (the logon task, or its CCS Bar alias, while a tray already runs) leaves the running tray alone.
+                Trace(background ? "background start, tray already running" : "handing over to the running tray");
+                if (!background) { AllowSetForegroundWindow(-1); showRequest.Set(); }
+                Shutdown(0); return;
             }
             Trace("instance owner");
-            var background = args.Contains("--background");
             var window = new MainWindow(preferences); MainWindow = window;
             window.QuitRequested = Quit;
             Trace("window created");
@@ -162,7 +167,7 @@ public partial class App : System.Windows.Application
     {
         try
         {
-            using var stream = TrayIcon.IconStream(SystemTheme.SystemUsesLightTheme());
+            using var stream = TrayIcon.AppIconStream();
             window.Icon = BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
         }
         catch { /* The window keeps the application icon. */ }
@@ -175,7 +180,6 @@ public partial class App : System.Windows.Application
         {
             if (Theme.Mode == ThemeMode.Auto) Theme.Apply(ThemeMode.Auto, animate: true);
             tray?.ApplyTheme();
-            if (MainWindow is not null) SetWindowIcon(MainWindow);
         }));
     }
 

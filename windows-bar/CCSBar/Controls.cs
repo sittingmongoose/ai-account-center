@@ -62,11 +62,11 @@ public static class Ui
         Image Make(string file) { var image = new Image { Source = MarkImage(file), Width = size, Height = size, Stretch = Stretch.Uniform }; RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality); return image; }
         if (lightVariants.Contains(provider))
         {
+            // Bound to ThemeFlags (a weak property-changed event), not a Theme.Changed handler: rows are rebuilt on every
+            // sample, also while the panel is hidden and never loads them, and a static handler kept each old row alive.
             var light = Make(provider + "-light"); var dark = Make(provider);
-            void Sync() { light.Visibility = Theme.IsDark ? Visibility.Collapsed : Visibility.Visible; dark.Visibility = Theme.IsDark ? Visibility.Visible : Visibility.Collapsed; }
-            Sync(); Theme.Changed += Sync;
-            host.Unloaded += (_, _) => Theme.Changed -= Sync;
-            host.Loaded += (_, _) => { Theme.Changed -= Sync; Theme.Changed += Sync; Sync(); };
+            light.SetBinding(UIElement.VisibilityProperty, new System.Windows.Data.Binding(nameof(ThemeFlags.LightOnly)) { Source = ThemeFlags.Instance, Mode = System.Windows.Data.BindingMode.OneWay });
+            dark.SetBinding(UIElement.VisibilityProperty, new System.Windows.Data.Binding(nameof(ThemeFlags.DarkOnly)) { Source = ThemeFlags.Instance, Mode = System.Windows.Data.BindingMode.OneWay });
             host.Children.Add(light); host.Children.Add(dark);
         }
         else host.Children.Add(Make(provider));
@@ -129,15 +129,17 @@ public static class Ui
         return grid;
     }
 
-    /// <summary>The section column grid: mark | identity | meters | action slot | tail. Sections with three meters use
-    /// 12 px meter gaps (two use 14); the tail takes up the difference, so every action slot ends on the same line.</summary>
+    /// <summary>The section column grid: mark | identity | meters | action slot | tail. The first meter starts on the
+    /// same x in every section (14 px after the identity, as in the concept); sections with three meters use 12 px
+    /// between meters (two use 14) so values and resets fit, and the tail takes up the difference, so every action
+    /// slot ends on the same line.</summary>
     public static Grid SectionGrid(int meters, double acts, double identity = 186, double mark = 22)
     {
         var grid = new Grid();
         void Add(GridLength length) => grid.ColumnDefinitions.Add(new ColumnDefinition { Width = length });
         var gap = meters >= 3 ? 12 : 14;
         Add(new GridLength(mark)); Add(new GridLength(14)); Add(new GridLength(identity));
-        for (int i = 0; i < meters; i++) { Add(new GridLength(gap)); Add(new GridLength(1, GridUnitType.Star)); }
+        for (int i = 0; i < meters; i++) { Add(new GridLength(i == 0 ? 14 : gap)); Add(new GridLength(1, GridUnitType.Star)); }
         Add(new GridLength(gap)); Add(new GridLength(acts)); Add(new GridLength(gap)); Add(new GridLength(28 - gap));
         return grid;
     }
@@ -150,7 +152,7 @@ public enum MeterKind { Compact, Labeled, Detail }
 
 /// <summary>What a meter shows. Value is % used; null is "unavailable", never zero.</summary>
 public sealed record MeterSpec(double? Value, string Tooltip, string? Label = null, string? Reset = null, bool ResetSoon = false, string? Amount = null,
-    double? Notch = null, double NotchOpacity = 1, string NaText = "Unavailable", string? Caption = null);
+    double? Notch = null, double NotchOpacity = 1, string NaText = "Unavailable", string? Caption = null, string[]? ResetFallbacks = null);
 
 /// <summary>
 /// The dashboard meter scaled to the tray: tabular SemiCondensed value with "%" in the same run, reset with a clock,
@@ -171,6 +173,10 @@ public sealed class Meter : Grid
     private readonly TextBlock label = Ui.Text("", 12, "Ink2", FontWeights.Medium, trim: true);
     private readonly DockPanel reset = new() { LastChildFill = true, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock resetText = Ui.Text("", 11.5, "Ink3");
+    /// <summary>The reset text on screen, and whether it is clipped (render checks).</summary>
+    internal string ResetShown => resetText.Text;
+    internal bool ResetClipped => resetText.IsVisible && new FormattedText(resetText.Text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+        new Typeface(resetText.FontFamily, resetText.FontStyle, resetText.FontWeight, resetText.FontStretch), resetText.FontSize, Brushes.Black, VisualTreeHelper.GetDpi(this).PixelsPerDip).WidthIncludingTrailingWhitespace > resetText.ActualWidth + 0.5;
     private readonly TextBlock amount = Ui.Text("", 11.5, "Ink3", trim: true);
     private readonly TextBlock longReset = Ui.Text("", 11.5, "Ink2", wrap: true);
     private readonly TextBlock caption = Ui.Text("", 11, "Ink3", FontWeights.Medium);
@@ -186,6 +192,7 @@ public sealed class Meter : Grid
     private readonly Border over = new() { CornerRadius = new CornerRadius(0, 3, 3, 0), HorizontalAlignment = HorizontalAlignment.Left, Visibility = Visibility.Collapsed };
     private string severity = "calm";
     private MeterSpec spec = new(null, "");
+    private readonly Grid top;
 
     public Meter(string key, MeterKind kind)
     {
@@ -211,7 +218,7 @@ public sealed class Meter : Grid
         var clock = Icons.Icon("clock", 12, Theme.Brush("Ink3"));
         clock.Margin = new Thickness(0, 1, 3, 0);
         reset.Children.Add(clock); reset.Children.Add(resetText);
-        var top = new Grid { Height = kind == MeterKind.Compact ? 17 : 16 };
+        top = new Grid { Height = kind == MeterKind.Compact ? 17 : 16 };
         if (kind == MeterKind.Compact)
         {
             // The value keeps its width; the reset takes what is left, right-aligned, and trims before it can touch the value.
@@ -220,7 +227,10 @@ public sealed class Meter : Grid
             value.FontSize = 15; value.HorizontalAlignment = HorizontalAlignment.Left;
             top.Children.Add(value);
             resetText.TextTrimming = TextTrimming.CharacterEllipsis;
+            // Explicit, so FitReset measures the face on screen even while a reused meter is between rows.
+            resetText.FontFamily = Theme.Sans;
             Grid.SetColumn(reset, 1); reset.HorizontalAlignment = HorizontalAlignment.Right; reset.Margin = new Thickness(5, 0, 0, 0); top.Children.Add(reset);
+            top.SizeChanged += (_, _) => FitReset();
         }
         else
         {
@@ -296,6 +306,25 @@ public sealed class Meter : Grid
         else { BeginAnimation(ShownProperty, null); Shown = target; }
         HasShownTarget = true;
         Paint();
+        FitReset();
+    }
+
+    /// <summary>Compact meters: the reset takes the longest of its forms ("5:15 AM", "15h 40m", "15h") that fits beside
+    /// the final value, so a narrow three-meter cell shows a whole countdown instead of a clipped time. Measured once per
+    /// sample or resize, against the final value text (not the rolling one).</summary>
+    private void FitReset()
+    {
+        if (Kind != MeterKind.Compact || string.IsNullOrEmpty(spec.Reset)) return;
+        var forms = new List<string> { spec.Reset! };
+        if (spec.ResetFallbacks is { } shorter) forms.AddRange(shorter);
+        resetText.Text = forms[0];
+        if (forms.Count == 1 || top.ActualWidth <= 0) return;
+        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        double Width(string text, TextBlock style) => new FormattedText(text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            new Typeface(style.FontFamily, style.FontStyle, style.FontWeight, style.FontStretch), style.FontSize, Brushes.Black, dpi).WidthIncludingTrailingWhitespace;
+        var shownValue = Target is double target ? Formatting.PercentWith(target, decimals) : spec.NaText;
+        var available = top.ActualWidth - Width(shownValue, value) - reset.Margin.Left - 15; // the clock glyph and its gap
+        resetText.Text = forms.FirstOrDefault(form => Width(form, resetText) <= available + 0.5) ?? forms[^1];
     }
 
     /// <summary>Hover feedback from the row: the track brightens.</summary>

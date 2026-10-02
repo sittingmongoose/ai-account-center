@@ -12,7 +12,7 @@
     <Title>AI Account Center</Title>
     <Product>AI Account Center</Product>
     <Description>Native accounts and usage tray for AI Account Center</Description>
-    <ApplicationIcon>Resources/Icons/TrayLight.ico</ApplicationIcon>
+    <ApplicationIcon>Resources/Icons/AppIcon.ico</ApplicationIcon>
     <PublishSingleFile>false</PublishSingleFile>
     <DebugType>none</DebugType>
     <Deterministic>true</Deterministic>
@@ -20,7 +20,7 @@
   <ItemGroup>
     <!-- Instrument Sans (OFL), static faces with tabular digits frozen in; see Resources/Fonts/README.md. -->
     <Resource Include="Resources/Fonts/*.ttf" />
-    <!-- Apex Soft notification-area art for light and dark taskbars (also the window and app icon). -->
+    <!-- Apex Soft: the plated app icon (exe, window, shortcuts) and notification-area art for light and dark taskbars. -->
     <EmbeddedResource Include="Resources/Icons/*.ico" LogicalName="CCSBar.Icons.%(Filename)%(Extension)" />
     <Content Include="Resources/Icons/*.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Official provider marks (marks-v2), with light-surface variants where the provider publishes one. -->

@@ -26,6 +26,12 @@ try {
     $before = Lines
     $results['background_start_runs_and_listens'] = -not $first.HasExited -and ($before -contains 'listening')
     $results['background_start_stays_hidden'] = -not ($before | Where-Object { $_ -like 'panel shown*' })
+    # The logon task firing again (or its CCS Bar alias) while the tray runs must not pop the running panel.
+    $again = Start-Process -FilePath $exe -ArgumentList '--background' -PassThru
+    $againExited = $again.WaitForExit(15000)
+    Start-Sleep -Seconds 1
+    $mid = Lines
+    $results['second_background_start_leaves_running_tray_alone'] = $againExited -and $again.ExitCode -eq 0 -and ($mid -contains 'background start, tray already running') -and -not ($mid | Where-Object { $_ -eq 'show request' -or $_ -like 'panel shown*' })
     $second = Start-Process -FilePath $exe -PassThru
     $exited = $second.WaitForExit(15000)
     Start-Sleep -Seconds 2

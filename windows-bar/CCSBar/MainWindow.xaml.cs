@@ -109,6 +109,8 @@ public partial class MainWindow : Window
     }
     internal void ToggleDetailsForCheck(string id) => ToggleDetails(id);
     internal Border? PlatterFor(string provider) => platters.TryGetValue(provider, out var platter) ? platter : null;
+    internal void SetRefreshingForCheck(bool spinning) => SetRefreshing(spinning);
+    internal bool RefreshSpinning => refreshTurn.HasAnimatedProperties;
 
     private static FrameworkElement Spinner(string icon, RotateTransform turn, double size)
     {
@@ -135,6 +137,7 @@ public partial class MainWindow : Window
         if (!wasVisible)
         {
             Show(); PlayOpen();
+            if (busy) SetRefreshing(true);
             // A sample that arrived while the panel was hidden had no layout yet: place the selected-row platter now.
             Dispatcher.BeginInvoke(new Action(() => { PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
         }
@@ -157,6 +160,7 @@ public partial class MainWindow : Window
         if (settingsVisible) CloseSettings(animate: false);
         foreach (var (key, meter) in meters) shownAtHide[key] = meter.Target;
         Hide();
+        if (busy) SetRefreshing(true); // stops the spin while hidden; it resumes if the panel opens before the sample lands
         lastHidden = DateTime.UtcNow;
     }
 
@@ -262,7 +266,8 @@ public partial class MainWindow : Window
     private void SetRefreshing(bool spinning)
     {
         RefreshButton.IsEnabled = !spinning && client is not null;
-        if (spinning && Motion.Enabled)
+        // Only a visible panel spins: a background refresh while hidden runs no animation clock (no idle CPU).
+        if (spinning && Motion.Enabled && IsVisible)
             refreshTurn.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(900)) { RepeatBehavior = RepeatBehavior.Forever });
         else
         {
@@ -270,7 +275,7 @@ public partial class MainWindow : Window
             var angle = refreshTurn.Angle % 360;
             refreshTurn.BeginAnimation(RotateTransform.AngleProperty, null);
             refreshTurn.Angle = angle;
-            if (angle > 0.5 && Motion.Enabled) Motion.To(refreshTurn, RotateTransform.AngleProperty, 360, 700, Motion.Out, completed: (_, _) => { refreshTurn.BeginAnimation(RotateTransform.AngleProperty, null); refreshTurn.Angle = 0; });
+            if (angle > 0.5 && Motion.Enabled && IsVisible) Motion.To(refreshTurn, RotateTransform.AngleProperty, 360, 700, Motion.Out, completed: (_, _) => { refreshTurn.BeginAnimation(RotateTransform.AngleProperty, null); refreshTurn.Angle = 0; });
             else refreshTurn.Angle = 0;
         }
     }
@@ -437,6 +442,7 @@ public partial class MainWindow : Window
         var mark = Ui.Mark(provider, 16); grid.Children.Add(mark);
         var identity = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         var name = Ui.Text(Formatting.ProviderName(provider, accounts[0].ProviderLabel), 13.5, "Ink", FontWeights.SemiBold);
+        name.Uid = "section-name";
         identity.Children.Add(name);
         var count = Ui.Text(accounts.Length.ToString(CultureInfo.CurrentCulture), 12, "Ink3"); count.Margin = new Thickness(7, 0, 0, 0); count.VerticalAlignment = VerticalAlignment.Bottom; count.Padding = new Thickness(0, 0, 0, 1);
         identity.Children.Add(count);
@@ -447,7 +453,8 @@ public partial class MainWindow : Window
             // Two Antigravity accounts: name line with its own auto-switch tools, captions on the next line.
             var line = new DockPanel { Margin = new Thickness(12, 6, 10, 0), MinHeight = 28, LastChildFill = false };
             var head = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            var mark2 = Ui.Mark(provider, 16); mark2.Margin = new Thickness(3, 0, 11, 0); head.Children.Add(mark2); head.Children.Add(identity);
+            // The mark sits centred in the grid's 22 px mark column and the name starts on the identity column (22 + 14).
+            var mark2 = Ui.Mark(provider, 16); mark2.Margin = new Thickness(3, 0, 17, 0); head.Children.Add(mark2); head.Children.Add(identity);
             line.Children.Add(head);
             var tools = AntigravityTools(accounts); DockPanel.SetDock(tools, Dock.Right); line.Children.Add(tools);
             return line;
@@ -563,7 +570,8 @@ public partial class MainWindow : Window
         var used = window.Unlimited || window.Enabled == false ? null : window.DisplayPercent;
         var na = window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable";
         // A retained (cached) window keeps its sample time in the tooltip; the compact row stays one line.
-        return new MeterSpec(used, MeterTip(account, window, notch), Reset: Formatting.ResetShort(window.ResetAt), ResetSoon: ResetSoon(window.ResetAt), Notch: notch, NotchOpacity: notchOpacity, NaText: na);
+        return new MeterSpec(used, MeterTip(account, window, notch), Reset: Formatting.ResetShort(window.ResetAt), ResetSoon: ResetSoon(window.ResetAt), Notch: notch, NotchOpacity: notchOpacity, NaText: na,
+            ResetFallbacks: Formatting.ResetFallbacks(window.ResetAt));
     }
 
     private static bool ResetSoon(string? reset) => DateTimeOffset.TryParse(reset, out var at) && at - Formatting.Now() < TimeSpan.FromHours(2) && at > Formatting.Now();

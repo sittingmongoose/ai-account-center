@@ -284,7 +284,7 @@ public static class Checks
             && !DashboardClient.AntigravityError(HttpStatusCode.Conflict, "FIXTURE_ONLY_PRIVATE", "token=fixture").Contains("FIXTURE", StringComparison.Ordinal);
         var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", Capabilities = new AccountCapabilities { CodexProfile = "b" }, Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
         var tooltip = Formatting.TrayTooltip(dashboard);
-        report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex codex-2: 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
+        report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex: codex-2, 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
             && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · not connected" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
             && Formatting.TrayTooltip(new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = new string('x', 200) + "@example.com", Windows = { new QuotaWindow { Key = "seven_day", UsedPercent = 1 } } } } }).Length <= 127;
         report.Checks["value_easing_never_overshoots"] = Motion.NeverOvershoots(Motion.Out) && Motion.NeverOvershoots(Motion.InOut) && !Motion.NeverOvershoots(Motion.Spring);
@@ -297,7 +297,9 @@ public static class Checks
             var now = DateTimeOffset.Parse("2026-10-01T15:00:00Z");
             Formatting.Now = () => now;
             report.Checks["reset_short_forms"] = Formatting.ResetShort("2026-10-08T05:00:00Z") == "6d 14h" && Formatting.ResetShort("2026-10-01T20:15:00Z") == Formatting.Clock(DateTimeOffset.Parse("2026-10-01T20:15:00Z")) && Formatting.ResetShort("2026-10-01T14:00:00Z") == "due" && Formatting.ResetShort(null) == ""
-                && Formatting.Relative("2026-10-01T14:59:21Z") == "39s ago" && Formatting.Relative("2026-10-01T14:59:58Z") == "just now";
+                && Formatting.Relative("2026-10-01T14:59:21Z") == "39s ago" && Formatting.Relative("2026-10-01T14:59:58Z") == "just now"
+                && Formatting.ResetFallbacks("2026-10-01T20:15:00Z").SequenceEqual(new[] { "5h 15m", "5h" }) && Formatting.ResetFallbacks("2026-10-01T15:45:00Z").SequenceEqual(new[] { "45m" })
+                && Formatting.ResetFallbacks("2026-10-08T05:00:00Z").SequenceEqual(new[] { "6d" }) && Formatting.ResetFallbacks("2026-10-01T14:00:00Z").Length == 0;
         }
         finally { Formatting.Now = saved; }
         var temporary = Path.Combine(Path.GetTempPath(), "aac-preferences-check-" + Guid.NewGuid().ToString("N") + ".json");
@@ -322,6 +324,17 @@ public static class Checks
             report.Checks["apex_tray_icons_load_light_and_dark"] = light.Width == 16 && dark.Width == 32;
         }
         catch (Exception error) { report.Checks["apex_tray_icons_load_light_and_dark"] = false; report.Notes["apex_tray_icons"] = error.GetType().Name + ": " + error.Message; }
+        try
+        {
+            // The plated app icon (exe, window, shortcuts): every Windows shell size, PNG frames.
+            using var stream = TrayIcon.AppIconStream();
+            using var reader = new BinaryReader(stream);
+            reader.ReadUInt16(); var type = reader.ReadUInt16(); var count = reader.ReadUInt16();
+            var sizes = new List<int>();
+            for (int i = 0; i < count; i++) { var width = reader.ReadByte(); reader.ReadBytes(15); sizes.Add(width == 0 ? 256 : width); }
+            report.Checks["app_icon_is_plated_apex_at_shell_sizes"] = type == 1 && new[] { 16, 20, 24, 32, 40, 48, 64, 256 }.All(sizes.Contains);
+        }
+        catch (Exception error) { report.Checks["app_icon_is_plated_apex_at_shell_sizes"] = false; report.Notes["app_icon"] = error.GetType().Name; }
         report.Checks["menu_font_is_instrument_sans"] = PrivateFonts.Family.Name == "Instrument Sans";
         var fixture = FixtureRender.LoadFixture(out _);
         report.Checks["fixture_is_sanitized"] = fixture.Accounts.Count > 0 && fixture.Accounts.All(account => account.Email is null || account.Email.EndsWith("@example.com", StringComparison.Ordinal));

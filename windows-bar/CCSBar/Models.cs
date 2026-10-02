@@ -325,6 +325,17 @@ public static class Formatting
         return left < TimeSpan.FromDays(1) ? Clock(reset) : Duration(left);
     }
 
+    /// <summary>Shorter forms of <see cref="ResetShort"/> for a compact meter too narrow for it, longest first:
+    /// "15h 40m" then "15h" under a day ("45m" under an hour), "6d" from a day. The exact time stays in the tooltip.</summary>
+    public static string[] ResetFallbacks(string? timestamp)
+    {
+        if (!DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var reset)) return Array.Empty<string>();
+        var left = reset - Now();
+        if (left <= TimeSpan.Zero) return Array.Empty<string>();
+        if (left >= TimeSpan.FromDays(1)) return new[] { $"{(int)left.TotalDays}d" };
+        return left >= TimeSpan.FromHours(1) ? new[] { Duration(left), $"{(int)left.TotalHours}h" } : new[] { Duration(left) };
+    }
+
     /// <summary>Details form: "Resets Thu, Oct 8, 8:00 AM · 6d 20h".</summary>
     public static string ResetLong(string? timestamp)
     {
@@ -354,7 +365,7 @@ public static class Formatting
         {
             var left = Math.Max(0, 100 - used);
             var who = (active.Email ?? active.Label).Split('@')[0];
-            text = $"{name} · Codex {who}: {PercentWith(left, Decimals(left))} weekly left";
+            text = $"{name} · Codex: {who}, {PercentWith(left, Decimals(left))} weekly left";
         }
         if (stale) text += " · last sample";
         return text.Length <= 127 ? text : text[..126] + "…";

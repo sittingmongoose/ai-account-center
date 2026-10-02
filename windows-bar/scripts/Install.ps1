@@ -55,10 +55,9 @@ $shortcuts = @(
 foreach ($entry in $shortcuts) {
     if (Test-Path -LiteralPath $entry.Path) { Copy-Item -LiteralPath $entry.Path -Destination (Join-Path $backup $entry.Backup) -Force }
 }
-# The Apex Soft icon for shortcuts: dark ink for a light Start menu and taskbar, white ink for a dark one.
-$lightSystem = $true
-try { $lightSystem = [int](Get-ItemPropertyValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'SystemUsesLightTheme' -ErrorAction Stop) -ne 0 } catch { }
-$shortcutIcon = Join-Path $destination ('Resources\Icons\' + $(if ($lightSystem) { 'TrayLight.ico' } else { 'TrayDark.ico' }))
+# The plated Apex Soft app icon for shortcuts: legible on any wallpaper, Start menu or taskbar theme, and it stays
+# right when the theme changes later. The bare tray glyphs are notification-area art only.
+$shortcutIcon = Join-Path $destination 'Resources\Icons\AppIcon.ico'
 $introducedDirectories = @()
 foreach ($rootPath in @($destination, $legacyDestination)) {
     if (-not (Test-Path -LiteralPath $rootPath)) { $introducedDirectories += $rootPath }
