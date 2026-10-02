@@ -709,10 +709,11 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     const saved = { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:e2e-hidden'] };
     const put = await browser.send('PUT', '/api/accounts/visibility', saved);
     expect(put.status).toBe(200);
-    expect(put.body).toEqual(saved);
+    // The store answers with every list; the ones this body left out read empty.
+    expect(put.body).toEqual({ ...saved, trayHiddenProviders: [] });
     const get = await browser.send('GET', '/api/accounts/visibility');
     expect(get.status).toBe(200);
-    expect(get.body).toEqual(saved);
+    expect(get.body).toEqual({ ...saved, trayHiddenProviders: [] });
 
     const dashboard = await browser.send(
       'GET',
@@ -1104,7 +1105,7 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     });
   });
 
-  it('case 16: X-Forwarded-For and X-Forwarded-Proto from the LAN do not change the trust decision', async () => {
+  it('case 16: a LAN request carrying proxy headers never gains or inherits local-network trust', async () => {
     const ctx = await startE2E('0.0.0.0');
     const browser = await setupFresh(ctx);
     const lanBase = ctx.lanBase as string;
@@ -1134,7 +1135,8 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
     expect(spoofedPairOff.status).toBe(403);
     expect(spoofedPairOff.body.code).toBe('secure_transport_required');
 
-    // On: spoofing a public or loopback address must not deny trust.
+    // On: rule 4 refuses any request that carries a proxy header (R2-BASE review fix 2), so a
+    // LAN reverse proxy can never pass its trust on. The peer is still the socket address.
     const on = await browser.send('PUT', '/api/auth/network', { trustLocalNetwork: true });
     expect(on.status).toBe(200);
     for (const spoofed of ['203.0.113.9', '127.0.0.1']) {
@@ -1144,7 +1146,7 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
       expect(check.status).toBe(200);
       expect(check.body).toMatchObject({
         trustedLocalNetwork: true,
-        connection: { peer: LAN_ADDRESS, trusted: true },
+        connection: { peer: LAN_ADDRESS, trusted: false },
       });
     }
     const spoofedPairOn = await new Jar(lanBase, null).send(
@@ -1158,7 +1160,27 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
       },
       { origin: '', 'x-forwarded-for': '203.0.113.9', 'x-forwarded-proto': 'http' }
     );
-    expect(spoofedPairOn.status).toBe(201);
+    expect(spoofedPairOn.status).toBe(403);
+    expect(spoofedPairOn.body.code).toBe('secure_transport_required');
+
+    // The same LAN peer without proxy headers is trusted and pairs.
+    const plainCheck = await new Jar(lanBase, lanBase).send('GET', '/api/auth/check');
+    expect(plainCheck.body).toMatchObject({
+      trustedLocalNetwork: true,
+      connection: { peer: LAN_ADDRESS, trusted: true },
+    });
+    const plainPair = await new Jar(lanBase, null).send(
+      'POST',
+      '/api/auth/devices/pair',
+      {
+        username: USERNAME,
+        password: PASSWORD,
+        deviceName: 'e2e-lan-plain-on',
+        platform: 'windows',
+      },
+      { origin: '' }
+    );
+    expect(plainPair.status).toBe(201);
   });
 
   it('case 17: a custom trusted_networks list decides the LAN peer, covering VPN subnets', async () => {
