@@ -61,6 +61,12 @@ session can still list that exact team, and the team's tier still equals the
 plan. It never selects or switches teams on this path. Anything else stays
 `identity_unavailable`.
 
+The dashboard labels Muse windows with the official dev.meta.ai/usage card
+names: "Current usage (5-hour)" for the rolling window and "Weekly limit". The
+official page rounds `used / limit` down to a whole percent ("<1%" below one);
+the dashboard keeps the exact ratio to four decimals and shows up to two, so for
+the same reading it is never lower and at most one point higher.
+
 If the existing browser sign-in is unavailable, the dashboard keeps the
 confirmed account and plan and explains the missing quota. It never invents
 zero usage or treats an omitted key-response quota as a failed CLI login.

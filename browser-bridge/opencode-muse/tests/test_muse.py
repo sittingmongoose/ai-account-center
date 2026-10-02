@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -250,6 +251,59 @@ class CollectionTests(unittest.TestCase):
             host.handle_request({"schemaVersion": 1, "action": "museSync", "cookies": [COOKIE], "teamId": "43", "previousSample": {"teamId": "42", "sample": {}}}, "/unused")
         restore.assert_not_called()
 
+
+
+class OfficialDisplayTests(unittest.TestCase):
+    """The official dev.meta.ai/usage cards and their percent, against our windows.
+
+    Source: subscriptionUsageDisplay(used, limit) in the first-party chunk
+    https://dev.meta.ai/_next/static/chunks/06wr0f0d2-zni.js (SHA-256
+    ceb8c6f5cad4b9e3837e3401cabe8500b547757ef8b3b9bad06bf889f4cefa94), called by
+    the /usage page chunk 00zf9fj7en94j.js (SHA-256
+    5f25b52f7920b85ada374eae2aa013c7941f37da9de29a6eaf9cf0776e1369e7) for its
+    "Current usage" card (window_weighted_used / window_weighted_limit) and its
+    "Weekly limit" card (weekly_weighted_used / weekly_weighted_limit). Both were
+    captured unauthenticated on 2026-10-01 by the Codex owner thread.
+    """
+
+    @staticmethod
+    def official(used, limit):
+        # Transcribed rule: limit <= 0 is "100%"; used <= 0 is "0%"; else
+        # floor(100 * used / limit) clamped to 0..100, and 0 shows as "<1%".
+        used, limit = float(used), float(limit)
+        if not limit > 0:
+            return "100%"
+        if not math.isfinite(used) or used <= 0:
+            return "0%"
+        percent = min(max(math.floor(100 * used / limit), 0), 100)
+        return "<1%" if percent == 0 else str(percent) + "%"
+
+    def test_our_labels_name_the_official_cards(self):
+        windows = usage.normalize_muse({"subscription_quota": QUOTA})
+        self.assertEqual([row["label"] for row in windows], ["Current usage (5-hour)", "Weekly limit"])
+
+    def test_real_counters_differ_only_by_the_official_whole_percent_floor(self):
+        # Saved provider readings: 2026-10-01T13:20Z and 2026-10-02T12:48Z (weekly, 300B limit).
+        for used, ours, theirs in (("19020266200", 6.3401, "6%"), ("38146338720", 12.7154, "12%"),
+                                   ("27000000000", 9, "9%"), ("1", 0, "<1%"), ("0", 0, "0%")):
+            with self.subTest(used=used):
+                quota = dict(QUOTA, weekly_weighted_used=used, weekly_weighted_limit="300000000000")
+                weekly = usage.normalize_muse({"subscription_quota": quota})[1]
+                self.assertEqual(weekly["usedPercent"], ours)
+                self.assertEqual(self.official(used, "300000000000"), theirs)
+
+    def test_ours_is_never_below_the_official_figure_and_at_most_one_point_above(self):
+        # Ours keeps 4 decimals (the trays and web show up to 2); Meta floors to a whole percent.
+        for used in range(26_999_000_000, 30_001_000_000, 99_999_937):
+            weekly = usage.normalize_muse({"subscription_quota": dict(
+                QUOTA, weekly_weighted_used=str(used), weekly_weighted_limit="300000000000")})[1]
+            official = int(self.official(used, 300_000_000_000).rstrip("%"))
+            self.assertLessEqual(official, weekly["usedPercent"])
+            self.assertLessEqual(weekly["usedPercent"], official + 1)
+        # The one edge: 4-decimal rounding can reach the next whole percent first.
+        edge = usage.normalize_muse({"subscription_quota": dict(
+            QUOTA, weekly_weighted_used="29999999999", weekly_weighted_limit="300000000000")})[1]
+        self.assertEqual((edge["usedPercent"], self.official(29999999999, 300000000000)), (10, "9%"))
 
 if __name__ == "__main__":
     unittest.main()

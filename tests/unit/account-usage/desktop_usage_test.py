@@ -158,12 +158,20 @@ class NormalizationTests(unittest.TestCase):
         self.assertNotIn("expiresAt", windows[1])
 
     def test_muse_rolling_duration_is_not_assumed_to_be_five_hours(self):
+        # Labels use Meta's own /usage card names ("Current usage", "Weekly limit") with our cadence.
         windows = usage.normalize_muse({"subs_usage": {"window": {"used_percent": 5, "window_duration_mins": 240}}})
-        self.assertEqual(windows[0]["label"], "4-hour usage")
+        self.assertEqual(windows[0]["label"], "Current usage (4-hour)")
         self.assertEqual(windows[0]["windowMinutes"], 240)
+        windows = usage.normalize_muse({"subs_usage": {"window": {"used_percent": 5, "window_duration_mins": 90}}})
+        self.assertEqual(windows[0]["label"], "Current usage (90-minute)")
         windows = usage.normalize_muse({"subs_usage": {"window": {"used_percent": 5}}})
-        self.assertEqual(windows[0]["label"], "Rolling usage")
+        self.assertEqual(windows[0]["label"], "Current usage")
         self.assertIsNone(windows[0]["windowMinutes"])
+        windows = usage.normalize_muse({"subs_usage": {"weekly": {"used_percent": 5}}})
+        self.assertEqual(windows[0]["label"], "Weekly limit")
+        windows = usage.normalize_muse({"subscription_quota": {"window_weighted_used": "1", "window_weighted_limit": "4",
+                                                               "window_duration_secs": 5400}})
+        self.assertEqual(windows[0]["label"], "Current usage (90-minute)")
 
     def test_cursor_cookie_is_encoded_and_identifies_subject(self):
         token = fake_jwt({"sub": "auth0|user_123"})
