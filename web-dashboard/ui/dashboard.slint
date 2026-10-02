@@ -11,6 +11,7 @@ import {
     AuthView, StrengthView, AnalyticsHeadView
 } from "models.slint";
 import { Icon } from "components/icon.slint";
+import { MarksPreloader } from "components/mark.slint";
 import { AppLogo } from "components/logo.slint";
 import { Caps } from "components/text.slint";
 import { Button } from "components/button.slint";
@@ -537,6 +538,18 @@ export component Dashboard inherits Window {
         triggered => { self.running = false; root.home-seen = true; }
     }
 
+    // Image-settle keep-alive (dark-marks fix): provider and platform images decode asynchronously
+    // in the browser, and Slint core only pokes the event loop when a load completes. If that lands
+    // while the loop is asleep with no timer scheduled, the frame is lost and the image stays blank
+    // until the next repaint. A scheduled timer keeps the loop out of that state; ~5s from boot
+    // covers every load with margin, then the timer stops and the dashboard idles cleanly again.
+    property <int> settle-ticks: 0;
+    settle-timer := Timer {
+        interval: 450ms;
+        running: root.settle-ticks < 11;
+        triggered => { root.settle-ticks += 1; }
+    }
+
     // ---------- page routing with a leave/enter transition ----------
     property <string> shown-page: "home";
     property <bool> leaving: false;
@@ -804,5 +817,11 @@ export component Dashboard inherits Window {
             recheck => { root.action("auth-recheck", ""); }
             limit-over => { root.action("login-limit-over", ""); }
         }
+    }
+
+    // Decodes every mark and platform image on boot (see MarksPreloader); invisible and inert.
+    MarksPreloader {
+        x: 0px;
+        y: 0px;
     }
 }

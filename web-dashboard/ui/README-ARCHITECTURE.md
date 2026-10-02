@@ -263,6 +263,10 @@ spinners and skeleton shimmer read `animation-tick()` only while they are active
   Simple Icons platform glyphs. `ProviderMark { provider: "codex"; size: 22px; }` applies the optical scale,
   cross-fades the light/dark artwork with the theme and never recolours a mark. Kimi Code is its official app
   icon with its plate (drawn 14% smaller). `PlatformGlyph { platform: "apple"; }` is tinted.
+  `MarksPreloader` (instantiated once in the shell) decodes every mark and glyph on boot: images first
+  used in late-created rows can otherwise finish loading after the event loop goes idle and miss their
+  repaint. The shell's settle keep-alive timer covers the same window; when adding a mark, add it to
+  the preloader (`tests/marks-preload.test.mjs` enforces this).
 - `components/logo.slint`: Apex Soft as Slint Paths (`AppLogo { size: 26px; }` picks the pixel-tuned variant).
   `public/assets/favicon.svg` and `aac-logo.svg` serve the browser tab and the loading screen.
 
@@ -271,7 +275,7 @@ spinners and skeleton shimmer read `animation-tick()` only while they are active
 | file | component | notes |
 |---|---|---|
 | icon.slint | `Icon`, `Icons` | |
-| mark.slint | `ProviderMark`, `PlatformGlyph`, `Marks` | |
+| mark.slint | `ProviderMark`, `PlatformGlyph`, `Marks`, `MarksPreloader` | the preloader decodes every image on boot so late rows never miss their repaint |
 | logo.slint | `AppLogo`, `AacLogoApex*` | |
 | text.slint | `Caps`, `ValueUnit` | the % or unit is the same family and weight at 88% on the number's baseline |
 | button.slint | `Button` | kinds default, primary, ink, accent-line, danger, ghost; `small`; `icon` or `platform`; exposes `pad-left`, `icon-size`, `icon-gap` for alignment |
