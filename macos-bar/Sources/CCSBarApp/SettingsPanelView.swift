@@ -39,7 +39,7 @@ struct SettingsPanelView: View {
   let glass: Namespace.ID
   @State private var launchAtLogin = LaunchAtLogin.enabled
   @State private var launchError: String?
-  @State private var editingConnection = false
+  @State private var confirmingDisconnect = false
 
   var body: some View {
     withPalette { palette in
@@ -109,7 +109,10 @@ struct SettingsPanelView: View {
             Color.clear.preference(key: OverlayHeightKey.self, value: geometry.size.height)
           })
         }
-        .onAppear { if state.scrollToAbout { proxy.scrollTo("about", anchor: .bottom); state.scrollToAbout = false } }
+        .onAppear {
+          if state.scrollToAbout { proxy.scrollTo("about", anchor: .bottom); state.scrollToAbout = false }
+          model.readConnectionInfo()
+        }
       }
     }
   }
@@ -161,48 +164,124 @@ struct SettingsPanelView: View {
     return "No active \(prefs.menuBarSource == .codex ? "Codex" : "Antigravity") account reported · logo only"
   }
 
+  /// Settings › Connection: "Paired as Mac tray, last synced ...", the computer and the saved address, and this
+  /// connection as the dashboard sees it (`GET /api/auth/check`), with Re-pair and Disconnect.
   @ViewBuilder private func connectionCard(_ palette: TrayPalette) -> some View {
     card {
       Text("Connection").font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label).padding(.bottom, 8)
-      HStack(spacing: 12) {
-        Image(systemName: "laptopcomputer").font(.system(size: 15)).foregroundStyle(palette.label2)
+      HStack(alignment: .center, spacing: 12) {
+        Image(systemName: connectionIcon).font(.system(size: 15)).foregroundStyle(palette.label2)
           .frame(width: 34, height: 34)
           .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(palette.label4, lineWidth: 0.5))
-        VStack(alignment: .leading, spacing: 2) {
-          if let connection = model.connection {
-            let user = Text(verbatim: connection.username).fontWeight(.semibold)
-            Text("Signed in as \(user)")
-              .font(.system(size: 12.5)).foregroundStyle(palette.label)
-            let state = Text(verbatim: model.connected ? "Connected" : "Not connected")
-              .foregroundColor(model.connected ? palette.goodText : palette.warnText).fontWeight(.semibold)
-            let synced = model.lastSyncedAt.map { " · last synced \(TrayFormat.relative($0))" } ?? ""
-            Text("\(state) · \(connection.baseURL.absoluteString)\(synced)")
-              .font(.system(size: 12)).foregroundStyle(palette.label2).lineLimit(1).truncationMode(.middle)
-          } else {
-            Text("Not connected").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(palette.label)
-            Text("Sign in with your dashboard address, username and password.").font(.system(size: 12)).foregroundStyle(palette.label2)
-          }
-        }
+        VStack(alignment: .leading, spacing: 2) { connectionLines(palette) }
         Spacer(minLength: 8)
-        Button(editingConnection ? "Cancel" : (model.connection == nil ? "Connect" : "Change")) {
-          // Cancel also stops a running check: nothing is saved and the current connection stays.
-          if editingConnection { model.cancelConnectionCheck() }
-          withAnimation(.trayValue(duration: 0.3)) { editingConnection.toggle() }
-        }
-        .trayGlassButton()
+        connectionButtons(palette)
       }
-      if editingConnection {
-        ConnectionForm(model: model, compact: true) { withAnimation(.trayValue(duration: 0.3)) { editingConnection = false } }
+      if confirmingDisconnect {
+        disconnectConfirm(palette)
           .padding(.top, 10)
           .transition(.opacity.combined(with: .move(edge: .top)))
       }
       HStack(alignment: .top, spacing: 6) {
         Image(systemName: "lock.shield").font(.system(size: 11.5)).foregroundStyle(palette.label2)
-        Text("The dashboard checks a new address and login before they are saved. The login is stored only in ~/.ccs/bar, readable by you alone. Device pairing, which keeps the tray signed in through a password change, arrives with the dashboard update.")
+        Text("This tray signs in with its own device key, not your password, so changing the dashboard password keeps it signed in. Revoking it in the dashboard signs it out.")
           .font(.system(size: 11.5)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
       }
       .padding(.top, 10)
     }
+    .animation(.trayValue(duration: 0.3), value: confirmingDisconnect)
+  }
+
+  private var connectionIcon: String {
+    guard let connection = model.connection, !model.signIn.active || model.signIn.repair else { return "cable.connector.slash" }
+    return connection.isPaired ? "laptopcomputer" : "key"
+  }
+
+  @ViewBuilder private func connectionLines(_ palette: TrayPalette) -> some View {
+    let paired = model.connection?.isPaired == true && (!model.signIn.active || model.signIn.repair)
+    if paired, let connection = model.connection {
+      let kind = Text("Mac tray").fontWeight(.semibold)
+      let synced = model.lastSyncedAt.map { "last synced \(TrayFormat.relative($0))" } ?? "not synced yet"
+      Text("Paired as \(kind), \(synced)").font(.system(size: 12.5)).foregroundStyle(palette.label)
+        .accessibilityIdentifier("connection-paired")
+      Text("On \(model.deviceName) · \(connection.baseURL.absoluteString)")
+        .font(.system(size: 12)).foregroundStyle(palette.label2).lineLimit(1).truncationMode(.middle)
+      Text(thisConnection).font(.system(size: 12)).foregroundStyle(palette.label2).lineLimit(1)
+        .accessibilityIdentifier("connection-this")
+    } else if let connection = model.connection, connection.hasPassword, !model.signIn.active {
+      let user = Text(verbatim: connection.username).fontWeight(.semibold)
+      Text("Signed in as \(user) with a saved password").font(.system(size: 12.5)).foregroundStyle(palette.label)
+      Text("On \(model.deviceName) · \(connection.baseURL.absoluteString)")
+        .font(.system(size: 12)).foregroundStyle(palette.label2).lineLimit(1).truncationMode(.middle)
+      Text("Pairing replaces the saved password with a device key.").font(.system(size: 12)).foregroundStyle(palette.label2)
+    } else {
+      Text(model.signIn.statusText).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(palette.label)
+      Text("Pair with your dashboard username and password to see usage.").font(.system(size: 12)).foregroundStyle(palette.label2)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  /// "This connection: 192.168.50.23, trusted local network", read when Settings opens.
+  private var thisConnection: String {
+    guard let check = model.connectionCheck else {
+      return model.checkingConnectionInfo ? "This connection: checking" : "This connection: unavailable"
+    }
+    let peer = check.peer ?? "unknown address"
+    if check.connection?.trusted == true { return "This connection: \(peer), trusted local network" }
+    if check.secureTransport == true { return "This connection: \(peer), secure" }
+    return "This connection: \(peer), not trusted"
+  }
+
+  @ViewBuilder private func connectionButtons(_ palette: TrayPalette) -> some View {
+    let paired = model.connection?.isPaired == true && !model.signIn.active
+    let password = model.connection?.hasPassword == true && !model.signIn.active
+    HStack(spacing: 8) {
+      if paired {
+        Button("Re-pair") {
+          confirmingDisconnect = false
+          state.setSettings(false)
+          model.beginRepair()
+        }
+        .trayGlassButton()
+        .accessibilityIdentifier("connection-repair")
+      } else if password {
+        Button("Pair") { state.setSettings(false); model.pairNow() }
+          .trayGlassButton()
+      } else {
+        Button("Pair") { state.setSettings(false) }
+          .trayGlassButton(prominent: true, tint: palette.accent)
+      }
+      if paired || password {
+        Button { confirmingDisconnect = true } label: {
+          Text("Disconnect").foregroundStyle(palette.critText)
+        }
+        .trayGlassButton()
+        .disabled(confirmingDisconnect)
+        .accessibilityIdentifier("connection-disconnect")
+      }
+    }
+  }
+
+  /// Disconnect asks inline: the dashboard revokes the key, the tray forgets it, usage stops.
+  @ViewBuilder private func disconnectConfirm(_ palette: TrayPalette) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Disconnect this tray?").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(palette.label)
+        Text("The dashboard revokes its device key, and usage stops here until you pair again.")
+          .font(.system(size: 12)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer(minLength: 8)
+      Button("Cancel") { confirmingDisconnect = false }.trayGlassButton()
+      Button {
+        confirmingDisconnect = false
+        state.setSettings(false)
+        model.disconnect()
+      } label: { Text("Disconnect").fontWeight(.semibold).foregroundStyle(palette.critText) }
+        .trayGlassButton()
+        .accessibilityIdentifier("connection-disconnect-confirm")
+    }
+    .padding(10)
+    .background(palette.controlInner, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
   }
 
   @ViewBuilder private func dashboardCard(_ palette: TrayPalette) -> some View {
@@ -218,14 +297,15 @@ struct SettingsPanelView: View {
       } ?? "Unavailable", palette)
       kv("Antigravity auto-switch", antigravityLine(dashboard), palette)
       HStack(alignment: .firstTextBaseline, spacing: 12) {
-        Text("Hidden on the dashboard").font(.system(size: 12.5)).foregroundStyle(palette.label2).frame(width: 170, alignment: .leading)
-        Text(hiddenLine(dashboard)).font(.system(size: 12.5)).foregroundStyle(palette.label)
+        Text("Hidden in the tray").font(.system(size: 12.5)).foregroundStyle(palette.label2).frame(width: 170, alignment: .leading)
+        Text(trayHiddenLine(dashboard)).font(.system(size: 12.5)).foregroundStyle(palette.label).lineLimit(2)
         Button("Change in dashboard") { model.openDashboard() }.buttonStyle(.link).font(.system(size: 12.5))
           .disabled(model.connection == nil)
         Spacer(minLength: 0)
       }
       .padding(.vertical, 6)
       .overlay(alignment: .top) { Rectangle().fill(palette.separator).frame(height: 0.5) }
+      kv("Hidden on the dashboard", hiddenLine(dashboard), palette)
       kv("Dashboard address", model.connection?.baseURL.absoluteString ?? "Not connected", palette)
     }
   }
@@ -253,8 +333,18 @@ struct SettingsPanelView: View {
   }
 
   private func hiddenLine(_ dashboard: AccountDashboard?) -> String {
-    let hidden = (dashboard?.hiddenProviders ?? []).sorted().map(ProviderMark.name)
+    guard let dashboard else { return "Unavailable" }
+    let hidden = dashboard.hiddenProviders.sorted().map(ProviderMark.name)
     return hidden.isEmpty ? "None" : hidden.joined(separator: ", ")
+  }
+
+  /// Providers switched off with "Show in tray", plus accounts hidden one by one.
+  private func trayHiddenLine(_ dashboard: AccountDashboard?) -> String {
+    guard let dashboard else { return "Unavailable" }
+    var parts = dashboard.trayHiddenProviders.sorted().map(ProviderMark.name)
+    let accounts = dashboard.hiddenAccounts.filter { !dashboard.trayHiddenProviders.contains($0.provider) }.count
+    if accounts > 0 { parts.append("\(accounts) account\(accounts == 1 ? "" : "s")") }
+    return parts.isEmpty ? "None" : parts.joined(separator: ", ")
   }
 
   private func aboutCard(_ palette: TrayPalette) -> some View {
@@ -304,122 +394,6 @@ struct ShortcutKeys: View {
       }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Option Command A")
-    }
-  }
-}
-
-/// The dashboard address and login, saved privately once the dashboard accepts them. Used for first-run connect
-/// and for Change; while the check runs the fields rest and Cancel (or Escape) stops it.
-struct ConnectionForm: View {
-  @ObservedObject var model: AccountsViewModel
-  var compact = false
-  var onDone: () -> Void = {}
-  @State private var baseURL = ""
-  @State private var username = ""
-  @State private var password = ""
-  @State private var showPassword = false
-  @State private var error: String?
-
-  var body: some View {
-    withPalette { palette in
-      VStack(alignment: .leading, spacing: 10) {
-        field("Dashboard address", palette) { TextField("http://host:3000", text: $baseURL).textFieldStyle(.roundedBorder) }
-          .disabled(model.checkingConnection)
-        field("Username", palette) { TextField("Dashboard username", text: $username).textFieldStyle(.roundedBorder) }
-          .disabled(model.checkingConnection)
-        field("Password", palette) {
-          HStack(spacing: 6) {
-            Group {
-              if showPassword { TextField("Dashboard password", text: $password) } else { SecureField("Dashboard password", text: $password) }
-            }.textFieldStyle(.roundedBorder)
-            Button { showPassword.toggle() } label: {
-              Image(systemName: showPassword ? "eye.slash" : "eye").frame(width: 26, height: 22)
-            }
-            .buttonStyle(.plain).foregroundStyle(palette.label2)
-            .help(showPassword ? "Hide password" : "Show password")
-          }
-        }
-        .disabled(model.checkingConnection)
-        if URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.scheme?.lowercased() == "http" {
-          HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "info.circle").font(.system(size: 11.5))
-            Text("This address uses plain HTTP, so the password crosses your network unencrypted. Use HTTPS or an SSH tunnel where you can.")
-              .fixedSize(horizontal: false, vertical: true)
-          }.font(.system(size: 11.5)).foregroundStyle(palette.label2)
-        }
-        if let error {
-          Text(error).font(.system(size: 12)).foregroundStyle(palette.critText).fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("connection-error")
-        }
-        HStack {
-          Spacer()
-          if model.checkingConnection {
-            Button("Cancel") { model.cancelConnectionCheck() }
-              .trayGlassButton(large: true)
-          }
-          Button(action: save) {
-            Text(model.checkingConnection ? "Checking" : compact ? "Save" : "Connect").font(.system(size: 13, weight: .semibold))
-              .frame(minWidth: compact ? 60 : 120)
-          }
-          .trayGlassButton(prominent: true, tint: palette.accent, large: true)
-          .keyboardShortcut(.defaultAction)
-          .disabled(model.checkingConnection)
-        }
-      }
-      .onAppear {
-        baseURL = model.connection?.baseURL.absoluteString ?? "http://192.168.50.179:3000"
-        username = model.connection?.username ?? ""
-        password = ""
-      }
-    }
-  }
-
-  private func field<Content: View>(_ title: String, _ palette: TrayPalette, @ViewBuilder _ content: () -> Content) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(palette.label2)
-      content()
-    }
-  }
-
-  /// Verify, then save: the saved connection and the live client change only when the dashboard accepts them.
-  private func save() {
-    guard !model.checkingConnection else { return }
-    error = nil
-    Task { @MainActor in
-      if let failure = await model.changeConnection(baseURL: baseURL, username: username, password: password) {
-        error = failure
-      } else {
-        password = ""
-        onDone()
-      }
-    }
-  }
-}
-
-/// First run: the panel shows the connect form in place of the list.
-struct ConnectView: View {
-  @ObservedObject var model: AccountsViewModel
-  var body: some View {
-    withPalette { palette in
-      PanelScroll {
-        VStack(alignment: .center, spacing: 14) {
-          AppIconImage(size: 60)
-          Text("Connect this Mac to AI Account Center").font(.system(size: 17, weight: .semibold)).foregroundStyle(palette.label)
-          Text("Sign in with your dashboard address, username and password. The login stays on this Mac in a file only you can read; provider credentials never leave the server.")
-            .font(.system(size: 12.5)).foregroundStyle(palette.label2).multilineTextAlignment(.center)
-            .frame(maxWidth: 440).fixedSize(horizontal: false, vertical: true)
-          if let message = model.message {
-            Text(message).font(.system(size: 12)).foregroundStyle(palette.critText).multilineTextAlignment(.center)
-          }
-          ConnectionForm(model: model).frame(maxWidth: 440)
-            .padding(14).groupPlatter(padding: 0)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 18)
-        .frame(maxWidth: .infinity)
-        .background(GeometryReader { geometry in
-          Color.clear.preference(key: OverlayHeightKey.self, value: geometry.size.height)
-        })
-      }
     }
   }
 }

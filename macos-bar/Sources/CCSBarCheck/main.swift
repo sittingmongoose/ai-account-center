@@ -194,7 +194,8 @@ private func checkWrites() async throws {
   try await client.activateCodex(profile: "gmail")
   _ = try await client.setAutomaticSwitching(enabled: true)
   _ = try await client.setAutomaticSwitching(enabled: false)
-  for profile in ["platyr", "gmail", "party", "me"] { try await client.openClaude(profile: profile) }
+  // Profile ids come from the dashboard's data; the tray keeps no list of its own.
+  for profile in ["alpha", "gmail", "work-2", "me"] { try await client.openClaude(profile: profile) }
   try await client.openClaude(profile: "gmail", platform: "windows")
   _ = try await client.setAutomaticSwitching(enabled: true, thresholdPercent: 15)
   let allCalls = await transport.recorded()
@@ -221,7 +222,7 @@ private func checkWrites() async throws {
     // NSNumber distinguishes JSON booleans from a mistakenly encoded string.
     try expect(body["enabled"] is NSNumber, "Enabled setting must not be encoded as text")
   }
-  for (offset, profile) in ["platyr", "gmail", "party", "me"].enumerated() {
+  for (offset, profile) in ["alpha", "gmail", "work-2", "me"].enumerated() {
     let call = calls[offset + 3]
     try expect(call.url.path == "/api/claude/desktop-profiles/\(profile)/open" && call.method == "POST",
       "Claude launcher must select an allowlisted profile through server endpoint")
@@ -254,8 +255,9 @@ private func checkRejectedProfileIdentifiers() async throws {
       try await client.activateCodex(profile: profile)
     }
   }
-  for profile in ["", "unknown", "Platyr", "GMAIL", "../gmail", "gmail/open", "gmail\n", "gmail?platform=windows"] {
-    try await expectError(.invalidConnection, "Claude profile must be one of exact four configured IDs") {
+  for profile in ["", ".", "../gmail", "gmail/open", "gmail\n", "gmail?platform=windows", "gmail#x", "-gmail",
+    "gmail%2Fopen", " gmail", String(repeating: "a", count: 65)] {
+    try await expectError(.invalidConnection, "Claude profile id must be a plain identifier before it enters the path") {
       try await client.openClaude(profile: profile)
     }
   }
@@ -1290,10 +1292,14 @@ private func checkDashboardAdditions() throws {
     "A lone Antigravity account has nothing to switch to")
   var hiddenAgy = guarded
   hiddenAgy["accounts"] = guardedAccounts
-  hiddenAgy["hiddenProviders"] = ["antigravity"]
+  hiddenAgy["providers"] = [["id": "antigravity", "visible": true, "trayVisible": false]]
   let hiddenSection = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hiddenAgy))
   try expect(!hiddenSection.canActivateAntigravity(hiddenSection.accounts.first { $0.id == "agy-b" }!),
-    "A provider hidden on the dashboard offers no switching in the tray")
+    "A provider hidden in the tray offers no switching in the tray")
+  hiddenAgy["providers"] = [["id": "antigravity", "visible": false, "trayVisible": true]]
+  let dashboardOnly = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hiddenAgy))
+  try expect(dashboardOnly.canActivateAntigravity(dashboardOnly.accounts.first { $0.id == "agy-b" }!),
+    "Hiding a provider on the dashboard alone leaves it, and its switching, in the tray")
 
   var malformed = object
   malformed["antigravityAutoSwitch"] = ["enabled": "yes", "thresholdUsedPercent": 400]
@@ -1304,20 +1310,44 @@ private func checkDashboardAdditions() throws {
   let outOfRange = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: malformed))
   try expect(outOfRange.antigravityAutoSwitch == nil, "An out-of-range Antigravity threshold must not be shown as a policy")
 
+  // "Show on dashboard" and "Show in tray" are independent (Jared, 2026-10-02): the tray follows only
+  // providers[].trayVisible and settings.trayHiddenProviders, plus accounts[].hidden.
   var hidden = object
   hidden["hiddenProviders"] = ["kimi-code"]
   let topLevel = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hidden))
-  try expect(topLevel.hiddenProviders == ["kimi-code"] && !topLevel.visibleAccounts.contains { $0.provider == "kimi-code" }
-    && !topLevel.providerGroups.contains { $0.id == "kimi-code" } && topLevel.accounts.count == 8,
-    "Providers hidden on the dashboard must close up in the tray while raw accounts stay intact")
+  try expect(topLevel.hiddenProviders == ["kimi-code"] && topLevel.visibleAccounts.contains { $0.provider == "kimi-code" }
+    && topLevel.providerGroups.contains { $0.id == "kimi-code" } && topLevel.accounts.count == 8,
+    "A provider hidden only on the dashboard stays in the tray")
   var inSettings = object
-  inSettings["settings"] = ["refreshIntervalSeconds": 60, "hiddenProviders": ["cursor"]]
+  inSettings["settings"] = ["refreshIntervalSeconds": 60, "hiddenProviders": ["cursor"], "trayHiddenProviders": ["kimi-code"]]
   let fromSettings = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: inSettings))
-  try expect(fromSettings.hiddenProviders == ["cursor"] && fromSettings.settings?.validatedInterval == 60,
-    "Hidden providers inside settings must be honoured without changing the refresh interval")
-  inSettings["settings"] = ["refreshIntervalSeconds": 60, "hiddenProviders": "cursor"]
+  try expect(fromSettings.hiddenProviders == ["cursor"] && fromSettings.trayHiddenProviders == ["kimi-code"]
+    && fromSettings.settings?.validatedInterval == 60
+    && !fromSettings.visibleAccounts.contains { $0.provider == "kimi-code" }
+    && fromSettings.visibleAccounts.contains { $0.provider == "cursor" }
+    && !fromSettings.providerGroups.contains { $0.id == "kimi-code" } && fromSettings.accounts.count == 8,
+    "settings.trayHiddenProviders closes the provider up in the tray; the dashboard list does not, and raw accounts stay")
+  var flagged = object
+  flagged["providers"] = [["id": "cursor", "label": "Cursor", "order": 3, "visible": false, "trayVisible": false],
+    ["id": "kimi-code", "visible": false], ["id": 7, "trayVisible": "no"], "junk"]
+  let fromProviders = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: flagged))
+  try expect(fromProviders.trayHiddenProviders == ["cursor"] && fromProviders.providers.count == 2
+    && !fromProviders.visibleAccounts.contains { $0.provider == "cursor" }
+    && fromProviders.visibleAccounts.contains { $0.provider == "kimi-code" },
+    "providers[].trayVisible false hides in the tray; a missing trayVisible is visible; malformed entries are skipped")
+  var oneAccount = object
+  var accounts = (object["accounts"] as! [[String: Any]])
+  let hiddenID = accounts[0]["id"] as! String
+  accounts[0]["hidden"] = true
+  oneAccount["accounts"] = accounts
+  let accountHidden = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: oneAccount))
+  try expect(!accountHidden.visibleAccounts.contains { $0.id == hiddenID } && accountHidden.accounts.count == 8
+    && accountHidden.hiddenAccounts.map(\.id) == [hiddenID] && accountHidden.visibleAccounts.count == 7,
+    "accounts[].hidden leaves only that account out of the tray")
+  inSettings["settings"] = ["refreshIntervalSeconds": 60, "hiddenProviders": "cursor", "trayHiddenProviders": "kimi-code"]
   let badHidden = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: inSettings))
-  try expect(badHidden.hiddenProviders.isEmpty, "A malformed hidden-provider list must be a no-op")
+  try expect(badHidden.hiddenProviders.isEmpty && badHidden.trayHiddenProviders.isEmpty && badHidden.visibleAccounts.count == 8,
+    "A malformed hidden-provider list must be a no-op")
 }
 
 // MARK: Tray presentation rules
@@ -1578,20 +1608,33 @@ private func closedLoopbackPort() -> Int {
   try expect(keys == ["baseURL", "username", "password"] && filePermissions == 0o600 && folderPermissions == 0o700,
     "The verified connection must keep the file's JSON shape and private permissions")
 
-  // Other members of the saved file (a device token from a later pairing) survive a verified Change exactly.
+  // Other members of the saved file survive a verified Change exactly; sign-in members never carry over, so a
+  // password can never sit next to a key.
   let paired = directory.appendingPathComponent("paired/accounts-connection.json")
   try FileManager.default.createDirectory(at: paired.deletingLastPathComponent(), withIntermediateDirectories: true)
   try JSONSerialization.data(withJSONObject: ["baseURL": dashboard, "username": "fixture", "password": "fixture-old",
-    "deviceToken": "fixture-device-token", "pairedAt": 1] as [String: Any]).write(to: paired)
+    "fixtureNote": "kept-exactly", "fixtureCount": 1] as [String: Any]).write(to: paired)
   try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: paired.path)
   let pairedSession = ConnectionSession(fileURL: paired, makeTransport: { SignInTransport(fixture) })
   try pairedSession.load()
   let pairedFailed = await pairedSession.change(baseURL: dashboard, username: "fixture", password: "wrong-password")
   let pairedOk = await pairedSession.change(baseURL: dashboard, username: "fixture", password: "fixture-new")
   let pairedObject = try JSONSerialization.jsonObject(with: Data(contentsOf: paired)) as? [String: Any]
-  try expect(pairedFailed != nil && pairedOk == nil && pairedObject?["deviceToken"] as? String == "fixture-device-token"
-    && (pairedObject?["pairedAt"] as? NSNumber)?.intValue == 1 && pairedObject?["password"] as? String == "fixture-new",
+  try expect(pairedFailed != nil && pairedOk == nil && pairedObject?["fixtureNote"] as? String == "kept-exactly"
+    && (pairedObject?["fixtureCount"] as? NSNumber)?.intValue == 1 && pairedObject?["password"] as? String == "fixture-new",
     "A verified Change must keep the file's other members exactly")
+  let keyed = BarConnection(baseURL: URL(string: dashboard)!, username: "fixture", deviceId: "dev_0123456789abcdef",
+    deviceToken: "aacd_" + String(repeating: "A", count: 43), installId: UUID().uuidString, pairedAt: "2026-10-02T00:00:00Z")
+  try ConnectionStore.write(keyed, to: paired)
+  try ConnectionStore.save(BarConnection(baseURL: URL(string: dashboard)!, username: "fixture", password: "fixture-new"), to: paired)
+  let overKey = try JSONSerialization.jsonObject(with: Data(contentsOf: paired)) as? [String: Any]
+  try expect(overKey?["deviceToken"] == nil && overKey?["deviceId"] == nil && overKey?["version"] == nil
+    && overKey?["fixtureNote"] as? String == "kept-exactly",
+    "A password login saved over a paired file must drop the key")
+  try ConnectionStore.write(keyed, to: paired)
+  let overPassword = try JSONSerialization.jsonObject(with: Data(contentsOf: paired)) as? [String: Any]
+  try expect(overPassword?["password"] == nil && overPassword?["deviceToken"] as? String == keyed.deviceToken,
+    "A key saved over a password file must drop the password")
 
   // First run: nothing saved yet. A failure saves nothing and leaves no client; success saves and connects.
   let firstFile = directory.appendingPathComponent("first/accounts-connection.json")
@@ -2079,6 +2122,748 @@ private func checkLive() async {
   }
 }
 
+
+// MARK: - Pairing, device keys and sign-out (CONTRACT-auth-devices sections 2a, 5 to 9; TSIGN-C local HTTP)
+
+/// A fake dashboard's sign-in side: the owner switch, the password, the paired devices and the request log.
+private final class FakeDashboard: @unchecked Sendable {
+  struct Device { var id: String; var token: String; var installId: String?; var previous: String?; var revoked: String? }
+  private let lock = NSLock()
+  var username = "owner"
+  var password = "fixture-pass-1"
+  var accessMode = "login"
+  var trustLocalNetwork = true
+  var peerTrusted = true
+  var peer = "192.168.50.23"
+  var supportsPairing = true
+  var setupCode = "K7QF2MXD"
+  var failures = 0
+  var rotateAfter = "2099-01-01T00:00:00Z"
+  var revokedFields: [String: String] = [:]
+  var meFails = false
+  var refuseRotate = false
+  private(set) var devices: [Device] = []
+  private(set) var log: [String] = []
+  private(set) var authorizations: [String] = []
+  private var counter = 0
+
+  func with<T>(_ body: (FakeDashboard) -> T) -> T { lock.lock(); defer { lock.unlock() }; return body(self) }
+  func record(_ line: String, auth: String?) { lock.lock(); log.append(line); authorizations.append(auth ?? ""); lock.unlock() }
+  var requests: [String] { lock.lock(); defer { lock.unlock() }; return log }
+  var auths: [String] { lock.lock(); defer { lock.unlock() }; return authorizations }
+  var deviceList: [Device] { lock.lock(); defer { lock.unlock() }; return devices }
+
+  func newToken() -> String {
+    counter += 1
+    let seed = String(format: "%043d", counter)
+    return "aacd_" + seed.replacingOccurrences(of: "0", with: "A")
+  }
+  func pair(installId: String?) -> Device {
+    lock.lock(); defer { lock.unlock() }
+    for index in devices.indices where devices[index].installId != nil && devices[index].installId == installId && devices[index].revoked == nil {
+      devices[index].revoked = "replaced"
+    }
+    counter += 1
+    let device = Device(id: String(format: "dev_%016x", counter), token: "aacd_" + String(format: "%043d", counter).replacingOccurrences(of: "0", with: "B"),
+      installId: installId, previous: nil, revoked: nil)
+    devices.append(device)
+    return device
+  }
+  /// The device a bearer token names, and whether it still works.
+  func device(for token: String) -> (index: Int, code: String?)? {
+    lock.lock(); defer { lock.unlock() }
+    guard let index = devices.firstIndex(where: { $0.token == token || $0.previous == token }) else { return nil }
+    let device = devices[index]
+    if let reason = device.revoked { return (index, reason == "expired" ? "device_expired" : "device_revoked") }
+    if device.previous == token { return (index, nil) }
+    devices[index].previous = nil
+    return (index, nil)
+  }
+  func revoke(_ index: Int, _ reason: String) { lock.lock(); devices[index].revoked = reason; lock.unlock() }
+  func rotate(_ index: Int) -> String {
+    lock.lock(); defer { lock.unlock() }
+    counter += 1
+    let token = "aacd_" + String(format: "%043d", counter).replacingOccurrences(of: "0", with: "C")
+    devices[index].previous = devices[index].token
+    devices[index].token = token
+    return token
+  }
+}
+
+private actor FakeDashboardTransport: BarHTTPTransport {
+  let fake: FakeDashboard
+  private var cookie = false
+  init(_ fake: FakeDashboard) { self.fake = fake }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    let url = request.url!
+    let host = url.host ?? ""
+    let method = request.httpMethod ?? "GET"
+    let auth = request.value(forHTTPHeaderField: "Authorization")
+    func reply(_ status: Int, _ object: Any = [String: Any](), headers: [String: String]? = nil) -> (Data, HTTPURLResponse) {
+      fake.record("\(method) \(host)\(url.path) \(status)", auth: auth)
+      let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+      return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!)
+    }
+    if host == "refused.invalid" || host == "192.168.77.77" { throw URLError(.cannotConnectToHost) }
+    if host == "slow.invalid" { try await Task.sleep(nanoseconds: 30_000_000_000) }
+    if host == "elsewhere.invalid" {
+      fake.record("\(method) \(host)\(url.path) 404", auth: auth)
+      return (Data("<html>Not found</html>".utf8), HTTPURLResponse(url: url, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!)
+    }
+    let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+    let secure = fake.with { $0.trustLocalNetwork && $0.peerTrusted }
+    let connection: [String: Any] = fake.with { ["peer": $0.peer, "trusted": $0.trustLocalNetwork && $0.peerTrusted] }
+    switch (method, url.path) {
+    case ("GET", "/api/auth/check"):
+      return reply(200, fake.with { ["accessMode": $0.accessMode, "authenticated": false, "username": NSNull(),
+        "setupCodeRequired": $0.accessMode == "setup", "secureTransport": false, "trustedLocalNetwork": $0.trustLocalNetwork,
+        "connection": connection] as [String: Any] })
+    case ("GET", "/api/auth/setup"):
+      return reply(200, fake.with { ["enabled": true, "configured": $0.accessMode != "setup", "setupCodeRequired": $0.accessMode == "setup",
+        "secureTransport": false, "trustedLocalNetwork": $0.trustLocalNetwork, "connection": connection] as [String: Any] })
+    case ("POST", "/api/auth/setup"):
+      guard fake.with({ $0.accessMode == "setup" }) else { return reply(409, ["code": "already_configured"]) }
+      guard secure else { return reply(403, ["code": "secure_transport_required"]) }
+      guard let code = body["setupCode"] as? String else { return reply(403, ["code": "setup_code_required"]) }
+      guard code.filter({ $0.isLetter || $0.isNumber }).uppercased() == fake.with({ $0.setupCode }) else {
+        return reply(403, ["code": "setup_code_invalid", "triesLeft": 4])
+      }
+      if let password = body["password"] as? String, password.count < 8 { return reply(400, ["code": "weak_password", "reason": "too_short"]) }
+      fake.with { $0.accessMode = "login"; $0.username = body["username"] as? String ?? ""; $0.password = body["password"] as? String ?? "" }
+      return reply(201, ["ok": true])
+    case ("POST", "/api/auth/devices/pair"):
+      guard fake.with({ $0.supportsPairing }) else { return reply(404, ["error": "Not found"]) }
+      guard secure else { return reply(403, ["code": "secure_transport_required"]) }
+      if fake.with({ $0.failures >= 5 }) { return reply(429, ["code": "rate_limited", "retryAfterSeconds": 600], headers: ["Retry-After": "600"]) }
+      guard Set(body.keys).isSubset(of: ["username", "password", "deviceName", "platform", "installId", "appVersion"]),
+        body["platform"] as? String == "mac" else { return reply(400, ["code": "invalid_body"]) }
+      guard body["username"] as? String == fake.with({ $0.username }), body["password"] as? String == fake.with({ $0.password }) else {
+        let left = fake.with { dashboard -> Int in dashboard.failures += 1; return 5 - dashboard.failures }
+        return reply(401, ["code": "invalid_credentials", "triesLeft": left])
+      }
+      let device = fake.pair(installId: body["installId"] as? String)
+      return reply(201, ["deviceId": device.id, "token": device.token, "name": body["deviceName"] as? String ?? "",
+        "platform": "mac", "pairedAt": "2026-10-02T15:00:00.000Z", "rotateAfter": fake.with { $0.rotateAfter }])
+    case ("POST", "/api/auth/login"):
+      guard body["username"] as? String == fake.with({ $0.username }), body["password"] as? String == fake.with({ $0.password })
+      else { return reply(401, ["code": "invalid_credentials", "triesLeft": 4]) }
+      cookie = true
+      return reply(200, ["success": true])
+    case ("GET", "/api/accounts/settings"):
+      return cookie && auth == nil ? reply(200, ["refreshIntervalSeconds": 60]) : reply(401, ["code": "auth_required"])
+    default: break
+    }
+    // Bearer routes.
+    guard let auth, auth.hasPrefix("Bearer ") else {
+      if url.path == "/api/accounts/dashboard" && cookie { return (dashboardJSON, HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!) }
+      return reply(401, ["code": "auth_required"])
+    }
+    let token = String(auth.dropFirst(7))
+    guard let found = fake.device(for: token) else { return reply(401, ["code": "invalid_token"]) }
+    if let code = found.code {
+      var object: [String: Any] = ["error": "fixed", "code": code]
+      for (key, value) in fake.with({ $0.revokedFields }) { object[key] = value }
+      return reply(401, object)
+    }
+    switch (method, url.path) {
+    case ("GET", "/api/auth/devices/me"):
+      if fake.with({ $0.meFails }) { throw URLError(.timedOut) }
+      return reply(200, ["id": fake.deviceList[found.index].id, "name": "Mac", "platform": "mac", "pairedAt": "2026-10-02T15:00:00.000Z",
+        "rotateAfter": fake.with { $0.rotateAfter }, "idleExpiresAt": "2026-12-31T15:00:00.000Z"])
+    case ("POST", "/api/auth/devices/me/rotate"):
+      if fake.with({ $0.refuseRotate }) || !secure { return reply(403, ["code": "secure_transport_required"]) }
+      let next = fake.rotate(found.index)
+      fake.with { $0.rotateAfter = "2099-01-01T00:00:00Z" }
+      return reply(200, ["token": next, "rotateAfter": "2099-01-01T00:00:00Z"])
+    case ("DELETE", "/api/auth/devices/me"):
+      fake.revoke(found.index, "self")
+      fake.record("\(method) \(host)\(url.path) 204", auth: auth)
+      return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: "HTTP/1.1", headerFields: nil)!)
+    case ("GET", "/api/accounts/dashboard"):
+      fake.record("\(method) \(host)\(url.path) 200", auth: auth)
+      return (dashboardJSON, HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+    case ("GET", "/api/claude/desktop-profiles"):
+      return reply(200, ["profiles": [[String: Any]]()])
+    case ("POST", _), ("PUT", _):
+      return reply(200, [String: Any]())
+    default:
+      return reply(403, ["code": "device_scope"])
+    }
+  }
+}
+
+private func pairingDirectory(_ name: String) throws -> URL {
+  let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aac-pairing-check-\(name)-\(UUID().uuidString)")
+  let real = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ccs").standardizedFileURL.path
+  try expect(!directory.standardizedFileURL.path.hasPrefix(real), "Pairing checks must never use ~/.ccs")
+  return directory
+}
+
+private func permissions(_ url: URL) -> Int? {
+  (try? FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue
+}
+
+private func jsonKeys(_ url: URL) -> Set<String> {
+  ((try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any]).map { Set($0.keys) } ?? []
+}
+
+private let sampleToken = "aacd_" + String(repeating: "Z", count: 43)
+
+/// Version 1, version 2 and signed-out files: exactly one shape, private, and never a password next to a key.
+private func checkConnectionVersions() async throws {
+  let directory = try pairingDirectory("versions")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let file = directory.appendingPathComponent("bar/accounts-connection.json")
+  let base = URL(string: "http://192.168.50.10:3000")!
+  let install = UUID().uuidString
+  let v2 = BarConnection(baseURL: base, username: "owner", deviceId: "dev_00000000000000aa", deviceToken: sampleToken,
+    installId: install, pairedAt: "2026-10-02T15:00:00Z")
+  try ConnectionStore.write(v2, to: file)
+  let loaded = try BarConnection.load(from: file)
+  try expect(loaded.isPaired && !loaded.hasPassword && loaded.version == 2 && loaded.installId == install,
+    "A version 2 file must load as paired, with no password")
+  try expect(jsonKeys(file) == ["version", "baseURL", "username", "deviceId", "deviceToken", "installId", "pairedAt"]
+    && permissions(file) == 0o600 && permissions(file.deletingLastPathComponent()) == 0o700,
+    "Version 2 must hold exactly the contract's members in a 0600 file in a 0700 folder")
+  let leftovers = try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path).filter { $0.hasSuffix(".tmp") }
+  try expect(leftovers.isEmpty, "The private writer must leave no temporary file")
+  let out = v2.signingOut(SignedOutNote(reason: "device_revoked", at: "2026-10-02T16:00:00Z"))
+  try ConnectionStore.write(out, to: file)
+  let signedOut = try BarConnection.load(from: file)
+  try expect(signedOut.isSignedOut && signedOut.deviceToken == nil && signedOut.deviceId == nil
+    && signedOut.username == "owner" && signedOut.baseURL == base && signedOut.installId == install
+    && signedOut.signedOut?.reason == "device_revoked" && !jsonKeys(file).contains("password"),
+    "A signed-out file keeps the address, username and install id, and no key")
+  let bad: [[String: Any]] = [
+    ["version": 2, "baseURL": base.absoluteString, "username": "owner", "password": "pw", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken],
+    ["version": 2, "baseURL": base.absoluteString, "username": "owner", "deviceToken": sampleToken],
+    ["version": 2, "baseURL": base.absoluteString, "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": "aacd_short"],
+    ["baseURL": base.absoluteString, "username": "owner", "password": "pw", "deviceToken": sampleToken, "deviceId": "dev_00000000000000aa"],
+    ["version": 2, "baseURL": base.absoluteString, "username": "owner"],
+    ["version": 2, "baseURL": base.absoluteString, "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken,
+     "installId": "not-a-uuid"],
+    ["version": 3, "baseURL": base.absoluteString, "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken],
+    ["version": 2, "baseURL": "http://192.168.50.10:3000/path", "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken],
+  ]
+  for object in bad {
+    try ConnectionStore.writePrivately(JSONSerialization.data(withJSONObject: object), to: file)
+    try await expectError(.invalidConnection, "Mixed or malformed connection shapes must be refused") {
+      _ = try BarConnection.load(from: file)
+    }
+  }
+  try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+  try await expectError(.privateConfigRequired, "A version 2 file readable by others must be refused") {
+    _ = try BarConnection.load(from: file)
+  }
+  // The state folder override is honoured (the isolated end-to-end run uses it) and defaults to ~/.ccs/bar.
+  try expect(BarConnection.configURL.lastPathComponent == "accounts-connection.json"
+    && BarConnection.rollbackURL().lastPathComponent == "accounts-connection.v1-rollback.json",
+    "The connection and its rollback copy keep the contract's file names")
+}
+
+/// The bearer client: the key on every request, never a login, and a 401 device code as a sign-out.
+private func checkBearerClient() async throws {
+  let fake = FakeDashboard()
+  let transport = FakeDashboardTransport(fake)
+  let device = fake.pair(installId: UUID().uuidString)
+  let base = URL(string: "http://192.168.50.10:3000")!
+  let connection = BarConnection(baseURL: base, username: "owner", deviceId: device.id, deviceToken: device.token,
+    installId: UUID().uuidString, pairedAt: "2026-10-02T15:00:00Z")
+  let client = AccountsClient(connection: connection, transport: transport)
+  _ = try await client.dashboard()
+  try await client.activateCodex(profile: "work")
+  _ = try await client.setAutomaticSwitching(enabled: true)
+  try await client.openClaude(profile: "alpha", platform: "windows")
+  _ = try await client.claudeDesktopProfiles()
+  _ = try await client.setAntigravityAutomaticSwitching(enabled: false)
+  let me = try await client.deviceSelf()
+  try expect(me.id == device.id && me.rotateAfter != nil, "devices/me must read this tray's own record")
+  let requests = fake.requests, auths = fake.auths
+  try expect(!requests.contains { $0.contains("/api/auth/login") }, "A paired tray never logs in with a password")
+  try expect(auths.count == requests.count && auths.allSatisfy { $0 == "Bearer \(device.token)" },
+    "Every request of a paired tray must carry its device key as Authorization: Bearer")
+
+  for (code, expected) in [("device_revoked", "device_revoked"), ("device_expired", "device_expired")] {
+    fake.revoke(fake.deviceList.firstIndex { $0.id == device.id }!, code == "device_expired" ? "expired" : "dashboard")
+    do {
+      _ = try await client.dashboard()
+      throw CheckFailure(description: "A revoked key must not read the dashboard")
+    } catch BarClientError.signedOut(let note) {
+      try expect(note.reason == expected && AccountFormatting.date(note.at) != nil && note.revokedBy == nil,
+        "A 401 \(code) must become a sign-out note with the time it was noticed")
+    }
+  }
+  fake.with { $0.revokedFields = ["revokedAt": "2026-10-02T14:41:00.000Z", "revokedReason": "revoke-all", "revokedBy": "owner"] }
+  do {
+    _ = try await client.dashboard()
+  } catch BarClientError.signedOut(let note) {
+    try expect(note.revokedBy == "owner" && note.revokedReason == "revoke-all" && note.at == "2026-10-02T14:41:00.000Z",
+      "Who and when are kept when the dashboard sends them")
+  }
+  fake.with { $0.revokedFields = ["revokedAt": "yesterday", "revokedReason": "Revoke All\n", "revokedBy": "x\nInjected"] }
+  do {
+    _ = try await client.dashboard()
+  } catch BarClientError.signedOut(let note) {
+    try expect(note.revokedBy == nil && note.revokedReason == nil && note.at != "yesterday",
+      "Malformed who and when fields from the dashboard are dropped, never shown")
+  }
+  let stranger = AccountsClient(connection: BarConnection(baseURL: base, username: "owner", deviceId: "dev_00000000000000ff",
+    deviceToken: sampleToken, installId: UUID().uuidString, pairedAt: "2026-10-02T15:00:00Z"), transport: transport)
+  do {
+    _ = try await stranger.dashboard()
+    throw CheckFailure(description: "An unknown key must not read the dashboard")
+  } catch BarClientError.signedOut(let note) {
+    try expect(note.reason == "invalid_token", "An unknown key is invalid_token")
+  }
+  // 503 auth_store_unavailable is not a sign-out.
+  let unavailable = MockTransport(replies: ["GET /api/accounts/dashboard": [MockReply(503, Data("{\"code\":\"auth_store_unavailable\"}".utf8))]])
+  let busy = AccountsClient(connection: connection, transport: unavailable)
+  do {
+    _ = try await busy.dashboard()
+    throw CheckFailure(description: "503 must fail")
+  } catch BarClientError.status(let status, let message) {
+    try expect(status == 503 && message == "The dashboard cannot check paired trays right now. Try again shortly.",
+      "auth_store_unavailable keeps the key and says to try again")
+  }
+  // A key rotated while a request was in flight is retried once with the saved new key.
+  let rotating = MockTransport(replies: ["GET /api/accounts/dashboard": [
+    MockReply(401, Data("{\"code\":\"invalid_token\"}".utf8), delayNanoseconds: 80_000_000), MockReply(200, dashboardJSON)]])
+  let racing = AccountsClient(connection: connection, transport: rotating)
+  async let read = racing.dashboard()
+  try await Task.sleep(nanoseconds: 20_000_000)
+  let next = "aacd_" + String(repeating: "N", count: 43)
+  await racing.adopt(token: next)
+  _ = try await read
+  let raced = await rotating.recorded()
+  try expect(raced.count == 2 && raced[0].headers["authorization"] == "Bearer \(device.token)"
+    && raced[1].headers["authorization"] == "Bearer \(next)",
+    "A request that crossed a rotation goes once more with the new key instead of signing out")
+}
+
+/// The tray's own local-network check (nothing is sent to an outside address over plain HTTP).
+private func checkLocalNetwork() throws {
+  let local = ["10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.0.1", "192.168.50.179", "127.0.0.1",
+    "::1", "fc00::1", "fd12:3456::9", "::ffff:192.168.50.20", "::ffff:c0a8:3214", "[fd00::5]", "fe80::1%en0x"]
+  let outside = ["8.8.8.8", "172.15.255.255", "172.32.0.1", "192.169.0.1", "11.0.0.1", "100.64.1.2", "169.254.3.4",
+    "203.0.113.5", "2001:db8::1", "fe80::1", "::", "0.0.0.0", "::ffff:8.8.8.8", "fbff::1", "fe00::1"]
+  for address in local where address != "fe80::1%en0x" {
+    try expect(LocalNetwork.isLocal(address: address), "\(address) is on the local network")
+  }
+  for address in outside {
+    try expect(!LocalNetwork.isLocal(address: address), "\(address) is not on the local network")
+  }
+  try expect(LocalNetwork.verdict(host: "192.168.50.179", resolver: { _ in ["8.8.8.8"] }) == .local,
+    "A literal address is judged as written, never by a lookup")
+  try expect(LocalNetwork.verdict(host: "dashboard.local", resolver: { _ in ["192.168.50.179", "fd00::5"] }) == .local,
+    "A name that resolves only to local addresses is local")
+  try expect(LocalNetwork.verdict(host: "home.example.net", resolver: { _ in ["192.168.50.179", "203.0.113.9"] }) == .outside("203.0.113.9"),
+    "A name with any outside address is refused")
+  try expect(LocalNetwork.verdict(host: "nowhere.invalid", resolver: { _ in [] }) == .unresolved,
+    "A name that does not resolve is left to the reachability check")
+  for (raw, expected) in [("192.168.50.179:3000", "http://192.168.50.179:3000"), (" http://dash.local:3000/ ", "http://dash.local:3000"),
+    ("https://10.0.0.5", "https://10.0.0.5"), ("[fd00::5]:3000", "http://[fd00::5]:3000")] {
+    try expect(DashboardProbe.normalize(raw)?.absoluteString == expected, "\(raw) must normalize to \(expected)")
+  }
+  for raw in ["", "ftp://host", "http://user:pw@host", "http://host/path", "http://host?x=1", "http://host#f", "http://", "javascript:alert(1)"] {
+    try expect(DashboardProbe.normalize(raw) == nil, "\(raw) is not a dashboard address")
+  }
+}
+
+/// States 1, 2, 4, 5 and 8 from the address check, with nothing saved.
+@MainActor private func checkAddressStates() async throws {
+  let directory = try pairingDirectory("address")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let fake = FakeDashboard()
+  let session = ConnectionSession(fileURL: directory.appendingPathComponent("accounts-connection.json"),
+    makeTransport: { FakeDashboardTransport(fake) })
+  session.resolver = { host in host == "home.example.net" ? ["203.0.113.9"] : host == "dash.local" ? ["192.168.50.179"] : [] }
+  let before = fake.requests.count
+  for outside in ["home.example.net:3000", "203.0.113.5:3000", "100.64.1.2:3000", "169.254.3.4:3000", "[2001:db8::1]:3000"] {
+    let result = await session.checkAddress(outside)
+    guard case .notLocal(_, let seen) = result, seen == nil else { throw CheckFailure(description: "\(outside) must be refused by the tray itself (state 4)") }
+  }
+  try expect(fake.requests.count == before, "Nothing at all is sent to an outside address")
+  let answer1 = await session.checkAddress("dash.local:3000")
+  try expect(answer1 == .ready(URL(string: "http://dash.local:3000")!),
+    "A local name with the switch on goes to the password step")
+  fake.with { $0.trustLocalNetwork = false; $0.peerTrusted = false }
+  let answer2 = await session.checkAddress("192.168.50.10:3000")
+  try expect(answer2 == .pairingOff(URL(string: "http://192.168.50.10:3000")!),
+    "Trust this local network off gives state 5, not 'not local'")
+  fake.with { $0.trustLocalNetwork = true; $0.peerTrusted = false; $0.peer = "100.70.1.4" }
+  let answer3 = await session.checkAddress("192.168.50.10:3000")
+  try expect(answer3 == .notLocal(URL(string: "http://192.168.50.10:3000")!, seenAs: "100.70.1.4"),
+    "The dashboard refusing this connection gives state 4 with the address it saw")
+  fake.with { $0.peerTrusted = true; $0.accessMode = "setup" }
+  let answer4 = await session.checkAddress("192.168.50.10:3000")
+  try expect(answer4 == .setup(URL(string: "http://192.168.50.10:3000")!, codeRequired: true),
+    "A dashboard with no sign-in yet gives state 2 with the setup code")
+  fake.with { $0.accessMode = "open" }
+  let answer5 = await session.checkAddress("192.168.50.10:3000")
+  try expect(answer5 == .signInOff(URL(string: "http://192.168.50.10:3000")!),
+    "A dashboard with sign-in off has nothing to pair with")
+  fake.with { $0.accessMode = "login" }
+  let answer6 = await session.checkAddress("refused.invalid:3000")
+  try expect(answer6 == .unreachable(URL(string: "http://refused.invalid:3000")!),
+    "No answer gives state 8 unreachable")
+  let answer7 = await session.checkAddress("elsewhere.invalid:8080")
+  try expect(answer7 == .notDashboard(URL(string: "http://elsewhere.invalid:8080")!),
+    "An answer that is not the dashboard gives state 8 wrong address")
+  let answer8 = await session.checkAddress("http://x/y")
+  try expect(answer8 == .invalid, "An address with a path is refused before anything is sent")
+  session.addressTimeout = 0.3
+  let started = Date()
+  let slow = await session.checkAddress("slow.invalid:3000")
+  try expect(slow == .unreachable(URL(string: "http://slow.invalid:3000")!) && Date().timeIntervalSince(started) < 3,
+    "A dashboard that never answers ends at the time limit")
+  // An older dashboard without the new fields: let pairing answer.
+  let older = DashboardProbe(baseURL: URL(string: "http://192.168.50.10:3000")!)
+  let olderCheck = try JSONDecoder().decode(AuthCheck.self, from: Data("{\"accessMode\":\"login\",\"authenticated\":false}".utf8))
+  try expect(older.classify(olderCheck, setup: nil) == .ready(URL(string: "http://192.168.50.10:3000")!),
+    "An older dashboard without the trust fields goes to the password step")
+  try expect(!FileManager.default.fileExists(atPath: session.fileURL.path) && session.client == nil,
+    "The address step saves nothing")
+}
+
+/// States 3, 6, 7 and 11: pair, prove the key, then save; every refusal keeps what was saved.
+@MainActor private func checkPairingFlow() async throws {
+  let directory = try pairingDirectory("pair")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let fake = FakeDashboard()
+  let file = directory.appendingPathComponent("bar/accounts-connection.json")
+  let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  session.deviceName = "Fixture Mac"
+  session.appVersion = "2.0.0"
+  let url = URL(string: "http://192.168.50.10:3000")!
+
+  guard case .wrongPassword(let tries) = await session.pair(url: url, username: "owner", password: "wrong-one") else {
+    throw CheckFailure(description: "A wrong password must be state 6")
+  }
+  try expect(tries == 4 && !FileManager.default.fileExists(atPath: file.path), "Tries left come from the dashboard; nothing is saved")
+
+  fake.with { $0.trustLocalNetwork = false; $0.peerTrusted = false }
+  guard case .refused(.pairingOff) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "A 403 with the switch off must lead to state 5")
+  }
+  fake.with { $0.trustLocalNetwork = true; $0.peerTrusted = false }
+  guard case .refused(.notLocal(_, "192.168.50.23")) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "A 403 with the switch on must lead to state 4 with the peer")
+  }
+  fake.with { $0.peerTrusted = true }
+
+  // Verify before saving: the dashboard issues a key but never confirms it.
+  fake.with { $0.meFails = true }
+  guard case .failed(let notConfirmed, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "A key that is never confirmed must not be saved")
+  }
+  fake.with { $0.meFails = false }
+  try expect(notConfirmed == SignInCopy.notConfirmed && !FileManager.default.fileExists(atPath: file.path) && session.client == nil,
+    "Nothing is saved until devices/me answers 200")
+
+  let mark = fake.requests.count
+  guard case .paired(let connection, let me) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "A right password must pair")
+  }
+  let log = Array(fake.requests.dropFirst(mark)), auths = Array(fake.auths.dropFirst(mark))
+  try expect(log == ["POST 192.168.50.10/api/auth/devices/pair 201", "GET 192.168.50.10/api/auth/devices/me 200"]
+    && auths[0].isEmpty && auths[1] == "Bearer \(connection.deviceToken ?? "")",
+    "Pairing sends the password once without a key, then proves the key with devices/me")
+  let saved = try BarConnection.load(from: file)
+  let text = try String(contentsOf: file, encoding: .utf8)
+  try expect(saved.isPaired && saved.deviceToken == connection.deviceToken && me.id == connection.deviceId
+    && !text.contains("fixture-pass-1") && !jsonKeys(file).contains("password") && permissions(file) == 0o600,
+    "The saved key is version 2 at 0600, and the password is nowhere in it")
+  let liveUsesKey = await session.client?.usesDeviceKey == true
+  try expect(liveUsesKey && session.device?.id == connection.deviceId, "The live client now uses the key")
+
+  // Re-pair keeps the install id, so the dashboard replaces this install's old key.
+  let oldToken = connection.deviceToken
+  guard case .paired(let again, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "Re-pair must pair")
+  }
+  try expect(again.installId == connection.installId && again.deviceToken != oldToken
+    && fake.deviceList.first { $0.token == oldToken }?.revoked == "replaced",
+    "Re-pair sends the same install id and the dashboard revokes the old key")
+
+  // A failed Change keeps the working key.
+  let before = try Data(contentsOf: file)
+  _ = await session.pair(url: URL(string: "http://refused.invalid:3000")!, username: "owner", password: "fixture-pass-1")
+  _ = await session.pair(url: url, username: "owner", password: "wrong-again")
+  try expect((try? Data(contentsOf: file)) == before && session.connection?.deviceToken == again.deviceToken,
+    "A failed re-pair or change keeps the saved key and the live client")
+
+  // The fifth failure pauses pairing (state 7) with the dashboard's own wait.
+  fake.with { $0.failures = 5 }
+  guard case .rateLimited(let until) = await session.pair(url: url, username: "owner", password: "x") else {
+    throw CheckFailure(description: "429 must be state 7")
+  }
+  try expect(until.timeIntervalSinceNow > 590 && until.timeIntervalSinceNow <= 601, "The countdown follows retryAfterSeconds")
+  fake.with { $0.failures = 0 }
+
+  // A dashboard without pairing yet (404) keeps today's verified password login.
+  let olderFile = directory.appendingPathComponent("older/accounts-connection.json")
+  let older = ConnectionSession(fileURL: olderFile, makeTransport: { FakeDashboardTransport(fake) })
+  fake.with { $0.supportsPairing = false }
+  guard case .unsupported = await older.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "A dashboard without pairing must fall back to the password login")
+  }
+  fake.with { $0.supportsPairing = true }
+  try expect((try? BarConnection.load(from: olderFile))?.hasPassword == true, "The fallback saves a verified version 1 login")
+}
+
+/// State 2: create the sign-in with the setup code, then pair.
+@MainActor private func checkSetupFlow() async throws {
+  let directory = try pairingDirectory("setup")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let fake = FakeDashboard()
+  fake.with { $0.accessMode = "setup"; $0.username = ""; $0.password = "" }
+  let file = directory.appendingPathComponent("accounts-connection.json")
+  let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  let url = URL(string: "http://192.168.50.10:3000")!
+  guard case .setupCode(let tries) = await session.setupAndPair(url: url, username: "owner", password: "summit-ledger-42",
+    setupCode: "WRON-GCOD") else { throw CheckFailure(description: "A wrong setup code must be refused") }
+  try expect(tries == 4, "A wrong setup code says the tries left")
+  guard case .failed(let weak, let field) = await session.setupAndPair(url: url, username: "owner", password: "short",
+    setupCode: "K7QF-2MXD") else { throw CheckFailure(description: "A weak password must be refused") }
+  try expect(weak == SignInCopy.passwordShort && field == "pass", "weak_password names the password field")
+  guard case .paired(let connection, _) = await session.setupAndPair(url: url, username: "owner", password: "summit-ledger-42",
+    setupCode: "k7qf-2mxd") else { throw CheckFailure(description: "A right setup code must create the sign-in and pair") }
+  try expect(connection.isPaired && (try? BarConnection.load(from: file))?.isPaired == true, "Setup then pairs and saves the key")
+  guard case .alreadyConfigured = await session.setupAndPair(url: url, username: "owner", password: "summit-ledger-42",
+    setupCode: "K7QF-2MXD") else { throw CheckFailure(description: "A configured dashboard refuses setup") }
+  // The form's own checks and the strength meter.
+  try expect(PasswordStrength.setupProblem(username: "1x", password: "summit-ledger-42", confirm: "summit-ledger-42", code: "K7QF-2MXD", codeRequired: true)?.field == "user"
+    && PasswordStrength.setupProblem(username: "owner", password: "short", confirm: "short", code: "K7QF-2MXD", codeRequired: true)?.field == "pass"
+    && PasswordStrength.setupProblem(username: "owner", password: String(repeating: "é", count: 40), confirm: String(repeating: "é", count: 40), code: "K7QF-2MXD", codeRequired: true)?.message == SignInCopy.passwordLong
+    && PasswordStrength.setupProblem(username: "owner", password: "summit-ledger-42", confirm: "summit-ledger-43", code: "K7QF-2MXD", codeRequired: true)?.field == "confirm"
+    && PasswordStrength.setupProblem(username: "owner", password: "summit-ledger-42", confirm: "summit-ledger-42", code: "", codeRequired: true)?.field == "code"
+    && PasswordStrength.setupProblem(username: "owner", password: "summit-ledger-42", confirm: "summit-ledger-42", code: "K7QF", codeRequired: true)?.field == "code"
+    && PasswordStrength.setupProblem(username: "owner", password: "summit-ledger-42", confirm: "summit-ledger-42", code: "", codeRequired: false) == nil,
+    "The setup form checks username, length, bytes, confirmation and the code before sending")
+  try expect(PasswordStrength.evaluate("").level == 0 && PasswordStrength.evaluate("abc").word == "Too short"
+    && PasswordStrength.evaluate("password123").word == "Weak" && PasswordStrength.evaluate("summit-ledger-42").level >= 3
+    && PasswordStrength.evaluate("a-long-and-mixed-Passphrase-2026").word == "Strong",
+    "The strength meter follows the concept's levels")
+}
+
+/// State 9 and section 8: the stored password is traded for a key once; the rollback copy lives until the first 200.
+@MainActor private func checkMigrationFlow() async throws {
+  let directory = try pairingDirectory("migrate")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let fake = FakeDashboard()
+  let file = directory.appendingPathComponent("bar/accounts-connection.json")
+  let url = URL(string: "http://192.168.50.10:3000")!
+  func seedV1(_ password: String = "fixture-pass-1") throws -> Data {
+    try? FileManager.default.removeItem(at: directory)
+    try ConnectionStore.save(BarConnection(baseURL: url, username: "owner", password: password), to: file)
+    return try Data(contentsOf: file)
+  }
+
+  // 200 on the first key check: the password and the rollback copy are gone.
+  let v1 = try seedV1()
+  var session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  try session.load()
+  let outcome = await session.migrate()
+  let text = try String(contentsOf: file, encoding: .utf8)
+  try expect(outcome == .secured && !session.hasPendingRollback && (try? BarConnection.load(from: file))?.isPaired == true
+    && !text.contains("fixture-pass-1") && session.connection?.password == nil,
+    "A migration that pairs and checks the key deletes the password and the rollback copy")
+  let leftovers = try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
+  try expect(leftovers == ["accounts-connection.json"], "Only the version 2 file remains")
+
+  // No answer to the first key check: both files stay, and the next poll finishes it.
+  _ = try seedV1()
+  session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  try session.load()
+  fake.with { $0.meFails = true }
+  let pending = await session.migrate()
+  let rollback = BarConnection.rollbackURL(for: file)
+  try expect(pending == .pending && session.hasPendingRollback && (try? Data(contentsOf: rollback)) == v1
+    && permissions(rollback) == 0o600 && (try? BarConnection.load(from: file))?.isPaired == true,
+    "Without an answer the rollback copy (the version 1 bytes, 0600) and the new key both stay")
+  fake.with { $0.meFails = false }
+  try await session.maintain()
+  try expect(!session.hasPendingRollback, "The next poll's 200 deletes the rollback copy")
+
+  // A 401 device code on the first check puts version 1 back.
+  _ = try seedV1()
+  session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  try session.load()
+  fake.with { $0.meFails = true }
+  _ = await session.migrate()
+  fake.with { $0.meFails = false }
+  if let index = fake.deviceList.firstIndex(where: { $0.token == session.connection?.deviceToken }) { fake.revoke(index, "dashboard") }
+  let restored = await session.confirmMigration()
+  try expect(restored == .keptPassword && (try? Data(contentsOf: file)) == v1 && !session.hasPendingRollback
+    && session.connection?.hasPassword == true,
+    "A 401 device code on the first check restores version 1 exactly and keeps the password login")
+
+  // The rollback copy never lives past 24 hours.
+  _ = try seedV1()
+  session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  try session.load()
+  fake.with { $0.meFails = true }
+  _ = await session.migrate()
+  try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-25 * 3600)], ofItemAtPath: rollback.path)
+  _ = await session.confirmMigration()
+  fake.with { $0.meFails = false }
+  try expect(!session.hasPendingRollback && (try? BarConnection.load(from: file))?.isPaired == true,
+    "A rollback copy older than 24 hours is deleted")
+
+  // No pairing yet (404): today's login stays, and pairing waits a day before trying again.
+  _ = try seedV1()
+  session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  try session.load()
+  fake.with { $0.supportsPairing = false }
+  let kept = await session.migrate()
+  let attempts = fake.requests.filter { $0.contains("/devices/pair") }.count
+  _ = await session.migrate()
+  try expect(kept == .keptPassword && (try? Data(contentsOf: file)) == v1
+    && fake.requests.filter { $0.contains("/devices/pair") }.count == attempts,
+    "Without pairing the version 1 login stays, and pairing is not retried within 24 hours")
+  fake.with { $0.supportsPairing = true }
+
+  // The stored password is wrong: the pairing screen, nothing changed.
+  _ = try seedV1("stale-password")
+  session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  try session.load()
+  guard case .needsPassword = await session.migrate() else { throw CheckFailure(description: "A stale stored password needs the pairing screen") }
+  try expect(!session.hasPendingRollback && (try? BarConnection.load(from: file))?.hasPassword == true, "A refused migration changes nothing")
+  fake.with { $0.failures = 0 }
+}
+
+/// Section 9 and Disconnect: the key goes, the address and username stay; nothing retries on its own.
+@MainActor private func checkSignOutAndDisconnect() async throws {
+  let directory = try pairingDirectory("signout")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let fake = FakeDashboard()
+  let file = directory.appendingPathComponent("accounts-connection.json")
+  let url = URL(string: "http://192.168.50.10:3000")!
+  let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  guard case .paired(let connection, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "Pairing must work for the sign-out checks")
+  }
+  session.signOut(SignedOutNote(reason: "device_revoked", at: "2026-10-02T16:00:00Z", revokedReason: "dashboard", revokedBy: "owner"))
+  let out = try BarConnection.load(from: file)
+  try expect(out.isSignedOut && out.username == "owner" && out.baseURL == url && out.installId == connection.installId
+    && out.signedOut?.revokedBy == "owner" && session.client == nil,
+    "A sign-out deletes the key, keeps the address, username and install id, and stops the client")
+  try session.load()
+  try expect(session.client == nil && session.connection?.isSignedOut == true, "After a restart the signed-out file feeds only the sign-in screen")
+
+  guard case .paired = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "Pair again must work after a sign-out")
+  }
+  let mark = fake.requests.count
+  let told = await session.disconnect()
+  let gone = try BarConnection.load(from: file)
+  try expect(told && Array(fake.requests.dropFirst(mark)) == ["DELETE 192.168.50.10/api/auth/devices/me 204"]
+    && gone.isSignedOut && gone.signedOut?.reason == "disconnected" && gone.baseURL == url && session.client == nil
+    && fake.deviceList.last?.revoked == "self",
+    "Disconnect revokes this key on the dashboard, then forgets it and keeps the address")
+
+  guard case .paired = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "Pairing must work again")
+  }
+  // The dashboard cannot be told: the key is still forgotten here, and the caller says so.
+  let offline = ConnectionSession(fileURL: file, makeTransport: { MockTransportThrowing() })
+  try offline.load()
+  let notTold = await offline.disconnect()
+  try expect(!notTold && (try? BarConnection.load(from: file))?.isSignedOut == true, "An unreachable dashboard still loses the key here")
+}
+
+private actor MockTransportThrowing: BarHTTPTransport {
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) { throw URLError(.cannotConnectToHost) }
+}
+
+/// Section 7: devices/me now and then, and rotation once rotateAfter has passed; the new key is saved before its first use.
+@MainActor private func checkRotation() async throws {
+  let directory = try pairingDirectory("rotate")
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let fake = FakeDashboard()
+  let file = directory.appendingPathComponent("accounts-connection.json")
+  let url = URL(string: "http://192.168.50.10:3000")!
+  let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  guard case .paired(let first, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "Pairing must work for the rotation checks")
+  }
+  var clock = Date()
+  session.now = { clock }
+  // Not due: devices/me was just read, nothing is sent.
+  let mark = fake.requests.count
+  try await session.maintain()
+  try expect(fake.requests.count == mark, "Within six hours of the last devices/me, maintenance sends nothing")
+  // Due: devices/me says rotateAfter has passed; the tray rotates, saves, then uses the new key.
+  fake.with { $0.rotateAfter = "2020-01-01T00:00:00Z" }
+  clock = clock.addingTimeInterval(7 * 3600)
+  try await session.maintain()
+  let saved = try BarConnection.load(from: file)
+  try expect(saved.deviceToken != first.deviceToken && saved.deviceId == first.deviceId && saved.installId == first.installId
+    && session.connection?.deviceToken == saved.deviceToken,
+    "Rotation saves the new key over the old one in the same pairing")
+  _ = try await session.client?.dashboard()
+  try expect(fake.auths.last == "Bearer \(saved.deviceToken ?? "")", "The next request uses the saved new key")
+  // Rotation refused over this transport (trust turned off): keep the key, try again only after an hour.
+  fake.with { $0.rotateAfter = "2020-01-01T00:00:00Z"; $0.refuseRotate = true }
+  clock = clock.addingTimeInterval(7 * 3600)
+  try await session.maintain()
+  let refusedAt = fake.requests.filter { $0.contains("/rotate") }.count
+  clock = clock.addingTimeInterval(10 * 60)
+  try await session.maintain()
+  try expect(fake.requests.filter { $0.contains("/rotate") }.count == refusedAt
+    && (try? BarConnection.load(from: file))?.deviceToken == saved.deviceToken,
+    "A refused rotation keeps the current key and waits an hour before trying again")
+  fake.with { $0.refuseRotate = false }
+  // A revoked key found by maintenance is a sign-out.
+  if let index = fake.deviceList.firstIndex(where: { $0.token == saved.deviceToken }) { fake.revoke(index, "dashboard") }
+  clock = clock.addingTimeInterval(7 * 3600)
+  do {
+    try await session.maintain()
+    throw CheckFailure(description: "A revoked key must surface from maintenance")
+  } catch BarClientError.signedOut(let note) {
+    try expect(note.reason == "device_revoked", "Maintenance reports the dashboard's sign-out")
+  }
+}
+
+/// F6 from the dashboard, OR'd with the tray's own rule.
+private func checkResetPassedField() throws {
+  func window(_ extra: [String: Any]) throws -> AccountQuotaWindow {
+    var object: [String: Any] = ["key": "five_hour", "label": "Five-hour", "usedPercent": 87.5, "remainingPercent": 12.5,
+      "resetAt": "2026-10-02T11:00:00.000Z", "windowMinutes": 300, "used": NSNull(), "limit": NSNull(), "unit": NSNull()]
+    for (key, value) in extra { object[key] = value }
+    return try JSONDecoder().decode(AccountQuotaWindow.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let before = AccountFormatting.date("2026-10-02T10:00:00.000Z")!
+  let marked = try window(["resetPassed": true])
+  try expect(TrayReset.pending(marked, accountSampledAt: "2026-10-02T10:30:00.000Z", now: before) != nil,
+    "resetPassed from the dashboard shows new reading pending even when this Mac's clock is behind")
+  let plain = try window([:])
+  try expect(TrayReset.pending(plain, accountSampledAt: "2026-10-02T10:30:00.000Z", now: before) == nil,
+    "Without the mark, a reset still ahead stands")
+  let after = AccountFormatting.date("2026-10-02T12:00:00.000Z")!
+  try expect(TrayReset.pending(plain, accountSampledAt: "2026-10-02T10:30:00.000Z", now: after) != nil,
+    "The tray's own rule still applies without the mark")
+  let amount = try window(["resetPassed": true, "kind": "balance"])
+  try expect(TrayReset.pending(amount, accountSampledAt: nil, now: after) == nil, "Amounts are left alone")
+  try expect(marked.meterUsedPercent == 87.5, "The old reading stays as history; nothing is zeroed")
+}
+
+/// "Opened · copied 3 of 18" when a bounded copy opened Claude before every record was across.
+private func checkClaudeOpenPartialCopy() throws {
+  func operation(_ state: String, _ confirmed: Int?, _ total: Int?) throws -> ClaudeOpenOperation {
+    var object: [String: Any] = ["id": "op", "platform": "mac", "state": state, "message": NSNull()]
+    object["confirmedCount"] = confirmed ?? NSNull()
+    object["totalCount"] = total ?? NSNull()
+    return try JSONDecoder().decode(ClaudeOpenOperation.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let partial = try operation("opened", 3, 18), whole = try operation("opened", 18, 18), uncounted = try operation("opened", nil, nil)
+  try expect(ClaudeOpenFlow.text(for: partial) == "Opened · copied 3 of 18"
+    && ClaudeOpenFlow.text(for: whole) == "Opened"
+    && ClaudeOpenFlow.text(for: uncounted) == "Opened",
+    "An Open that ended with part of the history copied says how much")
+}
+
 if CommandLine.arguments.contains("--check-live") {
   // Opt-in deployment check is read-only. It never refreshes usage, launches a
   // desktop, activates a profile, or changes automatic switching settings.
@@ -2116,7 +2901,7 @@ do {
   try await checkAntigravityClient()
   print("PASS Antigravity activation, one-use confirmation, fixed guidance, and % used automatic settings")
   try checkDashboardAdditions()
-  print("PASS Antigravity policy and capabilities, activation guards, tray order, and dashboard-hidden providers")
+  print("PASS Antigravity policy and capabilities, activation guards, tray order, and tray-hidden providers and accounts")
   try checkTrayPresentation()
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
   try await checkConnectionChange()
@@ -2127,6 +2912,28 @@ do {
   print("PASS status-item presses toggle instead of dismissing; presses elsewhere still dismiss")
   try await checkClaudeOpenProgress()
   print("PASS Claude Open progress: 200, 202 polling with counts, failed, blocked_uncertain, 409, deadline, one POST")
+  try checkClaudeOpenPartialCopy()
+  print("PASS Claude Open that ends with part of the history copied says how much")
+  try await checkConnectionVersions()
+  print("PASS connection file versions 1 and 2 and signed out: one shape, 0600 in 0700, never a password next to a key")
+  try await checkBearerClient()
+  print("PASS device key as Bearer on every tray route, no login, 401 device codes as sign-outs with who and when, 503 kept")
+  try checkLocalNetwork()
+  print("PASS local-network check: private, loopback and fc00::/7 local; public, CGNAT, link-local and unknown refused")
+  try await checkAddressStates()
+  print("PASS address check states: not local (tray and dashboard), pairing off, setup code, sign-in off, unreachable, wrong address")
+  try await checkPairingFlow()
+  print("PASS pairing: wrong password with tries, refusals, verify before saving, re-pair replaces the key, rate limit, password fallback")
+  try await checkSetupFlow()
+  print("PASS first-run setup code, form checks and strength meter, then pairing")
+  try await checkMigrationFlow()
+  print("PASS migration from a stored password: rollback copy until the first 200, restore on a device code, 24-hour limits")
+  try await checkSignOutAndDisconnect()
+  print("PASS sign-out keeps the address and username without the key; Disconnect revokes on the dashboard, then forgets it")
+  try await checkRotation()
+  print("PASS rotation after rotateAfter: saved before first use, refusals keep the key and wait, revocation surfaces")
+  try checkResetPassedField()
+  print("PASS dashboard resetPassed mark honoured with the tray's own F6 rule")
   print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
   fputs("AI Account Center core check failed: \(error)\n", stderr)

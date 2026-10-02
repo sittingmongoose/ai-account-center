@@ -103,7 +103,13 @@ public enum ClaudeOpenFlow {
       guard let confirmed = operation.confirmedCount, let total = operation.totalCount else { return "Copying history" }
       return "Copying history \(confirmed) of \(total)"
     case "opening": return "Opening"
-    case "opened": return "Opened"
+    case "opened":
+      // A bounded copy (45 s or 50 records) may open Claude before every record is across; the next Open copies
+      // the rest (CLIENT API SHEET 4.7).
+      if let confirmed = operation.confirmedCount, let total = operation.totalCount, confirmed < total {
+        return "Opened · copied \(confirmed) of \(total)"
+      }
+      return "Opened"
     case "failed", "blocked_uncertain": return publicMessage(operation.message)
     default: return nil
     }

@@ -77,7 +77,10 @@ final class PanelController: NSObject, NSWindowDelegate {
     let size = label.fittingSize
     statusItem.length = ceil(size.width)
     label.frame = NSRect(x: 0, y: (button.bounds.height - size.height) / 2, width: ceil(size.width), height: size.height)
-    button.toolTip = model.menuBarReading(prefs).map { "AI Account Center · \($0.detail)" } ?? "AI Account Center"
+    // Signed out or not paired: the logo alone, and the help tag says so (section 9).
+    let signedOut = model.needsConnection && !model.signIn.repair
+    button.toolTip = model.menuBarReading(prefs).map { "AI Account Center · \($0.detail)" }
+      ?? (signedOut ? "AI Account Center · \(model.signIn.menuBarHelp)" : "AI Account Center")
   }
 
   @objc private func statusItemClicked(_ sender: Any?) { toggle() }
@@ -93,6 +96,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     model.pendingCodexSwitch = nil
     model.pendingAntigravitySwitch = nil
     state.settingsOpen = false
+    model.panelOpened()
     var context = OpenContext()
     context.firstOpen = !model.hasOpenedThisSession
     context.from = model.lastShown
@@ -153,11 +157,11 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
   }
 
-  /// Escape closes a popover first, then stops a running connection check (nothing is saved), then closes Settings,
-  /// then an unanswered switch confirmation, then the panel.
+  /// Escape closes a popover first, then stops a running address or password check (nothing is saved), then closes
+  /// Settings, then an unanswered switch confirmation, then the panel.
   func cancel() {
     if popoverShown { state.popoverDismissal += 1 }
-    else if model.checkingConnection { model.cancelConnectionCheck() }
+    else if model.signIn.active && model.signIn.cancelRunning() {}
     else if state.settingsOpen { state.setSettings(false) }
     else if model.pendingCodexSwitch != nil { model.cancelCodexSwitch() }
     else if model.pendingAntigravitySwitch != nil { model.cancelAntigravitySwitch() }

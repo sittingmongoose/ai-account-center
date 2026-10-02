@@ -50,9 +50,13 @@ public enum TrayReset {
   /// The reset time when `resetAt` is in the past and the reading was sampled before it (the window's own
   /// `sampledAt`, else the account's), or when its sample time is unknown. Nil when the reading stands. Amounts,
   /// unlimited and disabled windows are left alone.
+  /// The dashboard's own `resetPassed: true` counts as well, so a Mac clock running behind the server never shows a
+  /// reading the dashboard has already marked as from before its reset.
   public static func pending(_ window: AccountQuotaWindow, accountSampledAt: String?, now: Date = TrayFormat.now) -> Date? {
     guard window.isMeter, window.unlimited != true, window.enabled != false,
-      let reset = AccountFormatting.date(window.resetAt), reset <= now else { return nil }
+      let reset = AccountFormatting.date(window.resetAt) else { return nil }
+    if window.resetPassed == true { return reset }
+    guard reset <= now else { return nil }
     if let sampled = AccountFormatting.date(window.sampledAt ?? accountSampledAt), sampled >= reset { return nil }
     return reset
   }

@@ -124,6 +124,15 @@ struct TrayPalette {
     }
   }
   var critText: Color { dark ? Self.hex(0xFF8469) : Self.hex(0xBC3219) }
+  /// The error edge of a field, and its halo.
+  var crit: Color { dark ? Self.hex(0xFF6D50) : Self.hex(0xCF4127) }
+  /// The calm green of a finished pairing (the primary button's done layer, the step checks).
+  var calm: Color { dark ? Self.hex(0x46C7B2) : Self.hex(0x23907F) }
+  /// A field on the glass: the glass control body and its hairline edge (--lg-ctl, --lg-ctl-edge).
+  var control: Color { dark ? Color.white.opacity(0.11) : Color.white.opacity(0.52) }
+  var controlEdge: Color { dark ? Color.black.opacity(0.40) : Color.black.opacity(0.10) }
+  /// Reduce Transparency: a solid field (--lg-solid-ctl).
+  var solidControl: Color { dark ? Self.hex(0x3A3B40) : Self.hex(0xFFFFFF) }
   var warnText: Color { dark ? Self.hex(0xF5C35D) : Self.hex(0x9A6100) }
   var warn: Color { dark ? Self.hex(0xF3B743) : Self.hex(0xC98410) }
 }

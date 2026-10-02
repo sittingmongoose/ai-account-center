@@ -19,6 +19,12 @@ enum CCSBarMain {
     if arguments.count == 3, arguments[1] == "--self-test" {
       PanelSelfTest.run(input: arguments[2])
     }
+    if arguments.count == 2, arguments[1] == "--check-signin" {
+      SignInCheck.run()
+    }
+    if arguments.count >= 3, arguments[1] == "--e2e" {
+      TrayE2E.run(arguments: Array(arguments.dropFirst(2)))
+    }
     if arguments.count == 3, arguments[1] == "--toggle-test" {
       PanelToggleTest.run(input: arguments[2])
     }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import CCSBarCore
 
 struct PendingCodexSwitch: Identifiable {
@@ -44,12 +45,21 @@ final class AccountsViewModel: ObservableObject {
   /// The first open of a session sweeps every meter from zero.
   var hasOpenedThisSession = false
   let isPreview: Bool
-  /// True while Connect or Save checks the entered details against the dashboard.
-  @Published private(set) var checkingConnection = false
-  /// The saved connection and its client. Sign-in and Change replace them only after the dashboard accepts the new
-  /// details (`ConnectionSession.change`).
-  private let session = ConnectionSession()
+  /// The saved connection and its client. Pairing, Re-pair and the address check replace them only after the
+  /// dashboard accepts the new details and the new key has worked once (`ConnectionSession.pair`).
+  let session: ConnectionSession
   private var client: AccountsClient? { session.client }
+  /// The sign-in screen (first run, pairing, the local-network refusals, a remote sign-out, Re-pair, Disconnect).
+  let signIn = SignInModel()
+  /// This connection as the dashboard sees it (`GET /api/auth/check`), read when Settings opens.
+  @Published private(set) var connectionCheck: AuthCheck?
+  @Published private(set) var checkingConnectionInfo = false
+  /// A short status line after pairing ("Paired · signed in with a device key"), shown in the header for a moment.
+  @Published private(set) var statusFlash: String?
+  /// After a hand-off the list loads in with the first-open stagger and every meter sweeps from 0.
+  @Published private(set) var listEntrance: OpenContext?
+  @Published private(set) var listGeneration = 0
+  private var signInWatch: [AnyCancellable] = []
   /// Bumped when a verified Change replaces the client, so a sample still in flight from the old one is dropped.
   private var connectionGeneration = 0
   /// The windows now drawn as "new reading pending" (F6), so the timer redraws only when one flips.
@@ -63,23 +73,43 @@ final class AccountsViewModel: ObservableObject {
   /// How often a running Open is read: 1 s, then every 5 s after two minutes, giving up after three.
   private let openPolling = ClaudeOpenPolling()
 
-  /// The first-run connect screen with no connection file and no network, for offline renders.
+  /// The first-run sign-in screen with no connection file and no network, for offline renders and the self-test.
   init(previewWithoutConnection: Bool) {
     isPreview = true
+    session = ConnectionSession(fileURL: FileManager.default.temporaryDirectory
+      .appendingPathComponent("aac-preview-\(UUID().uuidString)/accounts-connection.json"))
+    watchSignIn()
+    signIn.holdsState = true
+    signIn.showFirstRun()
   }
 
-  init(preview: AccountDashboard? = nil) {
+  init(preview: AccountDashboard? = nil, session: ConnectionSession? = nil) {
+    self.session = session ?? ConnectionSession()
     if let preview {
       isPreview = true
       dashboard = preview
       connected = true
       lastSyncedAt = AccountFormatting.date(preview.updatedAt)
+      watchSignIn()
       return
     }
     isPreview = false
+    watchSignIn()
     configure()
     configureRefreshTimer(60)
   }
+
+  /// The panel follows the sign-in screen's visibility, state and Re-pair flag.
+  private func watchSignIn() {
+    signIn.owner = self
+    signInWatch = [
+      signIn.$active.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() },
+      signIn.$state.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() },
+      signIn.$repair.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() },
+    ]
+  }
+
+  var deviceName: String { session.deviceName }
 
   private func configureRefreshTimer(_ interval: TimeInterval) {
     if timer?.timeInterval == interval { return }
@@ -94,12 +124,14 @@ final class AccountsViewModel: ObservableObject {
     }
   }
 
+  /// Signed out or not paired, the menu bar shows the template logo with no percentage (section 9).
   func menuBarReading(_ prefs: TrayPreferences) -> MenuBarReading? {
-    MenuBarReading.make(dashboard: dashboard, source: prefs.menuBarSource, mode: prefs.menuBarMode)
+    guard !signIn.active || signIn.repair else { return nil }
+    return MenuBarReading.make(dashboard: dashboard, source: prefs.menuBarSource, mode: prefs.menuBarMode)
   }
 
-  /// No saved connection and nothing to show: the panel offers the connect form.
-  var needsConnection: Bool { connection == nil && dashboard == nil }
+  /// The sign-in screen shows in place of the list.
+  var needsConnection: Bool { signIn.active }
 
   var hasPendingConfirmation: Bool { pendingCodexSwitch != nil || pendingAntigravitySwitch != nil }
 
@@ -113,45 +145,144 @@ final class AccountsViewModel: ObservableObject {
       try session.load()
       connection = session.connection
       message = nil
-      Task { await refresh() }
+      guard let saved = session.connection else { signIn.showFirstRun(); return }
+      if saved.isPaired {
+        Task { await refresh() }
+      } else if saved.hasPassword {
+        // Section 8: a stored password is traded for a device key by itself, once (state 9).
+        signIn.startSecuring()
+      } else if let note = saved.signedOut {
+        if note.reason == "disconnected" {
+          signIn.showDisconnected(at: AccountFormatting.date(note.at) ?? Date(), told: true, address: saved.baseURL.absoluteString)
+        } else {
+          signIn.showSignedOut(note, connection: saved)
+        }
+      }
     } catch {
       session.clear()
       connection = nil
-      message = FileManager.default.fileExists(atPath: BarConnection.configURL.path)
-        ? error.localizedDescription : nil
+      let exists = FileManager.default.fileExists(atPath: session.fileURL.path)
+      signIn.showFirstRun()
+      message = exists ? error.localizedDescription : nil
     }
   }
 
-  /// Connect and Change: verify, then save. A temporary client signs in with the entered details and reads the
-  /// dashboard; only then are they written privately (0700 directory, 0600 file, the same JSON) and the live client
-  /// replaced. A wrong address, a rejected login, a timeout or Cancel keeps the saved file and the live client.
-  /// Returns nil on success, or the message for the form.
-  func changeConnection(baseURL: String, username: String, password: String) async -> String? {
-    guard !isPreview else { return nil }
-    checkingConnection = true
-    let failure = await session.change(baseURL: baseURL, username: username, password: password)
-    checkingConnection = false
-    if let failure { return failure }
+  // MARK: Pairing hand-offs (called by the sign-in screen)
+
+  /// A new key works and is saved (or, on a dashboard without pairing, a verified password): the list loads in.
+  func didPair(flash: String) {
     connectionGeneration += 1
     pendingCodexSwitch = nil
     pendingAntigravitySwitch = nil
-    // The replaced connection's Open stops reading it and its row rests (the generation check drops both).
     openProgress = [:]
     connection = session.connection
     connected = false
     message = nil
-    await refresh()
-    return nil
+    var context = OpenContext()
+    context.firstOpen = true
+    context.animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    listEntrance = context
+    listGeneration += 1
+    flashStatus(flash)
+    Task { await refresh() }
   }
 
-  /// Cancel or Escape while a connection check runs.
-  func cancelConnectionCheck() { session.cancelCheck() }
+  /// The stored password stays (no pairing on this dashboard yet, or no answer): today's login keeps working.
+  func didKeepPassword() {
+    connection = session.connection
+    Task { await refresh() }
+  }
+
+  func cancelRepair() {
+    connection = session.connection
+  }
+
+  func beginRepair() {
+    guard let connection = session.connection else { signIn.showFirstRun(); return }
+    signIn.lastSyncedAt = lastSyncedAt
+    signIn.beginRepair(connection: connection)
+  }
+
+  /// Settings › Pair, for a tray still on its stored password.
+  func pairNow() {
+    guard session.connection?.hasPassword == true else { beginRepair(); return }
+    signIn.startSecuring()
+  }
+
+  /// Settings › Disconnect: the dashboard revokes this key, the tray forgets it and shows the first-run screen with
+  /// the last address filled in.
+  func disconnect() {
+    guard !isPreview else { return }
+    let address = session.connection?.baseURL.absoluteString ?? ""
+    Task { @MainActor in
+      let told = await session.disconnect()
+      connectionGeneration += 1
+      connection = session.connection
+      dashboard = nil
+      connected = false
+      openProgress = [:]
+      pendingCodexSwitch = nil
+      pendingAntigravitySwitch = nil
+      message = nil
+      recordStatus(connected: false)
+      signIn.showDisconnected(at: Date(), told: told, address: address)
+    }
+  }
+
+  /// Section 9: a 401 device code. The key is deleted, polling stops, and the signed-out screen shows who and when if
+  /// the dashboard said so. During a migration's first check the stored password comes back instead.
+  func handleSignedOut(_ note: SignedOutNote) {
+    session.signOut(note)
+    connectionGeneration += 1
+    connection = session.connection
+    openProgress = [:]
+    pendingCodexSwitch = nil
+    pendingAntigravitySwitch = nil
+    message = nil
+    if let restored = session.connection, restored.hasPassword {
+      Task { await refresh() }
+      return
+    }
+    connected = false
+    recordStatus(connected: false)
+    signIn.lastSyncedAt = lastSyncedAt
+    if let saved = session.connection { signIn.showSignedOut(note, connection: saved) } else { signIn.showFirstRun() }
+  }
+
+  /// One action's failure: a sign-out goes to its screen; anything else is the panel's message.
+  private func fail(_ error: Error) {
+    if case BarClientError.signedOut(let note) = error { handleSignedOut(note) } else { message = error.localizedDescription }
+  }
+
+  private func flashStatus(_ text: String) {
+    statusFlash = text
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 3_000_000_000)
+      if statusFlash == text { statusFlash = nil }
+    }
+  }
+
+  /// The panel opened: later opens use the panel's own entrance again.
+  func panelOpened() { listEntrance = nil }
+
+  /// Settings › Connection's "This connection" line, from the public `GET /api/auth/check`.
+  func readConnectionInfo() {
+    guard !isPreview, let base = session.connection?.baseURL, !checkingConnectionInfo else { return }
+    checkingConnectionInfo = true
+    Task { @MainActor in
+      let probe = DashboardProbe(baseURL: base)
+      let answer = await bounded(10) { try? await probe.check() } ?? nil
+      connectionCheck = answer
+      checkingConnectionInfo = false
+    }
+  }
 
   func refresh(force: Bool = false) async {
     guard !isPreview, !isRefreshing, busyAction == nil, !hasPendingConfirmation, let client else { return }
     let generation = connectionGeneration
     isRefreshing = true
     var replaced = false
+    var signedOut: SignedOutNote?
     do {
       let value = try await client.dashboard(refresh: force)
       guard value.schemaVersion == 1 else { throw BarClientError.decoding }
@@ -163,7 +294,12 @@ final class AccountsViewModel: ObservableObject {
         lastSyncedAt = Date()
         message = nil
         recordStatus(connected: true)
+        // The pending migration check, devices/me and rotation (sections 7 and 8).
+        do { try await session.maintain() } catch BarClientError.signedOut(let note) { signedOut = note } catch {}
+        connection = session.connection
       } else { replaced = true }
+    } catch BarClientError.signedOut(let note) {
+      if generation == connectionGeneration { signedOut = note } else { replaced = true }
     } catch {
       if generation == connectionGeneration {
         connected = false
@@ -172,7 +308,8 @@ final class AccountsViewModel: ObservableObject {
       } else { replaced = true }
     }
     isRefreshing = false
-    // A Change landed while this sample was in flight: read the new connection now.
+    if let signedOut { handleSignedOut(signedOut); return }
+    // A new connection landed while this sample was in flight: read it now.
     if replaced { await refresh() }
   }
 
@@ -188,7 +325,8 @@ final class AccountsViewModel: ObservableObject {
   }
 
   private func recordStatus(connected: Bool) {
-    let file = BarConnection.configURL.deletingLastPathComponent().appendingPathComponent("native-status.json")
+    // Next to the connection file: ~/.ccs/bar for the installed tray, the isolated folder for checks.
+    let file = session.fileURL.deletingLastPathComponent().appendingPathComponent("native-status.json")
     let value: [String: Any] = [
       "connected": connected,
       "checkedAt": ISO8601DateFormatter().string(from: Date()),
@@ -246,7 +384,7 @@ final class AccountsViewModel: ObservableObject {
         pendingCodexSwitch = PendingCodexSwitch(accountID: id, profile: profile,
           identity: identity, confirmation: confirmation)
         message = nil
-      } catch { message = error.localizedDescription }
+      } catch { fail(error) }
       busyAction = nil
       if succeeded { await refresh() }
     }
@@ -301,7 +439,7 @@ final class AccountsViewModel: ObservableObject {
         } else {
           message = Self.antigravityApprovalFailed
         }
-      } catch { message = error.localizedDescription }
+      } catch { fail(error) }
       busyAction = nil
       // A consumed approval may have changed the Ubuntu runtime even when it failed; show the truth, but
       // keep the failure text that a successful refresh would otherwise clear.
@@ -355,6 +493,10 @@ final class AccountsViewModel: ObservableObject {
             let current = await MainActor.run { self.connectionGeneration }
             guard generation == current else { throw CancellationError() }
           }, progress: { value in await self.report(key: key, generation: generation, value) })
+      } catch BarClientError.signedOut(let note) {
+        openProgress[key] = nil
+        if generation == connectionGeneration { handleSignedOut(note) }
+        return
       } catch { failure = error.localizedDescription }
       guard generation == connectionGeneration else { openProgress[key] = nil; return }
       // Nothing came back: the POST failed, or another Open for this Claude profile refused it. Either way this
@@ -402,7 +544,7 @@ final class AccountsViewModel: ObservableObject {
         try await operation(client)
         message = nil
         succeeded = true
-      } catch { message = error.localizedDescription }
+      } catch { fail(error) }
       busyAction = nil
       if succeeded { await refresh() }
     }
