@@ -24,6 +24,7 @@ test('the view model is versioned and lists Claude, Codex and Antigravity sectio
   assert.equal(vm.version, 2);
   assert.deepEqual(vm.sections.map(row => row.id), ['claude', 'codex', 'antigravity']);
   assert.deepEqual(vm.cards.map(card => card.id), ['cursor:a', 'kimi-code:a']);
+  assert.deepEqual(vm.cards.map(card => card.provider), ['cursor', 'kimi-code']);
   assert.deepEqual(vm.registry.map(row => row.id), ['claude', 'codex', 'antigravity', 'cursor', 'muse', 'kimi-code', 'qwen', 'zai', 'opencode-go']);
   assert.equal(vm.registry.find(row => row.id === 'muse').count, 0);
   // no Antigravity section without Antigravity accounts

@@ -4,9 +4,16 @@ Source: [AI Account Center](https://github.com/sittingmongoose/ai-account-center
 a fork of [CCS](https://github.com/kaitranntt/ccs).
 
 The production account dashboard is a real Slint UI compiled from
-`ui/dashboard.slint` to Rust and WebAssembly. `public/bridge.js` supplies browser
-session authentication, same-origin API requests and asynchronous updates; it
-does not render the dashboard. No React production assets are required.
+`ui/dashboard.slint` to Rust and WebAssembly, in the Daylight Atlas design
+(light, dark and auto themes, embedded Instrument Sans and Martian Mono, Lucide
+icons, official provider marks and the Apex Soft logo). `public/bridge.js`
+supplies browser session authentication, same-origin API requests, URL state
+(`?view=home|analytics|accounts`) and asynchronous updates; it does not render
+the dashboard. `public/view-model.mjs` turns the API responses into the version 2
+view model that `src/lib.rs` writes into persistent Slint models in place, so
+changed readings animate. [ui/README-ARCHITECTURE.md](ui/README-ARCHITECTURE.md)
+maps the shell, the component library, the theme tokens and the data seam.
+No React production assets are required.
 The browser probes WebGL on a separate disposable canvas before starting Slint's
 supported FemtoVG WebAssembly renderer. If WebGL is denied or unavailable,
 the page displays a readable request to enable browser hardware acceleration.
@@ -41,32 +48,35 @@ page as file:// or configure a cross-origin API URL.
 ## Data and controls
 
 - GET `/api/accounts/dashboard` supplies consolidated provider accounts.
-- Claude and Codex table summaries show provider-reported 5-hour and weekly
-  percentages. They never invent token denominators or reset times.
-- Detail views retain every returned quota window, credit balance, numeric
-  amount, unlimited/enabled state, reset date and separate expiration date.
-  Product display exclusions remove Codex Chat pass, attach Qwen subscription
-  expiration to monthly usage, and hide empty Z.ai reset-pack summaries.
-- Provider cards preview up to three actual windows. Their Details control
-  shows all windows from every returned account.
-- Claude launch icons POST the configured profile ID plus Mac/Windows choice.
-- Codex activation and auto-switch settings reuse authenticated guarded APIs.
-  The threshold is shown in percent used and sent in percent remaining.
-  Busy activation opens a Slint review dialog listing the blocking programs.
-  Yes submits the server-issued, target-bound approval token; Cancel sends no
-  mutation. Expired or stale approvals require a fresh Activate review.
-  The active Codex identity appears in both the page and Codex headers, with
-  its table row highlighted and marked Active.
-- Update apps starts the allowlisted asynchronous update job only after the
-  user presses the button; it is never run while the dashboard starts.
-- Usage refreshes at the server-confirmed interval configured in Settings
-  (30–3600 seconds, initially 60 seconds). Dashboard and Analytics Refresh
-  controls request fresh usage before reloading their views.
-  Failed refreshes retain received samples and
-  display their failure; unavailable values are never replaced with zero.
-- Analytics is a dashboard navigation tab with all provider/account filters,
-  observed quota history, reset/expiration details and authentic local CLI
-  activity. History gaps stay empty; estimated API-equivalent costs are labeled.
+- Home shows Claude, then Codex and Antigravity as switchable sections, then one
+  card per account of the other providers. Meters show provider-reported
+  percentages with severity colours (warning from 80%, critical from 95%), the
+  auto-switch threshold notch and reported overage; they never invent token
+  denominators or reset times, and a missing reading is drawn as unavailable,
+  never as zero. Fable appears only for Claude Max plans, from the
+  `seven_day_fable` window ("Not reported yet" when absent).
+- Details (a slide-over opened by clicking any account row or card; closed by a
+  click outside it or Escape) retain every visible quota window, credit balance,
+  numeric amount, unlimited/enabled state, reset date and separate expiration
+  date. Product display exclusions remove Codex Chat pass, attach Qwen
+  subscription expiration to monthly usage, and hide empty Z.ai reset-pack
+  summaries.
+- Claude launch buttons POST the configured profile ID plus Mac/Windows choice.
+- Codex and Antigravity activation and auto-switch settings reuse authenticated
+  guarded APIs. Thresholds are shown in percent used (Codex sends percent
+  remaining). Busy activation opens a Slint review dialog listing the blocking
+  programs. Yes submits the server-issued, target-bound approval token; Cancel
+  sends no mutation. Expired or stale approvals require a fresh Activate review.
+  The active account is the selected row, marked Active.
+- Update apps is its own header button. It starts the allowlisted asynchronous
+  update job only after the user presses it, shows progress in place and the
+  result as a toast; it is never run while the dashboard starts.
+- Usage refreshes at the server-confirmed interval configured in Accounts &
+  Settings (30–3600 seconds, initially 60 seconds). Refresh requests fresh usage
+  before reloading. Failed refreshes keep the received samples and report the
+  failure as a toast; unavailable values are never replaced with zero.
+- Analytics shows the KPI row and the quota history (one row per account,
+  grouped by provider) from the version 2 analytics view model.
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
@@ -79,7 +89,9 @@ node --test web-dashboard/tests/*.test.mjs
 
 The Slint compiler validates UI bindings during the actual WASM release build.
 The data tests cover unknown versus genuine zero, credit units/expiration,
-additional counters, confirmed auto-switch thresholds and complete details.
+additional counters, confirmed auto-switch thresholds, complete details and the
+version 2 view models (sections, Fable, switchable providers, hidden providers,
+quota history).
 
 For automated Chromium DPI checks, launch a disposable browser with
 `--force-device-scale-factor=N` and a new context with `device_scale_factor=N`
@@ -98,6 +110,8 @@ Official API documentation: https://docs.slint.dev/latest/docs/rust/slint/
 The dashboard application source follows the parent CCS project's MIT license.
 Slint 1.18.1 is used under its
 [Royalty-free license](https://github.com/slint-ui/slint/blob/v1.18.1/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md).
-The standard unmodified `AboutSlint` widget is available at the bottom of the
-Settings dialog, accessible from the dashboard's top-level Settings menu.
+The standard unmodified `AboutSlint` widget is shown in the About section of the
+Accounts & Settings page.
+Instrument Sans and Martian Mono are embedded under the SIL Open Font License 1.1
+and the icons are Lucide (ISC); see `public/assets/THIRD-PARTY-NOTICES.txt`.
 See [Slint's licensing FAQ](https://github.com/slint-ui/slint/blob/master/FAQ.md#what-obligations-do-i-need-to-fulfil-to-use-the-royalty-free-license).

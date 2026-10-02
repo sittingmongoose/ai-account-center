@@ -396,11 +396,15 @@ export component ProviderCard inherits Card {
     in property <int> index;
     in property <string> selected-id;
     selected: root.card.account-id == root.selected-id && root.selected-id != "";
+    // equal widths in every grid row: the same small preferred width, the same stretch
+    min-width: 240px;
+    preferred-width: 240px;
+    horizontal-stretch: 1;
     HorizontalLayout {
         spacing: 12px;
         VerticalLayout {
             alignment: start;
-            ProviderMark { provider: root.card.id; size: 28px; }
+            ProviderMark { provider: root.card.provider; size: 28px; }
         }
         VerticalLayout {
             spacing: 1px;
@@ -410,8 +414,12 @@ export component ProviderCard inherits Card {
         }
     }
     Rectangle { height: 14px; }
+    // cards in one grid row share a height: the meters keep their own height and the spare space
+    // collects above the source line
     VerticalLayout {
         spacing: 14px;
+        alignment: start;
+        vertical-stretch: 0;
         for m[k] in root.card.meters: Meter {
             data: m;
             inline: true;

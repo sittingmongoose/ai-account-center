@@ -46,13 +46,17 @@ export component AccountsPage inherits Rectangle {
     page := HorizontalLayout {
         spacing: 20px;
         alignment: start;
+        // each column keeps its own height (top-aligned), the row does not stretch the shorter one
+        VerticalLayout {
+        alignment: start;
+        horizontal-stretch: 3;
         Reveal {
             armed: root.ready;
             delay: 40ms;
-            horizontal-stretch: 3;
             Plate {
                 min-height: providers.preferred-height;
                 providers := VerticalLayout {
+                    alignment: start;
                     padding-left: 20px;
                     padding-right: 20px;
                     padding-top: 16px;
@@ -87,15 +91,19 @@ export component AccountsPage inherits Rectangle {
                 }
             }
         }
+        }
+        VerticalLayout {
+        alignment: start;
+        horizontal-stretch: 2;
+        min-width: 360px;
+        max-width: 480px;
         Reveal {
             armed: root.ready;
             delay: 80ms;
-            horizontal-stretch: 2;
-            min-width: 360px;
-            max-width: 480px;
             Plate {
                 min-height: settings.preferred-height;
                 settings := VerticalLayout {
+                    alignment: start;
                     padding-left: 20px;
                     padding-right: 20px;
                     padding-top: 16px;
@@ -145,6 +153,7 @@ export component AccountsPage inherits Rectangle {
                     }
                 }
             }
+        }
         }
     }
 }

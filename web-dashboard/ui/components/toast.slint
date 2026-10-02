@@ -11,7 +11,7 @@ component ToastItem inherits Rectangle {
     property <bool> entered: false;
     property <bool> leaving: false;
     property <bool> gone: false;
-    property <length> natural: inner.preferred-height + 28px;
+    property <length> natural: inner.preferred-height;
 
     init => { root.entered = true; }
     life := Timer {

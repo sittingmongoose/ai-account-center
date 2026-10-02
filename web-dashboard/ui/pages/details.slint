@@ -175,9 +175,11 @@ export component DetailsPanel inherits Rectangle {
             Stagger {
                 index: 3;
                 run: root.open;
-                HorizontalLayout {
+                // the actions wrap onto a second line instead of eliding their labels
+                FlexboxLayout {
                     padding-top: 16px;
-                    spacing: 8px;
+                    spacing-horizontal: 8px;
+                    spacing-vertical: 8px;
                     alignment: start;
                     if root.data.provider == "claude": Button {
                         small: true;

@@ -239,6 +239,7 @@ struct SectionDto {
 #[serde(default, rename_all = "camelCase")]
 struct CardDto {
     id: String,
+    provider: String,
     account_id: String,
     label: String,
     identity: String,
@@ -478,6 +479,7 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
         );
         cards.push(ProviderCardView {
             id: card.id.into(),
+            provider: card.provider.into(),
             account_id: card.account_id.into(),
             label: card.label.into(),
             identity: card.identity.into(),

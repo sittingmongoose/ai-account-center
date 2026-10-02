@@ -240,7 +240,9 @@ component Header inherits Rectangle {
         padding-left: Breakpoints.gutter;
         padding-right: Breakpoints.gutter;
         spacing: Breakpoints.compact ? 16px : 24px;
+        // Only the spacer stretches, so nothing in the header moves when the status text changes.
         brand := Rectangle {
+            horizontal-stretch: 0;
             min-width: brand-row.preferred-width;
             brand-row := HorizontalLayout {
                 spacing: 10px;
@@ -268,10 +270,12 @@ component Header inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
+            horizontal-stretch: 0;
             NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
         }
         Rectangle { horizontal-stretch: 1; }
         status := Rectangle {
+            horizontal-stretch: 0;
             min-width: status-row.preferred-width;
             status-row := HorizontalLayout {
                 spacing: 4px;
@@ -418,6 +422,8 @@ component PageScroll inherits Rectangle {
     flick := Flickable {
         width: root.width;
         height: root.height;
+        // a hover card belongs to the element under the pointer: scrolling moves that element away
+        changed content-y => { Hover.clear(); }
         content-width: root.width;
         content-height: max(root.height, root.content-height);
         @children
@@ -652,9 +658,8 @@ export component Dashboard inherits Window {
             view-h: root.height;
             open: root.details-open;
             close-requested => { root.close-details(); }
+            // Fills the panel's content area (no explicit size: `parent` here would be the SlideOver).
             DetailsPanel {
-                width: parent.width;
-                height: parent.height;
                 data: root.details;
                 open: root.details-open;
                 busy: root.busy;

@@ -356,7 +356,7 @@ function providerCards(accounts, hidden, now) {
       const provider = PROVIDER_REGISTRY.find(row => row.id === account.provider);
       const meters = visibleMeters(account).filter(w => usedPercent(w) !== null).slice(0, 3).map(w => meterView(account, w, { now }));
       return {
-        id: account.id, accountId: account.id, label: provider?.label || text(account.providerLabel),
+        id: account.id, provider: account.provider, accountId: account.id, label: provider?.label || text(account.providerLabel),
         identity: text(account.email) || text(account.label) || 'Identity unavailable', plan: text(account.plan),
         status: statusWord(account),
         source: [account.status === 'cached' ? `Cached · sampled ${relative(account.sampledAt || account.fetchedAt, now)}` : statusWord(account), text(account.source)].filter(Boolean).join(' · '),
