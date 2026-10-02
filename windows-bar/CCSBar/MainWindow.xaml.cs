@@ -121,13 +121,24 @@ public partial class MainWindow : Window
 
     public async Task OpenPopup(bool settings = false)
     {
-        var wasVisible = IsVisible;
-        PositionPopup();
-        if (!wasVisible) { Show(); PlayOpen(); }
-        Activate();
+        ShowPanel();
         App.Trace("panel shown, visible=" + IsVisible);
         if (settings && !settingsVisible) OpenSettings();
         if (!signInVisible) await Refresh(true);
+    }
+
+    /// <summary>Positions, shows and activates the panel with the open animation (no refresh).</summary>
+    internal void ShowPanel()
+    {
+        var wasVisible = IsVisible;
+        PositionPopup();
+        if (!wasVisible)
+        {
+            Show(); PlayOpen();
+            // A sample that arrived while the panel was hidden had no layout yet: place the selected-row platter now.
+            Dispatcher.BeginInvoke(new Action(() => { PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
+        }
+        Activate();
     }
 
     public async Task TogglePopup()

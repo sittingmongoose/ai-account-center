@@ -119,6 +119,15 @@ public static class FixtureRender
             // The restyled notification-area menu (WinForms ContextMenuStrip with the Atlas renderer).
             report.Checks[$"{name}_tray_menu_styled"] = TrayMenu(Path.Combine(directory, $"tray-menu-{name}.png"));
 
+            // A sample that arrives while the panel is hidden (background start) still gets its platter on open.
+            var hiddenFirst = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Width = 760, Height = 850 };
+            hiddenFirst.UseFixtureConnection();
+            hiddenFirst.ApplyDashboardSample(Clone(fixture));
+            hiddenFirst.ShowPanel();
+            await Settle(hiddenFirst);
+            report.Checks[$"{name}_platter_placed_after_hidden_sample"] = PlatterOn(hiddenFirst, "codex", "row:codex:example-2", measures, name + "_hidden");
+            hiddenFirst.AllowClose = true; hiddenFirst.Close();
+
             // First run: the sign-in screen.
             var signIn = new MainWindow(new Preferences { Theme = name, Hotkey = false }, loadConnection: false) { ShowActivated = false, Left = 40, Top = 40, Width = 760, Height = 850 };
             signIn.Show(); signIn.ShowSignIn(firstRun: true);
