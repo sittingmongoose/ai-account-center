@@ -283,6 +283,8 @@ describe('additional account usage service', () => {
     expect(projected.message).toBe(manual.message);
     const dashboard = new AccountDashboardService({
       scope: () => 'muse-cached-fixture',
+      // The fixture reading is current: its weekly reset is still ahead.
+      now: () => Date.parse(instant),
       refreshIntervalSeconds: () => 60,
       getCodexSummary: async () => ({ active: null, activated: null, default: null, profiles: [] }),
       getCodexRows: async () => [],

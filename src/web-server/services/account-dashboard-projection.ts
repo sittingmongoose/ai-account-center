@@ -116,7 +116,9 @@ export function codexAccount(
           ? 'Codex usage is temporarily unavailable.'
           : null,
     fetchedAt: timestamp(row?.fetchedAt),
-    sampledAt: timestamp(row?.fetchedAt),
+    // A local fallback reading is fetched now but was written when its session file
+    // last changed (staleAsOf, set once that is over five minutes ago).
+    sampledAt: timestamp(row?.staleAsOf) ?? timestamp(row?.fetchedAt),
     isActive: activated?.name === profile.name,
     windows:
       connected && row?.quotaStatus === 'ok'

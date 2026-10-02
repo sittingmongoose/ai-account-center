@@ -9,7 +9,10 @@ import {
 import { acquireCodexActivationLock } from '../../../src/codex-auth/codex-activation-lock';
 import { CodexProfileRegistry } from '../../../src/codex-auth/codex-profile-registry';
 import { resolveCodexProfileDir } from '../../../src/codex-auth/codex-profile-paths';
-import { invalidateCodexAuthProfilesCache } from '../../../src/codex-auth/codex-auth-dashboard-service';
+import {
+  getCodexAuthProfilesSummary,
+  invalidateCodexAuthProfilesCache,
+} from '../../../src/codex-auth/codex-auth-dashboard-service';
 
 const originalCcsHome = process.env.CCS_HOME;
 let temporary: string;
@@ -283,5 +286,43 @@ describe('workspace and principal bound activation', () => {
     expect(fs.readFileSync(liveAuth())).toEqual(original);
     expect(fs.readFileSync(profileAuth('personal'))).toEqual(savedPersonal);
     expect(fs.readFileSync(profileAuth('workspace'))).toEqual(target);
+  });
+
+  it('names the saved profile that holds the live login, never the first one with its email', async () => {
+    const activatedName = async (): Promise<string | null | undefined> => {
+      invalidateCodexAuthProfilesCache();
+      return (await getCodexAuthProfilesSummary(codexHome)).activated?.name;
+    };
+    expect(await activatedName()).toBe('personal');
+    await activateCodexProfile('workspace', { registry, codexHome, runtime: stubRuntime([]) });
+    invalidateCodexAuthProfilesCache();
+    const summary = await getCodexAuthProfilesSummary(codexHome);
+    // The email is shown; the workspace and principal choose the profile.
+    expect(summary.activated).toMatchObject({ name: 'workspace', email: 'shared@example.test' });
+    expect(JSON.stringify(summary)).not.toContain('same-user');
+    // Same email and workspace, another person: a different account.
+    fs.writeFileSync(liveAuth(), syntheticAuth({ ...workspace, userId: 'other-user' }));
+    expect(await activatedName()).toBeNull();
+    // Same email, a workspace no saved profile holds.
+    fs.writeFileSync(
+      liveAuth(),
+      syntheticAuth({ ...personal, accountId: 'unsaved', storedAccountId: 'unsaved' })
+    );
+    expect(await activatedName()).toBeNull();
+    // A live login without a workspace binding matches no saved profile by email alone.
+    fs.writeFileSync(liveAuth(), syntheticAuth({ userId: 'same-user' }));
+    expect(await activatedName()).toBeNull();
+  });
+
+  it('names the most recently activated of two saved copies of one login', async () => {
+    fs.writeFileSync(liveAuth(), syntheticAuth(workspace));
+    writeProfile('workspace-copy', syntheticAuth({ ...workspace, rotation: 3 }));
+    registry.updateProfile('workspace', { last_used: '2026-10-01T10:00:00.000Z' });
+    registry.updateProfile('workspace-copy', { last_used: '2026-10-01T11:00:00.000Z' });
+    invalidateCodexAuthProfilesCache();
+    expect((await getCodexAuthProfilesSummary(codexHome)).activated?.name).toBe('workspace-copy');
+    registry.updateProfile('workspace', { last_used: '2026-10-01T12:00:00.000Z' });
+    invalidateCodexAuthProfilesCache();
+    expect((await getCodexAuthProfilesSummary(codexHome)).activated?.name).toBe('workspace');
   });
 });

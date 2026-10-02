@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 941,
+    "totalOccurrences": 942,
     "filesAffected": 98,
     "hotpathOccurrences": 428,
     "hotpathFilesAffected": 57,
@@ -593,8 +593,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 29,
-      "totalSourceFiles": 358,
-      "coverageRatio": 0.081,
+      "totalSourceFiles": 359,
+      "coverageRatio": 0.0808,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -621,7 +621,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 118,
+          "count": 119,
           "withLogger": 13
         },
         {
@@ -740,7 +740,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 36,
+      "countOver400": 37,
       "countOver600": 12,
       "topOver400": [
         {
@@ -776,16 +776,16 @@
           "loc": 767
         },
         {
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 637
+        },
+        {
           "file": "src/web-server/services/additional-account-service.ts",
           "loc": 636
         },
         {
           "file": "src/cliproxy/services/usage-compatibility-transformer.ts",
           "loc": 632
-        },
-        {
-          "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 622
         },
         {
           "file": "src/cliproxy/services/stats-fetcher.ts",

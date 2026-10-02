@@ -259,7 +259,10 @@ describe('consolidated account dashboard', () => {
     expect(rows[1].capabilities.codexProfile).toBeNull();
   });
   it('returns three saved Codex accounts, four selected Claude accounts and seven usage providers', async () => {
-    const result = await new AccountDashboardService(deps()).get();
+    // The fixture readings are current: the Codex five-hour reset is still ahead.
+    const result = await new AccountDashboardService(
+      deps({ now: () => Date.parse('2026-10-01T12:30:00Z') })
+    ).get();
     expect(result.schemaVersion).toBe(1);
     expect(result.accounts).toHaveLength(14);
     expect(result.accounts.filter((account) => account.provider === 'codex')).toHaveLength(3);
@@ -975,5 +978,183 @@ describe('consolidated account dashboard', () => {
       resetAt: null,
       expiresAt: null,
     });
+  });
+
+  it('marks a persisted Claude reading whose reset passed after it was sampled, keeping it as history', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-dashboard-reset-'));
+    const previousCcsDir = process.env.CCS_DIR;
+    process.env.CCS_DIR = root;
+    try {
+      fs.writeFileSync(
+        path.join(root, 'claude-desktop-profiles.json'),
+        JSON.stringify({
+          version: 1,
+          profiles: claudeProfiles.map((profile) => ({
+            ...profile,
+            windows: { ...profile.windows, sshHost: 'fixture-windows' },
+          })),
+        })
+      );
+      const profiles = await listClaudeDesktopProfiles();
+      const gmail = profiles.find((profile) => profile.id === 'gmail')!;
+      const now = Date.now();
+      const base = liveClaude('gmail');
+      const sample: ClaudeDesktopLiveUsage = {
+        ...base,
+        // Read three hours ago; the five-hour window reset an hour ago.
+        fetchedAt: new Date(now - 3 * 3_600_000).toISOString(),
+        windows: [
+          {
+            ...base.windows[0],
+            key: 'five_hour',
+            label: 'Five-hour usage',
+            usedPercent: 87.5,
+            remainingPercent: 12.5,
+            resetAt: new Date(now - 3_600_000).toISOString(),
+            windowMinutes: 300,
+          },
+          { ...base.windows[0], resetAt: new Date(now + 3 * 86_400_000).toISOString() },
+          base.windows[1],
+        ],
+      };
+      await writeClaudeDesktopLiveSnapshot(
+        root,
+        'gmail',
+        createHash('sha256').update(JSON.stringify(gmail)).digest('hex'),
+        sample
+      );
+      const service = new AccountDashboardService(
+        deps({
+          scope: () => root,
+          listClaudeProfiles: async () => profiles,
+          getCachedLiveClaudeUsage: getCachedClaudeDesktopLiveUsage,
+          // The live source is unreachable, so only the retained reading exists.
+          getLiveClaudeUsage: async () => null,
+        })
+      );
+      const account = (await service.get('mac')).accounts.find(
+        (entry) => entry.id === 'claude:gmail'
+      )!;
+      expect(account.source).toBe('Claude Desktop live quota on Windows');
+      expect(account.status).toBe('cached');
+      expect(account.sampledAt).toBe(sample.fetchedAt);
+      expect(account.windows[0]).toMatchObject({
+        key: 'five_hour',
+        usedPercent: 87.5,
+        remainingPercent: 12.5,
+        resetPassed: true,
+      });
+      expect(account.windows[1].usedPercent).toBe(125.5);
+      expect(account.windows[1].resetPassed).toBeUndefined();
+      expect(account.windows[2]).toMatchObject({ kind: 'balance', resetAt: null });
+      expect(account.windows[2].resetPassed).toBeUndefined();
+    } finally {
+      if (previousCcsDir === undefined) delete process.env.CCS_DIR;
+      else process.env.CCS_DIR = previousCcsDir;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recomputes reset marks on every response from each window or account sample time', async () => {
+    let now = Date.parse('2026-10-01T14:59:59.999Z');
+    let collections = 0;
+    const window = (overrides: Partial<DashboardAccount['windows'][number]> = {}) => ({
+      key: 'weekly',
+      label: 'Weekly',
+      usedPercent: 64,
+      remainingPercent: 36,
+      resetAt: '2026-10-01T15:00:00Z',
+      windowMinutes: 10080,
+      used: null,
+      limit: null,
+      unit: null,
+      ...overrides,
+    });
+    const cursor: DashboardAccount = {
+      ...additional('cursor'),
+      sampledAt: '2026-10-01T15:30:00Z',
+      windows: [
+        // Retained from an older reading: its own sample time decides.
+        window({ key: 'retained', status: 'cached', sampledAt: '2026-10-01T14:00:00Z' }),
+        // Read with the account, after the reset: a current reading.
+        window({ key: 'current' }),
+      ],
+    };
+    const kimi: DashboardAccount = {
+      ...additional('kimi-code'),
+      sampledAt: null,
+      windows: [window({ key: 'unknown-sample' })],
+    };
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        refreshIntervalSeconds: () => 3600,
+        getAdditionalAccounts: async () => {
+          collections++;
+          return [cursor, kimi];
+        },
+      })
+    );
+    const marks = async () => {
+      const accounts = (await service.get()).accounts;
+      return Object.fromEntries(
+        accounts.flatMap((account) =>
+          account.windows.map((entry) => [`${account.id}/${entry.key}`, entry.resetPassed ?? false])
+        )
+      );
+    };
+    expect(await marks()).toMatchObject({
+      'codex:gmail/five_hour': false,
+      'cursor:usage/retained': false,
+      'cursor:usage/current': false,
+      'kimi-code:usage/unknown-sample': false,
+    });
+    now = Date.parse('2026-10-01T15:00:00Z');
+    expect(await marks()).toMatchObject({
+      // Codex rows were read at 12:00, before their 15:00 reset.
+      'codex:gmail/five_hour': true,
+      'cursor:usage/retained': true,
+      'cursor:usage/current': false,
+      'kimi-code:usage/unknown-sample': true,
+    });
+    // The same cached collection served both responses.
+    expect(collections).toBe(1);
+    const kept = (await service.get()).accounts.find((account) => account.id === 'cursor:usage')!;
+    expect(kept.windows[0]).toMatchObject({ usedPercent: 64, remainingPercent: 36 });
+  });
+
+  it('judges a stale Codex local reading by its session time, not by when it was fetched', async () => {
+    const result = await new AccountDashboardService(
+      deps({
+        now: () => Date.parse('2026-10-01T15:10:00Z'),
+        getCodexRows: async (names) =>
+          names.map((name) =>
+            name === 'gmail'
+              ? // Local fallback read at 15:10 from a session file last written at 14:00,
+                // before the 15:00 five-hour reset: history, not the current window.
+                row(name, {
+                  quotaSource: 'local',
+                  health: 'warning',
+                  fetchedAt: '2026-10-01T15:10:00Z',
+                  staleAsOf: '2026-10-01T14:00:00Z',
+                })
+              : // A fresh local reading (no staleAsOf) after the reset is current.
+                row(name, { quotaSource: 'local', fetchedAt: '2026-10-01T15:10:00Z' })
+          ),
+      })
+    ).get();
+    const codex = (name: string) =>
+      result.accounts.find((account) => account.id === `codex:${name}`)!;
+    expect(codex('gmail')).toMatchObject({
+      fetchedAt: '2026-10-01T15:10:00.000Z',
+      sampledAt: '2026-10-01T14:00:00.000Z',
+    });
+    expect(codex('gmail').windows[0]).toMatchObject({
+      key: 'five_hour',
+      usedPercent: 30,
+      resetPassed: true,
+    });
+    expect(codex('party').sampledAt).toBe('2026-10-01T15:10:00.000Z');
+    expect(codex('party').windows[0].resetPassed).toBeUndefined();
   });
 });

@@ -61,6 +61,7 @@ import {
   type AccountJobStates,
 } from './account-dashboard-state';
 import { getDashboardServerInfo } from './dashboard-server-info';
+import { markPassedResets } from './account-window-reset';
 
 import {
   ADDITIONAL_PROVIDERS,
@@ -406,6 +407,20 @@ export class AccountDashboardService {
     platform: ClaudeDashboardPlatform = 'mac',
     refresh = false,
     context: AccountDashboardRequestContext = {}
+  ): Promise<AccountDashboard> {
+    const dashboard = await this.read(platform, refresh, context);
+    // Per response: a window's reset can pass while its sample is still cached.
+    const now = (this.deps.now ?? Date.now)();
+    return {
+      ...dashboard,
+      accounts: dashboard.accounts.map((account) => markPassedResets(account, now)),
+    };
+  }
+
+  private async read(
+    platform: ClaudeDashboardPlatform,
+    refresh: boolean,
+    context: AccountDashboardRequestContext
   ): Promise<AccountDashboard> {
     const startedAt = Date.now();
     const now = (this.deps.now ?? Date.now)();

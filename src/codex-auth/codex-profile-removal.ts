@@ -3,7 +3,8 @@
  * and the dashboard's Remove (CONTRACT-registry-lifecycle section 6.7).
  *
  * Call it under the Codex activation lock. It re-reads membership and the
- * saved default, refuses the live native login by fresh email, renames the
+ * saved default, refuses the live native login by its fresh workspace and
+ * principal binding (email only when a binding cannot be read), renames the
  * profile folder aside, keeps a preservation copy until the registry entry is
  * gone, and restores both if any step fails.
  */
@@ -13,6 +14,11 @@ import * as path from 'path';
 import { ExitCode } from '../errors/exit-codes';
 import { resolveCodexProfileDir } from './codex-profile-paths';
 import { decodeIdToken, hasStructurallyValidIdToken } from './decode-id-token';
+import {
+  decodeCodexActivationIdentity,
+  matchesCodexActivationIdentity,
+  type CodexActivationIdentity,
+} from './codex-activation-identity';
 import type { CodexProfileRegistry } from './codex-profile-registry';
 import type { CodexProfileMetadata } from './types';
 
@@ -214,8 +220,15 @@ function restoreProfileDir(
   }
 }
 
+/** A fresh read of one auth.json: its email, and its workspace and principal binding. */
+interface FreshLogin {
+  email: string;
+  /** Null when the token carries no readable workspace binding; never printed. */
+  binding: CodexActivationIdentity | null;
+}
+
 /** No cache or registry metadata can establish the current native identity. */
-function freshEmail(authPath: string, label: string): string | null {
+function freshLogin(authPath: string, label: string): FreshLogin | null {
   let raw: string;
   try {
     raw = fs.readFileSync(authPath, 'utf8');
@@ -228,7 +241,7 @@ function freshEmail(authPath: string, label: string): string | null {
     );
   }
   try {
-    const parsed = JSON.parse(raw) as { tokens?: { id_token?: unknown } };
+    const parsed = JSON.parse(raw) as { tokens?: { id_token?: unknown; account_id?: unknown } };
     const token = parsed?.tokens?.id_token;
     const email = typeof token === 'string' ? decodeIdToken(token).email : null;
     if (typeof token !== 'string' || !hasStructurallyValidIdToken(token) || !email) {
@@ -238,7 +251,7 @@ function freshEmail(authPath: string, label: string): string | null {
         'unverified'
       );
     }
-    return email;
+    return { email, binding: decodeCodexActivationIdentity(token, parsed.tokens?.account_id) };
   } catch {
     // JSON errors may contain credential fragments. Report only our own text.
     throw new CodexProfileRemovalError(
@@ -249,11 +262,44 @@ function freshEmail(authPath: string, label: string): string | null {
   }
 }
 
+/**
+ * Whether a saved login is the live one. Like activation, this matches the workspace
+ * and principal, so a personal and a workspace login under one email stay apart. A
+ * match in either direction refuses, so an older saved token of the live workspace and
+ * email that carries no principal stays protected. Only when either side has no
+ * readable binding does the email alone decide.
+ */
+function isLiveLogin(live: FreshLogin, saved: FreshLogin): boolean {
+  if (!live.binding || !saved.binding) return live.email === saved.email;
+  return (
+    matchesCodexActivationIdentity(live.binding, saved.binding) ||
+    matchesCodexActivationIdentity(saved.binding, live.binding)
+  );
+}
+
+/**
+ * Whether a saved profile holds the live native login, by the same rule as the guard
+ * below (workspace and principal, the email only when a binding cannot be read). It is
+ * for checks made before the activation lock, such as the dashboard's Remove and Sign in
+ * again refusals. It answers false when there is no live login or a login cannot be
+ * verified; the guard under the lock still refuses those cases.
+ */
+export function savedLoginIsLive(nativeAuthPath: string, profileAuthPath: string): boolean {
+  try {
+    const live = freshLogin(nativeAuthPath, 'the current native');
+    if (!live) return false;
+    const saved = freshLogin(profileAuthPath, 'the saved profile');
+    return saved !== null && isLiveLogin(live, saved);
+  } catch {
+    return false;
+  }
+}
+
 function assertInactiveSavedProfile(nativeAuthPath: string, profileAuthPath: string): void {
-  const liveEmail = freshEmail(nativeAuthPath, 'the current native');
-  if (!liveEmail) return;
-  const targetEmail = freshEmail(profileAuthPath, 'the saved profile');
-  if (!targetEmail) {
+  const live = freshLogin(nativeAuthPath, 'the current native');
+  if (!live) return;
+  const target = freshLogin(profileAuthPath, 'the saved profile');
+  if (!target) {
     // A ghost entry's cached email is not fresh identity proof. Its deletion
     // is permitted when there is no native login, not while identity is unknown.
     throw new CodexProfileRemovalError(
@@ -262,7 +308,7 @@ function assertInactiveSavedProfile(nativeAuthPath: string, profileAuthPath: str
       'unverified'
     );
   }
-  if (targetEmail === liveEmail) {
+  if (isLiveLogin(live, target)) {
     throw new CodexProfileRemovalError(
       'Cannot remove a profile for the current Codex account. Activate another account first.',
       ExitCode.PROFILE_ERROR,

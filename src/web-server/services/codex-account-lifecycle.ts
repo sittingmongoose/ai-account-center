@@ -15,6 +15,7 @@ import {
 import {
   CodexProfileRemovalError,
   removeCodexProfileUnderLock,
+  savedLoginIsLive,
 } from '../../codex-auth/codex-profile-removal';
 import {
   getCodexAuthProfilesSummary,
@@ -167,9 +168,27 @@ export class CodexAccountLifecycle {
   }
 
   async activeProfile(): Promise<string | null> {
-    if (this.deps.activeProfile) return this.deps.activeProfile();
+    return (await this.liveLogin()).name;
+  }
+
+  /** The live native login as the summary reads it: the profile it names, and its email. */
+  private async liveLogin(): Promise<{ name: string | null; email: string | null }> {
+    if (this.deps.activeProfile) return { name: await this.deps.activeProfile(), email: null };
     const summary = await getCodexAuthProfilesSummary(this.codexHome());
-    return summary.activated?.name ?? null;
+    return { name: summary.activated?.name ?? null, email: summary.activated?.email ?? null };
+  }
+
+  /**
+   * The summary names the live profile by workspace and principal only. A refusal also
+   * counts a saved login the removal guard would call live (the email decides when a
+   * binding cannot be read), so these checks never get looser than that guard.
+   */
+  async isLiveProfile(name: string): Promise<boolean> {
+    if ((await this.activeProfile()) === name) return true;
+    return savedLoginIsLive(
+      path.join(this.codexHome(), 'auth.json'),
+      path.join(this.profileDir(name), 'auth.json')
+    );
   }
 
   async activationRunning(): Promise<boolean> {
@@ -375,7 +394,7 @@ export class CodexAccountLifecycle {
   async removeRefusal(name: string, signinRunning: boolean): Promise<CodexRemoveRefusal | null> {
     const registry = this.registry();
     const profiles = registry.listProfiles();
-    if ((await this.activeProfile()) === name) return 'account_active';
+    if (await this.isLiveProfile(name)) return 'account_active';
     if (registry.getDefault() === name && profiles.length > 1) return 'account_default';
     if (profiles.length <= 1) return 'last_account';
     if (await this.activationRunning()) return 'activation_running';
@@ -397,7 +416,9 @@ export class CodexAccountLifecycle {
     return stateFingerprint({
       entry: registry.hasProfile(name) ? registry.getProfile(name) : null,
       authHash,
-      active: await this.activeProfile(),
+      // The live login, not only the profile it names: a login whose binding cannot be
+      // read names no profile, and switching it must still make a reviewed remove stale.
+      active: await this.liveLogin(),
       default: registry.getDefault(),
       profiles: registry.listProfiles().sort(),
     });

@@ -33,6 +33,13 @@ export interface DashboardAccountWindow {
   /** Retained optional quota rows keep their original observation time. */
   status?: 'cached';
   sampledAt?: string;
+  /**
+   * Present, and always true, only when `resetAt` is at or before the response time and
+   * the reading was sampled before it (the window's `sampledAt`, else the account's) or
+   * at an unknown time. The percent and amount fields then hold the reading from before
+   * the reset, as history only: show "Reset at <time> · new reading pending", never 0%.
+   */
+  resetPassed?: true;
   poolId?: string;
   poolIdSource?: 'provider-id' | 'provider-bucket-membership';
   poolLabel?: string;

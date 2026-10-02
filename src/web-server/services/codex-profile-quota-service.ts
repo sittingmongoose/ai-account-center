@@ -4,12 +4,15 @@ import {
   getCodexProfileQuotaRows,
 } from '../usage/native-quota-collector';
 import type { BarSummaryRow } from '../routes/bar-routes';
+import { readingPredatesReset } from './account-window-reset';
 
 export interface CodexProfileQuotaWindow {
   key: string;
   label: string;
   usedPercent: number;
   resetsAt?: string;
+  /** Present only when resetsAt has passed since the reading: usedPercent is then history. */
+  resetPassed?: true;
 }
 
 export interface CodexProfileQuota {
@@ -30,9 +33,10 @@ export interface CodexProfileQuotaDeps {
   getRows?: (names: string[]) => Promise<BarSummaryRow[]>;
   getCachedRows?: (names: string[]) => BarSummaryRow[];
   responseBudgetMs?: number;
+  now?: () => number;
 }
 
-function buildQuota(profile: QuotaProfile, row?: BarSummaryRow): CodexProfileQuota {
+function buildQuota(profile: QuotaProfile, now: number, row?: BarSummaryRow): CodexProfileQuota {
   if (!profile.authValid) {
     return {
       profileName: profile.name,
@@ -51,6 +55,10 @@ function buildQuota(profile: QuotaProfile, row?: BarSummaryRow): CodexProfileQuo
           : window.label,
     usedPercent: window.usedPercent,
     ...(window.resetAt ? { resetsAt: window.resetAt } : {}),
+    // A stale local reading was sampled at its session file's mtime, not at fetchedAt.
+    ...(readingPredatesReset(window.resetAt, row?.staleAsOf ?? row?.fetchedAt, now)
+      ? { resetPassed: true as const }
+      : {}),
   }));
   if (row?.quotaStatus === 'ok' && windows.length > 0) {
     return { profileName: profile.name, status: 'available', windows, fetchedAt: row.fetchedAt };
@@ -94,5 +102,8 @@ export async function getCodexProfileQuotas(
   clearTimeout(timer);
   const rows = freshRows ?? (deps.getCachedRows ?? getCachedCodexProfileQuotaRows)(names);
   const byProfile = new Map(rows.map((row) => [row.profile, row]));
-  return { profiles: profiles.map((profile) => buildQuota(profile, byProfile.get(profile.name))) };
+  const now = (deps.now ?? Date.now)();
+  return {
+    profiles: profiles.map((profile) => buildQuota(profile, now, byProfile.get(profile.name))),
+  };
 }
