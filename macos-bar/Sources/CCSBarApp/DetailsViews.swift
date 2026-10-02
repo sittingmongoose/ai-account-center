@@ -140,7 +140,9 @@ struct AmountRow: View {
 
   private func quantity(_ value: Double) -> String {
     if window.unit == "USD" { return value.formatted(.currency(code: "USD").precision(.fractionLength(0...2))) }
-    return TrayFormat.number(value) + (window.unit.map { " \($0)" } ?? "")
+    // "1 reset", not "1 resets": a plural unit word reads singular for exactly one.
+    let unit = window.unit.map { value == 1 && $0.count > 2 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+    return TrayFormat.number(value) + (unit.map { " \($0)" } ?? "")
   }
 
   private var value: String {

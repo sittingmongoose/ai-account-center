@@ -152,12 +152,12 @@ struct SwitchConfirmView: View {
         }
         HStack(spacing: 8) {
           Spacer()
-          Button("Cancel", action: onCancel).buttonStyle(.glass).controlSize(.regular)
+          Button("Cancel", action: onCancel).trayGlassButton()
             .keyboardShortcut(.cancelAction)
           Button(action: onConfirm) {
             Text("Stop, switch, restart").font(.system(size: 13, weight: .semibold))
           }
-          .buttonStyle(.glassProminent).tint(palette.critText).controlSize(.regular)
+          .trayGlassButton(prominent: true, tint: palette.critText)
         }
       }
       .padding(12)

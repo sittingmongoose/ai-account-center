@@ -208,6 +208,49 @@ extension Animation {
   }
 }
 
+/// The system .glass / .glassProminent button styles. Offline renders cannot capture system glass, so
+/// there the capsule is drawn from the concept's tokens; the live panel always uses the system style.
+struct TrayGlassButton: ViewModifier {
+  var prominent = false
+  var tint: Color? = nil
+  var large = false
+  @Environment(\.trayStaticRender) private var staticRender
+
+  func body(content: Content) -> some View {
+    if staticRender {
+      content.buttonStyle(PreviewGlassButtonStyle(prominent: prominent, tint: tint, large: large))
+    } else if prominent {
+      content.buttonStyle(.glassProminent).tint(tint).controlSize(large ? .large : .regular)
+    } else {
+      content.buttonStyle(.glass).controlSize(large ? .large : .regular)
+    }
+  }
+}
+
+private struct PreviewGlassButtonStyle: ButtonStyle {
+  let prominent: Bool
+  let tint: Color?
+  let large: Bool
+  @Environment(\.colorScheme) private var scheme
+
+  func makeBody(configuration: Configuration) -> some View {
+    let dark = scheme == .dark
+    configuration.label
+      .font(.system(size: 13, weight: prominent ? .semibold : .regular))
+      .foregroundStyle(prominent ? (dark ? Color(.sRGB, red: 0x0B / 255, green: 0x14 / 255, blue: 0x24 / 255) : .white) : .primary)
+      .padding(.horizontal, large ? 18 : 14)
+      .frame(height: large ? 34 : 28)
+      .background(Capsule().fill(prominent ? (tint ?? .accentColor) : Color.white.opacity(dark ? 0.11 : 0.52)))
+      .overlay(Capsule().strokeBorder(Color.black.opacity(dark ? 0.40 : 0.10), lineWidth: 0.5))
+  }
+}
+
+extension View {
+  func trayGlassButton(prominent: Bool = false, tint: Color? = nil, large: Bool = false) -> some View {
+    modifier(TrayGlassButton(prominent: prominent, tint: tint, large: large))
+  }
+}
+
 /// The panel's request to close its popovers: Details, the Qwen packs and the auto-switch info.
 private struct PopoverDismissalKey: EnvironmentKey { static let defaultValue = 0 }
 extension EnvironmentValues {

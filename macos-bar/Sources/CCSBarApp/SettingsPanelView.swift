@@ -187,7 +187,7 @@ struct SettingsPanelView: View {
         Button(editingConnection ? "Cancel" : (model.connection == nil ? "Connect" : "Change")) {
           withAnimation(.trayValue(duration: 0.3)) { editingConnection.toggle() }
         }
-        .buttonStyle(.glass).controlSize(.regular)
+        .trayGlassButton()
       }
       if editingConnection {
         ConnectionForm(model: model, compact: true) { withAnimation(.trayValue(duration: 0.3)) { editingConnection = false } }
@@ -347,7 +347,7 @@ struct ConnectionForm: View {
           Button(action: save) {
             Text(compact ? "Save" : "Connect").font(.system(size: 13, weight: .semibold)).frame(minWidth: compact ? 60 : 120)
           }
-          .buttonStyle(.glassProminent).tint(palette.accent).controlSize(.large)
+          .trayGlassButton(prominent: true, tint: palette.accent, large: true)
           .keyboardShortcut(.defaultAction)
         }
       }
