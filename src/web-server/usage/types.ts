@@ -18,6 +18,11 @@ export interface ModelBreakdown {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   cost: number;
+  /**
+   * USD of `cost` priced only at the unknown-model fallback rate: tokens with no logged
+   * cost and no listed rate. Absent when zero, and from readers that never price at the fallback.
+   */
+  fallbackCost?: number;
 }
 
 // ============================================================================
@@ -56,6 +61,8 @@ export interface HourlyUsage {
   totalCost: number;
   modelsUsed: string[];
   modelBreakdowns: ModelBreakdown[];
+  /** Sum of the breakdowns' `fallbackCost`, when the reader reports it. */
+  fallbackCost?: number;
   /**
    * Raw request count for this hour bucket.
    * Optional for backward compatibility with previously persisted snapshots.
@@ -100,6 +107,8 @@ export interface SessionUsage {
   versions: string[];
   modelsUsed: string[];
   modelBreakdowns: ModelBreakdown[];
+  /** Sum of the breakdowns' `fallbackCost`, when the reader reports it. */
+  fallbackCost?: number;
   source: string;
   /** Target CLI used for this session (default: 'claude') */
   target?: string;

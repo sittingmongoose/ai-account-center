@@ -17,6 +17,22 @@ import type {
   AccountAnalyticsQuery,
 } from './account-analytics-types';
 
+const ACTIVITY_PROVIDERS: readonly AccountAnalyticsActivityProvider[] = [
+  'claude',
+  'codex',
+  'omp',
+  'muse',
+  'zcode',
+];
+
+const ACTIVITY_PROVIDER_LABELS: Record<AccountAnalyticsActivityProvider, string> = {
+  claude: 'Claude Code logs',
+  codex: 'Codex logs',
+  omp: 'OMP logs',
+  muse: 'Muse logs',
+  zcode: 'zcode logs',
+};
+
 /**
  * Pure projection of the retained local CLI snapshot into the Analytics
  * activity block: totals, per-type cost estimates, local-day buckets, the
@@ -24,9 +40,9 @@ import type {
  * anomaly rules. Nothing here reads disk or attributes activity to accounts.
  */
 
-/** One local CLI source as the activity reader retains it. */
+/** One CLI source as the activity reader retains it (all hosts merged). */
 export interface SourceData {
-  provider: 'claude' | 'codex';
+  provider: AccountAnalyticsActivityProvider;
   data: UsageWorkerResult[];
   fetchedAt: string;
 }
@@ -37,11 +53,12 @@ const FIELDS = [
   'cacheCreationTokens',
   'cacheReadTokens',
   'estimatedCostUsd',
+  'fallbackCostUsd',
 ] as const;
 
 type Provider = AccountAnalyticsActivityProvider;
 type TotalField = (typeof FIELDS)[number];
-type TokenField = Exclude<TotalField, 'estimatedCostUsd'>;
+type TokenField = Exclude<TotalField, 'estimatedCostUsd' | 'fallbackCostUsd'>;
 const TOKEN_FIELDS: readonly TokenField[] = [
   'inputTokens',
   'outputTokens',
@@ -57,7 +74,14 @@ const RATE_KEYS = [
   'cacheReadPerMillion',
   'source',
 ] as const;
-const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set(['claude', 'codex', 'droid']);
+const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([
+  'claude',
+  'codex',
+  'droid',
+  'omp',
+  'muse',
+  'zcode',
+]);
 const MAX_SESSION_SAMPLE = 50;
 const MAX_NAMED_DAY_MODELS = 12;
 const OTHER_MODELS = 'Other models';
@@ -67,6 +91,8 @@ export interface AccountAnalyticsProjectionOptions {
   tz?: string;
   /** Pricing lookup; memoised per model for one projection. */
   pricing?: AccountAnalyticsPricingLookup;
+  /** Per-tool, per-host collection states; empty when unknown. */
+  sources?: AccountAnalyticsActivity['sources'];
 }
 
 function finite(value: unknown): number {
@@ -82,6 +108,7 @@ function totals(value: {
   cacheReadTokens: number;
   cost?: number;
   totalCost?: number;
+  fallbackCost?: number;
 }): Record<TotalField, number> {
   return {
     inputTokens: finite(value.inputTokens),
@@ -89,6 +116,7 @@ function totals(value: {
     cacheCreationTokens: finite(value.cacheCreationTokens),
     cacheReadTokens: finite(value.cacheReadTokens),
     estimatedCostUsd: finite(value.totalCost ?? value.cost),
+    fallbackCostUsd: finite(value.fallbackCost),
   };
 }
 
@@ -103,6 +131,7 @@ function accumulator(): Accumulator {
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
     estimatedCostUsd: 0,
+    fallbackCostUsd: 0,
     input: 0,
     output: 0,
     cacheWrite: 0,
@@ -138,6 +167,7 @@ function publish(value: Accumulator): AccountAnalyticsActivityTotals {
     cacheCreationTokens: value.cacheCreationTokens,
     cacheReadTokens: value.cacheReadTokens,
     estimatedCostUsd: value.estimatedCostUsd,
+    fallbackCostUsd: nanoDollars(value.fallbackCostUsd),
   };
   if (!value.partsKnown) return { ...base, costByType: null, costByTypeReconciled: false };
   const sum = value.input + value.output + value.cacheWrite + value.cacheRead;
@@ -220,6 +250,7 @@ function priceBreakdowns(
           ),
           cacheReadTokens: Math.max(0, rowValues.cacheReadTokens - covered.cacheReadTokens),
           estimatedCostUsd: Math.max(0, rowValues.estimatedCostUsd - covered.estimatedCostUsd),
+          fallbackCostUsd: Math.max(0, rowValues.fallbackCostUsd - covered.fallbackCostUsd),
         }
       : null,
     models,
@@ -263,9 +294,7 @@ export function accountAnalyticsActivityCoverage(
       }
   return {
     oldestHourAt: Number.isFinite(oldest) ? oldest : null,
-    providersWithActivity: (['claude', 'codex'] as const).filter((provider) =>
-      active.has(provider)
-    ),
+    providersWithActivity: ACTIVITY_PROVIDERS.filter((provider) => active.has(provider)),
   };
 }
 
@@ -288,7 +317,7 @@ export function projectAccountAnalyticsActivity(
   const tz = options.tz ?? 'UTC';
   const base: AccountAnalyticsActivity = {
     status,
-    scope: 'ubuntu-local-cli',
+    scope: 'multi-host-cli',
     timezone: tz,
     accountAttribution: 'unavailable',
     costBasis: 'estimated-api-equivalent',
@@ -302,6 +331,7 @@ export function projectAccountAnalyticsActivity(
     byDayModel: [],
     sessions: null,
     anomalies: null,
+    sources: options.sources ?? [],
   };
   if (query.account !== 'all')
     return {
@@ -317,10 +347,9 @@ export function projectAccountAnalyticsActivity(
     return {
       ...base,
       status: status === 'loading' ? 'loading' : 'unavailable',
-      message:
-        query.provider !== 'all' && query.provider !== 'claude' && query.provider !== 'codex'
-          ? 'This provider reports quota and balance observations; local token and session history is not available.'
-          : message,
+      message: (ACTIVITY_PROVIDERS as readonly string[]).includes(query.provider)
+        ? message
+        : 'This provider reports quota and balance observations; token and session history is not available.',
     };
   base.fetchedAt = selected.map((source) => source.fetchedAt).sort()[0] ?? null;
   if (tz !== 'UTC' && hasPartialHourOffset(tz, from, to))
@@ -454,7 +483,7 @@ export function projectAccountAnalyticsActivity(
     merge(combined, sourceTotals);
     base.providers.push({
       provider: source.provider,
-      label: source.provider === 'claude' ? 'Claude Code logs' : 'Codex logs',
+      label: ACTIVITY_PROVIDER_LABELS[source.provider],
       totals: publish(sourceTotals),
       usageEvents,
       sessionCount: sessions.size,

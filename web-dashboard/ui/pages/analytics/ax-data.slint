@@ -6,6 +6,11 @@ import { RunView, AnalyticsHeadView } from "../../models.slint";
 
 export struct AxScopeLine { icon: string, text: string }
 
+// ---- included usage (activity.sources): one cell per tool and computer; tone ok | cached | unavailable | quiet ----
+export struct AxSrcCell { text: string, tone: string, tip: string }
+export struct AxSrcRow { tool: string, cells: [AxSrcCell] }
+export struct AxIncluded { shown: bool, label: string, line: string, foot: string }
+
 // ---- KPI row and the count-up numbers (fmt: tok | money | int | pct1 | pct2) ----
 export struct AxKpi {
     key: string,
@@ -96,6 +101,10 @@ export struct AxModelRow {
     tok: string,
     tok-tip: string,
     cost: string,
+    // the cost is all not logged (or missing): a quiet "Not logged", no bar and no share
+    cost-na: bool,
+    // some of the cost is not logged: the amount covers only what is, and says "partial"
+    partial: bool,
     share: string,
     sub: string,
     usage: string,
@@ -124,7 +133,7 @@ export struct AxDonutSeg {
     label: bool,
     idx: int,
 }
-export struct AxDonut { sub: string, note: string, mode: string, centre: string, centre-label: string, unit: string, empty: bool }
+export struct AxDonut { sub: string, note: string, mode: string, centre: string, centre-label: string, unit: string, empty: bool, empty-text: string }
 
 // ---- session stats, token breakdown, cache efficiency ----
 export struct AxStat { key: string, label: string, num: float, has: bool, fmt: string, text: string }
@@ -237,6 +246,9 @@ export global AxData {
     in-out property <string> status-note;
     in-out property <string> apport-tip;
     in-out property <[AxScopeLine]> scope;
+    in-out property <AxIncluded> included;
+    in-out property <[string]> included-hosts;
+    in-out property <[AxSrcRow]> included-rows;
     in-out property <[AxKpi]> kpis;
     in-out property <AxTrend> trend;
     in-out property <AxTrendPaths> trend-paths;

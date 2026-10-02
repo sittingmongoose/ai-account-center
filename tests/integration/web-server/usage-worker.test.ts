@@ -206,6 +206,7 @@ describe('compiled Node usage workers', () => {
         const query = { platform: 'mac', range: '24h', provider: 'all', account: 'all' };
         const service = new AccountAnalyticsActivityService({
           requests: () => ${JSON.stringify(requests)}, now: () => now,
+          remote: async () => ({ results: [], states: [] }),
         });
         const before = await service.get(query, from, now);
         fs.appendFileSync(${JSON.stringify(claudePath)}, JSON.stringify(${JSON.stringify(appendedClaude)}) + '\\n');

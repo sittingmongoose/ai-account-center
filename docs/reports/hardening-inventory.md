@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1043 |
-| Sync fs files affected (all) | 105 |
-| Sync fs occurrences (runtime hotpaths) | 438 |
-| Sync fs files affected (runtime hotpaths) | 58 |
+| Sync fs occurrences (all) | 1066 |
+| Sync fs files affected (all) | 108 |
+| Sync fs occurrences (runtime hotpaths) | 461 |
+| Sync fs files affected (runtime hotpaths) | 61 |
 | Legacy shim markers | 193 |
 | Legacy shim files affected | 74 |
 
@@ -19,6 +19,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|---|
 | `src/management/shared-manager/diverged-file-adopter.ts` | 29 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/management/shared-manager/migrations.ts` | 25 | copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, writeFileSync |
+| `src/web-server/usage/account-activity-collector.ts` | 23 | chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
 | `src/management/shared-manager/plugin-layout-internals.ts` | 18 | copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync |
 | `src/cliproxy/accounts/registry.ts` | 17 | existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync |
@@ -26,7 +27,6 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
 | `src/web-server/services/app-update-service.ts` | 15 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/cliproxy/accounts/token-file-ops.ts` | 14 | existsSync, mkdirSync, readdirSync, renameSync, unlinkSync |
-| `src/management/shared-manager/canonical-first-file-claims.ts` | 14 | chmodSync, copyFileSync, linkSync, lstatSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 22.2% (130/585) |
+| typed-error adoption (typed/total throws) | 23.0% (136/591) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 31/370 |
+| files with createLogger | 31/375 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 39 |
-| files > 600 LOC | 14 |
+| files > 400 LOC | 40 |
+| files > 600 LOC | 17 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -92,13 +92,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
+| `src/web-server/usage/account-activity-collector.ts` | 830 |
 | `src/web-server/usage/aggregator.ts` | 782 |
 | `src/web-server/usage/native-quota-collector.ts` | 768 |
 | `src/auth/profile-detector.ts` | 767 |
+| `src/web-server/services/account-analytics-activity.ts` | 691 |
 | `src/web-server/services/account-dashboard-service.ts` | 668 |
 | `src/web-server/services/additional-account-service.ts` | 636 |
 | `src/cliproxy/services/usage-compatibility-transformer.ts` | 632 |
-| `src/cliproxy/services/stats-fetcher.ts` | 614 |
-| `src/web-server/services/claude-desktop-live-service.ts` | 611 |
-| `src/web-server/services/account-analytics-projection.ts` | 600 |
+| `src/web-server/services/account-analytics-projection.ts` | 629 |
 

@@ -323,14 +323,15 @@ component TrendChart inherits Rectangle {
     }
     if AxData.trend.cost-shown: Rectangle {
         x: root.bx - 5px;
-        y: AxTrendPad.t + root.b.y-cost * 1px * root.sy - 5px;
+        // y-cost -1: no logged cost in this bucket, so no marker (never a $0 point)
+        y: AxTrendPad.t + max(0, root.b.y-cost) * 1px * root.sy - 5px;
         width: 10px;
         height: 10px;
         border-radius: 5px;
         background: Theme.paper;
         border-width: 2px;
         border-color: AxColor.of("cost");
-        opacity: root.xh-on ? 1 : 0;
+        opacity: root.xh-on && root.b.y-cost >= 0 ? 1 : 0;
         animate x, y { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
     }

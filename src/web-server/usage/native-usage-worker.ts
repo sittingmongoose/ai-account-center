@@ -14,7 +14,14 @@ import { collectAccountActivity } from './account-activity-collector';
 import type { UsageWorkerRequest, UsageWorkerResponse } from './worker-client';
 
 async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerResponse> {
-  if ((request.kind === 'claude' || request.kind === 'codex') && request.activity)
+  if (
+    (request.kind === 'claude' ||
+      request.kind === 'codex' ||
+      request.kind === 'omp' ||
+      request.kind === 'muse' ||
+      request.kind === 'zcode') &&
+    request.activity
+  )
     return { ok: true, data: await collectAccountActivity(request, request.activity) };
   let entries;
   let source;

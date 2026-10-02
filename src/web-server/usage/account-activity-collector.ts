@@ -9,12 +9,20 @@ import {
   parseCodexNativeUsageLine,
   type CodexNativeParserState,
 } from './codex-native-usage-collector';
-import { getModelPricing, type ModelPricing } from '../model-pricing';
+import {
+  isOmpSessionFilename,
+  ompSessionCopyKey,
+  ompSessionIdForFile,
+  parseOmpUsageLine,
+} from './omp-native-usage-collector';
+import { museSessionIdForFile, parseMuseUsageLine } from './muse-native-usage-collector';
+import { queryLocalZcodeUsage, type ZcodeFingerprint } from './zcode-native-usage-collector';
+import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
 import type { ModelBreakdown } from './types';
 import type { UsageWorkerRequest, UsageWorkerResult } from './worker-client';
 
-interface CompactEntry {
+export interface CompactEntry {
   entry: RawUsageEntry;
   events: number;
 }
@@ -32,6 +40,8 @@ interface Checkpoint {
   skippedLines: number;
   largeLineParserVersion?: 3;
   unfinishedTail?: boolean;
+  /** Row-shape version for kinds whose parser changed (PARSER_VERSION). */
+  parser?: number;
   state: CodexNativeParserState;
   rows: CompactEntry[];
 }
@@ -55,6 +65,24 @@ const MAX_TOTAL_ROWS = 100_000;
 
 function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
+/**
+ * Checkpoints of these kinds hold rows from an older parser and are read
+ * again from the start: OMP rows now keep the routing provider and never mix
+ * logged and unlogged events; Muse input no longer includes cache reads.
+ */
+const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2 };
+
+function wantedFile(kind: string, name: string): boolean {
+  if (kind === 'claude') return name.endsWith('.jsonl');
+  if (kind === 'codex') return name.endsWith('.jsonl') && name.startsWith('rollout-');
+  // OMP session files (`<ts>_<uuid>[.jsonl]`, `__advisor.jsonl`, `SubAgent/`
+  // records); Muse keeps `session.jsonl` per session and subagent.
+  if (kind === 'omp') return name.endsWith('.jsonl') || isOmpSessionFilename(name);
+  if (kind === 'muse') return name === 'session.jsonl';
+  return false;
 }
 async function filesUnder(
   root: string,
@@ -97,12 +125,7 @@ async function filesUnder(
           if (current.depth >= maxDepth || pending.length + visitedDirectories >= maxDirectories) {
             issues.failed++;
           } else pending.push({ directory: file, depth: current.depth + 1 });
-        } else if (
-          item.isFile() &&
-          item.name.endsWith('.jsonl') &&
-          (kind === 'claude' || item.name.startsWith('rollout-'))
-        )
-          result.push(file);
+        } else if (item.isFile() && wantedFile(kind, item.name)) result.push(file);
       }
     } catch {
       issues.failed++;
@@ -115,7 +138,7 @@ function fingerprint(fd: number, start: number, length: number): string {
   const read = fs.readSync(fd, buffer, 0, length, start);
   return hash(buffer.subarray(0, read));
 }
-function fresh(stats: fs.Stats, minDate: number): Checkpoint {
+function fresh(stats: fs.Stats, minDate: number, kind: ActivityKind): Checkpoint {
   return {
     version: 2,
     size: stats.size,
@@ -130,13 +153,20 @@ function fresh(stats: fs.Stats, minDate: number): Checkpoint {
     skippedLines: 0,
     largeLineParserVersion: 3,
     unfinishedTail: false,
+    ...(PARSER_VERSION[kind] === undefined ? {} : { parser: PARSER_VERSION[kind] }),
     state: createCodexNativeParserState(),
     rows: [],
   };
 }
-function loadCheckpoint(cache: string, file: string, stats: fs.Stats, minDate: number): Checkpoint {
+function loadCheckpoint(
+  cache: string,
+  file: string,
+  stats: fs.Stats,
+  minDate: number,
+  kind: ActivityKind
+): Checkpoint {
   try {
-    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate);
+    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate, kind);
     const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
     if (
       value.version !== 2 ||
@@ -152,9 +182,10 @@ function loadCheckpoint(cache: string, file: string, stats: fs.Stats, minDate: n
       !value.state ||
       typeof value.state.sessionId !== 'string' ||
       (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
-      (value.skippedLines > 0 && value.largeLineParserVersion !== 3)
+      (value.skippedLines > 0 && value.largeLineParserVersion !== 3) ||
+      value.parser !== PARSER_VERSION[kind]
     )
-      return fresh(stats, minDate);
+      return fresh(stats, minDate, kind);
     const fd = fs.openSync(file, 'r');
     try {
       // Check the consumed prefix and boundary before resuming an append. A
@@ -163,7 +194,7 @@ function loadCheckpoint(cache: string, file: string, stats: fs.Stats, minDate: n
         value.head !== fingerprint(fd, 0, Math.min(256, value.offset)) ||
         value.tail !== fingerprint(fd, Math.max(0, value.offset - 256), Math.min(256, value.offset))
       )
-        return fresh(stats, minDate);
+        return fresh(stats, minDate, kind);
     } finally {
       fs.closeSync(fd);
     }
@@ -171,7 +202,7 @@ function loadCheckpoint(cache: string, file: string, stats: fs.Stats, minDate: n
     if (stats.size > value.size) value.complete = false;
     return value;
   } catch {
-    return fresh(stats, minDate);
+    return fresh(stats, minDate, kind);
   }
 }
 function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: fs.Stats): void {
@@ -192,11 +223,21 @@ function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: f
   fs.renameSync(temporary, cache);
   fs.chmodSync(cache, 0o600);
 }
+/**
+ * One compact row per hour, model, session, tool and routing provider. Events
+ * with a logged cost and events without one never share a row, so a row is
+ * either wholly logged or wholly unlogged and no unlogged token is ever taken
+ * as covered by a logged cost.
+ */
+function compactKey(entry: RawUsageEntry, timestamp: string): string {
+  const logged = entry.costUsd !== undefined && entry.costUsd > 0 ? 'L' : 'U';
+  return `${timestamp.slice(0, 13)}\0${entry.model}\0${entry.sessionId}\0${entry.target ?? ''}\0${entry.provider ?? ''}\0${logged}`;
+}
 function addEntry(rows: Map<string, CompactEntry>, entry: RawUsageEntry, minDate: number): boolean {
   const epoch = Date.parse(entry.timestamp);
   if (!Number.isFinite(epoch) || epoch < minDate) return true;
   const timestamp = new Date(epoch).toISOString();
-  const key = `${timestamp.slice(0, 13)}\0${entry.model}\0${entry.sessionId}\0${entry.target ?? ''}`;
+  const key = compactKey(entry, timestamp);
   const existing = rows.get(key);
   if (existing) {
     for (const field of [
@@ -206,6 +247,8 @@ function addEntry(rows: Map<string, CompactEntry>, entry: RawUsageEntry, minDate
       'cacheReadTokens',
     ] as const)
       existing.entry[field] += entry[field];
+    if (entry.costUsd !== undefined)
+      existing.entry.costUsd = (existing.entry.costUsd ?? 0) + entry.costUsd;
     existing.entry.timestamp =
       existing.entry.timestamp > timestamp ? existing.entry.timestamp : timestamp;
     existing.events++;
@@ -216,17 +259,19 @@ function addEntry(rows: Map<string, CompactEntry>, entry: RawUsageEntry, minDate
   return true;
 }
 function rowKey(row: CompactEntry): string {
-  const entry = row.entry;
-  return `${entry.timestamp.slice(0, 13)}\0${entry.model}\0${entry.sessionId}\0${entry.target ?? ''}`;
+  return compactKey(row.entry, row.entry.timestamp);
 }
 
 /** Pricing is stable for one bounded read, so resolve each native model once. */
-function aggregateRows(
+export function aggregateRows(
   rows: CompactEntry[],
   source: string
 ): Pick<UsageWorkerResult, 'hourly' | 'session'> {
   interface Bucket {
     models: Map<string, ModelBreakdown>;
+    /** OMP logged cost per model; those tokens are not priced again. */
+    loggedCost: Map<string, number>;
+    unlogged: Map<string, { input: number; output: number; write: number; read: number }>;
     requestCount: number;
     firstActivity: string;
     lastActivity: string;
@@ -235,17 +280,22 @@ function aggregateRows(
   }
   const hours = new Map<string, Bucket>();
   const sessions = new Map<string, Bucket>();
-  const pricing = new Map<string, ModelPricing>();
+  const pricing = new Map<string, ModelPricingResolution>();
+  const blankBucket = (): Bucket => ({
+    models: new Map(),
+    loggedCost: new Map(),
+    unlogged: new Map(),
+    requestCount: 0,
+    firstActivity: '',
+    lastActivity: '',
+    versions: new Set(),
+  });
   const add = (map: Map<string, Bucket>, key: string, row: CompactEntry): void => {
     const entry = row.entry;
-    const bucket: Bucket = map.get(key) ?? {
-      models: new Map(),
-      requestCount: 0,
-      firstActivity: '',
-      lastActivity: '',
-      versions: new Set(),
-    };
-    const provider = normalizeUsageProvider(entry.target);
+    const bucket: Bucket = map.get(key) ?? blankBucket();
+    // The routing provider prices the row; the tool is the provider only for
+    // Claude Code and Codex entries, which carry no separate one.
+    const provider = normalizeUsageProvider(entry.provider ?? entry.target);
     const modelKey = `${provider ?? ''}\0${entry.model}`;
     const model = bucket.models.get(modelKey) ?? {
       modelName: entry.model,
@@ -263,6 +313,16 @@ function aggregateRows(
       'cacheReadTokens',
     ] as const)
       model[field] += entry[field];
+    if (entry.costUsd !== undefined && entry.costUsd > 0) {
+      bucket.loggedCost.set(modelKey, (bucket.loggedCost.get(modelKey) ?? 0) + entry.costUsd);
+    } else {
+      const pending = bucket.unlogged.get(modelKey) ?? { input: 0, output: 0, write: 0, read: 0 };
+      pending.input += entry.inputTokens;
+      pending.output += entry.outputTokens;
+      pending.write += entry.cacheCreationTokens;
+      pending.read += entry.cacheReadTokens;
+      bucket.unlogged.set(modelKey, pending);
+    }
     bucket.models.set(modelKey, model);
     bucket.requestCount += row.events;
     if (entry.timestamp > bucket.lastActivity) bucket.lastActivity = entry.timestamp;
@@ -280,17 +340,25 @@ function aggregateRows(
     const modelBreakdowns = [...bucket.models.values()];
     for (const model of modelBreakdowns) {
       const key = `${model.provider ?? ''}\0${model.modelName}`;
-      let rates = pricing.get(key);
-      if (!rates) {
-        rates = getModelPricing(model.modelName, { provider: model.provider });
-        pricing.set(key, rates);
+      let resolved = pricing.get(key);
+      if (!resolved) {
+        resolved = getModelPricingWithSource(model.modelName, { provider: model.provider });
+        pricing.set(key, resolved);
       }
-      model.cost =
-        (model.inputTokens / 1_000_000) * rates.inputPerMillion +
-        (model.outputTokens / 1_000_000) * rates.outputPerMillion +
-        (model.cacheCreationTokens / 1_000_000) * rates.cacheCreationPerMillion +
-        (model.cacheReadTokens / 1_000_000) * rates.cacheReadPerMillion;
+      const rates = resolved.pricing;
+      // Logged OMP cost wins where present; the rest prices at list rates.
+      const unlogged = bucket.unlogged.get(key) ?? { input: 0, output: 0, write: 0, read: 0 };
+      const listed =
+        (unlogged.input / 1_000_000) * rates.inputPerMillion +
+        (unlogged.output / 1_000_000) * rates.outputPerMillion +
+        (unlogged.write / 1_000_000) * rates.cacheCreationPerMillion +
+        (unlogged.read / 1_000_000) * rates.cacheReadPerMillion;
+      model.cost = (bucket.loggedCost.get(key) ?? 0) + listed;
+      // The part priced only at the unknown-model fallback: no logged cost and no listed rate.
+      // Present only when nonzero, so listed-rate rows keep their exact shape.
+      if (resolved.source === 'fallback' && listed > 0) model.fallbackCost = listed;
     }
+    const fallbackCost = modelBreakdowns.reduce((sum, item) => sum + (item.fallbackCost ?? 0), 0);
     modelBreakdowns.sort((left, right) => right.cost - left.cost);
     return {
       source,
@@ -300,6 +368,7 @@ function aggregateRows(
       cacheReadTokens: modelBreakdowns.reduce((sum, item) => sum + item.cacheReadTokens, 0),
       cost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
       totalCost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
+      ...(fallbackCost > 0 && { fallbackCost }),
       modelsUsed: getModelsUsed(modelBreakdowns),
       modelBreakdowns,
     };
@@ -326,7 +395,7 @@ async function readBatch(
   file: string,
   value: Checkpoint,
   stats: fs.Stats,
-  kind: 'claude' | 'codex',
+  kind: ActivityKind,
   options: AccountActivityScanOptions,
   deadline: number
 ): Promise<void> {
@@ -351,16 +420,23 @@ async function readBatch(
     end: end - 1,
     highWaterMark: 1024 * 1024,
   });
+  const fileSessionId =
+    kind === 'omp' ? ompSessionIdForFile(file) : kind === 'muse' ? museSessionIdForFile(file) : '';
   const consume = (buffer: Buffer): void => {
     const line = buffer.toString('utf8');
     // Avoid parsing conversations/prompts: only actual native usage and the
     // Codex metadata required to interpret its cumulative counters are read.
-    const entry =
-      kind === 'codex'
-        ? parseCodexNativeUsageLine(line, value.state)
-        : /"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line)
-          ? parseUsageEntry(line, '')
-          : null;
+    let entry: RawUsageEntry | null = null;
+    if (kind === 'codex') entry = parseCodexNativeUsageLine(line, value.state);
+    else if (kind === 'claude') {
+      if (/"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line))
+        entry = parseUsageEntry(line, '');
+    } else if (kind === 'omp') {
+      if (/"type"\s*:\s*"message"/.test(line) && /"usage"\s*:/.test(line))
+        entry = parseOmpUsageLine(line, fileSessionId);
+    } else if (kind === 'muse') {
+      if (line.includes('model_completed')) entry = parseMuseUsageLine(line, fileSessionId);
+    }
     if (entry && !addEntry(rows, entry, options.minDate)) value.skippedLines++;
   };
   try {
@@ -427,42 +503,271 @@ async function readBatch(
   }
 }
 
+interface ZcodeCache {
+  /** 2: rows of a changed database replace its cached rows (1 could hold doubled rows). */
+  version: 2;
+  minDate: number;
+  fingerprints: Record<string, ZcodeFingerprint>;
+  rows: CompactEntry[];
+}
+
+function blankZcodeCache(minDate: number): ZcodeCache {
+  return { version: 2, minDate, fingerprints: {}, rows: [] };
+}
+
+function zcodeCachePath(directory: string, dbPath: string): string {
+  return path.join(directory, `${hash(`zcode:${dbPath}`)}.json`);
+}
+
+function loadZcodeCache(cache: string, minDate: number): ZcodeCache {
+  try {
+    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return blankZcodeCache(minDate);
+    const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as ZcodeCache;
+    if (
+      value.version !== 2 ||
+      !Number.isFinite(value.minDate) ||
+      value.minDate > minDate ||
+      !value.fingerprints ||
+      typeof value.fingerprints !== 'object' ||
+      !Array.isArray(value.rows) ||
+      value.rows.length > MAX_TOTAL_ROWS
+    )
+      return blankZcodeCache(minDate);
+    value.rows = value.rows.filter((row) => Date.parse(row.entry.timestamp) >= minDate);
+    return value;
+  } catch {
+    return blankZcodeCache(minDate);
+  }
+}
+
+function saveZcodeCache(cache: string, value: ZcodeCache): void {
+  const body = JSON.stringify({ ...value, rows: value.rows.slice(0, MAX_TOTAL_ROWS) });
+  if (Buffer.byteLength(body) > MAX_CACHE_BYTES)
+    throw new CCSError('Native checkpoint exceeds limit');
+  const temporary = `${cache}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, body, { mode: 0o600 });
+  fs.renameSync(temporary, cache);
+  fs.chmodSync(cache, 0o600);
+}
+
+function sameZcodePrint(left: ZcodeFingerprint | undefined, right: ZcodeFingerprint | undefined) {
+  return (
+    !!left &&
+    !!right &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    (left.walSize ?? 0) === (right.walSize ?? 0) &&
+    (left.walMtimeMs ?? 0) === (right.walMtimeMs ?? 0)
+  );
+}
+
+async function collectZcodeAccountActivity(
+  dbPath: string,
+  options: AccountActivityScanOptions,
+  directory: string,
+  deadline: number
+): Promise<UsageWorkerResult> {
+  const cache = zcodeCachePath(directory, dbPath);
+  const cached = loadZcodeCache(cache, options.minDate);
+  let failed = 0;
+  let truncated = false;
+  if (Date.now() < deadline) {
+    try {
+      const fresh = queryLocalZcodeUsage(dbPath, options.minDate, cached.fingerprints, {
+        timeoutMs: Math.max(1000, deadline - Date.now()),
+      });
+      if (fresh.state === 'not_installed') throw new CCSError('Native log sources are unavailable');
+      if (fresh.state === 'error') {
+        // The database could not be read (for example mid-write): keep what
+        // was read before, and say the scan is incomplete.
+        failed++;
+      } else {
+        truncated = fresh.truncated;
+        const prior = cached.fingerprints;
+        const next: Record<string, ZcodeFingerprint> = { ...fresh.fingerprints };
+        // A cut scan leaves unconfirmed databases at their previous state.
+        if (truncated) for (const [key, print] of Object.entries(prior)) next[key] ??= print;
+        // The helper re-sends every row of a changed database, so its cached
+        // rows are replaced, never added to; unchanged databases send none.
+        const rows = cached.rows.filter((row) => {
+          const fileKey = (row.entry as { fileKey?: string }).fileKey ?? '';
+          return (
+            fileKey in next &&
+            sameZcodePrint(prior[fileKey], next[fileKey]) &&
+            Date.parse(row.entry.timestamp) >= options.minDate
+          );
+        });
+        const byKey = new Map(rows.map((row) => [rowKey(row), row]));
+        for (const helperRow of fresh.rows) {
+          const timestamp = `${helperRow.h.replace(' ', 'T')}:00Z`;
+          if (Date.parse(timestamp) < options.minDate) continue;
+          const entry: RawUsageEntry & { fileKey: string } = {
+            inputTokens: helperRow.i,
+            outputTokens: helperRow.o,
+            cacheCreationTokens: helperRow.cw,
+            cacheReadTokens: helperRow.cr,
+            model: helperRow.m,
+            sessionId: '',
+            timestamp,
+            projectPath: '',
+            target: 'zcode',
+            provider: helperRow.p ?? '',
+            fileKey: helperRow.f,
+          };
+          // Helper rows are already per model and hour; merge duplicates.
+          const key = rowKey({ entry, events: 0 });
+          const existing = byKey.get(key);
+          if (existing) {
+            existing.entry.inputTokens += entry.inputTokens;
+            existing.entry.outputTokens += entry.outputTokens;
+            existing.entry.cacheCreationTokens += entry.cacheCreationTokens;
+            existing.entry.cacheReadTokens += entry.cacheReadTokens;
+            existing.events += helperRow.n;
+          } else if (byKey.size < MAX_TOTAL_ROWS) {
+            byKey.set(key, { entry, events: helperRow.n });
+          } else failed++;
+        }
+        cached.rows = [...byKey.values()];
+        cached.fingerprints = next;
+        cached.minDate = options.minDate;
+        saveZcodeCache(cache, cached);
+      }
+    } catch (error) {
+      if (error instanceof CCSError) throw error;
+      failed++;
+    }
+  }
+  if (!cached.rows.length && failed > 0) throw new CCSError('Native log sources could not be read');
+  const { hourly, session } = aggregateRows(cached.rows, 'zcode-native');
+  return {
+    daily: [],
+    monthly: [],
+    hourly,
+    session,
+    eventCount: cached.rows.reduce((sum, row) => sum + row.events, 0),
+    scan: {
+      complete: !truncated && failed === 0,
+      completedFiles: failed === 0 ? 1 : 0,
+      totalFiles: 1,
+      skippedLines: 0,
+      failedFiles: failed,
+      readBytes: 0,
+      unfinishedFiles: 0,
+    },
+  };
+}
+
+/** True when `small` is a byte prefix of `large`: the same head and the same bytes where `small` ends. */
+function isPrefixCopy(
+  small: { file: string; stats: fs.Stats },
+  large: { file: string; stats: fs.Stats }
+): boolean {
+  const length = small.stats.size;
+  if (length > large.stats.size) return false;
+  let left: number | undefined;
+  let right: number | undefined;
+  try {
+    left = fs.openSync(small.file, 'r');
+    right = fs.openSync(large.file, 'r');
+    const head = Math.min(256, length);
+    const tail = Math.max(0, length - 256);
+    return (
+      fingerprint(left, 0, head) === fingerprint(right, 0, head) &&
+      fingerprint(left, tail, length - tail) === fingerprint(right, tail, length - tail)
+    );
+  } catch {
+    return false;
+  } finally {
+    if (left !== undefined) fs.closeSync(left);
+    if (right !== undefined) fs.closeSync(right);
+  }
+}
+
+/**
+ * A resumed OMP run copies the session file into its new root and appends to
+ * the copy, so every record of the older copy is also in the newer one. Per
+ * session, the longest file is kept and every other file that is a byte
+ * prefix of a kept one is dropped. Files that diverge are all kept.
+ */
+export function dropOmpResumeCopies<T extends { file: string; stats: fs.Stats }>(files: T[]): T[] {
+  const groups = new Map<string, T[]>();
+  for (const item of files) {
+    const key = ompSessionCopyKey(item.file);
+    if (!key) continue;
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  const dropped = new Set<string>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    group.sort(
+      (left, right) => right.stats.size - left.stats.size || left.file.localeCompare(right.file)
+    );
+    const kept: T[] = [];
+    for (const item of group) {
+      if (kept.some((larger) => isPrefixCopy(item, larger))) dropped.add(item.file);
+      else kept.push(item);
+    }
+  }
+  return dropped.size ? files.filter((item) => !dropped.has(item.file)) : files;
+}
+
 /** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
 export async function collectAccountActivity(
-  request: Extract<UsageWorkerRequest, { kind: 'claude' | 'codex' }>,
+  request: Extract<UsageWorkerRequest, { kind: ActivityKind }>,
   options: AccountActivityScanOptions
 ): Promise<UsageWorkerResult> {
-  const root =
-    request.kind === 'claude' ? request.projectsDir : path.join(request.codexHome, 'sessions');
+  const roots =
+    request.kind === 'claude'
+      ? [request.projectsDir]
+      : request.kind === 'codex'
+        ? [path.join(request.codexHome, 'sessions')]
+        : request.kind === 'omp'
+          ? request.roots
+          : request.kind === 'muse'
+            ? [request.sessionsDir]
+            : [];
   const directory = path.join(
     options.cacheDir,
     'account-activity-v1',
-    hash(`${request.kind}:${root}`)
+    hash(`${request.kind}:${roots.join('\n')}`)
   );
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
   const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
+  if (request.kind === 'zcode')
+    return collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
   const issues = { failed: 0 };
   const files: Array<{ file: string; stats: fs.Stats }> = [];
-  for (const file of await filesUnder(
-    root,
-    request.kind,
-    issues,
-    deadline,
-    options.traversalLimits
-  )) {
-    if (Date.now() >= deadline) {
-      issues.failed++;
-      break;
+  for (const root of roots) {
+    for (const file of await filesUnder(
+      root,
+      request.kind,
+      issues,
+      deadline,
+      options.traversalLimits
+    )) {
+      if (Date.now() >= deadline) {
+        issues.failed++;
+        break;
+      }
+      try {
+        files.push({ file, stats: fs.statSync(file) });
+      } catch {
+        issues.failed++;
+      }
+      if (files.length >= MAX_FILES) {
+        issues.failed++;
+        break;
+      }
     }
-    try {
-      files.push({ file, stats: fs.statSync(file) });
-    } catch {
-      issues.failed++;
-    }
+    if (files.length >= MAX_FILES || Date.now() >= deadline) break;
   }
   if (!files.length && issues.failed) throw new CCSError('Native log sources are unavailable');
-  files.sort(
+  // Resumed OMP runs copy a session into a new root; its records count once.
+  const scanned = request.kind === 'omp' ? dropOmpResumeCopies(files) : files;
+  scanned.sort(
     (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
   );
   const rows: CompactEntry[] = [];
@@ -471,10 +776,10 @@ export async function collectAccountActivity(
   let failed = issues.failed;
   let readBytes = 0;
   let unfinishedFiles = 0;
-  for (const { file, stats } of files) {
+  for (const { file, stats } of scanned) {
     const cache = path.join(directory, `${hash(file)}.json`);
     try {
-      const value = loadCheckpoint(cache, file, stats, options.minDate);
+      const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
       const before = value.offset;
       if (Date.now() < deadline) {
         await readBatch(file, value, stats, request.kind, options, deadline);
@@ -494,8 +799,15 @@ export async function collectAccountActivity(
     // Keep already-checkpointed records available even after the scan budget.
     // Loading every remaining small cache is bounded by MAX_FILES/MAX_TOTAL_ROWS.
   }
-  const source = request.kind === 'codex' ? 'codex-native' : 'custom-parser';
-  if (!rows.length && failed >= files.length && failed > 0)
+  const source =
+    request.kind === 'codex'
+      ? 'codex-native'
+      : request.kind === 'omp'
+        ? 'omp-native'
+        : request.kind === 'muse'
+          ? 'muse-native'
+          : 'custom-parser';
+  if (!rows.length && failed >= scanned.length && failed > 0)
     throw new CCSError('Native log sources could not be read');
   const { hourly, session } = aggregateRows(rows, source);
   return {
@@ -505,9 +817,10 @@ export async function collectAccountActivity(
     session,
     eventCount: rows.reduce((sum, row) => sum + row.events, 0),
     scan: {
-      complete: completed === files.length && files.length < MAX_FILES && !skippedLines && !failed,
+      complete:
+        completed === scanned.length && files.length < MAX_FILES && !skippedLines && !failed,
       completedFiles: completed,
-      totalFiles: files.length,
+      totalFiles: scanned.length,
       skippedLines,
       failedFiles: failed,
       readBytes,

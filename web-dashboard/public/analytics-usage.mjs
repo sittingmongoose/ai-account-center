@@ -3,10 +3,14 @@
 // approved Daylight Atlas concept (c-daylight-atlas/app-analytics.js). Pure functions of the analytics response
 // and the page state; every chart geometry is computed here and drawn by ui/pages/analytics/*.slint.
 //
-// Truthfulness: activity is Ubuntu Claude Code and Codex logs only; cost is an estimated API equivalent, not a
-// bill; activity covers all accounts and is never attributed to one or added to quota numbers; a missing reading
-// is unavailable, never zero; at most two decimals; local time throughout.
-import { reconcile } from './model-rates.mjs';
+// Truthfulness: activity is the CLI usage logs the server reads (activity.sources says which tools on which
+// computers). Only Claude Code and Codex are providers on this page; OMP, Muse Code and zcode merge into the
+// model views and the totals and never become a filter, legend, row or header. Cost is an estimated API
+// equivalent, not a bill; a cost that is neither logged nor priced at a listed rate is "not logged", never zero,
+// and a total that leaves such a cost out says "partial". Activity covers all accounts and is never attributed
+// to one or added to quota numbers; a missing reading is unavailable, never zero; at most two decimals; local
+// time throughout.
+import { reconcile, modelRates } from './model-rates.mjs';
 
 export const H = 3_600_000;
 export const D = 24 * H;
@@ -155,10 +159,66 @@ export const TYPES = [
   { k: 'cw', f: 'cacheCreationTokens', label: 'Cache write', long: 'Cache write' },
   { k: 'cr', f: 'cacheReadTokens', label: 'Cache read', long: 'Cache read' },
 ];
+/** The providers of this page: the provider filter, the per-provider views and the model marks. */
 export const PROVS = [['claude', 'Claude Code'], ['codex', 'Codex']];
 const PROV_LABEL = Object.fromEntries(PROVS);
+const isProv = p => p === 'claude' || p === 'codex';
+/**
+ * Every tool whose usage logs the server reads (activity.providers[] / byHour[] / models[] `provider`). Only
+ * PROVS are providers here; the others count in the totals and merge into the model views when no provider is
+ * picked, and are never a filter, a legend, a row or a section of their own.
+ */
+export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode'];
+const zeroByTool = () => Object.fromEntries(TOOLS.map(p => [p, 0]));
 export const RANGES = [['24h', '24H'], ['7d', '7D'], ['30d', '30D'], ['month', 'Month'], ['all', 'All']];
 const tokens = row => TYPES.every(t => finite(row?.[t.f]) && row[t.f] >= 0);
+const TINY = 1e-9;
+export const NOT_LOGGED = 'Not logged';
+/**
+ * The part of a row's estimate that is not logged: tokens with no logged cost and no listed rate, which the
+ * server prices only at its unknown-model fallback (fallbackCostUsd). A response from before that field counts
+ * a row with an unknown split and no listed rate as wholly not logged, so a guess is never shown as a cost.
+ * Claude Code and Codex rows (`tool`) keep their estimate as before: only the tools that are not providers of
+ * this page read as not logged.
+ */
+export function notLoggedPart(row, est, tool) {
+  if (est === null || isProv(tool)) return 0;
+  if (finite(row?.fallbackCostUsd) && row.fallbackCostUsd >= 0) return Math.min(est, row.fallbackCostUsd);
+  if (row && 'costByType' in row && row.costByType === null && (!row.rates || row.rates.source === 'fallback')) return est;
+  return 0;
+}
+const RATE_FIELDS = ['inputPerMillion', 'outputPerMillion', 'cacheCreationPerMillion', 'cacheReadPerMillion'];
+/**
+ * The server's published rates for a model, when they are a listed rate (the unknown-model fallback is not). For
+ * Claude Code and Codex (`keepFallback`) the fallback stays the estimate's rate, as it was before other tools.
+ */
+function listedRate(r, keepFallback = false) {
+  if (!r || typeof r !== 'object' || (r.source === 'fallback' && !keepFallback) || !RATE_FIELDS.every(k => finite(r[k]) && r[k] >= 0)) return null;
+  return { in: r.inputPerMillion, out: r.outputPerMillion, cw: r.cacheCreationPerMillion, cr: r.cacheReadPerMillion, source: text(r.source) || 'builtin' };
+}
+/**
+ * A model's per-type cost: the server's own split when it reconciles, else the tokens at its listed rate when they
+ * add up to the logged estimate, else token shares of what is logged. A response without published rates uses
+ * the page's mirror of the CCS rates (model-rates.mjs), as before; the mirror's fallback is no listed rate.
+ */
+function modelSplit(row, tok, total, known) {
+  const shares = () => Object.fromEntries(TYPES.map(t => [t.k, total > 0 && finite(known) ? tok[t.k] / total * known : 0]));
+  const keepFallback = isProv(row.provider);
+  if (!('rates' in row)) {
+    const r = reconcile(row);
+    const rate = r.rate.source === 'fallback' && !keepFallback ? null : r.rate;
+    return rate && r.reconciled ? { cost: r.cost, mode: 'rates', rate } : { cost: shares(), mode: 'shares', rate };
+  }
+  const rate = listedRate(row.rates, keepFallback);
+  const p = row.costByType;
+  if (rate && row.costByTypeReconciled === true && p && ['input', 'output', 'cacheWrite', 'cacheRead'].every(k => finite(p[k]) && p[k] >= 0))
+    return { cost: { in: p.input, out: p.output, cw: p.cacheWrite, cr: p.cacheRead }, mode: 'rates', rate };
+  if (rate && finite(known)) {
+    const cost = Object.fromEntries(TYPES.map(t => [t.k, tok[t.k] * rate[t.k] / 1e6]));
+    if (Math.abs(cost.in + cost.out + cost.cw + cost.cr - known) <= Math.max(0.005, known * 1e-6)) return { cost, mode: 'rates', rate };
+  }
+  return { cost: shares(), mode: 'shares', rate };
+}
 
 /** The analytics API range that covers a page range (the backend accepts 24h, 7d and 30d today). */
 export function apiRangeFor(state, now = Date.now()) {
@@ -170,7 +230,13 @@ export function apiRangeFor(state, now = Date.now()) {
 }
 const dayStartMonth = now => { const d = new Date(now); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
-/** Validated activity rows. Malformed, unknown-provider and duplicate rows are dropped, never counted twice. So is `<synthetic>`, Claude Code's placeholder for messages that never reached a model: it is excluded silently, never listed and never noted. */
+/**
+ * Validated activity rows. Malformed, unknown-tool and duplicate rows are dropped, never counted twice. So is
+ * `<synthetic>`, Claude Code's placeholder for messages that never reached a model: it is excluded silently, never
+ * listed and never noted. Rows of every tool in TOOLS are kept with their tool; only the views decide what a
+ * provider is. Each row's cost is the part that is logged or priced at a listed rate (`cost`), and `unk` says some
+ * of it is not logged.
+ */
 export function activityData(payload, now = Date.now()) {
   const act = payload?.activity || {};
   const available = ['ok', 'cached'].includes(act.status) && tokens(act.totals);
@@ -180,15 +246,16 @@ export function activityData(payload, now = Date.now()) {
   if (available) {
     for (const row of Array.isArray(act.byHour) ? act.byHour : []) {
       const value = text(row?.hour);
-      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:00(?::00)?Z$/.test(value) || !['claude', 'codex'].includes(row.provider) || !tokens(row)) continue;
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:00(?::00)?Z$/.test(value) || !TOOLS.includes(row.provider) || !tokens(row)) continue;
       const t = Date.parse(value);
       if (!finite(t) || new Date(t).toISOString().slice(0, 13) !== value.slice(0, 13)) continue;
       const key = `${row.provider}|${t}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const cost = finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
-      if (cost === null) costMissing = true;
-      hours.push({ t, p: row.provider, in: row.inputTokens, out: row.outputTokens, cw: row.cacheCreationTokens, cr: row.cacheReadTokens, cost: cost ?? 0 });
+      const est = finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
+      if (est === null) costMissing = true;
+      const nl = notLoggedPart(row, est, row.provider);
+      hours.push({ t, p: row.provider, in: row.inputTokens, out: row.outputTokens, cw: row.cacheCreationTokens, cr: row.cacheReadTokens, cost: est === null ? 0 : Math.max(0, est - nl), unk: nl > TINY });
     }
   }
   hours.sort((a, b) => a.t - b.t);
@@ -196,23 +263,26 @@ export function activityData(payload, now = Date.now()) {
   const modelKeys = new Set();
   if (available) {
     for (const row of Array.isArray(act.models) ? act.models : []) {
-      if (!['claude', 'codex'].includes(row?.provider) || !text(row.model) || !tokens(row) || text(row.model) === '<synthetic>') continue;
+      if (!TOOLS.includes(row?.provider) || !text(row.model) || !tokens(row) || text(row.model) === '<synthetic>') continue;
       const key = `${row.provider}|${row.model}`;
       if (modelKeys.has(key)) continue;
       modelKeys.add(key);
       const tok = Object.fromEntries(TYPES.map(t => [t.k, row[t.f]]));
       const total = tok.in + tok.out + tok.cw + tok.cr;
-      const r = reconcile(row);
-      const logged = r.logged;
-      const mode = r.reconciled ? 'rates' : 'shares';
-      const cost = mode === 'rates' ? r.cost : Object.fromEntries(TYPES.map(t => [t.k, total > 0 && finite(logged) ? tok[t.k] / total * logged : 0]));
-      models.push({ model: row.model, provider: row.provider, tok, total, logged, hasCost: finite(logged), cost, mode, rate: r.rate });
+      const est = finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
+      // a response without fallbackCostUsd or rates: the mirror's unknown-model fallback is no listed rate either
+      const legacy = !('fallbackCostUsd' in row) && !('rates' in row) && !('costByType' in row);
+      const nl = isProv(row.provider) ? 0 : legacy ? (est !== null && modelRates(row.model).source === 'fallback' ? est : 0) : notLoggedPart(row, est, row.provider);
+      const logged = est === null ? null : Math.max(0, est - nl);
+      const split = modelSplit(row, tok, total, logged);
+      models.push({ model: row.model, provider: row.provider, tok, total, logged, hasCost: est !== null, unk: nl > TINY, cost: split.cost, mode: split.mode, rate: split.rate });
     }
   }
-  const unreconciled = models.filter(m => m.mode === 'shares' && (m.total > 0 || (m.logged || 0) > 0));
-  // a provider's blended per-type rate over the logged window, used to split a shorter range's logged cost
+  // a listed rate that does not add up to the logged estimate (a model without a listed rate is not "unreconciled")
+  const unreconciled = models.filter(m => m.mode === 'shares' && m.rate && (m.total > 0 || (m.logged || 0) > 0));
+  // a tool's blended per-type rate over the logged window, used to split a shorter range's logged cost
   const blend = {};
-  for (const [p] of PROVS) {
+  for (const p of TOOLS) {
     blend[p] = {};
     const list = models.filter(m => m.provider === p);
     for (const t of TYPES) {
@@ -224,13 +294,20 @@ export function activityData(payload, now = Date.now()) {
   const fetched = Date.parse(act.fetchedAt);
   const win0 = Math.min(finite(apiFrom) ? Math.ceil(apiFrom / H) * H : Infinity, hours.length ? hours[0].t : Infinity, finite(apiFrom) ? Infinity : now - 7 * D);
   const win1 = finite(fetched) ? Math.min(fetched, now) : hours.length ? Math.min(now, hours.at(-1).t + H) : now;
-  const sessions = (available && Array.isArray(act.providers) ? act.providers : []).filter(p => ['claude', 'codex'].includes(p?.provider)).map(p => ({
-    p: p.provider, label: PROV_LABEL[p.provider],
-    sessions: Number.isInteger(p.sessionCount) && p.sessionCount >= 0 ? p.sessionCount : null,
-    events: Number.isInteger(p.usageEvents) && p.usageEvents >= 0 ? p.usageEvents : null,
-    cost: finite(p.totals?.estimatedCostUsd) && p.totals.estimatedCostUsd >= 0 ? p.totals.estimatedCostUsd : null,
-  }));
-  return { available, status: text(act.status), message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, costMissing, apiPreset: text(payload?.range?.preset), apiFrom };
+  const sessionTools = new Set();
+  const sessions = (available && Array.isArray(act.providers) ? act.providers : []).filter(p => TOOLS.includes(p?.provider) && !sessionTools.has(p.provider) && sessionTools.add(p.provider)).map(p => {
+    const est = finite(p.totals?.estimatedCostUsd) && p.totals.estimatedCostUsd >= 0 ? p.totals.estimatedCostUsd : null;
+    const nl = notLoggedPart(p.totals, est, p.provider);
+    return {
+      p: p.provider, label: PROV_LABEL[p.provider] || '',
+      sessions: Number.isInteger(p.sessionCount) && p.sessionCount >= 0 ? p.sessionCount : null,
+      events: Number.isInteger(p.usageEvents) && p.usageEvents >= 0 ? p.usageEvents : null,
+      cost: est === null ? null : Math.max(0, est - nl), unk: nl > TINY,
+    };
+  });
+  // usage from a tool that is not a provider of this page (it merges into the totals and the model views)
+  const others = hours.some(r => !isProv(r.p)) || models.some(m => !isProv(m.provider));
+  return { available, status: text(act.status), message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, costMissing, others, apiPreset: text(payload?.range?.preset), apiFrom };
 }
 
 /** The page range in local time: [a2, b) clipped to the logs that were read; step is the bucket size. */
@@ -254,24 +331,33 @@ export function pageRange(state, A, now) {
   return { range, a, b, a2, end, step, now, clipped: a < A.win0 - H, unread: A.win1 < b ? b - A.win1 : 0 };
 }
 export const stepWord = s => s >= D ? 'Daily' : s === H ? 'Hourly' : `${Math.round(s / H)}-hour`;
+/**
+ * The provider filter. A picked provider narrows every block to that provider's own logs; the tools that are
+ * not providers of this page count only under All (they cannot be picked, so they never stand alone).
+ */
 const provOK = (state, p) => !state?.prov || state.prov === 'all' || state.prov === p;
-const provName = state => !state?.prov || state.prov === 'all' ? 'Claude Code and Codex' : PROV_LABEL[state.prov] || 'Claude Code and Codex';
+const allPicked = state => !state?.prov || state.prov === 'all';
+/** What a block covers, for its subtitle: the picked provider, or every included log under All. */
+const provName = (state, A) => !allPicked(state) ? PROV_LABEL[state.prov] || 'Claude Code and Codex' : A?.others ? 'all included logs' : 'Claude Code and Codex';
+/** The same for a sentence ("No ... activity was logged"); every included log needs no name. */
+const provWords = (state, A) => allPicked(state) && A?.others ? '' : `${provName(state, A)} `;
 const rowsIn = (A, R, state) => A.hours.filter(r => provOK(state, r.p) && r.t + H > R.a2 && r.t < R.b);
 export function sumRows(rows) {
-  const o = { in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: { claude: 0, codex: 0 }, ptok: { claude: 0, codex: 0 } };
-  for (const r of rows) { o.in += r.in; o.out += r.out; o.cw += r.cw; o.cr += r.cr; o.cost += r.cost; o.pc[r.p] += r.cost; o.ptok[r.p] += r.in + r.out + r.cw + r.cr; }
+  const o = { in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: zeroByTool(), ptok: zeroByTool(), partial: false };
+  for (const r of rows) { o.in += r.in; o.out += r.out; o.cw += r.cw; o.cr += r.cr; o.cost += r.cost; o.pc[r.p] += r.cost; o.ptok[r.p] += r.in + r.out + r.cw + r.cr; if (r.unk) o.partial = true; }
   o.tok = o.in + o.out + o.cw + o.cr;
   return o;
 }
 /**
- * Per-type costs for a set of hourly rows: each provider's logged cost split by its token mix at its models'
- * blended rates, so the parts always add up to the logged total. For the whole logged window with every model
- * reconciled this equals the sum of each model's tokens at its rates (exact).
+ * Per-type costs for a set of hourly rows: each tool's logged cost split by its token mix at its models' blended
+ * rates, so the parts always add up to the logged total. For the whole logged window with every model reconciled
+ * this equals the sum of each model's tokens at its rates (exact).
  */
 export function typeCosts(A, rows) {
   const out = { in: 0, out: 0, cw: 0, cr: 0 };
   let exact = true;
-  for (const [p] of PROVS) {
+  const present = new Set(rows.map(r => r.p));
+  for (const p of TOOLS) {
     const pr = rows.filter(r => r.p === p);
     if (!pr.length) continue;
     const logged = pr.reduce((s, r) => s + r.cost, 0);
@@ -281,7 +367,9 @@ export function typeCosts(A, rows) {
     if (Math.abs(k - 1) > 1e-6) exact = false;
     for (const t of TYPES) out[t.k] += w[t.k] * k;
   }
-  return { cost: out, exact: exact && !A.unreconciled.length };
+  // exact only when every model of these tools splits at its rates and every cost is logged
+  const inexact = A.models.some(m => present.has(m.provider) && (m.mode !== 'rates' || m.unk) && (m.total > 0 || (m.logged || 0) > 0));
+  return { cost: out, exact: exact && !inexact && !rows.some(r => r.unk) };
 }
 export function buckets(A, R, state) {
   const list = [], map = new Map();
@@ -289,7 +377,7 @@ export function buckets(A, R, state) {
   for (let t = bucketStart(R.a2, R.step), guard = 0; t < R.end && guard < 800; t = nextBucket(t, R.step), guard++) {
     const t1 = nextBucket(t, R.step);
     const lo = Math.max(t, R.a2), hi = Math.min(t1, R.end);
-    const b = { t, t1, lo, hi, mid: (lo + hi) / 2, in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: { claude: 0, codex: 0 }, partial: t < R.a2 || t1 > R.end };
+    const b = { t, t1, lo, hi, mid: (lo + hi) / 2, in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: zeroByTool(), unk: false, punk: false, others: false, partial: t < R.a2 || t1 > R.end };
     list.push(b); map.set(t, b);
   }
   for (const r of rowsIn(A, R, state)) {
@@ -297,6 +385,9 @@ export function buckets(A, R, state) {
     if (!b) continue;
     for (const t of TYPES) b[t.k] += r[t.k];
     b.cost += r.cost; b.pc[r.p] += r.cost;
+    // unk: some cost in the bucket is not logged; punk: the same for the providers alone (the daily chart)
+    if (r.unk) { b.unk = true; if (isProv(r.p)) b.punk = true; }
+    if (!isProv(r.p)) b.others = true;
   }
   return list;
 }
@@ -315,23 +406,30 @@ export const DEFAULT_SIZES = { trend: { w: 1320, h: 380 }, daily: { w: 1320, h: 
 function kpis(A, R, state, rows, K, C) {
   if (!A.available) {
     return [['tok', 'Total tokens', ''], ['cost', 'Total cost', 'cost'], ['cache', 'Cache tokens', 'cache'], ['in', 'Input cost', 'in'], ['out', 'Output cost', 'out']]
-      .map(([key, label, swatch]) => ({ key, label, swatch, num: 0, has: false, fmt: key === 'tok' || key === 'cache' ? 'tok' : 'money', text: 'Unavailable', tip: '', sub: [run('Local CLI activity unavailable')], apport: false }));
+      .map(([key, label, swatch]) => ({ key, label, swatch, num: 0, has: false, fmt: key === 'tok' || key === 'cache' ? 'tok' : 'money', text: 'Unavailable', tip: '', sub: [run('CLI usage logs unavailable')], apport: false }));
   }
   const days = (R.end - R.a2) / D;
   const cacheCost = C.cost.cw + C.cost.cr;
   const costOk = !A.costMissing;
-  const perDay = !costOk ? [] : days >= 0.75 ? [run(money(K.cost / Math.max(1, days)), true), run(' a day · ')] : days > 0 ? [run(money(K.cost / (days * 24)), true), run(' an hour · ')] : [];
+  // partial: some cost in the range is not logged, so the totals cover only what is
+  const partial = costOk && K.partial;
+  const perDay = !costOk || partial ? [] : days >= 0.75 ? [run(money(K.cost / Math.max(1, days)), true), run(' a day · ')] : days > 0 ? [run(money(K.cost / (days * 24)), true), run(' an hour · ')] : [];
   const apport = !C.exact;
-  const card = (key, label, swatch, num, fmt, tip, sub) => ({ key, label, swatch, num: finite(num) ? num : 0, has: finite(num), fmt, text: finite(num) ? fmt === 'money' ? money(num) : tokC(num) : 'Unavailable', tip, sub, apport: apport && (key === 'in' || key === 'out') });
+  // a cost that is all not logged reads "Not logged", never $0.00
+  const costCard = (num, sub) => partial && !(K.cost > TINY) ? { num: null, text: NOT_LOGGED, sub } : { num, sub };
+  const card = (key, label, swatch, num, fmt, tip, sub, na = 'Unavailable') => ({ key, label, swatch, num: finite(num) ? num : 0, has: finite(num), fmt, text: finite(num) ? fmt === 'money' ? money(num) : tokC(num) : na, tip, sub, apport: apport && (key === 'in' || key === 'out') });
+  const total = costCard(costOk ? K.cost : null, partial ? [run('Partial', true), run(' · some cost is not logged')] : [...perDay, run('API-equivalent estimate')]);
+  const input = costCard(costOk ? C.cost.in : null, partial ? [run('Partial', true), run(` · ${tokC(K.in)} uncached input tokens`)] : [run(`${tokC(K.in)} uncached input tokens`)]);
+  const output = costCard(costOk ? C.cost.out : null, partial ? [run('Partial', true), run(` · ${tokC(K.out)} output tokens`)] : [run(`${tokC(K.out)} output tokens, with reasoning`)]);
   return [
     card('tok', 'Total tokens', '', K.tok, 'tok', tokX(K.tok), [run(`${tokC(K.in)} in · ${tokC(K.out)} out · ${tokC(K.cw + K.cr)} cache`)]),
-    card('cost', 'Total cost', 'cost', costOk ? K.cost : null, 'money', 'An estimate at API prices, not a bill', [...perDay, run('API-equivalent estimate')]),
-    card('cache', 'Cache tokens', 'cache', K.cw + K.cr, 'tok', tokX(K.cw + K.cr), costOk ? [run(money(cacheCost), true), run(` cache cost · ${share1(K.cost ? cacheCost / K.cost * 100 : 0)}% of cost`)] : [run('Cache cost unavailable')]),
-    card('in', 'Input cost', 'in', costOk ? C.cost.in : null, 'money', '', [run(`${tokC(K.in)} uncached input tokens`)]),
-    card('out', 'Output cost', 'out', costOk ? C.cost.out : null, 'money', '', [run(`${tokC(K.out)} output tokens, with reasoning`)]),
+    card('cost', 'Total cost', 'cost', total.num, 'money', partial ? 'An estimate at API prices, not a bill. Partial: it leaves out the cost that is not logged (no logged cost and no listed rate).' : 'An estimate at API prices, not a bill', total.sub, total.text),
+    card('cache', 'Cache tokens', 'cache', K.cw + K.cr, 'tok', tokX(K.cw + K.cr), !costOk ? [run('Cache cost unavailable')] : partial ? [run(K.cost > TINY ? money(cacheCost) : NOT_LOGGED, true), run(' cache cost · partial')] : [run(money(cacheCost), true), run(` cache cost · ${share1(K.cost ? cacheCost / K.cost * 100 : 0)}% of cost`)]),
+    card('in', 'Input cost', 'in', input.num, 'money', '', input.sub, input.text),
+    card('out', 'Output cost', 'out', output.num, 'money', '', output.sub, output.text),
   ];
 }
-export const APPORT_TIP = "Model detail is logged only for the whole log window. For a shorter range, each provider's logged cost is split by its token mix at its models' rates, so the parts still add up to the logged total.";
+export const APPORT_TIP = "Model detail is logged only for the whole log window. For a shorter range, each log's cost is split by its token mix at its models' rates, so the parts still add up to the logged total. Cost that is not logged is left out.";
 
 // ---------------------------------------------------------------- usage trends
 function xTicks(R, pw) {
@@ -400,14 +498,20 @@ export function trendView(A, R, state, size) {
   let minor = '';
   for (const tk of xt) if (!tk.major) minor += dashLine(tk.x, 0, tk.x, ph, 2, 4);
   const tail = A.win1 < R.b && A.win1 > R.a2 ? pt(X(A.win1)) : -1;
+  // the readout's Claude Code / Codex split adds up to the bucket only while no other log is in the range
+  const showSplit = allPicked(state) && costOk && !B.some(b => b.others);
+  const partial = costOk && B.some(b => b.unk);
   const bucketsOut = B.map(b => {
     const top = inc.reduce((s, t) => s + b[t.k], 0), all = b.in + b.out + b.cw + b.cr;
     const when = R.step >= D ? `${wmdTxt(b.t)}${b.partial ? `, ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`
       : `${wmdTxt(b.t)} · ${hourTxt(b.lo)} to ${b.hi === b.t1 ? hourTxt(b.hi) : clockTxt(b.hi)}`;
-    const foot = [state.prov === 'all' && costOk ? PROVS.map(([p, l]) => `${l} ${money(b.pc[p])}`).join(' · ') : '', b.t1 > A.win1 ? `Logs read ${clockTxt(A.win1)}; later activity is not in yet` : ''].filter(Boolean);
+    const split = showSplit ? PROVS.map(([p, l]) => `${l} ${money(b.pc[p])}`).join(' · ') : '';
+    const costFoot = costOk && b.unk ? split ? `${split} · partial` : 'Partial: some cost here is not logged' : split;
+    const foot = [costFoot, b.t1 > A.win1 ? `Logs read ${clockTxt(A.win1)}; later activity is not in yet` : ''].filter(Boolean);
     return {
-      x: pt(X(b.mid)), yTok: pt(Y(top)), yCost: pt(costOk ? YC(b.cost) : ph), time: when.toUpperCase(),
-      vin: tokC(b.in), vout: tokC(b.out), vcw: tokC(b.cw), vcr: tokC(b.cr), all: tokC(all), cost: costOk ? money(b.cost) : 'Unavailable',
+      // yCost -1: no logged cost in this bucket, so the crosshair draws no cost marker (never a $0 point)
+      x: pt(X(b.mid)), yTok: pt(Y(top)), yCost: !costOk ? pt(ph) : b.unk && !(b.cost > TINY) ? -1 : pt(YC(b.cost)), time: when.toUpperCase(),
+      vin: tokC(b.in), vout: tokC(b.out), vcw: tokC(b.cw), vcr: tokC(b.cr), all: tokC(all), cost: !costOk ? 'Unavailable' : b.unk && !(b.cost > TINY) ? NOT_LOGGED : money(b.cost),
       tin: tokX(b.in), tout: tokX(b.out), tcw: tokX(b.cw), tcr: tokX(b.cr), tall: tokX(all), crDim: !state.cache,
       foot: foot[0] || '', foot2: foot[1] || '',
     };
@@ -425,13 +529,13 @@ export function trendView(A, R, state, size) {
   const legend = [];
   if (state.split) TYPES.forEach(t => { if (t.k !== 'cr' || state.cache) legend.push({ key: t.k, label: t.label, note: '' }); });
   else legend.push({ key: 'tok', label: state.cache ? 'All tokens' : 'Tokens without cache reads', note: 'left axis' });
-  legend.push({ key: 'cost', label: 'Estimated cost', note: costOk ? 'right axis, USD' : 'unavailable for this range' });
+  legend.push({ key: 'cost', label: 'Estimated cost', note: !costOk ? 'unavailable for this range' : partial ? 'right axis, USD, partial' : 'right axis, USD' });
   return {
     w: W, h: Hc, pw: pt(pw), ph: pt(ph),
     geo: { x0, x1, lv, cost },
-    sub: `${stepWord(R.step)} buckets · ${provName(state)}${R.clipped ? ` · logs start ${mdTxt(R.a2)}` : ''}`,
+    sub: `${stepWord(R.step)} buckets · ${provName(state, A)}${R.clipped ? ` · logs start ${mdTxt(R.a2)}` : ''}`,
     split: !!state.split, cache: !!state.cache, costShown: costOk,
-    empty, emptyText: !A.available ? (A.message || 'Local CLI activity is unavailable.') : empty ? `No ${provName(state)} activity was logged in this range.` : '',
+    empty, emptyText: !A.available ? (A.message || 'CLI usage logs are unavailable.') : empty ? `No ${provWords(state, A)}activity was logged in this range.` : '',
     yTicks, xTicks: xt, minor,
     tailX: tail, tailLabel: tail >= 0 ? `LOGS READ ${clockTxt(A.win1).toUpperCase()}` : '', hatch: tail >= 0 ? hatch(tail, 0, pw, ph) : '',
     clipNote: R.clipped ? `LOGS START ${wmdTxt(R.a2).toUpperCase()}, ${hourTxt(R.a2).toUpperCase()}` : '',
@@ -451,13 +555,63 @@ export function mixGeo(from, to, k) {
 }
 
 // ---------------------------------------------------------------- models: cost by model + donut
-const modelsShown = (A, state) => A.models.filter(m => provOK(state, m.provider) && (m.total > 0 || (m.logged || 0) > 0)).sort((a, b) => (b.logged || 0) - (a.logged || 0));
-const hiddenModels = (A, state) => A.models.filter(m => provOK(state, m.provider) && !(m.total > 0 || (m.logged || 0) > 0));
-/** One colour per model in its provider's family: full tone for the largest, lighter steps after it. */
-function modelShades(A) {
-  const out = {}, n = { claude: 0, codex: 0 };
+/**
+ * The page's model rows: every tool's rows of one model merged into one, because models are the only division.
+ * `provider` is Claude Code or Codex only when the model's usage here comes from that provider alone (its mark
+ * and colour family); otherwise it is '' and the model has no mark and the neutral family. `logged` is the cost
+ * that is logged or priced at a listed rate; `unk` says some cost is not logged; `na` says an estimate is missing.
+ */
+export function pageModels(A, state) {
+  const groups = new Map();
+  for (const m of A.models) {
+    if (!provOK(state, m.provider)) continue;
+    const g = groups.get(m.model) || { model: m.model, parts: [] };
+    g.parts.push(m);
+    groups.set(m.model, g);
+  }
+  return [...groups.values()].map(({ model, parts }) => {
+    const tools = new Set(parts.map(m => m.provider));
+    const only = tools.size === 1 ? [...tools][0] : '';
+    const tok = Object.fromEntries(TYPES.map(t => [t.k, parts.reduce((s, m) => s + m.tok[t.k], 0)]));
+    const total = tok.in + tok.out + tok.cw + tok.cr;
+    const logged = parts.reduce((s, m) => s + (m.logged ?? 0), 0);
+    const unk = parts.some(m => m.unk), na = parts.some(m => m.logged === null);
+    const exact = !unk && !na && parts.every(m => m.mode === 'rates');
+    const cost = exact ? Object.fromEntries(TYPES.map(t => [t.k, parts.reduce((s, m) => s + m.cost[t.k], 0)]))
+      : Object.fromEntries(TYPES.map(t => [t.k, total > 0 ? tok[t.k] / total * logged : 0]));
+    const r0 = parts[0].rate;
+    const rate = r0 && parts.every(m => m.rate && m.rate.source === r0.source && TYPES.every(t => m.rate[t.k] === r0[t.k])) ? r0 : null;
+    return {
+      model, key: model, provider: isProv(only) ? only : '', tok, total, logged, unk, na, cost, rate,
+      mode: exact ? 'rates' : 'shares', unreconciled: parts.some(m => A.unreconciled.includes(m)),
+      // nothing known: every part is not logged or missing
+      none: (unk || na) && !(logged > TINY),
+    };
+  });
+}
+const active = m => m.total > 0 || m.logged > 0 || m.unk;
+const byCost = (a, b) => (b.logged || 0) - (a.logged || 0) || b.total - a.total || a.model.localeCompare(b.model);
+const modelsShown = (A, state) => pageModels(A, state).filter(active).sort(byCost);
+const hiddenModels = (A, state) => pageModels(A, state).filter(m => !active(m));
+/** The cost of a model row: logged (or listed) cost; "Not logged" when none of it is, never $0.00. */
+const modelCost = m => m.none ? (m.unk ? NOT_LOGGED : 'Unavailable') : money(m.logged);
+/**
+ * One colour per model in its family (Claude Code, Codex, or the neutral family of models that are not one
+ * provider's alone): full tone for the largest, lighter steps after it. The neutral family can hold many models,
+ * so it spreads them over an even ramp and interleaves it, so neighbours by size never share a tone.
+ */
+export function modelShades(list) {
+  const out = {}, n = {};
   const mixes = [1, 0.66, 0.42, 0.24];
-  A.models.slice().sort((a, b) => (b.logged || 0) - (a.logged || 0)).forEach(m => { n[m.provider] += 1; out[`${m.provider}|${m.model}`] = mixes[Math.min(3, n[m.provider] - 1)]; });
+  const sorted = list.slice().sort(byCost);
+  const neutral = sorted.filter(m => m.provider === '').length;
+  const half = Math.ceil(neutral / 2);
+  sorted.forEach(m => {
+    const i = n[m.provider] = (n[m.provider] || 0) + 1;
+    if (m.provider !== '' || neutral <= mixes.length) { out[m.key] = mixes[Math.min(3, i - 1)]; return; }
+    const k = (i - 1) % 2 === 0 ? (i - 1) / 2 : half + (i - 2) / 2;
+    out[m.key] = Math.round((1 - 0.72 * k / (neutral - 1)) * 1000) / 1000;
+  });
   return out;
 }
 function ioStatus(r) {
@@ -467,7 +621,16 @@ function ioStatus(r) {
   return 'More output than input. A generation-heavy workload.';
 }
 const ioTxt = v => v >= 10 ? nf0.format(v) : nf2v.format(v);
-const RATE_SOURCE = { builtin: 'CCS pricing table', 'models-dev': 'models.dev rates, as CCS resolves them', fallback: 'CCS fallback rate for models it does not list' };
+const RATE_SOURCE = { builtin: 'CCS pricing table', 'models-dev': 'models.dev rates, as CCS resolves them', fallback: 'CCS fallback rate for models it does not list, an estimate with a fallback rate' };
+function rateText(m) {
+  if (m.rate) {
+    const base = `${money(m.rate.in)} in, ${money(m.rate.out)} out, ${money(m.rate.cw)} cache write, ${money(m.rate.cr)} cache read per million tokens; ${RATE_SOURCE[m.rate.source] || 'CCS rate'}.`;
+    return `${base}${m.mode === 'rates' ? ' The four parts add up to the logged estimate.' : ' These rates do not reconcile with the logged estimate, so the split shows token shares.'}`;
+  }
+  if (m.none && m.unk) return 'No cost is logged for this model and CCS lists no rate for it, so its cost is not logged. It is never counted as $0.';
+  if (m.unk) return 'Part of this cost was logged with the usage; the rest has no logged cost and no listed rate, so it is not logged. The split shows token shares of the logged part.';
+  return 'CCS lists no rate for this model; the cost was logged with the usage. The split shows token shares.';
+}
 function modelRows(A, state, windowText) {
   const list = modelsShown(A, state);
   const max = Math.max(0, ...list.map(m => m.logged || 0)) || 1;
@@ -479,38 +642,42 @@ function modelRows(A, state, windowText) {
     const io = m.tok.out > 0 ? m.tok.in / m.tok.out : null;
     const ioCtx = m.tok.out > 0 ? (m.tok.in + m.tok.cr + m.tok.cw) / m.tok.out : null;
     const maxType = Math.max(...TYPES.map(t => m.cost[t.k]), 0) || 1;
-    const rateTxt = m.rate ? `${money(m.rate.in)} in, ${money(m.rate.out)} out, ${money(m.rate.cw)} cache write, ${money(m.rate.cr)} cache read per million tokens; ${RATE_SOURCE[m.rate.source] || 'CCS rate'}${m.rate.source === 'fallback' ? ', an estimate with a fallback rate' : ''}.` : 'No rate listed; the split shows token shares.';
+    const partial = (m.unk || m.na) && !m.none;
+    const typeCost = k => m.none ? m.unk ? NOT_LOGGED : 'Unavailable' : money(m.cost[k]);
     return {
-      key: `${m.provider}|${m.model}`, name: m.model, provider: m.provider, idx: i,
-      w: Math.max(0.4, (m.logged || 0) / max * 100),
+      key: m.key, name: m.model, provider: m.provider, idx: i,
+      w: m.none ? 0 : Math.max(0.4, (m.logged || 0) / max * 100),
       fin: frac('in'), fout: frac('out'), fcw: frac('cw'), fcr: frac('cr'),
-      tipIn: `Input: ${money(m.cost.in)} for ${tokX(m.tok.in)}`, tipOut: `Output: ${money(m.cost.out)} for ${tokX(m.tok.out)}`,
-      tipCw: `Cache write: ${money(m.cost.cw)} for ${tokX(m.tok.cw)}`, tipCr: `Cache read: ${money(m.cost.cr)} for ${tokX(m.tok.cr)}`,
-      tok: tokC(m.total), tokTip: tokX(m.total), cost: m.hasCost ? money(m.logged) : 'Unavailable', share: m.hasCost ? share1((m.logged || 0) / total * 100) : 'Unavailable',
+      tipIn: `Input: ${typeCost('in')} for ${tokX(m.tok.in)}`, tipOut: `Output: ${typeCost('out')} for ${tokX(m.tok.out)}`,
+      tipCw: `Cache write: ${typeCost('cw')} for ${tokX(m.tok.cw)}`, tipCr: `Cache read: ${typeCost('cr')} for ${tokX(m.tok.cr)}`,
+      tok: tokC(m.total), tokTip: tokX(m.total), cost: modelCost(m), costNa: m.none, partial,
+      share: m.none ? '' : share1((m.logged || 0) / total * 100),
       // the model detail popover
-      sub: `${PROV_LABEL[m.provider]} logs · ${windowText}`,
+      sub: `${m.provider ? `${PROV_LABEL[m.provider]} logs` : 'Included logs'} · ${windowText}`,
       usage: share1(totTok ? m.total / totTok * 100 : 0),
-      types: TYPES.map(t => ({ key: t.k, label: t.long, tok: m.tok[t.k] ? tokC(m.tok[t.k]) : 'None', tip: tokX(m.tok[t.k]), cost: money(m.cost[t.k]), w: m.cost[t.k] > 0 ? Math.max(1.5, m.cost[t.k] / maxType * 100) : 0, none: !m.tok[t.k] })),
+      types: TYPES.map(t => ({ key: t.k, label: t.long, tok: m.tok[t.k] ? tokC(m.tok[t.k]) : 'None', tip: tokX(m.tok[t.k]), cost: m.tok[t.k] ? typeCost(t.k) : money(0), w: m.cost[t.k] > 0 ? Math.max(1.5, m.cost[t.k] / maxType * 100) : 0, none: !m.tok[t.k] })),
       io: io === null ? 'Unavailable' : `${ioTxt(io)} to 1`,
       ioNote: io === null ? 'No output was logged, so there is no ratio.' : ioStatus(io),
       ioQuiet: io === null ? '' : `Uncached input divided by output, as in the original. Counting cache reads and writes as input, it is ${ioTxt(ioCtx)} to 1: ${share2((m.tok.cr + m.tok.cw) / Math.max(1, m.tok.in + m.tok.cr + m.tok.cw) * 100)}% of this model's input side arrived through the cache.`,
-      rate: `${rateTxt}${m.mode === 'rates' ? ' The four parts add up to the logged estimate.' : ' These rates do not reconcile with the logged estimate, so the split shows token shares.'}`,
+      rate: `${rateText(m)}${partial ? ' The cost shown is partial.' : ''}`,
     };
   });
 }
 function donutView(A, state, shades) {
+  const cost = state.donut === 'cost';
+  // by cost, a model whose cost is not logged has no share to draw; it stays in the token view
   const list = modelsShown(A, state);
-  const val = m => state.donut === 'cost' ? (m.logged || 0) : m.total;
-  const total = list.reduce((s, m) => s + val(m), 0);
+  const drawn = cost ? list.filter(m => m.logged > 0) : list;
+  const val = m => cost ? (m.logged || 0) : m.total;
+  const total = drawn.reduce((s, m) => s + val(m), 0);
   const segs = [], small = [];
-  list.slice().sort((a, b) => val(b) - val(a)).forEach(m => { if (total && val(m) / total < 0.01) small.push(m); else segs.push(m); });
+  drawn.slice().sort((a, b) => val(b) - val(a)).forEach(m => { if (total && val(m) / total < 0.01) small.push(m); else segs.push(m); });
   const idxOf = m => list.indexOf(m);
-  const seg = m => ({ key: `${m.provider}|${m.model}`, name: m.model, provider: m.provider, mix: shades[`${m.provider}|${m.model}`] ?? 1, other: false, v: val(m), model: `${m.provider}|${m.model}`, tip: '', idx: idxOf(m) });
+  const seg = m => ({ key: m.key, name: m.model, provider: m.provider, mix: shades[m.key] ?? 1, other: false, v: val(m), model: m.key, tip: '', idx: idxOf(m) });
   const out = segs.map(seg);
   if (small.length === 1) out.push(seg(small[0]));
   else if (small.length) out.push({ key: '_other', name: `${small.length} smaller models`, provider: '', mix: 1, other: true, v: small.reduce((s, m) => s + val(m), 0), model: '', tip: small.map(m => m.model).join(', '), idx: -1 });
   let a = 0;
-  const cost = state.donut === 'cost';
   const rows = out.map(s => {
     const span = total ? s.v / total * Math.PI * 2 : 0;
     const row = { ...s, a0: a, a1: a + span, share: share1(total ? s.v / total * 100 : 0), shareNum: total ? s.v / total * 100 : 0, value: cost ? money(s.v) : tokC(s.v), valueTip: cost ? '' : tokX(s.v), label: total && s.v / total >= 0.05 };
@@ -523,30 +690,41 @@ function donutView(A, state, shades) {
     const a = (deg + 0.5) / 180 * Math.PI;
     return rows.findIndex(r => a >= r.a0 && a < r.a1);
   });
+  const partial = cost && list.some(m => m.unk || m.na);
+  const allNone = cost && !drawn.length && list.some(m => m.unk);
   return {
     mode: cost ? 'cost' : 'tokens', segs: rows, lut,
-    centre: cost ? money(total) : tokC(total), centreLabel: `${cost ? 'estimated cost' : 'tokens'}, ${rows.length > 1 ? 'all models' : '1 model'}`,
-    unit: cost ? '' : ' tokens', empty: !rows.length,
+    centre: cost ? allNone ? NOT_LOGGED : money(total) : tokC(total),
+    centreLabel: cost ? `estimated cost, ${partial ? 'partial' : rows.length > 1 ? 'all models' : '1 model'}` : `tokens, ${rows.length > 1 ? 'all models' : '1 model'}`,
+    unit: cost ? '' : ' tokens', empty: !rows.length && !allNone,
+    emptyText: allNone ? 'No model in these logs has a logged cost.' : 'No model activity in the logs.',
   };
 }
 
 // ---------------------------------------------------------------- session stats
+/**
+ * The stats total every included log (the other tools only under All); the per-CLI rows are the providers alone.
+ * An average cost needs every session's cost, so it is not logged while any of it is not.
+ */
 function sessionsView(A, state) {
-  const rows = A.sessions.filter(s => provOK(state, s.p));
-  const sum = k => rows.length && rows.every(r => finite(r[k])) ? rows.reduce((s, r) => s + r[k], 0) : null;
+  const all = A.sessions.filter(s => provOK(state, s.p));
+  const rows = all.filter(s => isProv(s.p));
+  const sum = k => all.length && all.every(r => finite(r[k])) ? all.reduce((s, r) => s + r[k], 0) : null;
   const sessions = sum('sessions'), events = sum('events'), cost = sum('cost');
-  const avg = finite(sessions) && sessions > 0 && finite(cost) ? cost / sessions : null;
+  const unk = all.some(r => r.unk);
+  const avg = !unk && finite(sessions) && sessions > 0 && finite(cost) ? cost / sessions : null;
   const evs = finite(sessions) && sessions > 0 && finite(events) ? events / sessions : null;
   return {
+    others: all.length > rows.length,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },
-      { key: 'avg', label: 'Average estimated cost per session', num: avg ?? 0, has: finite(avg), fmt: 'money', text: money(avg) },
+      { key: 'avg', label: 'Average estimated cost per session', num: avg ?? 0, has: finite(avg), fmt: 'money', text: unk && finite(sessions) && sessions > 0 ? NOT_LOGGED : money(avg) },
       { key: 'evs', label: 'Usage events per session', num: evs ?? 0, has: finite(evs), fmt: 'int', text: intText(evs) },
     ],
     rows: rows.map(r => ({
       provider: r.p, label: r.label,
       sessions: finite(r.sessions) ? nf0.format(r.sessions) : 'Unavailable',
-      per: finite(r.sessions) && r.sessions > 0 && finite(r.cost) ? money(r.cost / r.sessions) : 'Unavailable',
+      per: finite(r.sessions) && r.sessions > 0 && r.unk ? NOT_LOGGED : finite(r.sessions) && r.sessions > 0 && finite(r.cost) ? money(r.cost / r.sessions) : 'Unavailable',
       events: finite(r.sessions) && r.sessions > 0 && finite(r.events) ? nf0.format(Math.round(r.events / r.sessions)) : 'Unavailable',
       eventsTip: finite(r.events) ? `${nf0.format(r.events)} usage events` : '',
     })),
@@ -556,16 +734,18 @@ function sessionsView(A, state) {
 // ---------------------------------------------------------------- token breakdown and cache efficiency
 function tokensView(K, C, costOk, available = true) {
   if (!available) return TYPES.map(t => ({ key: t.k, label: t.label, wt: 0, wc: 0, tok: 'Unavailable', tokTip: '', tokShare: '', cost: 'Unavailable', costShare: '' }));
+  // shares of the logged cost; with none of it logged there is no cost to show, never $0.00
+  const none = K.partial && !(K.cost > TINY);
   return TYPES.map(t => {
     const ts = K.tok ? K[t.k] / K.tok * 100 : 0, cs = costOk && K.cost ? C.cost[t.k] / K.cost * 100 : 0;
-    return { key: t.k, label: t.label, wt: ts > 0 ? Math.max(0.6, ts) : 0, wc: cs > 0 ? Math.max(0.6, cs) : 0, tok: tokC(K[t.k]), tokTip: tokX(K[t.k]), tokShare: share1(ts), cost: costOk ? money(C.cost[t.k]) : 'Unavailable', costShare: costOk ? share1(cs) : '' };
+    return { key: t.k, label: t.label, wt: ts > 0 ? Math.max(0.6, ts) : 0, wc: cs > 0 ? Math.max(0.6, cs) : 0, tok: tokC(K[t.k]), tokTip: tokX(K[t.k]), tokShare: share1(ts), cost: !costOk ? 'Unavailable' : none ? NOT_LOGGED : money(C.cost[t.k]), costShare: costOk && !none ? share1(cs) : '' };
   });
 }
 function cacheView(A, rows, K, C, costOk) {
   const hit = K.cr + K.cw > 0 ? K.cr / (K.cr + K.cw) * 100 : null;
-  // savings = cache-read tokens x (input rate - cache-read rate), per provider at its models' blended rates
+  // savings = cache-read tokens x (input rate - cache-read rate), per log at its listed models' blended rates
   let save = 0;
-  for (const [p] of PROVS) {
+  for (const p of TOOLS) {
     const crTok = rows.filter(r => r.p === p).reduce((s, r) => s + r.cr, 0);
     const list = A.models.filter(m => m.provider === p && m.rate && m.tok.cr > 0);
     const crAll = list.reduce((s, m) => s + m.tok.cr, 0);
@@ -575,13 +755,16 @@ function cacheView(A, rows, K, C, costOk) {
   const ccost = C.cost.cw + C.cost.cr;
   const tot = K.cr + K.cw;
   const sh = v => tot > 0 ? share2(v / tot * 100) : 'Unavailable';
+  // with none of the cost logged, the cache cost is not logged either (never $0.00)
+  const none = costOk && K.partial && !(K.cost > TINY);
+  const c = v => !costOk ? 'Unavailable' : none ? NOT_LOGGED : money(v);
   return {
     hit: hit ?? 0, hasHit: finite(hit), hitText: finite(hit) ? share2(hit) : 'Unavailable',
-    save: costOk ? save : 0, hasSave: costOk, saveText: costOk ? money(save) : 'Unavailable',
-    ccost: costOk ? ccost : 0, hasCcost: costOk, ccostText: costOk ? money(ccost) : 'Unavailable',
-    ccostShare: costOk ? share1(K.cost ? ccost / K.cost * 100 : 0) : '',
-    reads: { tok: tokC(K.cr), tip: tokX(K.cr), share: sh(K.cr), cost: costOk ? money(C.cost.cr) : 'Unavailable', w: K.cr },
-    writes: { tok: tokC(K.cw), tip: tokX(K.cw), share: sh(K.cw), cost: costOk ? money(C.cost.cw) : 'Unavailable', w: K.cw, note: tot && K.cw === 0 ? 'none logged' : '' },
+    save: costOk && !none ? save : 0, hasSave: costOk && !none, saveText: c(save),
+    ccost: costOk && !none ? ccost : 0, hasCcost: costOk && !none, ccostText: c(ccost),
+    ccostShare: costOk && !none ? share1(K.cost ? ccost / K.cost * 100 : 0) : '',
+    reads: { tok: tokC(K.cr), tip: tokX(K.cr), share: sh(K.cr), cost: c(C.cost.cr), w: K.cr },
+    writes: { tok: tokC(K.cw), tip: tokX(K.cw), share: sh(K.cw), cost: c(C.cost.cw), w: K.cw, note: tot && K.cw === 0 ? 'none logged' : '' },
     readFrac: tot > 0 ? K.cr / tot : 0,
   };
 }
@@ -601,12 +784,13 @@ export function dashedRect(w, h, r = 4) {
   return dashPolyline(pts, [3, 3]);
 }
 function heatView(A, R, state, width, height) {
-  const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ v: null, n: 0, tok: 0, cost: 0 })));
+  const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ v: null, n: 0, tok: 0, cost: 0, unk: false })));
   // hours inside the read window count (zero when nothing ran); hours outside it stay empty, never zero;
   // without readable activity every hour stays empty
   for (let t = Math.ceil(R.a2 / H) * H; A.available && t < R.end; t += H) { const d = new Date(t), c = cells[(d.getDay() + 6) % 7][d.getHours()]; if (c.v === null) c.v = 0; c.n++; }
-  for (const r of rowsIn(A, R, state)) { const d = new Date(r.t), c = cells[(d.getDay() + 6) % 7][d.getHours()]; if (c.v === null) c.v = 0; c.tok += r.in + r.out + r.cw; c.cost += r.cost; }
+  for (const r of rowsIn(A, R, state)) { const d = new Date(r.t), c = cells[(d.getDay() + 6) % 7][d.getHours()]; if (c.v === null) c.v = 0; c.tok += r.in + r.out + r.cw; c.cost += r.cost; if (r.unk) c.unk = true; }
   const byCost = state.heat !== 'tokens' && !A.costMissing;
+  const partial = byCost && cells.some(row => row.some(c => c.unk));
   for (const row of cells) for (const c of row) if (c.v !== null) c.v = byCost ? c.cost : c.tok;
   const max = Math.max(0, ...cells.flat().filter(c => c.v !== null).map(c => c.v));
   const valTxt = v => byCost ? money(v) : `${tokC(v)} tokens`;
@@ -616,11 +800,12 @@ function heatView(A, R, state, width, height) {
   cells.forEach((row, i) => row.forEach((c, h) => {
     const name = `${WD[i]} ${hourLab(h)}`;
     if (c.v === null) { out.push({ state: 0, k: 0, tip: `${name} · outside the logs in this range` }); return; }
-    out.push({ state: c.v === 0 ? 1 : 2, k: max > 0 ? Math.sqrt(c.v / max) : 0, tip: `${name} · ${c.v ? valTxt(c.v) : 'nothing logged'}${c.n > 1 ? ` · ${c.n} hours in range` : ''}` });
+    const what = c.v ? `${valTxt(c.v)}${byCost && c.unk ? ', partial' : ''}` : byCost && c.unk ? 'cost not logged' : 'nothing logged';
+    out.push({ state: c.v === 0 ? 1 : 2, k: max > 0 ? Math.sqrt(c.v / max) : 0, tip: `${name} · ${what}${c.n > 1 ? ` · ${c.n} hours in range` : ''}` });
   }));
   return {
     mode: byCost ? 'cost' : 'tokens',
-    sub: `${byCost ? 'Estimated cost' : 'Tokens without cache reads'} per hour, local time · ${dateLabel(R)}`,
+    sub: `${byCost ? partial ? 'Estimated cost, partial,' : 'Estimated cost' : 'Tokens without cache reads'} per hour, local time · ${dateLabel(R)}`,
     cells: out, days: WD,
     hours: Array.from({ length: 24 }, (_, h) => h % (wide ? 3 : 6) === 0 ? hourLab(h) : ''),
     busiest: max ? valTxt(max) : 'none',
@@ -643,22 +828,26 @@ function dailyView(A, R, state, size) {
   const every = Math.max(1, Math.ceil(64 / slot));
   const yTicks = [];
   for (let i = 0; i <= sc.k; i++) yTicks.push({ y: i / sc.k, label: costOk ? moneyAxis(sc.step * i, sc.step) : '', base: i === 0 });
+  // the chart is per provider: Claude Code and Codex only; the other logs are in the trend and the totals
+  const others = allPicked(state) && A.others;
   const bars = B.map((b, i) => {
     const cl = val(b, 'claude'), cx = val(b, 'codex'), tot = cl + cx;
+    const range = b.t1 > A.win1 ? `So far: logs read ${clockTxt(A.win1)}` : b.t < R.a2 ? `Logs start ${clockTxt(R.a2)}` : '';
     return {
       h: costOk && sc.top > 0 ? tot / sc.top : 0, cl: tot > 0 ? cl / tot : 0,
       label: i % every ? '' : step === H ? (new Date(b.t).getHours() === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
       time: `${step === H ? `${wmdTxt(b.t)} · ${hourTxt(b.t)}` : wmdTxt(b.t)}${b.partial ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
       claude: provOK(state, 'claude') ? money(cl) : '', codex: provOK(state, 'codex') ? money(cx) : '',
       total: state.prov === 'all' || !state.prov ? money(tot) : '',
-      foot: b.t1 > A.win1 ? `So far: logs read ${clockTxt(A.win1)}` : b.t < R.a2 ? `Logs start ${clockTxt(R.a2)}` : '',
+      foot: costOk && b.punk ? [range, 'Partial: some cost is not logged'].filter(Boolean).join(' · ') : range,
     };
   });
   const empty = !B.length || max === 0;
+  const names = allPicked(state) ? 'Claude Code and Codex' : PROV_LABEL[state.prov] || 'Claude Code and Codex';
   return {
     title: step === H ? 'Hourly cost by provider' : 'Daily cost by provider',
-    sub: `Estimated, USD · ${dateLabel(R)}`,
-    yTicks, bars, empty, emptyText: !A.available ? (A.message || 'Local CLI activity is unavailable.') : empty ? (costOk ? `No ${provName(state)} cost was logged in this range.` : 'Cost is unavailable for this range.') : '',
+    sub: `${others ? 'Claude Code and Codex · estimated' : 'Estimated'}, USD · ${dateLabel(R)}`,
+    yTicks, bars, empty, emptyText: !A.available ? (A.message || 'CLI usage logs are unavailable.') : empty ? (costOk ? `No ${names} cost was logged in this range.` : 'Cost is unavailable for this range.') : '',
     showClaude: provOK(state, 'claude'), showCodex: provOK(state, 'codex'),
   };
 }
@@ -679,6 +868,53 @@ export function calendarView(A, R, now, apiAll) {
   return { cells, lo, hi, firstN: cells.find(c => !c.off)?.n ?? 0, lastN: cells.findLast(c => !c.off)?.n ?? 0, note: `Logs read ${clockTxt(A.win1)} today. Whole local days within the last 30 days.` };
 }
 
+// ---------------------------------------------------------------- included usage (activity.sources)
+const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
+const SOURCE_HOSTS = [['ubuntu', 'Ubuntu'], ['mac', 'Mac'], ['windows', 'Windows']];
+const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed'];
+const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
+/**
+ * The "Included usage" disclosure: one sentence naming the tools and computers whose logs were read, the tools
+ * that keep no local usage log, and a tool x computer grid of each source's state and last scan. It describes
+ * where the numbers come from; it never divides them (models stay the only division).
+ * tone: ok | cached | unavailable | quiet.
+ */
+export function includedView(payload, now = Date.now()) {
+  const seen = new Set();
+  const list = (Array.isArray(payload?.activity?.sources) ? payload.activity.sources : []).filter(r => SOURCE_TOOLS.some(([t]) => t === r?.tool)
+    && SOURCE_HOSTS.some(([h]) => h === r?.host) && SOURCE_STATES.includes(r?.state) && !seen.has(`${r.tool}|${r.host}`) && seen.add(`${r.tool}|${r.host}`));
+  if (!list.length) return { shown: false, label: '', line: '', hosts: [], rows: [], foot: '' };
+  const read = r => r.state === 'ok' || r.state === 'cached';
+  const tools = SOURCE_TOOLS.filter(([t]) => list.some(r => r.tool === t));
+  const included = tools.filter(([t]) => list.some(r => r.tool === t && read(r))).map(([, l]) => l);
+  const hosts = SOURCE_HOSTS.filter(([h]) => list.some(r => r.host === h && read(r))).map(([, l]) => l);
+  const nolog = tools.filter(([t]) => list.filter(r => r.tool === t).every(noLocalLog)).map(([, l]) => l);
+  const line = [
+    included.length ? `Includes ${andList(included)}${hosts.length ? ` on ${andList(hosts)}` : ''}.` : 'No usage log could be read yet.',
+    nolog.length ? `${andList(nolog)} keep${nolog.length === 1 ? 's' : ''} no local usage log.` : '',
+  ].filter(Boolean).join(' ');
+  const when = r => Date.parse(text(r.lastScanAt));
+  const events = r => Number.isInteger(r.rowCount) && r.rowCount >= 0 ? `${nf0.format(r.rowCount)} usage events kept` : '';
+  const cell = r => {
+    if (!r) return { text: 'Not read', tone: 'quiet', tip: 'This computer is not read for this tool.' };
+    const t = when(r), last = finite(t) ? `Last scan ${timeTxt(t)}.` : 'Never scanned.';
+    if (r.state === 'ok') return { text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), last].filter(Boolean).join(' · ') };
+    if (r.state === 'cached') return { text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `The latest scan did not finish; earlier records are shown. ${last}` };
+    if (noLocalLog(r)) return { text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
+    if (r.state === 'not_installed') return { text: 'Not installed', tone: 'quiet', tip: '' };
+    return { text: 'Unavailable', tone: 'unavailable', tip: `${text(r.detail) ? `${text(r.detail).replace(/^./, c => c.toUpperCase())}. ` : ''}${last}` };
+  };
+  const rows = tools.map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h))) }));
+  const cached = list.filter(r => r.state === 'cached').length, down = list.filter(r => r.state === 'unavailable' && !noLocalLog(r)).length;
+  const flags = [cached ? `${cached} cached` : '', down ? `${down} unavailable` : ''].filter(Boolean).join(', ');
+  return {
+    shown: true, label: `Included usage${flags ? ` · ${flags}` : ''}`, line,
+    hosts: SOURCE_HOSTS.map(([, l]) => l.toUpperCase()), rows,
+    foot: 'Usage from every computer is merged and divided by model only. A source that cannot be read keeps its last scan (cached) or shows as unavailable; it is never counted as zero.',
+  };
+}
+
 // ---------------------------------------------------------------- the whole Usage part of the page
 /**
  * state: { range: 24h|7d|30d|month|all|custom, from, to (local-day ms, custom only), prov: all|claude|codex,
@@ -696,36 +932,47 @@ export function usageView(payload, state, opts = {}) {
   const apiMatches = ['24h', '7d', '30d', 'all'].includes(state.range) && (state.range === 'all' ? A.apiPreset === '30d' : A.apiPreset === state.range);
   const rangeName = state.range === 'custom' ? 'custom' : RANGES.find(r => r[0] === state.range)?.[1] || '';
   const wholeNote = kind => apiMatches || !A.available ? '' : `${kind === 'sessions' ? 'Session counts' : 'Per-model data'} cover the logs read for ${windowText}, not the ${rangeName} range.`;
-  const shades = modelShades(A);
+  const shown = modelsShown(A, state);
+  const shades = modelShades(shown);
   const hid = hiddenModels(A, state);
+  const unrec = shown.filter(m => m.unreconciled);
+  const notLogged = shown.filter(m => m.unk);
+  // models with some logged cost but no listed rate (a model with no logged cost has no split to show)
+  const noRate = shown.filter(m => m.mode !== 'rates' && !m.unreconciled && !m.none).length;
   const foot = [
     hid.length ? `${hid.length === 1 ? hid[0].model : `${hid.length} entries`} ${hid.length === 1 ? 'is' : 'are'} left out: no tokens or cost logged.` : '',
-    A.unreconciled.length ? `${A.unreconciled.map(m => m.model).join(', ')}: rates do not reconcile with the logged cost, so the split shows token shares.` : '',
+    unrec.length ? `${unrec.map(m => m.model).join(', ')}: rates do not reconcile with the logged cost, so the split shows token shares.` : '',
+    notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '',
   ].filter(Boolean).join(' ');
-  const statusNote = A.available ? '' : A.message || 'Local CLI activity is unavailable.';
+  const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
+  const sessions = sessionsView(A, state);
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
     head: {
-      scope: `Ubuntu Claude Code and Codex logs · local time${zone ? ` (${zone})` : ''} · read `,
+      scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
       read: relTxt(A.win1, now),
       readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' The log scan is refreshing; earlier records are shown until it completes.' : ''}`,
       date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
     },
     scope: [
-      { icon: 'terminal', text: 'Only Ubuntu Claude Code and Codex logs. Other providers and other machines are not in these numbers.' },
-      { icon: 'wallet', text: 'Cost is an estimated API equivalent at the per-token rates CCS prices each model at. It is not a bill or a subscription charge.' },
+      { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, merged by model. Claude Code and Codex can be picked on their own; the other logs count under All only.' },
+      { icon: 'wallet', text: 'Cost is an estimated API equivalent at the rates CCS prices each model at, or the cost the log recorded; it is not a bill. Cost with neither shows as not logged, and totals without it say partial.' },
       { icon: 'users', text: 'Activity covers all accounts together; it cannot be attributed to one account.' },
-      { icon: 'layers', text: A.unreconciled.length ? `${A.unreconciled.length} model${A.unreconciled.length === 1 ? '' : 's'} do not reconcile with these rates; their split uses token shares.` : "Per-type costs use each model's rate as CCS prices it and match every model's logged estimate to the cent." },
+      { icon: 'layers', text: unrec.length || noRate ? [
+        unrec.length ? `${unrec.length} model${unrec.length === 1 ? '' : 's'} do not reconcile with these rates; their split uses token shares.` : '',
+        noRate ? `${noRate} model${noRate === 1 ? ' has' : 's have'} no listed rate; ${noRate === 1 ? 'its' : 'their'} split uses token shares of the logged cost.` : '',
+      ].filter(Boolean).join(' ') : "Per-type costs use each model's rate as CCS prices it and match every model's logged estimate to the cent." },
       { icon: 'clock', text: `Logs read ${timeTxt(A.win1)}. Hours are shown in local time${zone ? ` (${zone})` : ''}.${A.status === 'cached' ? ' The scan is refreshing; earlier records are shown until it completes.' : ''}` },
     ],
     kpis: kpis(A, R, state, rows, K, C),
     apportTip: APPORT_TIP,
     trend: trendView(A, R, state, opts.sizes?.trend),
-    cbm: { sub: `${windowText} · select a model for detail`, note: wholeNote('models'), rows: modelRows(A, state, windowText), foot, empty: A.available ? `No model activity for ${provName(state)} in the logs.` : statusNote },
+    cbm: { sub: `${windowText} · select a model for detail`, note: wholeNote('models'), rows: modelRows(A, state, windowText), foot, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
-    sessions: { sub: `Logs read for ${windowText}`, note: wholeNote('sessions'), ...sessionsView(A, state) },
-    tokens: { sub: `${dateLabel(R)} · ${provName(state)}`, rows: tokensView(K, C, costOk, A.available) },
-    cache: { sub: `${dateLabel(R)} · ${provName(state)}`, ...cacheView(A, rows, K, C, costOk && A.available) },
+    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.others ? 'The totals count every included log; the rows list Claude Code and Codex.' : ''].filter(Boolean).join(' '), stats: sessions.stats, rows: sessions.rows },
+    tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },
+    cache: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, ...cacheView(A, rows, K, C, costOk && A.available) },
+    included: includedView(payload, now),
     heat: heatView(A, R, state, opts.sizes?.heat?.w, opts.sizes?.heat?.h),
     daily: dailyView(A, R, state, opts.sizes?.daily),
     calendar: calendarView(A, R, now),

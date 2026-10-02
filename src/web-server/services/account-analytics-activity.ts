@@ -12,6 +12,14 @@ import {
   projectAccountAnalyticsActivity,
   type SourceData,
 } from './account-analytics-projection';
+import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
+import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
+import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
+import {
+  loadAnalyticsRemoteCachedSources,
+  loadAnalyticsRemoteSources,
+  type AnalyticsRemoteSourceState,
+} from './analytics-remote-sources';
 import {
   defaultAccountAnalyticsPricing,
   memoiseAccountAnalyticsPricing,
@@ -25,7 +33,9 @@ import type {
 import type {
   AccountAnalyticsActivity,
   AccountAnalyticsActivityCoverage,
+  AccountAnalyticsActivityProvider,
   AccountAnalyticsQuery,
+  AccountAnalyticsSource,
 } from './account-analytics-types';
 
 export {
@@ -47,14 +57,77 @@ interface ActivityState {
   manualRefreshPending: boolean;
   sources: SourceData[];
   partial: boolean;
+  /** Per-tool, per-host collection states for the current snapshot. */
+  sourceStates: AccountAnalyticsSource[];
+  /** The last remote answer, carried forward while a later remote scan has not answered. */
+  remote: RemoteAnswer | null;
   /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
   pricing: AccountAnalyticsPricingLookup;
   /** Recent cost of projecting this snapshot, reserved out of the response budget. */
   projectionMs: number;
 }
+
+export type AccountAnalyticsActivityRequest = {
+  provider: AccountAnalyticsActivityProvider;
+  request: UsageWorkerRequest;
+};
+
+type RemoteAnswer = {
+  results: Array<{ tool: 'omp' | 'muse' | 'zcode'; data: UsageWorkerResult }>;
+  states: AnalyticsRemoteSourceState[];
+};
+
+/**
+ * Fixed entries for tools with no local usage log, on every host. Antigravity
+ * keeps token counts only inside sqlite protobuf BLOBs mixed with conversation
+ * content; Cursor usage is server-side. The page uses these to say why they
+ * are missing. Muse and zcode are not installed on Windows and are skipped.
+ */
+export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
+  const entries: AccountAnalyticsSource[] = [];
+  for (const host of ['ubuntu', 'mac', 'windows'] as const) {
+    entries.push({
+      tool: 'antigravity',
+      host,
+      state: 'unavailable',
+      lastScanAt: null,
+      rowCount: 0,
+      detail:
+        'no local usage log: token counts exist only inside sqlite protobuf BLOBs mixed with conversation content',
+    });
+    entries.push({
+      tool: 'cursor',
+      host,
+      state: 'unavailable',
+      lastScanAt: null,
+      rowCount: 0,
+      detail:
+        'no local usage log: usage is server-side; the local state database has no token-usage columns',
+    });
+  }
+  for (const tool of ['muse', 'zcode'] as const) {
+    entries.push({
+      tool,
+      host: 'windows',
+      state: 'not_installed',
+      lastScanAt: null,
+      rowCount: 0,
+      detail: 'not installed on this host',
+    });
+  }
+  return entries;
+}
+
 export interface AccountAnalyticsActivityDeps {
   loadWorker?: (request: UsageWorkerRequest) => Promise<UsageWorkerResult>;
-  requests?: () => Array<{ provider: 'claude' | 'codex'; request: UsageWorkerRequest }>;
+  requests?: () => AccountAnalyticsActivityRequest[] | Promise<AccountAnalyticsActivityRequest[]>;
+  remote?: (minDateMs: number) => Promise<RemoteAnswer>;
+  /**
+   * Saved remote aggregates, read without contacting a host, for a remote scan
+   * that has not answered in time and no earlier answer in memory. Defaults
+   * to the on-disk remote cache when `remote` is the default.
+   */
+  remoteCached?: (minDateMs: number) => RemoteAnswer | null;
   now?: () => number;
   scope?: () => string;
   /**
@@ -118,7 +191,20 @@ export function loadAccountAnalyticsWorker(
   });
 }
 
-function localRequests(): Array<{ provider: 'claude' | 'codex'; request: UsageWorkerRequest }> {
+async function isDirectory(directory: string): Promise<boolean> {
+  try {
+    return (await fs.promises.stat(directory)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The local log roots to read. The OMP marker scan awaits every directory
+ * read, so it never blocks the server's event loop; it runs once per
+ * collection, and the tools it returns are also what says which are installed.
+ */
+async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
   const ccsDir = getCcsDir();
   const activity = { minDate: Date.now() - 31 * 86_400_000, cacheDir: path.join(ccsDir, 'cache') };
   const claudeRoots = [path.join(getDefaultClaudeConfigDir(), 'projects')];
@@ -129,7 +215,7 @@ function localRequests(): Array<{ provider: 'claude' | 'codex'; request: UsageWo
     /* No configured instance history. */
   }
   const unique = new Set<string>();
-  const requests: Array<{ provider: 'claude' | 'codex'; request: UsageWorkerRequest }> = [];
+  const requests: AccountAnalyticsActivityRequest[] = [];
   for (const directory of claudeRoots) {
     try {
       if (!fs.statSync(directory).isDirectory()) continue;
@@ -151,7 +237,49 @@ function localRequests(): Array<{ provider: 'claude' | 'codex'; request: UsageWo
       provider: 'codex',
       request: { kind: 'codex', codexHome, cacheDir: path.join(ccsDir, 'cache'), activity },
     });
+  try {
+    const ompRoots: string[] = [];
+    for (const root of await resolveOmpSessionRoots({ cacheDir: path.join(ccsDir, 'cache') }))
+      if (await isDirectory(root)) ompRoots.push(root);
+    if (ompRoots.length)
+      requests.push({ provider: 'omp', request: { kind: 'omp', roots: ompRoots, activity } });
+  } catch {
+    /* Absent history is not an error or measured zero. */
+  }
+  try {
+    const sessionsDir = resolveMuseSessionsDir();
+    if (fs.statSync(sessionsDir).isDirectory())
+      requests.push({ provider: 'muse', request: { kind: 'muse', sessionsDir, activity } });
+  } catch {
+    /* Absent history is not an error or measured zero. */
+  }
+  try {
+    const dbPath = resolveZcodeDbPath();
+    if (fs.statSync(dbPath).isFile())
+      requests.push({ provider: 'zcode', request: { kind: 'zcode', dbPath, activity } });
+  } catch {
+    /* Absent history is not an error or measured zero. */
+  }
   return requests;
+}
+
+/**
+ * Whether each tool's Ubuntu logs exist, for `not_installed` states: the
+ * tools that have a local request (a Claude Code projects folder, Codex
+ * sessions, an OMP session root, Muse sessions, the zcode database).
+ */
+function localSourcePresence(
+  requests: AccountAnalyticsActivityRequest[]
+): Record<AccountAnalyticsActivityProvider, boolean> {
+  const presence: Record<AccountAnalyticsActivityProvider, boolean> = {
+    claude: false,
+    codex: false,
+    omp: false,
+    muse: false,
+    zcode: false,
+  };
+  for (const entry of requests) presence[entry.provider] = true;
+  return presence;
 }
 
 export class AccountAnalyticsActivityService {
@@ -164,10 +292,20 @@ export class AccountAnalyticsActivityService {
   }
 
   private async collect(state: ActivityState, generation: number): Promise<void> {
-    const requests = (this.deps.requests ?? localRequests)().slice(0, MAX_DIRECTORIES + 1);
-    const collected = new Map<'claude' | 'codex', UsageWorkerResult[]>();
+    const requests = (await (this.deps.requests ?? localRequests)()).slice(0, MAX_DIRECTORIES + 1);
+    const presence = this.deps.requests === undefined ? localSourcePresence(requests) : null;
+    const collected = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
     let failed = false;
     const deadline = Date.now() + MAX_COLLECTION_TIME_MS;
+    const cutoff = (this.deps.now ?? Date.now)() - 31 * 86_400_000;
+    // Remote scans run alongside the local workers; a timeout or failure only
+    // marks those sources, never the whole collection.
+    const remotePromise = (this.deps.remote ?? loadAnalyticsRemoteSources)(cutoff).catch(
+      () => null
+    );
+    const succeeded = new Set<AccountAnalyticsActivityProvider>();
+    const attempted = new Set<AccountAnalyticsActivityProvider>();
+    const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
     // Two concurrent workers bound memory while preserving all detected roots.
     for (let index = 0; index < requests.length; index += 2) {
       // A manual refresh supersedes the old read without starting overlapping
@@ -186,13 +324,13 @@ export class AccountAnalyticsActivityService {
         )
       );
       results.forEach((result, position) => {
+        const provider = batch[position].provider;
+        attempted.add(provider);
         if (result.status === 'rejected') {
           failed = true;
           return;
         }
-        const provider = batch[position].provider;
         const existing = collected.get(provider) ?? [];
-        const cutoff = (this.deps.now ?? Date.now)() - 31 * 86_400_000;
         const data = result.value;
         if (data.scan && !data.scan.complete) failed = true;
         // An unfinished cold scan with no events is not a measured zero.
@@ -216,14 +354,69 @@ export class AccountAnalyticsActivityService {
             .map((session) => ({ ...session, projectPath: '' })),
         });
         collected.set(provider, existing);
+        succeeded.add(provider);
+        localEvents.set(provider, (localEvents.get(provider) ?? 0) + data.eventCount);
       });
     }
     if (generation !== state.generation) return;
+    const remaining = deadline - Date.now();
+    let remote: Awaited<typeof remotePromise> = null;
+    if (remaining > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        remote = await Promise.race([
+          remotePromise,
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), remaining);
+          }),
+        ]);
+      } finally {
+        // A lingering deadline must never hold the caller's event loop open.
+        clearTimeout(timer);
+      }
+    }
+    // A remote scan that has not answered in time keeps the remote part of
+    // the totals: the last answer in memory, else the saved remote cache.
+    let remoteStates: AnalyticsRemoteSourceState[] | null = null;
+    let remoteAnswer: RemoteAnswer | null = remote;
+    if (remote) {
+      state.remote = remote;
+      remoteStates = remote.states;
+    } else {
+      failed = true;
+      if (state.remote) remoteAnswer = state.remote;
+      else {
+        const cached =
+          this.deps.remoteCached ??
+          (this.deps.remote === undefined ? loadAnalyticsRemoteCachedSources : undefined);
+        try {
+          remoteAnswer = cached ? cached(cutoff) : null;
+        } catch {
+          remoteAnswer = null;
+        }
+        if (remoteAnswer) remoteStates = remoteAnswer.states;
+      }
+    }
+    if (remoteAnswer) {
+      for (const entry of remoteAnswer.results) {
+        const existing = collected.get(entry.tool) ?? [];
+        const data = entry.data;
+        const hourly = data.hourly
+          .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
+          .slice(0, 744);
+        if (hourly.length || data.eventCount === 0) {
+          existing.push({ ...data, daily: [], monthly: [], hourly, session: [] });
+          collected.set(entry.tool, existing);
+        }
+      }
+    }
+    if (generation !== state.generation) return;
     const now = (this.deps.now ?? Date.now)();
+    const fetchedAt = new Date(now).toISOString();
     const updated: SourceData[] = [];
-    for (const provider of ['claude', 'codex'] as const) {
+    for (const provider of ['claude', 'codex', 'omp', 'muse', 'zcode'] as const) {
       const data = collected.get(provider);
-      if (data) updated.push({ provider, data, fetchedAt: new Date(now).toISOString() });
+      if (data) updated.push({ provider, data, fetchedAt });
       else {
         const previous = state.sources.find((source) => source.provider === provider);
         if (previous && requests.some((source) => source.provider === provider))
@@ -231,9 +424,106 @@ export class AccountAnalyticsActivityService {
       }
     }
     state.sources = updated;
+    state.sourceStates = this.buildSourceStates(
+      state,
+      succeeded,
+      attempted,
+      remoteStates,
+      localEvents,
+      fetchedAt,
+      presence
+    );
     state.pricing = this.snapshotPricing();
     state.partial = failed || requests.length >= MAX_DIRECTORIES + 1;
     state.fetchedAt = now;
+  }
+
+  private buildSourceStates(
+    state: ActivityState,
+    succeeded: Set<AccountAnalyticsActivityProvider>,
+    attempted: Set<AccountAnalyticsActivityProvider>,
+    remote: AnalyticsRemoteSourceState[] | null,
+    localEvents: Map<AccountAnalyticsActivityProvider, number>,
+    fetchedAt: string,
+    presence: Record<AccountAnalyticsActivityProvider, boolean> | null
+  ): AccountAnalyticsSource[] {
+    const entries: AccountAnalyticsSource[] = [];
+    const previous = new Map(
+      state.sourceStates.map((entry) => [`${entry.tool}\0${entry.host}`, entry])
+    );
+    for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode'] as const) {
+      const key = `${tool}\0ubuntu`;
+      const old = previous.get(key);
+      if (succeeded.has(tool)) {
+        entries.push({
+          tool,
+          host: 'ubuntu',
+          state: 'ok',
+          lastScanAt: fetchedAt,
+          rowCount: localEvents.get(tool) ?? 0,
+          detail: null,
+        });
+      } else if (old && attempted.has(tool)) {
+        entries.push({ ...old, state: old.rowCount > 0 ? 'cached' : 'unavailable' });
+      } else if (presence && !presence[tool]) {
+        entries.push({
+          tool,
+          host: 'ubuntu',
+          state: 'not_installed',
+          lastScanAt: old?.lastScanAt ?? null,
+          rowCount: 0,
+          detail: 'no usage logs found on this host',
+        });
+      } else if (old) {
+        entries.push({ ...old, state: old.rowCount > 0 ? 'cached' : old.state });
+      } else {
+        entries.push({
+          tool,
+          host: 'ubuntu',
+          state: attempted.has(tool) ? 'unavailable' : 'not_installed',
+          lastScanAt: null,
+          rowCount: 0,
+          detail: attempted.has(tool) ? 'local scan failed' : 'no usage logs found on this host',
+        });
+      }
+    }
+    if (remote) {
+      for (const entry of remote) entries.push({ ...entry });
+    } else {
+      // The remote scans never answered; the previous remote aggregates are
+      // still in the totals, and are marked.
+      for (const tool of ['omp', 'muse', 'zcode'] as const) {
+        for (const host of ['mac', 'windows'] as const) {
+          if (tool !== 'omp' && host === 'windows') continue;
+          const old = previous.get(`${tool}\0${host}`);
+          if (old)
+            entries.push(
+              old.rowCount > 0
+                ? {
+                    ...old,
+                    state: 'cached',
+                    detail: 'remote scan timed out; showing previously read aggregates',
+                  }
+                : old
+            );
+          else
+            entries.push({
+              tool,
+              host,
+              state: 'unavailable',
+              lastScanAt: null,
+              rowCount: 0,
+              detail: 'remote scan timed out',
+            });
+        }
+      }
+    }
+    entries.push(...fixedAnalyticsSourceEntries());
+    const order = (tool: string): number =>
+      ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor'].indexOf(tool);
+    const hostOrder = (host: string): number => ['ubuntu', 'mac', 'windows'].indexOf(host);
+    entries.sort((a, b) => order(a.tool) - order(b.tool) || hostOrder(a.host) - hostOrder(b.host));
+    return entries;
   }
 
   private snapshotPricing(): AccountAnalyticsPricingLookup {
@@ -278,6 +568,8 @@ export class AccountAnalyticsActivityService {
         manualRefreshPending: false,
         sources: [],
         partial: false,
+        sourceStates: [],
+        remote: null,
         pricing: this.snapshotPricing(),
         projectionMs: 0,
       };
@@ -288,10 +580,12 @@ export class AccountAnalyticsActivityService {
         this.states.delete(oldest);
       }
     }
+    // Dashboard quota-provider ids overlap the activity tools only for
+    // claude/codex/muse; omp/zcode filters can only arrive via `all`.
+    const activityFilters: readonly string[] = ['all', 'claude', 'codex', 'omp', 'muse', 'zcode'];
     if (
       query.refresh !== true &&
-      (query.account !== 'all' ||
-        (query.provider !== 'all' && query.provider !== 'claude' && query.provider !== 'codex'))
+      (query.account !== 'all' || !activityFilters.includes(query.provider))
     )
       return {
         ...projectAccountAnalyticsActivity(
@@ -301,7 +595,7 @@ export class AccountAnalyticsActivityService {
           to,
           'unavailable',
           'Local activity is unavailable for this selection.',
-          { tz }
+          { tz, sources: state.sourceStates }
         ),
         // Already-read history still says which providers have activity, so
         // the provider list stays stable while a quota-only filter is chosen.
@@ -363,16 +657,16 @@ export class AccountAnalyticsActivityService {
       to,
       status,
       status === 'loading'
-        ? 'Local CLI history is being read. Quota history is available immediately.'
+        ? 'CLI history is being read. Quota history is available immediately.'
         : status === 'unavailable'
-          ? 'No usable local Claude Code or Codex history is available.'
+          ? 'No usable Claude Code, Codex, OMP, Muse or zcode history is available.'
           : state.pending
-            ? 'Local CLI activity is refreshing. Previously read records are shown until the bounded scan completes; cost is an API-equivalent estimate, not a subscription charge.'
+            ? 'CLI activity is refreshing. Previously read records are shown until the bounded scan completes; cost is an API-equivalent estimate, not a subscription charge.'
             : state.partial
-              ? 'The available local records are shown while the bounded history scan continues; some sources may be unavailable. Cost is an API-equivalent estimate, not a subscription charge.' +
+              ? 'The available records are shown while the bounded history scan continues; some sources may be unavailable. Cost is an API-equivalent estimate, not a subscription charge.' +
                 scanProgress
-              : `Local Ubuntu CLI activity, across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
-      { tz, pricing: state.pricing }
+              : `CLI activity from Ubuntu, Mac and Windows (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
+      { tz, pricing: state.pricing, sources: state.sourceStates }
     );
     const coverage = accountAnalyticsActivityCoverage(state.sources, from, to);
     // Keep the dearest recent projection (halving older ones), capped at the

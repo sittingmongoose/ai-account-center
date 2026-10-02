@@ -90,6 +90,7 @@ describe('native local analytics activity', () => {
     let now = NOW;
     let complete = false;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       now: () => now,
       scope: () => 'progress',
       responseBudgetMs: 100,
@@ -127,6 +128,7 @@ describe('native local analytics activity', () => {
   it('labels old unfinished tails separately from remaining history and never invents cold partial zeros', async () => {
     let events = false;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       now: () => NOW,
       scope: () => 'unfinished',
       responseBudgetMs: 100,
@@ -291,7 +293,7 @@ describe('native local analytics activity', () => {
     expect(result.costBasis).toBe('estimated-api-equivalent');
     expect(result.timezone).toBe('UTC');
     expect(result.accountAttribution).toBe('unavailable');
-    expect(result.scope).toBe('ubuntu-local-cli');
+    expect(result.scope).toBe('multi-host-cli');
     expect(JSON.stringify(result)).not.toContain('/private/project');
     expect(JSON.stringify(result)).not.toContain('shared-id');
   });
@@ -369,6 +371,7 @@ describe('native local analytics activity', () => {
     });
     let calls = 0;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         {
           provider: 'codex',
@@ -404,6 +407,7 @@ describe('native local analytics activity', () => {
     let input = 10;
     let calls = 0;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/projects' } },
         {
@@ -439,6 +443,7 @@ describe('native local analytics activity', () => {
     let input = 10;
     let calls = 0;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         {
           provider: 'codex',
@@ -474,6 +479,7 @@ describe('native local analytics activity', () => {
     let calls = 0;
     let elapsed = 0;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         {
           provider: 'codex',
@@ -510,6 +516,7 @@ describe('native local analytics activity', () => {
     let maximum = 0;
     const resolvers: Array<(value: UsageWorkerResult) => void> = [];
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/projects' } },
         {
@@ -557,6 +564,7 @@ describe('native local analytics activity', () => {
     let calls = 0;
     const resolvers: Array<(value: UsageWorkerResult) => void> = [];
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         {
           provider: 'codex',
@@ -602,6 +610,7 @@ describe('native local analytics activity', () => {
     let input = 10;
     let calls = 0;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/projects' } },
         {
@@ -634,6 +643,7 @@ describe('native local analytics activity', () => {
     let now = NOW;
     let fail = false;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/projects' } },
       ],
@@ -658,6 +668,7 @@ describe('native local analytics activity', () => {
     let now = NOW;
     let fail = false;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => [
         { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/projects' } },
       ],
@@ -682,6 +693,7 @@ describe('native local analytics activity', () => {
   it('does not start native workers for unsupported provider or exact-account filters', async () => {
     let calls = 0;
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => {
         calls++;
         return [];
@@ -707,6 +719,7 @@ describe('native local analytics activity', () => {
       })
     );
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       requests: () => requests,
       now: () => NOW,
       responseBudgetMs: 5,

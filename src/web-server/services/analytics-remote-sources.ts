@@ -1,0 +1,370 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { getCcsDir } from '../../utils/config-manager';
+import { aggregateRows, type CompactEntry } from '../usage/account-activity-collector';
+import type { UsageWorkerResult } from '../usage/worker-client';
+import {
+  runAnalyticsRemoteHelper,
+  resolveAnalyticsRemoteHosts,
+  type AnalyticsRemoteFingerprint,
+  type AnalyticsRemoteHost,
+  type AnalyticsRemoteKind,
+  type AnalyticsRemoteResponse,
+  type AnalyticsRemoteRow,
+} from './analytics-remote-transport';
+
+export type AnalyticsSourceTool = 'omp' | 'muse' | 'zcode';
+export type AnalyticsSourceState = 'ok' | 'cached' | 'unavailable' | 'not_installed';
+
+export interface AnalyticsRemoteSourceState {
+  tool: AnalyticsSourceTool;
+  host: AnalyticsRemoteHost;
+  state: AnalyticsSourceState;
+  lastScanAt: string | null;
+  rowCount: number;
+  detail: string | null;
+}
+
+export interface AnalyticsRemoteSourceDeps {
+  hosts?: () => Promise<{ mac: string | null; windows: string | null }>;
+  runHelper?: (
+    sshHost: string,
+    platform: AnalyticsRemoteHost,
+    request: {
+      kinds: AnalyticsRemoteKind[];
+      minDateMs: number;
+      fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>;
+    }
+  ) => Promise<AnalyticsRemoteResponse>;
+  now?: () => number;
+  cacheDir?: string;
+}
+
+/** Remote coverage: OMP on the Mac and Windows; Muse and zcode on the Mac only. */
+const REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
+  mac: ['omp', 'muse', 'zcode'],
+  windows: ['omp'],
+};
+
+const MAX_CACHED_ROWS = 100_000;
+
+/**
+ * 2: Muse input nets out cache reads and rows never mix logged and unlogged
+ * events, so rows cached by version 1 are read again.
+ */
+const CACHE_VERSION = 2;
+
+interface RemoteCache {
+  version: typeof CACHE_VERSION;
+  fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>;
+  rows: AnalyticsRemoteRow[];
+  lastScanAt: string | null;
+}
+
+function cacheFile(cacheDir: string, host: AnalyticsRemoteHost): string {
+  return path.join(cacheDir, 'analytics-remote-v1', `${host}.json`);
+}
+
+function blankCache(): RemoteCache {
+  return { version: CACHE_VERSION, fingerprints: {}, rows: [], lastScanAt: null };
+}
+
+function loadCache(file: string): RemoteCache {
+  try {
+    if (fs.statSync(file).size > 8 * 1024 * 1024) return blankCache();
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as RemoteCache;
+    if (
+      value.version !== CACHE_VERSION ||
+      !value.fingerprints ||
+      typeof value.fingerprints !== 'object' ||
+      !Array.isArray(value.rows) ||
+      value.rows.length > MAX_CACHED_ROWS ||
+      (value.lastScanAt !== null && typeof value.lastScanAt !== 'string')
+    )
+      return blankCache();
+    return value;
+  } catch {
+    return blankCache();
+  }
+}
+
+function saveCache(file: string, value: RemoteCache): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const body = JSON.stringify({ ...value, rows: value.rows.slice(0, MAX_CACHED_ROWS) });
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, body, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+  fs.chmodSync(file, 0o600);
+}
+
+function hourEpoch(hour: string): number {
+  return Date.parse(`${hour.replace(' ', 'T')}:00Z`);
+}
+
+function samePrint(
+  left: AnalyticsRemoteFingerprint | undefined,
+  right: AnalyticsRemoteFingerprint | undefined
+): boolean {
+  return (
+    !!left &&
+    !!right &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    (left.head ?? null) === (right.head ?? null) &&
+    (left.tail ?? null) === (right.tail ?? null) &&
+    (left.walSize ?? 0) === (right.walSize ?? 0) &&
+    (left.walMtimeMs ?? 0) === (right.walMtimeMs ?? 0)
+  );
+}
+
+function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
+  return rows.map((row) => ({
+    entry: {
+      inputTokens: Math.floor(row.i),
+      outputTokens: Math.floor(row.o),
+      cacheCreationTokens: Math.floor(row.cw),
+      cacheReadTokens: Math.floor(row.cr),
+      model: row.m,
+      sessionId: '',
+      timestamp: `${row.h.replace(' ', 'T')}:00Z`,
+      projectPath: '',
+      // The tool that logged the row; its routing provider prices it.
+      target: row.k,
+      provider: row.p ?? '',
+      // The helper never mixes logged and unlogged events in one row.
+      ...(row.c > 0 ? { costUsd: row.c } : {}),
+    },
+    events: Math.floor(row.n),
+  }));
+}
+
+function toWorkerResult(rows: AnalyticsRemoteRow[], kind: AnalyticsRemoteKind): UsageWorkerResult {
+  const { hourly, session } = aggregateRows(toCompact(rows), `${kind}-remote`);
+  return {
+    daily: [],
+    monthly: [],
+    hourly,
+    session,
+    eventCount: rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
+    scan: {
+      complete: true,
+      completedFiles: 0,
+      totalFiles: 0,
+      skippedLines: 0,
+      failedFiles: 0,
+      readBytes: 0,
+      unfinishedFiles: 0,
+    },
+  };
+}
+
+function inWindow(row: AnalyticsRemoteRow, minDateMs: number): boolean {
+  const epoch = hourEpoch(row.h);
+  return Number.isFinite(epoch) && epoch >= minDateMs;
+}
+
+/** Previously read aggregates of one host, marked `cached`, or `unavailable` when none. */
+function cachedHostSources(
+  host: AnalyticsRemoteHost,
+  cached: RemoteCache,
+  minDateMs: number,
+  detail: string
+): {
+  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  states: AnalyticsRemoteSourceState[];
+} {
+  const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
+  const states: AnalyticsRemoteSourceState[] = [];
+  for (const tool of REMOTE_TARGETS[host]) {
+    const kept = cached.rows.filter((row) => row.k === tool && inWindow(row, minDateMs));
+    if (kept.length) {
+      results.push({ tool, data: toWorkerResult(kept, tool) });
+      states.push({
+        tool,
+        host,
+        state: 'cached',
+        lastScanAt: cached.lastScanAt,
+        rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
+        detail: `${detail}; showing previously read aggregates`,
+      });
+    } else {
+      states.push({
+        tool,
+        host,
+        state: 'unavailable',
+        lastScanAt: cached.lastScanAt,
+        rowCount: 0,
+        detail,
+      });
+    }
+  }
+  return { results, states };
+}
+
+/**
+ * The remote aggregates saved by the last scans, without contacting a host:
+ * what the page shows while a remote scan has not answered in time.
+ */
+export function loadAnalyticsRemoteCachedSources(
+  minDateMs: number,
+  deps: Pick<AnalyticsRemoteSourceDeps, 'cacheDir'> = {}
+): {
+  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  states: AnalyticsRemoteSourceState[];
+} {
+  const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
+  const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
+  const states: AnalyticsRemoteSourceState[] = [];
+  for (const host of ['mac', 'windows'] as const) {
+    const part = cachedHostSources(
+      host,
+      loadCache(cacheFile(cacheDir, host)),
+      minDateMs,
+      'remote scan timed out'
+    );
+    results.push(...part.results);
+    states.push(...part.states);
+  }
+  states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
+  return { results, states };
+}
+
+/**
+ * Collect remote usage over ssh, one helper invocation per host. A timeout or
+ * failure leaves that source `cached` (previous aggregates) or `unavailable`,
+ * never failing the page.
+ */
+export async function loadAnalyticsRemoteSources(
+  minDateMs: number,
+  deps: AnalyticsRemoteSourceDeps = {}
+): Promise<{
+  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  states: AnalyticsRemoteSourceState[];
+}> {
+  const now = deps.now ?? Date.now;
+  const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
+  const hosts = await (deps.hosts ?? resolveAnalyticsRemoteHosts)().catch(() => ({
+    mac: null as string | null,
+    windows: null as string | null,
+  }));
+  const runHelper = deps.runHelper ?? runAnalyticsRemoteHelper;
+  const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
+  const states: AnalyticsRemoteSourceState[] = [];
+  const jobs: Array<Promise<void>> = [];
+  for (const host of ['mac', 'windows'] as const) {
+    jobs.push(
+      (async (): Promise<void> => {
+        const kinds = REMOTE_TARGETS[host];
+        const file = cacheFile(cacheDir, host);
+        const cached = loadCache(file);
+        const alias = hosts[host];
+        if (!alias) {
+          for (const tool of kinds)
+            states.push({
+              tool,
+              host,
+              state: 'unavailable',
+              lastScanAt: cached.lastScanAt,
+              rowCount: 0,
+              detail: 'remote host is not configured',
+            });
+          return;
+        }
+        let response: AnalyticsRemoteResponse;
+        try {
+          response = await runHelper(alias, host, {
+            kinds,
+            minDateMs,
+            fingerprints: cached.fingerprints,
+          });
+        } catch {
+          // Previous aggregates stay available; nothing remote fails the page.
+          const part = cachedHostSources(host, cached, minDateMs, 'remote scan failed');
+          results.push(...part.results);
+          states.push(...part.states);
+          return;
+        }
+        const errored = new Set(kinds.filter((tool) => response.kinds[tool]?.state === 'error'));
+        // Files a scan did not reach keep their rows and prints until a scan
+        // reaches them: after a cut scan, a kind that could not be read, or
+        // (OMP) a root search that hit its bounds.
+        const keepsUnvisited = (tool: AnalyticsRemoteKind): boolean =>
+          response.truncated ||
+          errored.has(tool) ||
+          (tool === 'omp' && response.discoveryTruncated === true);
+        const freshPrints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
+        for (const tool of kinds) freshPrints[tool] = response.kinds[tool]?.fingerprints ?? {};
+        const kept = cached.rows.filter((row) => {
+          if (!kinds.includes(row.k) || !inWindow(row, minDateMs)) return false;
+          const print = freshPrints[row.k]?.[row.f];
+          if (print === undefined) return keepsUnvisited(row.k);
+          return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
+        });
+        const fresh = response.rows.filter(
+          (row) => kinds.includes(row.k) && !errored.has(row.k) && inWindow(row, minDateMs)
+        );
+        const merged = [...kept, ...fresh].slice(0, MAX_CACHED_ROWS);
+        const scannedAt = new Date(now()).toISOString();
+        const prints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {
+          ...freshPrints,
+        };
+        for (const [kind, entries] of Object.entries(cached.fingerprints)) {
+          if (!kinds.includes(kind as AnalyticsRemoteKind)) continue;
+          if (!keepsUnvisited(kind as AnalyticsRemoteKind)) continue;
+          for (const [key, print] of Object.entries(entries)) {
+            prints[kind] ??= {};
+            prints[kind][key] ??= print;
+          }
+        }
+        try {
+          saveCache(file, {
+            version: CACHE_VERSION,
+            fingerprints: prints,
+            rows: merged,
+            lastScanAt: scannedAt,
+          });
+        } catch {
+          /* Cache writes are best-effort; the rows are still served. */
+        }
+        for (const tool of kinds) {
+          const rows = merged.filter((row) => row.k === tool);
+          const kindState = response.kinds[tool]?.state ?? 'ok';
+          if (kindState === 'not_installed') {
+            states.push({
+              tool,
+              host,
+              state: 'not_installed',
+              lastScanAt: scannedAt,
+              rowCount: 0,
+              detail: 'no usage logs found on this host',
+            });
+            continue;
+          }
+          if (rows.length) results.push({ tool, data: toWorkerResult(rows, tool) });
+          const partial = response.truncated || errored.has(tool);
+          const reason = errored.has(tool) ? 'remote read failed' : 'remote scan hit its bounds';
+          states.push({
+            tool,
+            host,
+            // Partial with nothing to show is not a cached result.
+            state: partial ? (rows.length ? 'cached' : 'unavailable') : 'ok',
+            lastScanAt: scannedAt,
+            rowCount: rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
+            detail: partial
+              ? rows.length
+                ? `${reason}; showing partial aggregates`
+                : `${reason} before any usage was read`
+              : tool === 'omp' && response.discoveryTruncated === true
+                ? 'the search for custom OMP session folders hit its bounds; folders it did not reach are not read'
+                : tool === 'zcode' && response.kinds.zcode?.walUnread === true
+                  ? "zcode's newest usage waits in its write-ahead log, which a read-only open here cannot read; it appears once zcode checkpoints it"
+                  : null,
+          });
+        }
+      })()
+    );
+  }
+  await Promise.all(jobs);
+  states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
+  return { results, states };
+}

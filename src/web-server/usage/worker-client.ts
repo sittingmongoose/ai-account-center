@@ -8,6 +8,9 @@ import type { AccountActivityScanOptions } from './account-activity-collector';
 export type UsageWorkerRequest =
   | { kind: 'claude'; projectsDir: string; activity?: AccountActivityScanOptions }
   | { kind: 'codex'; codexHome: string; cacheDir: string; activity?: AccountActivityScanOptions }
+  | { kind: 'omp'; roots: string[]; activity?: AccountActivityScanOptions }
+  | { kind: 'muse'; sessionsDir: string; activity?: AccountActivityScanOptions }
+  | { kind: 'zcode'; dbPath: string; activity?: AccountActivityScanOptions }
   | { kind: 'droid'; homeDir: string };
 
 export interface UsageWorkerResult {

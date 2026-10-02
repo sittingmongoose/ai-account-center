@@ -157,6 +157,19 @@ boxes report their size, and bridge.js lays those charts out in pixels). The bac
 Month, All and custom ranges request the covering window (`apiRangeFor`) and are cut in the browser; when the
 fetched window differs from the range, cost by model, the donut and session stats say which logs they cover.
 
+Usage sources (activity `scope: multi-host-cli`): the server reads Claude Code and Codex on Ubuntu plus OMP,
+Muse Code and zcode on Ubuntu, Mac and Windows. Only Claude Code and Codex are providers on this page (the
+filter, the session rows, the daily chart, the model marks); `TOOLS` rows of the other tools count in the
+totals, the trend, the heatmap and the model views under All only, merged by model name (`pageModels`; a model
+that is not one provider's alone has `provider: ""`, no mark and the neutral `Theme.h-model` family). Cost:
+`fallbackCostUsd` is the part of `estimatedCostUsd` the server priced only at its unknown-model fallback (no
+logged cost, no listed rate); for the tools that are not providers here the page leaves it out, shows "Not
+logged" where nothing is logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`).
+Claude Code and Codex rows keep their whole estimate, fallback rate included, exactly as before the other tools
+were added. "Included usage" in the header
+(`includedView`, from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each
+source's state and last scan.
+
 Motion: sections play their first view when they first scroll on screen (`AxReveal` reads its absolute
 position against the page scroll). The trend draws on through a clip; on a range, filter or toggle change
 bridge.js interpolates the 360-sample point arrays every frame and pushes only the eleven path strings
