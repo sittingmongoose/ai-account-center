@@ -4,6 +4,11 @@ import { randomBytes } from 'crypto';
 import { CodexProfileRegistry } from './codex-profile-registry';
 import { resolveCodexProfileDir } from './codex-profile-paths';
 import { decodeIdToken, hasStructurallyValidIdToken } from './decode-id-token';
+import {
+  decodeCodexActivationIdentity,
+  matchesCodexActivationIdentity,
+  type CodexActivationIdentity,
+} from './codex-activation-identity';
 import { getCodexProfileNameError } from './types';
 import type { CodexAccountIdentity } from './types';
 import { acquireCodexActivationLock, getActivationCodexHome } from './codex-activation-lock';
@@ -75,6 +80,7 @@ export interface CodexActivationResult {
 interface AuthSnapshot {
   content: Buffer;
   identity: CodexAccountIdentity & { email: string };
+  binding: CodexActivationIdentity;
 }
 
 function readAuth(authPath: string, label: string, requireCredentials = false): AuthSnapshot {
@@ -85,7 +91,12 @@ function readAuth(authPath: string, label: string, requireCredentials = false): 
     throw new CodexActivationError('auth_read_failed', `Could not read ${label} auth.json.`);
   }
   let parsed: {
-    tokens?: { id_token?: unknown; access_token?: unknown; refresh_token?: unknown };
+    tokens?: {
+      id_token?: unknown;
+      access_token?: unknown;
+      refresh_token?: unknown;
+      account_id?: unknown;
+    };
   };
   try {
     parsed = JSON.parse(content.toString('utf8')) as typeof parsed;
@@ -101,6 +112,13 @@ function readAuth(authPath: string, label: string, requireCredentials = false): 
       `${label} auth.json needs a valid Codex login with a decoded email.`
     );
   }
+  const binding = decodeCodexActivationIdentity(token, parsed.tokens?.account_id);
+  if (!binding) {
+    throw new CodexActivationError(
+      'invalid_profile',
+      `${label} auth.json needs a consistent Codex workspace and account identity.`
+    );
+  }
   if (
     requireCredentials &&
     (typeof parsed.tokens?.access_token !== 'string' ||
@@ -113,7 +131,7 @@ function readAuth(authPath: string, label: string, requireCredentials = false): 
       `${label} auth.json needs access and refresh tokens from a Codex login.`
     );
   }
-  return { content, identity: { ...identity, email: identity.email } };
+  return { content, identity: { ...identity, email: identity.email }, binding };
 }
 
 function atomicReplace(authPath: string, content: Buffer): void {
@@ -167,9 +185,9 @@ function saveLiveProfile(
 ): void {
   const candidates = registry.listProfiles().filter((name) => {
     try {
-      return (
-        readAuth(path.join(resolveCodexProfileDir(name), 'auth.json'), 'Profile').identity.email ===
-        live.identity.email
+      return matchesCodexActivationIdentity(
+        live.binding,
+        readAuth(path.join(resolveCodexProfileDir(name), 'auth.json'), 'Profile').binding
       );
     } catch {
       return false;
@@ -226,7 +244,7 @@ export async function activateCodexProfile(
   }
   const targetAuthPath = path.join(resolveCodexProfileDir(name), 'auth.json');
   const expectedTarget = readAuth(targetAuthPath, 'Target profile', true);
-  const expectedEmail = expectedTarget.identity.email;
+  let expectedIdentity = expectedTarget.binding;
   try {
     fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
   } catch {
@@ -265,12 +283,13 @@ export async function activateCodexProfile(
       throw new CodexActivationError('invalid_profile', `Codex profile '${name}' does not exist.`);
     }
     lockedTarget = readAuth(targetAuthPath, 'Target profile', true);
-    if (lockedTarget.identity.email !== expectedEmail) {
+    if (!matchesCodexActivationIdentity(expectedIdentity, lockedTarget.binding)) {
       throw new CodexActivationError(
         'verification_failed',
         'The target profile changed account before activation. Try again.'
       );
     }
+    expectedIdentity = lockedTarget.binding;
     let approval: CodexActivationStopPlan | undefined;
     if (options.confirmationToken) {
       const live = fs.existsSync(authPath) ? readAuth(authPath, 'Live').content : Buffer.alloc(0);
@@ -294,17 +313,18 @@ export async function activateCodexProfile(
       saveLiveProfile(registry, name, original);
     }
     const target = readAuth(targetAuthPath, 'Target profile', true);
-    if (target.identity.email !== expectedEmail) {
+    if (!matchesCodexActivationIdentity(expectedIdentity, target.binding)) {
       throw new CodexActivationError(
         'verification_failed',
         'The target profile changed account during activation. Try again.'
       );
     }
+    expectedIdentity = target.binding;
     authReplaced = true;
     atomicReplace(authPath, target.content);
     await runtime.start();
     const installed = readAuth(authPath, 'Activated', true);
-    if (installed.identity.email !== expectedEmail) {
+    if (!matchesCodexActivationIdentity(expectedIdentity, installed.binding)) {
       throw new CodexActivationError(
         'verification_failed',
         'Codex did not keep the requested account after restarting.'

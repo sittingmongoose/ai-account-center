@@ -225,7 +225,12 @@ describe('activateCodexProfile', () => {
   it('refuses unsaved live identities and brings writers back without changing auth', async () => {
     // The payload itself needs a different decoded email.
     const header = Buffer.from('{"alg":"none"}').toString('base64url');
-    const payload = Buffer.from('{"email":"unknown@example.test"}').toString('base64url');
+    const payload = Buffer.from(
+      JSON.stringify({
+        email: 'unknown@example.test',
+        'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-unknown' },
+      })
+    ).toString('base64url');
     const live = Buffer.from(
       JSON.stringify({ tokens: { id_token: `${header}.${payload}.fakesig` } })
     );
