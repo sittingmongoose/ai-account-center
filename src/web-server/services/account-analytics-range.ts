@@ -107,19 +107,20 @@ function formatter(tz: string): Intl.DateTimeFormat {
 }
 
 /**
- * True for `UTC` and for zones `Intl.supportedValuesOf('timeZone')` lists. A
- * legacy alias the runtime accepts (for example `Asia/Calcutta`) is accepted
- * when it resolves to a listed zone, so a browser's own zone name is not refused.
+ * True for `UTC`, for zones `Intl.supportedValuesOf('timeZone')` lists, and
+ * for any other IANA name `Intl.DateTimeFormat` accepts. The list alone is not
+ * enough: Node 22 lists `Asia/Calcutta` but not `Asia/Kolkata`, and neither
+ * Node nor Bun lists every alias a browser reports as its own zone. Offset
+ * strings and anything that is not a zone name are refused.
  */
 export function isAccountAnalyticsTimeZone(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^[A-Za-z][A-Za-z0-9_+\-/]{0,63}$/.test(value)) return false;
-  if (value === 'UTC') return true;
-  const zones = zoneList();
-  if (zones?.has(value)) return true;
+  if (typeof value !== 'string' || !/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(value))
+    return false;
+  if (value.length > 64) return false;
+  if (value === 'UTC' || zoneList()?.has(value)) return true;
   try {
-    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions()
-      .timeZone;
-    return zones ? zones.has(resolved) || resolved === 'UTC' : true;
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
+    return true;
   } catch {
     return false;
   }

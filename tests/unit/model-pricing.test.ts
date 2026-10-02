@@ -7,6 +7,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, it, expect } from 'bun:test';
 import {
   getModelPricing,
+  getModelPricingWithSource,
   calculateCost,
   getKnownModels,
   hasCustomPricing,
@@ -588,6 +589,23 @@ describe('model-pricing', () => {
       expect(pricing.outputPerMillion).toBe(30);
       expect(pricing.cacheReadPerMillion).toBe(0.5);
       expect(pricing.cacheCreationPerMillion).toBe(0);
+    });
+
+    it('says which table supplied the rates without changing them', () => {
+      expect(getModelPricingWithSource('openai/gpt-5.5')).toMatchObject({
+        source: 'models-dev',
+        pricing: { inputPerMillion: 5, outputPerMillion: 30 },
+      });
+      expect(getModelPricingWithSource('openai/gpt-5.5').pricing).toEqual(
+        getModelPricing('openai/gpt-5.5')
+      );
+      expect(getModelPricingWithSource('claude-sonnet-4-6').source).toBe('builtin');
+      expect(getModelPricingWithSource('claude-sonnet-4-6').pricing).toEqual(
+        getModelPricing('claude-sonnet-4-6')
+      );
+      const fallback = getModelPricingWithSource('aac-unknown-model-for-source-test');
+      expect(fallback.source).toBe('fallback');
+      expect(fallback.pricing).toEqual(getModelPricing('aac-unknown-model-for-source-test'));
     });
 
     it('keeps subscription-backed provider pricing distinct from paid API pricing', () => {
