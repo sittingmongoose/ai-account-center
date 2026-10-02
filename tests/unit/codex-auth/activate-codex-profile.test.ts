@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as lockfile from 'proper-lockfile';
 import {
   activateCodexProfile,
   CodexActivationError,
@@ -52,6 +53,51 @@ function runtime(events: string[]): CodexActivationRuntime {
       events.push('start');
     },
   };
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+/** A zero-retry contender for the activation lock: refused at once while it is held. */
+async function activationLockHeld(): Promise<boolean> {
+  try {
+    const release = await lockfile.lock(codexHome, {
+      realpath: false,
+      lockfilePath: path.join(codexHome, '.ccs-activation.lock'),
+      stale: 120_000,
+      retries: 0,
+    });
+    await release();
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOCKED') return true;
+    throw error;
+  }
+}
+
+/**
+ * The shared registry, with one caller's hasProfile reads reported in order. Activation
+ * and removal both read it once just before waiting for the lock and once under it.
+ */
+function observedRegistry(onHasProfile: (call: number) => void): CodexProfileRegistry {
+  let calls = 0;
+  return new Proxy(registry, {
+    get(target, property) {
+      if (property === 'hasProfile') {
+        return (name: string) => {
+          onHasProfile(++calls);
+          return target.hasProfile(name);
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 beforeEach(() => {
@@ -182,13 +228,21 @@ describe('activateCodexProfile', () => {
 
   it('serializes simultaneous activations with a lock spanning stop through verification', async () => {
     const events: string[] = [];
+    const lockHeldByFirst: boolean[] = [];
+    const firstStopping = deferred();
+    const finishFirstStop = deferred();
+    const secondWaiting = deferred();
     const first: CodexActivationRuntime = {
       async stop() {
         events.push('first-stop');
-        await new Promise((resolve) => setTimeout(resolve, 180));
+        lockHeldByFirst.push(await activationLockHeld());
+        firstStopping.resolve();
+        await finishFirstStop.promise;
       },
       async start() {
         events.push('first-start');
+        // Restart and verification still run under the same lock.
+        lockHeldByFirst.push(await activationLockHeld());
       },
     };
     const second: CodexActivationRuntime = {
@@ -200,14 +254,28 @@ describe('activateCodexProfile', () => {
       },
     };
     const firstActivation = activateCodexProfile('platyr', { codexHome, registry, runtime: first });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    // Stop runs only under the lock, so the first activation holds it from here on.
+    await firstStopping.promise;
     const secondActivation = activateCodexProfile('gmail', {
       codexHome,
-      registry,
+      registry: observedRegistry((call) => {
+        if (call === 1) secondWaiting.resolve();
+        else events.push('second-locked');
+      }),
       runtime: second,
     });
+    // The second activation has read its profile and asked for the lock.
+    await secondWaiting.promise;
+    finishFirstStop.resolve();
     await Promise.all([firstActivation, secondActivation]);
-    expect(events).toEqual(['first-stop', 'first-start', 'second-stop', 'second-start']);
+    expect(lockHeldByFirst).toEqual([true, true]);
+    expect(events).toEqual([
+      'first-stop',
+      'first-start',
+      'second-locked',
+      'second-stop',
+      'second-start',
+    ]);
     expect(decodeAccountIdentity(path.join(codexHome, 'auth.json')).email).toBe(
       'gmail@example.test'
     );
@@ -527,14 +595,9 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
 
   it('retains a newly activated profile when removal began during the activation', async () => {
     const { handleRemoveCodex } = await import('../../../src/codex-auth/commands/remove-command');
-    let stopEntered!: () => void;
-    let allowStop!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      stopEntered = resolve;
-    });
-    const allowed = new Promise<void>((resolve) => {
-      allowStop = resolve;
-    });
+    const stopEntered = deferred();
+    const allowStop = deferred();
+    const removalWaiting = deferred();
     const events: string[] = [];
     const pendingActivation = activateCodexProfile('platyr', {
       codexHome,
@@ -542,15 +605,15 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
       runtime: {
         async stop() {
           events.push('stop');
-          stopEntered();
-          await allowed;
+          stopEntered.resolve();
+          await allowStop.promise;
         },
         async start() {
           events.push('start');
         },
       },
     });
-    await entered;
+    await stopEntered.promise;
     const originalExit = process.exit;
     const originalError = console.error;
     let denied = false;
@@ -562,25 +625,34 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     console.error = () => {};
     try {
       const pendingRemoval = handleRemoveCodex(
-        { registry, version: 'test' },
+        {
+          registry: observedRegistry((call) => {
+            if (call === 1) removalWaiting.resolve();
+            else events.push('removal-locked');
+          }),
+          version: 'test',
+        },
         ['platyr', '--yes', '--force'],
         { codexHome }
       ).catch((error: unknown) => {
         if (!(error instanceof Error) || error.message !== 'fixture exit') throw error;
       });
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      // Removal has checked the profile and asked for the lock the activation holds.
+      await removalWaiting.promise;
+      expect(await activationLockHeld()).toBe(true);
       expect(fs.existsSync(auth('platyr'))).toBe(true);
       expect(registry.hasProfile('platyr')).toBe(true);
-      allowStop();
+      allowStop.resolve();
       await pendingActivation;
       await pendingRemoval;
     } finally {
-      allowStop();
+      allowStop.resolve();
       process.exit = originalExit;
       console.error = originalError;
     }
     expect(denied).toBe(true);
-    expect(events).toEqual(['stop', 'start']);
+    // Removal reread the registry only after the activation released the lock.
+    expect(events).toEqual(['stop', 'start', 'removal-locked']);
     expect(registry.hasProfile('platyr')).toBe(true);
     expect(fs.readFileSync(auth('platyr'))).toEqual(fixture('platyr'));
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('platyr'));
