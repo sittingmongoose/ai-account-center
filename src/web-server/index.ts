@@ -8,7 +8,9 @@
 
 import express from 'express';
 import http from 'http';
+import type https from 'https';
 import type { AddressInfo } from 'net';
+import type { Duplex } from 'stream';
 import path from 'path';
 import { WebSocketServer } from 'ws';
 import {
@@ -40,6 +42,11 @@ import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
 import { attachDashboardEventServer } from './dashboard-events';
 import { isSecureTransport } from './middleware/secure-transport';
+import {
+  configureDashboardTransport,
+  prepareFirstRunSetupCode,
+  startDashboardHttpsListener,
+} from './dashboard-auth-runtime';
 import { authKind } from './middleware/request-auth';
 import {
   startAccountLifecycleMaintenance,
@@ -59,6 +66,8 @@ export interface ServerInstance {
   server: http.Server;
   wss: WebSocketServer;
   cleanup: () => void;
+  /** The optional in-process HTTPS listener (`dashboard_tls.https_listener`); null when off. */
+  httpsServer?: https.Server | null;
 }
 
 function getListenHost(options: ServerOptions): string {
@@ -99,6 +108,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const app = express();
   // Routes answer only to their canonical spelling; set before the first app.use.
   app.set('case sensitive routing', true);
+  // Trusted local TLS proxy (off unless dashboard_tls.trusted_proxy is set).
+  configureDashboardTransport(app);
   const server = http.createServer(app);
   const wss = new WebSocketServer({
     noServer: true,
@@ -186,7 +197,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     }
   );
 
-  server.on('upgrade', (request, socket, head) => {
+  const onUpgrade = (request: http.IncomingMessage, socket: Duplex, head: Buffer): void => {
     const pathname = getUpgradePathname(request.url);
     if (!pathname) {
       rejectWebSocketUpgrade(socket, 400, 'Invalid WebSocket upgrade request');
@@ -222,7 +233,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         });
       }
     );
-  });
+  };
+  server.on('upgrade', onUpgrade);
+  let httpsServer: https.Server | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   let antigravityRuntime: AntigravityRuntime | null = null;
@@ -232,10 +245,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const detachDashboardEvents = attachDashboardEventServer(wss, {
     isSecure: isSecureTransport,
     authKind: (request) => authKind(request as express.Request),
+    sessionEpoch: (request) => (request as express.Request).session?.epoch ?? null,
   });
 
   // Combined cleanup function
   const cleanup = () => {
+    httpsServer?.close();
     detachDashboardEvents();
     stopAccountLifecycleMaintenance();
     codexAutoSwitch.stop();
@@ -299,7 +314,15 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       startAccountLifecycleMaintenance();
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
-      resolve({ server, wss, cleanup });
+      // First run with sign-in on and no password: this run's one-time setup code.
+      void prepareFirstRunSetupCode();
+      // The optional HTTPS listener (dashboard_tls.https_listener, off by default).
+      void startDashboardHttpsListener(app, listenHost, onUpgrade)
+        .catch(() => null)
+        .then((started) => {
+          httpsServer = started;
+          resolve({ server, wss, cleanup, httpsServer: started });
+        });
     };
 
     try {

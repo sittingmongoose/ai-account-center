@@ -17,6 +17,9 @@ import {
   getDashboardAuthConfig,
   isDashboardAuthEnabled,
 } from '../../config/config-loader-facade';
+import { bearerToken, guardApiRequest } from './api-request-guard';
+import { authKind } from './request-auth';
+import { isSessionEpochCurrent } from '../services/dashboard-auth-state';
 
 // Extend Express Request with session
 declare module 'express-session' {
@@ -24,20 +27,6 @@ declare module 'express-session' {
     authenticated: boolean;
     username: string;
   }
-}
-
-/** Public API routes, relative to the /api mount (lowercase for case-insensitive matching). */
-const PUBLIC_API_ROUTES = ['/auth/login', '/auth/check', '/auth/setup', '/health'];
-
-/** The same public routes as full request paths. */
-const PUBLIC_PATHS = PUBLIC_API_ROUTES.map((route) => `/api${route}`);
-
-/** Exact match (an optional trailing slash allowed), never a prefix, ignoring letter case. */
-function isPublicPath(requestPath: string, publicPaths: readonly string[]): boolean {
-  const pathLower = requestPath.toLowerCase();
-  return publicPaths.some(
-    (publicPath) => pathLower === publicPath || pathLower === `${publicPath}/`
-  );
 }
 
 /**
@@ -50,31 +39,28 @@ export function isApiRequestPath(requestPath: string): boolean {
   return pathLower === '/api' || pathLower.startsWith('/api/');
 }
 
-/** `/api/accounts` and below, in any letter case (CONTRACT-registry-lifecycle section 1). */
-function isAccountsApiPath(requestPath: string): boolean {
+/**
+ * `/api/accounts` and `/api/auth` and below, in any letter case
+ * (CONTRACT-registry-lifecycle section 1, CONTRACT-auth-devices section 2).
+ */
+function isCodedApiPath(requestPath: string): boolean {
   const pathLower = requestPath.toLowerCase();
-  return pathLower === '/api/accounts' || pathLower.startsWith('/api/accounts/');
+  return ['/api/accounts', '/api/auth'].some(
+    (prefix) => pathLower === prefix || pathLower.startsWith(`${prefix}/`)
+  );
 }
 
 /**
- * A 401 is never cached. Under /api/accounts it also carries the stable code
- * `auth_required` (contract rules 1 and 4); elsewhere the body stays as it was.
+ * A 401 is never cached. Under /api/accounts and /api/auth it also carries the
+ * stable code `auth_required`; elsewhere the body stays as it was.
  * `fullPath` is the request path including the /api mount.
  */
-function rejectWithoutSession(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-  fullPath: string
-): void {
-  if (req.session?.authenticated === true) {
-    return next();
-  }
+function rejectWithoutSession(res: Response, fullPath: string): void {
   res.setHeader('Cache-Control', 'no-store');
   res
     .status(401)
     .json(
-      isAccountsApiPath(fullPath)
+      isCodedApiPath(fullPath)
         ? { error: 'Authentication required', code: 'auth_required' }
         : { error: 'Authentication required' }
     );
@@ -125,17 +111,41 @@ function getSessionSecret(): string {
   return newSecret;
 }
 
+/** Seconds until a limiter window resets, at least 1 (the 429 body and `Retry-After`). */
+export function retryAfterSeconds(req: Request): number {
+  const reset = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
+  const seconds = reset ? Math.ceil((reset.getTime() - Date.now()) / 1000) : 15 * 60;
+  return Math.max(1, seconds);
+}
+
+/** Tries left in the current limiter window (the failed request already counted). */
+export function triesLeft(req: Request): number {
+  const remaining = (req as Request & { rateLimit?: { remaining?: number } }).rateLimit?.remaining;
+  return typeof remaining === 'number' ? Math.max(0, remaining) : 0;
+}
+
 /**
- * Rate limiter for login attempts.
- * 5 attempts per 15 minutes per IP.
+ * Rate limiter for login attempts: 5 failed attempts per 15 minutes per IP;
+ * successful requests are not counted (CONTRACT-auth-devices section 10).
+ * Pairing and a LAN setup code share this key and budget.
  */
 export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts
-  message: { error: 'Too many login attempts. Please try again later.' },
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   skip: () => !isDashboardAuthEnabled(),
+  handler: (req, res) => {
+    const seconds = retryAfterSeconds(req);
+    res.setHeader('Retry-After', String(seconds));
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(429).json({
+      error: 'Too many login attempts. Please try again later.',
+      code: 'rate_limited',
+      retryAfterSeconds: seconds,
+    });
+  },
 });
 
 /**
@@ -154,7 +164,9 @@ export function createSessionMiddleware(): (
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: false, // Local CLI uses HTTP
+      // Secure whenever the request arrived over TLS (in-process, or a trusted
+      // loopback proxy once `trust proxy` is set); plain HTTP keeps working.
+      secure: 'auto',
       httpOnly: true,
       maxAge,
       sameSite: 'strict',
@@ -177,12 +189,12 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     return next();
   }
 
-  // Allow public paths (case-insensitive, exact)
-  if (isPublicPath(req.path, PUBLIC_PATHS)) {
-    return next();
-  }
-
-  rejectWithoutSession(req, res, next, req.path);
+  // Public routes (exact method and path), bearer tokens, then the session.
+  const apiPath = req.path.slice('/api'.length) || '/';
+  guardApiRequest(req, res, next, apiPath, {
+    unauthenticated: (response) => rejectWithoutSession(response, req.path),
+    canonicalMount: req.path === '/api' || req.path.startsWith('/api/'),
+  });
 }
 
 /**
@@ -195,11 +207,11 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
     return next();
   }
 
-  if (isPublicPath(req.path, PUBLIC_API_ROUTES)) {
-    return next();
-  }
-
-  rejectWithoutSession(req, res, next, `/api${req.path}`);
+  guardApiRequest(req, res, next, req.path, {
+    unauthenticated: (response) => rejectWithoutSession(response, `/api${req.path}`),
+    // The /api router is mounted case-sensitively, so it only sees the exact mount.
+    canonicalMount: true,
+  });
 }
 
 /**
@@ -216,7 +228,8 @@ export function requireDashboardSession(
     return requireLocalAccessWhenAuthDisabled(req, res, localAccessError);
   }
 
-  if (req.session?.authenticated === true) {
+  // A device reaches a route only when the /api guard put it in scope.
+  if (authKind(req) !== null) {
     return true;
   }
 
@@ -307,11 +320,19 @@ export function isDashboardWebSocketUpgradeAllowed(req: IncomingMessage): boolea
     return isLoopbackRemoteAddress(req.socket.remoteAddress);
   }
 
-  return Boolean((req as Request).session?.authenticated);
+  // Device tokens never open /ws (CONTRACT-auth-devices section 6), and a
+  // browser signed out by "sign out other browsers" does not either.
+  if (bearerToken(req as Request) !== null) return false;
+  const session = (req as Request).session;
+  return Boolean(session?.authenticated) && isSessionEpochCurrent(session?.epoch);
 }
 
 export function getDashboardWebSocketRejectionStatus(req?: IncomingMessage): 401 | 403 {
   if (req && !isDashboardWebSocketOriginAllowed(req)) {
+    return 403;
+  }
+
+  if (req && isDashboardAuthEnabled() && bearerToken(req as Request) !== null) {
     return 403;
   }
 

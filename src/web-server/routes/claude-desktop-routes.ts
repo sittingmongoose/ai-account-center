@@ -1,4 +1,5 @@
 import { createApiRouter } from './api-router';
+import { authKind } from '../middleware/request-auth';
 import { ConfigError, ProfileError } from '../../errors/error-types';
 import {
   isDashboardWebSocketOriginAllowed,
@@ -70,7 +71,7 @@ router.get('/desktop-profiles/usage', async (req, res): Promise<void> => {
 });
 
 router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
-  if (req.session?.authenticated !== true) {
+  if (authKind(req) === null) {
     res.status(401).json({ error: 'Authentication required' });
     return;
   }

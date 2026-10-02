@@ -5,7 +5,7 @@
  * This file imports all section types from their respective schema modules.
  */
 
-import type { AccountConfig, ProfileConfig, DashboardAuthConfig } from './auth';
+import type { AccountConfig, ProfileConfig, DashboardAuthConfig, DashboardTlsConfig } from './auth';
 import { DEFAULT_DASHBOARD_AUTH_CONFIG } from './auth';
 import type { CLIProxyConfig } from './cliproxy';
 import { CLIPROXY_SUPPORTED_PROVIDERS, DEFAULT_CLIPROXY_SAFETY_CONFIG } from './cliproxy';
@@ -85,6 +85,8 @@ export interface UnifiedConfig {
   channels?: OfficialChannelsConfig;
   /** Dashboard authentication configuration (optional) */
   dashboard_auth?: DashboardAuthConfig;
+  /** Dashboard secure transport (optional, off by default) */
+  dashboard_tls?: DashboardTlsConfig;
   /** Browser automation configuration */
   browser?: BrowserConfig;
   /** Image analysis configuration (vision via CLIProxy) */

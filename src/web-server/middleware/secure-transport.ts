@@ -58,6 +58,16 @@ export interface SecureTransportOptions {
   trustedProxy?: TrustedProxyKind | null;
 }
 
+/**
+ * Loopback as `requireLocalAccessWhenAuthDisabled` tests it: the peer and the
+ * Host header are loopback, and no local proxy forwarded the request.
+ */
+export function isDirectLoopbackRequest(req: IncomingMessage): boolean {
+  if (!isLoopbackRemoteAddress(req.socket?.remoteAddress)) return false;
+  if (FORWARDED_HEADERS.some((name) => req.headers[name] !== undefined)) return false;
+  return isLoopbackHostName(hostName(singleHeader(req.headers.host)));
+}
+
 export function isSecureTransport(
   req: IncomingMessage,
   options: SecureTransportOptions = {}

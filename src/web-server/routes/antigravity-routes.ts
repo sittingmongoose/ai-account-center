@@ -1,6 +1,8 @@
 import { AntigravityError } from '../../antigravity/errors';
 import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
+import { authKind } from '../middleware/request-auth';
+import { callerKey, ConfirmationBindings } from './caller-bound-confirmations';
 import { isAntigravityAutoSwitchSettingsPatch } from '../../antigravity/auto-switch/settings';
 import { ANTIGRAVITY_AUTO_SWITCH_MESSAGES } from '../../antigravity/auto-switch/monitor';
 import type { AntigravityAutoSwitchOutcome } from '../../antigravity/auto-switch/types';
@@ -187,9 +189,9 @@ function activationResponse(result: ActivationResult, profileId: string): Record
   return output;
 }
 
+/** A browser session, or a paired device token on a tray route (the /api guard checks scope). */
 function authenticated(req: Request, res: Response): boolean {
-  if ((req as Request & { session?: { authenticated?: boolean } }).session?.authenticated === true)
-    return true;
+  if (authKind(req) !== null) return true;
   res.status(401).json({ error: 'Authentication required' });
   return false;
 }
@@ -270,6 +272,7 @@ export function createAntigravityRouter(
       });
     }
   });
+  const confirmations = new ConfirmationBindings();
   router.put('/auto-switch', (req, res) => {
     if (!writeAllowed(req, res, originAllowed)) return;
     if (Object.keys(req.query).length || !isAutoSettingsPatch(req.body)) {
@@ -306,6 +309,18 @@ export function createAntigravityRouter(
         });
         return;
       }
+      if (
+        typeof req.body.confirmationToken === 'string' &&
+        !confirmations.allows(req.body.confirmationToken, callerKey(req))
+      ) {
+        // Issued to another device or browser: never consumed here.
+        res.status(409).json({
+          status: 'stale-confirmation',
+          profileId: req.params.profileId,
+          hostId: 'ubuntu',
+        });
+        return;
+      }
       let invalidate = false;
       try {
         const result = await deps.activate({
@@ -330,7 +345,11 @@ export function createAntigravityRouter(
               : result.status === 'failed-rolled-back' || result.status === 'recovery-required'
                 ? 500
                 : 409;
-        res.status(status).json(activationResponse(result, req.params.profileId));
+        const body = activationResponse(result, req.params.profileId);
+        const offer = body.confirmation as { token?: unknown } | undefined;
+        if (offer && typeof offer.token === 'string')
+          confirmations.record(offer.token, callerKey(req));
+        res.status(status).json(body);
       } catch {
         invalidate = true;
         res.status(500).json({

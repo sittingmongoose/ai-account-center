@@ -1,5 +1,6 @@
 import type { Router } from 'express';
 import { createApiRouter } from './api-router';
+import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { getAccountAnalytics } from '../services/account-analytics-service';
 import type { AccountAnalytics, AccountAnalyticsQuery } from '../services/account-analytics-types';
@@ -25,7 +26,7 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
   const router = createApiRouter();
   router.get('/analytics', async (req, res): Promise<void> => {
     res.setHeader('Cache-Control', 'no-store');
-    if (req.session?.authenticated !== true) {
+    if (authKind(req) !== 'session') {
       res.status(401).json({ error: 'Authentication required' });
       return;
     }

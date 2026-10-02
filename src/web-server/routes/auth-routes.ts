@@ -1,43 +1,40 @@
 /**
  * Dashboard Authentication Routes
- * Handles login, logout, session check, and setup status.
+ * Handles login, logout, session check and setup status here; the password
+ * change, sessions, first-run setup and paired devices are registered from
+ * auth-session-routes.ts and auth-device-routes.ts (CONTRACT-auth-devices).
  */
 
 import type { Request, Response } from 'express';
-import bcrypt from 'bcrypt';
-import crypto from 'crypto';
 
 import type { DashboardAuthConfig } from '../../config/unified-config-types';
-import { isLoopbackRemoteAddress, loginRateLimiter } from '../middleware/auth-middleware';
+import {
+  isLoopbackRemoteAddress,
+  loginRateLimiter,
+  triesLeft,
+} from '../middleware/auth-middleware';
 import { getDashboardAuthConfig } from '../../config/config-loader-facade';
+import { isDirectLoopbackRequest, isSecureTransport } from '../middleware/secure-transport';
+import { forgetSession } from '../services/dashboard-auth-state';
 import { createApiRouter } from './api-router';
-
-/** Login field bounds; bcrypt reads only the first 72 bytes of a password. */
-const MAX_USERNAME_LENGTH = 256;
-const MAX_PASSWORD_LENGTH = 1024;
-
-/**
- * Timing-safe string comparison to prevent timing attacks.
- * Returns true if strings match, false otherwise.
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  // Compare UTF-8 bytes: strings of equal length can differ in byte length,
-  // and crypto.timingSafeEqual throws on buffers of different lengths.
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  if (left.length !== right.length) {
-    // Still compare to avoid length-based timing leak
-    crypto.timingSafeEqual(left, left);
-    return false;
-  }
-  return crypto.timingSafeEqual(left, right);
-}
-
-function isLoginField(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= maxLength;
-}
+import {
+  audit,
+  BCRYPT_HASH_PATTERN,
+  credentialSource,
+  isLoginField,
+  MAX_PASSWORD_LENGTH,
+  MAX_USERNAME_LENGTH,
+  noStore,
+  passwordMatches,
+  secureOrigin,
+  startSignedInSession,
+  timingSafeStringEqual,
+} from './auth-route-helpers';
+import { registerAuthSessionRoutes } from './auth-session-routes';
+import { registerAuthDeviceRoutes } from './auth-device-routes';
 
 const router = createApiRouter();
+router.use(noStore);
 
 export type DashboardAccessMode = 'open' | 'login' | 'setup';
 
@@ -85,10 +82,15 @@ export function resolveDashboardAccessState(
   };
 }
 
+/** Section 4: a first run from anywhere but loopback needs the one-time setup code. */
+function setupCodeRequired(req: Request, configured: boolean): boolean {
+  return !configured && !isDirectLoopbackRequest(req);
+}
+
 /**
  * POST /api/auth/login
  * Authenticate user with username/password.
- * Rate limited: 5 attempts per 15 minutes.
+ * Rate limited: 5 failed attempts per 15 minutes per IP.
  */
 router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   const body: unknown = req.body;
@@ -113,8 +115,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   }
 
   // Validate bcrypt hash format to prevent bcrypt.compare errors
-  const isBcryptHash = /^\$2[aby]?\$\d{2}\$.{53}$/.test(authConfig.password_hash);
-  if (!isBcryptHash) {
+  if (!BCRYPT_HASH_PATTERN.test(authConfig.password_hash)) {
     res.status(500).json({ error: 'Invalid password hash format in config' });
     return;
   }
@@ -122,30 +123,35 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   // Verify credentials (timing-safe comparison for username). A comparison
   // that fails is a failed login, never an error that leaves the request.
   let usernameMatch = false;
-  let passwordMatch = false;
   try {
-    usernameMatch = timingSafeEqual(username, authConfig.username);
-    passwordMatch = await bcrypt.compare(password, authConfig.password_hash);
+    usernameMatch = timingSafeStringEqual(username, authConfig.username);
   } catch {
     usernameMatch = false;
-    passwordMatch = false;
   }
+  const passwordMatch = await passwordMatches(password, authConfig.password_hash);
 
   if (!usernameMatch || !passwordMatch) {
-    res.status(401).json({ error: 'Invalid credentials' });
+    // The submitted username is never logged: people type passwords into it.
+    audit('auth.login.failed', 'Dashboard sign-in failed', {
+      remoteAddress: req.socket.remoteAddress ?? null,
+      reason: 'invalid_credentials',
+    });
+    res.status(401).json({
+      error: 'Invalid credentials',
+      code: 'invalid_credentials',
+      triesLeft: triesLeft(req),
+    });
     return;
   }
 
-  // Regenerate session to prevent session fixation, then set auth
-  req.session.regenerate((err) => {
-    if (err) {
-      res.status(500).json({ error: 'Session error' });
-      return;
-    }
-    req.session.authenticated = true;
-    req.session.username = username;
-    res.json({ success: true, username });
-  });
+  // Regenerate session to prevent session fixation, then sign in within the current epoch.
+  try {
+    await startSignedInSession(req, username);
+  } catch {
+    res.status(500).json({ error: 'Session error' });
+    return;
+  }
+  res.json({ success: true, username });
 });
 
 /**
@@ -153,6 +159,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
  * Clear session and log out user.
  */
 router.post('/logout', (req: Request, res: Response) => {
+  forgetSession(req.sessionID);
   req.session.destroy((err) => {
     if (err) {
       res.status(500).json({ error: 'Failed to logout' });
@@ -175,6 +182,11 @@ router.get('/check', (req: Request, res: Response) => {
     ...accessState,
     authenticated: req.session?.authenticated ?? false,
     username: req.session?.username ?? null,
+    // CONTRACT-auth-devices sections 2a, 4 and 10 (additive fields).
+    signedOutReason: req.session?.revoked === true ? 'revoked' : null,
+    setupCodeRequired: setupCodeRequired(req, accessState.authConfigured),
+    secureTransport: isSecureTransport(req),
+    secureOrigin: secureOrigin(),
   });
 });
 
@@ -182,14 +194,23 @@ router.get('/check', (req: Request, res: Response) => {
  * GET /api/auth/setup
  * Check if authentication is properly configured.
  */
-router.get('/setup', (_req: Request, res: Response) => {
+router.get('/setup', (req: Request, res: Response) => {
   const authConfig = getDashboardAuthConfig();
+  const configured = !!(authConfig.username && authConfig.password_hash);
 
   res.json({
     enabled: authConfig.enabled,
-    configured: !!(authConfig.username && authConfig.password_hash),
+    configured,
     sessionTimeoutHours: authConfig.session_timeout_hours ?? 24,
+    // CONTRACT-auth-devices sections 2a and 4 (additive); the code itself is never returned.
+    setupCodeRequired: setupCodeRequired(req, configured),
+    managedBy: credentialSource(),
+    secureTransport: isSecureTransport(req),
+    secureOrigin: secureOrigin(),
   });
 });
+
+registerAuthSessionRoutes(router);
+registerAuthDeviceRoutes(router);
 
 export default router;

@@ -403,7 +403,12 @@ describe('F2: malformed login requests stay inside the request', () => {
     // Same number of UTF-16 code units as the real username, more UTF-8 bytes.
     const response = await login({ username: 'é'.repeat(USERNAME.length), password: PASSWORD });
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'Invalid credentials' });
+    // CONTRACT-auth-devices section 10: a stable code and the tries left (additive).
+    expect(await response.json()).toEqual({
+      error: 'Invalid credentials',
+      code: 'invalid_credentials',
+      triesLeft: 4,
+    });
     await expectServerUp();
   });
 
@@ -414,7 +419,11 @@ describe('F2: malformed login requests stay inside the request', () => {
     expect(compare).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(401);
     const text = await response.text();
-    expect(JSON.parse(text)).toEqual({ error: 'Invalid credentials' });
+    expect(JSON.parse(text)).toEqual({
+      error: 'Invalid credentials',
+      code: 'invalid_credentials',
+      triesLeft: 4,
+    });
     expect(text).not.toContain('PRIVATE_BCRYPT_FAILURE');
     await expectServerUp();
   });

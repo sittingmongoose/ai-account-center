@@ -56,6 +56,19 @@ on a plain transport) and polled. Once the login is being installed, a cancel or
 timeout no longer ends the job at once: the install checks the stop under the
 activation lock and the job ends cancelled only if nothing was saved.
 
+Dashboard sign-in ([auth routes](../../src/web-server/routes/auth-routes.ts)) keeps
+the username and password login for browsers and today's trays, and adds a password
+change, a first-run setup (free on loopback, a one-time code printed by the server for
+the LAN) and "sign out other browsers" through a session epoch in `~/.ccs/auth/state.json`.
+Trays pair once with the password and then use a revocable
+[device token](../../src/web-server/services/dashboard-device-store.ts) as
+`Authorization: Bearer`; only its SHA-256 is stored, it reaches only the tray routes
+([allowlist](../../src/web-server/middleware/api-request-guard.ts)), rotates every 30 days
+and expires after 90 days unused. Password, setup, pairing and rotation need a secure
+transport; `dashboard_tls` in config.yaml (a trusted local TLS proxy, an in-process HTTPS
+listener and the public origin) is off by default. Credentials set by environment
+variables are read-only.
+
 A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
 is tracked as an operation, and the profile list reports its progress as
 `openOperation` (counts and fixed sentences only). A request that sends

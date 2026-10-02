@@ -21,6 +21,8 @@ export interface DashboardEventClient {
   secure: boolean;
   /** authKind() of the socket's upgrade request; null when unknown or signed out. */
   authKind: RequestAuthKind;
+  /** The session epoch of a browser session's socket (CONTRACT-auth-devices section 3). */
+  sessionEpoch?: number | null;
 }
 
 const UNKNOWN_CLIENT: DashboardEventClient = Object.freeze({ secure: false, authKind: null });
@@ -35,6 +37,8 @@ export interface DashboardEventServerOptions {
   isSecure?: (request: IncomingMessage) => boolean;
   /** Who opened each connection; without it every client counts as unknown (null). */
   authKind?: (request: IncomingMessage) => RequestAuthKind;
+  /** The session epoch of each browser connection, so "sign out other browsers" can close it. */
+  sessionEpoch?: (request: IncomingMessage) => number | null;
 }
 
 /** Register a server's clients; returns the detach function for shutdown. */
@@ -57,7 +61,14 @@ export function attachDashboardEventServer(
     } catch {
       kind = null;
     }
-    clients.set(socket, { secure, authKind: kind });
+    let sessionEpoch: number | null = null;
+    try {
+      const value = options.sessionEpoch?.(request);
+      sessionEpoch = typeof value === 'number' ? value : null;
+    } catch {
+      sessionEpoch = null;
+    }
+    clients.set(socket, { secure, authKind: kind, sessionEpoch });
   };
   wss.on('connection', onConnection);
   return () => {
@@ -92,4 +103,32 @@ export function broadcastDashboardEvent(source: EventSource): number {
     }
   }
   return sent;
+}
+
+/**
+ * Close the browser-session sockets whose epoch is no longer current (after
+ * "sign out other browsers" or a password change). Returns how many closed.
+ */
+export function closeStaleSessionClients(isCurrent: (epoch: number | null) => boolean): number {
+  let closed = 0;
+  for (const wss of servers) {
+    for (const client of wss.clients) {
+      const info = clients.get(client);
+      if (!info || info.authKind !== 'session') continue;
+      let current = true;
+      try {
+        current = isCurrent(info.sessionEpoch ?? null);
+      } catch {
+        current = false;
+      }
+      if (current) continue;
+      try {
+        client.close(4001, 'Signed out');
+        closed += 1;
+      } catch {
+        // Already closing.
+      }
+    }
+  }
+  return closed;
 }

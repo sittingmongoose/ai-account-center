@@ -4,6 +4,15 @@ import { createLogger, withRequestContext } from '../../services/logging';
 
 const logger = createLogger('web-server:http');
 
+/**
+ * A device token sent in a URL is refused (400 `token_in_query`), but the URL
+ * is still logged; its token never is, whatever the redaction setting
+ * (CONTRACT-auth-devices section 6).
+ */
+export function scrubLoggedUrl(url: string): string {
+  return url.replace(/aacd_[A-Za-z0-9_%-]{8,}/g, 'aacd_[redacted]');
+}
+
 export function requestLoggingMiddleware(req: Request, res: Response, next: NextFunction): void {
   const requestId = randomUUID();
   const startTime = Date.now();
@@ -19,7 +28,7 @@ export function requestLoggingMiddleware(req: Request, res: Response, next: Next
       logger.info('request.completed', 'Dashboard request completed', {
         requestId,
         method: req.method,
-        path: req.originalUrl,
+        path: scrubLoggedUrl(req.originalUrl),
         statusCode: res.statusCode,
         durationMs: Date.now() - startTime,
         remoteAddress: req.socket.remoteAddress || null,

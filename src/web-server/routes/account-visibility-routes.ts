@@ -1,5 +1,6 @@
 import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
+import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { createLogger } from '../../services/logging';
 import { getCcsDir } from '../../utils/config-manager';
@@ -50,7 +51,7 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
 
   router.use('/visibility', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
-    if (req.session?.authenticated !== true) {
+    if (authKind(req) !== 'session') {
       fail(res, 401, 'auth_required', 'Authentication required');
       return;
     }

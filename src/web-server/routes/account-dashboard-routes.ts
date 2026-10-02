@@ -1,5 +1,6 @@
 import type { Router } from 'express';
 import { createApiRouter } from './api-router';
+import { authKind } from '../middleware/request-auth';
 import {
   getAccountDashboard,
   type AccountDashboardRequestContext,
@@ -21,7 +22,7 @@ export interface AccountDashboardRouterDeps {
 export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = {}): Router {
   const router = createApiRouter();
   router.get('/dashboard', async (req, res): Promise<void> => {
-    if (req.session?.authenticated !== true) {
+    if (authKind(req) === null) {
       res.status(401).json({ error: 'Authentication required' });
       return;
     }
