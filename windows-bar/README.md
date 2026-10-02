@@ -42,6 +42,19 @@ when the dashboard reports them; until then Settings says the server does not re
 Claude profile ids and Antigravity profile ids come from the data and are accepted only when they are URI and path
 safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
 
+Claude "Open on Mac" and "Open on Windows" both POST `/api/claude/desktop-profiles/:id/open` with
+`Prefer: respond-async`. The tray never starts a `ccs-claude://` URI itself, so a guarded history copy cannot be
+bypassed; when the dashboard cannot be reached the Open says "Can't reach the dashboard. Try again." and launches
+nothing. A 200 is today's finished Open. A 202 turns into a read-poll of `GET /api/claude/desktop-profiles` once a
+second (every five seconds after two minutes, giving up after three), and the account row's secondary line shows the
+reported `openOperation` in its own style: "Copying history 3 of 18", then "Opening", then "Opened". `failed` and
+`blocked_uncertain` show the server's fixed sentence, or "History copy could not be confirmed. Claude was not
+opened.", which is also what a 409 `history_unconfirmed` says; three minutes without a terminal state says "Still
+working on the dashboard. Check again shortly." Those sentences go to the footer status, which is where every other
+error already shows. Both platform buttons rest for the whole Open, so a second one never starts for the same account,
+and the POST is never repeated: not for a poll, not after an expired session, and never resumed after a restart. A read
+that fails while polling never ends the Open; the poll just tries again.
+
 ## Look and motion
 
 - **Type:** Instrument Sans, embedded as static WPF font resources (Regular, Medium, SemiBold, Bold and SemiCondensed
@@ -151,7 +164,9 @@ the dashboard's pairing routes; until then a dashboard password change needs a n
   anywhere.
 - `--render-proof <png>`: renders the live panel against the configured dashboard without a second tray instance.
 
-No test activates a real Codex, Antigravity or Claude account.
+No test activates a real Codex, Antigravity or Claude account. The Claude Open checks run the tray's own flow against a
+loopback fixture dashboard with the connection in an isolated temporary store, and prove that no shell launch happens
+when the dashboard cannot be reached.
 
 ## Branding compatibility
 

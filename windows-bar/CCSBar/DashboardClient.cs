@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -74,10 +75,35 @@ public sealed class DashboardClient : IDisposable
         return Request<JsonElement>(HttpMethod.Post, path, body, profileId, retryAuthentication: confirmationToken is null, requestKind: DashboardRequestKind.AntigravityActivation);
     }
 
-    public Task<JsonElement> OpenClaudeOnMac(string profile)
+    /// <summary>Claude "Open on Mac" and "Open on Windows". `Prefer: respond-async` opts into the 202 progress answer;
+    /// without it the server waits and answers 200. One Open is one POST: the only re-send is the session handshake
+    /// after a 401, which the launcher never saw.</summary>
+    public async Task<ClaudeOpenStart> OpenClaude(string profile, string platform)
     {
-        if (!Formatting.IsSafeClaudeProfile(profile)) throw new ArgumentException("Choose a configured Claude account.");
-        return Request<JsonElement>(HttpMethod.Post, "api/claude/desktop-profiles/" + Uri.EscapeDataString(profile) + "/open", new { platform = "mac" }, requestKind: DashboardRequestKind.ClaudeOpen);
+        if (!Formatting.IsSafeClaudeProfile(profile) || platform is not ("mac" or "windows"))
+            throw new ArgumentException("Choose a configured Claude account.");
+        var path = "api/claude/desktop-profiles/" + Uri.EscapeDataString(profile) + "/open";
+        object body = new { platform };
+        var response = await Send(HttpMethod.Post, path, body, prefer: RespondAsync);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            response.Dispose();
+            await Login();
+            response = await Send(HttpMethod.Post, path, body, prefer: RespondAsync);
+        }
+        using (response)
+        {
+            var reply = await Decode<ClaudeOpenReply>(response, requestKind: DashboardRequestKind.ClaudeOpen);
+            return new ClaudeOpenStart(response.StatusCode == HttpStatusCode.Accepted, reply.OperationId ?? "");
+        }
+    }
+
+    /// <summary>The Claude desktop profile list, read while an Open runs for its openOperation progress. It is on the
+    /// tray's device-token allowlist and carries no UUIDs, titles, transcript text, ssh details or paths.</summary>
+    public async Task<IReadOnlyList<ClaudeDesktopProfile>> ClaudeDesktopProfiles()
+    {
+        var list = await Request<ClaudeDesktopProfileList>(HttpMethod.Get, "api/claude/desktop-profiles");
+        return list.Profiles;
     }
 
     private async Task<T> Request<T>(HttpMethod method, string path, object? body = null, string? confirmationProfile = null, bool retryAuthentication = true, DashboardRequestKind requestKind = DashboardRequestKind.General)
@@ -139,10 +165,14 @@ public sealed class DashboardClient : IDisposable
         catch (JsonException) { return false; }
     }
 
-    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body, CancellationToken cancel = default)
+    /// <summary>The RFC 7240 preference that asks the Open route for its 202 progress answer.</summary>
+    private const string RespondAsync = "respond-async";
+
+    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body, CancellationToken cancel = default, string? prefer = null)
     {
         var request = new HttpRequestMessage(method, path);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body, Formatting.Json), Encoding.UTF8, "application/json");
+        if (prefer is not null) request.Headers.TryAddWithoutValidation("Prefer", prefer);
         return SendAndDispose(request, cancel);
     }
 
@@ -216,7 +246,7 @@ public sealed class DashboardClient : IDisposable
         if (!response.IsSuccessStatusCode)
         {
             string? publicCode = null, publicReason = null;
-            if (requestKind == DashboardRequestKind.CodexActivation)
+            if (requestKind is DashboardRequestKind.CodexActivation or DashboardRequestKind.ClaudeOpen)
             {
                 try
                 {
@@ -286,6 +316,8 @@ public sealed class DashboardClient : IDisposable
         }
         if (kind == DashboardRequestKind.ClaudeOpen)
         {
+            // The guarded history copy could not be confirmed, so Claude was not opened (CONTRACT-serving-misc 4.4).
+            if (status == HttpStatusCode.Conflict && code == "history_unconfirmed") return ClaudeOpenFlow.HistoryUnconfirmed;
             if (status is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable) return "Claude could not be opened on the selected computer. Check its profile setup and connection.";
             if (status == HttpStatusCode.NotFound) return "The selected Claude profile is not available on that computer.";
         }

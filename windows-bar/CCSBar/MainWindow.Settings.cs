@@ -192,7 +192,7 @@ public partial class MainWindow
         notices.Click += (_, _) =>
         {
             var file = Path.Combine(AppContext.BaseDirectory, "Resources", "Providers", "THIRD-PARTY-NOTICES.txt");
-            if (File.Exists(file)) Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            if (File.Exists(file)) Launch(new ProcessStartInfo(file) { UseShellExecute = true });
         };
         aboutButtons.Children.Add(notices);
         var quit = Ui.Button("Quit", "GhostButton", Icons.Icon("power", 14, Theme.Brush("Ink3")));
@@ -368,6 +368,8 @@ public partial class MainWindow
             connection = candidate; client = verified; verified = null;
             connectionGeneration++;
             dashboard = null; staleSample = false; lastFailure = DateTimeOffset.MinValue; statusFlash = null;
+            // The replaced connection's Open stops reading it and its row rests; it is never resumed.
+            openProgress.Clear();
             previous?.Dispose();
             return null;
         }
