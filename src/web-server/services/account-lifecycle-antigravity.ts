@@ -17,15 +17,11 @@ import { antigravityTerminal, invalid, keys } from './account-lifecycle-helpers'
  * (`ai-account-center antigravity signin <profile>`, src/antigravity/
  * terminal-signin.ts), so both routes check their refusals and then answer
  * 409 `preflight_failed` with `fallback: {kind: 'terminal', host: 'ubuntu',
- * command}`. Remove lives with the other removals (account-lifecycle-removal.ts).
+ * command}`. Nothing secret crosses HTTP, so neither needs a secure
+ * transport. Remove lives with the other removals (account-lifecycle-removal.ts).
  */
-/**
- * Antigravity Add: the sign-in runs in the user's terminal on Ubuntu, so a
- * valid, free profile name answers 409 `preflight_failed` with the terminal
- * command as `fallback`. Nothing secret crosses HTTP, so this needs no secure
- * transport; refusals (`id_in_use`, `too_many_accounts`, `tool_missing`) come
- * first.
- */
+
+/** Add: refusals (`id_in_use`, `too_many_accounts`, `tool_missing`) come first. */
 export async function addAntigravity(
   env: LifecycleEnv,
   agy: AntigravityAccountLifecycle,
