@@ -1,14 +1,20 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
+import fs from 'fs';
 import path from 'path';
+import { PROVIDER_CREDENTIAL_KINDS } from '../../../src/web-server/services/account-registry-v2';
 import {
   ADDITIONAL_PROVIDERS,
   AdditionalUsageTransportError,
+  COLLECTED_CREDENTIAL_KINDS,
   collectorAccountArguments,
   isAdditionalProvider,
+  isCollectableSource,
   isSafeUsageSshAlias,
+  remoteCommand,
   runAdditionalUsageSource,
   type AdditionalUsageSource,
+  type CollectorCredential,
 } from '../../../src/web-server/services/additional-usage-transport';
 
 const localPlatform =
@@ -397,5 +403,112 @@ describe('registry v2 collector arguments', () => {
 
   it('builds no account arguments for version 1 sources', () => {
     expect(collectorAccountArguments({ provider: 'zai', platform: 'ubuntu' })).toEqual([]);
+  });
+});
+
+describe('remote command quoting', () => {
+  const macKey = (account: Record<string, unknown>): AdditionalUsageSource =>
+    ({
+      provider: 'zai',
+      platform: 'mac',
+      sshHost: 'jared-mac',
+      account: {
+        id: 'zai:acct:9f2c41d0',
+        label: null,
+        credential: { kind: 'aac-key', keyId: '9f2c41d0' },
+        ...account,
+      },
+    }) as AdditionalUsageSource;
+
+  it('keeps the version 1 commands byte for byte', () => {
+    expect(remoteCommand({ provider: 'zai', platform: 'mac', sshHost: 'jared-mac' })).toBe(
+      `/usr/bin/python3 "$HOME/.ccs/account-usage/plan_usage.py" --provider 'zai' --platform 'mac'`
+    );
+    const windows = remoteCommand({ provider: 'qwen', platform: 'windows', sshHost: 'w' });
+    expect(Buffer.from(windows.split(' ').at(-1)!, 'base64').toString('utf16le')).toContain(
+      "& python.exe $helper --provider 'qwen' --platform 'windows'; exit $LASTEXITCODE"
+    );
+  });
+
+  // A caller that skips isValidSourceAccount still cannot reach a shell with these values.
+  it.each([
+    ['a quote in the account id', { id: "zai:acct:9f2c41d0' ; touch /tmp/PRIVATE ; '" }],
+    ['a space in the account id', { id: 'zai:acct:9f2c41d0 x' }],
+    ['a PowerShell subexpression', { id: 'zai:acct:$(whoami)' }],
+    ['an upper-case key id', { credential: { kind: 'aac-key', keyId: '9F2C41D0' } }],
+    ['a key id with a quote', { credential: { kind: 'aac-key', keyId: "9f2c41d0'" } }],
+    ['a capsule id with a newline', { credential: { kind: 'browser-capsule', capsuleId: 'a\nb' } }],
+  ])('throws for %s, on Mac and Windows', (_name, account) => {
+    for (const platform of ['mac', 'windows'] as const) {
+      const source = { ...macKey(account), platform };
+      expect(() => remoteCommand(source)).toThrow(AdditionalUsageTransportError);
+    }
+  });
+
+  it('throws for a provider or platform value outside the pattern', () => {
+    for (const source of [
+      { provider: "zai'; id; '", platform: 'mac', sshHost: 'jared-mac' },
+      { provider: 'zai', platform: 'mac os', sshHost: 'jared-mac' },
+    ]) {
+      expect(() => remoteCommand(source as unknown as AdditionalUsageSource)).toThrow(
+        AdditionalUsageTransportError
+      );
+    }
+  });
+});
+
+describe('the shared helper credential fixture', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(
+      path.resolve(__dirname, '../../fixtures/account-usage/collected-credential-kinds.json'),
+      'utf8'
+    )
+  ) as {
+    kinds: CollectorCredential['kind'][];
+    helpers: Record<string, Record<string, CollectorCredential['kind'][]>>;
+  };
+  const credentialFor = (kind: CollectorCredential['kind']): CollectorCredential =>
+    ({
+      discover: { kind: 'discover' },
+      'aac-key': { kind: 'aac-key', keyId: '9f2c41d0' },
+      'browser-capsule': { kind: 'browser-capsule', capsuleId: 'default' },
+      'config-home': { kind: 'config-home', homeId: '9f2c41d0' },
+      'antigravity-profile': { kind: 'antigravity-profile', profileId: 'party' },
+    })[kind] as CollectorCredential;
+
+  it('matches the server table and the helper each provider runs', () => {
+    const flattened = Object.assign({}, ...Object.values(fixture.helpers));
+    expect(flattened).toEqual({ ...COLLECTED_CREDENTIAL_KINDS });
+    for (const [helper, providers] of Object.entries(fixture.helpers)) {
+      for (const provider of Object.keys(providers)) {
+        const command = remoteCommand({
+          provider: provider as AdditionalUsageSource['provider'],
+          platform: 'mac',
+          sshHost: 'jared-mac',
+        });
+        expect({ provider, command }).toEqual({
+          provider,
+          command: expect.stringContaining(`/account-usage/${helper}"`),
+        });
+      }
+    }
+  });
+
+  it.each(ADDITIONAL_PROVIDERS)('collects exactly the fixture kinds for %s', (provider) => {
+    const collected = fixture.kinds.filter((kind) =>
+      isCollectableSource({
+        provider,
+        platform: 'ubuntu',
+        account: {
+          id: kind === 'discover' ? `${provider}:usage` : `${provider}:acct:9f2c41d0`,
+          label: null,
+          credential: credentialFor(kind),
+        },
+      })
+    );
+    const expected = Object.values(fixture.helpers).find((table) => provider in table)?.[provider];
+    expect(collected).toEqual(expected ?? []);
+    // Every collected kind is one the registry accepts for that provider.
+    for (const kind of collected) expect(PROVIDER_CREDENTIAL_KINDS[provider]).toContain(kind);
   });
 });

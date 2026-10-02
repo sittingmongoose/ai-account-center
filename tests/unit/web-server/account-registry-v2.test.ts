@@ -134,10 +134,85 @@ describe('account registry v2 schema', () => {
     ['a blank label', withAccount({ label: '   ' })],
     ['a control character label', withAccount({ label: 'Work\u0007' })],
     ['a bidi override label', withAccount({ label: 'Work\u202e' })],
+    ['a zero-width space label', withAccount({ label: '\u200b' })],
+    ['a zero-width space in a label', withAccount({ label: 'Wo\u200brk' })],
+    ['a left-to-right mark in a label', withAccount({ label: 'Work\u200e' })],
+    ['an Arabic letter mark in a label', withAccount({ label: 'Work\u061c' })],
+    ['a word joiner in a label', withAccount({ label: 'Work\u2060' })],
+    ['an invisible plus in a label', withAccount({ label: 'Work\u2064' })],
+    ['a byte order mark label', withAccount({ label: '\ufeff' })],
+    ['a lone surrogate in a label', withAccount({ label: 'Work\ud800' })],
+    ['a label of spaces and format characters', withAccount({ label: ' \u200b\u2060 ' })],
+    ['discover created by the dashboard', withAccount({ createdBy: 'dashboard' }, 0)],
     ['a bad timestamp', withAccount({ createdAt: 'yesterday' })],
     ['an unknown creator', withAccount({ createdBy: 'cli' })],
   ])('rejects the whole file for %s', (_name, value) => {
     expect(parseAccountRegistry(value)).toBeNull();
+  });
+
+  it('accepts ordinary labels in any script, and discover from migration or no creator', () => {
+    for (const label of ['Work 2', 'Café', '仕事', 'Работа', 'x'.repeat(48)]) {
+      expect({ label, ok: parseAccountRegistry(withAccount({ label })) !== null }).toEqual({
+        label,
+        ok: true,
+      });
+    }
+    expect(parseAccountRegistry(withAccount({ createdBy: null }, 0))).not.toBeNull();
+    expect(parseAccountRegistry(withAccount({ createdBy: undefined }, 0))).not.toBeNull();
+  });
+
+  it("treats Qwen's discover row as holding the default console capsule", () => {
+    const qwen = (id: string, credential: Record<string, unknown>) => ({
+      id,
+      provider: 'qwen',
+      platform: 'windows',
+      sshHost: 'jared-windows',
+      credential,
+    });
+    const discover = qwen('qwen:usage', { kind: 'discover' });
+    // Both would read qwen-console-session.json, so the account would show twice.
+    expect(
+      parseAccountRegistry({
+        version: 2,
+        accounts: [
+          discover,
+          qwen('qwen:acct:0a1b2c3d', { kind: 'browser-capsule', capsuleId: 'default' }),
+        ],
+      })
+    ).toBeNull();
+    expect(
+      parseAccountRegistry({
+        version: 2,
+        accounts: [
+          qwen('qwen:acct:0a1b2c3d', { kind: 'browser-capsule', capsuleId: 'default' }),
+          discover,
+        ],
+      })
+    ).toBeNull();
+    expect(
+      parseAccountRegistry({
+        version: 2,
+        accounts: [
+          discover,
+          qwen('qwen:acct:0a1b2c3d', { kind: 'browser-capsule', capsuleId: '0a1b2c3d' }),
+        ],
+      })?.accounts
+    ).toHaveLength(2);
+    // Other providers' discover rows hold no store reference.
+    expect(
+      parseAccountRegistry({
+        version: 2,
+        accounts: [
+          {
+            id: 'zai:usage',
+            provider: 'zai',
+            platform: 'ubuntu',
+            credential: { kind: 'discover' },
+          },
+          keyAccount('zai', '0a1b2c3d'),
+        ],
+      })?.accounts
+    ).toHaveLength(2);
   });
 
   it('rejects a second account on the same key, and more than 16 per provider or 64 in all', () => {
@@ -280,6 +355,19 @@ describe('account registry v2 file', () => {
         read.registry.accounts.filter((entry) => entry.provider === 'zai').map((entry) => entry.id)
     ).toEqual(['zai:usage', 'zai:acct:00000001', 'zai:acct:00000002', 'zai:acct:00000003']);
     expect(fs.readdirSync(dir)).toEqual([ACCOUNT_REGISTRY_FILE]);
+  });
+
+  it('refuses a lifecycle write that would add a dashboard discover row', async () => {
+    const dir = ccsDir();
+    await expect(
+      updateAccountRegistry(dir, (registry) => ({
+        version: 2,
+        accounts: registry.accounts.map((entry) =>
+          entry.id === 'zai:usage' ? { ...entry, createdBy: 'dashboard' } : entry
+        ),
+      }))
+    ).rejects.toThrow('The account list change is not valid.');
+    expect(fs.existsSync(path.join(dir, ACCOUNT_REGISTRY_FILE))).toBe(false);
   });
 
   it('refuses to replace an invalid registry or migrate an invalid version 1 manifest', async () => {

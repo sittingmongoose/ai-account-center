@@ -379,7 +379,29 @@ def key_fingerprint(secret):
     return "sha256:" + hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
 
 
-def aac_key_credential(provider, key_id, home=None):
+def _key_record_text(directory, provider, key_id, windows=None):
+    """The key record's JSON text, in the one format the key store writes.
+
+    Ubuntu and Mac: `<provider>-<keyId>.json`, the UTF-8 JSON record itself.
+    Windows: `<provider>-<keyId>.dpapi`, the raw binary output of
+    CryptProtectData (CurrentUser scope, entropy `AAC/account-key/v1`) over the
+    UTF-8 bytes of that same JSON record. It is not base64 and not wrapped in
+    JSON (unlike the Qwen capsule's `cookiesDPAPI`). The Windows folder has no
+    POSIX mode to check; DPAPI CurrentUser already limits decryption to the
+    same Windows user, and the file is still refused when it is a link.
+    """
+    windows = os.name == "nt" if windows is None else windows
+    if windows:
+        raw = _private_file_bytes(directory / "{}-{}.dpapi".format(provider, key_id), MAX_KEY_FILE_BYTES * 4)
+        return _windows_unprotect(raw, KEY_ENTROPY) if raw else None
+    raw = _private_file_bytes(directory / "{}-{}.json".format(provider, key_id), MAX_KEY_FILE_BYTES)
+    try:
+        return raw.decode("utf-8") if raw else None
+    except UnicodeError:
+        return None
+
+
+def aac_key_credential(provider, key_id, home=None, windows=None):
     """The dashboard-owned key of one account, and nothing else (no OMP, OpenCode or env fallback)."""
     if provider not in KEY_PROVIDERS or not isinstance(key_id, str) or not KEY_ID.match(key_id):
         return None
@@ -391,15 +413,7 @@ def aac_key_credential(provider, key_id, home=None):
         return None
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or (os.name != "nt" and info.st_mode & 0o077):
         return None
-    if os.name == "nt":
-        raw = _private_file_bytes(directory / "{}-{}.dpapi".format(provider, key_id), MAX_KEY_FILE_BYTES * 4)
-        text = _windows_unprotect(raw, KEY_ENTROPY) if raw else None
-    else:
-        raw = _private_file_bytes(directory / "{}-{}.json".format(provider, key_id), MAX_KEY_FILE_BYTES)
-        try:
-            text = raw.decode("utf-8") if raw else None
-        except UnicodeError:
-            text = None
+    text = _key_record_text(directory, provider, key_id, windows)
     try:
         record = json.loads(text) if isinstance(text, str) and len(text) <= MAX_KEY_FILE_BYTES else None
     except ValueError:

@@ -9,9 +9,11 @@ import {
   type AccountDashboardDeps,
 } from '../../../src/web-server/services/account-dashboard-service';
 import type {
+  AccountDashboard,
   DashboardAccount,
   DashboardProvider,
 } from '../../../src/web-server/services/account-dashboard-types';
+import type { AccountVisibilityRead } from '../../../src/web-server/services/account-visibility';
 import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
 import type { AdditionalAccountsSnapshot } from '../../../src/web-server/services/additional-account-service';
 
@@ -354,6 +356,90 @@ describe('visibility in the dashboard DTO', () => {
     ).get('mac');
     expect(thrown.settings?.visibilityAvailable).toBe(false);
     expect(JSON.stringify(thrown)).not.toContain('PRIVATE_PATH');
+  });
+});
+
+describe('an unreadable visibility file after a good read', () => {
+  it('keeps the last good lists, says they could not be read, and never unhides rows', async () => {
+    const reads: Array<() => Promise<AccountVisibilityRead>> = [
+      async () => ({
+        state: 'ok',
+        visibility: { hiddenProviders: ['zai'], hiddenAccountIds: ['codex:gmail'] },
+      }),
+      async () => ({ state: 'unavailable' }),
+      async () => {
+        throw new TypeError('PRIVATE_PATH');
+      },
+      async () => ({
+        state: 'ok',
+        visibility: { hiddenProviders: [], hiddenAccountIds: [] },
+      }),
+    ];
+    let index = 0;
+    const service = new AccountDashboardService(
+      deps({ readVisibility: () => reads[Math.min(index++, reads.length - 1)]() })
+    );
+    const hiddenIds = (dashboard: AccountDashboard) =>
+      dashboard.accounts.filter((account) => account.hidden).map((account) => account.id);
+    const good = await service.get('mac');
+    expect(good.settings).toMatchObject({
+      hiddenProviders: ['zai'],
+      hiddenAccountIds: ['codex:gmail'],
+      visibilityAvailable: true,
+    });
+    const expected = ['codex:gmail', 'zai:usage', 'zai:acct:9f2c41d0'];
+    expect(hiddenIds(good)).toEqual(expected);
+    for (const label of ['unavailable', 'thrown']) {
+      const bad = await service.get('mac');
+      expect({ label, settings: bad.settings }).toMatchObject({
+        label,
+        settings: {
+          hiddenProviders: ['zai'],
+          hiddenAccountIds: ['codex:gmail'],
+          visibilityAvailable: false,
+        },
+      });
+      expect(hiddenIds(bad)).toEqual(expected);
+      expect(bad.providers?.find((entry) => entry.id === 'zai')?.visible).toBe(false);
+      expect(JSON.stringify(bad)).not.toContain('PRIVATE_PATH');
+    }
+    // A later good read (here: everything shown again on purpose) replaces the memory.
+    const repaired = await service.get('mac');
+    expect(repaired.settings).toMatchObject({ hiddenProviders: [], visibilityAvailable: true });
+    expect(hiddenIds(repaired)).toEqual([]);
+  });
+
+  it('keeps each scope separate', async () => {
+    let scope = '/tmp/aac-scope-a';
+    let failing = false;
+    const service = new AccountDashboardService(
+      deps({
+        scope: () => scope,
+        readVisibility: async (current) =>
+          failing
+            ? { state: 'unavailable' }
+            : {
+                state: 'ok',
+                visibility: {
+                  hiddenProviders: current === '/tmp/aac-scope-a' ? ['zai'] : [],
+                  hiddenAccountIds: [],
+                },
+              },
+      })
+    );
+    await service.get('mac');
+    failing = true;
+    scope = '/tmp/aac-scope-b';
+    // Scope b never had a good read: nothing hidden, and unavailable.
+    expect((await service.get('mac')).settings).toMatchObject({
+      hiddenProviders: [],
+      visibilityAvailable: false,
+    });
+    scope = '/tmp/aac-scope-a';
+    expect((await service.get('mac')).settings).toMatchObject({
+      hiddenProviders: ['zai'],
+      visibilityAvailable: false,
+    });
   });
 });
 

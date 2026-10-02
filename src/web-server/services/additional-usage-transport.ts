@@ -44,8 +44,12 @@ const MAX_STDOUT_BYTES = 64 * 1024;
 
 export class AdditionalUsageTransportError extends NetworkError {
   /**
-   * The helper rejected the account arguments (exit status 2, argparse usage
-   * error, or a missing helper file): the host still runs an older helper.
+   * The helper rejected the account arguments: exit status 2 while account
+   * arguments were sent. Exit status 2 is reserved for usage errors (argparse,
+   * the helper's own argument consistency check, or Python failing to open a
+   * missing helper file), so every one of them reads as "update the usage
+   * helper". The helpers never use 2 for a collection outcome; those print a
+   * row and exit 0, and other failures exit 1.
    */
   readonly helperOutdated: boolean;
 
@@ -107,18 +111,28 @@ export function isCollectorCredential(value: unknown): value is CollectorCredent
 }
 
 /**
- * Credential kinds the usage helpers read in this release. A `discover`
- * account keeps today's call exactly (no account arguments), so hosts with an
- * older helper keep working; `config-home` and `antigravity-profile` accounts
- * are not read by a helper yet.
+ * Credential kinds the usage helpers read in this release, per provider. A
+ * `discover` account keeps today's call exactly (no account arguments), so
+ * hosts with an older helper keep working; `config-home` and
+ * `antigravity-profile` accounts are not read by a helper yet. The shared
+ * fixture `tests/fixtures/account-usage/collected-credential-kinds.json` pins
+ * this table to the Python helpers' own argument checks.
  */
+export const COLLECTED_CREDENTIAL_KINDS: Readonly<
+  Record<AdditionalProvider, readonly CollectorCredential['kind'][]>
+> = Object.freeze({
+  antigravity: ['discover'],
+  muse: ['discover'],
+  cursor: ['discover'],
+  'kimi-code': ['discover', 'aac-key'],
+  qwen: ['discover', 'browser-capsule'],
+  zai: ['discover', 'aac-key'],
+  'opencode-go': ['discover', 'aac-key'],
+});
+
 export function isCollectableSource(source: AdditionalUsageSource): boolean {
   const kind = source.account?.credential.kind ?? 'discover';
-  return (
-    kind === 'discover' ||
-    (kind === 'aac-key' && ['kimi-code', 'zai', 'opencode-go'].includes(source.provider)) ||
-    (kind === 'browser-capsule' && source.provider === 'qwen')
-  );
+  return COLLECTED_CREDENTIAL_KINDS[source.provider]?.includes(kind) === true;
 }
 
 /** Enumerated account arguments; empty for version 1 sources and `discover` accounts. */
@@ -164,12 +178,31 @@ function helperName(provider: AdditionalProvider): string {
     : 'plan_usage.py';
 }
 
+/** Values placed inside single quotes in a POSIX shell or PowerShell command. */
+const REMOTE_VALUE = /^[a-z0-9:-]+$/;
+const REMOTE_FLAG = /^--[a-z][a-z-]*$/;
+
+/**
+ * Single-quoted, and only for values that need no escaping in either shell.
+ * This is checked here as well as by the callers' validation, so a future
+ * caller that skips `isValidSourceAccount` still cannot inject a command.
+ */
+function remoteValue(value: string): string {
+  if (!REMOTE_VALUE.test(value)) throw new AdditionalUsageTransportError();
+  return `'${value}'`;
+}
+
 /** Remote commands contain only fixed paths and enumerated arguments. */
-function remoteCommand(source: AdditionalUsageSource): string {
+export function remoteCommand(source: AdditionalUsageSource): string {
   const helper = helperName(source.provider);
-  // Every value is enumerated or matches a fixed pattern without quotes or spaces.
+  const provider = remoteValue(source.provider);
+  const platform = remoteValue(source.platform);
   const accountArguments = collectorAccountArguments(source)
-    .map((value) => (value.startsWith('--') ? ` ${value}` : ` '${value}'`))
+    .map((value) => {
+      if (!value.startsWith('--')) return ` ${remoteValue(value)}`;
+      if (!REMOTE_FLAG.test(value)) throw new AdditionalUsageTransportError();
+      return ` ${value}`;
+    })
     .join('');
   if (source.platform === 'windows') {
     const script = [
@@ -177,12 +210,12 @@ function remoteCommand(source: AdditionalUsageSource): string {
       "$env:PYTHONIOENCODING = 'utf-8'",
       "$env:PYTHONUTF8 = '1'",
       `$helper = [IO.Path]::Combine($HOME, '.ccs', 'account-usage', '${helper}')`,
-      `& python.exe $helper --provider '${source.provider}' --platform 'windows'${accountArguments}`,
+      `& python.exe $helper --provider ${provider} --platform 'windows'${accountArguments}`,
       'exit $LASTEXITCODE',
     ].join('; ');
     return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
   }
-  return `/usr/bin/python3 "$HOME/.ccs/account-usage/${helper}" --provider '${source.provider}' --platform '${source.platform}'${accountArguments}`;
+  return `/usr/bin/python3 "$HOME/.ccs/account-usage/${helper}" --provider ${provider} --platform ${platform}${accountArguments}`;
 }
 
 /** No helper paths, hosts or command fragments are taken from dashboard requests. */

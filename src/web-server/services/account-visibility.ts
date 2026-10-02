@@ -117,3 +117,61 @@ export function writeAccountVisibility(
     return saved;
   });
 }
+
+/** What the dashboard shows: the hidden lists, and whether they come from a good read. */
+export interface DashboardVisibility extends AccountVisibility {
+  available: boolean;
+}
+
+/**
+ * The dashboard's memory of the visibility file, per CCS scope. An unreadable
+ * file is never read as empty (CONTRACT-registry-lifecycle section 1, rule 6):
+ * the last good lists stay in force, marked unavailable, so one bad read
+ * (a wrong mode, a partial hand edit) never shows every hidden row again.
+ * Only a scope that has never had a good read shows nothing hidden.
+ */
+export class VisibilityMemory {
+  private readonly scopes = new Map<
+    string,
+    { good: AccountVisibility | null; available: boolean }
+  >();
+
+  constructor(private readonly maxScopes = 16) {}
+
+  private view(good: AccountVisibility | null, available: boolean): DashboardVisibility {
+    return {
+      hiddenProviders: [...(good?.hiddenProviders ?? [])],
+      hiddenAccountIds: [...(good?.hiddenAccountIds ?? [])],
+      available,
+    };
+  }
+
+  /** Record a finished read of this scope and return what to show. */
+  record(scope: string, read: AccountVisibilityRead): DashboardVisibility {
+    const previous = this.scopes.get(scope);
+    const entry =
+      read.state === 'ok'
+        ? {
+            good: {
+              hiddenProviders: [...read.visibility.hiddenProviders],
+              hiddenAccountIds: [...read.visibility.hiddenAccountIds],
+            },
+            available: true,
+          }
+        : { good: previous?.good ?? null, available: false };
+    this.scopes.delete(scope);
+    this.scopes.set(scope, entry);
+    while (this.scopes.size > this.maxScopes) {
+      const oldest = this.scopes.keys().next().value;
+      if (oldest === undefined) break;
+      this.scopes.delete(oldest);
+    }
+    return this.view(entry.good, entry.available);
+  }
+
+  /** While a read is slow: the last result for this scope, or nothing hidden and unavailable. */
+  current(scope: string): DashboardVisibility {
+    const entry = this.scopes.get(scope);
+    return this.view(entry?.good ?? null, entry?.available ?? false);
+  }
+}

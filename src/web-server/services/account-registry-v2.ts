@@ -73,8 +73,14 @@ const ENTRY_KEYS = new Set([
   'createdBy',
 ]);
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
-/** C0, DEL, C1, line separators and bidirectional overrides. */
-const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+/**
+ * Controls (C0, DEL, C1), format characters (zero-width spaces and joiners,
+ * direction marks and overrides, U+061C, U+2060-U+2064, U+FEFF), lone
+ * surrogates and the line and paragraph separators.
+ */
+const UNPRINTABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+/** At least one character that is neither whitespace nor a format character. */
+const VISIBLE = /[^\s\p{Cf}]/u;
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -86,9 +92,23 @@ export function isAccountLabel(value: unknown): value is string {
     typeof value === 'string' &&
     [...value].length >= 1 &&
     [...value].length <= 48 &&
-    value.trim().length > 0 &&
+    VISIBLE.test(value) &&
     !UNPRINTABLE.test(value)
   );
+}
+
+/**
+ * The stores an account reads, as `<kind>:<id>` references; two accounts of
+ * one provider may never share one. Qwen's `discover` reads today's default
+ * console capsule, so it holds `capsule:default` too.
+ */
+function credentialReferences(
+  provider: AdditionalProvider,
+  credential: CollectorCredential
+): string[] {
+  if (credential.kind === 'discover') return provider === 'qwen' ? ['capsule:default'] : [];
+  const reference = credentialReference(credential);
+  return reference ? [reference] : [];
 }
 
 function credentialReference(credential: CollectorCredential): string | null {
@@ -117,8 +137,11 @@ function parseEntry(entry: unknown): RegistryAccount | null {
     (label !== undefined && label !== null && !isAccountLabel(label)) ||
     !isCollectorCredential(credential) ||
     !PROVIDER_CREDENTIAL_KINDS[provider].includes(credential.kind) ||
-    // `discover` is today's first-working-credential lookup: only the migrated row.
-    (credential.kind === 'discover' && id !== `${provider}:usage`) ||
+    // `discover` is today's first-working-credential lookup: only the migrated row,
+    // never one the dashboard creates (contract 3.1: "only from migration").
+    (credential.kind === 'discover' &&
+      (id !== `${provider}:usage` ||
+        (createdBy !== undefined && createdBy !== null && createdBy !== 'migration'))) ||
     (createdAt !== undefined &&
       createdAt !== null &&
       (typeof createdAt !== 'string' ||
@@ -161,13 +184,15 @@ export function parseAccountRegistry(value: unknown): AccountRegistryV2 | null {
   for (const candidate of value.accounts) {
     const entry = parseEntry(candidate);
     if (!entry || ids.has(entry.id)) return null;
-    const reference = credentialReference(entry.credential);
-    if (reference && references.has(`${entry.provider}/${reference}`)) return null;
+    const held = credentialReferences(entry.provider, entry.credential).map(
+      (reference) => `${entry.provider}/${reference}`
+    );
+    if (held.some((reference) => references.has(reference))) return null;
     const count = (perProvider.get(entry.provider) ?? 0) + 1;
     if (count > MAX_ACCOUNTS_PER_PROVIDER) return null;
     perProvider.set(entry.provider, count);
     ids.add(entry.id);
-    if (reference) references.add(`${entry.provider}/${reference}`);
+    for (const reference of held) references.add(reference);
     accounts.push(entry);
   }
   return { version: 2, accounts };

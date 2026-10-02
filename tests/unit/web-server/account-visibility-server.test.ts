@@ -137,7 +137,9 @@ describe('account visibility on the real server', () => {
     const put = (headers: Record<string, string>, route = '/api/accounts/visibility') =>
       fetch(`${base}${route}`, { method: 'PUT', headers, body: valid });
     const cases: Array<[Response, number, string]> = [
-      [await put({ 'Content-Type': 'application/json', Origin: base }), 401, ''],
+      [await put({ 'Content-Type': 'application/json', Origin: base }), 401, 'auth_required'],
+      // With dashboard auth on, the global guard answers first; it carries the same code.
+      [await fetch(`${base}/api/accounts/visibility`), 401, 'auth_required'],
       [
         await put({
           'Content-Type': 'application/json',
@@ -158,12 +160,13 @@ describe('account visibility on the real server', () => {
       [
         await put({ 'Content-Type': 'application/json', Origin: base }, '/API/accounts/visibility'),
         401,
-        '',
+        'auth_required',
       ],
     ];
     for (const [response, status, code] of cases) {
       expect(response.status).toBe(status);
-      if (code) expect((await response.json()).code).toBe(code);
+      expect((await response.json()).code).toBe(code);
+      expect(response.headers.get('cache-control')).toBe('no-store');
     }
     // Letter-case variants never reach the handler, even with a session.
     for (const route of [

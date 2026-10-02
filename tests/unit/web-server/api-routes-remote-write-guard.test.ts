@@ -284,7 +284,10 @@ describe('api-routes remote write guard', () => {
         body: JSON.stringify({ refreshIntervalSeconds: 120 }),
       });
       expect(anonymousResponse.status).toBe(401);
-      expect(await anonymousResponse.json()).toEqual({ error: 'Authentication required' });
+      expect(await anonymousResponse.json()).toEqual({
+        error: 'Authentication required',
+        code: 'auth_required',
+      });
 
       const loginResponse = await fetch(`${authBaseUrl}/api/auth/login`, {
         method: 'POST',

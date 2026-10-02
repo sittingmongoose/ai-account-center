@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1164,
-    "filesAffected": 113,
-    "hotpathOccurrences": 510,
-    "hotpathFilesAffected": 64,
+    "totalOccurrences": 1165,
+    "filesAffected": 114,
+    "hotpathOccurrences": 511,
+    "hotpathFilesAffected": 65,
     "topHotpathFiles": [
       {
         "file": "src/management/shared-manager/diverged-file-adopter.ts",
@@ -516,11 +516,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 377,
-      "typedThrows": 115,
+      "totalThrows": 380,
+      "typedThrows": 116,
       "plainThrows": 70,
-      "otherThrows": 192,
-      "adoptionRatio": 0.305,
+      "otherThrows": 194,
+      "adoptionRatio": 0.3053,
       "topSubdomainsByThrows": [
         {
           "subdomain": "antigravity",
@@ -536,8 +536,8 @@
         },
         {
           "subdomain": "web-server",
-          "count": 80,
-          "typed": 52,
+          "count": 83,
+          "typed": 53,
           "plain": 10
         },
         {
@@ -597,9 +597,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 26,
+      "filesWithCreateLogger": 27,
       "totalSourceFiles": 352,
-      "coverageRatio": 0.0739,
+      "coverageRatio": 0.0767,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -626,7 +626,7 @@
         {
           "subdomain": "web-server",
           "count": 74,
-          "withLogger": 5
+          "withLogger": 6
         },
         {
           "subdomain": "utils",

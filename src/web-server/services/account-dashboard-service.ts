@@ -32,7 +32,11 @@ import {
   getConfiguredAdditionalAccounts,
   type AdditionalAccountsSnapshot,
 } from './additional-account-service';
-import { readAccountVisibility, type AccountVisibilityRead } from './account-visibility';
+import {
+  readAccountVisibility,
+  VisibilityMemory,
+  type AccountVisibilityRead,
+} from './account-visibility';
 import {
   buildDashboardProviders,
   DEFAULT_PROVIDER_REGISTRY_FACTS,
@@ -126,7 +130,7 @@ export class AccountDashboardService {
   private readonly codexInventories = new Map<string, CodexAuthProfilesSummary>();
   private readonly claudeInventories = new Map<string, ClaudeDesktopProfile[]>();
   private readonly claudeLiveSamples = new Map<string, ClaudeDesktopLiveUsage>();
-  private readonly visibility = new Map<string, AccountVisibilityRead>();
+  private readonly visibility = new VisibilityMemory(MAX_SCOPES);
 
   constructor(private readonly deps: AccountDashboardDeps = {}) {}
 
@@ -431,7 +435,7 @@ export class AccountDashboardService {
       0,
       (this.deps.responseBudgetMs ?? 2500) - (Date.now() - startedAt)
     );
-    const [summary, selectedAntigravityProfileId, visibilityRead] = await Promise.all([
+    const [summary, selectedAntigravityProfileId, visibility] = await Promise.all([
       this.bounded(
         Promise.resolve().then(() => (this.deps.getCodexSummary ?? getCodexAuthProfilesSummary)()),
         () => null,
@@ -449,29 +453,18 @@ export class AccountDashboardService {
             remainingBudget
           )
         : Promise.resolve(null),
-      // A small private file; unreadable means "could not be read", never "nothing hidden".
-      // A slow read falls back to the last read of this scope, so a slow cycle never unhides rows.
+      // A small private file; unreadable means "could not be read", never "nothing hidden":
+      // the last good lists of this scope stay in force, marked unavailable. A slow read
+      // shows the last result, so a slow cycle never unhides rows either.
       this.bounded(
         Promise.resolve()
           .then(() => (this.deps.readVisibility ?? readAccountVisibility)(scope))
-          .then((read) => {
-            this.visibility.delete(scope);
-            this.visibility.set(scope, read);
-            while (this.visibility.size > MAX_SCOPES) {
-              const oldest = this.visibility.keys().next().value;
-              if (oldest === undefined) break;
-              this.visibility.delete(oldest);
-            }
-            return read;
-          }),
-        (): AccountVisibilityRead => this.visibility.get(scope) ?? { state: 'unavailable' },
+          .catch((): AccountVisibilityRead => ({ state: 'unavailable' }))
+          .then((read) => this.visibility.record(scope, read)),
+        () => this.visibility.current(scope),
         Math.max(remainingBudget, VISIBILITY_BUDGET_FLOOR_MS)
       ),
     ]);
-    const visibility =
-      visibilityRead.state === 'ok'
-        ? visibilityRead.visibility
-        : { hiddenProviders: [], hiddenAccountIds: [] };
     const hiddenProviders = new Set<string>(visibility.hiddenProviders);
     const hiddenAccountIds = new Set(visibility.hiddenAccountIds);
     // Validate saved credential revisions on every response, including dashboard
@@ -555,7 +548,7 @@ export class AccountDashboardService {
         refreshIntervalSeconds,
         hiddenProviders: [...visibility.hiddenProviders],
         hiddenAccountIds: [...visibility.hiddenAccountIds],
-        visibilityAvailable: visibilityRead.state === 'ok',
+        visibilityAvailable: visibility.available,
       },
       providers: buildDashboardProviders(
         rows,

@@ -103,8 +103,18 @@ describe('Dashboard Auth', () => {
     guard: typeof authMiddleware,
     requestPath: string,
     authenticated = false
-  ): { passed: boolean; status: number | null; body: unknown } {
-    const outcome = { passed: false, status: null as number | null, body: undefined as unknown };
+  ): {
+    passed: boolean;
+    status: number | null;
+    body: unknown;
+    headers: Record<string, string>;
+  } {
+    const outcome = {
+      passed: false,
+      status: null as number | null,
+      body: undefined as unknown,
+      headers: {} as Record<string, string>,
+    };
     const req = {
       path: requestPath,
       session: { authenticated },
@@ -112,6 +122,10 @@ describe('Dashboard Auth', () => {
       headers: { host: '127.0.0.1:3000' },
     };
     const res = {
+      setHeader(name: string, value: string) {
+        outcome.headers[name.toLowerCase()] = value;
+        return this;
+      },
       status(code: number) {
         outcome.status = code;
         return this;
@@ -184,7 +198,13 @@ describe('Dashboard Auth', () => {
           passed: false,
           status: 401,
         });
-        expect(outcome.body).toEqual({ error: 'Authentication required' });
+        // Under /api/accounts the 401 carries the contract code; elsewhere the body is unchanged.
+        expect(outcome.body).toEqual(
+          requestPath.toLowerCase().startsWith('/api/accounts/')
+            ? { error: 'Authentication required', code: 'auth_required' }
+            : { error: 'Authentication required' }
+        );
+        expect(outcome.headers['cache-control']).toBe('no-store');
         expect(runGuard(authMiddleware, requestPath, true).passed).toBe(true);
       }
     });
@@ -207,6 +227,15 @@ describe('Dashboard Auth', () => {
         expect(runGuard(apiAuthMiddleware, requestPath).status).toBe(401);
         expect(runGuard(apiAuthMiddleware, requestPath, true).passed).toBe(true);
       }
+      for (const requestPath of ['/accounts/visibility', '/Accounts/dashboard', '/accounts']) {
+        const outcome = runGuard(apiAuthMiddleware, requestPath);
+        expect(outcome.status).toBe(401);
+        expect(outcome.body).toEqual({ error: 'Authentication required', code: 'auth_required' });
+        expect(outcome.headers['cache-control']).toBe('no-store');
+      }
+      expect(runGuard(apiAuthMiddleware, '/accountsx').body).toEqual({
+        error: 'Authentication required',
+      });
     });
 
     it('passes every request when dashboard auth is disabled', () => {

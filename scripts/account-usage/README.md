@@ -28,3 +28,21 @@ key gives an unavailable result. A `browser-capsule` account reads only
 `qwen-console-session.json` (`default`) or `qwen-console-session-<id>.json`. Any other
 combination exits with status 2, which the dashboard reports as an outdated helper.
 
+Exit status 2 is reserved for usage errors: argparse, the account argument check above,
+or Python failing to open a missing helper file. A collection outcome always prints one
+JSON row and exits 0; any other failure exits 1. The dashboard reads exit status 2 after
+it sent account arguments as "Update the usage helper", so no helper may use 2 for
+anything else. Which credential kinds each helper reads is pinned for both the server
+(`COLLECTED_CREDENTIAL_KINDS`) and the helpers by one shared fixture,
+`tests/fixtures/account-usage/collected-credential-kinds.json`.
+
+Key file format, which the key store writer must produce exactly:
+- Ubuntu and Mac: `<provider>-<keyId>.json` is the UTF-8 JSON record
+  `{"version":1,"provider":"zai","keyId":"9f2c41d0","secret":"...","fingerprint":"sha256:<16 hex>","last4":"...","createdAt":"..."}`
+  (`fingerprint`, `last4` and `createdAt` optional; no other key), at most 4 KB.
+- Windows: `<provider>-<keyId>.dpapi` is the raw binary output of `CryptProtectData`
+  (CurrentUser scope, entropy `AAC/account-key/v1`) over the UTF-8 bytes of that same JSON
+  record, at most 16 KB. It is not base64 and not wrapped in JSON, unlike the Qwen
+  capsule. The folder gets no extra ACL check: DPAPI CurrentUser already limits decryption
+  to the same Windows user, and a linked file is still refused.
+

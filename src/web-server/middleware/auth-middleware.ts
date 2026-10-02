@@ -50,11 +50,34 @@ export function isApiRequestPath(requestPath: string): boolean {
   return pathLower === '/api' || pathLower.startsWith('/api/');
 }
 
-function rejectWithoutSession(req: Request, res: Response, next: NextFunction): void {
+/** `/api/accounts` and below, in any letter case (CONTRACT-registry-lifecycle section 1). */
+function isAccountsApiPath(requestPath: string): boolean {
+  const pathLower = requestPath.toLowerCase();
+  return pathLower === '/api/accounts' || pathLower.startsWith('/api/accounts/');
+}
+
+/**
+ * A 401 is never cached. Under /api/accounts it also carries the stable code
+ * `auth_required` (contract rules 1 and 4); elsewhere the body stays as it was.
+ * `fullPath` is the request path including the /api mount.
+ */
+function rejectWithoutSession(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  fullPath: string
+): void {
   if (req.session?.authenticated === true) {
     return next();
   }
-  res.status(401).json({ error: 'Authentication required' });
+  res.setHeader('Cache-Control', 'no-store');
+  res
+    .status(401)
+    .json(
+      isAccountsApiPath(fullPath)
+        ? { error: 'Authentication required', code: 'auth_required' }
+        : { error: 'Authentication required' }
+    );
 }
 
 /** Path to persistent session secret file */
@@ -159,7 +182,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     return next();
   }
 
-  rejectWithoutSession(req, res, next);
+  rejectWithoutSession(req, res, next, req.path);
 }
 
 /**
@@ -176,7 +199,7 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
     return next();
   }
 
-  rejectWithoutSession(req, res, next);
+  rejectWithoutSession(req, res, next, `/api${req.path}`);
 }
 
 /**

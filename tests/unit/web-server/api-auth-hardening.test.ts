@@ -254,13 +254,21 @@ async function expectServerUp(): Promise<void> {
   expect(processFailures).toEqual([]);
 }
 
+/** Under /api/accounts the guard's 401 carries the contract code (CONTRACT-registry-lifecycle 1). */
+function unauthenticatedBody(family: string): Record<string, string> {
+  return family === 'accounts'
+    ? { error: 'Authentication required', code: 'auth_required' }
+    : { error: 'Authentication required' };
+}
+
 describe('F1: API session guard whatever the URL letter case', () => {
   it.each(VARIANT_CASES)(
     'rejects $method $variant without a session',
-    async ({ method, variant, query, body }) => {
+    async ({ family, method, variant, query, body }) => {
       const response = await send(method, `${variant}${query ?? ''}`, { body });
       expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: 'Authentication required' });
+      expect(await response.json()).toEqual(unauthenticatedBody(family));
+      expect(response.headers.get('cache-control')).toBe('no-store');
       expect(stubCalls()).toBe(0);
     }
   );
@@ -270,7 +278,8 @@ describe('F1: API session guard whatever the URL letter case', () => {
       body: route.body,
     });
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'Authentication required' });
+    expect(await response.json()).toEqual(unauthenticatedBody(route.family));
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(stubCalls()).toBe(0);
   });
 

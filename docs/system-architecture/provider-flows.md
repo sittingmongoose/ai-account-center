@@ -47,7 +47,10 @@ on <host>". See the [registry](../../src/web-server/services/account-registry-v2
 The display-only visibility file `account-visibility.json` (0600) holds
 `hiddenProviders` and `hiddenAccountIds`. Hidden accounts are still collected and
 still auto-switch candidates; the dashboard marks them `hidden` and lists every
-provider in `providers[]` with `visible`.
+provider in `providers[]` with `visible`. An unreadable file is never treated as
+empty: the dashboard keeps the last good lists, sets `settings.visibilityAvailable`
+to false, and shows nothing hidden only when it has never read the file. Every
+private store refuses a folder that others can write.
 
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
 the existing `platyr`, `gmail`, `party` and `me` profile IDs. The optional

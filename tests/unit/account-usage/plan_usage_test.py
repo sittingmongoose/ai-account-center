@@ -761,6 +761,84 @@ class RegistryV2AccountTests(unittest.TestCase):
                 self.assertEqual(completed.returncode, 2)
                 self.assertEqual(completed.stdout, "")
 
+    def test_windows_key_file_is_the_raw_dpapi_blob_of_the_json_record(self):
+        """Pins the `.dpapi` format the key store writer must produce (README "Key file format")."""
+        record = {"version": 1, "provider": "zai", "keyId": self.KEY_ID, "secret": self.SECRET,
+                  "fingerprint": common.key_fingerprint(self.SECRET)}
+        blob = b"\x01\x00\x00\x00\xd0\x8c\x9d\xdf raw CryptProtectData output"
+        path = self.key_dir() / "zai-{}.dpapi".format(self.KEY_ID)
+        path.write_bytes(blob)
+        path.chmod(0o600)
+        # A POSIX-format file beside it is never read on Windows.
+        self.write_key(secret="posix-file-secret-0123", fingerprint=common.key_fingerprint("posix-file-secret-0123"))
+        seen = []
+
+        def unprotect(ciphertext, entropy=None):
+            seen.append((ciphertext, entropy))
+            return json.dumps(record)
+
+        with mock.patch.object(common, "_windows_unprotect", side_effect=unprotect):
+            found = common.aac_key_credential("zai", self.KEY_ID, self.home, windows=True)
+        self.assertEqual(found, {"secret": self.SECRET, "source": "Dashboard key", "email": None, "expires": None})
+        # The file bytes go to DPAPI as they are: no base64, no JSON wrapper; the entropy is fixed.
+        self.assertEqual(seen, [(blob, b"AAC/account-key/v1")])
+        with mock.patch.object(common, "_windows_unprotect", return_value=None):
+            self.assertIsNone(common.aac_key_credential("zai", self.KEY_ID, self.home, windows=True))
+        path.unlink()
+        with mock.patch.object(common, "_windows_unprotect", side_effect=unprotect) as called:
+            self.assertIsNone(common.aac_key_credential("zai", self.KEY_ID, self.home, windows=True))
+            called.assert_not_called()
+
+
+class SharedCredentialKindFixtureTests(unittest.TestCase):
+    """One fixture pins which credential kinds each helper reads, for the server and the helpers."""
+
+    FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "account-usage" / "collected-credential-kinds.json"
+
+    class Parser:
+        def error(self, message):
+            raise ValueError(message)
+
+    def setUp(self):
+        self.fixture = json.loads(self.FIXTURE.read_text())
+
+    def namespace(self, provider, kind):
+        extra = {"aac-key": {"key_id": "9f2c41d0"}, "browser-capsule": {"capsule_id": "default"}}.get(kind, {})
+        account = "{}:usage".format(provider) if kind == "discover" else "{}:acct:9f2c41d0".format(provider)
+        values = {"provider": provider, "account": account, "credential": kind, "key_id": None, "capsule_id": None}
+        values.update(extra)
+        return mock.Mock(**values)
+
+    def test_plan_usage_accepts_exactly_the_fixture_kinds(self):
+        table = self.fixture["helpers"]["plan_usage.py"]
+        self.assertEqual(set(table), set(usage.PROVIDERS))
+        for provider, expected in table.items():
+            accepted = []
+            for kind in self.fixture["kinds"]:
+                try:
+                    usage.account_arguments(self.Parser(), self.namespace(provider, kind))
+                except ValueError:
+                    continue
+                accepted.append(kind)
+            with self.subTest(provider=provider):
+                self.assertEqual(accepted, expected)
+
+    def test_desktop_helper_takes_no_account_arguments(self):
+        table = self.fixture["helpers"]["desktop_usage.py"]
+        self.assertTrue(all(kinds == ["discover"] for kinds in table.values()))
+        with tempfile.TemporaryDirectory() as home:
+            environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": home, "USERPROFILE": home,
+                           "PYTHONDONTWRITEBYTECODE": "1"}
+            for provider in table:
+                with self.subTest(provider=provider):
+                    completed = subprocess.run(
+                        [sys.executable, str(HELPERS / "desktop_usage.py"), "--provider", provider, "--platform",
+                         "ubuntu", "--account", "{}:usage".format(provider), "--credential", "discover"],
+                        capture_output=True, text=True, timeout=20, env=environment)
+                    # Exit status 2 is reserved for usage errors (README); nothing was collected.
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertEqual(completed.stdout, "")
+
 
 if __name__ == "__main__":
     unittest.main()

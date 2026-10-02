@@ -149,8 +149,10 @@ export interface AccountDashboardSettings {
   /** Always set by the dashboard service; ids may name accounts that are briefly absent. */
   hiddenAccountIds?: string[];
   /**
-   * False when the visibility file exists but could not be read safely; the
-   * lists are then empty and the page should say so rather than hide anything.
+   * False when the visibility file exists but could not be read safely. The
+   * lists are then the last good read of this server (never re-shown as
+   * "nothing hidden"), or empty when there has never been one, and the page
+   * should say that the hidden list could not be read.
    */
   visibilityAvailable?: boolean;
 }
