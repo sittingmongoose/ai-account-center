@@ -103,8 +103,8 @@ struct AccountRow: View {
 
   private func meta(_ palette: TrayPalette) -> Text {
     if account.status == "needs_sign_in" {
-      return Text("Sign-in needed").foregroundColor(palette.warnText).fontWeight(.semibold)
-        + Text(" · \(TrayFormat.platformName(account.platform))")
+      let needed = Text(verbatim: "Sign-in needed").foregroundColor(palette.warnText).fontWeight(.semibold)
+      return Text("\(needed) · \(TrayFormat.platformName(account.platform))")
     }
     var parts = [TrayFormat.planLabel(account.plan), TrayFormat.platformName(account.platform)].filter { !$0.isEmpty }
     if let sampled = AccountFormatting.date(account.sampledAt ?? account.fetchedAt) { parts.append(TrayFormat.relative(sampled)) }
@@ -310,8 +310,9 @@ struct SectionHeader: View {
 
   @ViewBuilder private func meta(_ palette: TrayPalette) -> some View {
     if let active = accounts.first(where: \.isActive) {
-      (Text(String(active.identity.split(separator: "@").first ?? Substring(active.identity))).fontWeight(.semibold).foregroundColor(palette.label)
-        + Text(" active"))
+      let name = Text(verbatim: String(active.identity.split(separator: "@").first ?? Substring(active.identity)))
+        .fontWeight(.semibold).foregroundColor(palette.label)
+      Text("\(name) active")
         .font(.system(size: 12)).foregroundStyle(palette.label2)
         .transition(.opacity)
         .id(active.id)

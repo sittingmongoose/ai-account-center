@@ -185,8 +185,8 @@ struct AccountsMenuView: View {
       } else if let dashboard = model.dashboard {
         let summary = TrayStatusSummary(dashboard: dashboard)
         let updated = AccountFormatting.date(dashboard.updatedAt)?.formatted(date: .omitted, time: .shortened) ?? "time unavailable"
-        Text("\(summary.reporting) of \(summary.providers)").fontWeight(.semibold).foregroundColor(palette.label)
-          + Text(" reporting · \(summary.allCached ? "cached" : "live") · updated \(updated)")
+        let count = Text(verbatim: "\(summary.reporting) of \(summary.providers)").fontWeight(.semibold).foregroundColor(palette.label)
+        Text("\(count) reporting · \(summary.allCached ? "cached" : "live") · updated \(updated)")
       } else if !model.connected {
         Text("Connecting")
       }

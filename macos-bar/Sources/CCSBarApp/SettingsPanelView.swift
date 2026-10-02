@@ -169,11 +169,13 @@ struct SettingsPanelView: View {
           .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(palette.label4, lineWidth: 0.5))
         VStack(alignment: .leading, spacing: 2) {
           if let connection = model.connection {
-            (Text("Signed in as ") + Text(connection.username).fontWeight(.semibold))
+            let user = Text(verbatim: connection.username).fontWeight(.semibold)
+            Text("Signed in as \(user)")
               .font(.system(size: 12.5)).foregroundStyle(palette.label)
-            (Text(model.connected ? "Connected" : "Not connected").foregroundColor(model.connected ? palette.goodText : palette.warnText).fontWeight(.semibold)
-              + Text(" · \(connection.baseURL.absoluteString)")
-              + Text(model.lastSyncedAt.map { " · last synced \(TrayFormat.relative($0))" } ?? ""))
+            let state = Text(verbatim: model.connected ? "Connected" : "Not connected")
+              .foregroundColor(model.connected ? palette.goodText : palette.warnText).fontWeight(.semibold)
+            let synced = model.lastSyncedAt.map { " · last synced \(TrayFormat.relative($0))" } ?? ""
+            Text("\(state) · \(connection.baseURL.absoluteString)\(synced)")
               .font(.system(size: 12)).foregroundStyle(palette.label2).lineLimit(1).truncationMode(.middle)
           } else {
             Text("Not connected").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(palette.label)
