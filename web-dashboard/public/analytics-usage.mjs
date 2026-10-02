@@ -178,17 +178,22 @@ export const NOT_LOGGED = 'Not logged';
  * The part of a row's estimate that is not logged: tokens with no logged cost and no listed rate, which the
  * server prices only at its unknown-model fallback (fallbackCostUsd). A response from before that field counts
  * a row with an unknown split and no listed rate as wholly not logged, so a guess is never shown as a cost.
+ * Claude Code and Codex rows (`tool`) keep their estimate as before: only the tools that are not providers of
+ * this page read as not logged.
  */
-export function notLoggedPart(row, est) {
-  if (est === null) return 0;
+export function notLoggedPart(row, est, tool) {
+  if (est === null || isProv(tool)) return 0;
   if (finite(row?.fallbackCostUsd) && row.fallbackCostUsd >= 0) return Math.min(est, row.fallbackCostUsd);
   if (row && 'costByType' in row && row.costByType === null && (!row.rates || row.rates.source === 'fallback')) return est;
   return 0;
 }
 const RATE_FIELDS = ['inputPerMillion', 'outputPerMillion', 'cacheCreationPerMillion', 'cacheReadPerMillion'];
-/** The server's published rates for a model, when they are a listed rate (the unknown-model fallback is not). */
-function listedRate(r) {
-  if (!r || typeof r !== 'object' || r.source === 'fallback' || !RATE_FIELDS.every(k => finite(r[k]) && r[k] >= 0)) return null;
+/**
+ * The server's published rates for a model, when they are a listed rate (the unknown-model fallback is not). For
+ * Claude Code and Codex (`keepFallback`) the fallback stays the estimate's rate, as it was before other tools.
+ */
+function listedRate(r, keepFallback = false) {
+  if (!r || typeof r !== 'object' || (r.source === 'fallback' && !keepFallback) || !RATE_FIELDS.every(k => finite(r[k]) && r[k] >= 0)) return null;
   return { in: r.inputPerMillion, out: r.outputPerMillion, cw: r.cacheCreationPerMillion, cr: r.cacheReadPerMillion, source: text(r.source) || 'builtin' };
 }
 /**
@@ -198,12 +203,13 @@ function listedRate(r) {
  */
 function modelSplit(row, tok, total, known) {
   const shares = () => Object.fromEntries(TYPES.map(t => [t.k, total > 0 && finite(known) ? tok[t.k] / total * known : 0]));
+  const keepFallback = isProv(row.provider);
   if (!('rates' in row)) {
     const r = reconcile(row);
-    const rate = r.rate.source === 'fallback' ? null : r.rate;
+    const rate = r.rate.source === 'fallback' && !keepFallback ? null : r.rate;
     return rate && r.reconciled ? { cost: r.cost, mode: 'rates', rate } : { cost: shares(), mode: 'shares', rate };
   }
-  const rate = listedRate(row.rates);
+  const rate = listedRate(row.rates, keepFallback);
   const p = row.costByType;
   if (rate && row.costByTypeReconciled === true && p && ['input', 'output', 'cacheWrite', 'cacheRead'].every(k => finite(p[k]) && p[k] >= 0))
     return { cost: { in: p.input, out: p.output, cw: p.cacheWrite, cr: p.cacheRead }, mode: 'rates', rate };
@@ -248,7 +254,7 @@ export function activityData(payload, now = Date.now()) {
       seen.add(key);
       const est = finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
       if (est === null) costMissing = true;
-      const nl = notLoggedPart(row, est);
+      const nl = notLoggedPart(row, est, row.provider);
       hours.push({ t, p: row.provider, in: row.inputTokens, out: row.outputTokens, cw: row.cacheCreationTokens, cr: row.cacheReadTokens, cost: est === null ? 0 : Math.max(0, est - nl), unk: nl > TINY });
     }
   }
@@ -266,7 +272,7 @@ export function activityData(payload, now = Date.now()) {
       const est = finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
       // a response without fallbackCostUsd or rates: the mirror's unknown-model fallback is no listed rate either
       const legacy = !('fallbackCostUsd' in row) && !('rates' in row) && !('costByType' in row);
-      const nl = legacy ? (est !== null && modelRates(row.model).source === 'fallback' ? est : 0) : notLoggedPart(row, est);
+      const nl = isProv(row.provider) ? 0 : legacy ? (est !== null && modelRates(row.model).source === 'fallback' ? est : 0) : notLoggedPart(row, est, row.provider);
       const logged = est === null ? null : Math.max(0, est - nl);
       const split = modelSplit(row, tok, total, logged);
       models.push({ model: row.model, provider: row.provider, tok, total, logged, hasCost: est !== null, unk: nl > TINY, cost: split.cost, mode: split.mode, rate: split.rate });
@@ -291,7 +297,7 @@ export function activityData(payload, now = Date.now()) {
   const sessionTools = new Set();
   const sessions = (available && Array.isArray(act.providers) ? act.providers : []).filter(p => TOOLS.includes(p?.provider) && !sessionTools.has(p.provider) && sessionTools.add(p.provider)).map(p => {
     const est = finite(p.totals?.estimatedCostUsd) && p.totals.estimatedCostUsd >= 0 ? p.totals.estimatedCostUsd : null;
-    const nl = notLoggedPart(p.totals, est);
+    const nl = notLoggedPart(p.totals, est, p.provider);
     return {
       p: p.provider, label: PROV_LABEL[p.provider] || '',
       sessions: Number.isInteger(p.sessionCount) && p.sessionCount >= 0 ? p.sessionCount : null,
@@ -615,7 +621,7 @@ function ioStatus(r) {
   return 'More output than input. A generation-heavy workload.';
 }
 const ioTxt = v => v >= 10 ? nf0.format(v) : nf2v.format(v);
-const RATE_SOURCE = { builtin: 'CCS pricing table', 'models-dev': 'models.dev rates, as CCS resolves them' };
+const RATE_SOURCE = { builtin: 'CCS pricing table', 'models-dev': 'models.dev rates, as CCS resolves them', fallback: 'CCS fallback rate for models it does not list, an estimate with a fallback rate' };
 function rateText(m) {
   if (m.rate) {
     const base = `${money(m.rate.in)} in, ${money(m.rate.out)} out, ${money(m.rate.cw)} cache write, ${money(m.rate.cr)} cache read per million tokens; ${RATE_SOURCE[m.rate.source] || 'CCS rate'}.`;

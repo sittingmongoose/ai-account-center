@@ -242,6 +242,29 @@ test('(3) not-logged parts come from fallbackCostUsd, or from an unknown split w
   assert.equal(activityData(payload({ byHour: [{ ...byHour[0], provider: 'qwen' }] }), now).hours.length, 0);
 });
 
+test('(3) Claude Code and Codex keep their estimate when a model has no listed rate, as before other tools', () => {
+  // gpt-5.5-codex has no listed rate under openai: the server prices it at its fallback and says so
+  const codex = { model: 'gpt-5.5-codex', provider: 'codex', ...tok(1e6, 1e5, 0, 0), estimatedCostUsd: 3 + 1.5, fallbackCostUsd: 4.5, costByType: null, costByTypeReconciled: false, rates: FALLBACK };
+  const p = payload({
+    totals: add(M.haiku, codex), byHour: [hour(26, 'claude', M.haiku), hour(25, 'codex', codex)],
+    providers: [provider('claude', 'Claude Code logs', 3, 30, [M.haiku]), provider('codex', 'Codex logs', 2, 10, [codex])],
+    models: [M.haiku, codex],
+  });
+  assert.equal(notLoggedPart(codex, 4.5, 'codex'), 0);
+  assert.equal(notLoggedPart(codex, 4.5, 'omp'), 4.5);
+  const A = activityData(p, now);
+  assert.ok(A.hours.every(h => !h.unk));
+  const m = A.models.find(x => x.model === 'gpt-5.5-codex');
+  assert.deepEqual([m.logged, m.unk, m.mode, m.rate.source], [4.5, false, 'rates', 'fallback']);
+  const view = usageView(p, state(), { now });
+  const cost = kpi(view, 'cost');
+  assert.ok(Math.abs(cost.num - (haiku(1e6, 2e5, 1e6, 4e7) + 4.5)) < 1e-9);
+  assert.ok(!JSON.stringify(cost.sub).includes('Partial'));
+  const row = view.cbm.rows.find(r => r.name === 'gpt-5.5-codex');
+  assert.deepEqual([row.cost, row.costNa, row.partial], ['$4.50', false, false]);
+  assert.match(row.rate, /fallback rate/);
+});
+
 test('(1) models that are no provider\'s alone share one neutral family, with a distinct tone each', () => {
   const list = Array.from({ length: 9 }, (_, i) => ({ key: `m${i}`, model: `m${i}`, provider: '', logged: 10 - i, total: 1 }))
     .concat([{ key: 'c', model: 'c', provider: 'claude', logged: 50, total: 1 }]);

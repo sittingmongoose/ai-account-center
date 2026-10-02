@@ -154,8 +154,10 @@ filter, the session rows, the daily chart, the model marks); `TOOLS` rows of the
 totals, the trend, the heatmap and the model views under All only, merged by model name (`pageModels`; a model
 that is not one provider's alone has `provider: ""`, no mark and the neutral `Theme.h-model` family). Cost:
 `fallbackCostUsd` is the part of `estimatedCostUsd` the server priced only at its unknown-model fallback (no
-logged cost, no listed rate); the page leaves it out, shows "Not logged" where nothing is logged (never $0.00)
-and marks totals that leave it out "partial" (`notLoggedPart`). "Included usage" in the header
+logged cost, no listed rate); for the tools that are not providers here the page leaves it out, shows "Not
+logged" where nothing is logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`).
+Claude Code and Codex rows keep their whole estimate, fallback rate included, exactly as before the other tools
+were added. "Included usage" in the header
 (`includedView`, from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each
 source's state and last scan.
 

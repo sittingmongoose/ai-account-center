@@ -104,8 +104,9 @@ page as file:// or configure a cross-origin API URL.
   from OMP, Muse Code and zcode (Ubuntu, Mac and Windows) counts in the totals
   and merges into the model views under All; they are never a provider, filter
   or legend. "Included usage" in the header lists each source's state and last
-  scan. Cost with no logged amount and no listed rate shows "Not logged", never
-  $0.00, and totals that leave it out say "partial". Month,
+  scan. Their cost with no logged amount and no listed rate shows "Not logged",
+  never $0.00, and totals that leave it out say "partial"; Claude Code and Codex
+  estimates are unchanged. Month,
   All and custom ranges read the covering 24h, 7d or 30d response and are cut in
   the browser; per-model and session data then say which logs they cover.
 - Accounts & Settings lists every provider with its accounts: status only for
