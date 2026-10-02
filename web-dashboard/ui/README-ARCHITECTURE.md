@@ -67,6 +67,19 @@ reading in Slint, never add or average across accounts, never turn a missing val
   plus `active`, `activeLabel` ("on Ubuntu"), `canActivate`, `activateKind` (`activate` |
   `antigravity-activate`), `profile`, `amountsLine` (Codex credits and banked resets), and `auto` (the
   section's auto-switch state, always "% used").
+  - Lines that mix weights travel as runs, `{ text, strong, tone }` (`RunView`; tone `good` is the active
+    account's name, `warn` a warning figure): `metaRuns` ("**4** accounts · desktop profiles", "**3** accounts ·
+    **codex-2** active"), a row's `amountsRuns` ("**62.5K** credits · **1** banked"), `foot.runs`,
+    `auto.offRuns` and `confirmRuns`.
+  - `canSwitch`: more than one account to switch between; rows show Activate only then.
+  - `auto.shown`: the header draws the toggle and the % used stepper (`auto.min`..`auto.max`, `auto.pool`);
+    otherwise `auto.offRuns` ("Auto-switch **off** · needs a second account").
+  - `foot` (Codex): `{ shown, warn, runs, when }`, what auto-switch does about the active account (the
+    backend's own message while it is below the point; a warning naming the next account when it is above;
+    "Checked 1m ago · every 1 min").
+  - A row's `confirm`/`confirmRuns`: activating an account already at or past the section's switch point
+    asks inline first ("**99% used**, above the 95% switch point. ... Activate anyway?"); only when the
+    threshold is known. "Activate anyway" then runs the existing guarded activation.
   - Claude columns: 5-hour, Weekly, and Fable only when a Max account exists; Fable comes from the
     `seven_day_fable` window; absent is "Not reported yet"; Pro rows get an empty cell.
   - Codex: no 5-hour column unless an account reports the canonical `five_hour` window; Chat pass hidden;
@@ -75,14 +88,20 @@ reading in Slint, never add or average across accounts, never turn a missing val
     weekly); rows come from the dashboard DTO and become activatable only when the native inventory
     (`/api/antigravity/profiles`, commit 9cf75fbe) binds and verifies them (antigravity-data.mjs).
 - `cards`: one per account of the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go), in
-  registry order; up to three meters, everything else as `AmountView`s (packs, balances, credits, spend).
+  registry order; up to three meters (a window with no reading is an unavailable meter), everything else as
+  `AmountView`s (packs, balances, credits, spend). The plan drops the provider's own name ("High Usage"); the
+  footer is `flag` ("Stale" after 30 minutes, or a status word like "Sign-in needed"), `sampled` and
+  `platform`; `planNote` is the Qwen "Plan subscription ends ..." line (visible-usage.mjs marks the window with
+  `planExpiry`) and `packsNote` says "All 3 packs expire ..." once instead of on every pack.
 - `registry`: the provider registry derived client-side (`PROVIDER_REGISTRY`) with counts and `visible`.
   Providers listed in `data.settings.hiddenProviders` (when the backend sends it) are left out of sections and
   cards and marked `visible: false`.
 - `chrome`: the header status line ("Updated **2m ago** · cached readings") plus username and host.
 
 `detailsViewModel(data, id, ctx)`: every visible window of one account as a labelled meter (notches copied
-from its row), amounts, facts (status, sampled, fetched, source, platform, profile, note) and the action state.
+from its row), amounts, facts (status, sampled, fetched, source, platform, profile, note) and the action state:
+`subLead` ("Codex · Pro"), `canSwitch`, `activeLabel`, `activateHint`, `platform`, `confirm` and `confirmRuns`,
+so Details shows the row's own action slot and asks the same inline question.
 
 ### Analytics v2
 
@@ -172,7 +191,7 @@ spinners and skeleton shimmer read `animation-tick()` only while they are active
 | hover-card.slint | `Hover` (global), `HoverLayer` | custom hover card and tooltips, 90 ms intent, glides between targets |
 | skeleton.slint | `Skeleton` | shimmer only while `active` |
 | toast.slint | `ToastStack` | spring up, countdown bar, fade, slot closes, then `toast-dismissed(id)` removes the row |
-| slide-over.slint | `SlideOver` | outside click and Escape close it; `swap()` dips the content when another row opens |
+| slide-over.slint | `SlideOver` | the scrim only tints and lets clicks through (as in the concept): a row click swaps the content (`swap()`), the window's background TouchAreas close it on any other click, Escape closes it |
 | dialog.slint | `Dialog` | scrim + rising card; `dismissable` |
 | field.slint | `Field` | text and password fields with show/hide |
 | nav.slint | `NavBar` | the indicator glides between the three items |
@@ -194,11 +213,42 @@ Gotchas found while building W1 (Slint 1.18.1):
   (`mounted`) before sweeping; do the same for anything that must animate in on first load.
 - Layout items stretch by default: give fixed header items `horizontal-stretch: 0` so only the spacer grows.
 
+Gotchas found while building Home (W2):
+- **A GridLayout whose repeater starts empty and fills later can panic** in i-slint-core `layout.rs`
+  (`index out of bounds: the len is 4 but the index is 4`); it showed in dark mode, where the theme switch at
+  boot re-lays out between the model change and the repeater update. Create every repeated GridLayout only
+  once its model has rows (`if model.length > 0: GridLayout { for ... }`). Later count changes (a provider
+  hidden, 7 to 6 cards) were tested and are fine.
+- `row`, `col` and `colspan` of repeated grid items can be runtime expressions; Home uses that so cards and
+  sections re-flow on resize without being re-created (their meters keep their values).
+- `ValueUnit` (and any element that centres its own child) needs an explicit `height` when placed outside a
+  layout, or it centres twice.
+- Slint Text has no line-height: give Texts the concept's line box as `min-height` (13.5 px body is 19.5 px,
+  12 px meta 17.5 px, 18 px titles 26 px) with `vertical-alignment: center`, or rows come out shorter.
+- `changed` callbacks fire for properties with bindings, so a Meter reports `value-changed` when its reading
+  moves after the load-in and the row flashes.
+
 ## Pages
 
-- `pages/home.slint` (W1 foundation): `HomePage` with `AccountSection` (plate, header with auto-switch,
-  column heads, rows, the one selected-row highlight that glides between rows) and `ProviderCard` grid
-  (GridLayout, 2/3/4 columns by breakpoint, equal widths). The Home task refines it.
+- `pages/home.slint` (W2, built like the concept's Home):
+  - `HomePage`: the sections in a GridLayout (stacked; Claude and Codex side by side at 7:5 from 1600 px,
+    4:3 from 2200 px, the same height), "Other providers" with its count, and the cards: as many columns as
+    fit at 300 px, spread over the fewest rows with the longer rows first, equal widths within a row (a grid
+    over the rows' least common multiple), heights following content.
+  - `AccountSection`: header (mark, title, meta runs; Claude's "?" legend popup and History; a switchable
+    section's auto-switch toggle and % used `Stepper`, debounced 600 ms, the notch sliding first; or the off
+    line), column heads, rows, the Codex footer. Column fitting: rows report `ident-natural` (mark, gap, the
+    widest of email at the active weight, meta and credits, slack; clamped 150 to 320 px) and `slot-natural`;
+    the section keeps the largest; meter columns share the rest equally (min 108 px). The selected-row
+    highlight is one Rectangle per section placed from the active row's y and height: instant on re-layout,
+    a 520 ms ease-out glide on a switch; it deepens on hover and flashes with its row.
+  - `AccountRow`: the full row opens Details, nested buttons act on their own; `SwitchSlot` stacks the
+    Activate button and `ActiveMark` (check-circle `CheckMark` drawn in by a clip, "Active", "on Ubuntu") on
+    the button's grid (`pad-left`, `icon-size`, `icon-gap`), measured equal within 0.11 px at 1024, 1440 and
+    2560 in both themes before and after a switch; `ConfirmLine` opens under the row (and `ConfirmBox` in
+    Details).
+  - `ProviderCard`: header with plan, inline meters (side by side from 560 px), plan note, amounts (two
+    columns from 700 px, dashed separators), packs note, footer; a soft flash when a reading changes.
 - `pages/analytics.slint` (stub): header, KPI row, quota-history rows.
 - `pages/accounts.slint` (stub): provider registry rows, Appearance, Usage refresh, About with `AboutSlint`
   (Slint's required attribution; keep it).
@@ -209,4 +259,6 @@ Gotchas found while building W1 (Slint 1.18.1):
 ## Visual check
 
 `~/PM-Experiments/ccs-accounts-20260930/worktrees/preview/` serves `dist/ui` with sanitized fixtures and
-screenshots it in headless Chrome with SwiftShader WebGL; see its README.
+screenshots it in headless Chrome with SwiftShader WebGL; see its README. `POST /__preview/state` changes the
+data at runtime (hidden providers, example readings) and `shoot.mjs` steps `post`, `eval` and `film`
+(a CDP screencast, optionally clicking or evaluating once it runs) cover refresh, switch and load-in motion.
