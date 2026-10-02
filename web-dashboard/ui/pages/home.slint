@@ -940,6 +940,12 @@ export component AccountSection inherits Plate {
             preferred-height: colhead.preferred-height;
             Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
             Rectangle { y: parent.height - 1px; height: 1px; background: Theme.rule-2; }
+            // The strip's opaque background covers the parent box's side borders, so the strip
+            // redraws them itself: 1 px Theme.rule exactly on the box's edges, like the box's
+            // own border (no inset gap, no double line). Painted after the hairlines so the
+            // strip's corners keep the box's edge continuous.
+            Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.rule; }
+            Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.rule; }
             // the concept's .colhead: 8 px padding inside its two hairlines and an 11 px line at line-height 1.35
             colhead := HorizontalLayout {
                 padding-left: 20px;

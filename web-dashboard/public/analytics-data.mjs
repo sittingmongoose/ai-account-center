@@ -173,7 +173,7 @@ export function activityView(activity = {}, range = {}, interval = 'Daily') {
   const uniqueProviders = [...new Map(providers.map(row => [row.provider, row])).values()];
   const counter = key => uniqueProviders.length && uniqueProviders.every(row => Number.isInteger(row[key]) && row[key] >= 0) ? uniqueProviders.reduce((sum, row) => sum + row[key], 0) : null;
   const sessions = counter('sessionCount'), events = counter('usageEvents');
-  const models = available ? [...new Map(array(activity.models).filter(row => tokenTotal(row) !== null && ['claude', 'codex'].includes(row.provider) && text(row.model)).map(row => [JSON.stringify([row.provider, row.model]), row])).values()].sort((a, b) => (finite(b.estimatedCostUsd) ? b.estimatedCostUsd : -1) - (finite(a.estimatedCostUsd) ? a.estimatedCostUsd : -1) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model)) : [];
+  const models = available ? [...new Map(array(activity.models).filter(row => tokenTotal(row) !== null && ['claude', 'codex'].includes(row.provider) && text(row.model) && text(row.model) !== '<synthetic>').map(row => [JSON.stringify([row.provider, row.model]), row])).values()].sort((a, b) => (finite(b.estimatedCostUsd) ? b.estimatedCostUsd : -1) - (finite(a.estimatedCostUsd) ? a.estimatedCostUsd : -1) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model)) : [];
   const listedTokens = models.reduce((sum, row) => sum + tokenTotal(row), 0);
   const largestCost = Math.max(0, ...models.filter(row => finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0).map(row => row.estimatedCostUsd));
   return {

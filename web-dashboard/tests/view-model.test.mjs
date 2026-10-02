@@ -288,3 +288,17 @@ test('F6: a Codex window pending its reset has no notch and does not count towar
   // the footer no longer says the active account is above the switch point on the stale 99%
   assert.doesNotMatch(codex.foot.runs.map(r => r.text).join(''), /above/);
 });
+
+test('a limit of 100 with no unit only restates the percent, so cards show no "N of 100" caption', () => {
+  const kimi = account({ id: 'kimi-code:a', provider: 'kimi-code', email: 'k@example.test', windows: [
+    window({ key: '5h', label: '5 hours', windowMinutes: 300, usedPercent: 99, remainingPercent: 1, used: 99, limit: 100, unit: null }),
+    window({ key: 'weekly', label: 'Weekly', usedPercent: 20, remainingPercent: 80, used: 20, limit: 100, unit: null }),
+  ] });
+  const card = dashboardViewModel(data([kimi]), { now }).cards[0];
+  assert.deepEqual(card.meters.map(m => m.amount), ['', '']);
+  // another provider with the same percent-scale window loses its caption too
+  assert.equal(meterView(account(), window({ usedPercent: 50, remainingPercent: 50, used: 50, limit: 100, unit: null }), { now }).amount, '');
+  // counts that carry real information stay: another limit, or a named unit
+  assert.equal(meterView(account(), window({ used: 340, limit: 500, unit: 'requests' }), { now }).amount, '340 of 500 requests');
+  assert.equal(meterView(account(), window({ used: 50, limit: 100, unit: 'requests' }), { now }).amount, '50 of 100 requests');
+});
