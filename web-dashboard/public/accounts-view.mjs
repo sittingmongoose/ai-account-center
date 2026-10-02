@@ -386,7 +386,11 @@ export function accountsViewModel(data, ctx = {}) {
     const rows = mine.map(account => {
       const homeRow = homeRows.get(account.id);
       const [src, srcSub] = sourceLines(entry.id, account);
-      const { status, sampled, sampledTip } = rowStatus(account, now);
+      const { status, sampled: sampledLine, sampledTip: sampledLineTip } = rowStatus(account, now);
+      // a Claude Open in progress (claude-open.mjs) takes the "sampled" line while it runs
+      const opening = entry.id === 'claude' && c.openProgress instanceof Map ? c.openProgress.get(homeRow?.profile || text(account.capabilities?.claudeProfileId)) : null;
+      const sampled = opening?.text || sampledLine;
+      const sampledTip = opening?.text || sampledLineTip;
       const email = text(account.email) || text(account.label) || 'Account identity unavailable';
       const meta = [planLabel(text(account.plan)), text(account.label) && text(account.label) !== email ? text(account.label) : ''].filter(Boolean).join(' · ');
       const switchable = SWITCHABLE.includes(entry.id);

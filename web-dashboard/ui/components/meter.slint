@@ -221,6 +221,7 @@ export component Meter inherits Rectangle {
                 horizontal-stretch: 0;
                 Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
             }
+            // "Unavailable", "Not reported yet" or a pending reset ("Reset at 10:15 AM"): elided in a narrow cell.
             if !root.data.has-value: Text {
                 text: root.data.na-text != "" ? root.data.na-text : "Unavailable";
                 font-size: 13px;
@@ -228,6 +229,7 @@ export component Meter inherits Rectangle {
                 color: Theme.ink-3;
                 vertical-alignment: center;
                 horizontal-stretch: 0;
+                overflow: elide;
             }
             if !root.inline: Rectangle { horizontal-stretch: 1; }
             if root.data.has-value && root.data.over-text != "" && !root.compact && !root.inline: VerticalLayout {

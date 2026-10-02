@@ -14,6 +14,7 @@ public/analytics-data.mjs DTO -> analytics view + analyticsSlintModel() v3 (pure
 public/analytics-usage.mjs, analytics-quota.mjs, model-rates.mjs   the Analytics page's numbers and chart geometry
 public/accounts-view.mjs  DTO -> Accounts & Settings view model v1 (pure, tested); LIVE lists what the server can do
 public/auth-view.mjs      the sign-in page's words and rules: strength, setup checks, limiter headers (pure, tested)
+public/claude-open.mjs    Claude Open progress: the 202 poller (injected I/O) and the row's progress line (tested)
 public/*-data.mjs, *-confirmation.mjs, visible-usage.mjs   truthfulness and switching rules (tested)
 src/lib.rs                wasm entry points; JSON -> Slint structs; persistent models updated in place
 src/sync.rs               sync_rows() and Nested<T>: diff by id with set_row_data

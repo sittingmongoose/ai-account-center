@@ -123,3 +123,12 @@ test('the agenda merges same-minute resets, names expiries with what is left and
   assert.equal(kimi.rel, 'in 3h 0m');
   assert.deepEqual(kimi.now, []);
 });
+
+test('F6: a current reading from before a passed reset is no current reading in the quota history', () => {
+  const stale = account('codex:stale', 'codex', 'stale@example.test', [win('seven_day', 'Weekly usage', 97, { resetAt: iso(now - H) })], { sampledAt: iso(now - 2 * H) });
+  const fresh = account('codex:fresh', 'codex', 'fresh@example.test', [win('seven_day', 'Weekly usage', 4, { resetAt: iso(now - H) })], { sampledAt: iso(now - 0.5 * H) });
+  const [a, b] = quotaAccounts({ accounts: [] }, { now, dashboard: { accounts: [stale, fresh] } });
+  assert.equal(a.windows[0].used, null);
+  assert.equal(b.windows[0].used, 4);
+  assert.equal(project(a, a.windows[0], now).kind, 'na');
+});

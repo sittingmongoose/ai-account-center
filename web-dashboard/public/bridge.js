@@ -9,6 +9,7 @@ import { analyticsView, analyticsChoiceId, analyticsSlintModel } from './analyti
 import { usageView, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGES, H, D } from './analytics-usage.mjs';
 import { quotaView, agendaView, QUOTA_PROVIDERS } from './analytics-quota.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
+import { createClaudeOpen, openProgress } from './claude-open.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -91,7 +92,8 @@ function auth(signedIn, state, extra = {}) {
   }));
 }
 
-async function request(path, options = {}) {
+/** One request: { status, payload } on success; a refusal throws with its status, payload and headers. */
+async function send(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
@@ -103,13 +105,38 @@ async function request(path, options = {}) {
     error.retryAfter = response.headers?.get?.('Retry-After') || response.headers?.get?.('RateLimit-Reset') || '';
     throw error;
   }
-  return payload;
+  return { status: response.status, payload };
 }
+async function request(path, options = {}) { return (await send(path, options)).payload; }
 const mutation = (path, body, method = 'POST') => request(path, { method, body: JSON.stringify(body) });
+
+// Claude "Open" progress (claude-open.mjs): one POST that asks for the 202 answer, then read-only polling of the
+// profile list. A finished Open ends in a toast; the row line clears a few seconds later.
+const claudeOpen = createClaudeOpen({
+  post: async (id, target) => {
+    const { status, payload } = await send(`/api/claude/desktop-profiles/${encodeURIComponent(id)}/open`, {
+      method: 'POST', body: JSON.stringify({ platform: target }), headers: { Prefer: 'respond-async' },
+    });
+    return { status, body: payload };
+  },
+  list: async () => {
+    const payload = await request('/api/claude/desktop-profiles');
+    if (Array.isArray(payload?.profiles)) profiles = payload.profiles;
+    return payload;
+  },
+  changed: () => { if (authenticated) render(); },
+  finished: (id, view) => {
+    if (!authenticated) return;
+    const where = view.platform === 'windows' ? 'Windows' : 'Mac';
+    if (view.state === 'opened') toast('ok', `Claude opened on ${where}`, 'It opened in its own desktop profile.');
+    else if (view.state === 'failed' || view.state === 'blocked_uncertain') failure(view.text, `Claude did not open on ${where}`);
+    else toast('info', `Opening Claude on ${where}`, view.text, 7000);
+  },
+});
 
 // ---------------------------------------------------------------- rendering
 function context(extra = {}) {
-  return { profiles, platform, antigravityInventory, antigravityAuto, refreshing: !!refreshing && extra.refreshing !== false, intervalSeconds: refreshIntervalSeconds, username, host, ...extra };
+  return { profiles, platform, antigravityInventory, antigravityAuto, refreshing: !!refreshing && extra.refreshing !== false, intervalSeconds: refreshIntervalSeconds, username, host, openProgress: openProgress(claudeOpen.views(), profiles), ...extra };
 }
 function antigravityModel() { return antigravityView(data, antigravityInventory, antigravityAuto); }
 function render() {
@@ -421,6 +448,7 @@ function showSetup(extra = {}) {
 /** The server no longer knows this browser's session: say whether it ran out or ended early. */
 function sessionEnded(reason = endedReason(signedInAt(globalThis.localStorage), sessionHours) || 'ended') {
   forgetSignIn(globalThis.localStorage);
+  claudeOpen.reset();
   const banner = expiredBanner(reason, sessionHours);
   auth(false, 'expired', { bannerTitle: banner.title, bannerBody: banner.body });
 }
@@ -538,6 +566,7 @@ window.ccsDashboardAction = async (action, value) => {
       await mutation('/api/auth/logout', {});
       forgetSignIn(globalThis.localStorage);
       analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
+      claudeOpen.reset();
       auth(false, 'default', { notice: true, message: 'Signed out.' }); return;
     }
     if (action === 'refresh') { await refresh(true); if (currentPage === 'analytics') await refreshAnalytics(true); return; }
@@ -549,10 +578,14 @@ window.ccsDashboardAction = async (action, value) => {
         if (platform === 'windows' && /^ccs-claude:\/\/launch\/(platyr|gmail|party|me)$/.test(launcher?.launchUri || '')) { location.href = launcher.launchUri; return; }
         throw new Error('Remote Windows launcher is unavailable.');
       }
+      // An Open of this profile that is already running (here, in a tray or another browser) is followed, never sent again.
+      if (claudeOpen.running(id) || openProgress(null, profiles).has(id)) { toast('info', 'Claude is already opening', 'Its progress shows on the row.'); return; }
+      let outcome;
       setBusy(true);
-      try { await mutation(`/api/claude/desktop-profiles/${encodeURIComponent(id)}/open`, { platform: target }); }
+      try { outcome = await claudeOpen.start(id, target); }
       finally { setBusy(false); }
-      toast('info', `Opening Claude on ${target === 'mac' ? 'Mac' : 'Windows'}`, 'It opens in its own desktop profile.'); return;
+      if (outcome === 'opened') toast('info', `Opening Claude on ${target === 'mac' ? 'Mac' : 'Windows'}`, 'It opens in its own desktop profile.');
+      return;
     }
     if (action === 'activate') {
       refreshGeneration++;

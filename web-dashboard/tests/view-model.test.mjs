@@ -232,3 +232,59 @@ test('Details carries the row slot and the same inline confirmation (W2)', () =>
   assert.equal(active.active, true); assert.equal(active.activeLabel, 'on Ubuntu'); assert.equal(active.confirm, false);
   assert.equal(detailsViewModel(data([a]), 'codex:a', { now }).canSwitch, false);
 });
+
+test('F6: a reading sampled before a reset that has passed shows "Reset at … · new reading pending", never the old percent or 0%', async () => {
+  const { pendingReset, currentUsedPercent } = await import('../public/view-model.mjs');
+  const passed = window({ key: 'five_hour', label: 'Five-hour usage', windowMinutes: 300, usedPercent: 88, remainingPercent: 12, resetAt: at(-30) });
+  const before = claude('pending', 'max', [passed, window({ usedPercent: 40, remainingPercent: 60 })]);
+  before.sampledAt = at(-45);
+  const vm = dashboardViewModel(data([before]), { now });
+  const cell = section(vm, 'claude').rows[0].cells[0];
+  assert.equal(pendingReset(before, passed, now), true);
+  assert.equal(currentUsedPercent(before, passed, now), null);
+  assert.equal(cell.hasValue, false);
+  assert.equal(cell.valueText, '');
+  assert.equal(cell.value, 0);
+  assert.equal(cell.notch, null);
+  assert.match(cell.naText, /^Reset at \S/);
+  assert.equal(cell.naSub, 'New reading pending');
+  assert.match(cell.resetExact, /^Reset at .* · new reading pending$/);
+  assert.doesNotMatch(JSON.stringify(cell), /88|"0%"/);
+  // the weekly window has not reset: its reading stays
+  assert.equal(section(vm, 'claude').rows[0].cells[1].valueText, '40');
+
+  // sampled after the reset: a real new reading, shown as usual
+  const after = { ...before, sampledAt: at(-10) };
+  assert.equal(pendingReset(after, passed, now), false);
+  assert.equal(meterView(after, passed, { now }).valueText, '88');
+  // the window's own sample time comes first
+  assert.equal(pendingReset(after, { ...passed, sampledAt: at(-40) }, now), true);
+  assert.equal(pendingReset(before, { ...passed, sampledAt: at(-5) }, now), false);
+  // unknown sample time: pending
+  assert.equal(pendingReset({ ...before, sampledAt: null }, passed, now), true);
+  // a reset still ahead is not pending
+  assert.equal(pendingReset(before, { ...passed, resetAt: at(30) }, now), false);
+  // amounts, unlimited and switched-off windows are left alone
+  assert.equal(pendingReset(before, { ...passed, kind: 'spend' }, now), false);
+  assert.equal(pendingReset(before, { ...passed, unlimited: true }, now), false);
+  assert.equal(pendingReset(before, { ...passed, enabled: false }, now), false);
+  // Details reads the same
+  const details = detailsViewModel(data([before]), 'claude:pending', { now });
+  const meter = details.meters.find(m => m.key === 'claude:pending|five_hour');
+  assert.equal(meter.hasValue, false);
+  assert.equal(meter.naSub, 'New reading pending');
+});
+
+test('F6: a Codex window pending its reset has no notch and does not count toward the switch point', () => {
+  const pendingWeek = window({ usedPercent: 99, remainingPercent: 1, resetAt: at(-5) });
+  const active = account({ id: 'codex:a', email: 'a@example.test', isActive: true, sampledAt: at(-20), windows: [pendingWeek], capabilities: { codexProfile: 'a' } });
+  const other = account({ id: 'codex:b', email: 'b@example.test', windows: [window({ usedPercent: 10, remainingPercent: 90 })], capabilities: { codexProfile: 'b' } });
+  const vm = dashboardViewModel(data([active, other]), { now });
+  const codex = section(vm, 'codex');
+  const weekly = codex.rows[0].cells.at(-1);
+  assert.equal(weekly.hasValue, false);
+  assert.equal(weekly.notch, null);
+  assert.equal(weekly.naSub, 'New reading pending');
+  // the footer no longer says the active account is above the switch point on the stale 99%
+  assert.doesNotMatch(codex.foot.runs.map(r => r.text).join(''), /above/);
+});

@@ -31,6 +31,8 @@ const nf2 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const nfCompact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 });
 const money = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const dateTime = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const clockTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const dayClock = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const PLATFORM = { mac: 'Mac', windows: 'Windows', ubuntu: 'Ubuntu', linux: 'Linux' };
 
 export const platformLabel = id => PLATFORM[id] || (id ? id[0].toUpperCase() + id.slice(1) : 'Unknown');
@@ -111,6 +113,25 @@ export function fullWindowLabel(provider, w) {
 export function statusWord(account) {
   return { ok: 'Live', cached: 'Cached', needs_sign_in: 'Sign-in needed', error: 'Refresh failed', unavailable: 'Unavailable' }[account?.status] || 'Unavailable';
 }
+/**
+ * F6: a meter window whose reset time has passed while its reading was sampled before that reset (or at an
+ * unknown time) no longer says anything about the new period. Its old percent, fill and notch are hidden and it
+ * reads "Reset at 10:15 AM · new reading pending" until a reading sampled after the reset arrives. Amounts,
+ * unlimited and switched-off windows are left alone, and nothing is ever shown as 0%.
+ */
+export function pendingReset(account, w, now = Date.now()) {
+  if (!w || !isMeterWindow(w) || w.enabled === false || usedPercent(w) === null) return false;
+  if (!validDate(w.resetAt) || Date.parse(w.resetAt) > now) return false;
+  const at = validDate(w.sampledAt) ? w.sampledAt : validDate(account?.sampledAt) ? account.sampledAt : null;
+  return !at || Date.parse(at) < Date.parse(w.resetAt);
+}
+/** A window's "% used" for comparisons and labels: null while a reset is pending, like any missing reading. */
+export const currentUsedPercent = (account, w, now = Date.now()) => pendingReset(account, w, now) ? null : usedPercent(w);
+/** "10:15 AM" today, "Thu, Oct 1, 10:15 AM" on another day. */
+export function resetClock(value, now = Date.now()) {
+  const time = new Date(value);
+  return time.toDateString() === new Date(now).toDateString() ? clockTime.format(time) : dayClock.format(time);
+}
 function sampledText(account, w, now) {
   const at = validDate(w?.sampledAt) ? w.sampledAt : validDate(account?.sampledAt) ? account.sampledAt : null;
   if (!at) return '';
@@ -119,10 +140,11 @@ function sampledText(account, w, now) {
 
 /** One window as a MeterView. `opts.notch` is a "% used" threshold or null. */
 export function meterView(account, w, { now = Date.now(), notch = null, notchFaint = false, naText = 'Unavailable', naSub = '', label } = {}) {
-  const value = w ? usedPercent(w) : null;
+  const pending = pendingReset(account, w, now);
+  const value = w && !pending ? usedPercent(w) : null;
   const hasValue = value !== null && w?.unlimited !== true;
   const unit = text(w?.unit);
-  const amount = finite(w?.used) && finite(w?.limit) && w.limit > 0
+  const amount = !pending && finite(w?.used) && finite(w?.limit) && w.limit > 0
     ? `${nfCompact.format(w.used)} of ${compactAmount(w.limit)}${unit ? ` ${unit}` : ''}` : '';
   return {
     key: `${account?.id || ''}|${text(w?.key) || 'missing'}`,
@@ -133,12 +155,12 @@ export function meterView(account, w, { now = Date.now(), notch = null, notchFai
     valueText: hasValue ? valueText(value) : '',
     overText: hasValue && value > 100 ? valueText(value - 100) : '',
     reset: hasValue ? resetIn(w?.resetAt, now) || 'no reset reported' : '',
-    resetExact: exact(w?.resetAt, 'Resets '),
+    resetExact: pending ? `Reset at ${resetClock(w.resetAt, now)} · new reading pending` : exact(w?.resetAt, 'Resets '),
     resetSoon: validDate(w?.resetAt) && Date.parse(w.resetAt) - now < 2 * 3_600_000 && Date.parse(w.resetAt) > now,
-    naText: hasValue ? '' : naText,
-    naSub: hasValue ? '' : naSub,
+    naText: hasValue ? '' : pending ? `Reset at ${resetClock(w.resetAt, now)}` : naText,
+    naSub: hasValue ? '' : pending ? 'New reading pending' : naSub,
     amount,
-    left: finite(w?.remaining) && unit ? `${unitAmount(w.remaining, unit)} left` : '',
+    left: !pending && finite(w?.remaining) && unit ? `${unitAmount(w.remaining, unit)} left` : '',
     sampled: sampledText(account, w, now),
     source: [text(account?.source) || 'Unknown source', platformLabel(account?.platform), w?.status === 'cached' ? 'Cached window' : statusWord(account)].join(' · '),
     caption: '',
@@ -207,8 +229,8 @@ function codexAmountsRuns(account) {
 }
 const runsText = runs => runs.map(r => r.text).join('');
 /** The larger of an account's 5-hour and weekly use: the Codex switch point compares this with the threshold. */
-function codexPeak(account) {
-  const values = visibleUsageWindows('codex', account?.windows).filter(w => (w.key === 'five_hour' || w.key === 'seven_day') && usedPercent(w) !== null).map(usedPercent);
+function codexPeak(account, now = Date.now()) {
+  const values = visibleUsageWindows('codex', account?.windows).map(w => (w.key === 'five_hour' || w.key === 'seven_day') ? currentUsedPercent(account, w, now) : null).filter(value => value !== null);
   return values.length ? Math.max(...values) : null;
 }
 /** The inline question before activating an account that is already past the switch point. */
@@ -225,10 +247,10 @@ function codexFoot(accounts, auto, known, threshold, now) {
   if (!accounts.length) return { shown: false, warn: false, runs: [], when: '' };
   if (!known) return foot([run(text(auto?.message) || 'Automatic switching status unavailable')]);
   if (!active) return foot([run('No Codex account is active')], true);
-  const peak = codexPeak(active);
+  const peak = codexPeak(active, now);
   if (peak !== null && peak >= threshold) {
     if (auto.enabled !== true) return foot([run(short(active), true), run(` is above ${valueText(threshold)}% used; auto-switch is off, so it stays active until you switch`)], true);
-    const next = accounts.filter(account => account !== active).map(account => ({ account, peak: codexPeak(account) }))
+    const next = accounts.filter(account => account !== active).map(account => ({ account, peak: codexPeak(account, now) }))
       .filter(row => row.peak !== null && row.peak < threshold).sort((a, b) => a.peak - b.peak)[0]?.account;
     return foot(next
       ? [run(short(active), true), run(` is above the ${valueText(threshold)}% switch point; auto-switch moves to `), run(short(next), true), run(' on the next check')]
@@ -256,7 +278,12 @@ export function providerRegistry(data) {
 }
 
 // ---------------------------------------------------------------- sections
-function claudeSection(accounts, profiles, platform, now) {
+/** The row line of a Claude Open in progress (claude-open.mjs), or ''. */
+function openLine(openProgress, profileId) {
+  const view = profileId && openProgress instanceof Map ? openProgress.get(profileId) : null;
+  return view && typeof view.text === 'string' ? view.text : '';
+}
+function claudeSection(accounts, profiles, platform, now, openProgress) {
   const anyMax = accounts.some(isMaxPlan);
   const columns = [{ key: 'five', label: '5-hour' }, { key: 'weekly', label: 'Weekly' }, ...(anyMax ? [{ key: 'fable', label: 'Fable' }] : [])];
   const rows = accounts.map(account => {
@@ -275,10 +302,12 @@ function claudeSection(accounts, profiles, platform, now) {
     if (!five) cells[0].key = `${account.id}|five_hour`;
     if (!weekly) cells[1].key = `${account.id}|seven_day`;
     if (anyMax && isMaxPlan(account) && !fable) cells[2].key = `${account.id}|seven_day_fable`;
+    const opening = openLine(openProgress, account.capabilities?.claudeProfileId);
     return {
       id: account.id, provider: 'claude', profile: account.capabilities?.claudeProfileId || '',
       email: text(account.email) || text(account.label) || 'Account identity unavailable', plan: text(account.plan),
-      meta: [planLabel(text(account.plan)), account.status === 'ok' || account.status === 'cached' ? relative(account.sampledAt || account.fetchedAt, now) : statusWord(account)].filter(Boolean).join(' · '),
+      // While an Open runs, its progress replaces the meta line ("Copying history 3 of 18", "Opening on Mac").
+      meta: opening || [planLabel(text(account.plan)), account.status === 'ok' || account.status === 'cached' ? relative(account.sampledAt || account.fetchedAt, now) : statusWord(account)].filter(Boolean).join(' · '),
       status: statusWord(account), note: text(account.message), platform: text(account.platform),
       active: false, activeLabel: '', setup: false, canActivate: false, activateKind: '', activateHint: '',
       canMac: !!launcher?.mac?.canOpen,
@@ -318,7 +347,7 @@ function codexSection(accounts, data, now) {
     cells.push(weeklyCell);
     const profile = account.capabilities?.codexProfile || '';
     const amountsRuns = codexAmountsRuns(account);
-    const peak = codexPeak(account);
+    const peak = codexPeak(account, now);
     const above = known && account.isActive !== true && peak !== null && peak >= threshold;
     return {
       id: account.id, provider: 'codex', profile,
@@ -365,7 +394,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now) {
     const active = nativeRow?.selected === true;
     const notchFor = w => status?.enabled === true && status.requestedPoolId && w.poolId === status.requestedPoolId ? status.thresholdUsedPercent : null;
     // The switch point reads the windows of the pool the policy watches.
-    const poolUse = status?.requestedPoolId ? visibleMeters(account).filter(w => w.poolId === status.requestedPoolId && usedPercent(w) !== null).map(usedPercent) : [];
+    const poolUse = status?.requestedPoolId ? visibleMeters(account).filter(w => w.poolId === status.requestedPoolId).map(w => currentUsedPercent(account, w, now)).filter(value => value !== null) : [];
     const peak = poolUse.length ? Math.max(...poolUse) : null;
     const above = !!status && !active && peak !== null && peak >= status.thresholdUsedPercent;
     const cells = keys.map(({ key }) => {
@@ -472,7 +501,7 @@ export function dashboardViewModel(data, ctx = {}) {
   const hidden = hiddenProviders(data);
   const of = provider => accounts.filter(account => account.provider === provider);
   const sections = [];
-  if (!hidden.has('claude')) sections.push(claudeSection(of('claude'), ctx.profiles, ctx.platform || 'mac', now));
+  if (!hidden.has('claude')) sections.push(claudeSection(of('claude'), ctx.profiles, ctx.platform || 'mac', now, ctx.openProgress));
   if (!hidden.has('codex')) sections.push(codexSection(of('codex'), data, now));
   if (!hidden.has('antigravity') && of('antigravity').length) sections.push(antigravitySection(of('antigravity'), data, ctx.antigravityInventory, ctx.antigravityAuto, now));
   return {
@@ -514,6 +543,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     ...(text(account.message) ? [{ label: 'Note', value: text(account.message), mono: false }] : []),
   ];
   const missingFable = isMaxPlan(account) && !visibleMeters(account).some(isFable);
+  const opening = account.provider === 'claude' ? openLine(ctx.openProgress, account.capabilities?.claudeProfileId) : '';
   return {
     id: account.id, provider: account.provider,
     title: text(account.email) || text(account.label) || 'Account identity unavailable',
@@ -524,7 +554,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     canSwitch: !!section?.canSwitch, activeLabel: row?.activeLabel || '', activateHint: row?.activateHint || '',
     platform: platformLabel(account.platform), confirm: !!row?.confirm, confirmRuns: row?.confirmRuns || [],
     profile: row?.profile || profile, canMac: !!row?.canMac, canWindows: !!row?.canWindows,
-    note: missingFable ? 'Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.' : '',
+    note: [opening, missingFable ? 'Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.' : ''].filter(Boolean).join(' · '),
     meters, amounts: visibleAmounts(account).map(w => amountView(account, w, now)), facts,
     sectionId: section?.id || '',
   };

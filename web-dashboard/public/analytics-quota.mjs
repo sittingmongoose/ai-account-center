@@ -7,7 +7,7 @@
 // across accounts; a missing reading is a gap, never zero; a reset is never bridged by a line; projections are
 // labelled as projections; at most two decimals.
 import { visibleUsageWindows } from './visible-usage.mjs';
-import { usedPercent, isFable, isMeterWindow, period, windowLabel, planLabel, valueText, hiddenProviders } from './view-model.mjs';
+import { usedPercent, currentUsedPercent, isFable, isMeterWindow, period, windowLabel, planLabel, valueText, hiddenProviders } from './view-model.mjs';
 import { H, D, clockTxt, hourTxt, mdTxt, wmdTxt, wdTxt, timeTxt, duration, untilTxt, dayStart, addDays, bucketStart, nextBucket, dashLine, dashPolyline } from './analytics-usage.mjs';
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -72,10 +72,12 @@ export function quotaAccounts(payload, ctx = {}) {
   const history = new Map((Array.isArray(payload?.accounts) ? payload.accounts : []).filter(a => text(a?.id)).map(a => [a.id, a]));
   const current = Array.isArray(ctx.dashboard?.accounts) ? ctx.dashboard.accounts.filter(a => text(a?.id)) : [...history.values()];
   const known = new Set(QUOTA_PROVIDERS.map(([id]) => id));
+  const now = Number.isFinite(ctx.now) ? ctx.now : Date.now();
   return current.filter(a => known.has(a.provider) && !hidden.has(a.provider)).map(a => {
     const windows = visibleUsageWindows(a.provider, a.windows).map(w => ({
       key: text(w.key), label: text(w.label), short: windowLabel(a.provider, w), period: period(w), fable: isFable(w),
-      used: isMeterWindow(w) && w.unlimited !== true ? usedPercent(w) : null, meter: isMeterWindow(w),
+      // a reading from before a reset that has passed is no current reading (F6)
+      used: isMeterWindow(w) && w.unlimited !== true ? currentUsedPercent(a, w, now) : null, meter: isMeterWindow(w),
       resetAt: validDate(w.resetAt) ? Date.parse(w.resetAt) : null, expiresAt: validDate(w.expiresAt) ? Date.parse(w.expiresAt) : null,
       planExpiry: !!w.planExpiry, kind: text(w.kind) || 'rate_limit', unit: text(w.unit) || null, remaining: finite(w.remaining) ? w.remaining : null,
       raw: w,

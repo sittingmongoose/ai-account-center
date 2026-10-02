@@ -54,7 +54,11 @@ page as file:// or configure a cross-origin API URL.
   auto-switch threshold notch and reported overage; they never invent token
   denominators or reset times, and a missing reading is drawn as unavailable,
   never as zero. Fable appears only for Claude Max plans, from the
-  `seven_day_fable` window ("Not reported yet" when absent).
+  `seven_day_fable` window ("Not reported yet" when absent). A window whose
+  reset time has passed while its reading was sampled before that reset (or at
+  an unknown time) hides the old percent, fill and notch and reads "Reset at
+  10:15 AM · new reading pending" over a dashed track until a newer reading
+  arrives; it never shows 0%, and it does not count toward a switch point.
 - Details (a slide-over opened by clicking any account row or card; closed by a
   click anywhere outside it, including header buttons, nested row actions and
   Analytics cards, or Escape; a click on another row swaps it to that account)
@@ -63,7 +67,15 @@ page as file:// or configure a cross-origin API URL.
   date. Product display exclusions remove Codex Chat pass, attach Qwen
   subscription expiration to monthly usage, and hide empty Z.ai reset-pack
   summaries.
-- Claude launch buttons POST the configured profile ID plus Mac/Windows choice.
+- Claude launch buttons POST the configured profile ID plus Mac/Windows choice
+  with `Prefer: respond-async`. A 200 is a finished Open, as before. A 202
+  (a managed history copy) starts read-only polling of
+  `GET /api/claude/desktop-profiles` (every 1 s for 120 s, then every 5 s, for
+  at most 10 minutes) and the row's line shows "Copying history 3 of 18",
+  "Opening on Mac", "Opened on Mac" or the server's fixed sentence; the result
+  also appears as a toast. The POST is never sent again by the poller, a second
+  click while an Open runs sends nothing, and nothing resumes after a reload or
+  a server restart (`public/claude-open.mjs`, `tests/claude-open.test.mjs`).
 - Codex and Antigravity activation and auto-switch settings reuse authenticated
   guarded APIs. Thresholds are shown in percent used (Codex sends percent
   remaining). Busy activation opens a Slint review dialog listing the blocking
