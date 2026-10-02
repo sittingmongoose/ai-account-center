@@ -10,6 +10,7 @@ import {
   ACCOUNT_VISIBILITY_FILE,
   parseVisibilityBody,
   readAccountVisibility,
+  updateAccountVisibility,
   writeAccountVisibility,
 } from '../../../src/web-server/services/account-visibility';
 import { createAccountVisibilityRouter } from '../../../src/web-server/routes/account-visibility-routes';
@@ -39,11 +40,12 @@ describe('account visibility store', () => {
     const dir = ccsDir();
     expect(await readAccountVisibility(dir)).toEqual({
       state: 'ok',
-      visibility: { hiddenProviders: [], hiddenAccountIds: [] },
+      visibility: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] },
     });
     const saved = await writeAccountVisibility(dir, {
       hiddenProviders: ['kimi-code'],
       hiddenAccountIds: ['codex:lexxmariah', 'plan-opencode-go-console-mac-0123456789ab'],
+      trayHiddenProviders: ['qwen'],
     });
     const file = path.join(dir, ACCOUNT_VISIBILITY_FILE);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
@@ -68,6 +70,36 @@ describe('account visibility store', () => {
       ],
       [JSON.stringify({ version: 1, hiddenProviders: [], hiddenAccountIds: ids(129) }), 0o600],
       [' '.repeat(16 * 1024 + 1), 0o600],
+      // The tray list is validated exactly like the dashboard provider list.
+      [
+        JSON.stringify({
+          version: 1,
+          hiddenProviders: [],
+          hiddenAccountIds: [],
+          trayHiddenProviders: 'qwen',
+        }),
+        0o600,
+      ],
+      [
+        JSON.stringify({
+          version: 1,
+          hiddenProviders: [],
+          hiddenAccountIds: [],
+          trayHiddenProviders: [42],
+        }),
+        0o600,
+      ],
+      [
+        JSON.stringify({
+          version: 1,
+          hiddenProviders: [],
+          hiddenAccountIds: [],
+          trayHiddenProviders: Array.from({ length: 33 }, () => 'qwen'),
+        }),
+        0o600,
+      ],
+      // The tray key does not replace a required key.
+      [JSON.stringify({ version: 1, hiddenProviders: [], trayHiddenProviders: [] }), 0o600],
     ] as const) {
       fs.writeFileSync(file, contents);
       fs.chmodSync(file, mode);
@@ -79,25 +111,45 @@ describe('account visibility store', () => {
     fs.symlinkSync(target, file);
     expect(await readAccountVisibility(dir)).toEqual({ state: 'unavailable' });
     // A full replacement repairs it without following the link.
-    await writeAccountVisibility(dir, { hiddenProviders: [], hiddenAccountIds: [] });
+    await writeAccountVisibility(dir, {
+      hiddenProviders: [],
+      hiddenAccountIds: [],
+      trayHiddenProviders: [],
+    });
     expect(fs.lstatSync(file).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe(valid);
   });
 
   it('drops a provider that has left the table but keeps the rest of the file', async () => {
     const dir = ccsDir();
+    const file = path.join(dir, ACCOUNT_VISIBILITY_FILE);
     fs.writeFileSync(
-      path.join(dir, ACCOUNT_VISIBILITY_FILE),
+      file,
       JSON.stringify({
         version: 1,
         hiddenProviders: ['retired-provider', 'qwen'],
         hiddenAccountIds: ['zai:usage'],
+        trayHiddenProviders: ['retired-provider', 'zai'],
       }),
       { mode: 0o600 }
     );
     expect(await readAccountVisibility(dir)).toEqual({
       state: 'ok',
-      visibility: { hiddenProviders: ['qwen'], hiddenAccountIds: ['zai:usage'] },
+      visibility: {
+        hiddenProviders: ['qwen'],
+        hiddenAccountIds: ['zai:usage'],
+        trayHiddenProviders: ['zai'],
+      },
+    });
+    // A file written before the tray list existed keeps reading, with nothing tray-hidden.
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ version: 1, hiddenProviders: ['qwen'], hiddenAccountIds: [] }),
+      { mode: 0o600 }
+    );
+    expect(await readAccountVisibility(dir)).toEqual({
+      state: 'ok',
+      visibility: { hiddenProviders: ['qwen'], hiddenAccountIds: [], trayHiddenProviders: [] },
     });
   });
 
@@ -111,14 +163,23 @@ describe('account visibility store', () => {
       hiddenProviders: ['zai'],
       hiddenAccountIds: ['zai:acct:9f2c41d0'],
     });
+    // Each list may be updated alone; the tray list deduplicates the same way.
+    expect(parseVisibilityBody({ hiddenProviders: [] })).toEqual({ hiddenProviders: [] });
+    expect(parseVisibilityBody({ hiddenAccountIds: [] })).toEqual({ hiddenAccountIds: [] });
+    expect(parseVisibilityBody({ trayHiddenProviders: ['qwen', 'qwen'] })).toEqual({
+      trayHiddenProviders: ['qwen'],
+    });
     expect(
       parseVisibilityBody({ hiddenProviders: [], hiddenAccountIds: ids(128) })?.hiddenAccountIds
     ).toHaveLength(128);
+    expect(
+      parseVisibilityBody({ trayHiddenProviders: Array.from({ length: 32 }, () => 'qwen') })
+        ?.trayHiddenProviders
+    ).toHaveLength(1);
     for (const body of [
       null,
       [],
       {},
-      { hiddenProviders: [] },
       { hiddenProviders: ['unknown'], hiddenAccountIds: [] },
       { hiddenProviders: [], hiddenAccountIds: ids(129) },
       { hiddenProviders: [], hiddenAccountIds: ['codex'] },
@@ -128,6 +189,12 @@ describe('account visibility store', () => {
       { hiddenProviders: [], hiddenAccountIds: [42] },
       { hiddenProviders: 'zai', hiddenAccountIds: [] },
       { hiddenProviders: [], hiddenAccountIds: [], extra: [] },
+      { hiddenProviders: Array.from({ length: 33 }, () => 'zai') },
+      { trayHiddenProviders: ['unknown'] },
+      { trayHiddenProviders: 'qwen' },
+      { trayHiddenProviders: [42] },
+      { trayHiddenProviders: Array.from({ length: 33 }, () => 'qwen') },
+      { trayHiddenProviders: [], nope: [] },
     ]) {
       expect(parseVisibilityBody(body)).toBeNull();
     }
@@ -167,7 +234,7 @@ describe('GET and PUT /api/accounts/visibility', () => {
       '/api/accounts',
       createAccountVisibilityRouter({
         read: () => readAccountVisibility(dir),
-        write: (visibility) => writeAccountVisibility(dir, visibility),
+        write: (update) => updateAccountVisibility(dir, update),
         onChanged: onChanged ?? (() => (changes += 1)),
         audit: (counts) => audits.push(counts),
       })
@@ -190,7 +257,11 @@ describe('GET and PUT /api/accounts/visibility', () => {
 
   it('saves a full replacement and returns it on the next GET', async () => {
     const { dir, url, put, audits, changes } = await fixture();
-    const body = { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:lexxmariah'] };
+    const body = {
+      hiddenProviders: ['kimi-code'],
+      hiddenAccountIds: ['codex:lexxmariah'],
+      trayHiddenProviders: ['qwen'],
+    };
     const response = await put(body);
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
@@ -201,8 +272,42 @@ describe('GET and PUT /api/accounts/visibility', () => {
     expect(await read.json()).toEqual(body);
     expect(fs.statSync(path.join(dir, ACCOUNT_VISIBILITY_FILE)).mode & 0o777).toBe(0o600);
     expect(changes()).toBe(1);
-    expect(audits).toEqual([{ hiddenProviders: 1, hiddenAccountIds: 1 }]);
+    expect(audits).toEqual([{ hiddenProviders: 1, hiddenAccountIds: 1, trayHiddenProviders: 1 }]);
     expect(JSON.stringify(audits)).not.toContain('lexxmariah');
+  });
+
+  it('updates one list without touching the others', async () => {
+    const { url, put } = await fixture();
+    const get = async () => {
+      const read = await fetch(url, { headers: { 'x-test-session': 'true' } });
+      expect(read.status).toBe(200);
+      return read.json();
+    };
+    expect((await put({ trayHiddenProviders: ['qwen', 'zai'] })).status).toBe(200);
+    expect(await get()).toEqual({
+      hiddenProviders: [],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['qwen', 'zai'],
+    });
+    expect((await put({ hiddenProviders: ['kimi-code'] })).status).toBe(200);
+    expect(await get()).toEqual({
+      hiddenProviders: ['kimi-code'],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['qwen', 'zai'],
+    });
+    expect((await put({ hiddenAccountIds: ['codex:lexxmariah'] })).status).toBe(200);
+    expect(await get()).toEqual({
+      hiddenProviders: ['kimi-code'],
+      hiddenAccountIds: ['codex:lexxmariah'],
+      trayHiddenProviders: ['qwen', 'zai'],
+    });
+    // An empty tray list clears only the tray list.
+    expect((await put({ trayHiddenProviders: [] })).status).toBe(200);
+    expect(await get()).toEqual({
+      hiddenProviders: ['kimi-code'],
+      hiddenAccountIds: ['codex:lexxmariah'],
+      trayHiddenProviders: [],
+    });
   });
 
   it('refuses without a session, with a query, a foreign origin, a non-JSON type or a bad body', async () => {
@@ -246,6 +351,10 @@ describe('GET and PUT /api/accounts/visibility', () => {
       { hiddenProviders: [], hiddenAccountIds: ids(129) },
       { hiddenProviders: [], hiddenAccountIds: [], PRIVATE: true },
       { hiddenProviders: [], hiddenAccountIds: ['codex:x'], pad: 'x'.repeat(9000) },
+      { trayHiddenProviders: ['PRIVATE'] },
+      { trayHiddenProviders: 'qwen' },
+      { trayHiddenProviders: Array.from({ length: 33 }, () => 'qwen') },
+      {},
       [],
     ]) {
       await expectError(await put(body), 400, 'invalid_body');
@@ -272,12 +381,11 @@ describe('GET and PUT /api/accounts/visibility', () => {
     ).toBe(404);
   });
 
-  it('answers 500 when the file cannot be read safely, and a PUT repairs it', async () => {
+  it('answers 500 when the file cannot be read safely, and a full PUT repairs it', async () => {
     const { dir, url, put } = await fixture();
     const file = path.join(dir, ACCOUNT_VISIBILITY_FILE);
-    fs.writeFileSync(file, '{"version":1,"hiddenProviders":[],"hiddenAccountIds":[]}', {
-      mode: 0o644,
-    });
+    const unsafe = '{"version":1,"hiddenProviders":[],"hiddenAccountIds":[]}';
+    fs.writeFileSync(file, unsafe, { mode: 0o644 });
     fs.chmodSync(file, 0o644);
     const read = await fetch(url, { headers: { 'x-test-session': 'true' } });
     expect(read.status).toBe(500);
@@ -285,8 +393,30 @@ describe('GET and PUT /api/accounts/visibility', () => {
       error: 'Account visibility could not be read safely.',
       code: 'visibility_unavailable',
     });
-    expect((await put({ hiddenProviders: ['zai'], hiddenAccountIds: [] })).status).toBe(200);
-    expect((await fetch(url, { headers: { 'x-test-session': 'true' } })).status).toBe(200);
+    // A partial PUT cannot merge into an unreadable file: 500, and nothing is written.
+    const partial = await put({ trayHiddenProviders: ['qwen'] });
+    expect(partial.status).toBe(500);
+    expect(await partial.json()).toEqual({
+      error: 'Account visibility could not be read safely.',
+      code: 'visibility_unavailable',
+    });
+    expect(fs.readFileSync(file, 'utf8')).toBe(unsafe);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o644);
+    // A full PUT replaces and repairs the file, exactly as before.
+    const full = await put({
+      hiddenProviders: ['zai'],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['qwen'],
+    });
+    expect(full.status).toBe(200);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    const after = await fetch(url, { headers: { 'x-test-session': 'true' } });
+    expect(after.status).toBe(200);
+    expect(await after.json()).toEqual({
+      hiddenProviders: ['zai'],
+      hiddenAccountIds: [],
+      trayHiddenProviders: ['qwen'],
+    });
   });
 
   it('pushes accounts-changed to every open /ws client after a saved change', async () => {

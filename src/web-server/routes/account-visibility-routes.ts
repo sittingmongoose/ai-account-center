@@ -8,15 +8,19 @@ import { broadcastDashboardEvent } from '../dashboard-events';
 import {
   parseVisibilityBody,
   readAccountVisibility,
-  writeAccountVisibility,
+  updateAccountVisibility,
   type AccountVisibility,
   type AccountVisibilityRead,
+  type AccountVisibilityUpdate,
+  type AccountVisibilityUpdateResult,
 } from '../services/account-visibility';
 
 /**
  * GET and PUT /api/accounts/visibility (CONTRACT-registry-lifecycle section 4).
  * A browser session is required; the PUT also needs the dashboard Origin,
- * application/json, a strict body of at most 8 KB and no query string.
+ * application/json, a strict body of at most 8 KB and no query string. The PUT
+ * body may name any non-empty subset of `hiddenProviders`, `hiddenAccountIds`
+ * and `trayHiddenProviders`; a list it leaves out is unchanged.
  * Errors are `{error, code}` with fixed sentences and never echo input.
  */
 const MAX_BODY_BYTES = 8 * 1024;
@@ -24,10 +28,14 @@ const logger = createLogger('account-visibility');
 
 export interface AccountVisibilityRouterDeps {
   read?: () => Promise<AccountVisibilityRead>;
-  write?: (visibility: AccountVisibility) => Promise<AccountVisibility>;
+  write?: (update: AccountVisibilityUpdate) => Promise<AccountVisibilityUpdateResult>;
   /** After a saved change: tell the /ws clients to re-read the dashboard. */
   onChanged?: () => void;
-  audit?: (counts: { hiddenProviders: number; hiddenAccountIds: number }) => void;
+  audit?: (counts: {
+    hiddenProviders: number;
+    hiddenAccountIds: number;
+    trayHiddenProviders: number;
+  }) => void;
 }
 
 function fail(res: Response, status: number, code: string, error: string): void {
@@ -47,7 +55,7 @@ function bodyTooLarge(req: Request): boolean {
 export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps = {}): Router {
   const router = createApiRouter();
   const read = deps.read ?? (() => readAccountVisibility(getCcsDir()));
-  const write = deps.write ?? ((visibility) => writeAccountVisibility(getCcsDir(), visibility));
+  const write = deps.write ?? ((update) => updateAccountVisibility(getCcsDir(), update));
 
   router.use('/visibility', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -84,19 +92,25 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
       fail(res, 415, 'json_required', 'This change requires application/json.');
       return;
     }
-    const visibility = bodyTooLarge(req) ? null : parseVisibilityBody(req.body);
-    if (!visibility) {
+    const update = bodyTooLarge(req) ? null : parseVisibilityBody(req.body);
+    if (!update) {
       fail(
         res,
         400,
         'invalid_body',
-        'Send hiddenProviders with known providers and at most 128 valid hiddenAccountIds.'
+        'Send hiddenProviders or trayHiddenProviders with known providers and at most 128 valid ids.'
       );
       return;
     }
     let saved: AccountVisibility;
     try {
-      saved = await write(visibility);
+      const result = await write(update);
+      if (result.state !== 'saved') {
+        // A partial update cannot merge into a file that cannot be read safely.
+        fail(res, 500, 'visibility_unavailable', 'Account visibility could not be read safely.');
+        return;
+      }
+      saved = result.visibility;
     } catch {
       fail(res, 500, 'visibility_write_failed', 'Account visibility could not be saved.');
       return;
@@ -104,6 +118,7 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
     const counts = {
       hiddenProviders: saved.hiddenProviders.length,
       hiddenAccountIds: saved.hiddenAccountIds.length,
+      trayHiddenProviders: saved.trayHiddenProviders.length,
     };
     // The change is saved; a failed log line or hint never changes the answer.
     try {
