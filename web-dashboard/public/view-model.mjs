@@ -144,7 +144,10 @@ export function meterView(account, w, { now = Date.now(), notch = null, notchFai
   const value = w && !pending ? usedPercent(w) : null;
   const hasValue = value !== null && w?.unlimited !== true;
   const unit = text(w?.unit);
-  const amount = !pending && finite(w?.used) && finite(w?.limit) && w.limit > 0
+  // A limit of 100 with no unit only restates the meter's own percentage ("99 of 100" under a 99%
+  // bar), so cards show no caption for it. Counts with a real limit or a named unit stay.
+  const restatesPercent = w?.limit === 100 && !unit;
+  const amount = !pending && !restatesPercent && finite(w?.used) && finite(w?.limit) && w.limit > 0
     ? `${nfCompact.format(w.used)} of ${compactAmount(w.limit)}${unit ? ` ${unit}` : ''}` : '';
   return {
     key: `${account?.id || ''}|${text(w?.key) || 'missing'}`,
