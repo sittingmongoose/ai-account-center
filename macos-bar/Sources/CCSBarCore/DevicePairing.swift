@@ -1,4 +1,5 @@
 import Foundation
+import SystemConfiguration
 
 // Pairing this tray with the dashboard (CONTRACT-auth-devices sections 2a, 4, 5, 6, 7 and 8, as amended for the
 // trusted local network on 2026-10-02). The dashboard stays on plain HTTP at its LAN address; its owner switch
@@ -190,9 +191,11 @@ public struct DashboardProbe: Sendable {
     self.transport = transport
   }
 
-  /// "jared-mac" or what the Mac calls itself, 1 to 64 printable characters.
+  /// The Mac's own name (System Settings › General › Sharing), 1 to 64 printable characters. Read from the
+  /// system configuration store, which answers at once (`Host.current()` can wait on name lookups).
   public static func deviceName(_ candidate: String? = nil) -> String {
-    let raw = candidate ?? Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    let computer = SCDynamicStoreCopyComputerName(nil, nil) as String?
+    let raw = candidate ?? computer ?? ProcessInfo.processInfo.hostName
     let printable = raw.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7F }
     let trimmed = String(String.UnicodeScalarView(printable)).trimmingCharacters(in: .whitespaces)
     return trimmed.isEmpty ? "Mac" : String(trimmed.prefix(64))

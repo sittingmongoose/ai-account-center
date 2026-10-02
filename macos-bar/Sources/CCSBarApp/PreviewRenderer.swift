@@ -48,6 +48,14 @@ enum PreviewRenderer {
     NSApplication.shared.appearance = appearance
     TrayFormat.referenceNow = AccountFormatting.date(dashboard.updatedAt)
     let model = AccountsViewModel(preview: dashboard)
+    if options.settings, let example = URL(string: "http://192.168.1.20:3000") {
+      // Settings shows Connection as a paired tray: an example key, never a saved one.
+      let check = try? JSONDecoder().decode(AuthCheck.self, from: Data("""
+        {"accessMode":"login","secureTransport":false,"trustedLocalNetwork":true,"connection":{"peer":"192.168.1.23","trusted":true}}
+        """.utf8))
+      model.previewPaired(BarConnection(baseURL: example, username: "owner", deviceId: "dev_0000000000000001",
+        deviceToken: "aacd_" + String(repeating: "x", count: 43), installId: UUID().uuidString, pairedAt: dashboard.updatedAt), check: check)
+    }
     let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard, persist: false)
     let state = PanelState()
     state.staticRender = true

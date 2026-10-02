@@ -109,6 +109,14 @@ enum SignInCheck {
     record("first run opens the sign-in screen with an empty address", signIn.active && signIn.state == .firstRun
       && signIn.address.isEmpty && model.menuBarReading(TrayPreferences(defaults: UserDefaults(suiteName: "aac.signin.check") ?? .standard, persist: false)) == nil)
 
+    // The refresh timer never resets what the person is typing, and never polls behind the screen.
+    signIn.address = "192.168.50.10:30"
+    let ticked = Holder(false)
+    Task { @MainActor in await model.tick(); ticked.value = true }
+    wait { ticked.value }
+    record("a refresh tick leaves the sign-in screen and its fields alone", signIn.active && signIn.state == .firstRun
+      && signIn.address == "192.168.50.10:30" && fake.count == 0)
+
     // 4: a public address is refused by the tray itself; nothing is sent.
     let sent = fake.count
     signIn.address = "203.0.113.5:3000"
@@ -249,6 +257,25 @@ enum SignInCheck {
     let setUp = wait(5) { !signIn.active }
     record("2 setup then pairing hands off", setUp && (try? BarConnection.load(from: file))?.isPaired == true && fake.mode == "login")
     wait(3) { !model.isRefreshing }
+
+    // A connection deployed privately while the screen waits is picked up by the next tick.
+    let deployedFile = directory.appendingPathComponent("deployed/accounts-connection.json")
+    let waiting = AccountsViewModel(preview: nil, session: makeSession(deployedFile))
+    let firstShown = waiting.signIn.active && waiting.signIn.state == .firstRun
+    let writer = makeSession(deployedFile)
+    let deployed = Holder(false)
+    Task { @MainActor in
+      if case .paired = await writer.pair(url: URL(string: "http://192.168.50.10:3000")!, username: "owner", password: "check-pass-1") {
+        deployed.value = true
+      }
+    }
+    wait { deployed.value }
+    let tock = Holder(false)
+    Task { @MainActor in await waiting.tick(); tock.value = true }
+    wait { tock.value }
+    wait(3) { !waiting.isRefreshing && waiting.dashboard != nil }
+    record("a connection deployed while the screen waits is picked up by the next tick", firstShown && deployed.value
+      && !waiting.signIn.active && waiting.connection?.isPaired == true)
 
     // 9: a stored version 1 password is traded for a key by itself.
     let migrated = directory.appendingPathComponent("v1/accounts-connection.json")

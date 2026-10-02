@@ -202,7 +202,7 @@ public final class ConnectionSession {
   /// Name resolution for the tray's own local-network check (a check fixture replaces it).
   public var resolver: @Sendable (String) -> [String] = { LocalNetwork.resolve($0) }
   public var now: () -> Date = { Date() }
-  public var deviceName: String = DashboardProbe.deviceName()
+  public lazy var deviceName: String = DashboardProbe.deviceName()
   public var appVersion: String? = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
   /// The last `devices/me`, and when it was read.
   public private(set) var device: DeviceSelf?

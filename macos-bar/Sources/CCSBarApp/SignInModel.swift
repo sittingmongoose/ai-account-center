@@ -232,6 +232,14 @@ final class SignInModel: ObservableObject {
     }
   }
 
+  /// The screen leaves without a hand-off (a connection appeared from elsewhere).
+  func dismiss() {
+    run += 1
+    busy = false
+    repair = false
+    active = false
+  }
+
   func cancel() {
     run += 1
     busy = false

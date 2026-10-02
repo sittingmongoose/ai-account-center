@@ -115,12 +115,7 @@ final class AccountsViewModel: ObservableObject {
     if timer?.timeInterval == interval { return }
     timer?.invalidate()
     timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-      Task { @MainActor in
-        guard let self else { return }
-        self.reevaluateResets()
-        if self.client == nil { self.configure() }
-        else { await self.refresh() }
-      }
+      Task { @MainActor in await self?.tick() }
     }
   }
 
@@ -165,6 +160,26 @@ final class AccountsViewModel: ObservableObject {
       signIn.showFirstRun()
       message = exists ? error.localizedDescription : nil
     }
+  }
+
+  /// One refresh-timer tick. While the sign-in screen shows (not a Re-pair), nothing polls and nothing the person is
+  /// typing is reset; only a connection file deployed privately in the meantime is picked up.
+  func tick() async {
+    reevaluateResets()
+    if signIn.active && !signIn.repair { reloadIfDeployed() }
+    else if client == nil { configure() }
+    else { await refresh() }
+  }
+
+  /// A paired or password connection written to the private file while the sign-in screen waited (for example a
+  /// deployed file) replaces the screen; a signed-out file, or a sign-in step in progress, is left alone.
+  private func reloadIfDeployed() {
+    guard !signIn.busy, ![.pairing, .securing, .success].contains(signIn.state),
+      let saved = try? BarConnection.load(from: session.fileURL), saved.isPaired || saved.hasPassword,
+      saved.deviceToken != connection?.deviceToken || saved.password != connection?.password || connection == nil
+    else { return }
+    signIn.dismiss()
+    configure()
   }
 
   // MARK: Pairing hand-offs (called by the sign-in screen)
@@ -260,6 +275,13 @@ final class AccountsViewModel: ObservableObject {
       try? await Task.sleep(nanoseconds: 3_000_000_000)
       if statusFlash == text { statusFlash = nil }
     }
+  }
+
+  /// Offline renders only: show Settings › Connection as a paired tray (an example connection, never a saved one).
+  func previewPaired(_ example: BarConnection, check: AuthCheck?) {
+    guard isPreview else { return }
+    connection = example
+    connectionCheck = check
   }
 
   /// The panel opened: later opens use the panel's own entrance again.

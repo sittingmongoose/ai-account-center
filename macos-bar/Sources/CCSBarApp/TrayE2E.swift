@@ -70,6 +70,7 @@ enum TrayE2E {
     switch phase {
     case "trust-off": trustOff(base: base, folder: folder, user: user, password: first)
     case "not-trusted": notTrusted(base: base, folder: folder)
+    case "setup": setup(base: base, folder: folder, user: user, password: first, code: environment["AAC_E2E_SETUP_CODE"] ?? "")
     case "main": main(base: base, folder: folder, user: user, first: first, second: second)
     case "migrate": migrate(base: base, folder: folder, user: user, password: second)
     default: refuse("unknown phase")
@@ -78,6 +79,8 @@ enum TrayE2E {
   }
 
   private static func tray(_ file: URL) -> AccountsViewModel {
+    // Each phase starts from its own empty folder inside the isolated state folder.
+    try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
     let session = ConnectionSession(fileURL: file)
     let model = AccountsViewModel(preview: nil, session: session)
     model.signIn.stepInterval = 0.2
@@ -124,6 +127,36 @@ enum TrayE2E {
     signIn.submit()
     wait { !signIn.busy }
     record("4 a public address is refused by the tray before anything is sent", signIn.state == .notLocal && signIn.seenAs == nil)
+  }
+
+  /// State 2 over the real network: a fresh sandbox dashboard with no sign-in yet, its one-time setup code read from
+  /// the sandbox server's own file by the operator, then pairing.
+  private static func setup(base: URL, folder: URL, user: String, password: String, code: String) {
+    let file = folder.appendingPathComponent("setup/accounts-connection.json")
+    let model = tray(file)
+    let signIn = model.signIn
+    signIn.address = base.absoluteString
+    signIn.submit()
+    wait { !signIn.busy }
+    let text = screen(signIn)
+    record("2 a dashboard with no sign-in asks for the one-time setup code, on screen", signIn.state == .setupCode
+      && signIn.codeRequired && shows(text, ["Set up sign-in", "has no sign-in yet", "Setup code"]), ["read": text])
+    signIn.username = user
+    signIn.password = password
+    signIn.confirm = password
+    signIn.setupCode = "AAAA-AAAA"
+    signIn.submit()
+    wait { !signIn.busy }
+    record("2 a wrong setup code is refused by the dashboard", signIn.state == .setupCode && signIn.badField == .code)
+    signIn.setupCode = code
+    signIn.submit()
+    let done = wait(30) { !signIn.active }
+    let saved = try? BarConnection.load(from: file)
+    record("2 the right setup code creates the sign-in and pairs this tray", done && saved?.isPaired == true)
+    wait(30) { model.dashboard != nil && !model.isRefreshing }
+    model.disconnect()
+    wait(20) { signIn.active }
+    record("the setup phase's key is disconnected at the end", (try? BarConnection.load(from: file))?.isSignedOut == true)
   }
 
   private static func main(base: URL, folder: URL, user: String, first: String, second: String) {
@@ -236,15 +269,22 @@ enum TrayE2E {
     do { try ConnectionStore.save(BarConnection(baseURL: base, username: user, password: password), to: file) }
     catch { record("fake version 1 file written", false); return }
     record("fake version 1 password file written (0600)", (try? BarConnection.load(from: file))?.hasPassword == true)
-    let model = tray(file)
+    let session = ConnectionSession(fileURL: file)
+    let model = AccountsViewModel(preview: nil, session: session)
+    model.signIn.stepInterval = 0.2
+    model.signIn.successHold = 0.3
     let signIn = model.signIn
     let securing = signIn.active && signIn.state == .securing
     let done = wait(30) { !signIn.active }
-    let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
-    let names = (try? FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)) ?? []
+    let folderURL = file.deletingLastPathComponent()
+    let names = ((try? FileManager.default.contentsOfDirectory(atPath: folderURL.path)) ?? []).sorted()
+    // The password is in no file of the folder any more, and the rollback copy is gone.
+    let leaked = names.contains { name in
+      ((try? String(contentsOf: folderURL.appendingPathComponent(name), encoding: .utf8)) ?? "").contains(password)
+    }
     record("9 a stored password is traded for a key by itself; the password and the rollback copy are gone", securing && done
-      && (try? BarConnection.load(from: file))?.isPaired == true && !text.contains(password) && names == ["accounts-connection.json"],
-      ["files": names])
+      && (try? BarConnection.load(from: file))?.isPaired == true && !leaked
+      && !names.contains("accounts-connection.v1-rollback.json"), ["files": names])
     wait(30) { model.dashboard != nil && !model.isRefreshing }
     record("bearer reads after the migration", model.dashboard != nil && model.connected)
     // Leave the sandbox clean: this key is disconnected too.
@@ -274,7 +314,7 @@ final class AdminBrowser {
     self.base = base
     let config = URLSessionConfiguration.ephemeral
     config.httpShouldSetCookies = true
-    config.httpCookieStorage = HTTPCookieStorage()
+    config.httpCookieAcceptPolicy = .always
     config.timeoutIntervalForRequest = 20
     session = URLSession(configuration: config)
   }
