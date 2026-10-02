@@ -363,6 +363,9 @@ Gotchas found in the W5 review (concept comparison and performance):
   the pointer sets `cached: false`, and the trend card caches only its plot (`chart-layer`).
 - **Never animate `drop-shadow-*`.** Each change re-blurs a new shadow texture (same cost as above); fade a
   static second shadow instead (`HoverShadow`).
+- **Content-sized columns.** The concept's agenda grid sizes TIME to its widest line and ACCOUNT to its widest
+  (at most 300 px); each agenda line measures its own texts with hidden Text elements and raises the widths in
+  `AxAgendaCols`, the way Accounts rows report their slot widths.
 - **Opacity 0 still draws.** Give faded-out groups `visible: self.opacity > 0.005` (the trend's hidden token
   bands were tessellated every frame).
 - **Missed redraws.** A state change pushed from JavaScript could stay unpainted until the next pointer event

@@ -7,9 +7,11 @@ import { Caps, ValueUnit } from "../../components/text.slint";
 import { AxData, AxAgendaRow } from "ax-data.slint";
 import { AxCard, AxCardHead, AxTip } from "ax-common.slint";
 
+// The concept's grid sizes TIME to its widest line (max-content) and ACCOUNT to its widest, at most 300 px
+// (fit-content); every line reports its natural widths here, and the columns only grow while the page lives.
 export global AxAgendaCols {
-    out property <length> time: 150px;
-    out property <length> who: Breakpoints.width >= 1600px ? 230px : 250px;
+    in-out property <length> time: 0px;
+    in-out property <length> who: 0px;
     out property <length> now: Breakpoints.width >= 1600px ? 200px : 220px;
 }
 
@@ -34,6 +36,21 @@ component AgendaLine inherits Rectangle {
     property <bool> shown: !Motion.on;
     show := Timer { interval: max(1ms, root.delay + root.ar.i * 16ms); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
     min-height: root.ar.kind == "day" ? 41px : 31px;
+    // natural column widths, measured with the line's own fonts (never drawn)
+    time-m := Text { visible: false; text: root.ar.time; font-family: Type.tab; font-size: 13px; font-weight: 620; }
+    rel-m := Text { visible: false; text: root.ar.rel; font-family: Type.tab; font-size: 12px; }
+    who-m := Text { visible: false; text: root.ar.who; font-size: 13px; font-weight: 540; }
+    property <length> time-natural: time-m.preferred-width + (root.ar.rel != "" ? 8px + rel-m.preferred-width : 0px);
+    property <length> who-natural: min(300px, 18px + 9px + who-m.preferred-width);
+    function report() {
+        if root.ar.kind == "line" {
+            AxAgendaCols.time = max(AxAgendaCols.time, root.time-natural);
+            AxAgendaCols.who = max(AxAgendaCols.who, root.who-natural);
+        }
+    }
+    init => { root.report(); }
+    changed time-natural => { root.report(); }
+    changed who-natural => { root.report(); }
     opacity: root.shown ? 1 : 0;
     animate opacity { duration: Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     if root.ar.kind == "day": Rectangle {
