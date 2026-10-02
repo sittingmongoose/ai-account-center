@@ -438,7 +438,8 @@ public partial class MainWindow : Window
     private FrameworkElement SectionHeader(string provider, DashboardAccount[] accounts, List<Column> columns, double acts, bool separateCaptions)
     {
         var grid = Ui.SectionGrid(columns.Count, acts);
-        grid.Margin = new Thickness(12, 6, 10, 0); grid.MinHeight = 28;
+        // The concept's header is 28 px including its 6 px top padding (border-box), so 22 px under the margin.
+        grid.Margin = new Thickness(12, 6, 10, 0); grid.MinHeight = 22;
         var mark = Ui.Mark(provider, 16); grid.Children.Add(mark);
         var identity = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         var name = Ui.Text(Formatting.ProviderName(provider, accounts[0].ProviderLabel), 13.5, "Ink", FontWeights.SemiBold);
@@ -451,7 +452,7 @@ public partial class MainWindow : Window
         if (separateCaptions)
         {
             // Two Antigravity accounts: name line with its own auto-switch tools, captions on the next line.
-            var line = new DockPanel { Margin = new Thickness(12, 6, 10, 0), MinHeight = 28, LastChildFill = false };
+            var line = new DockPanel { Margin = new Thickness(12, 6, 10, 0), MinHeight = 22, LastChildFill = false };
             var head = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             // The mark sits centred in the grid's 22 px mark column and the name starts on the identity column (22 + 14).
             var mark2 = Ui.Mark(provider, 16); mark2.Margin = new Thickness(3, 0, 17, 0); head.Children.Add(mark2); head.Children.Add(identity);

@@ -322,6 +322,21 @@ public static class Checks
         {
             using var light = TrayIcon.LoadIcon(true, 16); using var dark = TrayIcon.LoadIcon(false, 32);
             report.Checks["apex_tray_icons_load_light_and_dark"] = light.Width == 16 && dark.Width == 32;
+            // Light-taskbar art is dark ink and dark-taskbar art is light ink (mean luminance of the opaque pixels).
+            static double Ink(bool lightTaskbar)
+            {
+                using var icon = TrayIcon.LoadIcon(lightTaskbar, 16); using var bitmap = icon.ToBitmap();
+                double sum = 0, weight = 0;
+                for (int y = 0; y < bitmap.Height; y++) for (int x = 0; x < bitmap.Width; x++)
+                {
+                    var c = bitmap.GetPixel(x, y); if (c.A < 128) continue;
+                    sum += (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255; weight++;
+                }
+                return weight == 0 ? double.NaN : sum / weight;
+            }
+            var lightInk = Ink(true); var darkInk = Ink(false);
+            report.Measurements["tray_icon_ink_light_taskbar"] = Math.Round(lightInk, 3); report.Measurements["tray_icon_ink_dark_taskbar"] = Math.Round(darkInk, 3);
+            report.Checks["tray_icon_ink_contrasts_with_taskbar"] = lightInk < 0.35 && darkInk > 0.65;
         }
         catch (Exception error) { report.Checks["apex_tray_icons_load_light_and_dark"] = false; report.Notes["apex_tray_icons"] = error.GetType().Name + ": " + error.Message; }
         try

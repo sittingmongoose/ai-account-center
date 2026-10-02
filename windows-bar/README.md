@@ -32,7 +32,8 @@ The tray is a thin client of `GET /api/accounts/dashboard?platform=windows`. Unk
 unknown ("Unavailable", never 0), nothing is summed or averaged across accounts, and displayed fractions use at most two
 decimals (the raw values keep their precision). Codex Chat pass windows, Qwen subscription metadata, empty Z.ai pack
 summaries and an unreported Codex 5-hour window are not shown. Retained (cached) readings keep their original sample
-time in the tooltip and details. Providers listed in `hiddenProviders` (top level, or in `settings`) are left out
+time in the tooltip and details. A compact meter's reset takes the longest form that fits beside its value ("5:15 AM",
+then "5h 15m", then "5h"); the exact time is always in its tooltip. Providers listed in `hiddenProviders` (top level, or in `settings`) are left out
 when the dashboard reports them; until then Settings says the server does not report them. Provider ids, Codex profiles,
 Claude profile ids and Antigravity profile ids come from the data and are accepted only when they are URI and path
 safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
@@ -44,8 +45,10 @@ safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
   number. See `CCSBar/Resources/Fonts/README.md`.
 - **Light / Dark / Auto:** Settings, live. Auto follows the Windows app mode (`AppsUseLightTheme`) and re-applies on
   `SystemEvents.UserPreferenceChanged`; colours cross-fade over 300 ms.
-- **Icons:** the Apex Soft notification-area icon and app icon, light or dark taskbar art picked from
-  `SystemUsesLightTheme`; official provider marks (`marks-v2`, light-surface variants in Light, never recoloured);
+- **Icons:** the Apex Soft notification-area icon, light or dark taskbar art picked from `SystemUsesLightTheme` and
+  swapped when the taskbar theme changes; the plated Apex Soft app icon (the Mac's art, built by
+  `scripts/build-app-icon.py`) for the executable, window and shortcuts, legible on any wallpaper or theme; official
+  provider marks (`marks-v2`, light-surface variants in Light, never recoloured);
   filled Apple and Windows glyphs; Lucide UI icons drawn as vectors. No glyph-font or emoji icons.
 - **Motion:** the panel fades and rises on open with a short stagger; bars sweep from 0 on the first open of a session
   and later only changed readings move. Meter widths and numbers ease out (cubic) and never pass the reading; the
@@ -53,25 +56,27 @@ safe (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`); there is no allowlist of account names.
   60 degree turn. Rows tint on hover (140 ms), details expand with an animated height, Settings slides over the list,
   Refresh spins and eases to rest. Windows' "show animations" setting off turns motion off.
 - **Tray menu:** right-click shows a restyled menu (Open accounts, Open dashboard, Refresh now, Settings, Quit) in the
-  panel's palette and font, with Windows 11 rounded corners. The tooltip carries usage: "AI Account Center · Codex
-  codex-2: 91% weekly left".
+  panel's palette and font, with Windows 11 rounded corners. The tooltip carries usage: "AI Account Center · Codex:
+  codex-2, 91% weekly left".
 
 ## Settings
 
 Settings opens inside the panel with a visible X; the gear toggles it (and stays pressed while it is open) and Escape
-closes it before a second Escape hides the panel. It holds Appearance (Light / Dark / Auto), Connection (who is signed
+closes it before a second Escape hides the panel. The gear also works on the sign-in screen: Settings slides over it,
+and X or Escape return to it. It holds Appearance (Light / Dark / Auto), Connection (who is signed
 in, the dashboard address and Change), Start with Windows (the installer's logon task), Keyboard shortcut, read-only
 facts from the dashboard (refresh interval, Codex and Antigravity auto-switch, hidden providers, address) and About
 (version, third-party notices, Quit).
 
 ## Reopening the tray
 
-- **Shortcuts:** the installer creates "AI Account Center" in the Start menu and on the Desktop (Apex Soft icon,
-  matched to the taskbar theme at install time). Launching it starts the tray with its panel open; if the tray is
+- **Shortcuts:** the installer creates "AI Account Center" in the Start menu and on the Desktop (the plated Apex Soft
+  app icon). Launching it starts the tray with its panel open; if the tray is
   already running, the new launch hands over to it (single instance) and the running tray shows its panel.
 - **Keyboard:** Ctrl+Alt+A opens or hides the panel from anywhere while the tray runs. It is optional (Settings >
   Keyboard shortcut). If another app owns the combination, Settings says so and nothing is overridden.
-- **At sign-in:** the logon task starts the tray hidden in the notification area (`--background`).
+- **At sign-in:** the logon task starts the tray hidden in the notification area (`--background`). A background start
+  while a tray already runs (the task again, or its `CCS Bar` alias) exits and leaves the running panel alone.
 
 ## Codex and Antigravity switching
 
@@ -128,8 +133,10 @@ the dashboard's pairing routes; until then a dashboard password change needs a n
 - `--render-fixture <dir> [light|dark]`: renders the real panel from the bundled sanitized fixture
   (`CCSBar/Fixtures/dashboard.json`, example.com identities) to PNGs, with Settings, details, a switch, two Antigravity
   accounts, a hidden provider and an unknown provider, and measures the selected-row rule (check and "Active" on the
-  Activate button's left edge and label x within 0.5 px, before and after a switch) and the platter's glide. It never
-  connects anywhere.
+  Activate button's left edge and label x within 0.5 px, before and after a switch), the platter's glide, one x for
+  every section's name and first meter, whole compact resets, real gear and X clicks, and two runtime rules: refreshes
+  (hidden or shown) leave no theme handlers behind, and an idle panel, shown or hidden, uses no CPU. It never connects
+  anywhere.
 - `--render-proof <png>`: renders the live panel against the configured dashboard without a second tray instance.
 
 No test activates a real Codex, Antigravity or Claude account.
