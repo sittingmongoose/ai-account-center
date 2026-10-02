@@ -129,6 +129,10 @@ Easings are written inline (Slint has no easing-typed properties):
 - `cubic-bezier(0.4, 0, 1, 1)` ease-in: quick exits.
 - `cubic-bezier(0.32, 1.12, 0.52, 1)`: the slide-over (its 28 px bleed hides the overshoot).
 
+Colour animations on elements (hover tints, flashes, toggles) must use `duration: Motion.tint(...)`: it is 0 ms
+while the theme cross-fades (`Motion.theme-shift`), so every colour moves with `Theme.mix` in step instead of
+lagging behind it with its own animation.
+
 Load-in: the header slides down 8 px, sections rise 12 px one stagger apart (`Reveal`), meters sweep from 0
 with their colour climbing the severity ramp, numbers roll up (`Meter.played`, `delay`). Page change: the
 outgoing page fades and lifts 8 px (190 ms), the incoming page's sections rise in. Nothing loops while idle:
@@ -183,6 +187,12 @@ Gotchas found while building W1 (Slint 1.18.1):
   that must keep the hover (a card's meters) inside the TouchArea.
 - Globals cannot hold `animate`; animate in a component and copy into the global (`changed`).
 - Flickable `viewport-*` are deprecated: use `content-*`.
+- A `Path` keeps its viewbox aspect ratio by default (centred); charts and sparklines need `fit: fill`.
+- Children passed through `@children` resolve `parent` at the use site: do not size them with
+  `parent.width` (the Details panel fills the slide-over without an explicit size).
+- An element created together with its data has no "previous value" to animate from: `Meter` waits one frame
+  (`mounted`) before sweeping; do the same for anything that must animate in on first load.
+- Layout items stretch by default: give fixed header items `horizontal-stretch: 0` so only the spacer grows.
 
 ## Pages
 
