@@ -237,6 +237,7 @@ component PolicyRow inherits VerticalLayout {
             owner: "policy:" + root.policy.provider;
             tip: root.policy.tip;
             width: tg.preferred-width;
+            horizontal-stretch: 0;
             tg := Toggle {
                 y: (parent.height - self.height) / 2;
                 on: root.policy.enabled;
@@ -246,6 +247,8 @@ component PolicyRow inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: 8px;
+            horizontal-stretch: 0;
+            alignment: start;
             opacity: root.policy.wait ? 0.5 : 1;
             Text { text: "at"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
             VerticalLayout {
