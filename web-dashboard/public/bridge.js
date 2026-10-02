@@ -314,7 +314,10 @@ function renderAnalytics(mode = 'static') {
   const from = shownGeo;
   const morph = mode === 'morph' && !motionReduced && from && shownSize === size && from.lv[0].length === next.lv[0].length;
   cancelAnimationFrame(trendRaf);
-  set_analytics(JSON.stringify(analyticsSlintModel(analyticsModel, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph ? from : next) })));
+  const slintView = analyticsSlintModel(analyticsModel, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph ? from : next) });
+  // e2e only (?e2e): the last Analytics view handed to Slint, so a harness can read its words
+  if (e2e) globalThis.__aacLastAnalytics = slintView;
+  set_analytics(JSON.stringify(slintView));
   shownSize = size;
   if (!morph) { shownGeo = next; return; }
   const t0 = performance.now();

@@ -12,6 +12,7 @@ import {
 } from "models.slint";
 import { Icon } from "components/icon.slint";
 import { MarksPreloader } from "components/mark.slint";
+import { ProbeMark } from "components/probe.slint";
 import { AppLogo } from "components/logo.slint";
 import { Caps } from "components/text.slint";
 import { Button } from "components/button.slint";
@@ -351,6 +352,7 @@ component Header inherits Rectangle {
                     data: root.update;
                     enabled: !root.busy;
                     clicked => { root.update-apps(); }
+                    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "update-apps"; }
                 }
             }
             // .chrome-sep: a 22 px hairline with 4 px on each side

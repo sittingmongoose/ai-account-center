@@ -860,6 +860,7 @@ component UpdateGroup inherits SetGroup {
                     small: true;
                     text: AcData.update-cancelling ? "Cancelling…" : "Cancel";
                     enabled: !AcData.update-cancelling;
+                    probe: "update-cancel";
                     clicked => { root.act("update-cancel", ""); }
                 }
             }

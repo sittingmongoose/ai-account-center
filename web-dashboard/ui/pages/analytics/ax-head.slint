@@ -8,6 +8,7 @@ import { IconButton } from "../../components/icon-button.slint";
 import { Button } from "../../components/button.slint";
 import { Caps } from "../../components/text.slint";
 import { HoverShadow } from "../../components/card.slint";
+import { ProbeMark } from "../../components/probe.slint";
 import { AxData, AxKpi, AxDay, AxSrcCell } from "ax-data.slint";
 import { AxColor, AxNum, AxTip, AxSwatch, AxSeg, AxSegItem, AxInfo } from "ax-common.slint";
 
@@ -123,6 +124,7 @@ component IncludedButton inherits Rectangle {
         }
     }
     ta := TouchArea { mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
+    ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: "included-usage"; }
 }
 
 // One day of the custom range picker.
