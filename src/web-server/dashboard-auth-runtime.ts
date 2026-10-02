@@ -6,7 +6,10 @@ import os from 'os';
 import path from 'path';
 import { createLogger } from '../services/logging';
 import { isLoopbackRemoteAddress } from './middleware/auth-middleware';
-import { setTrustedProxyResolver } from './middleware/secure-transport';
+import {
+  setLocalNetworkTrustResolver,
+  setTrustedProxyResolver,
+} from './middleware/secure-transport';
 import { dashboardAuthState, sendAuthError } from './routes/auth-route-helpers';
 import { authFile } from './services/dashboard-auth-files';
 import { createSetupCode } from './services/dashboard-setup-code';
@@ -14,6 +17,7 @@ import {
   getDashboardTlsSettings,
   type DashboardHttpsListenerSettings,
 } from './services/dashboard-tls-config';
+import { getDashboardNetworkSettings } from './services/dashboard-network-config';
 
 /**
  * Server-side wiring for dashboard sign-in (CONTRACT-auth-devices 2a and 4):
@@ -26,10 +30,15 @@ const logger = createLogger('dashboard-auth');
 /**
  * Rule 3 of isSecureTransport, plus Express `trust proxy` for loopback peers
  * only, and only while `dashboard_tls.trusted_proxy` is set. X-Forwarded-*
- * from any other peer is never trusted.
+ * from any other peer is never trusted. Rule 4 reads `dashboard_network`
+ * (the owner's trusted local network, off by default).
  */
 export function configureDashboardTransport(app: Express): void {
   setTrustedProxyResolver(() => getDashboardTlsSettings().trustedProxy);
+  setLocalNetworkTrustResolver(() => {
+    const settings = getDashboardNetworkSettings();
+    return { enabled: settings.trustLocalNetwork, networks: settings.networks };
+  });
   app.set(
     'trust proxy',
     (address: string) =>

@@ -18,6 +18,7 @@ export type {
   TokenRefreshSettings,
   DashboardAuthConfig,
   DashboardTlsConfig,
+  DashboardNetworkConfig,
 } from './auth';
 export { DEFAULT_DASHBOARD_AUTH_CONFIG } from './auth';
 

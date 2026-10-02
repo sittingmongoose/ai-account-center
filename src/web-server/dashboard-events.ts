@@ -17,7 +17,11 @@ import type { SignInJob } from './services/signin-jobs';
 export type DashboardEvent = { type: 'accounts-changed' } | { type: 'signin-job'; job: SignInJob };
 
 export interface DashboardEventClient {
-  /** isSecureTransport() of the socket's upgrade request. */
+  /**
+   * isSecureTransport() of the socket's upgrade request, when it opened and
+   * again for each event, so turning off local network trust (rule 4) stops
+   * codes to sockets that relied on it.
+   */
   secure: boolean;
   /** authKind() of the socket's upgrade request; null when unknown or signed out. */
   authKind: RequestAuthKind;
@@ -29,8 +33,22 @@ const UNKNOWN_CLIENT: DashboardEventClient = Object.freeze({ secure: false, auth
 
 type EventSource = DashboardEvent | ((client: DashboardEventClient) => DashboardEvent | null);
 
+interface ClientRecord extends DashboardEventClient {
+  /** isSecureTransport() of the upgrade request, asked again now. */
+  stillSecure: () => boolean;
+}
+
 const servers = new Set<WebSocketServer>();
-const clients = new WeakMap<WebSocket, DashboardEventClient>();
+const clients = new WeakMap<WebSocket, ClientRecord>();
+
+function clientView(record: ClientRecord | undefined): DashboardEventClient {
+  if (!record) return UNKNOWN_CLIENT;
+  return {
+    secure: record.secure && record.stillSecure(),
+    authKind: record.authKind,
+    sessionEpoch: record.sessionEpoch,
+  };
+}
 
 export interface DashboardEventServerOptions {
   /** Classify each connection when it opens; without it every client counts as not secure. */
@@ -48,12 +66,14 @@ export function attachDashboardEventServer(
 ): () => void {
   servers.add(wss);
   const onConnection = (socket: WebSocket, request: IncomingMessage) => {
-    let secure = false;
-    try {
-      secure = options.isSecure?.(request) === true;
-    } catch {
-      secure = false;
-    }
+    const stillSecure = (): boolean => {
+      try {
+        return options.isSecure?.(request) === true;
+      } catch {
+        return false;
+      }
+    };
+    const secure = stillSecure();
     let kind: RequestAuthKind = null;
     try {
       const value = options.authKind?.(request) ?? null;
@@ -68,7 +88,7 @@ export function attachDashboardEventServer(
     } catch {
       sessionEpoch = null;
     }
-    clients.set(socket, { secure, authKind: kind, sessionEpoch });
+    clients.set(socket, { secure, authKind: kind, sessionEpoch, stillSecure });
   };
   wss.on('connection', onConnection);
   return () => {
@@ -88,8 +108,7 @@ export function broadcastDashboardEvent(source: EventSource): number {
       if (client.readyState !== WebSocket.OPEN) continue;
       let event: DashboardEvent | null;
       try {
-        event =
-          typeof source === 'function' ? source(clients.get(client) ?? UNKNOWN_CLIENT) : source;
+        event = typeof source === 'function' ? source(clientView(clients.get(client))) : source;
       } catch {
         event = null;
       }

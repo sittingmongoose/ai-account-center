@@ -24,7 +24,10 @@ import {
   loginRateLimiter,
 } from '../../../src/web-server/middleware/auth-middleware';
 import { requestLoggingMiddleware } from '../../../src/web-server/middleware/request-logging-middleware';
-import { setTrustedProxyResolver } from '../../../src/web-server/middleware/secure-transport';
+import {
+  setLocalNetworkTrustResolver,
+  setTrustedProxyResolver,
+} from '../../../src/web-server/middleware/secure-transport';
 import { configureDashboardTransport } from '../../../src/web-server/dashboard-auth-runtime';
 import { apiRoutes } from '../../../src/web-server/routes';
 import { resetAuthRateLimitsForTests } from '../../../src/web-server/routes/auth-rate-limits';
@@ -69,6 +72,8 @@ export interface HarnessOptions {
   /** Routers mounted in front of /api (e.g. a fixture Antigravity router). */
   before?: (app: express.Express) => void;
   dashboardTls?: Record<string, unknown>;
+  /** `dashboard_network` in the fixture config.yaml (rule 4, off by default). */
+  dashboardNetwork?: Record<string, unknown>;
   logging?: boolean;
 }
 
@@ -117,6 +122,9 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
   }
   if (options.dashboardTls) {
     (config as unknown as Record<string, unknown>).dashboard_tls = options.dashboardTls;
+  }
+  if (options.dashboardNetwork) {
+    (config as unknown as Record<string, unknown>).dashboard_network = options.dashboardNetwork;
   }
   const hash = await hashPassword(PASSWORD);
   if (mode === 'config') {
@@ -204,6 +212,7 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
       setAuthClockForTests(null);
       setPasswordHashCostForTests(null);
       setTrustedProxyResolver(() => null);
+      setLocalNetworkTrustResolver(null);
       resetDashboardAuthStateForTests();
       resetDeviceStoreForTests();
       resetSetupCodeForTests();

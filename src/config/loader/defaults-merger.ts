@@ -329,6 +329,8 @@ export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfi
     },
     // Dashboard secure transport: passed through only when present (off by default).
     ...(partial.dashboard_tls ? { dashboard_tls: partial.dashboard_tls } : {}),
+    // Dashboard trusted local network: passed through only when present (off by default).
+    ...(partial.dashboard_network ? { dashboard_network: partial.dashboard_network } : {}),
     browser: canonicalizeBrowserConfig(partial.browser),
     // Image analysis config - enabled by default for CLIProxy providers
     image_analysis: canonicalizeImageAnalysisConfig({

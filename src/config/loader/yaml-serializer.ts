@@ -335,6 +335,20 @@ export function generateYamlWithComments(config: UnifiedConfig): string {
     lines.push('# Dashboard TLS: secure transport (off by default)', tls.trim(), '');
   }
 
+  if (config.dashboard_network) {
+    const network = yaml.dump(
+      { dashboard_network: config.dashboard_network },
+      { indent: 2, lineWidth: -1 }
+    );
+    lines.push(
+      '# Dashboard network: trust_local_network lets plain HTTP from trusted_networks carry',
+      '# passwords, keys and sign-in codes (off by default). trusted_networks defaults to',
+      '# 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, fc00::/7 and ::1/128.',
+      network.trim(),
+      ''
+    );
+  }
+
   // Browser automation section
   if (config.browser) {
     lines.push('# ----------------------------------------------------------------------------');

@@ -166,4 +166,51 @@ describe('dashboard events', () => {
       plan: 'pro',
     });
   });
+
+  it('asks again for each event, so a socket that lost its secure transport gets no codes', async () => {
+    let trusted = true;
+    const server = http.createServer();
+    const wss = new WebSocketServer({ server, path: '/ws' });
+    // Rule 4 of isSecureTransport can be turned off while a socket stays open.
+    const detach = attachDashboardEventServer(wss, {
+      isSecure: (request) => request.headers['x-test-secure'] === '1' || trusted,
+      authKind: () => 'session',
+    });
+    closers.push(async () => {
+      detach();
+      for (const client of wss.clients) client.terminate();
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/ws`;
+    const connect = async (headers: Record<string, string>) => {
+      const socket = new WebSocket(url, { headers });
+      const messages: string[] = [];
+      socket.on('message', (data) => messages.push(String(data)));
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', () => resolve());
+        socket.once('error', reject);
+      });
+      closers.push(async () => socket.close());
+      return messages;
+    };
+    const tls = await connect({ 'x-test-secure': '1' });
+    const lan = await connect({});
+    trusted = false;
+    const late = await connect({});
+    trusted = true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broadcastDashboardEvent((client) => signInJobEvent(JOB, client))).toBe(3);
+    trusted = false;
+    expect(broadcastDashboardEvent((client) => signInJobEvent(JOB, client))).toBe(3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const codes = (messages: string[]) =>
+      messages.map((text) => JSON.parse(text).job.verification?.userCode ?? null);
+    expect(codes(tls)).toEqual(['ABCD-12345', 'ABCD-12345']);
+    expect(codes(lan)).toEqual(['ABCD-12345', null]);
+    // Not secure when it connected: it stays that way even while the check passes.
+    expect(codes(late)).toEqual([null, null]);
+  });
 });

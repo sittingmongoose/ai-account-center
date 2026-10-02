@@ -121,6 +121,21 @@ export interface DashboardTlsConfig {
 }
 
 /**
+ * Trusted local network for the dashboard (CONTRACT-auth-devices section 2a,
+ * rule 4, amended 2026-10-02). Off by default. When on, plain HTTP from a peer
+ * in `trusted_networks` counts as a secure transport.
+ */
+export interface DashboardNetworkConfig {
+  /** Trust peers on the local network (default: false). Only `true` turns it on. */
+  trust_local_network?: boolean;
+  /**
+   * Trusted ranges as CIDRs (default: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+   * 127.0.0.0/8, fc00::/7 and ::1/128). A VPN subnet outside them can be added here.
+   */
+  trusted_networks?: string[];
+}
+
+/**
  * Default dashboard auth configuration.
  * Disabled by default - must be explicitly enabled.
  */

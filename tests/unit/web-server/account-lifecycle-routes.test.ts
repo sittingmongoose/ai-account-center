@@ -29,6 +29,8 @@ import type { ClaudeHostTransport } from '../../../src/web-server/services/claud
 import { CodexAccountLifecycle } from '../../../src/web-server/services/codex-account-lifecycle';
 import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
 import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
+import { setLocalNetworkTrustResolver } from '../../../src/web-server/middleware/secure-transport';
+import { parseTrustedNetworks } from '../../../src/web-server/middleware/trusted-networks';
 
 const KEY = 'zai-TEST-key-0123456789-x7Qa';
 const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
@@ -60,6 +62,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const close of closers.splice(0).reverse()) await close();
+  setLocalNetworkTrustResolver(null);
   if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
   else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
   invalidateCodexAuthProfilesCache();
@@ -241,6 +244,13 @@ async function fixture(options: { claudeEnabled?: boolean } = {}): Promise<Fixtu
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
+    // The peer the route sees: `x-test-peer`, or the real loopback peer. Set on every
+    // request, because a kept-alive socket carries the last value to the next one.
+    const peer = req.headers['x-test-peer'];
+    Object.defineProperty(req.socket, 'remoteAddress', {
+      value: typeof peer === 'string' && peer ? peer : '127.0.0.1',
+      configurable: true,
+    });
     const session = req.headers['x-test-session'];
     if (typeof session === 'string' && session) {
       Object.assign(req, { session: { authenticated: true }, sessionID: session });
@@ -465,6 +475,105 @@ describe('API keys', () => {
     expect([discover.status, discover.body.code]).toEqual([409, 'not_aac_owned']);
     const plain = await f.request('PUT', `/${id}/key`, { key: 'zai-NEW-key-9999' }, PLAIN);
     expect([plain.status, plain.body.code]).toEqual([403, 'secure_transport_required']);
+  });
+});
+
+describe('trusted local network (CONTRACT-auth-devices 2a rule 4)', () => {
+  const LAN = { 'x-test-peer': '192.168.50.20' };
+  const MAPPED = { 'x-test-peer': '::ffff:10.6.0.2' };
+  const PUBLIC = { 'x-test-peer': '203.0.113.9' };
+  const trust = (enabled: boolean) =>
+    setLocalNetworkTrustResolver(() => ({
+      enabled,
+      networks: parseTrustedNetworks(undefined).networks,
+    }));
+
+  it('accepts key add and replace, job create and code submit from a private peer only while on', async () => {
+    const f = await fixture();
+    codexProfile('gmail');
+    const own = await f.request('POST', '/add', { provider: 'zai', key: KEY });
+    const id = String((own.body.account as { id: string }).id);
+    const sensitive = async (headers: Record<string, string>, suffix: string) => ({
+      add: await f.request(
+        'POST',
+        '/add',
+        { provider: 'kimi-code', key: `${KEY}${suffix}` },
+        headers
+      ),
+      replace: await f.request('PUT', `/${id}/key`, { key: `zai-NEW-key-${suffix}` }, headers),
+      job: await f.request(
+        'POST',
+        '/add',
+        { provider: 'codex', profileName: `codex-${suffix}` },
+        headers
+      ),
+      code: await f.request(
+        'POST',
+        '/signin-jobs/job_00000000000000aa/code',
+        { code: 'abc' },
+        headers
+      ),
+    });
+    const refusedEverywhere = (result: Awaited<ReturnType<typeof sensitive>>) => {
+      for (const [name, response] of Object.entries(result)) {
+        expect([name, response.status, response.body.code]).toEqual([
+          name,
+          403,
+          'secure_transport_required',
+        ]);
+      }
+    };
+
+    // Off (the default): the private peer is plain HTTP.
+    refusedEverywhere(await sensitive(LAN, '1'));
+    trust(false);
+    refusedEverywhere(await sensitive(MAPPED, '2'));
+    expect(f.probes).toHaveLength(1);
+
+    trust(true);
+    refusedEverywhere(await sensitive(PUBLIC, '3'));
+    const lan = await sensitive(LAN, '4');
+    expect(lan.add.status).toBe(201);
+    expect(lan.replace.status).toBe(200);
+    expect(lan.job.status).toBe(202);
+    // Past the transport gate: this job id was never issued.
+    expect([lan.code.status, lan.code.body.code]).toEqual([404, 'unknown_job']);
+    const job = lan.job.body.job as { id: string };
+    const cancelled = await f.request('POST', `/signin-jobs/${job.id}/cancel`, {}, MAPPED);
+    expect(cancelled.status).toBe(200);
+    const mapped = await f.request(
+      'POST',
+      '/add',
+      { provider: 'opencode-go', key: `${KEY}5` },
+      MAPPED
+    );
+    expect(mapped.status).toBe(201);
+
+    // Turned off again: refused at once.
+    trust(false);
+    refusedEverywhere(await sensitive(LAN, '6'));
+  });
+
+  it('offers API-key sign-in to a trusted private peer only', async () => {
+    const f = await fixture();
+    trust(true);
+    const started = await f.request(
+      'POST',
+      '/add',
+      { provider: 'codex', profileName: 'codex-7' },
+      LAN
+    );
+    expect(started.status).toBe(202);
+    const listing = await f.request('GET', '/registry', undefined, LAN);
+    expect(listing.status).toBe(200);
+    const plain = await f.request('GET', '/registry', undefined, PUBLIC);
+    expect(plain.status).toBe(200);
+    const signIn = (body: Record<string, unknown>) =>
+      (body.providers as Array<{ id: string; signIn: { unavailableReason: string | null } }>).find(
+        (provider) => provider.id === 'zai'
+      )?.signIn.unavailableReason;
+    expect(signIn(listing.body)).toBeNull();
+    expect(signIn(plain.body)).toBe('secure_transport_required');
   });
 });
 

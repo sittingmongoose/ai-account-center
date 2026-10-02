@@ -16,7 +16,12 @@ import {
   triesLeft,
 } from '../middleware/auth-middleware';
 import { getDashboardAuthConfig } from '../../config/config-loader-facade';
-import { isDirectLoopbackRequest, isSecureTransport } from '../middleware/secure-transport';
+import {
+  describeConnection,
+  isDirectLoopbackRequest,
+  isSecureTransport,
+  localNetworkTrust,
+} from '../middleware/secure-transport';
 import { forgetSession } from '../services/dashboard-auth-state';
 import { createApiRouter } from './api-router';
 import { signInServerLimiter } from './auth-rate-limits';
@@ -35,6 +40,7 @@ import {
 } from './auth-route-helpers';
 import { registerAuthSessionRoutes } from './auth-session-routes';
 import { registerAuthDeviceRoutes } from './auth-device-routes';
+import { registerAuthNetworkRoutes } from './auth-network-routes';
 
 const router = createApiRouter();
 router.use(noStore);
@@ -206,6 +212,9 @@ router.get('/check', (req: Request, res: Response) => {
     setupCodeRequired: setupCodeRequired(req, accessState.authConfigured),
     secureTransport: isSecureTransport(req),
     secureOrigin: secureOrigin(),
+    // Section 2a rule 4 (amended 2026-10-02): the owner's switch, and this connection.
+    trustedLocalNetwork: localNetworkTrust().enabled,
+    connection: describeConnection(req),
   });
 });
 
@@ -226,10 +235,13 @@ router.get('/setup', (req: Request, res: Response) => {
     managedBy: credentialSource(),
     secureTransport: isSecureTransport(req),
     secureOrigin: secureOrigin(),
+    trustedLocalNetwork: localNetworkTrust().enabled,
+    connection: describeConnection(req),
   });
 });
 
 registerAuthSessionRoutes(router);
 registerAuthDeviceRoutes(router);
+registerAuthNetworkRoutes(router);
 
 export default router;

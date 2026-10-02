@@ -57,8 +57,9 @@ The [lifecycle routes](../../src/web-server/routes/account-lifecycle-routes.ts) 
 `/api/accounts` add, sign in again, replace keys, remove, re-check, relabel, open
 Cursor, list the 30-day trash and restore from it. They need a signed-in browser
 session (a device token gets `device_scope`), the dashboard origin, JSON and a strict
-body; keys and device codes need a secure transport (HTTPS, a trusted local TLS proxy
-or a loopback tunnel, [`isSecureTransport`](../../src/web-server/middleware/secure-transport.ts)).
+body; keys and device codes need a secure transport (HTTPS, a trusted local TLS proxy,
+a loopback tunnel or, when the owner turns it on, the trusted local network,
+[`isSecureTransport`](../../src/web-server/middleware/secure-transport.ts)).
 Destructive actions take a one-use [confirmation token](../../src/web-server/services/account-confirmations.ts)
 bound to the session and to the reviewed state. Codex sign-ins run as in-memory
 [jobs](../../src/web-server/services/signin-jobs.ts) whose state is pushed to `/ws` as
@@ -77,7 +78,13 @@ Trays pair once with the password and then use a revocable
 ([allowlist](../../src/web-server/middleware/api-request-guard.ts)), rotates every 30 days
 and expires after 90 days unused. Password, setup, pairing and rotation need a secure
 transport; `dashboard_tls` in config.yaml (a trusted local TLS proxy, an in-process HTTPS
-listener and the public origin) is off by default. Credentials set by environment
+listener and the public origin) is off by default. So is `dashboard_network`: with
+`trust_local_network: true`, plain HTTP from a peer in `trusted_networks` (by default
+10/8, 172.16/12, 192.168/16, fc00::/7 and loopback; [ranges](../../src/web-server/middleware/trusted-networks.ts),
+IPv4-mapped addresses normalised) counts as secure, while public, link-local and CGNAT
+peers stay refused unless listed. `/api/auth/check` reports the switch and this
+connection; [`PUT /api/auth/network`](../../src/web-server/routes/auth-network-routes.ts)
+turns it off from any signed-in browser and on only from loopback. Credentials set by environment
 variables are read-only. Wrong passwords are limited per address and per server
 ([limits](../../src/web-server/routes/auth-rate-limits.ts)), keyed independently of the
 session id, and a confirmation token offered to one browser or tray is refused for any

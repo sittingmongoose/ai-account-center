@@ -64,7 +64,7 @@ function managedByEnv(res: Response): void {
 }
 
 /** A browser session (401 `auth_required`); a device token is 403 `device_scope`. */
-function requireBrowserSession(req: Request, res: Response): boolean {
+export function requireBrowserSession(req: Request, res: Response): boolean {
   const kind = authKind(req);
   if (kind === 'session') return true;
   if (kind === 'device') {
