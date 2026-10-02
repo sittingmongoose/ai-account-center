@@ -120,6 +120,16 @@ public enum LocalNetwork {
     return addresses
   }
 
+  /// Plain HTTP from the packaged app reaches a numeric address, a `.local` name or a one-word name only: App Transport
+  /// Security, with local networking allowed, refuses every other host name before a request leaves this Mac
+  /// (`NSURLErrorAppTransportSecurityRequiresSecureConnection`). Checked on the Mac with macOS 27.2.
+  public static func plainHTTPReaches(host: String) -> Bool {
+    let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+    if ipv4(bare) != nil || ipv6(bare.split(separator: "%").first.map(String.init) ?? bare) != nil { return true }
+    let name = bare.hasSuffix(".") ? String(bare.dropLast()) : bare
+    return !name.contains(".") || name.hasSuffix(".local")
+  }
+
   /// The verdict for a host: a literal address is judged as it is; a name by every address it resolves to.
   public static func verdict(host: String, resolver: (String) -> [String] = resolve) -> Verdict {
     let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
@@ -147,6 +157,9 @@ public enum AddressCheck: Sendable, Equatable {
   case notDashboard(URL)
   /// Sign-in is turned off on that dashboard, so there is nothing to pair with.
   case signInOff(URL)
+  /// A host name this Mac will not reach over plain HTTP (see `LocalNetwork.plainHTTPReaches`): use the numeric
+  /// address or a `.local` name.
+  case insecureName(URL)
   /// State 2: a dashboard with no password yet. `codeRequired` is true away from the dashboard machine.
   case setup(URL, codeRequired: Bool)
   /// State 1, password step: pairing can go ahead.
@@ -156,7 +169,7 @@ public enum AddressCheck: Sendable, Equatable {
     switch self {
     case .invalid: return nil
     case .notLocal(let url, _), .pairingOff(let url), .unreachable(let url), .notDashboard(let url),
-      .signInOff(let url), .setup(let url, _), .ready(let url): return url
+      .signInOff(let url), .insecureName(let url), .setup(let url, _), .ready(let url): return url
     }
   }
 }
@@ -179,6 +192,8 @@ public enum PairOutcome: Sendable {
   case alreadyConfigured
   /// A fixed sentence for anything else, and which field it is about.
   case failed(String, field: String?)
+  /// Cancel or Escape stopped the attempt: nothing was saved, and a key the dashboard had already issued was revoked.
+  case cancelled
 }
 
 /// The dashboard's public sign-in routes: check, setup and pair. No session and no key are sent.
@@ -244,13 +259,16 @@ public struct DashboardProbe: Sendable {
   /// the dashboard says about this connection.
   public func checkAddress(resolver: @Sendable (String) -> [String] = { LocalNetwork.resolve($0) }) async -> AddressCheck {
     guard let host = baseURL.host else { return .invalid }
-    if baseURL.scheme?.lowercased() == "http", case .outside = LocalNetwork.verdict(host: host, resolver: resolver) {
+    let plain = baseURL.scheme?.lowercased() == "http"
+    if plain, case .outside = LocalNetwork.verdict(host: host, resolver: resolver) {
       return .notLocal(baseURL, seenAs: nil)
     }
+    if plain && !LocalNetwork.plainHTTPReaches(host: host) { return .insecureName(baseURL) }
     let answer: AuthCheck?
     do { answer = try await check() }
     catch {
       if case BarClientError.nonHTTPResponse = error { return .notDashboard(baseURL) }
+      if ConnectionCheckError.isInsecureAddressBlock(error) { return .insecureName(baseURL) }
       return .unreachable(baseURL)
     }
     guard let answer else { return .notDashboard(baseURL) }
@@ -330,6 +348,7 @@ public struct PairRefusal: Error, Sendable, Equatable {
 public enum SignInCopy {
   public static let enterAddress = "Enter the dashboard address."
   public static let invalidAddress = "Enter an http address with a host and port, such as http://192.168.1.20:3000."
+  public static let useNumericAddress = "This Mac only reaches a dashboard over plain HTTP by its numeric address or a .local name. Use the dashboard's numeric address, such as http://192.168.1.20:3000."
   public static let enterLogin = "Enter your dashboard username and password."
   public static let signInOff = "Sign-in is turned off on this dashboard, so there is nothing to pair with. Turn it on in the dashboard first."
   public static let tooManyDevices = "The dashboard already has 20 paired trays. Revoke one under Settings › Dashboard sign-in, then pair again."

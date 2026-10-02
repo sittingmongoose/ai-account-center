@@ -129,15 +129,25 @@ enum SignInCheck {
     record("4 the same refusal again shakes", signIn.state == .notLocal && signIn.shake >= 1)
 
     // 8: unreachable and wrong address.
-    signIn.address = "refused.invalid:3000"
+    signIn.address = "refused.local:3000"
     signIn.submit()
     wait { !signIn.busy && signIn.state != .notLocal }
     record("8 an address that does not answer is unreachable", signIn.state == .unreachable
       && signIn.message?.bold == "No answer after 10 seconds.")
-    signIn.address = "elsewhere.invalid:8080"
+    signIn.address = "elsewhere.local:8080"
     signIn.submit()
     wait { !signIn.busy && signIn.state != .unreachable }
     record("8 an address that is not the dashboard is a wrong address", signIn.state == .wrongAddress)
+
+    // A dotted name the Mac will not reach over plain HTTP: its own message on the address field, nothing sent.
+    let sentBeforeName = fake.count
+    signIn.address = "box.home.arpa:3000"
+    signIn.submit()
+    wait { !signIn.busy && signIn.state != .wrongAddress }
+    let named = read(signIn)
+    record("a host name other than .local asks for the numeric address, on screen, before anything is sent",
+      signIn.state == .firstRun && signIn.badField == .addr && signIn.message?.text == SignInCopy.useNumericAddress
+      && fake.count == sentBeforeName && shows(named.text, ["numeric address"]), ["read": named.text])
 
     // 5: pairing turned off.
     fake.set { $0.trust = false }
@@ -180,6 +190,36 @@ enum SignInCheck {
     signIn.cancel()
     record("Cancel keeps the current key and returns to the list", !signIn.active
       && (try? BarConnection.load(from: file))?.deviceToken == saved?.deviceToken)
+
+    // Cancel while the Re-pair call runs: the dashboard has already issued a key; it is revoked, nothing is saved and
+    // the working key stays valid (the new key would have had its own install id).
+    fake.set { $0.pairDelay = 0.3 }
+    model.beginRepair()
+    signIn.password = "check-pass-1"
+    var issued = fake.issuedCount
+    signIn.submit()
+    wait { fake.issuedCount > issued }
+    let cancelInFlight = model.session.isPairing
+    signIn.cancel()
+    wait { !model.session.isPairing }
+    record("Cancel during the Re-pair call saves nothing, revokes the issued key and keeps the working key", cancelInFlight
+      && !signIn.active && (try? BarConnection.load(from: file))?.deviceToken == saved?.deviceToken
+      && model.session.connection?.deviceToken == saved?.deviceToken && fake.state(of: fake.lastIssued) == "self"
+      && fake.isActive(saved?.deviceToken))
+    // Escape does the same while the call runs, and leaves the password step showing.
+    model.beginRepair()
+    signIn.password = "check-pass-1"
+    issued = fake.issuedCount
+    signIn.submit()
+    wait { fake.issuedCount > issued }
+    let escaped = signIn.cancelRunning()
+    wait { !model.session.isPairing }
+    record("Escape during the Re-pair call saves nothing, revokes the issued key and keeps the password step", escaped
+      && signIn.active && signIn.repair && signIn.state == .password && !signIn.busy
+      && (try? BarConnection.load(from: file))?.deviceToken == saved?.deviceToken
+      && fake.state(of: fake.lastIssued) == "self" && fake.isActive(saved?.deviceToken))
+    signIn.cancel()
+    fake.set { $0.pairDelay = 0 }
 
     // 10: signed out remotely, with who and when.
     fake.set { $0.revoke(reason: "dashboard"); $0.revokedFields = ["revokedBy": "owner", "revokedReason": "dashboard"] }
@@ -290,6 +330,31 @@ enum SignInCheck {
     record("9 a stored password is secured by itself and deleted", securingShown && secured
       && (try? BarConnection.load(from: migrated))?.isPaired == true && migratedFile?.contains("summit-ledger-42") == false
       && !FileManager.default.fileExists(atPath: BarConnection.rollbackURL(for: migrated).path))
+
+    // 9 later: "Trust this local network" was off at launch, so the password login stayed. Once it is on, the refresh
+    // path trades the password for a key within the hour, with no restart and no sign-in screen.
+    let late = directory.appendingPathComponent("v1-late/accounts-connection.json")
+    try? ConnectionStore.save(BarConnection(baseURL: URL(string: "http://192.168.50.10:3000")!, username: "owner",
+      password: "summit-ledger-42"), to: late)
+    fake.set { $0.trust = false }
+    let lateSession = makeSession(late)
+    var lateClock = Date()
+    lateSession.now = { lateClock }
+    let lateModel = AccountsViewModel(preview: nil, session: lateSession)
+    lateModel.signIn.stepInterval = 0.02
+    lateModel.signIn.successHold = 0.05
+    wait(5) { !lateModel.signIn.active && !lateModel.isRefreshing && lateModel.connection?.hasPassword == true }
+    let keptAtLaunch = lateModel.connection?.hasPassword == true && !lateSession.migrationDue
+    fake.set { $0.trust = true }
+    lateClock = lateClock.addingTimeInterval(61 * 60)
+    let refreshed = Holder(false)
+    Task { @MainActor in await lateModel.refresh(); refreshed.value = true }
+    wait(5) { refreshed.value }
+    let lateText = (try? String(contentsOf: late, encoding: .utf8)) ?? ""
+    record("9 a password kept at launch (trust off) is secured from the refresh path once trust is on, without a restart",
+      keptAtLaunch && lateModel.connection?.isPaired == true && (try? BarConnection.load(from: late))?.isPaired == true
+      && !lateText.contains("summit-ledger-42") && !lateModel.signIn.active
+      && !FileManager.default.fileExists(atPath: BarConnection.rollbackURL(for: late).path))
   }
 }
 
@@ -300,7 +365,11 @@ final class CheckDashboard: @unchecked Sendable {
   var mode = "login"
   var failures = 0
   var revokedFields: [String: String] = [:]
+  /// The pair answer waits this long after the key was issued (Cancel while the answer is on its way).
+  var pairDelay: Double = 0
   private(set) var tokens: [String: String?] = [:]
+  private var installs: [String: String] = [:]
+  private var issued: [String] = []
   private(set) var log: [String] = []
   private(set) var lastAuthorization = ""
   private var counter = 0
@@ -310,6 +379,16 @@ final class CheckDashboard: @unchecked Sendable {
   var paths: [String] { lock.lock(); defer { lock.unlock() }; return log }
 
   func revoke(reason: String) { for key in tokens.keys where tokens[key] == .some(nil) { tokens[key] = .some(reason) } }
+  var pairDelayNow: Double { lock.lock(); defer { lock.unlock() }; return pairDelay }
+  var issuedCount: Int { lock.lock(); defer { lock.unlock() }; return issued.count }
+  var lastIssued: String? { lock.lock(); defer { lock.unlock() }; return issued.last }
+  /// nil while the key works; otherwise why it stopped ("self", "replaced", ...).
+  func state(of token: String?) -> String? {
+    lock.lock(); defer { lock.unlock() }
+    guard let token, let state = tokens[token] else { return "unknown" }
+    return state
+  }
+  func isActive(_ token: String?) -> Bool { state(of: token) == nil }
 
   fileprivate func handle(_ request: URLRequest) -> (Int, [String: Any])? {
     lock.lock(); defer { lock.unlock() }
@@ -334,10 +413,16 @@ final class CheckDashboard: @unchecked Sendable {
         failures += 1
         return failures >= 5 ? (429, ["code": "rate_limited", "retryAfterSeconds": 900]) : (401, ["code": "invalid_credentials", "triesLeft": 5 - failures])
       }
-      for key in tokens.keys where tokens[key] == .some(nil) { tokens[key] = .some("replaced") }
+      // Like the dashboard: a new pairing replaces only the active key of the same install id.
+      let install = (body["installId"] as? String)?.lowercased()
+      for key in tokens.keys where tokens[key] == .some(nil) && install != nil && installs[key] == install {
+        tokens[key] = .some("replaced")
+      }
       counter += 1
       let token = "aacd_" + String(format: "%043d", counter).replacingOccurrences(of: "0", with: "Q")
       tokens[token] = .some(nil)
+      if let install { installs[token] = install }
+      issued.append(token)
       return (201, ["deviceId": String(format: "dev_%016x", counter), "token": token, "pairedAt": "2026-10-02T15:00:00.000Z",
         "rotateAfter": "2099-01-01T00:00:00.000Z"])
     default: break
@@ -371,8 +456,8 @@ actor CheckDashboardTransport: BarHTTPTransport {
   init(_ fake: CheckDashboard) { self.fake = fake }
   func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     let url = request.url!
-    if url.host == "refused.invalid" { throw URLError(.cannotConnectToHost) }
-    if url.host == "elsewhere.invalid" {
+    if url.host?.hasPrefix("refused.") == true { throw URLError(.cannotConnectToHost) }
+    if url.host?.hasPrefix("elsewhere.") == true {
       return (Data("<html></html>".utf8), HTTPURLResponse(url: url, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!)
     }
     guard let (status, object) = fake.handle(request) else {
@@ -382,6 +467,10 @@ actor CheckDashboardTransport: BarHTTPTransport {
       "settings":{"refreshIntervalSeconds":60}}
       """
       return (Data(dashboard.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)
+    }
+    if url.path == "/api/auth/devices/pair" && status == 201 {
+      let delay = fake.pairDelayNow
+      if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
     }
     let data = status == 204 ? Data() : ((try? JSONSerialization.data(withJSONObject: object)) ?? Data())
     return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!)

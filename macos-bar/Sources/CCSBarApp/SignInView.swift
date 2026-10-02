@@ -357,7 +357,7 @@ struct SignInSpec {
     let cancel: Alt? = model.repair ? Alt(label: "Cancel", action: { $0.cancel() }) : nil
     let repairBanner: Banner? = model.repair
       ? Banner(icon: "key", tone: .info, title: "Re-pairing replaces this tray's device key",
-        body: AttributedString("The current key keeps working until the new one is issued, so Cancel changes nothing."))
+        body: AttributedString("The current key keeps working until the new one works and is saved, so Cancel changes nothing."))
       : nil
     func passwordStep() {
       spec.title = model.repair ? "Sign in to re-pair" : "Sign in to pair"

@@ -180,7 +180,8 @@ final class SignInModel: ObservableObject {
     begin(next)
   }
 
-  /// Settings › Re-pair: the password step with Cancel; the current key keeps working until a new one is issued.
+  /// Settings › Re-pair: the password step with Cancel. The new key is issued under a new install id, so the current
+  /// key keeps working until the new one is confirmed and saved; only then is the old key revoked.
   func beginRepair(connection: BarConnection) {
     repair = true
     note = nil
@@ -240,20 +241,24 @@ final class SignInModel: ObservableObject {
     active = false
   }
 
+  /// Cancel: a running check or pair is stopped in the session too, so nothing is saved and an issued key is revoked.
   func cancel() {
     run += 1
     busy = false
+    owner?.session.cancelCheck()
     guard repair else { return }
     repair = false
     active = false
     owner?.cancelRepair()
   }
 
-  /// Escape while a check runs: the run is dropped, nothing is saved.
+  /// Escape while a check or a pair runs: the run is dropped and the session stops it, so nothing is saved and a key
+  /// the dashboard already issued is revoked rather than kept.
   func cancelRunning() -> Bool {
     guard busy, state != .securing, state != .pairing, state != .success else { return false }
     run += 1
     busy = false
+    owner?.session.cancelCheck()
     return true
   }
 
@@ -347,6 +352,10 @@ final class SignInModel: ObservableObject {
       tried = url
       if state != .firstRun { go(.firstRun) }
       fail(.addr, SignInCopy.signInOff)
+    case .insecureName(let url):
+      tried = url
+      if state != .firstRun { go(.firstRun) }
+      fail(.addr, SignInCopy.useNumericAddress)
     case .setup(let url, let required):
       verified = url
       codeRequired = required
@@ -466,6 +475,8 @@ final class SignInModel: ObservableObject {
       message = SignInMessage(text: SignInCopy.alreadyConfigured, info: true)
     case .failed(let text, let field):
       fail(field.flatMap(SignInField.init(rawValue:)), text)
+    case .cancelled:
+      break
     }
   }
 

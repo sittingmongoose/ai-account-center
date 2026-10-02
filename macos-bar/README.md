@@ -149,8 +149,10 @@ python3 Scripts/migration_check.py
 - `--e2e <sandbox address> <phase>` runs the same flows over real HTTP against a sandbox dashboard only (a port from
   3901 to 3999, never 3000), with its tray state in `AAC_TRAY_STATE_DIR` (refused under `~/.ccs`) and the sandbox's test
   login in `AAC_E2E_USER`, `AAC_E2E_PASSWORD` and `AAC_E2E_NEW_PASSWORD`. Phases: `trust-off`, `not-trusted`, `main`
-  (first pairing, bearer reads, a password change on the dashboard, revoke, Pair again, Re-pair, This connection,
-  Disconnect) and `migrate` (a fake version 1 password file).
+  (first pairing, bearer reads, a password change on the dashboard, revoke, Pair again, Re-pair, Re-pair cancelled
+  during the pair call, This connection, Disconnect), `migrate` (a fake version 1 password file) and `names` (run from
+  the packaged app's own binary against a dotted host name for the sandbox, such as `<lan address>.nip.io`: the
+  numeric-address message, before anything is sent and for a saved password connection).
 - `--render-preview` draws the panel content offscreen (`--light`, `--dark`, `--settings`, `--details=<account id or
   provider>`, `--signin=<state>`, and `--reduce-transparency` or `--increase-contrast`, which simulate those display settings in
   the render only). System glass is composited by the window server and never reaches an offscreen render, so previews
@@ -178,20 +180,33 @@ version), proves the new key with one `GET /api/auth/devices/me`, and only then 
 written. From then on every request carries `Authorization: Bearer <key>` and the tray never logs in; it calls only the
 dashboard's tray routes. A password change on the dashboard does nothing to the key, so the tray stays signed in.
 
+- **Plain HTTP addresses.** The app's App Transport Security allows local networking only (`NSAllowsLocalNetworking`,
+  no per-address exception), which on macOS 27.2 lets plain HTTP reach a numeric address (IPv4 or IPv6), a `.local`
+  name or a one-word name, and refuses every other host name before a request leaves the Mac. The address step
+  therefore asks for the dashboard's numeric address (such as `http://192.168.1.20:3000`) or its `.local` name when
+  given another name such as `dash.home.arpa`, and the Mac's own refusal is shown with that message, never as "Can't
+  reach that address".
 - **Trusted local network.** The dashboard stays on plain HTTP at its LAN address. Pairing works when its owner has
   turned on "Trust this local network" and this Mac's address is in its trusted networks (the home network or the home
   VPN). Before any password is sent, the tray resolves the address itself and refuses a public, CGNAT, link-local or
   unknown one ("This address isn't on your local network"); then `GET /api/auth/check` decides between the password
   step, "Pairing is turned off for remote computers" (`trustedLocalNetwork: false`) and the dashboard's own refusal
   ("The dashboard sees this Mac at <address>").
-- **Verify before saving.** Address checks save nothing. Re-pair and a change of address keep the working key and file
-  until the new key has answered `devices/me` with 200; Cancel (or Escape) while a check runs drops it.
+- **Verify before saving.** Address checks save nothing. Re-pair pairs under a new install id, because the dashboard
+  revokes an install id's old key the moment it pairs that id again. The working key and file therefore stay valid
+  until the new key has answered `devices/me` with 200 and is saved; only then is the old key revoked with itself
+  (`DELETE /api/auth/devices/me`, tried again by maintenance if the dashboard does not answer). A key the dashboard
+  issued that is never saved (no confirmation, a failed save, or Cancel or Escape while the pair call runs) is revoked
+  at once instead of being kept, and a failed save restores the file exactly. Attempts in one sign-in session share
+  one install id, so a retry replaces any key that could not be revoked; after a Cancel the next attempt takes a new
+  one.
 - **Migration from version 1.** A stored password is traded for a key by itself on launch ("Securing this tray"): the
   version 1 file is copied to `accounts-connection.v1-rollback.json` (0600), version 2 replaces it, and the first 200
   from `devices/me` deletes the copy. A 401 device code puts version 1 back; no answer keeps both and checks again on the
-  next poll, for at most 24 hours. A dashboard without pairing (404/405) or one that refuses it keeps today's verified
-  password login and is asked again at most once a day; a stored password the dashboard rejects opens the pairing
-  screen with the username filled in.
+  next poll, for at most 24 hours. A dashboard without pairing (404/405), one that refuses it (403, trust off) or no
+  answer keeps today's verified password login; the refresh path asks again after an hour, so turning on "Trust this
+  local network" later needs no restart. A key the dashboard refuses right after a migration puts version 1 back and
+  waits a day. A stored password the dashboard rejects opens the pairing screen with the username filled in.
 - **Rotation.** `devices/me` is read every six hours; once its `rotateAfter` has passed, the tray calls
   `POST /api/auth/devices/me/rotate`, saves the new key before its first use and switches to it. A refusal keeps the
   current key and waits an hour.

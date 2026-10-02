@@ -73,6 +73,7 @@ enum TrayE2E {
     case "setup": setup(base: base, folder: folder, user: user, password: first, code: environment["AAC_E2E_SETUP_CODE"] ?? "")
     case "main": main(base: base, folder: folder, user: user, first: first, second: second)
     case "migrate": migrate(base: base, folder: folder, user: user, password: second)
+    case "names": names(base: base, folder: folder, user: user, password: second)
     default: refuse("unknown phase")
     }
     finish()
@@ -231,17 +232,40 @@ enum TrayE2E {
     record("re-pair after the sign-out gets a new key and reads again", again && repaired?.isPaired == true
       && repaired?.deviceId != saved?.deviceId && model.connected)
 
-    // Settings › Re-pair replaces this install's key.
+    // Settings › Re-pair: the new key gets its own install id, is confirmed and saved, then the old key is revoked
+    // with itself, so exactly one key stays active.
+    func activeIds() -> [String] {
+      (admin.json("GET", "/api/auth/devices", nil).object["devices"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
+    }
     model.beginRepair()
     let repairShown = signIn.active && signIn.repair && signIn.state == .password
     signIn.password = second
     signIn.submit()
     let replacedOk = wait(20) { !signIn.active }
+    wait(20) { !model.session.isRetiringKey }
     let third = try? BarConnection.load(from: file)
-    let devices = admin.json("GET", "/api/auth/devices", nil)
-    let active = (devices.object["devices"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
-    record("Settings Re-pair issues a new key and the dashboard drops the old one", repairShown && replacedOk
-      && third?.deviceId != repaired?.deviceId && active.contains(third?.deviceId ?? "-") && !active.contains(repaired?.deviceId ?? "-"))
+    let active = activeIds()
+    record("Settings Re-pair issues a new key, then revokes the old one; one key stays active", repairShown && replacedOk
+      && third?.deviceId != repaired?.deviceId && third?.installId != repaired?.installId && active == [third?.deviceId ?? "-"],
+      ["active": active.count])
+
+    // Re-pair, then Cancel while the pair call is on its way: nothing is saved, the key the dashboard issued is
+    // revoked, and the working key still reads.
+    model.beginRepair()
+    signIn.password = second
+    signIn.submit()
+    wait(2) { model.session.isPairing }
+    pump(0.08)
+    let inFlight = model.session.isPairing
+    signIn.cancel()
+    wait(30) { !model.session.isPairing }
+    let kept = try? BarConnection.load(from: file)
+    let afterCancel = activeIds()
+    let stillReads = waitValue { try await model.session.client?.deviceSelf() }
+    record("Re-pair Cancel during the pair call saves nothing, revokes the issued key and keeps the working key", inFlight
+      && !signIn.active && kept?.deviceToken == third?.deviceToken && model.session.connection?.deviceToken == third?.deviceToken
+      && afterCancel == [third?.deviceId ?? "-"] && stillReads?.id == third?.deviceId,
+      ["inFlight": inFlight, "active": afterCancel.count])
 
     // This connection as the dashboard sees it.
     model.readConnectionInfo()
@@ -291,6 +315,45 @@ enum TrayE2E {
     model.disconnect()
     wait(20) { signIn.active }
     record("the migrated key is disconnected at the end", (try? BarConnection.load(from: file))?.isSignedOut == true)
+  }
+
+  /// The packaged app's App Transport Security against a host name: the address step refuses a dotted name with the
+  /// numeric-address message before anything is sent, and a saved password connection to that name shows the same
+  /// message instead of "could not reach". Run it with the packaged app's own binary (its Info.plist applies) against
+  /// a name that resolves to the sandbox, such as `<lan address>.nip.io`.
+  private static func names(base: URL, folder: URL, user: String, password: String) {
+    guard let host = base.host, !LocalNetwork.plainHTTPReaches(host: host) else {
+      record("the names phase needs a dotted host name (not a number or .local)", false)
+      return
+    }
+    let packaged = Bundle.main.bundleURL.pathExtension == "app"
+    record("names: run from the packaged app, so App Transport Security applies", packaged,
+      ["bundle": Bundle.main.bundleURL.lastPathComponent])
+    // Unbundled, nothing blocks the name, so the saved-password half would pair a key: stop here.
+    guard packaged else { return }
+    let file = folder.appendingPathComponent("names/accounts-connection.json")
+    let model = tray(file)
+    let signIn = model.signIn
+    signIn.address = base.absoluteString
+    signIn.submit()
+    wait { !signIn.busy }
+    let text = screen(signIn)
+    record("a dotted host name asks for the numeric address, on screen; nothing saved", signIn.state == .firstRun
+      && signIn.badField == .addr && signIn.message?.text == SignInCopy.useNumericAddress
+      && shows(text, ["numeric address"]) && !FileManager.default.fileExists(atPath: file.path), ["read": text])
+    // A saved password connection to that name (as an older tray might hold): no pairing and no reads get through,
+    // and the panel says why.
+    let saved = folder.appendingPathComponent("names-v1/accounts-connection.json")
+    try? FileManager.default.removeItem(at: saved.deletingLastPathComponent())
+    do { try ConnectionStore.save(BarConnection(baseURL: base, username: user, password: password), to: saved) }
+    catch { record("names: version 1 file written", false); return }
+    let older = AccountsViewModel(preview: nil, session: ConnectionSession(fileURL: saved))
+    older.signIn.stepInterval = 0.2
+    older.signIn.successHold = 0.3
+    wait(40) { !older.signIn.active && !older.isRefreshing && older.message != nil }
+    record("a saved connection to that name shows the numeric-address message, not 'could not reach'",
+      older.message == SignInCopy.useNumericAddress && older.connection?.hasPassword == true && !older.connected,
+      ["message": older.message ?? ""])
   }
 
   private static func waitValue<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T?) -> T? {

@@ -2142,6 +2142,10 @@ private final class FakeDashboard: @unchecked Sendable {
   var revokedFields: [String: String] = [:]
   var meFails = false
   var refuseRotate = false
+  /// The pair answer waits this long after the key was issued (Cancel while the answer is on its way).
+  var pairDelay: Double = 0
+  /// DELETE devices/me gets no answer.
+  var deleteFails = false
   private(set) var devices: [Device] = []
   private(set) var log: [String] = []
   private(set) var authorizations: [String] = []
@@ -2205,9 +2209,10 @@ private actor FakeDashboardTransport: BarHTTPTransport {
       let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
       return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!)
     }
-    if host == "refused.invalid" || host == "192.168.77.77" { throw URLError(.cannotConnectToHost) }
-    if host == "slow.invalid" { try await Task.sleep(nanoseconds: 30_000_000_000) }
-    if host == "elsewhere.invalid" {
+    if host.hasPrefix("refused.") || host == "192.168.77.77" { throw URLError(.cannotConnectToHost) }
+    if host.hasPrefix("ats.") { throw URLError(.appTransportSecurityRequiresSecureConnection) }
+    if host.hasPrefix("slow.") { try await Task.sleep(nanoseconds: 30_000_000_000) }
+    if host.hasPrefix("elsewhere.") {
       fake.record("\(method) \(host)\(url.path) 404", auth: auth)
       return (Data("<html>Not found</html>".utf8), HTTPURLResponse(url: url, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: nil)!)
     }
@@ -2243,6 +2248,8 @@ private actor FakeDashboardTransport: BarHTTPTransport {
         return reply(401, ["code": "invalid_credentials", "triesLeft": left])
       }
       let device = fake.pair(installId: body["installId"] as? String)
+      let delay = fake.with { $0.pairDelay }
+      if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
       return reply(201, ["deviceId": device.id, "token": device.token, "name": body["deviceName"] as? String ?? "",
         "platform": "mac", "pairedAt": "2026-10-02T15:00:00.000Z", "rotateAfter": fake.with { $0.rotateAfter }])
     case ("POST", "/api/auth/login"):
@@ -2277,6 +2284,7 @@ private actor FakeDashboardTransport: BarHTTPTransport {
       fake.with { $0.rotateAfter = "2099-01-01T00:00:00Z" }
       return reply(200, ["token": next, "rotateAfter": "2099-01-01T00:00:00Z"])
     case ("DELETE", "/api/auth/devices/me"):
+      if fake.with({ $0.deleteFails }) { throw URLError(.timedOut) }
       fake.revoke(found.index, "self")
       fake.record("\(method) \(host)\(url.path) 204", auth: auth)
       return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: "HTTP/1.1", headerFields: nil)!)
@@ -2468,6 +2476,16 @@ private func checkLocalNetwork() throws {
   for raw in ["", "ftp://host", "http://user:pw@host", "http://host/path", "http://host?x=1", "http://host#f", "http://", "javascript:alert(1)"] {
     try expect(DashboardProbe.normalize(raw) == nil, "\(raw) is not a dashboard address")
   }
+  // App Transport Security with local networking allowed: numbers, .local and one-word names only (measured on the Mac).
+  for host in ["192.168.50.10", "10.6.0.9", "[fd00::5]", "fe80::1%en0", "localhost", "dashboard", "dash.local", "Dash.Local."] {
+    try expect(LocalNetwork.plainHTTPReaches(host: host), "\(host) is reachable over plain HTTP from the packaged app")
+  }
+  for host in ["box.home.arpa", "dash.lan", "192.168.50.179.nip.io", "vpn.example.net", "dash.local.example.net"] {
+    try expect(!LocalNetwork.plainHTTPReaches(host: host), "\(host) is refused over plain HTTP by the Mac")
+  }
+  try expect(ConnectionCheckError.reason(URLError(.appTransportSecurityRequiresSecureConnection), cancelled: false) == .insecureAddress
+    && ConnectionCheckError.insecureAddress.errorDescription == SignInCopy.useNumericAddress,
+    "The Mac's own HTTP refusal is its own message, never 'could not reach'")
 }
 
 /// States 1, 2, 4, 5 and 8 from the address check, with nothing saved.
@@ -2477,7 +2495,9 @@ private func checkLocalNetwork() throws {
   let fake = FakeDashboard()
   let session = ConnectionSession(fileURL: directory.appendingPathComponent("accounts-connection.json"),
     makeTransport: { FakeDashboardTransport(fake) })
-  session.resolver = { host in host == "home.example.net" ? ["203.0.113.9"] : host == "dash.local" ? ["192.168.50.179"] : [] }
+  session.resolver = { host in
+    host == "home.example.net" ? ["203.0.113.9"] : ["dash.local", "box.home.arpa"].contains(host) ? ["192.168.50.179"] : []
+  }
   let before = fake.requests.count
   for outside in ["home.example.net:3000", "203.0.113.5:3000", "100.64.1.2:3000", "169.254.3.4:3000", "[2001:db8::1]:3000"] {
     let result = await session.checkAddress(outside)
@@ -2504,18 +2524,28 @@ private func checkLocalNetwork() throws {
   try expect(answer5 == .signInOff(URL(string: "http://192.168.50.10:3000")!),
     "A dashboard with sign-in off has nothing to pair with")
   fake.with { $0.accessMode = "login" }
-  let answer6 = await session.checkAddress("refused.invalid:3000")
-  try expect(answer6 == .unreachable(URL(string: "http://refused.invalid:3000")!),
+  let answer6 = await session.checkAddress("refused.local:3000")
+  try expect(answer6 == .unreachable(URL(string: "http://refused.local:3000")!),
     "No answer gives state 8 unreachable")
-  let answer7 = await session.checkAddress("elsewhere.invalid:8080")
-  try expect(answer7 == .notDashboard(URL(string: "http://elsewhere.invalid:8080")!),
+  let answer7 = await session.checkAddress("elsewhere.local:8080")
+  try expect(answer7 == .notDashboard(URL(string: "http://elsewhere.local:8080")!),
     "An answer that is not the dashboard gives state 8 wrong address")
+  // A local name the Mac will not reach over plain HTTP: refused with its own message before anything is sent.
+  let sentBeforeName = fake.requests.count
+  let named = await session.checkAddress("box.home.arpa:3000")
+  try expect(named == .insecureName(URL(string: "http://box.home.arpa:3000")!) && fake.requests.count == sentBeforeName,
+    "A dotted name other than .local is refused before anything is sent: use the numeric address")
+  let single = await session.checkAddress("dashboard:3000")
+  try expect(single == .ready(URL(string: "http://dashboard:3000")!), "A one-word name goes to the password step")
+  let blocked = await session.checkAddress("ats.local:3000")
+  try expect(blocked == .insecureName(URL(string: "http://ats.local:3000")!),
+    "The Mac's own refusal (App Transport Security) gets the numeric-address message, not 'unreachable'")
   let answer8 = await session.checkAddress("http://x/y")
   try expect(answer8 == .invalid, "An address with a path is refused before anything is sent")
   session.addressTimeout = 0.3
   let started = Date()
-  let slow = await session.checkAddress("slow.invalid:3000")
-  try expect(slow == .unreachable(URL(string: "http://slow.invalid:3000")!) && Date().timeIntervalSince(started) < 3,
+  let slow = await session.checkAddress("slow.local:3000")
+  try expect(slow == .unreachable(URL(string: "http://slow.local:3000")!) && Date().timeIntervalSince(started) < 3,
     "A dashboard that never answers ends at the time limit")
   // An older dashboard without the new fields: let pairing answer.
   let older = DashboardProbe(baseURL: URL(string: "http://192.168.50.10:3000")!)
@@ -2577,14 +2607,21 @@ private func checkLocalNetwork() throws {
   let liveUsesKey = await session.client?.usesDeviceKey == true
   try expect(liveUsesKey && session.device?.id == connection.deviceId, "The live client now uses the key")
 
-  // Re-pair keeps the install id, so the dashboard replaces this install's old key.
+  func active() -> [String] { fake.deviceList.filter { $0.revoked == nil }.map(\.token) }
+  func state(_ token: String?) -> String? { fake.deviceList.first { $0.token == token }?.revoked }
+  try expect(fake.deviceList.filter { $0.installId == connection.installId }.count == 2 && active() == [connection.deviceToken ?? ""],
+    "The unconfirmed attempt and the saved one share one install id, and the unconfirmed key was revoked")
+
+  // Re-pair pairs under a new install id, so the working key stays valid until the new one is saved; then the old
+  // key is revoked with itself (DELETE devices/me) and only the new key stays active.
   let oldToken = connection.deviceToken
   guard case .paired(let again, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
     throw CheckFailure(description: "Re-pair must pair")
   }
-  try expect(again.installId == connection.installId && again.deviceToken != oldToken
-    && fake.deviceList.first { $0.token == oldToken }?.revoked == "replaced",
-    "Re-pair sends the same install id and the dashboard revokes the old key")
+  await session.finishRetiring()
+  try expect(again.installId != connection.installId && again.deviceToken != oldToken && state(oldToken) == "self"
+    && !session.isRetiringKey && active() == [again.deviceToken ?? ""],
+    "Re-pair uses a new install id, saves the new key, then revokes the old key with itself")
 
   // A failed Change keeps the working key.
   let before = try Data(contentsOf: file)
@@ -2592,6 +2629,72 @@ private func checkLocalNetwork() throws {
   _ = await session.pair(url: url, username: "owner", password: "wrong-again")
   try expect((try? Data(contentsOf: file)) == before && session.connection?.deviceToken == again.deviceToken,
     "A failed re-pair or change keeps the saved key and the live client")
+
+  // Re-pair whose new key never gets a devices/me answer after the 201: the working key is still valid and still
+  // saved, and the unconfirmed key is revoked rather than left active.
+  fake.with { $0.meFails = true }
+  guard case .failed(let unconfirmed, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "An unconfirmed Re-pair must fail")
+  }
+  fake.with { $0.meFails = false }
+  let unconfirmedKey = fake.deviceList.last
+  let stillReads = try await session.client?.deviceSelf()
+  try expect(unconfirmed == SignInCopy.notConfirmed && (try? Data(contentsOf: file)) == before
+    && session.connection?.deviceToken == again.deviceToken && unconfirmedKey?.token != again.deviceToken
+    && unconfirmedKey?.revoked == "self" && active() == [again.deviceToken ?? ""] && stillReads?.id == again.deviceId,
+    "A Re-pair with no devices/me answer keeps the working key valid and revokes the unconfirmed one")
+
+  // Its key cannot even be revoked (no answer either): the next attempt reuses the install id, so the dashboard
+  // replaces the stray record instead of keeping it toward the 20-tray limit.
+  fake.with { $0.meFails = true; $0.deleteFails = true }
+  _ = await session.pair(url: url, username: "owner", password: "fixture-pass-1")
+  fake.with { $0.meFails = false; $0.deleteFails = false }
+  let stray = fake.deviceList.last
+  try expect(stray?.revoked == nil && stray?.installId == unconfirmedKey?.installId && session.connection?.deviceToken == again.deviceToken,
+    "A key that could not be revoked stays active for now, under the same install id")
+  guard case .paired(let fourth, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "Re-pair must pair after a stray key")
+  }
+  await session.finishRetiring()
+  try expect(fourth.installId == stray?.installId && state(stray?.token) == "replaced" && state(again.deviceToken) == "self"
+    && active() == [fourth.deviceToken ?? ""],
+    "One install id per sign-in session: the retry replaces the stray key and only the saved key stays active")
+
+  // Re-pair whose new key cannot be saved: no file changes, the working key stays valid, the new key is revoked.
+  let folder = file.deletingLastPathComponent()
+  let beforeSave = try Data(contentsOf: file)
+  try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: folder.path)
+  let unsavedOutcome = await session.pair(url: url, username: "owner", password: "fixture-pass-1")
+  try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: folder.path)
+  guard case .failed(let unsavedText, _) = unsavedOutcome else { throw CheckFailure(description: "An unsaved Re-pair must fail") }
+  let unsaved = fake.deviceList.last
+  try expect(unsavedText == SignInCopy.saveFailed && (try? Data(contentsOf: file)) == beforeSave
+    && session.connection?.deviceToken == fourth.deviceToken && unsaved?.token != fourth.deviceToken
+    && unsaved?.revoked == "self" && active() == [fourth.deviceToken ?? ""],
+    "A Re-pair that cannot save keeps the file and the working key, and revokes the new key")
+
+  // Cancel while the pair call is on its way back: nothing is saved, the issued key is revoked, the working key stays,
+  // and the next attempt uses a new install id so the late answer can never replace it.
+  fake.with { $0.pairDelay = 0.4 }
+  let issuedBefore = fake.deviceList.count
+  let running = Task { @MainActor in await session.pair(url: url, username: "owner", password: "fixture-pass-1") }
+  var spins = 0
+  while fake.deviceList.count == issuedBefore && spins < 400 { try await Task.sleep(nanoseconds: 5_000_000); spins += 1 }
+  let inFlight = session.isPairing
+  session.cancelCheck()
+  let cancelled = await running.value
+  fake.with { $0.pairDelay = 0 }
+  let dropped = fake.deviceList.last
+  guard case .cancelled = cancelled else { throw CheckFailure(description: "Cancel during the pair call must cancel it") }
+  try expect(inFlight && (try? Data(contentsOf: file)) == beforeSave && session.connection?.deviceToken == fourth.deviceToken
+    && dropped?.token != fourth.deviceToken && dropped?.revoked == "self" && active() == [fourth.deviceToken ?? ""],
+    "Cancel during the pair call saves nothing, revokes the issued key and keeps the working key")
+  guard case .paired(let fifth, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+    throw CheckFailure(description: "Re-pair must pair after a cancel")
+  }
+  await session.finishRetiring()
+  try expect(fifth.installId != dropped?.installId && active() == [fifth.deviceToken ?? ""],
+    "After a cancel the next attempt uses a new install id")
 
   // The fifth failure pauses pairing (state 7) with the dashboard's own wait.
   fake.with { $0.failures = 5 }
@@ -2711,7 +2814,7 @@ private func checkLocalNetwork() throws {
   try expect(!session.hasPendingRollback && (try? BarConnection.load(from: file))?.isPaired == true,
     "A rollback copy older than 24 hours is deleted")
 
-  // No pairing yet (404): today's login stays, and pairing waits a day before trying again.
+  // No pairing yet (404): today's login stays, and pairing waits an hour before trying again.
   _ = try seedV1()
   session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
   try session.load()
@@ -2719,10 +2822,29 @@ private func checkLocalNetwork() throws {
   let kept = await session.migrate()
   let attempts = fake.requests.filter { $0.contains("/devices/pair") }.count
   _ = await session.migrate()
-  try expect(kept == .keptPassword && (try? Data(contentsOf: file)) == v1
+  try expect(kept == .keptPassword && (try? Data(contentsOf: file)) == v1 && !session.migrationDue
     && fake.requests.filter { $0.contains("/devices/pair") }.count == attempts,
-    "Without pairing the version 1 login stays, and pairing is not retried within 24 hours")
+    "Without pairing the version 1 login stays, and pairing is not retried within the hour")
   fake.with { $0.supportsPairing = true }
+
+  // Trust turned on after launch: the refused migration (403) is due again after an hour, and then pairs.
+  _ = try seedV1()
+  session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
+  try session.load()
+  var clock = Date()
+  session.now = { clock }
+  fake.with { $0.trustLocalNetwork = false; $0.peerTrusted = false }
+  let refused = await session.migrate()
+  let blockedNow = !session.migrationDue
+  fake.with { $0.trustLocalNetwork = true; $0.peerTrusted = true }
+  clock = clock.addingTimeInterval(30 * 60)
+  let stillBlocked = await session.migrate()
+  clock = clock.addingTimeInterval(31 * 60)
+  let dueLater = session.migrationDue
+  let later = await session.migrate()
+  try expect(refused == .keptPassword && blockedNow && stillBlocked == .keptPassword && dueLater && later == .secured
+    && (try? BarConnection.load(from: file))?.isPaired == true && !session.hasPendingRollback,
+    "A migration refused with trust off is retried after an hour and pairs once trust is on, without a restart")
 
   // The stored password is wrong: the pairing screen, nothing changed.
   _ = try seedV1("stale-password")
@@ -2921,13 +3043,13 @@ do {
   try checkLocalNetwork()
   print("PASS local-network check: private, loopback and fc00::/7 local; public, CGNAT, link-local and unknown refused")
   try await checkAddressStates()
-  print("PASS address check states: not local (tray and dashboard), pairing off, setup code, sign-in off, unreachable, wrong address")
+  print("PASS address check states: not local (tray and dashboard), pairing off, setup code, sign-in off, unreachable, wrong address, numeric address for plain HTTP")
   try await checkPairingFlow()
-  print("PASS pairing: wrong password with tries, refusals, verify before saving, re-pair replaces the key, rate limit, password fallback")
+  print("PASS pairing: wrong password with tries, refusals, verify before saving, Re-pair under a new install id (unconfirmed, unsaved, cancelled), one install id per session, rate limit, password fallback")
   try await checkSetupFlow()
   print("PASS first-run setup code, form checks and strength meter, then pairing")
   try await checkMigrationFlow()
-  print("PASS migration from a stored password: rollback copy until the first 200, restore on a device code, 24-hour limits")
+  print("PASS migration from a stored password: rollback copy until the first 200, restore on a device code, 24-hour rollback limit, hourly retry after a refusal")
   try await checkSignOutAndDisconnect()
   print("PASS sign-out keeps the address and username without the key; Disconnect revokes on the dashboard, then forgets it")
   try await checkRotation()

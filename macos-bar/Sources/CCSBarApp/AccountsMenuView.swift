@@ -245,7 +245,7 @@ struct AccountsMenuView: View {
 
   private var statusHelp: String {
     if model.needsConnection {
-      return model.signIn.repair ? "Re-pairing: the current device key keeps working until the new one is issued"
+      return model.signIn.repair ? "Re-pairing: the current device key keeps working until the new one is saved"
         : "\(model.signIn.statusText): usage appears after this tray is paired"
     }
     guard let dashboard = model.dashboard else { return "" }

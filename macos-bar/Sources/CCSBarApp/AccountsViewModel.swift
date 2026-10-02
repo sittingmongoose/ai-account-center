@@ -62,6 +62,8 @@ final class AccountsViewModel: ObservableObject {
   private var signInWatch: [AnyCancellable] = []
   /// Bumped when a verified Change replaces the client, so a sample still in flight from the old one is dropped.
   private var connectionGeneration = 0
+  /// A stored-password migration started from the refresh path is running.
+  private var retryingMigration = false
   /// The windows now drawn as "new reading pending" (F6), so the timer redraws only when one flips.
   private var pendingResets = Set<String>()
   private var timer: Timer?
@@ -325,14 +327,38 @@ final class AccountsViewModel: ObservableObject {
     } catch {
       if generation == connectionGeneration {
         connected = false
-        message = error.localizedDescription
+        message = ConnectionCheckError.isInsecureAddressBlock(error) ? SignInCopy.useNumericAddress : error.localizedDescription
         recordStatus(connected: false)
       } else { replaced = true }
     }
     isRefreshing = false
     if let signedOut { handleSignedOut(signedOut); return }
     // A new connection landed while this sample was in flight: read it now.
-    if replaced { await refresh() }
+    if replaced { await refresh(); return }
+    await retryMigrationIfDue()
+  }
+
+  /// Section 8 while the tray runs: a stored password whose pairing was refused (trust off, no pairing yet) or got no
+  /// answer at launch is traded for a key once `migrationDue`, so turning on "Trust this local network" later needs no
+  /// restart. It runs quietly behind the list; only a rejected password opens the pairing screen, as at launch.
+  private func retryMigrationIfDue() async {
+    guard !isPreview, !retryingMigration, !signIn.active, session.connection?.hasPassword == true, session.migrationDue
+    else { return }
+    retryingMigration = true
+    defer { retryingMigration = false }
+    switch await session.migrate() {
+    case .secured, .pending:
+      connectionGeneration += 1
+      connection = session.connection
+      flashStatus("Secured · this tray now signs in with a device key")
+    case .needsPassword(let tries):
+      if let saved = session.connection, saved.hasPassword {
+        signIn.lastSyncedAt = lastSyncedAt
+        signIn.showPasswordNeeded(connection: saved, triesLeft: tries)
+      }
+    case .keptPassword, .rateLimited:
+      break
+    }
   }
 
   /// The refresh timer's first step (F6): a window whose reset passes while the panel is open turns into "Reset at

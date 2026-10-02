@@ -157,8 +157,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
   }
 
-  /// Escape closes a popover first, then stops a running address or password check (nothing is saved), then closes
-  /// Settings, then an unanswered switch confirmation, then the panel.
+  /// Escape closes a popover first, then stops a running address check or pair (nothing is saved, and a key the
+  /// dashboard already issued is revoked), then closes Settings, then an unanswered switch confirmation, then the panel.
   func cancel() {
     if popoverShown { state.popoverDismissal += 1 }
     else if model.signIn.active && model.signIn.cancelRunning() {}
