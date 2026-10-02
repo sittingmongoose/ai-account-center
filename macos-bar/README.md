@@ -86,6 +86,7 @@ export AAC_ASSETS_DIR="$PWD/Resources/Assets"            # unbundled runs read a
 .build/release/CCSBar --check-native-tooltips Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --check-native-packs Tests/Fixtures/tray-concept-preview.json /tmp/packs.png
 .build/release/CCSBar --self-test Tests/Fixtures/tray-concept-preview.json
+.build/release/CCSBar --toggle-test Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/panel.png --dark [--settings]
 .build/release/CCSBar --render-preview Tests/Fixtures/tray-concept-preview.json /tmp/rt.png --dark --reduce-transparency
 python3 Scripts/migration_check.py
@@ -101,6 +102,9 @@ python3 Scripts/migration_check.py
   toggling the panel, Escape from a focused text field on the connect screen, idle CPU with the panel open and
   closed, and memory over 24 open-close cycles. It shows the panel on screen for about half a minute and leaves no
   preferences behind.
+- `--toggle-test` clicks the menu-bar icon with real synthetic mouse events from a fixture (no sign-in, no network):
+  open, close, open again, then click-outside closes, Escape closes, and the Carbon hot-key event toggles. It posts
+  its clicks through a `--click-at` helper child process and leaves no preferences behind.
 - `--render-preview` draws the panel content offscreen (`--light`, `--dark`, `--settings`, `--details=<account id or
   provider>`, `--connect`, and `--reduce-transparency` or `--increase-contrast`, which simulate those display settings in
   the render only). System glass is composited by the window server and never reaches an offscreen render, so previews

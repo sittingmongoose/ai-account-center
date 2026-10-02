@@ -1686,6 +1686,22 @@ private func checkResetPending() throws {
     "A window flips to pending when its reset passes while the panel is open")
 }
 
+private func checkStatusItemToggle() throws {
+  let button = CGRect(x: 100, y: 900, width: 40, height: 22)
+  // A left or right press on our own button is not an outside click: the button action toggles.
+  try expect(!StatusItemClick.isOutsideClick(at: CGPoint(x: 120, y: 911), buttonFrame: button, buttonActs: true),
+    "A press on the status-item button must not dismiss the panel")
+  try expect(!StatusItemClick.isOutsideClick(at: CGPoint(x: 100.5, y: 900.5), buttonFrame: button, buttonActs: true)
+    && !StatusItemClick.isOutsideClick(at: CGPoint(x: 139.5, y: 921.5), buttonFrame: button, buttonActs: true),
+    "Presses just inside the button's edges must not dismiss the panel")
+  // Anything off the button dismisses, as does a press the button ignores (another mouse button).
+  try expect(StatusItemClick.isOutsideClick(at: CGPoint(x: 99.9, y: 911), buttonFrame: button, buttonActs: true)
+    && StatusItemClick.isOutsideClick(at: CGPoint(x: 140.1, y: 911), buttonFrame: button, buttonActs: true)
+    && StatusItemClick.isOutsideClick(at: CGPoint(x: 120, y: 500), buttonFrame: button, buttonActs: true)
+    && StatusItemClick.isOutsideClick(at: CGPoint(x: 120, y: 911), buttonFrame: button, buttonActs: false),
+    "Presses off the button, or that the button ignores, must still dismiss the panel")
+}
+
 private func printJSON(_ object: [String: Any]) throws {
   let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
   print(String(decoding: data, as: UTF8.self))
@@ -1757,6 +1773,8 @@ do {
   print("PASS sign-in and Change verify before saving: wrong address, wrong login, cancel, timeout, success, first run")
   try checkResetPending()
   print("PASS readings from before their reset show as new reading pending, never 0%")
+  try checkStatusItemToggle()
+  print("PASS status-item presses toggle instead of dismissing; presses elsewhere still dismiss")
   print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
   fputs("AI Account Center core check failed: \(error)\n", stderr)

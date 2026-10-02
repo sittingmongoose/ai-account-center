@@ -19,6 +19,15 @@ enum CCSBarMain {
     if arguments.count == 3, arguments[1] == "--self-test" {
       PanelSelfTest.run(input: arguments[2])
     }
+    if arguments.count == 3, arguments[1] == "--toggle-test" {
+      PanelToggleTest.run(input: arguments[2])
+    }
+    if arguments.count == 4, arguments[1] == "--click-at",
+      let x = Double(arguments[2]), let y = Double(arguments[3]) {
+      PanelToggleTest.clickOnce(at: CGPoint(x: x, y: y))
+      exit(0)
+    }
+
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
