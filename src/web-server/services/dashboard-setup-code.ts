@@ -1,6 +1,7 @@
 import { randomInt, timingSafeEqual } from 'crypto';
 import fs from 'fs/promises';
 import { authFile, authNow, ensureAuthDirectory, withAuthWriteGate } from './dashboard-auth-files';
+import { writePrivateTextFile } from './private-json-store';
 
 /**
  * The one-time setup code for a first run from the LAN (CONTRACT-auth-devices
@@ -45,14 +46,8 @@ export function createSetupCode(print: (formatted: string) => void): Promise<str
     await ensureAuthDirectory();
     const file = authFile('setup-code');
     const code = makeCode();
-    const temporary = `${file}.${process.pid}.tmp`;
-    try {
-      await fs.writeFile(temporary, `${formatSetupCode(code)}\n`, { mode: 0o600, flag: 'w' });
-      await fs.chmod(temporary, 0o600);
-      await fs.rename(temporary, file);
-    } finally {
-      await fs.rm(temporary, { force: true }).catch(() => undefined);
-    }
+    // The same atomic 0600 write as the other auth files (random temporary name, `wx`, fsync).
+    await writePrivateTextFile(file, `${formatSetupCode(code)}\n`);
     pending = { file, code, createdAt: authNow() };
     print(formatSetupCode(code));
     return formatSetupCode(code);

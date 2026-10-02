@@ -67,7 +67,10 @@ Trays pair once with the password and then use a revocable
 and expires after 90 days unused. Password, setup, pairing and rotation need a secure
 transport; `dashboard_tls` in config.yaml (a trusted local TLS proxy, an in-process HTTPS
 listener and the public origin) is off by default. Credentials set by environment
-variables are read-only.
+variables are read-only. Wrong passwords are limited per address and per server
+([limits](../../src/web-server/routes/auth-rate-limits.ts)), keyed independently of the
+session id, and a confirmation token offered to one browser or tray is refused for any
+other caller.
 
 A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
 is tracked as an operation, and the profile list reports its progress as

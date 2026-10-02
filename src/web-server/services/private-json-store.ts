@@ -151,6 +151,15 @@ async function syncFolder(directory: string): Promise<void> {
 
 /** Atomic replacement; call inside `withPrivateFileLock` for the same file. */
 export async function writePrivateJsonFile(file: string, value: unknown): Promise<void> {
+  await writePrivateTextFile(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * Atomic 0600 replacement of a small private text file: a new temporary file
+ * with a random name (`wx`, so a planted file or symlink is never followed),
+ * fsync, rename, then a best-effort fsync of the folder.
+ */
+export async function writePrivateTextFile(file: string, contents: string): Promise<void> {
   const directory = path.dirname(file);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   if ((await checkStoreFolder(directory)) !== 'ok') {
@@ -163,7 +172,7 @@ export async function writePrivateJsonFile(file: string, value: unknown): Promis
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     handle = await fs.open(temporary, 'wx', 0o600);
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    await handle.writeFile(contents, 'utf8');
     await handle.chmod(0o600);
     await handle.sync();
     await handle.close();

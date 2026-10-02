@@ -1,16 +1,12 @@
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import {
   getDashboardAuthConfig,
   loadOrCreateUnifiedConfig,
 } from '../../config/config-loader-facade';
 import { createLogger } from '../../services/logging';
-import {
-  isDashboardWebSocketOriginAllowed,
-  retryAfterSeconds,
-} from '../middleware/auth-middleware';
+import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { isSecureTransport } from '../middleware/secure-transport';
 import { closeStaleSessionClients } from '../dashboard-events';
 import {
@@ -18,7 +14,6 @@ import {
   forgetSession,
   isSessionEpochCurrent,
   noteSession,
-  sessionKey,
 } from '../services/dashboard-auth-state';
 import { getDashboardTlsSettings } from '../services/dashboard-tls-config';
 
@@ -257,15 +252,32 @@ function sessionCall(run: (done: (error?: unknown) => void) => void): Promise<vo
 }
 
 /**
+ * Whether the stored password hash is still the one a request compared its
+ * password against: a login or pairing whose bcrypt check overlapped a
+ * password change must not succeed with the password just replaced.
+ */
+export function passwordHashUnchanged(checkedHash: string): boolean {
+  return dashboardAuthState().passwordHash === checkedHash;
+}
+
+export interface SignedInSession {
+  expiresAt: string | null;
+}
+
+/**
  * Regenerate the session (a new id, so no fixation), sign it in for `username`
  * in the current epoch, and save it before answering so the response carries
- * the new cookie. Returns the session's expiry.
+ * the new cookie. With `credentialHash`, the stored password hash must still
+ * be that one once the epoch is read; otherwise nothing changes and the
+ * answer is null (a password change finished while the password was checked).
  */
-export async function startSignedInSession(
+async function beginSignedInSession(
   req: Request,
-  username: string
-): Promise<{ expiresAt: string | null }> {
+  username: string,
+  credentialHash: string | null
+): Promise<SignedInSession | null> {
   const epoch = await ensureSessionEpoch();
+  if (credentialHash !== null && !passwordHashUnchanged(credentialHash)) return null;
   const previous = req.sessionID;
   await sessionCall((done) => req.session.regenerate(done));
   forgetSession(previous);
@@ -280,33 +292,27 @@ export async function startSignedInSession(
   return { expiresAt: expires ? expires.toISOString() : null };
 }
 
+export async function startSignedInSession(
+  req: Request,
+  username: string
+): Promise<SignedInSession> {
+  return (await beginSignedInSession(req, username, null)) as SignedInSession;
+}
+
+/** A sign-in with a password: null when that password was replaced before the session started. */
+export function startSessionForPassword(
+  req: Request,
+  username: string,
+  checkedHash: string
+): Promise<SignedInSession | null> {
+  return beginSignedInSession(req, username, checkedHash);
+}
+
 /** The current session's expiry, as ISO time. */
 export function sessionExpiresAt(req: Request): string | null {
   const expires = req.session?.cookie?.expires;
   return expires instanceof Date ? expires.toISOString() : null;
 }
-
-/**
- * Contract 3.4: 5 failed current-password checks per 15 minutes, keyed on the
- * session and the IP; only a wrong current password counts.
- */
-export const passwordChangeLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  skipSuccessfulRequests: true,
-  requestWasSuccessful: (_req, res) => res.statusCode !== 401,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) =>
-    `${ipKeyGenerator(req.ip ?? req.socket?.remoteAddress ?? 'unknown')}|${sessionKey(req.sessionID ?? '')}`,
-  handler: (req: Request, res: Response) => {
-    const seconds = retryAfterSeconds(req);
-    res.setHeader('Retry-After', String(seconds));
-    sendAuthError(res, 429, 'rate_limited', 'Too many wrong passwords. Try again later.', {
-      retryAfterSeconds: seconds,
-    });
-  },
-});
 
 /** Every response under /api/auth is `no-store` (rule 1). */
 export function noStore(_req: Request, res: Response, next: NextFunction): void {

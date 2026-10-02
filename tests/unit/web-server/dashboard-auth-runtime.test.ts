@@ -21,6 +21,7 @@ import { createEmptyUnifiedConfig } from '../../../src/config/unified-config-typ
 import { saveUnifiedConfig } from '../../../src/config/unified-config-loader';
 import { invalidateConfigCache } from '../../../src/config/config-loader-facade';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
+import { resetAuthRateLimitsForTests } from '../../../src/web-server/routes/auth-rate-limits';
 import { setTrustedProxyResolver } from '../../../src/web-server/middleware/secure-transport';
 import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
@@ -86,6 +87,7 @@ afterEach(async () => {
   for (const stub of stubs) stub.mockRestore();
   setTrustedProxyResolver(() => null);
   for (const key of ['127.0.0.1', '::ffff:127.0.0.1']) loginRateLimiter.resetKey(key);
+  await resetAuthRateLimitsForTests();
   for (const name of ENVIRONMENT) {
     if (original[name] === undefined) delete process.env[name];
     else process.env[name] = original[name];
@@ -223,9 +225,11 @@ describe('in-process HTTPS listener (dashboard_tls.https_listener)', () => {
 });
 
 describe('first-run setup code at startup', () => {
-  it('prints the code on stdout once and writes it to ~/.ccs/auth/setup-code', async () => {
-    await writeConfig('setup');
+  /** Starts the server with stdout seen as a terminal or not, and returns what it printed. */
+  async function startCapturingStdout(interactive: boolean): Promise<string[]> {
     const printed: string[] = [];
+    const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { value: interactive, configurable: true });
     const write = spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
       printed.push(String(chunk));
       return true;
@@ -239,12 +243,30 @@ describe('first-run setup code at startup', () => {
       await settleAuthWrites();
     } finally {
       write.mockRestore();
+      if (descriptor) Object.defineProperty(process.stdout, 'isTTY', descriptor);
+      else delete (process.stdout as { isTTY?: boolean }).isTTY;
     }
+    return printed;
+  }
+
+  it('prints the code on a terminal once and writes it to ~/.ccs/auth/setup-code', async () => {
+    await writeConfig('setup');
+    const printed = await startCapturingStdout(true);
     const file = path.join(home, '.ccs', 'auth', 'setup-code');
     const code = fs.readFileSync(file, 'utf8').trim();
     expect(code).toMatch(/^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     expect(printed.filter((line) => line.includes(code)).length).toBe(1);
+  });
+
+  it('prints only where the code is when stdout is a log file, not the code', async () => {
+    await writeConfig('setup');
+    const printed = await startCapturingStdout(false);
+    const code = fs.readFileSync(path.join(home, '.ccs', 'auth', 'setup-code'), 'utf8').trim();
+    const text = printed.join('');
+    expect(text).not.toContain(code);
+    expect(text).not.toContain(code.replace('-', ''));
+    expect(text).toContain('setup-code');
   });
 
   it('makes no code for a configured server', async () => {
@@ -321,5 +343,46 @@ describe('/ws and dashboard sign-in', () => {
     // The browser that revoked the others still connects with its new cookie.
     const renewed = /connect\.sid=[^;]*/.exec(revoke.headers.get('set-cookie') ?? '')?.[0] ?? '';
     expect(await upgradeStatus(port, { cookie: renewed, origin: base })).toBe(101);
+  });
+});
+
+describe('/api/auth error answers from the server', () => {
+  it('carry a code and no-store under /api/auth only', async () => {
+    await writeConfig('configured');
+    instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: path.join(home, 'ui') });
+    const base = `http://127.0.0.1:${(instance.server.address() as AddressInfo).port}`;
+    const malformed = (route: string) =>
+      fetch(`${base}${route}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"username":',
+      });
+    const auth = await malformed('/api/auth/login');
+    expect(auth.status).toBe(400);
+    expect(auth.headers.get('cache-control')).toBe('no-store');
+    expect(await auth.json()).toEqual({
+      error: 'Invalid JSON in request body',
+      code: 'invalid_json',
+    });
+    const other = await malformed('/api/health');
+    expect(other.status).toBe(400);
+    expect(await other.json()).toEqual({ error: 'Invalid JSON in request body' });
+
+    const login = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: USERNAME, password: PASSWORD }),
+    });
+    const cookie = /connect\.sid=[^;]*/.exec(login.headers.get('set-cookie') ?? '')?.[0] ?? '';
+    const unknownAuth = await fetch(`${base}/api/auth/no-such-route`, { headers: { cookie } });
+    expect(unknownAuth.status).toBe(404);
+    expect(unknownAuth.headers.get('cache-control')).toBe('no-store');
+    expect(await unknownAuth.json()).toEqual({
+      error: 'API endpoint was not found.',
+      code: 'not_found',
+    });
+    const unknownApi = await fetch(`${base}/api/no-such-route`, { headers: { cookie } });
+    expect(unknownApi.status).toBe(404);
+    expect(await unknownApi.json()).toEqual({ error: 'API endpoint was not found.' });
   });
 });

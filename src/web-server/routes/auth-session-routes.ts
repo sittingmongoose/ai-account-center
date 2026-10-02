@@ -1,7 +1,12 @@
 import bcrypt from 'bcrypt';
 import type { NextFunction, Request, Response, Router } from 'express';
 import { mutateConfig } from '../../config/config-loader-facade';
-import { loginRateLimiter, triesLeft } from '../middleware/auth-middleware';
+import {
+  loginRateLimiter,
+  markCredentialsAccepted,
+  markCredentialsRejected,
+  triesLeft,
+} from '../middleware/auth-middleware';
 import { authKind } from '../middleware/request-auth';
 import { isDirectLoopbackRequest, isSecureTransport } from '../middleware/secure-transport';
 import {
@@ -18,13 +23,18 @@ import {
   setupCodeMatches,
 } from '../services/dashboard-setup-code';
 import {
+  passwordChangeLimiter,
+  passwordChangeServerLimiter,
+  sessionRotationLimiter,
+  signInLimiters,
+} from './auth-rate-limits';
+import {
   audit,
   BCRYPT_HASH_PATTERN,
   dashboardAuthState,
   invalidBody,
   MAX_PASSWORD_LENGTH,
   newPasswordProblem,
-  passwordChangeLimiter,
   passwordChangedAt,
   passwordMatches,
   readAuthBody,
@@ -35,6 +45,7 @@ import {
   sessionExpiresAt,
   startSignedInSession,
   weakPassword,
+  type SignedInSession,
 } from './auth-route-helpers';
 
 /**
@@ -144,17 +155,31 @@ async function changePassword(req: Request, res: Response): Promise<void> {
     });
     return;
   }
+  // The password has changed from here on: whatever fails next is reported
+  // with the 200, never as an error the client would retry with the old one.
   let signedOutBrowsers = 0;
+  let session: SignedInSession | null = null;
+  let rotationFailed = false;
   if (change.signOutOtherBrowsers) {
-    signedOutBrowsers = countOtherSessions(req.sessionID);
-    await bumpSessionEpoch();
+    try {
+      const others = countOtherSessions(req.sessionID);
+      await bumpSessionEpoch();
+      signedOutBrowsers = others;
+    } catch {
+      rotationFailed = true;
+    }
   }
-  const username = req.session.username ?? dashboardAuthState().username;
-  const session = await startSignedInSession(req, username);
+  try {
+    const username = req.session.username ?? dashboardAuthState().username;
+    session = await startSignedInSession(req, username);
+  } catch {
+    rotationFailed = true;
+  }
   const pairedDevices = activeDevices().length;
   audit('auth.password.changed', 'Dashboard password changed', {
     signedOutBrowsers,
     pairedDevices,
+    ...(rotationFailed ? { sessionRotation: 'failed' } : {}),
   });
   res.json({
     ok: true,
@@ -162,14 +187,21 @@ async function changePassword(req: Request, res: Response): Promise<void> {
     signedOutBrowsers,
     pairedDevices,
     session,
+    // Sign in again with the new password; other browsers may still be signed in.
+    ...(rotationFailed ? { code: 'session_rotation_failed' } : {}),
   });
+}
+
+/** Refused requests answer before the limiter, so they spend nothing. */
+function revokeOthersPreflight(req: Request, res: Response, next: NextFunction): void {
+  if (!requireAuthConfigured(res)) return;
+  if (!requireBrowserSession(req, res)) return;
+  if (!readAuthBody(req, res, 'required', [])) return;
+  next();
 }
 
 async function revokeOtherSessions(req: Request, res: Response): Promise<void> {
   const state = dashboardAuthState();
-  if (!requireAuthConfigured(res, state)) return;
-  if (!requireBrowserSession(req, res)) return;
-  if (!readAuthBody(req, res, 'required', [])) return;
   const signedOutBrowsers = countOtherSessions(req.sessionID);
   await bumpSessionEpoch();
   await startSignedInSession(req, req.session.username ?? state.username);
@@ -250,19 +282,21 @@ function setupPreflight(req: Request, res: Response, next: NextFunction): void {
     next();
     return;
   }
-  // Wrong codes count against the login limiter's key (per IP).
-  loginRateLimiter(req, res, next);
+  // Wrong codes count against the login limiter's key (per IP) and the server-wide budget.
+  signInLimiters(loginRateLimiter)(req, res, next);
 }
 
 async function completeSetup(req: Request, res: Response): Promise<void> {
   const request = res.locals.setupRequest as SetupRequest;
   delete res.locals.setupRequest;
   if (!request.loopback && !(hasActiveSetupCode() && setupCodeMatches(request.setupCode ?? ''))) {
+    markCredentialsRejected(res);
     sendAuthError(res, 403, 'setup_code_invalid', 'The setup code is not valid.', {
       triesLeft: triesLeft(req),
     });
     return;
   }
+  markCredentialsAccepted(res);
   const hash = await bcrypt.hash(request.password, passwordHashCost());
   const written = await withAuthWriteGate(async () => {
     // Re-checked inside the gate: setup never overwrites a password.
@@ -291,8 +325,19 @@ async function completeSetup(req: Request, res: Response): Promise<void> {
 }
 
 export function registerAuthSessionRoutes(router: Router): void {
-  router.post('/password', passwordPreflight, passwordChangeLimiter, changePassword);
+  router.post(
+    '/password',
+    passwordPreflight,
+    passwordChangeLimiter,
+    passwordChangeServerLimiter,
+    changePassword
+  );
   router.get('/session', sessionSummary);
-  router.post('/sessions/revoke-others', revokeOtherSessions);
+  router.post(
+    '/sessions/revoke-others',
+    revokeOthersPreflight,
+    sessionRotationLimiter,
+    revokeOtherSessions
+  );
   router.post('/setup', setupPreflight, completeSetup);
 }

@@ -111,28 +111,72 @@ function getSessionSecret(): string {
   return newSecret;
 }
 
+/**
+ * The per-client limiters write `req.rateLimit`; the server-wide ones write
+ * `req.serverRateLimit` (routes/auth-rate-limits.ts), so neither hides the other.
+ */
+export type RateLimitProperty = 'rateLimit' | 'serverRateLimit';
+
+interface RateLimitInfo {
+  remaining?: number;
+  resetTime?: Date;
+}
+
+function rateLimitInfo(req: Request, property: RateLimitProperty): RateLimitInfo | undefined {
+  return (req as Request & Partial<Record<RateLimitProperty, RateLimitInfo>>)[property];
+}
+
 /** Seconds until a limiter window resets, at least 1 (the 429 body and `Retry-After`). */
-export function retryAfterSeconds(req: Request): number {
-  const reset = (req as Request & { rateLimit?: { resetTime?: Date } }).rateLimit?.resetTime;
+export function retryAfterSeconds(req: Request, property: RateLimitProperty = 'rateLimit'): number {
+  const reset = rateLimitInfo(req, property)?.resetTime;
   const seconds = reset ? Math.ceil((reset.getTime() - Date.now()) / 1000) : 15 * 60;
   return Math.max(1, seconds);
 }
 
-/** Tries left in the current limiter window (the failed request already counted). */
+/**
+ * Tries left before a 429 (the failed request already counted): the smaller
+ * of the per-client and the server-wide budget that applied to this request.
+ */
 export function triesLeft(req: Request): number {
-  const remaining = (req as Request & { rateLimit?: { remaining?: number } }).rateLimit?.remaining;
-  return typeof remaining === 'number' ? Math.max(0, remaining) : 0;
+  const budgets = (['rateLimit', 'serverRateLimit'] as const)
+    .map((property) => rateLimitInfo(req, property)?.remaining)
+    .filter((remaining): remaining is number => typeof remaining === 'number');
+  return budgets.length > 0 ? Math.max(0, Math.min(...budgets)) : 0;
+}
+
+/**
+ * Whether a request's credentials (password, setup code) were checked and
+ * matched, or checked and refused. The sign-in limiters count requests by
+ * these marks, so an answer after a correct password (409 `too_many_devices`,
+ * 503, a session error) never spends the login budget.
+ */
+export function markCredentialsAccepted(res: Response): void {
+  res.locals.credentialsAccepted = true;
+}
+
+export function markCredentialsRejected(res: Response): void {
+  res.locals.credentialsRejected = true;
+}
+
+export function credentialsWereAccepted(res: Response): boolean {
+  return res.locals.credentialsAccepted === true;
+}
+
+export function credentialsWereRejected(res: Response): boolean {
+  return res.locals.credentialsRejected === true;
 }
 
 /**
  * Rate limiter for login attempts: 5 failed attempts per 15 minutes per IP;
  * successful requests are not counted (CONTRACT-auth-devices section 10).
- * Pairing and a LAN setup code share this key and budget.
+ * Pairing and a LAN setup code share this key and budget. A request whose
+ * credentials matched counts as successful, whatever it answers afterwards.
  */
 export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts
   skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req, res) => res.statusCode < 400 || credentialsWereAccepted(res),
   standardHeaders: true,
   legacyHeaders: false,
   skip: () => !isDashboardAuthEnabled(),

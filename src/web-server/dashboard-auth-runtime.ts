@@ -1,11 +1,14 @@
-import type { Express } from 'express';
+import type { Express, Request, Response } from 'express';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
+import os from 'os';
+import path from 'path';
 import { createLogger } from '../services/logging';
 import { isLoopbackRemoteAddress } from './middleware/auth-middleware';
 import { setTrustedProxyResolver } from './middleware/secure-transport';
-import { dashboardAuthState } from './routes/auth-route-helpers';
+import { dashboardAuthState, sendAuthError } from './routes/auth-route-helpers';
+import { authFile } from './services/dashboard-auth-files';
 import { createSetupCode } from './services/dashboard-setup-code';
 import {
   getDashboardTlsSettings,
@@ -34,17 +37,54 @@ export function configureDashboardTransport(app: Express): void {
   );
 }
 
-function printSetupCode(code: string): void {
-  // Printed once to the terminal that started the server; never to the log files.
+/**
+ * Under /api/auth (any letter case) a body or routing error answers like the
+ * auth routes do: `no-store` and a stable code (section 2). Returns false for
+ * other paths, which keep their existing answers.
+ */
+export function sendAuthPathError(
+  req: Request,
+  res: Response,
+  status: number,
+  code: string,
+  error: string
+): boolean {
+  if (!/^\/api\/auth(?:\/|$)/i.test(req.path)) return false;
+  sendAuthError(res, status, code, error);
+  return true;
+}
+
+/** Where the code file is, for the message: home-relative, never a full path outside the home folder. */
+function setupCodeLocation(): string {
+  const file = authFile('setup-code');
+  const home = os.homedir();
+  return home && file.startsWith(`${home}${path.sep}`)
+    ? `~${file.slice(home.length)}`
+    : 'auth/setup-code in the CCS folder';
+}
+
+/**
+ * Printed once to the terminal that started the server, and never to a log
+ * file: when stdout is not a terminal (`bar launch` sends it to
+ * ~/.ccs/bar/serve.log, a service manager to its journal), only the file's
+ * location is printed, not the code.
+ */
+export function printSetupCode(
+  code: string,
+  interactive: boolean = process.stdout.isTTY === true
+): void {
   process.stdout.write(
-    `\n  Dashboard first-run setup code: ${code}\n` +
-      '  Valid for 60 minutes. Also saved in ~/.ccs/auth/setup-code (0600).\n\n'
+    interactive
+      ? `\n  Dashboard first-run setup code: ${code}\n` +
+          `  Valid for 60 minutes. Also saved in ${setupCodeLocation()} (0600).\n\n`
+      : `\n  Dashboard first-run setup code saved in ${setupCodeLocation()} (0600).\n` +
+          '  Valid for 60 minutes. Read it there on this computer.\n\n'
   );
 }
 
 /** While sign-in is on but has no password yet, make this run's one-time setup code. */
 export async function prepareFirstRunSetupCode(
-  print: (code: string) => void = printSetupCode
+  print: (code: string) => void = (code) => printSetupCode(code)
 ): Promise<string | null> {
   const state = dashboardAuthState();
   if (!state.enabled || state.configured || state.managedBy === 'env') return null;

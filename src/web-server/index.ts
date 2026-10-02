@@ -45,6 +45,7 @@ import { isSecureTransport } from './middleware/secure-transport';
 import {
   configureDashboardTransport,
   prepareFirstRunSetupCode,
+  sendAuthPathError,
   startDashboardHttpsListener,
 } from './dashboard-auth-runtime';
 import { authKind } from './middleware/request-auth';
@@ -122,16 +123,20 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.use(
     (
       err: Error & { status?: number; body?: string; type?: string },
-      _req: express.Request,
+      req: express.Request,
       res: express.Response,
       next: express.NextFunction
     ) => {
       if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+        if (sendAuthPathError(req, res, 400, 'invalid_json', 'Invalid JSON in request body'))
+          return;
         res.status(400).json({ error: 'Invalid JSON in request body' });
         return;
       }
       // body-parser's own 413 would otherwise reach Express's HTML error page.
       if (err.type === 'entity.too.large') {
+        if (sendAuthPathError(req, res, 413, 'body_too_large', 'Request body is too large.'))
+          return;
         res.status(413).json({ error: 'Request body is too large.' });
         return;
       }
@@ -157,6 +162,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       next();
       return;
     }
+    if (sendAuthPathError(req, res, 404, 'not_found', 'API endpoint was not found.')) return;
     res.status(404).json({ error: 'API endpoint was not found.' });
   });
 

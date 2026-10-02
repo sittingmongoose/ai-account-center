@@ -27,6 +27,7 @@ import { requestLoggingMiddleware } from '../../../src/web-server/middleware/req
 import { setTrustedProxyResolver } from '../../../src/web-server/middleware/secure-transport';
 import { configureDashboardTransport } from '../../../src/web-server/dashboard-auth-runtime';
 import { apiRoutes } from '../../../src/web-server/routes';
+import { resetAuthRateLimitsForTests } from '../../../src/web-server/routes/auth-rate-limits';
 import { resetDashboardAuthStateForTests } from '../../../src/web-server/services/dashboard-auth-state';
 import {
   setAuthClockForTests,
@@ -180,6 +181,7 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
   for (const key of [peer.address, `::ffff:${peer.address}`, LAN_PEER, '::1']) {
     loginRateLimiter.resetKey(key);
   }
+  await resetAuthRateLimitsForTests();
 
   return {
     baseUrl,
@@ -197,6 +199,7 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
       for (const key of ['127.0.0.1', '::ffff:127.0.0.1', LAN_PEER, '::1']) {
         loginRateLimiter.resetKey(key);
       }
+      await resetAuthRateLimitsForTests();
       await settleAuthWrites();
       setAuthClockForTests(null);
       setPasswordHashCostForTests(null);

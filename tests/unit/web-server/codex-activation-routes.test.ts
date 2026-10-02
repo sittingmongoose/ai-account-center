@@ -114,10 +114,32 @@ describe('POST /api/codex/profiles/:name/activate', () => {
 
   it('forwards only the opaque token after explicit client confirmation', async () => {
     const activate = stubActivation();
-    const confirmationToken = 'x'.repeat(43);
+    const confirmationToken = 'f'.repeat(43);
+    activate.mockRejectedValueOnce(
+      new activation.CodexActivationError('busy', 'private-error', {
+        reason: 'running_processes',
+        confirmation: {
+          token: confirmationToken,
+          expiresAt: '2026-10-01T05:00:00.000Z',
+          targetProfile: 'work',
+          processes: [],
+          warning: 'Stopping these programs interrupts active Codex work.',
+        },
+      })
+    );
+    expect((await post()).status).toBe(409);
     const response = await post({}, { confirmationToken });
     expect(response.status).toBe(200);
-    expect(activate).toHaveBeenCalledWith('work', { confirmationToken });
+    expect(activate).toHaveBeenLastCalledWith('work', { confirmationToken });
+  });
+
+  it('refuses a confirmation token this route never offered, without activating', async () => {
+    const activate = stubActivation();
+    const response = await post({}, { confirmationToken: 'n'.repeat(43) });
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body.code).toBe('confirmation_stale');
+    expect(activate).not.toHaveBeenCalled();
   });
 
   it('provides a named safe process warning while withholding private plan fields', async () => {
@@ -161,14 +183,31 @@ describe('POST /api/codex/profiles/:name/activate', () => {
   );
 
   it('requires a fresh reviewed activation after a stale capability and does not issue a replacement automatically', async () => {
-    spyOn(activation, 'activateCodexProfile').mockRejectedValue(
-      new activation.CodexActivationError('confirmation_stale', 'private-error')
-    );
-    const response = await post({}, { confirmationToken: 'x'.repeat(43) });
+    const confirmationToken = 's'.repeat(43);
+    const activate = spyOn(activation, 'activateCodexProfile')
+      .mockRejectedValueOnce(
+        new activation.CodexActivationError('busy', 'private-error', {
+          reason: 'running_processes',
+          confirmation: {
+            token: confirmationToken,
+            expiresAt: '2026-10-01T05:00:00.000Z',
+            targetProfile: 'work',
+            processes: [],
+            warning: 'Stopping these programs interrupts active Codex work.',
+          },
+        })
+      )
+      .mockRejectedValue(
+        new activation.CodexActivationError('confirmation_stale', 'private-error')
+      );
+    expect((await post()).status).toBe(409);
+    const response = await post({}, { confirmationToken });
     const body = await response.json();
     expect(response.status).toBe(409);
     expect(body.code).toBe('confirmation_stale');
     expect(body.confirmation).toBeUndefined();
+    // The issuer itself judged the token stale.
+    expect(activate).toHaveBeenLastCalledWith('work', { confirmationToken });
   });
 
   it.each(['busy', 'invalid_profile', 'invalid_codex_home', 'restart_failed'] as const)(

@@ -23,7 +23,8 @@ import {
 } from '../services/codex-auto-switch-service';
 
 const router = createApiRouter();
-const confirmations = new ConfirmationBindings();
+// Every Codex confirmation token is offered by this route, so one it never bound is refused.
+const confirmations = new ConfirmationBindings({ strict: true });
 // H6: email is PII. Each route checks the session itself (localhost access when
 // dashboard auth is disabled) instead of relying on the global guard alone.
 const CODEX_PROFILES_ACCESS_ERROR =
@@ -131,7 +132,8 @@ router.post('/profiles/:name/activate', async (req: Request, res: Response): Pro
     res.status(400).json({ error: 'Provide an empty object or a valid confirmationToken.' });
     return;
   }
-  // A warning's token is bound to the browser or device it was shown to.
+  // A warning's token is bound to the browser or device it was shown to
+  // (or to `local` with dashboard sign-in off); any other token is stale.
   if (
     req.body.confirmationToken &&
     !confirmations.allows(req.body.confirmationToken, callerKey(req))

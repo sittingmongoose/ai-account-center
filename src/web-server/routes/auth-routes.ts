@@ -11,12 +11,15 @@ import type { DashboardAuthConfig } from '../../config/unified-config-types';
 import {
   isLoopbackRemoteAddress,
   loginRateLimiter,
+  markCredentialsAccepted,
+  markCredentialsRejected,
   triesLeft,
 } from '../middleware/auth-middleware';
 import { getDashboardAuthConfig } from '../../config/config-loader-facade';
 import { isDirectLoopbackRequest, isSecureTransport } from '../middleware/secure-transport';
 import { forgetSession } from '../services/dashboard-auth-state';
 import { createApiRouter } from './api-router';
+import { signInServerLimiter } from './auth-rate-limits';
 import {
   audit,
   BCRYPT_HASH_PATTERN,
@@ -27,7 +30,7 @@ import {
   noStore,
   passwordMatches,
   secureOrigin,
-  startSignedInSession,
+  startSessionForPassword,
   timingSafeStringEqual,
 } from './auth-route-helpers';
 import { registerAuthSessionRoutes } from './auth-session-routes';
@@ -87,12 +90,27 @@ function setupCodeRequired(req: Request, configured: boolean): boolean {
   return !configured && !isDirectLoopbackRequest(req);
 }
 
+function invalidCredentials(req: Request, res: Response): void {
+  markCredentialsRejected(res);
+  // The submitted username is never logged: people type passwords into it.
+  audit('auth.login.failed', 'Dashboard sign-in failed', {
+    remoteAddress: req.socket.remoteAddress ?? null,
+    reason: 'invalid_credentials',
+  });
+  res.status(401).json({
+    error: 'Invalid credentials',
+    code: 'invalid_credentials',
+    triesLeft: triesLeft(req),
+  });
+}
+
 /**
  * POST /api/auth/login
  * Authenticate user with username/password.
- * Rate limited: 5 failed attempts per 15 minutes per IP.
+ * Rate limited: 5 failed attempts per 15 minutes per IP, plus the server-wide
+ * budget for addresses taken from X-Forwarded-For (auth-rate-limits.ts).
  */
-router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
+async function login(req: Request, res: Response): Promise<void> {
   const body: unknown = req.body;
   const fields: Record<string, unknown> =
     body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
@@ -128,31 +146,32 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   } catch {
     usernameMatch = false;
   }
-  const passwordMatch = await passwordMatches(password, authConfig.password_hash);
+  const checkedHash = authConfig.password_hash;
+  const passwordMatch = await passwordMatches(password, checkedHash);
 
   if (!usernameMatch || !passwordMatch) {
-    // The submitted username is never logged: people type passwords into it.
-    audit('auth.login.failed', 'Dashboard sign-in failed', {
-      remoteAddress: req.socket.remoteAddress ?? null,
-      reason: 'invalid_credentials',
-    });
-    res.status(401).json({
-      error: 'Invalid credentials',
-      code: 'invalid_credentials',
-      triesLeft: triesLeft(req),
-    });
+    invalidCredentials(req, res);
     return;
   }
 
-  // Regenerate session to prevent session fixation, then sign in within the current epoch.
+  // Regenerate session to prevent session fixation, then sign in within the
+  // current epoch, unless the password was changed while it was being checked.
+  let session: Awaited<ReturnType<typeof startSessionForPassword>>;
   try {
-    await startSignedInSession(req, username);
+    session = await startSessionForPassword(req, username, checkedHash);
   } catch {
+    markCredentialsAccepted(res);
     res.status(500).json({ error: 'Session error' });
     return;
   }
+  if (session === null) {
+    invalidCredentials(req, res);
+    return;
+  }
   res.json({ success: true, username });
-});
+}
+
+router.post('/login', loginRateLimiter, signInServerLimiter, login);
 
 /**
  * POST /api/auth/logout

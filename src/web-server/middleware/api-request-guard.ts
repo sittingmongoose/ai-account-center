@@ -6,7 +6,9 @@ import {
   noteSession,
 } from '../services/dashboard-auth-state';
 import { authenticateDeviceToken, hashDeviceToken } from '../services/dashboard-device-store';
+import { getDashboardTlsSettings } from '../services/dashboard-tls-config';
 import type { DeviceRequestAuth } from './request-auth';
+import { isSecureTransport } from './secure-transport';
 
 /**
  * The /api guard when dashboard auth is on (CONTRACT-auth-devices sections 2,
@@ -78,16 +80,28 @@ export function isDeviceScopeRoute(method: string | undefined, apiPath: string):
 
 const TOKEN_SHAPE = /aacd_[A-Za-z0-9_-]{16,}/;
 
-const TOKEN_KEY = /token|authorization|bearer/i;
+/** A whole device token (`aacd_` and 43 base64url characters), anywhere in a string. */
+const BODY_TOKEN = /aacd_[A-Za-z0-9_-]{43}/;
 
-/** A token-like value under a token-like key (passwords are never inspected). */
-function bodyCarriesToken(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== 'object' || depth > 2) return false;
-  return Object.entries(value as Record<string, unknown>).some(([key, entry]) =>
-    typeof entry === 'string'
-      ? TOKEN_KEY.test(key) && TOKEN_SHAPE.test(entry)
-      : bodyCarriesToken(entry, depth + 1)
-  );
+/**
+ * A device token in any string of a parsed body, at any depth, as a value or
+ * a key. The walk is iterative, so a deeply nested body cannot overflow the
+ * stack; the JSON parser's size limit bounds it.
+ */
+function bodyCarriesToken(body: unknown): boolean {
+  const pending: unknown[] = [body];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === 'string') {
+      if (BODY_TOKEN.test(value)) return true;
+    } else if (value && typeof value === 'object') {
+      for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+        if (BODY_TOKEN.test(key)) return true;
+        pending.push(entry);
+      }
+    }
+  }
+  return false;
 }
 
 /** A device token anywhere but the Authorization header (the request log records the URL). */
@@ -136,6 +150,26 @@ function auditRejected(reason: string, deviceId: string | null): void {
   } catch {
     /* Logging never changes the answer. */
   }
+}
+
+/**
+ * Rotation hands out a new token, so it needs a secure transport (section 2a).
+ * Over plain HTTP it is refused before the bearer is looked at, so the refused
+ * request neither stamps `lastSeenAt` nor ends a rotation's grace period.
+ * Returns true after answering 403 `secure_transport_required`.
+ */
+function requiresSecureTransportFirst(req: Request, res: Response, apiPath: string): boolean {
+  const rotate =
+    (req.method ?? '').toUpperCase() === 'POST' && /^\/auth\/devices\/me\/rotate\/?$/.test(apiPath);
+  if (!rotate || isSecureTransport(req)) return false;
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(403).json({
+    error:
+      'Use the secure dashboard address (HTTPS or a tunnel) for passwords, setup codes and device tokens.',
+    code: 'secure_transport_required',
+    secureOrigin: getDashboardTlsSettings().publicOrigin,
+  });
+  return true;
 }
 
 /** Bearer path: true after `req.auth` is set, false after answering. */
@@ -226,6 +260,7 @@ export function guardApiRequest(
   }
   const token = bearerToken(req);
   if (token !== null) {
+    if (requiresSecureTransportFirst(req, res, apiPath)) return;
     if (authenticateBearer(req, res, token, rejections.canonicalMount ? apiPath : null)) next();
     return;
   }

@@ -1,5 +1,10 @@
 import type { NextFunction, Request, Response, Router } from 'express';
-import { loginRateLimiter, triesLeft } from '../middleware/auth-middleware';
+import {
+  loginRateLimiter,
+  markCredentialsAccepted,
+  markCredentialsRejected,
+  triesLeft,
+} from '../middleware/auth-middleware';
 import { authKind, requestDevice } from '../middleware/request-auth';
 import { authNow, isoTime } from '../services/dashboard-auth-files';
 import { bumpSessionEpoch, countOtherSessions } from '../services/dashboard-auth-state';
@@ -17,6 +22,7 @@ import {
   type ActiveDeviceRecord,
   type DevicePlatform,
 } from '../services/dashboard-device-store';
+import { signInServerLimiter } from './auth-rate-limits';
 import {
   audit,
   BCRYPT_HASH_PATTERN,
@@ -25,6 +31,7 @@ import {
   isLoginField,
   MAX_PASSWORD_LENGTH,
   MAX_USERNAME_LENGTH,
+  passwordHashUnchanged,
   passwordMatches,
   readAuthBody,
   readOptionalEmptyBody,
@@ -121,7 +128,9 @@ async function pair(req: Request, res: Response): Promise<void> {
   }
   const usernameMatch = timingSafeStringEqual(request.username, state.username);
   const passwordMatch = await passwordMatches(request.password, state.passwordHash);
-  if (!usernameMatch || !passwordMatch) {
+  // A password change that finished during the bcrypt check wins: the old password pairs nothing.
+  if (!usernameMatch || !passwordMatch || !passwordHashUnchanged(state.passwordHash)) {
+    markCredentialsRejected(res);
     audit('auth.login.failed', 'Tray pairing sign-in failed', {
       remoteAddress: req.socket.remoteAddress ?? null,
       reason: 'invalid_credentials',
@@ -131,6 +140,8 @@ async function pair(req: Request, res: Response): Promise<void> {
     });
     return;
   }
+  // From here on a failure (cap, store) is not a wrong password and spends no login budget.
+  markCredentialsAccepted(res);
   if (!deviceStoreAvailable()) {
     storeFailure(res, new DeviceStoreError('store_unavailable'));
     return;
@@ -317,7 +328,7 @@ async function disconnectMe(req: Request, res: Response): Promise<void> {
 }
 
 export function registerAuthDeviceRoutes(router: Router): void {
-  router.post('/devices/pair', pairPreflight, loginRateLimiter, pair);
+  router.post('/devices/pair', pairPreflight, loginRateLimiter, signInServerLimiter, pair);
   router.get('/devices', listDevices);
   router.post('/devices/revoke-all', revokeAll);
   router.get('/devices/me', readMe);
