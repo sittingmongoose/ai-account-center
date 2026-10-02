@@ -10,9 +10,6 @@ import type { ProviderEntitlementEvidence } from '../auth/provider-entitlement-t
 /** Supported quota providers */
 export type QuotaProvider = 'agy' | 'codex' | 'claude' | 'gemini' | 'ghcp';
 
-// Re-export Antigravity types for unified access
-export type { QuotaResult as AntigravityQuotaResult } from './quota-fetcher';
-
 export interface QuotaErrorMetadata {
   /** Upstream HTTP status when available */
   httpStatus?: number;
