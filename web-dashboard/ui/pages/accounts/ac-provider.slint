@@ -566,7 +566,7 @@ export component ProviderSection inherits Plate {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                ProviderMark { provider: root.provider.id; size: 28px; }
+                ProviderMark { provider: root.provider.id; size: 28px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "pmark:" + root.provider.id; } }
             }
             VerticalLayout {
                 alignment: center;

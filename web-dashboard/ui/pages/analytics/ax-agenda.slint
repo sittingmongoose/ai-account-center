@@ -3,6 +3,7 @@
 // 1600 px it is one table; from 1600 px the days split into two balanced tables side by side.
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { ProviderMark } from "../../components/mark.slint";
+import { ProbeMark } from "../../components/probe.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
 import { AxData, AxAgendaRow } from "ax-data.slint";
 import { AxCard, AxCardHead, AxTip } from "ax-common.slint";
@@ -90,7 +91,7 @@ component AgendaLine inherits Rectangle {
                 HorizontalLayout {
                     width: AxAgendaCols.who;
                     spacing: 9px;
-                    VerticalLayout { alignment: center; ProviderMark { provider: root.ar.provider; size: 18px; } }
+                    VerticalLayout { alignment: center; ProviderMark { provider: root.ar.provider; size: 18px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "amark:" + root.ar.provider; } } }
                     Text { text: root.ar.who; font-size: 13px; font-weight: 540; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                 }
                 Text { text: root.ar.what; font-size: 13px; color: Theme.ink-2; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 60px; }

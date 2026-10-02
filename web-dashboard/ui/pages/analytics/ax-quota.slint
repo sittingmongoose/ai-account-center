@@ -6,6 +6,7 @@ import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { Icon } from "../../components/icon.slint";
 import { Button } from "../../components/button.slint";
 import { ProviderMark } from "../../components/mark.slint";
+import { ProbeMark } from "../../components/probe.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
 import { AxData, AxQuotaRow, AxQuotaGroup, AxFocus, AxStop, AxShape, AxLabel } from "ax-data.slint";
 import { AxColor, AxCard, AxCardHead, AxSwitch, AxTip, AxSwatch, AxRoTime, AxRoCard } from "ax-common.slint";
@@ -302,7 +303,7 @@ component QuotaRow inherits Rectangle {
                 HorizontalLayout {
                     width: AxQuotaCols.id-w;
                     spacing: 9px;
-                    VerticalLayout { alignment: center; ProviderMark { provider: root.qr.provider; size: 18px; } }
+                    VerticalLayout { alignment: center; ProviderMark { provider: root.qr.provider; size: 18px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qmark:" + root.qr.provider; } } }
                     Text { text: root.qr.label; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; min-width: 40px; }
                     if root.qr.active: Text { text: "Active"; font-size: 12px; font-weight: 640; color: Theme.good-text; vertical-alignment: center; horizontal-stretch: 0; }
                     if root.qr.plan != "" && Breakpoints.width >= 1180px: Text { text: root.qr.plan; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
@@ -439,7 +440,7 @@ component QuotaGroup inherits Rectangle {
                         animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                     }
                 }
-                VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: 20px; } }
+                VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: 20px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qgroup:" + root.g.provider; } } }
                 Text { text: root.g.label; font-size: 13.5px; font-weight: 640; color: Theme.ink; vertical-alignment: center; }
                 Text { text: root.g.meta; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; }
             }
