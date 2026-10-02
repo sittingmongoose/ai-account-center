@@ -81,7 +81,8 @@ export function withJobState(account: DashboardAccount, jobs: AccountJobStates):
 
 /**
  * A Claude profile made by Add that has not signed in yet. It has no email or
- * usage, and no Open buttons: the Claude Open route reads only the inventory.
+ * usage, and it advertises no platforms: the Open route accepts its id, but no
+ * row offers Open for it yet.
  */
 export function pendingClaudeAccount(
   profile: PendingClaudeProfile,
