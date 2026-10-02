@@ -192,19 +192,22 @@ function publish(value: Accumulator): AccountAnalyticsActivityTotals {
     estimatedCostUsd: value.estimatedCostUsd,
   };
   if (!value.partsKnown) return { ...base, costByType: null, costByTypeReconciled: false };
-  const costByType = {
-    input: value.input,
-    output: value.output,
-    cacheWrite: value.cacheWrite,
-    cacheRead: value.cacheRead,
-  };
-  const sum = costByType.input + costByType.output + costByType.cacheWrite + costByType.cacheRead;
+  const sum = value.input + value.output + value.cacheWrite + value.cacheRead;
   return {
     ...base,
-    costByType,
+    // Nano-dollar rounding only trims float noise from the JSON; it never rescales.
+    costByType: {
+      input: nanoDollars(value.input),
+      output: nanoDollars(value.output),
+      cacheWrite: nanoDollars(value.cacheWrite),
+      cacheRead: nanoDollars(value.cacheRead),
+    },
     costByTypeReconciled:
       Math.abs(sum - base.estimatedCostUsd) <= Math.max(0.01, 0.005 * base.estimatedCostUsd),
   };
+}
+function nanoDollars(value: number): number {
+  return Math.round(value * 1e9) / 1e9;
 }
 
 interface PricedBreakdowns {
@@ -482,7 +485,8 @@ export function projectAccountAnalyticsActivity(
         const lastActivity = Date.parse(session.lastActivity);
         if (lastActivity >= from && lastActivity <= to && typeof session.sessionId === 'string') {
           sessions.add(session.sessionId);
-          const key = sessionKey(source.provider, session.sessionId);
+          // Internal dedupe only; the published key is hashed for the sample alone.
+          const key = `${source.provider}\0${session.sessionId}`;
           const previous = sessionCandidates.get(key);
           if (!previous || lastActivity > previous.lastActivity)
             sessionCandidates.set(key, { provider: source.provider, lastActivity, session });
@@ -555,8 +559,9 @@ export function projectAccountAnalyticsActivity(
   const sample = [...sessionCandidates.entries()]
     .sort((a, b) => b[1].lastActivity - a[1].lastActivity || a[0].localeCompare(b[0]))
     .slice(0, MAX_SESSION_SAMPLE)
-    .map(([key, candidate]) => {
+    .map(([, candidate]) => {
       const session = candidate.session;
+      const key = sessionKey(candidate.provider, session.sessionId);
       const priced = priceBreakdowns(session, pricing);
       const values = accumulator();
       addValues(values, totals(session));
