@@ -28,6 +28,9 @@ export interface AnalyticsRemoteFingerprint {
   mtimeMs: number;
   head?: string;
   tail?: string;
+  /** zcode only: the write-ahead log, where new rows wait for a checkpoint. */
+  walSize?: number;
+  walMtimeMs?: number;
 }
 
 export interface AnalyticsRemoteRow {
@@ -44,13 +47,21 @@ export interface AnalyticsRemoteRow {
   n: number;
 }
 
+export interface AnalyticsRemoteKindResult {
+  /** `error`: the data exists but could not be read; nothing of it was confirmed. */
+  state: 'ok' | 'not_installed' | 'error';
+  fingerprints: Record<string, AnalyticsRemoteFingerprint>;
+  /** zcode: an immutable open cannot read rows still in the write-ahead log. */
+  walUnread?: boolean;
+}
+
 export interface AnalyticsRemoteResponse {
   version: 1;
+  /** A file, row or deadline cap stopped the scan: some files were not read. */
   truncated: boolean;
-  kinds: Record<
-    AnalyticsRemoteKind,
-    { state: 'ok' | 'not_installed'; fingerprints: Record<string, AnalyticsRemoteFingerprint> }
-  >;
+  /** Only the search for custom OMP session roots hit its bounds. */
+  discoveryTruncated?: boolean;
+  kinds: Record<AnalyticsRemoteKind, AnalyticsRemoteKindResult>;
   rows: AnalyticsRemoteRow[];
 }
 
@@ -102,7 +113,9 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
     nonNegative(print.size) &&
     nonNegative(print.mtimeMs) &&
     (print.head === undefined || typeof print.head === 'string') &&
-    (print.tail === undefined || typeof print.tail === 'string')
+    (print.tail === undefined || typeof print.tail === 'string') &&
+    (print.walSize === undefined || nonNegative(print.walSize)) &&
+    (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs))
   );
 }
 
@@ -117,7 +130,11 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
   } catch {
     throw new AnalyticsRemoteTransportError();
   }
-  if (response.version !== 1 || typeof response.truncated !== 'boolean') {
+  if (
+    response.version !== 1 ||
+    typeof response.truncated !== 'boolean' ||
+    (response.discoveryTruncated !== undefined && typeof response.discoveryTruncated !== 'boolean')
+  ) {
     throw new AnalyticsRemoteTransportError();
   }
   const kinds = response.kinds as Record<string, unknown> | undefined;
@@ -130,8 +147,15 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
   for (const [kind, value] of Object.entries(kinds)) {
     if (kind !== 'omp' && kind !== 'muse' && kind !== 'zcode')
       throw new AnalyticsRemoteTransportError();
-    const entry = value as { state?: unknown; fingerprints?: unknown };
-    if (entry.state !== 'ok' && entry.state !== 'not_installed' && entry.state !== undefined)
+    const entry = value as { state?: unknown; fingerprints?: unknown; walUnread?: unknown };
+    if (
+      entry.state !== 'ok' &&
+      entry.state !== 'not_installed' &&
+      entry.state !== 'error' &&
+      entry.state !== undefined
+    )
+      throw new AnalyticsRemoteTransportError();
+    if (entry.walUnread !== undefined && typeof entry.walUnread !== 'boolean')
       throw new AnalyticsRemoteTransportError();
     const prints = entry.fingerprints as Record<string, unknown> | undefined;
     if (!prints || typeof prints !== 'object' || Array.isArray(prints))
@@ -140,13 +164,20 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     if (entries.length > 20_000 || !entries.every(([, print]) => validFingerprint(print)))
       throw new AnalyticsRemoteTransportError();
     parsed[kind] = {
-      state: entry.state === 'not_installed' ? 'not_installed' : 'ok',
+      state:
+        entry.state === 'not_installed'
+          ? 'not_installed'
+          : entry.state === 'error'
+            ? 'error'
+            : 'ok',
       fingerprints: prints as Record<string, AnalyticsRemoteFingerprint>,
+      ...(entry.walUnread === true ? { walUnread: true } : {}),
     };
   }
   return {
     version: 1,
     truncated: response.truncated,
+    ...(response.discoveryTruncated === true ? { discoveryTruncated: true } : {}),
     kinds: parsed,
     rows: rows as AnalyticsRemoteRow[],
   };

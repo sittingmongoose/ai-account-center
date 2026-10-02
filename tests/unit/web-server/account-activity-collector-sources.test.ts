@@ -128,7 +128,8 @@ describe('omp and muse account activity', () => {
     fs.writeFileSync(path.join(sub, 'session.jsonl'), `${museLine()}\n`);
     const data = await collectMuse(sessions);
     expect(data.eventCount).toBe(2);
-    expect(data.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(1000);
+    // Muse input includes the cache reads: (500 - 400) uncached per event.
+    expect(data.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(200);
     expect(data.hourly.reduce((sum, hour) => sum + hour.cacheReadTokens, 0)).toBe(800);
     expect(data.session.map((session) => session.sessionId).sort()).toEqual(['sub-1', 'uuid-1']);
   });
@@ -166,5 +167,60 @@ describe('omp and muse account activity', () => {
     expect(logged?.modelBreakdowns[0].fallbackCost).toBeUndefined();
     expect(unpriced?.cost).toBeCloseTo(unlogged, 9);
     expect(unpriced?.fallbackCost).toBeCloseTo(unlogged, 9);
+  });
+
+  it('splits logged and unlogged events of one hour, model and session', async () => {
+    const sessions = path.join(root, 'omp', 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessions, '2026-10-01T15-00_uuid.jsonl'),
+      `${ompLine('no-such-model-xyz', 0.25)}\n${ompLine('no-such-model-xyz', 0, '2026-10-01T15:20:00Z').replace('"m1"', '"m2"')}\n`
+    );
+    const data = await collectOmp([sessions]);
+    expect(data.hourly).toHaveLength(1);
+    const hour = data.hourly[0];
+    const unlogged = (1000 / 1e6) * 3 + (200 / 1e6) * 15 + (400 / 1e6) * 3.75 + (3000 / 1e6) * 0.3;
+    // The unlogged event is priced (and flagged) on its own, never covered by the logged cost.
+    expect(hour.inputTokens).toBe(2000);
+    expect(hour.cost).toBeCloseTo(0.25 + unlogged, 9);
+    expect(hour.fallbackCost).toBeCloseTo(unlogged, 9);
+    expect(data.eventCount).toBe(2);
+  });
+
+  it('prices omp rows under the provider that served them, not under the tool', async () => {
+    const sessions = path.join(root, 'omp', 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessions, '2026-10-01T15-00_uuid.jsonl'),
+      `${ompLine('no-such-model-xyz', 0.25).replace('"chutes"', '"anthropic"')}\n`
+    );
+    const data = await collectOmp([sessions]);
+    expect(data.hourly[0].modelBreakdowns[0].provider).toBe('anthropic');
+    // The tool still names the session.
+    expect(data.session[0].target).toBe('omp');
+  });
+
+  it('counts a resumed omp session copied into a second root once', async () => {
+    const name = '2026-10-01T15-00-00-000Z_01a0d985.jsonl';
+    const first = path.join(root, 'job', 'resume-01', 'sessions');
+    const second = path.join(root, 'job', 'resume-02', 'sessions');
+    fs.mkdirSync(first, { recursive: true });
+    fs.mkdirSync(second, { recursive: true });
+    const original = `${ompLine()}\n${ompLine('k3', 1.5).replace('"m1"', '"m2"')}\n`;
+    fs.writeFileSync(path.join(first, name), original);
+    // The resume copied the file and appended to the copy.
+    fs.writeFileSync(
+      path.join(second, name),
+      `${original}${ompLine('qwen3.8-max', 0).replace('"m1"', '"m3"')}\n`
+    );
+    const data = await collectOmp([first, second]);
+    expect(data.eventCount).toBe(3);
+    expect(data.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(3000);
+    // A different session with the same name that diverged is kept whole.
+    const third = path.join(root, 'job', 'other', 'sessions');
+    fs.mkdirSync(third, { recursive: true });
+    fs.writeFileSync(path.join(third, name), `${ompLine('glm-5.3-flash', 0.1)}\n`);
+    const again = await collectOmp([first, second, third]);
+    expect(again.eventCount).toBe(4);
   });
 });

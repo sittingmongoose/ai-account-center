@@ -120,7 +120,7 @@ describe('omp session roots', () => {
   });
   afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
 
-  it('resolves the default, PI_CODING_AGENT_DIR and custom scan roots', () => {
+  it('resolves the default, PI_CODING_AGENT_DIR and custom scan roots', async () => {
     fs.mkdirSync(path.join(home, '.omp', 'agent', 'sessions'), { recursive: true });
     fs.mkdirSync(path.join(home, 'custom', 'agent', 'sessions'), { recursive: true });
     const custom = path.join(home, 'PM-Experiments', 'proj', 'sessions');
@@ -130,7 +130,7 @@ describe('omp session roots', () => {
     const skipped = path.join(home, 'PM-Experiments', 'proj', 'node_modules', 'x', 'sessions');
     fs.mkdirSync(skipped, { recursive: true });
     fs.writeFileSync(path.join(skipped, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
-    const roots = resolveOmpSessionRoots({
+    const roots = await resolveOmpSessionRoots({
       env: { PI_CODING_AGENT_DIR: path.join(home, 'custom', 'agent') } as NodeJS.ProcessEnv,
       homeDir: home,
     });
@@ -140,50 +140,55 @@ describe('omp session roots', () => {
     expect(roots).not.toContain(skipped);
   });
 
-  it('treats any jsonl-bearing sessions dir as a root, and empty ones as none', () => {
+  it('treats any jsonl-bearing sessions dir as a root, and empty ones as none', async () => {
     const generic = path.join(home, 'PM-Experiments', 'proj', 'sessions');
     fs.mkdirSync(generic, { recursive: true });
     fs.writeFileSync(path.join(generic, 'rollout-anything.jsonl'), '{}\n');
     const empty = path.join(home, 'PM-Experiments', 'other', 'sessions');
     fs.mkdirSync(empty, { recursive: true });
-    const roots = resolveOmpSessionRoots({ env: {}, homeDir: home });
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
     expect(roots).toContain(generic);
     expect(roots).not.toContain(empty);
   });
 
-  it('honors explicit scan bounds', () => {
+  it('honors explicit scan bounds', async () => {
     const custom = path.join(home, 'PM-Experiments', 'proj', 'sessions');
     fs.mkdirSync(custom, { recursive: true });
     fs.writeFileSync(path.join(custom, 'x.jsonl'), '{}\n');
-    const starved = resolveOmpSessionRoots({
+    const starved = await resolveOmpSessionRoots({
       env: {},
       homeDir: home,
       scanBounds: { maxEntries: 1 },
     });
     expect(starved).not.toContain(custom);
-    const found = resolveOmpSessionRoots({ env: {}, homeDir: home });
+    const found = await resolveOmpSessionRoots({ env: {}, homeDir: home });
     expect(found).toContain(custom);
   });
 
-  it('caches the marker scan for six hours', () => {
+  it('caches the marker scan for six hours', async () => {
     const cacheDir = path.join(home, 'cache');
     const first = path.join(home, 'PM-Experiments', 'a', 'sessions');
     fs.mkdirSync(first, { recursive: true });
     fs.writeFileSync(path.join(first, 'x.jsonl'), '{}\n');
     const now = Date.now();
-    const scanned = resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir, now: () => now });
+    const scanned = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      cacheDir,
+      now: () => now,
+    });
     expect(scanned).toContain(first);
     const second = path.join(home, 'PM-Experiments', 'b', 'sessions');
     fs.mkdirSync(second, { recursive: true });
     fs.writeFileSync(path.join(second, 'y.jsonl'), '{}\n');
-    const cached = resolveOmpSessionRoots({
+    const cached = await resolveOmpSessionRoots({
       env: {},
       homeDir: home,
       cacheDir,
       now: () => now + 1000,
     });
     expect(cached).not.toContain(second);
-    const rescanned = resolveOmpSessionRoots({
+    const rescanned = await resolveOmpSessionRoots({
       env: {},
       homeDir: home,
       cacheDir,
@@ -192,8 +197,8 @@ describe('omp session roots', () => {
     expect(rescanned).toContain(second);
   });
 
-  it('dedupes roots that resolve to the same directory', () => {
-    const roots = resolveOmpSessionRoots({
+  it('dedupes roots that resolve to the same directory', async () => {
+    const roots = await resolveOmpSessionRoots({
       env: { PI_CODING_AGENT_DIR: path.join(home, '.omp', 'agent') } as NodeJS.ProcessEnv,
       homeDir: home,
     });

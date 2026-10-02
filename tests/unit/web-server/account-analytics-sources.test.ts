@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { AccountAnalyticsActivityService } from '../../../src/web-server/services/account-analytics-activity';
+import {
+  AccountAnalyticsActivityService,
+  type AccountAnalyticsActivityDeps,
+} from '../../../src/web-server/services/account-analytics-activity';
 import type { UsageWorkerResult } from '../../../src/web-server/usage/worker-client';
 
 const FROM = Date.parse('2026-10-01T00:00:00Z');
@@ -59,7 +62,42 @@ function workerResult(
   };
 }
 
-function service() {
+async function remoteAnswer() {
+  return {
+    results: [
+      {
+        tool: 'omp',
+        data: workerResult('remote-model-b', {
+          input: 70,
+          output: 7,
+          read: 0,
+          write: 0,
+          cost: 4,
+        }),
+      },
+    ],
+    states: [
+      {
+        tool: 'omp',
+        host: 'mac',
+        state: 'ok',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 3,
+        detail: null,
+      },
+      {
+        tool: 'omp',
+        host: 'windows',
+        state: 'unavailable',
+        lastScanAt: null,
+        rowCount: 0,
+        detail: 'remote scan failed',
+      },
+    ],
+  };
+}
+
+function service(overrides: AccountAnalyticsActivityDeps = {}) {
   return new AccountAnalyticsActivityService({
     now: () => NOW,
     requests: () => [
@@ -90,38 +128,8 @@ function service() {
         fallback: 1.5,
       });
     },
-    remote: async () => ({
-      results: [
-        {
-          tool: 'omp',
-          data: workerResult('remote-model-b', {
-            input: 70,
-            output: 7,
-            read: 0,
-            write: 0,
-            cost: 4,
-          }),
-        },
-      ],
-      states: [
-        {
-          tool: 'omp',
-          host: 'mac',
-          state: 'ok',
-          lastScanAt: new Date(NOW).toISOString(),
-          rowCount: 3,
-          detail: null,
-        },
-        {
-          tool: 'omp',
-          host: 'windows',
-          state: 'unavailable',
-          lastScanAt: null,
-          rowCount: 0,
-          detail: 'remote scan failed',
-        },
-      ],
-    }),
+    remote: remoteAnswer,
+    ...overrides,
   });
 }
 
@@ -185,5 +193,52 @@ describe('analytics activity across sources', () => {
     const activity = await service().get(QUERY, FROM, TO, { tz: 'UTC' });
     expect(activity.message).not.toContain('Local Ubuntu CLI activity');
     expect(activity.message).toContain('Ubuntu, Mac and Windows');
+  });
+
+  it('keeps the remote part of the totals when a later remote scan does not answer', async () => {
+    let calls = 0;
+    const activity = service({
+      remote: async () => {
+        calls++;
+        if (calls > 1) throw new Error('timed out');
+        return remoteAnswer();
+      },
+    });
+    const first = await activity.get(QUERY, FROM, TO, { tz: 'UTC' });
+    expect(first.totals?.inputTokens).toBe(220);
+    const second = await activity.get({ ...QUERY, refresh: true }, FROM, TO, { tz: 'UTC' });
+    expect(calls).toBe(2);
+    // The Mac's OMP usage stays in the totals, and its cell says it is cached.
+    expect(second.totals?.inputTokens).toBe(220);
+    expect(second.models.find((row) => row.model === 'remote-model-b')?.inputTokens).toBe(70);
+    const mac = second.sources.find((row) => row.tool === 'omp' && row.host === 'mac');
+    expect(mac).toMatchObject({ state: 'cached', rowCount: 3 });
+    expect(mac?.detail).toContain('timed out');
+  });
+
+  it('falls back to the saved remote aggregates when no remote answer has come yet', async () => {
+    const saved = await remoteAnswer();
+    const activity = service({
+      remote: async () => {
+        throw new Error('timed out');
+      },
+      remoteCached: () => ({
+        results: saved.results,
+        states: saved.states.map((entry) =>
+          entry.rowCount > 0
+            ? {
+                ...entry,
+                state: 'cached' as const,
+                detail: 'remote scan timed out; showing previously read aggregates',
+              }
+            : entry
+        ),
+      }),
+    });
+    const result = await activity.get(QUERY, FROM, TO, { tz: 'UTC' });
+    expect(result.totals?.inputTokens).toBe(220);
+    expect(result.sources.find((row) => row.tool === 'omp' && row.host === 'mac')?.state).toBe(
+      'cached'
+    );
   });
 });

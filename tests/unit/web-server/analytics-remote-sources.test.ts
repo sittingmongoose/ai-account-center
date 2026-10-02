@@ -6,7 +6,10 @@ import {
   parseAnalyticsRemoteResponse,
   runAnalyticsRemoteHelper,
 } from '../../../src/web-server/services/analytics-remote-transport';
-import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
+import {
+  loadAnalyticsRemoteCachedSources,
+  loadAnalyticsRemoteSources,
+} from '../../../src/web-server/services/analytics-remote-sources';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 let cache: string;
@@ -194,5 +197,110 @@ describe('analytics remote sources', () => {
     expect(
       unconfigured.states.every((entry) => entry.detail === 'remote host is not configured')
     ).toBe(true);
+  });
+
+  it('keeps a complete scan ok when only the custom-root search hit its bounds', async () => {
+    const runHelper = async () =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response({ discoveryTruncated: true })));
+    const { results, states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper,
+    });
+    expect(results.find((entry) => entry.tool === 'omp')?.data.hourly[0].inputTokens).toBe(100);
+    const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
+    expect(mac?.state).toBe('ok');
+    expect(mac?.detail).toContain('custom OMP session folders');
+  });
+
+  it('never calls an empty partial scan cached', async () => {
+    const truncated = response({
+      truncated: true,
+      kinds: { omp: { state: 'ok', fingerprints: {} } },
+      rows: [],
+    });
+    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(truncated)),
+    });
+    const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
+    expect(mac).toMatchObject({ state: 'unavailable', rowCount: 0 });
+  });
+
+  it('keeps the rows of a kind the host could not read', async () => {
+    const zcodeRow = row({ k: 'zcode', f: 'db-1', m: 'GLM-5.3-Flash', c: 0, i: 40 });
+    const first = response({
+      kinds: {
+        omp: { state: 'ok', fingerprints: { 'file-1': { size: 10, mtimeMs: 20 } } },
+        zcode: { state: 'ok', fingerprints: { 'db-1': { size: 5, mtimeMs: 6 } } },
+      },
+      rows: [row(), zcodeRow],
+    });
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(first)),
+    });
+    const failed = response({
+      kinds: {
+        omp: { state: 'ok', fingerprints: { 'file-1': { size: 10, mtimeMs: 20 } } },
+        zcode: { state: 'error', fingerprints: {} },
+      },
+      rows: [],
+    });
+    const { results, states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(failed)),
+    });
+    expect(results.find((entry) => entry.tool === 'zcode')?.data.hourly[0].inputTokens).toBe(40);
+    const zcode = states.find((entry) => entry.tool === 'zcode' && entry.host === 'mac');
+    expect(zcode?.state).toBe('cached');
+    expect(zcode?.detail).toContain('read failed');
+  });
+
+  it('replaces zcode rows when only its write-ahead log changed', async () => {
+    const at = (walSize: number, i: number) =>
+      response({
+        kinds: {
+          zcode: {
+            state: 'ok',
+            fingerprints: { 'db-1': { size: 5, mtimeMs: 6, walSize, walMtimeMs: walSize } },
+          },
+        },
+        rows: [row({ k: 'zcode', f: 'db-1', m: 'GLM-5.3-Flash', c: 0, i })],
+      });
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(at(0, 40))),
+    });
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(at(4096, 55))),
+    });
+    expect(results.find((entry) => entry.tool === 'zcode')?.data.hourly[0].inputTokens).toBe(55);
+  });
+
+  it('prices remote rows under their routing provider and keeps the tool apart', async () => {
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(JSON.stringify(response({ rows: [row({ p: 'anthropic' })] }))),
+    });
+    expect(results[0].data.hourly[0].modelBreakdowns[0].provider).toBe('anthropic');
+  });
+
+  it('serves the saved aggregates without contacting a host', async () => {
+    const runHelper = async () => parseAnalyticsRemoteResponse(JSON.stringify(response()));
+    await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
+    const { results, states } = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
+    expect(results.find((entry) => entry.tool === 'omp')?.data.hourly[0].inputTokens).toBe(100);
+    const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
+    expect(mac?.state).toBe('cached');
+    expect(mac?.detail).toContain('timed out');
   });
 });

@@ -33,6 +33,13 @@ export interface RawUsageEntry {
   version?: string;
   target?: string;
   /**
+   * Routing provider used to look up list rates (OMP `message.provider`, zcode
+   * `provider_id`), kept apart from `target`, the tool that logged the entry.
+   * `''` means the log names none. When absent, `target` is the provider
+   * (Claude Code and Codex).
+   */
+  provider?: string;
+  /**
    * Logged USD cost for this entry (OMP `usage.cost.total`), present only
    * when nonzero. A logged 0 is "not logged", never free, and falls through
    * to the price resolver.

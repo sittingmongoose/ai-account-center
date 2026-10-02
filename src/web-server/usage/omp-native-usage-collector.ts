@@ -25,6 +25,14 @@ function cleanModel(value: unknown): string | null {
   return text;
 }
 
+/** A routing provider id, or '' when the record names none or an unusable one. */
+function cleanProvider(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const text = value.trim();
+  if (!text || text.length > 64 || /[\u0000-\u001f\u007f]/.test(text)) return '';
+  return text;
+}
+
 function epochMs(timestamp: unknown): number | null {
   if (typeof timestamp === 'string') {
     const epoch = Date.parse(timestamp);
@@ -86,6 +94,9 @@ export function parseOmpUsageLine(line: string, sessionId: string): RawUsageEntr
     timestamp: new Date(epoch).toISOString(),
     projectPath: '',
     target: OMP_TARGET,
+    // Rates are looked up under the provider that served the call, as the
+    // remote helper does, so a model is priced the same on every host.
+    provider: cleanProvider(message.provider),
     ...(costUsd === undefined ? {} : { costUsd }),
   };
 }
@@ -135,7 +146,7 @@ export interface OmpScanBounds {
  * `session.jsonl`), so the marker is presence, not naming; the OMP line
  * parser rejects every non-OMP record inside.
  */
-function sessionsDirHasMarker(directory: string): boolean {
+async function sessionsDirHasMarker(directory: string): Promise<boolean> {
   const pending: Array<{ directory: string; depth: number }> = [{ directory, depth: 0 }];
   let checked = 0;
   while (pending.length) {
@@ -143,7 +154,7 @@ function sessionsDirHasMarker(directory: string): boolean {
     if (!current) break;
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(current.directory, { withFileTypes: true });
+      entries = await fs.promises.readdir(current.directory, { withFileTypes: true });
     } catch {
       return false;
     }
@@ -163,41 +174,42 @@ function sessionsDirHasMarker(directory: string): boolean {
   return false;
 }
 
-function scanSessionRoots(base: string, bounds: OmpScanBounds = {}): string[] {
+/**
+ * Breadth-first marker walk. Every directory read is awaited, so a large tree
+ * never blocks the server's event loop; the walk is bounded by depth,
+ * directory count, entries examined and a deadline.
+ */
+async function scanSessionRoots(base: string, bounds: OmpScanBounds = {}): Promise<string[]> {
   const maxDepth = bounds.maxDepth ?? OMP_SCAN_MAX_DEPTH;
   const maxDirs = bounds.maxDirs ?? OMP_SCAN_MAX_DIRS;
-  const maxEntries = bounds.maxEntries ?? 500_000;
+  const maxEntries = bounds.maxEntries ?? 2_000_000;
   const deadline = Date.now() + Math.max(1, bounds.deadlineMs ?? 15_000);
   const found: string[] = [];
   try {
-    if (!fs.statSync(base).isDirectory()) return found;
+    if (!(await fs.promises.stat(base)).isDirectory()) return found;
   } catch {
     return found;
   }
   // Breadth-first so shallow roots are found even when the caps bite.
   const pending: Array<{ directory: string; depth: number }> = [{ directory: base, depth: 0 }];
+  let head = 0;
   let visited = 0;
   let examined = 0;
-  while (pending.length && found.length < OMP_SCAN_MAX_ROOTS) {
-    const current = pending.shift();
-    if (
-      !current ||
-      visited >= maxDirs ||
-      current.depth > maxDepth ||
-      (visited % 256 === 0 && Date.now() >= deadline)
-    )
-      continue;
+  while (head < pending.length && found.length < OMP_SCAN_MAX_ROOTS) {
+    if (visited >= maxDirs || Date.now() >= deadline) break;
+    const current = pending[head++];
+    if (current.depth > maxDepth) continue;
     visited++;
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(current.directory, { withFileTypes: true });
+      entries = await fs.promises.readdir(current.directory, { withFileTypes: true });
     } catch {
       continue;
     }
     examined += entries.length;
     if (examined > maxEntries) break;
     if (path.basename(current.directory) === 'sessions' && current.directory !== base) {
-      if (sessionsDirHasMarker(current.directory)) found.push(current.directory);
+      if (await sessionsDirHasMarker(current.directory)) found.push(current.directory);
       continue;
     }
     if (current.depth >= maxDepth) continue;
@@ -263,8 +275,9 @@ function writeRootsCache(cacheDir: string, roots: string[], scannedAt: number): 
  * sessions when set, `$OMP_SESSION_DIRS` extras, and custom `--session-dir`
  * roots found by a bounded marker scan under `~/PM-Experiments`. The scan is
  * cached for six hours because the tree is large; explicit roots never wait.
+ * The scan awaits each directory read, so it never blocks the event loop.
  */
-export function resolveOmpSessionRoots(options: OmpRootOptions = {}): string[] {
+export async function resolveOmpSessionRoots(options: OmpRootOptions = {}): Promise<string[]> {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? os.homedir();
   const now = (options.now ?? Date.now)();
@@ -297,7 +310,7 @@ export function resolveOmpSessionRoots(options: OmpRootOptions = {}): string[] {
   // A complete walk of a large tree; bounded by depth, directory count and a
   // deadline, and cached afterwards. A bounded walk that finds nothing keeps
   // no stale roots: defaults and explicit roots still apply.
-  const scanned = scanSessionRoots(base, {
+  const scanned = await scanSessionRoots(base, {
     maxDirs: 100_000,
     deadlineMs: 30_000,
     ...options.scanBounds,
@@ -305,4 +318,21 @@ export function resolveOmpSessionRoots(options: OmpRootOptions = {}): string[] {
   if (options.cacheDir) writeRootsCache(options.cacheDir, scanned, now);
   for (const found of scanned) add(found);
   return roots.slice(0, OMP_SCAN_MAX_ROOTS);
+}
+
+/**
+ * The part of an OMP session file's path that names its session: the nearest
+ * `<ts>_<uuid>` component (the file itself or its session directory) and
+ * everything below it. A resumed run copies a session into a new root under
+ * the same name, so two files with the same key may hold the same records.
+ * Null for files outside any session-named component.
+ */
+export function ompSessionCopyKey(file: string): string | null {
+  const parts = path.resolve(file).split(path.sep);
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const part = parts[index];
+    if (part !== '__advisor.jsonl' && isOmpSessionFilename(part))
+      return parts.slice(index).join('/');
+  }
+  return null;
 }

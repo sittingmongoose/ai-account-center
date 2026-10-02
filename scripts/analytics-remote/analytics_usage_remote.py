@@ -14,15 +14,24 @@ Request (all fields validated, unknown fields rejected):
                    "muse": {...}, "zcode": {...}}}
 
 Response:
-  {"version": 1, "truncated": false,
-   "kinds": {"omp": {"state": "ok"|"not_installed", "fingerprints": {...}}} ,
+  {"version": 1, "truncated": false, "discoveryTruncated": false,
+   "kinds": {"omp": {"state": "ok"|"not_installed"|"error",
+                     "fingerprints": {...}, "walUnread": true?}} ,
    "rows": [{"k": "omp", "f": "<filekey>", "m": "<model>", "p": "<provider>",
              "h": "2026-10-01 15:00", "i": 1, "o": 2, "cr": 3, "cw": 4,
              "c": 0.01, "n": 5}]}
 Only files whose fingerprint is new or changed contribute rows; the caller
 merges rows by filekey and drops rows whose filekey disappeared.
+
+"truncated" means a file, row or deadline cap stopped the scan, so some files
+were not read; "discoveryTruncated" means only that the search for custom OMP
+session roots hit its bounds, so roots it did not reach were not read. A row
+is either wholly logged (c > 0) or wholly unlogged (c == 0): events with and
+without a logged cost never share a row. "error" means the kind's data exists
+but could not be read; nothing of that kind is confirmed.
 """
 
+import collections
 import hashlib
 import json
 import os
@@ -37,9 +46,15 @@ MAX_FILES = 20000
 MAX_LINE_BYTES = 8 * 1024 * 1024
 MAX_ROWS = 50000
 MAX_REQUEST_BYTES = 1024 * 1024
-# Marker scan under ~/PM-Experiments for custom --session-dir roots.
+# Walk of one session root (the server collector's per-root ceilings).
+WALK_MAX_DIRS = 10000
+WALK_MAX_ENTRIES = 100000
+# Breadth-first marker scan under ~/PM-Experiments for custom --session-dir
+# roots, with the server scanner's bounds plus a share of the request budget.
 SCAN_MAX_DEPTH = 6
-SCAN_MAX_DIRS = 5000
+SCAN_MAX_DIRS = 100000
+SCAN_MAX_ENTRIES = 2000000
+SCAN_BUDGET_SHARE = 0.4
 SCAN_MAX_ROOTS = 128
 SCAN_SKIP_DIRS = frozenset(["node_modules", ".git"])
 SESSION_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}")
@@ -148,15 +163,22 @@ def _hour_label(epoch_ms, now_ms):
 
 
 class Collector(object):
-    def __init__(self, min_date_ms, deadline, fingerprints):
+    def __init__(self, min_date_ms, deadline, fingerprints, budget=20.0):
         self.min_date_ms = min_date_ms
         self.deadline = deadline
+        self.budget = budget
         self.now_ms = int(time.time() * 1000)
         self.prior = fingerprints if isinstance(fingerprints, dict) else {}
         self.fresh = {}
         self.pending = {}
         self.rows = {}
+        # A file, row or deadline cap stopped the scan: some files were not read.
         self.truncated = False
+        # The row cap was hit: nothing more can be added.
+        self.row_cap = False
+        # The custom-root search hit its bounds: some roots were not found.
+        self.discovery_truncated = False
+        self.wal_unread = False
         self.files_seen = 0
 
     def expired(self):
@@ -183,12 +205,15 @@ class Collector(object):
             self.fresh.setdefault(kind, {})[key] = pending
 
     def add(self, kind, filekey, model, provider, hour, tokens, cost):
-        if len(self.rows) >= MAX_ROWS:
-            self.truncated = True
-            return
-        key = (kind, filekey, model, provider or "", hour)
+        # Logged and unlogged events never share a row, so a row's logged
+        # cost never seems to cover tokens that logged none.
+        key = (kind, filekey, model, provider or "", hour, cost > 0)
         row = self.rows.get(key)
         if row is None:
+            if len(self.rows) >= MAX_ROWS:
+                self.truncated = True
+                self.row_cap = True
+                return
             row = {
                 "k": kind,
                 "f": filekey,
@@ -219,7 +244,7 @@ def _iter_jsonl_files(root, accept, collector):
     visited_entries = 0
     while pending:
         directory, depth = pending.pop()
-        if visited_dirs >= SCAN_MAX_DIRS:
+        if visited_dirs >= WALK_MAX_DIRS or collector.expired():
             collector.truncated = True
             return
         visited_dirs += 1
@@ -228,7 +253,7 @@ def _iter_jsonl_files(root, accept, collector):
         except OSError:
             continue
         for name in entries:
-            if visited_entries >= 100000:
+            if visited_entries >= WALK_MAX_ENTRIES:
                 collector.truncated = True
                 return
             visited_entries += 1
@@ -273,7 +298,7 @@ def _omp_roots(home, env, collector):
     for found in _scan_session_roots(os.path.join(home, "PM-Experiments"), collector):
         _add(found)
     if len(roots) > SCAN_MAX_ROOTS:
-        collector.truncated = True
+        collector.discovery_truncated = True
     return roots[:SCAN_MAX_ROOTS]
 
 
@@ -288,41 +313,55 @@ def _is_session_filename(name):
 
 
 def _scan_session_roots(base, collector):
-    """Bounded marker scan for custom OMP session roots."""
+    """Breadth-first marker scan for custom OMP session roots.
+
+    Bounded by depth, directories, entries and a share of the request budget.
+    Hitting a bound sets only discovery_truncated: the roots found so far are
+    read in full, and nothing else is cut.
+    """
     found = []
     if not os.path.isdir(base):
         return found
-    pending = [(base, 0)]
+    deadline = min(
+        collector.deadline, time.monotonic() + collector.budget * SCAN_BUDGET_SHARE
+    )
+    pending = collections.deque([(base, 0)])
     visited = 0
+    examined = 0
     while pending and len(found) < SCAN_MAX_ROOTS:
-        if visited >= SCAN_MAX_DIRS:
-            collector.truncated = True
+        if (
+            visited >= SCAN_MAX_DIRS
+            or examined > SCAN_MAX_ENTRIES
+            or time.monotonic() >= deadline
+        ):
+            collector.discovery_truncated = True
             break
-        directory, depth = pending.pop()
-        if visited >= SCAN_MAX_DIRS or depth > SCAN_MAX_DEPTH:
+        directory, depth = pending.popleft()
+        if depth > SCAN_MAX_DEPTH:
             continue
         visited += 1
         try:
-            entries = os.listdir(directory)
+            with os.scandir(directory) as iterator:
+                entries = list(iterator)
         except OSError:
             continue
+        examined += len(entries)
         if os.path.basename(directory) == "sessions" and directory != base:
             if _sessions_dir_has_marker(directory):
                 found.append(directory)
             continue
         if depth >= SCAN_MAX_DEPTH:
             continue
-        for name in entries:
-            if name in SCAN_SKIP_DIRS:
+        for entry in entries:
+            if entry.name in SCAN_SKIP_DIRS:
                 continue
-            path = os.path.join(directory, name)
             try:
-                if os.path.isdir(path) and not os.path.islink(path):
-                    pending.append((path, depth + 1))
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append((entry.path, depth + 1))
             except OSError:
                 continue
     if pending and len(found) >= SCAN_MAX_ROOTS:
-        collector.truncated = True
+        collector.discovery_truncated = True
     return found
 
 
@@ -423,6 +462,71 @@ def _parse_omp_line(line, collector, kind, filekey):
     collector.add(kind, filekey, model, provider, hour, tokens, cost)
 
 
+def _session_copy_key(path):
+    """The session-named part of an OMP file's path, or None.
+
+    The nearest <ts>_<uuid> component (the file or its session directory) and
+    everything below it. A resumed run copies a session into a new root under
+    the same name, so files with the same key may hold the same records.
+    """
+    parts = os.path.abspath(path).split(os.sep)
+    for index in range(len(parts) - 1, -1, -1):
+        part = parts[index]
+        if part != "__advisor.jsonl" and _is_session_filename(part):
+            return "/".join(parts[index:])
+    return None
+
+
+def _is_prefix_copy(small, large):
+    """True when small is a byte prefix of large: same head, same bytes where small ends."""
+    small_path, small_size = small
+    large_path, large_size = large
+    if small_size > large_size:
+        return False
+    head = min(256, small_size)
+    tail = max(0, small_size - 256)
+    try:
+        with open(small_path, "rb") as left, open(large_path, "rb") as right:
+            if left.read(head) != right.read(head):
+                return False
+            left.seek(tail)
+            right.seek(tail)
+            return left.read(small_size - tail) == right.read(small_size - tail)
+    except OSError:
+        return False
+
+
+def _drop_resume_copies(paths):
+    """Keep the longest file per session; drop files that are a byte prefix of a kept one.
+
+    A resumed OMP run copies the session file into its new root and appends to
+    the copy, so the older copy's records are all in the newer one. Files that
+    diverge are all kept.
+    """
+    groups = {}
+    for path in paths:
+        key = _session_copy_key(path)
+        if key is None:
+            continue
+        try:
+            size = os.stat(path).st_size
+        except OSError:
+            continue
+        groups.setdefault(key, []).append((path, size))
+    dropped = set()
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda item: (-item[1], item[0]))
+        kept = []
+        for item in group:
+            if any(_is_prefix_copy(item, larger) for larger in kept):
+                dropped.add(item[0])
+            else:
+                kept.append(item)
+    return [path for path in paths if path not in dropped]
+
+
 def _collect_omp(collector, home, env):
     roots = [
         root
@@ -435,42 +539,51 @@ def _collect_omp(collector, home, env):
     def _accept(name):
         return name.endswith(".jsonl") or _is_session_filename(name)
 
+    paths = []
     for root in roots:
         for path in _iter_jsonl_files(root, _accept, collector):
-            if collector.expired():
+            paths.append(path)
+            if len(paths) > MAX_FILES:
                 collector.truncated = True
-                return "ok"
-            filekey = collector.note_file("omp", path)
-            if filekey is None:
-                staged = _filekey("omp", path)
-                if staged in collector.pending.get("omp", {}):
-                    collector.confirm_file("omp", staged)
-                continue
-            try:
-                handle = open(path, "rb")
-            except OSError:
-                continue
-            with handle:
-                while True:
-                    if collector.expired():
-                        collector.truncated = True
-                        return "ok"
-                    chunk = handle.readline(MAX_LINE_BYTES + 2)
-                    if not chunk:
-                        break
-                    if len(chunk) > MAX_LINE_BYTES + 1:
-                        # Skip the oversized line without decoding content.
-                        while chunk and not chunk.endswith(b"\n"):
-                            chunk = handle.readline(MAX_LINE_BYTES + 2)
-                        continue
-                    try:
-                        line = chunk.decode("utf-8")
-                    except UnicodeDecodeError:
-                        continue
-                    _parse_omp_line(line, collector, "omp", filekey)
-                    if collector.truncated:
-                        return "ok"
-            collector.confirm_file("omp", filekey)
+                break
+        if collector.expired() or len(paths) > MAX_FILES:
+            break
+    for path in _drop_resume_copies(paths):
+        if collector.expired():
+            collector.truncated = True
+            return "ok"
+        filekey = collector.note_file("omp", path)
+        if filekey is None:
+            staged = _filekey("omp", path)
+            if staged in collector.pending.get("omp", {}):
+                collector.confirm_file("omp", staged)
+            continue
+        try:
+            handle = open(path, "rb")
+        except OSError:
+            continue
+        with handle:
+            while True:
+                # Only the deadline and the row cap stop a file part-way.
+                if collector.expired():
+                    collector.truncated = True
+                    return "ok"
+                chunk = handle.readline(MAX_LINE_BYTES + 2)
+                if not chunk:
+                    break
+                if len(chunk) > MAX_LINE_BYTES + 1:
+                    # Skip the oversized line without decoding content.
+                    while chunk and not chunk.endswith(b"\n"):
+                        chunk = handle.readline(MAX_LINE_BYTES + 2)
+                    continue
+                try:
+                    line = chunk.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                _parse_omp_line(line, collector, "omp", filekey)
+                if collector.row_cap:
+                    return "ok"
+        collector.confirm_file("omp", filekey)
     return "ok"
 
 
@@ -549,7 +662,13 @@ def _parse_muse_line(line, collector, kind, filekey):
         return
     # cached_tokens duplicates cache_read_tokens; output already includes
     # reasoning per the Codex convention, so reasoning_tokens is not added.
-    tokens = [int(values[0]), int(values[1]), int(values[2]), int(values[3])]
+    # input_tokens includes the cache reads (as zcode's does): net them out.
+    tokens = [
+        max(0, int(values[0]) - int(values[2])),
+        int(values[1]),
+        int(values[2]),
+        int(values[3]),
+    ]
     hour = _hour_label(epoch_ms, collector.now_ms)
     if hour is None:
         return
@@ -598,10 +717,35 @@ def _collect_muse(collector, home, env):
                 except UnicodeDecodeError:
                     continue
                 _parse_muse_line(line, collector, "muse", filekey)
-                if collector.truncated:
+                if collector.row_cap:
                     return "ok"
         collector.confirm_file("muse", filekey)
     return "ok"
+
+
+def _zcode_fingerprint(db_path):
+    """The database plus its write-ahead log, where zcode keeps new rows until a checkpoint."""
+    stat = os.stat(db_path)
+    print_ = {
+        "size": stat.st_size,
+        "mtimeMs": int(stat.st_mtime * 1000),
+        "walSize": 0,
+        "walMtimeMs": 0,
+    }
+    try:
+        wal = os.stat(db_path + "-wal")
+        print_["walSize"] = wal.st_size
+        print_["walMtimeMs"] = int(wal.st_mtime * 1000)
+    except OSError:
+        pass
+    return print_
+
+
+def _same_zcode_fingerprint(prior, current):
+    return isinstance(prior, dict) and all(
+        prior.get(key, 0) == current.get(key, 0)
+        for key in ("size", "mtimeMs", "walSize", "walMtimeMs")
+    )
 
 
 def _collect_zcode(collector, home, env, immutable):
@@ -614,17 +758,16 @@ def _collect_zcode(collector, home, env, immutable):
         return "not_installed"
     filekey = _filekey("zcode", db_path)
     try:
-        stat = os.stat(db_path)
+        current = _zcode_fingerprint(db_path)
     except OSError:
         return "not_installed"
-    current = {"size": stat.st_size, "mtimeMs": int(stat.st_mtime * 1000)}
+    if immutable and current["walSize"] > 0:
+        # An immutable open never reads the write-ahead log: rows still in it
+        # appear once zcode checkpoints them.
+        collector.wal_unread = True
     collector.pending.setdefault("zcode", {})[filekey] = current
     prior = collector.prior.get("zcode", {}).get(filekey)
-    if (
-        isinstance(prior, dict)
-        and prior.get("size") == current["size"]
-        and prior.get("mtimeMs") == current["mtimeMs"]
-    ):
+    if _same_zcode_fingerprint(prior, current):
         collector.confirm_file("zcode", filekey)
         return "ok"
     # Model names and integers only; never raw_usage_json, provider metadata
@@ -636,7 +779,8 @@ def _collect_zcode(collector, home, env, immutable):
     try:
         connection = sqlite3.connect(uri, uri=True, timeout=5.0)
     except sqlite3.Error:
-        return "ok"
+        # Present but unreadable (locked mid-write, for example): never "ok".
+        return "error"
     try:
         cursor = connection.cursor()
         cursor.execute(
@@ -652,7 +796,7 @@ def _collect_zcode(collector, home, env, immutable):
         )
         groups = cursor.fetchall()
     except sqlite3.Error:
-        return "ok"
+        return "error"
     finally:
         try:
             connection.close()
@@ -684,11 +828,12 @@ def _collect_zcode(collector, home, env, immutable):
         hour = _hour_label(epoch_ms, collector.now_ms)
         if hour is None:
             continue
-        key = ("zcode", filekey, model, provider or "", hour)
+        key = ("zcode", filekey, model, provider or "", hour, False)
         row = collector.rows.get(key)
         if row is None:
             if len(collector.rows) >= MAX_ROWS:
                 collector.truncated = True
+                collector.row_cap = True
                 return "ok"
             row = {
                 "k": "zcode",
@@ -710,8 +855,8 @@ def _collect_zcode(collector, home, env, immutable):
         row["cr"] += tokens[2]
         row["cw"] += tokens[3]
         row["n"] += count
-    if not collector.truncated:
-        collector.confirm_file("zcode", filekey)
+    # Every group was added: the database is confirmed whatever other kinds hit.
+    collector.confirm_file("zcode", filekey)
     return "ok"
 
 
@@ -765,7 +910,7 @@ def main():
     kinds, min_date_ms, immutable, fingerprints, budget = _read_request()
     home = _home()
     env = dict(os.environ)
-    collector = Collector(min_date_ms, time.monotonic() + budget, fingerprints)
+    collector = Collector(min_date_ms, time.monotonic() + budget, fingerprints, budget)
     states = {}
     for kind in kinds:
         collector.fresh.setdefault(kind, {})
@@ -783,13 +928,17 @@ def main():
         collector.rows = {
             key: row for key, row in collector.rows.items() if row["f"] in confirmed
         }
+    kind_entries = {}
+    for kind in kinds:
+        entry = {"state": states.get(kind, "ok"), "fingerprints": collector.fresh.get(kind, {})}
+        if kind == "zcode" and collector.wal_unread:
+            entry["walUnread"] = True
+        kind_entries[kind] = entry
     response = {
         "version": VERSION,
         "truncated": collector.truncated,
-        "kinds": {
-            kind: {"state": states.get(kind, "ok"), "fingerprints": collector.fresh.get(kind, {})}
-            for kind in kinds
-        },
+        "discoveryTruncated": collector.discovery_truncated,
+        "kinds": kind_entries,
         "rows": sorted(
             collector.rows.values(), key=lambda row: (row["h"], row["k"], row.get("p", ""), row["m"])
         ),

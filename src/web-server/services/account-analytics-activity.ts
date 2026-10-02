@@ -16,6 +16,7 @@ import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
 import {
+  loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   type AnalyticsRemoteSourceState,
 } from './analytics-remote-sources';
@@ -58,6 +59,8 @@ interface ActivityState {
   partial: boolean;
   /** Per-tool, per-host collection states for the current snapshot. */
   sourceStates: AccountAnalyticsSource[];
+  /** The last remote answer, carried forward while a later remote scan has not answered. */
+  remote: RemoteAnswer | null;
   /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
   pricing: AccountAnalyticsPricingLookup;
   /** Recent cost of projecting this snapshot, reserved out of the response budget. */
@@ -67,6 +70,11 @@ interface ActivityState {
 export type AccountAnalyticsActivityRequest = {
   provider: AccountAnalyticsActivityProvider;
   request: UsageWorkerRequest;
+};
+
+type RemoteAnswer = {
+  results: Array<{ tool: 'omp' | 'muse' | 'zcode'; data: UsageWorkerResult }>;
+  states: AnalyticsRemoteSourceState[];
 };
 
 /**
@@ -112,11 +120,14 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
 
 export interface AccountAnalyticsActivityDeps {
   loadWorker?: (request: UsageWorkerRequest) => Promise<UsageWorkerResult>;
-  requests?: () => AccountAnalyticsActivityRequest[];
-  remote?: (minDateMs: number) => Promise<{
-    results: Array<{ tool: 'omp' | 'muse' | 'zcode'; data: UsageWorkerResult }>;
-    states: AnalyticsRemoteSourceState[];
-  }>;
+  requests?: () => AccountAnalyticsActivityRequest[] | Promise<AccountAnalyticsActivityRequest[]>;
+  remote?: (minDateMs: number) => Promise<RemoteAnswer>;
+  /**
+   * Saved remote aggregates, read without contacting a host, for a remote scan
+   * that has not answered in time and no earlier answer in memory. Defaults
+   * to the on-disk remote cache when `remote` is the default.
+   */
+  remoteCached?: (minDateMs: number) => RemoteAnswer | null;
   now?: () => number;
   scope?: () => string;
   /**
@@ -180,7 +191,20 @@ export function loadAccountAnalyticsWorker(
   });
 }
 
-function localRequests(): AccountAnalyticsActivityRequest[] {
+async function isDirectory(directory: string): Promise<boolean> {
+  try {
+    return (await fs.promises.stat(directory)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The local log roots to read. The OMP marker scan awaits every directory
+ * read, so it never blocks the server's event loop; it runs once per
+ * collection, and the tools it returns are also what says which are installed.
+ */
+async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
   const ccsDir = getCcsDir();
   const activity = { minDate: Date.now() - 31 * 86_400_000, cacheDir: path.join(ccsDir, 'cache') };
   const claudeRoots = [path.join(getDefaultClaudeConfigDir(), 'projects')];
@@ -214,15 +238,9 @@ function localRequests(): AccountAnalyticsActivityRequest[] {
       request: { kind: 'codex', codexHome, cacheDir: path.join(ccsDir, 'cache'), activity },
     });
   try {
-    const ompRoots = resolveOmpSessionRoots({ cacheDir: path.join(ccsDir, 'cache') }).filter(
-      (root) => {
-        try {
-          return fs.statSync(root).isDirectory();
-        } catch {
-          return false;
-        }
-      }
-    );
+    const ompRoots: string[] = [];
+    for (const root of await resolveOmpSessionRoots({ cacheDir: path.join(ccsDir, 'cache') }))
+      if (await isDirectory(root)) ompRoots.push(root);
     if (ompRoots.length)
       requests.push({ provider: 'omp', request: { kind: 'omp', roots: ompRoots, activity } });
   } catch {
@@ -245,8 +263,14 @@ function localRequests(): AccountAnalyticsActivityRequest[] {
   return requests;
 }
 
-/** Whether each tool's Ubuntu logs exist, for `not_installed` states. */
-function localSourcePresence(): Record<AccountAnalyticsActivityProvider, boolean> {
+/**
+ * Whether each tool's Ubuntu logs exist, for `not_installed` states: the
+ * tools that have a local request (a Claude Code projects folder, Codex
+ * sessions, an OMP session root, Muse sessions, the zcode database).
+ */
+function localSourcePresence(
+  requests: AccountAnalyticsActivityRequest[]
+): Record<AccountAnalyticsActivityProvider, boolean> {
   const presence: Record<AccountAnalyticsActivityProvider, boolean> = {
     claude: false,
     codex: false,
@@ -254,46 +278,7 @@ function localSourcePresence(): Record<AccountAnalyticsActivityProvider, boolean
     muse: false,
     zcode: false,
   };
-  try {
-    presence.claude = fs.statSync(path.join(getDefaultClaudeConfigDir(), 'projects')).isDirectory();
-  } catch {
-    presence.claude = false;
-  }
-  try {
-    if (!presence.claude) {
-      for (const instance of listAccountInstancePaths(path.join(getCcsDir(), 'instances'))) {
-        if (fs.statSync(path.join(instance, 'projects')).isDirectory()) {
-          presence.claude = true;
-          break;
-        }
-      }
-    }
-  } catch {
-    /* No configured instance history. */
-  }
-  presence.codex = fs.existsSync(path.join(resolveCodexConfigPaths().baseDir, 'sessions'));
-  try {
-    const cacheDir = path.join(getCcsDir(), 'cache');
-    presence.omp = resolveOmpSessionRoots({ cacheDir }).some((root) => {
-      try {
-        return fs.statSync(root).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-  } catch {
-    presence.omp = false;
-  }
-  try {
-    presence.muse = fs.statSync(resolveMuseSessionsDir()).isDirectory();
-  } catch {
-    presence.muse = false;
-  }
-  try {
-    presence.zcode = fs.statSync(resolveZcodeDbPath()).isFile();
-  } catch {
-    presence.zcode = false;
-  }
+  for (const entry of requests) presence[entry.provider] = true;
   return presence;
 }
 
@@ -307,7 +292,8 @@ export class AccountAnalyticsActivityService {
   }
 
   private async collect(state: ActivityState, generation: number): Promise<void> {
-    const requests = (this.deps.requests ?? localRequests)().slice(0, MAX_DIRECTORIES + 1);
+    const requests = (await (this.deps.requests ?? localRequests)()).slice(0, MAX_DIRECTORIES + 1);
+    const presence = this.deps.requests === undefined ? localSourcePresence(requests) : null;
     const collected = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
     let failed = false;
     const deadline = Date.now() + MAX_COLLECTION_TIME_MS;
@@ -389,9 +375,30 @@ export class AccountAnalyticsActivityService {
         clearTimeout(timer);
       }
     }
-    if (!remote) failed = true;
-    else {
-      for (const entry of remote.results) {
+    // A remote scan that has not answered in time keeps the remote part of
+    // the totals: the last answer in memory, else the saved remote cache.
+    let remoteStates: AnalyticsRemoteSourceState[] | null = null;
+    let remoteAnswer: RemoteAnswer | null = remote;
+    if (remote) {
+      state.remote = remote;
+      remoteStates = remote.states;
+    } else {
+      failed = true;
+      if (state.remote) remoteAnswer = state.remote;
+      else {
+        const cached =
+          this.deps.remoteCached ??
+          (this.deps.remote === undefined ? loadAnalyticsRemoteCachedSources : undefined);
+        try {
+          remoteAnswer = cached ? cached(cutoff) : null;
+        } catch {
+          remoteAnswer = null;
+        }
+        if (remoteAnswer) remoteStates = remoteAnswer.states;
+      }
+    }
+    if (remoteAnswer) {
+      for (const entry of remoteAnswer.results) {
         const existing = collected.get(entry.tool) ?? [];
         const data = entry.data;
         const hourly = data.hourly
@@ -421,9 +428,10 @@ export class AccountAnalyticsActivityService {
       state,
       succeeded,
       attempted,
-      remote?.states ?? null,
+      remoteStates,
       localEvents,
-      fetchedAt
+      fetchedAt,
+      presence
     );
     state.pricing = this.snapshotPricing();
     state.partial = failed || requests.length >= MAX_DIRECTORIES + 1;
@@ -436,10 +444,10 @@ export class AccountAnalyticsActivityService {
     attempted: Set<AccountAnalyticsActivityProvider>,
     remote: AnalyticsRemoteSourceState[] | null,
     localEvents: Map<AccountAnalyticsActivityProvider, number>,
-    fetchedAt: string
+    fetchedAt: string,
+    presence: Record<AccountAnalyticsActivityProvider, boolean> | null
   ): AccountAnalyticsSource[] {
     const entries: AccountAnalyticsSource[] = [];
-    const presence = this.deps.requests === undefined ? localSourcePresence() : null;
     const previous = new Map(
       state.sourceStates.map((entry) => [`${entry.tool}\0${entry.host}`, entry])
     );
@@ -482,12 +490,22 @@ export class AccountAnalyticsActivityService {
     if (remote) {
       for (const entry of remote) entries.push({ ...entry });
     } else {
-      // The remote scans never answered; previous remote aggregates stay marked.
+      // The remote scans never answered; the previous remote aggregates are
+      // still in the totals, and are marked.
       for (const tool of ['omp', 'muse', 'zcode'] as const) {
         for (const host of ['mac', 'windows'] as const) {
           if (tool !== 'omp' && host === 'windows') continue;
           const old = previous.get(`${tool}\0${host}`);
-          if (old) entries.push({ ...old, state: old.rowCount > 0 ? 'cached' : old.state });
+          if (old)
+            entries.push(
+              old.rowCount > 0
+                ? {
+                    ...old,
+                    state: 'cached',
+                    detail: 'remote scan timed out; showing previously read aggregates',
+                  }
+                : old
+            );
           else
             entries.push({
               tool,
@@ -551,6 +569,7 @@ export class AccountAnalyticsActivityService {
         sources: [],
         partial: false,
         sourceStates: [],
+        remote: null,
         pricing: this.snapshotPricing(),
         projectionMs: 0,
       };

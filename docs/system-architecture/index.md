@@ -46,9 +46,13 @@ scans with per-file checkpoints; the Mac and Windows contribute per-model,
 per-hour aggregates through one packaged Python helper streamed over the
 existing ssh channel ([remote transport](../../src/web-server/services/analytics-remote-transport.ts)),
 never raw events. OMP rows use the logged cost when nonzero, else list rates
-(a logged 0 is "not logged"). `activity.sources` lists each tool and host as
-`ok`, `cached`, `unavailable` or `not_installed`, with fixed "no local usage
-log" entries for Antigravity and Cursor.
+under the provider that served the call (a logged 0 is "not logged"); logged
+and unlogged events never share a compact row. Muse and zcode input exclude
+cache reads. A resumed OMP session copied into a second root counts once. A
+remote scan that does not answer keeps the last remote aggregates in the
+totals. `activity.sources` lists each tool and host as `ok`, `cached`,
+`unavailable` or `not_installed`, with fixed "no local usage log" entries for
+Antigravity and Cursor.
 
 [Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts),
 [guarded activation/rollback](../../src/codex-auth/activate-codex-profile.ts) and idle-only

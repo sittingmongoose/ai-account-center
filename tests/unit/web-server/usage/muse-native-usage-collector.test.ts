@@ -35,13 +35,16 @@ describe('muse usage lines', () => {
   it('maps model_completed records, counting cache reads once', () => {
     const entry = parseMuseUsageLine(JSON.stringify(completed()), 'session-uuid');
     expect(entry).toMatchObject({
-      inputTokens: 26179,
+      // input_tokens includes the cache reads: 26179 - 26097 uncached.
+      inputTokens: 82,
       outputTokens: 512,
       cacheReadTokens: 26097,
       cacheCreationTokens: 12,
       model: 'muse-spark-1.3-contributor',
       sessionId: 'session-uuid',
       target: 'muse',
+      // Muse names no routing provider; the tool is never priced as one.
+      provider: '',
     });
     expect(entry?.timestamp).toBe(new Date('2026-10-01T15:10:00Z').toISOString());
   });

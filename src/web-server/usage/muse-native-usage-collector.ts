@@ -91,13 +91,14 @@ export function parseMuseUsageLine(line: string, sessionId: string): RawUsageEnt
   const output = nonNegative(usage.output_tokens);
   // cached_tokens duplicates cache_read_tokens: count once. Output already
   // includes reasoning per the Codex convention, so reasoning_tokens is not
-  // added. Whether input_tokens is gross or net is unresolved from logs
-  // alone; the raw fields are stored as logged.
+  // added. input_tokens is gross: it includes the cache reads (every sampled
+  // record has input >= cache read, and the 31-day sums are 2.17B against
+  // 2.09B), so the uncached input is the difference, as for zcode.
   const cacheRead = nonNegative(usage.cache_read_tokens);
   const cacheWrite = nonNegative(usage.cache_write_tokens);
   if (input === null || output === null || cacheRead === null || cacheWrite === null) return null;
   return {
-    inputTokens: Math.floor(input),
+    inputTokens: Math.max(0, Math.floor(input) - Math.floor(cacheRead)),
     outputTokens: Math.floor(output),
     cacheCreationTokens: Math.floor(cacheWrite),
     cacheReadTokens: Math.floor(cacheRead),
@@ -106,6 +107,8 @@ export function parseMuseUsageLine(line: string, sessionId: string): RawUsageEnt
     timestamp: new Date(epoch).toISOString(),
     projectPath: '',
     target: MUSE_TARGET,
+    // Muse logs no routing provider; rates are looked up by model name alone.
+    provider: '',
   };
 }
 

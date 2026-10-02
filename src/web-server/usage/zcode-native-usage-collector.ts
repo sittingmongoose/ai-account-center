@@ -41,9 +41,18 @@ export interface ZcodeHelperRow {
   n: number;
 }
 
+/** The database file plus its write-ahead log, where zcode keeps recent rows until a checkpoint. */
+export interface ZcodeFingerprint {
+  size: number;
+  mtimeMs: number;
+  walSize?: number;
+  walMtimeMs?: number;
+}
+
 export interface ZcodeHelperResult {
-  state: 'ok' | 'not_installed';
-  fingerprints: Record<string, { size: number; mtimeMs: number }>;
+  /** `error`: the database exists but could not be read; nothing was confirmed. */
+  state: 'ok' | 'not_installed' | 'error';
+  fingerprints: Record<string, ZcodeFingerprint>;
   rows: ZcodeHelperRow[];
   truncated: boolean;
 }
@@ -79,7 +88,7 @@ function isRow(value: unknown): value is ZcodeHelperRow {
 export function queryLocalZcodeUsage(
   dbPath: string,
   minDateMs: number,
-  fingerprints: Record<string, { size: number; mtimeMs: number }>,
+  fingerprints: Record<string, ZcodeFingerprint>,
   options: { pythonPath?: string; homeDir?: string; timeoutMs?: number } = {}
 ): ZcodeHelperResult {
   const helper = analyticsRemoteHelperPath();
@@ -114,22 +123,23 @@ export function queryLocalZcodeUsage(
     truncated?: boolean;
   };
   const kind = response?.kinds?.zcode;
-  if (!kind || (kind.state !== 'ok' && kind.state !== 'not_installed'))
+  if (!kind || (kind.state !== 'ok' && kind.state !== 'not_installed' && kind.state !== 'error'))
     throw new CCSError('Analytics helper returned an invalid result.');
   const rows = Array.isArray(response.rows) ? response.rows : [];
   if (rows.length > 100_000 || !rows.every(isRow))
     throw new CCSError('Analytics helper result is invalid.');
-  const prints: Record<string, { size: number; mtimeMs: number }> = {};
+  const prints: Record<string, ZcodeFingerprint> = {};
+  const count = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
   for (const [key, value] of Object.entries(kind.fingerprints ?? {})) {
-    if (
-      value &&
-      typeof value === 'object' &&
-      typeof (value as { size?: unknown }).size === 'number' &&
-      typeof (value as { mtimeMs?: unknown }).mtimeMs === 'number'
-    )
+    const print = value as Record<string, unknown> | null;
+    if (print && typeof print === 'object' && count(print.size) && count(print.mtimeMs))
       prints[key] = {
-        size: (value as { size: number }).size,
-        mtimeMs: (value as { mtimeMs: number }).mtimeMs,
+        size: print.size,
+        mtimeMs: print.mtimeMs,
+        ...(count(print.walSize) && count(print.walMtimeMs)
+          ? { walSize: print.walSize, walMtimeMs: print.walMtimeMs }
+          : {}),
       };
   }
   return { state: kind.state, fingerprints: prints, rows, truncated: response.truncated === true };
