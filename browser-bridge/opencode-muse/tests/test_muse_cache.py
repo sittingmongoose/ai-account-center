@@ -1,5 +1,6 @@
 """Independent dashboard/bar processes share a private Muse request budget."""
 import importlib
+import importlib.util
 import copy
 import datetime as dt
 import io
@@ -88,8 +89,17 @@ class CacheTests(unittest.TestCase):
             root = home / ".ccs/account-usage"
             root.mkdir(parents=True, mode=0o700)
             muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+            calls = []
+
+            def portal(route):
+                # No usable email, and this session cannot read the capsule's verified team.
+                calls.append(route)
+                if route == "/api/portal/teams":
+                    return {"teams": [{"team_id": 43, "team_name": "sk-private"}]}
+                return {"email": "", "userId": "synthetic-user", "message": "sk-private"}
+
             client = Client()
-            with patch.object(client, "get", return_value={"email": "", "message": "sk-private"}) as get, \
+            with patch.object(client, "get", side_effect=portal), \
                     patch.object(muse, "PortalClient", return_value=client), \
                     patch.object(muse, "verify_device_identity"), patch.object(usage, "request_json") as request:
                 result = helpers.account("muse", "mac")
@@ -101,7 +111,121 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(result["message"], muse.ERROR_MESSAGES["identity_unavailable"])
             self.assertNotIn("sk-private", json.dumps(result))
             request.assert_not_called()
-            get.assert_called_once_with("/api/auth/me")
+            self.assertEqual(calls, ["/api/auth/me", "/api/portal/teams"])
+            self.assertFalse((root / muse.BINDING_NAME).exists())
+
+    def test_collector_reads_the_capsule_team_when_the_portal_omits_the_email(self):
+        # Live 2026-10-02 shape: HTTP 200 auth/me with "email": "", one team, a full quota.
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root = home / ".ccs/account-usage"
+            root.mkdir(parents=True, mode=0o700)
+            muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+            quota = dict(QUOTA, weekly_weighted_used="38146338720", weekly_weighted_limit="300000000000",
+                         window_weighted_limit="100000000000", as_of=1790945289)
+            calls = []
+
+            def portal(route):
+                calls.append(route)
+                if route == "/api/auth/me":
+                    return {"displayName": "Synthetic", "email": "", "userId": "sk-private"}
+                if route == "/api/portal/teams":
+                    return {"teams": [{"team_id": 42, "team_name": "Personal"}]}
+                return {"subscription_quota": quota, "api_key": "sk-private"}
+
+            client = Client()
+            with patch.object(client, "get", side_effect=portal), \
+                    patch.object(muse, "PortalClient", return_value=client), \
+                    patch.object(muse, "verify_device_identity") as identity, \
+                    patch.object(muse.time, "time", return_value=1790945300), \
+                    patch.object(usage, "request_json") as request:
+                result = helpers.account("muse", "mac")
+                usage.fetch_muse(helpers.Credential(ACCESS, email=EMAIL), result, home)
+                cached = helpers.account("muse", "mac")
+                usage.fetch_muse(helpers.Credential(ACCESS, email=EMAIL), cached, home)
+            identity.assert_called_once()
+            request.assert_not_called()
+            self.assertEqual(calls, ["/api/auth/me", "/api/portal/teams", "/api/portal/teams/42/subscription-quota"])
+            self.assertEqual(result["status"], "ok")
+            self.assertNotIn("failureCode", result)
+            self.assertEqual((result["email"], result["plan"]), (EMAIL, PLAN))
+            self.assertEqual(result["sampledAt"], "2026-10-02T12:48:09Z")
+            self.assertEqual([(row["key"], row["usedPercent"], row["used"], row["limit"]) for row in result["windows"]],
+                             [("window", 0, 0, 100000000000), ("weekly", 12.7154, 38146338720, 300000000000)])
+            self.assertEqual(cached["status"], "cached")
+            self.assertEqual(cached["sampledAt"], result["sampledAt"])
+            state = muse.read_usage_state(root)
+            self.assertEqual((state["teamId"], state["lastError"]), ("42", None))
+            pin = muse.read_binding(root)
+            self.assertEqual(pin, {"schemaVersion": 1, "email": EMAIL, "plan": PLAN, "teamId": "42",
+                                   "userHash": muse.user_hash({"userId": "sk-private"})})
+            self.assertEqual((root / muse.BINDING_NAME).stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("sk-private", json.dumps(result) + (root / muse.CACHE_NAME).read_text()
+                             + (root / muse.BINDING_NAME).read_text())
+
+    def test_browser_sync_reads_the_capsule_team_when_the_portal_omits_the_email(self):
+        with tempfile.TemporaryDirectory() as root:
+            muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+            teams = [[{"team_id": 42}, {"team_id": 43}]]
+
+            def portal(route):
+                if route == "/api/auth/me":
+                    return {"email": "", "userId": "synthetic-user"}
+                if route == "/api/portal/teams":
+                    return {"teams": teams[0]}
+                return {"subscription_quota": QUOTA}
+
+            with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(ACCESS, email=EMAIL)), \
+                    patch("muse_console.verify_device_identity"), \
+                    patch("muse_console.PortalClient.get", side_effect=portal), \
+                    patch("desktop_usage.request_json") as native_request:
+                with self.assertRaises(muse.MuseError) as several:
+                    # Nothing pinned yet: the capsule session must list exactly one team.
+                    muse.collect_browser([COOKIE], root=root)
+                (Path(root) / muse.CACHE_NAME).unlink()
+                teams[0] = [{"team_id": 42}]
+                team, sample = muse.collect_browser([COOKIE], root=root)
+                (Path(root) / muse.CACHE_NAME).unlink()
+                with self.assertRaises(muse.MuseError) as error:
+                    # Choosing another team in the popup has no verified binding without an email.
+                    muse.collect_browser([COOKIE], requested="43", root=root)
+            self.assertEqual(several.exception.code, "identity_unavailable")
+            self.assertEqual((team, sample["status"], sample["email"]), ("42", "ok", EMAIL))
+            self.assertEqual([row["usedPercent"] for row in sample["windows"]], [0, 6])
+            self.assertEqual(error.exception.code, "identity_unavailable")
+            native_request.assert_not_called()
+
+    def test_a_binding_never_reaches_another_team_or_touches_the_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(), now=1000)
+            before = (Path(root) / muse.CACHE_NAME).read_bytes()
+            client = Client()
+            with self.assertRaises(muse.MuseError) as error:
+                muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "43", ACCESS, client, now=2000, bound_team="42")
+            self.assertEqual(error.exception.code, "identity_unavailable")
+            self.assertEqual(client.calls, [])
+            self.assertEqual((Path(root) / muse.CACHE_NAME).read_bytes(), before)
+
+    def test_choosing_another_team_waits_out_a_provider_429_and_keeps_the_first_reading(self):
+        with tempfile.TemporaryDirectory() as root:
+            first = muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(), now=1000)
+            muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS,
+                              Client(muse.MuseError("rate_limited", retry_after=1800)), now=1400)
+            before = (Path(root) / muse.CACHE_NAME).read_bytes()
+            client = Client()
+            with self.assertRaises(muse.MuseError) as error:
+                muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "43", ACCESS, client, now=1500)
+            self.assertEqual(error.exception.code, "rate_limited")
+            self.assertEqual(client.calls, [])
+            self.assertEqual((Path(root) / muse.CACHE_NAME).read_bytes(), before)
+            state = muse.read_usage_state(root)
+            self.assertEqual((state["teamId"], state["sampledAt"]), ("42", first["sampledAt"]))
+            # Once the cooldown is due, the switch is an ordinary email-verified request.
+            client = Client()
+            with self.assertRaises(muse.MuseError) as error:
+                muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "43", ACCESS, client, now=3200)
+            self.assertEqual(error.exception.code, "team_mismatch")
+            self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams"])
 
     def test_success_survives_cold_process_reload_with_original_sample_and_zero(self):
         with tempfile.TemporaryDirectory() as root:
@@ -361,9 +485,28 @@ class ProviderObservationTimeTests(unittest.TestCase):
             identity.assert_called_once()
             native_request.assert_not_called()
 
-    def test_shipped_helper_is_byte_identical(self):
-        self.assertEqual((ROOT / "scripts/account-usage/muse_console.py").read_bytes(),
-                         (ROOT / "browser-bridge/opencode-muse/native-host/muse_console.py").read_bytes())
+    def test_bridge_ships_no_second_muse_module_and_installs_the_collector_copy(self):
+        bridge = ROOT / "browser-bridge/opencode-muse"
+        self.assertEqual(sorted(path.name for path in bridge.rglob("muse_console.py")), [])
+        spec = importlib.util.spec_from_file_location("muse_install_macos", bridge / "install-macos.py")
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            version = type("Completed", (), {"stdout": "0.16.3\n"})()
+            with patch.object(installer.sys, "platform", "darwin"), \
+                    patch.object(installer.Path, "home", return_value=home), \
+                    patch.object(installer.subprocess, "run", return_value=version) as run:
+                result = installer.install()
+            self.assertTrue(result["installed"])
+            self.assertEqual(run.call_count, 1)
+            shared = (ROOT / "scripts/account-usage/muse_console.py").read_bytes()
+            for installed in (home / ".ccs/account-usage/muse_console.py",
+                              home / ".ccs/opencode-usage-bridge/native-host/muse_console.py"):
+                self.assertEqual(installed.read_bytes(), shared)
+                self.assertEqual(installed.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((home / ".ccs/opencode-usage-bridge/native-host/host.py").read_bytes(),
+                             (bridge / "native-host/host.py").read_bytes())
 
 
 class RetryTests(unittest.TestCase):

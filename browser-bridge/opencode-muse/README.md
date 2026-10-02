@@ -50,6 +50,37 @@ in an owner-only directory and file. Dashboard output contains only account
 identity, weighted token usage, actual percentages and reported reset times.
 The regular Muse collector and the browser bridge share an owner-only usage cache. They request fresh quota at most every five minutes across all dashboard and bar callers. Brave startup, extension reload, and exact Muse session-cookie changes resume refresh automatically; the user does not need to keep pressing Sync. A provider HTTP 429 starts a persistent cooldown (ten minutes by default, or bounded Retry-After), and retains the last successful reading with its original observation time and cached status. Restarting AI Account Center or a helper does not bypass that cooldown. The native CLI credential, verified email, selected team, and plan bind each cached observation; a different identity or expired authentication cannot inherit another account’s quota.
 
+Since 2026-10-01 Muse can answer `/api/auth/me` with HTTP 200 and an empty
+`email`. An empty, missing or malformed email proves no other account, so it is
+not `account_mismatch`; a valid different email still is, masked ones included.
+Team membership alone does not identify the web user, because another Muse
+account in the same team could be signed into the browser. So the email-less
+path binds on the web user that auth/me names (`userId`), stored only as a
+SHA-256 pin in the private sidecar `muse-console-binding.json` next to the
+capsule; the capsule and cache formats are unchanged.
+
+- Every email-verified reading pins its user for that email, plan and team.
+- With no pin yet, only the capsule's own stored session may read, and only
+  while it lists exactly one team; that first reading pins its user.
+- After that, any session of the pinned user may read, and another user is
+  `account_mismatch`.
+- In every case the collector reads only the capsule's team, the live CLI
+  identity must still match the capsule's email and plan, and the team's tier
+  must equal the plan. It never selects or switches teams on this path.
+- A browser Sync replaces the capsule's cookies only with a session a fresh
+  reading verified (email, pinned user, or the capsule session itself), or,
+  for a cached reading, while a pin guards the next fresh one.
+
+Anything else stays `identity_unavailable`, including auth/me without a
+`userId`. Choosing another team in the popup needs an email-verified reading.
+A provider 429 also holds back a team switch until its cooldown ends.
+
+The dashboard labels Muse windows with the official dev.meta.ai/usage card
+names: "Current usage (5-hour)" for the rolling window and "Weekly limit". The
+official page rounds `used / limit` down to a whole percent ("<1%" below one);
+the dashboard keeps the exact ratio to four decimals and shows up to two, so for
+the same reading it is never lower and at most one point higher.
+
 If the existing browser sign-in is unavailable, the dashboard keeps the
 confirmed account and plan and explains the missing quota. It never invents
 zero usage or treats an omitted key-response quota as a failed CLI login.

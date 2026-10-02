@@ -38,7 +38,11 @@ const childEnvironment = {
   TMP: childTmp,
 };
 
-const fixtures: { cases: Scenario[]; nativeRateLimited: Scenario } = JSON.parse(
+const fixtures: {
+  cases: Scenario[];
+  nativeRateLimited: Scenario;
+  blankPortalEmail: Record<string, unknown>;
+} = JSON.parse(
   execFileSync(
     '/usr/bin/python3',
     [
@@ -169,6 +173,27 @@ describe('real Python Muse helper to Node cache boundary', () => {
       expect(recovered.sampledAt).toBe('2026-10-01T12:30:00.000Z');
     }
   );
+
+  it('serves a real reading when the portal omits the email but the capsule session names its user', async () => {
+    const helper = fixtures.blankPortalEmail;
+    expect(helper.status).toBe('ok');
+    expect(helper).not.toHaveProperty('failureCode');
+    const service = serviceFixture([helper]);
+    const account = await service.read(0);
+    expect(account.status).toBe('ok');
+    expect(account.email).toBe('fixture@example.com');
+    expect(account.plan).toBe('Muse Code High Usage');
+    expect(account.sampledAt).toBe('2026-10-02T12:48:09.000Z');
+    expect(account.message).toBeNull();
+    expect(account.windows.map((window) => [window.key, window.label, window.usedPercent])).toEqual(
+      [
+        ['window', 'Current usage (5-hour)', 0],
+        ['weekly', 'Weekly limit', 6.3],
+      ]
+    );
+    expect(JSON.stringify(account)).not.toContain('synthetic-fixture');
+    expect(JSON.stringify(account)).not.toContain('synthetic-user');
+  });
 
   it('preserves native 429 cooldown and actual cached timestamps without public classification fields', async () => {
     const fixture = fixtures.nativeRateLimited;

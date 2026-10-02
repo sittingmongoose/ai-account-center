@@ -43,7 +43,7 @@ def write_frame(handle, value):
 
 def handle_request(request, root, collector=collect, writer=write_capsule):
     if isinstance(request, dict) and request.get("action") == "museSync":
-        from muse_console import MuseError, collect_browser, restore_browser_sample, validate_cookies as muse_cookies, write_capsule as muse_write
+        from muse_console import MuseError, restore_browser_sample, sync_browser, validate_cookies as muse_cookies
         if set(request) - {"schemaVersion", "action", "cookies", "teamId", "previousSample"} or type(request.get("schemaVersion")) is not int or request["schemaVersion"] != 1:
             raise MuseError("invalid_request")
         cookies = muse_cookies(request.get("cookies"))
@@ -52,8 +52,8 @@ def handle_request(request, root, collector=collect, writer=write_capsule):
                     or request["previousSample"].get("teamId") != request["teamId"]):
                 raise MuseError("team_mismatch")
             restore_browser_sample(root, request["previousSample"])
-        team, sample = collect_browser(cookies, request.get("teamId"), root)
-        muse_write(root, cookies, team, sample["email"], sample["plan"])
+        # sync_browser replaces the capsule's session only with a verified one.
+        team, sample = sync_browser(cookies, request.get("teamId"), root)
         return {"schemaVersion": 1, "ok": True, "sample": sample, "teamId": team}
     if (not isinstance(request, dict) or set(request) - {"schemaVersion", "action", "cookies", "workspaceId"}
             or type(request.get("schemaVersion")) is not int or request["schemaVersion"] != 1

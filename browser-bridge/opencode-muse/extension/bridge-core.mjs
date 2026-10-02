@@ -131,6 +131,12 @@ export function projectMuseTeams(values) {
     seen.add(row.id); return {id: row.id, name: row.name};
   });
 }
+// Meta's own /usage card names with our cadence, as desktop_usage.muse_window_label.
+export function museWindowLabel(key, minutes) {
+  if (key === 'weekly') return 'Weekly limit';
+  if (!minutes || minutes > 525600) return 'Current usage';
+  return minutes % 60 === 0 ? `Current usage (${minutes / 60}-hour)` : `Current usage (${minutes}-minute)`;
+}
 export function projectMuseSample(value) {
   if (!value || value.provider !== 'muse' || value.platform !== 'mac' || !['ok', 'cached'].includes(value.status) ||
       !iso(value.fetchedAt) || !iso(value.sampledAt) || !Array.isArray(value.windows) || !value.windows.length || value.windows.length > 2 ||
@@ -144,7 +150,7 @@ export function projectMuseSample(value) {
     const usedPercent = nonnegative(row.usedPercent), resetAt = iso(row.resetAt), used = nonnegative(row.used), limit = nonnegative(row.limit);
     if (usedPercent === null && resetAt === null && used === null) throw new Error('protocol_error');
     const minutes = nonnegative(row.windowMinutes);
-    return {key: row.key, label: row.key === 'weekly' ? 'Weekly usage' : minutes && minutes % 60 === 0 ? `${minutes / 60}-hour usage` : 'Rolling usage',
+    return {key: row.key, label: museWindowLabel(row.key, minutes),
       usedPercent, remainingPercent: usedPercent === null ? null : Math.max(0, 100 - usedPercent), resetAt,
       windowMinutes: minutes && minutes <= 525600 ? minutes : null, used, limit, unit: 'weighted tokens', kind: 'rate_limit'};
   });

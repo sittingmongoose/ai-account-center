@@ -111,19 +111,27 @@ def cursor_credentials(home, platform):
     return None
 
 
+def muse_window_label(key, minutes):
+    """Meta's own /usage card names, with our cadence: "Current usage (5-hour)", "Weekly limit"."""
+    if key == "weekly":
+        return "Weekly limit"
+    if minutes is None or not 0 < minutes <= 525600:
+        return "Current usage"
+    return "Current usage (" + (f"{minutes / 60:g}-hour" if minutes % 60 == 0 else f"{minutes:g}-minute") + ")"
+
+
 def normalize_muse(payload):
     usage = payload.get("subs_usage")
     windows = []
     portal = payload.get("subscription_quota")
     if isinstance(portal, dict):
-        for key, prefix, label in (("window", "window", "Rolling usage"), ("weekly", "weekly", "Weekly usage")):
-            used = counter(portal.get(prefix + "_weighted_used"))
-            limit = counter(portal.get(prefix + "_weighted_limit"))
+        for key in ("window", "weekly"):
+            used = counter(portal.get(key + "_weighted_used"))
+            limit = counter(portal.get(key + "_weighted_limit"))
             duration = counter(portal.get("window_duration_secs")) if key == "window" else None
             minutes = duration / 60 if duration is not None else 10080 if key == "weekly" else None
-            if key == "window" and minutes is not None and 0 < minutes <= 525600:
-                label = str(int(minutes / 60)) + "-hour usage" if minutes % 60 == 0 else "Rolling usage"
-            reset_value = portal.get(prefix + "_resets_at")
+            label = muse_window_label(key, minutes)
+            reset_value = portal.get(key + "_resets_at")
             reset = reset_at(counter(reset_value) if isinstance(reset_value, str) and counter(reset_value) is not None else reset_value)
             if used is None and reset is None:
                 continue
@@ -132,13 +140,11 @@ def normalize_muse(payload):
                                         used=used, limit=limit, unit="weighted tokens"))
         return windows
     if isinstance(usage, dict):
-        for key, label, duration in (("window", "Rolling usage", None), ("weekly", "Weekly usage", 10080)):
+        for key, duration in (("window", None), ("weekly", 10080)):
             bucket = usage.get(key)
             if isinstance(bucket, dict):
                 duration = number(bucket.get("window_duration_mins", duration))
-                if key == "window" and duration is not None and 0 < duration <= 525600:
-                    label = (str(int(duration / 60)) + "-hour usage") if duration % 60 == 0 else str(duration).rstrip("0").rstrip(".") + "-minute usage"
-                window = quota_window(key, label, used_percent=bucket.get("used_percent"),
+                window = quota_window(key, muse_window_label(key, duration), used_percent=bucket.get("used_percent"),
                                       reset=bucket.get("resets_at"), minutes=duration,
                                       enabled=bucket.get("enabled"), unlimited=bucket.get("unlimited"))
                 if window["usedPercent"] is not None or window["resetAt"] is not None:
@@ -166,7 +172,8 @@ def fetch_muse(credential, result, home=None):
         if credential.email and credential.email.lower() == bound_email.lower():
             result.update(email=bound_email, plan=bound_plan)
             cached = quota_sample(root, cookies, bound_email, bound_plan, team, credential.access,
-                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan))
+                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan),
+                                  bound_team=team)
         if cached:
             result.update(email=bound_email, plan=bound_plan, status="cached" if cached["cached"] else "ok", message=cached["message"],
                           sampledAt=cached["sampledAt"], windows=normalize_muse({"subscription_quota": cached["quota"]}))
@@ -209,7 +216,7 @@ def fetch_muse(credential, result, home=None):
         if not result["email"] or not result["plan"] or bound_email.lower() != result["email"].lower() or bound_plan != result["plan"]:
             failed("account_mismatch", ERROR_MESSAGES["account_mismatch"])
             return
-        sample = quota_sample(root, cookies, result["email"], result["plan"], team, credential.access)
+        sample = quota_sample(root, cookies, result["email"], result["plan"], team, credential.access, bound_team=team)
         result["windows"] = normalize_muse({"subscription_quota": sample["quota"]})
         if result["windows"]:
             result["status"] = "cached" if sample["cached"] else "ok"
