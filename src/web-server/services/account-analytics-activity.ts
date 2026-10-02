@@ -9,12 +9,14 @@ import { resolveCodexConfigPaths } from './compatible-cli-config-paths';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import {
   accountAnalyticsActivityCoverage,
-  defaultAccountAnalyticsPricing,
-  memoiseAccountAnalyticsPricing,
   projectAccountAnalyticsActivity,
-  type AccountAnalyticsPricingLookup,
   type SourceData,
 } from './account-analytics-projection';
+import {
+  defaultAccountAnalyticsPricing,
+  memoiseAccountAnalyticsPricing,
+  type AccountAnalyticsPricingLookup,
+} from './account-analytics-pricing';
 import type {
   UsageWorkerRequest,
   UsageWorkerResult,
@@ -28,12 +30,14 @@ import type {
 
 export {
   accountAnalyticsActivityCoverage,
-  defaultAccountAnalyticsPricing,
-  memoiseAccountAnalyticsPricing,
   projectAccountAnalyticsActivity,
-  type AccountAnalyticsPricingLookup,
   type SourceData,
 } from './account-analytics-projection';
+export {
+  defaultAccountAnalyticsPricing,
+  memoiseAccountAnalyticsPricing,
+  type AccountAnalyticsPricingLookup,
+} from './account-analytics-pricing';
 export { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
 
 interface ActivityState {

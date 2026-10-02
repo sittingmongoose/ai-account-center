@@ -1,7 +1,11 @@
 import { createHash } from 'crypto';
-import { getModelPricingWithSource } from '../model-pricing';
 import { hasPartialHourOffset, localDate } from './account-analytics-range';
 import { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
+import {
+  defaultAccountAnalyticsPricing,
+  memoiseAccountAnalyticsPricing,
+  type AccountAnalyticsPricingLookup,
+} from './account-analytics-pricing';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import type { ModelBreakdown, SessionUsage } from '../usage/types';
 import type {
@@ -46,15 +50,6 @@ const TOKEN_FIELDS: readonly TokenField[] = [
 ];
 const PART_FIELDS = ['input', 'output', 'cacheWrite', 'cacheRead'] as const;
 type PartField = (typeof PART_FIELDS)[number];
-const RATE_FOR_PART: Record<
-  PartField,
-  [TokenField, keyof Omit<AccountAnalyticsModelRates, 'source'>]
-> = {
-  input: ['inputTokens', 'inputPerMillion'],
-  output: ['outputTokens', 'outputPerMillion'],
-  cacheWrite: ['cacheCreationTokens', 'cacheCreationPerMillion'],
-  cacheRead: ['cacheReadTokens', 'cacheReadPerMillion'],
-};
 const RATE_KEYS = [
   'inputPerMillion',
   'outputPerMillion',
@@ -67,58 +62,11 @@ const MAX_SESSION_SAMPLE = 50;
 const MAX_NAMED_DAY_MODELS = 12;
 const OTHER_MODELS = 'Other models';
 
-/** Rates for one model, or null when no usable rate exists. */
-export type AccountAnalyticsPricingLookup = (
-  model: string,
-  provider: string | undefined
-) => AccountAnalyticsModelRates | null;
-
 export interface AccountAnalyticsProjectionOptions {
   /** IANA zone for day buckets; UTC when absent. */
   tz?: string;
   /** Pricing lookup; memoised per model for one projection. */
   pricing?: AccountAnalyticsPricingLookup;
-}
-
-/** The same list rates the native worker priced each model with, plus where they came from. */
-export function defaultAccountAnalyticsPricing(
-  model: string,
-  provider: string | undefined
-): AccountAnalyticsModelRates | null {
-  try {
-    const { pricing, source } = getModelPricingWithSource(model, { provider });
-    const rates: AccountAnalyticsModelRates = {
-      inputPerMillion: pricing.inputPerMillion,
-      outputPerMillion: pricing.outputPerMillion,
-      cacheCreationPerMillion: pricing.cacheCreationPerMillion,
-      cacheReadPerMillion: pricing.cacheReadPerMillion,
-      source,
-    };
-    return PART_FIELDS.every((part) => {
-      const value = rates[RATE_FOR_PART[part][1]];
-      return typeof value === 'number' && Number.isFinite(value) && value >= 0;
-    })
-      ? rates
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Memoise a lookup per model and provider; rates are stable for one read of the snapshot. */
-export function memoiseAccountAnalyticsPricing(
-  lookup: AccountAnalyticsPricingLookup
-): AccountAnalyticsPricingLookup {
-  const cache = new Map<string, AccountAnalyticsModelRates | null>();
-  return (model, provider) => {
-    const key = `${provider ?? ''}\0${model}`;
-    if (!cache.has(key)) {
-      if (cache.size >= 4096) cache.clear();
-      cache.set(key, lookup(model, provider));
-    }
-    const rates = cache.get(key) ?? null;
-    return rates ? { ...rates } : null;
-  };
 }
 
 function finite(value: unknown): number {
