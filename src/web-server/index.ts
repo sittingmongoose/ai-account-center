@@ -39,6 +39,11 @@ import { loadStaticUi, pageRouteHandler, precompressedStatic, uiStaticHeaders } 
 import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
 import { attachDashboardEventServer } from './dashboard-events';
+import { isSecureTransport } from './middleware/secure-transport';
+import {
+  startAccountLifecycleMaintenance,
+  stopAccountLifecycleMaintenance,
+} from './services/account-lifecycle-runtime';
 
 export interface ServerOptions {
   port: number;
@@ -220,12 +225,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   let antigravityRuntime: AntigravityRuntime | null = null;
-  // Account changes (visibility now, lifecycle jobs later) reach /ws clients as hints.
-  const detachDashboardEvents = attachDashboardEventServer(wss);
+  // Account changes and sign-in jobs reach /ws clients as hints; a job's code
+  // goes only to sockets that connected over a secure transport.
+  const detachDashboardEvents = attachDashboardEventServer(wss, { isSecure: isSecureTransport });
 
   // Combined cleanup function
   const cleanup = () => {
     detachDashboardEvents();
+    stopAccountLifecycleMaintenance();
     codexAutoSwitch.stop();
     antigravityRuntime?.stop();
     stopAccountAnalyticsSampling();
@@ -283,6 +290,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       }
       codexAutoSwitch.start();
       startAccountAnalyticsSampling();
+      // Staging folders of sign-ins from before a restart, and trash past 30 days.
+      startAccountLifecycleMaintenance();
       // Usage cache loads on-demand when Analytics page is visited
       // This keeps server startup instant for users who don't need analytics
       resolve({ server, wss, cleanup });

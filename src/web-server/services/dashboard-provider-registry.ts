@@ -68,7 +68,9 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
     signIn: { kind: 'app-session', label: 'Desktop app session', platforms: ['mac', 'windows'] },
     extras: null,
     openApp: [],
-    lifecycleOpenApp: ['mac', 'windows'],
+    // `POST /api/accounts/:id/open` opens Cursor in the Mac console session; Windows
+    // has no interactive launcher task for Cursor yet.
+    lifecycleOpenApp: ['mac'],
   },
   muse: {
     label: 'Muse Code',
@@ -159,12 +161,34 @@ export interface ProviderRegistryFacts {
   secureTransport: boolean;
   /** A flow that cannot run now, for example a failed isolation preflight. */
   flows?: Partial<Record<DashboardProvider, DashboardSignInUnavailableReason>>;
+  /** Providers whose Remove is not served yet (default: served with the lifecycle routes). */
+  remove?: Partial<Record<DashboardProvider, boolean>>;
+  /** Providers whose Re-check is not served (default: served with the lifecycle routes). */
+  recheck?: Partial<Record<DashboardProvider, boolean>>;
 }
 
 export const DEFAULT_PROVIDER_REGISTRY_FACTS: Readonly<ProviderRegistryFacts> = Object.freeze({
   lifecycleRoutes: false,
   secureTransport: false,
 });
+
+/** One provider's sign-in kind and whether its flow can run now (the same rule as providers[]). */
+export function providerSignInState(
+  id: DashboardProvider,
+  facts: ProviderRegistryFacts
+): {
+  kind: DashboardSignInKind;
+  multiAccount: boolean;
+  unavailableReason: DashboardSignInUnavailableReason | null;
+} {
+  const definition = PROVIDERS[id];
+  const kind = definition.signIn.kind;
+  const unavailableReason: DashboardSignInUnavailableReason | null = !facts.lifecycleRoutes
+    ? 'not_implemented'
+    : (facts.flows?.[id] ??
+      (SECURE_KINDS.has(kind) && !facts.secureTransport ? 'secure_transport_required' : null));
+  return { kind, multiAccount: definition.multiAccount, unavailableReason };
+}
 
 export function buildDashboardProviders(
   accounts: readonly DashboardAccount[],
@@ -174,13 +198,9 @@ export function buildDashboardProviders(
   const hidden = new Set(hiddenProviders);
   return DASHBOARD_PROVIDER_IDS.map((id, order) => {
     const definition = PROVIDERS[id];
-    const kind = definition.signIn.kind;
+    const { kind, unavailableReason } = providerSignInState(id, facts);
     const secureTransportRequired = SECURE_KINDS.has(kind);
     const accountCount = accounts.filter((account) => account.provider === id).length;
-    const unavailableReason: DashboardSignInUnavailableReason | null = !facts.lifecycleRoutes
-      ? 'not_implemented'
-      : (facts.flows?.[id] ??
-        (secureTransportRequired && !facts.secureTransport ? 'secure_transport_required' : null));
     const available = unavailableReason === null;
     return {
       id,
@@ -209,14 +229,14 @@ export function buildDashboardProviders(
         signInAgain:
           facts.lifecycleRoutes && kind !== 'api-key' && (GUIDE_KINDS.has(kind) || available),
         replaceKey: kind === 'api-key' && available,
-        remove: facts.lifecycleRoutes,
+        remove: facts.lifecycleRoutes && facts.remove?.[id] !== false,
         activate: definition.switchable,
         autoSwitch: definition.switchable,
         openApp: [
           ...definition.openApp,
           ...(facts.lifecycleRoutes ? definition.lifecycleOpenApp : []),
         ],
-        recheck: facts.lifecycleRoutes,
+        recheck: facts.lifecycleRoutes && facts.recheck?.[id] !== false,
       },
     };
   });

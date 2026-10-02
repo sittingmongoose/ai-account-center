@@ -1,4 +1,9 @@
-import type { CodexAutoSwitchDashboardStatus, DashboardAccount } from './account-dashboard-types';
+import type {
+  ClaudeDashboardPlatform,
+  CodexAutoSwitchDashboardStatus,
+  DashboardAccount,
+} from './account-dashboard-types';
+import type { PendingClaudeProfile } from './claude-account-stores';
 
 /**
  * An Antigravity registry profile that cannot be used yet: its saved login is
@@ -26,12 +31,16 @@ export function isAntigravitySetupRow(account: DashboardAccount): boolean {
  *   activation still does its own proof. A setup row is never a switch target
  *   and reads `pending_sign_in`.
  * - Every other provider: not switchable.
- * No sign-in jobs exist yet, so `jobId` is always null here.
+ * A Claude profile from Add keeps `pending_sign_in` until its first reading.
+ * Running sign-in jobs are laid over this by withJobState.
  */
 export function withAccountState(
   account: DashboardAccount,
   codexAuthValid?: boolean
 ): DashboardAccount {
+  if (account.provider === 'claude' && account.lifecycle?.state === 'pending_sign_in') {
+    return { ...account, switchable: false };
+  }
   if (isAntigravitySetupRow(account)) {
     return {
       ...account,
@@ -58,4 +67,45 @@ export function withThresholdUsedPercent(
   }
 ): CodexAutoSwitchDashboardStatus {
   return { ...status, thresholdUsedPercent: 100 - status.thresholdPercent };
+}
+
+/** Running sign-in jobs by account id. */
+export type AccountJobStates = ReadonlyMap<
+  string,
+  { state: 'signing_in' | 'verifying'; jobId: string }
+>;
+
+/** A row whose account has a running Sign in again job reads signing_in or verifying. */
+export function withJobState(account: DashboardAccount, jobs: AccountJobStates): DashboardAccount {
+  const job = jobs.get(account.id);
+  return job ? { ...account, lifecycle: { state: job.state, jobId: job.jobId } } : account;
+}
+
+/**
+ * A Claude profile made by Add that has not signed in yet. It has no email or
+ * usage, and no Open buttons: the Claude Open route reads only the inventory.
+ */
+export function pendingClaudeAccount(
+  profile: PendingClaudeProfile,
+  platform: ClaudeDashboardPlatform
+): DashboardAccount {
+  return {
+    id: `claude:${profile.id}`,
+    provider: 'claude',
+    providerLabel: 'Claude',
+    label: profile.label ?? profile.id,
+    email: null,
+    plan: null,
+    platform,
+    source: `Claude desktop on ${platform === 'mac' ? 'Mac' : 'Windows'}`,
+    status: 'needs_sign_in',
+    message: 'Open Claude on Mac or Windows and sign in to finish setting up this profile.',
+    fetchedAt: null,
+    sampledAt: null,
+    isActive: false,
+    windows: [],
+    capabilities: { codexProfile: null, claudeProfileId: profile.id, claudePlatforms: [] },
+    switchable: false,
+    lifecycle: { state: 'pending_sign_in', jobId: null },
+  };
 }

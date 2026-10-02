@@ -106,7 +106,13 @@ function caseVariants(canonical: string): string[] {
   ];
 }
 
-const VARIANT_CASES = ROUTES.flatMap((route) =>
+/** Lifecycle reads (CONTRACT-registry-lifecycle 6.1, 6.8); the registry reads the dashboard stub too. */
+const LIFECYCLE_ROUTES: ApiRoute[] = [
+  { family: 'accounts', method: 'GET', path: '/api/accounts/registry', status: 200 },
+  { family: 'accounts', method: 'GET', path: '/api/accounts/trash', status: 200 },
+];
+
+const VARIANT_CASES = [...ROUTES, ...LIFECYCLE_ROUTES].flatMap((route) =>
   caseVariants(route.path).map((variant) => ({ ...route, variant }))
 );
 
@@ -273,15 +279,18 @@ describe('F1: API session guard whatever the URL letter case', () => {
     }
   );
 
-  it.each(ROUTES)('rejects canonical $method $path without a session', async (route) => {
-    const response = await send(route.method, `${route.path}${route.query ?? ''}`, {
-      body: route.body,
-    });
-    expect(response.status).toBe(401);
-    expect(await response.json()).toEqual(unauthenticatedBody(route.family));
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(stubCalls()).toBe(0);
-  });
+  it.each([...ROUTES, ...LIFECYCLE_ROUTES])(
+    'rejects canonical $method $path without a session',
+    async (route) => {
+      const response = await send(route.method, `${route.path}${route.query ?? ''}`, {
+        body: route.body,
+      });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(unauthenticatedBody(route.family));
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(stubCalls()).toBe(0);
+    }
+  );
 
   it('serves every canonical route unchanged with a session', async () => {
     const cookie = await signIn();
@@ -296,6 +305,14 @@ describe('F1: API session guard whatever the URL letter case', () => {
       });
     }
     expect(serviceStubs.every((stub) => stub.mock.calls.length === 1)).toBe(true);
+    for (const route of LIFECYCLE_ROUTES) {
+      const response = await send(route.method, route.path, { cookie });
+      expect({ path: route.path, status: response.status }).toEqual({
+        path: route.path,
+        status: route.status,
+      });
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
   });
 
   it('answers non-canonical casings with 404 and no data, even with a session', async () => {

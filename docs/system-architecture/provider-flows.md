@@ -52,6 +52,19 @@ empty: the dashboard keeps the last good lists, sets `settings.visibilityAvailab
 to false, and shows nothing hidden only when it has never read the file. Every
 private store refuses a folder that others can write.
 
+API keys added from the dashboard (Kimi Code, Z.ai, OpenCode Go) are kept by the
+[AAC key store](../../src/web-server/services/account-key-store.ts) in
+`account-usage/keys/<provider>-<keyId>.json` (0600 in a 0700 folder) on the host that
+collects them; another host is written by `scripts/account-usage/key_store.py` with
+the key on stdin only. The API returns only the last four characters and a
+fingerprint. A new key is checked once by the collector: a rejected key is deleted
+again, a network failure keeps it as unverified. Codex accounts are added or signed
+in again with `codex login --device-auth` in a private staging folder, never in the
+native `~/.codex`; the identity must be new (Add) or unchanged (Sign in again), and
+the active, default and last profiles cannot be removed. Claude profile creation and
+removal into a 30-day trash are implemented against a host transport but stay off
+until the Windows launcher and the usage helper read profile ids from the inventory.
+
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
 the existing `platyr`, `gmail`, `party` and `me` profile IDs. The optional
 `opencode-console-wallet-source.json` selects a distinct workspace wallet source.

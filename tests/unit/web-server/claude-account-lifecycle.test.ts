@@ -1,0 +1,365 @@
+/**
+ * Claude Add, Remove, trash, restore and purge (CONTRACT-registry-lifecycle
+ * 6.2, 6.7, 6.8) against a fake host transport and a temporary CCS folder.
+ * Nothing here reaches a real host.
+ */
+import { afterEach, describe, expect, it } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { listClaudeDesktopProfiles } from '../../../src/web-server/services/claude-desktop-profile-service';
+import {
+  ClaudeAccountLifecycle,
+  ClaudeLifecycleError,
+  CLAUDE_TRASH_DAYS,
+} from '../../../src/web-server/services/claude-account-lifecycle';
+import type {
+  ClaudeHostStep,
+  ClaudeHostTransport,
+} from '../../../src/web-server/services/claude-host-transport';
+import type {
+  ClaudeHost,
+  ClaudeHostLauncher,
+} from '../../../src/web-server/services/claude-account-stores';
+
+const ORIGINAL_CCS_HOME = process.env.CCS_HOME;
+const dirs: string[] = [];
+afterEach(() => {
+  if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const DAY = 24 * 60 * 60_000;
+const START = Date.parse('2026-10-02T08:00:00Z');
+
+/** Hosts as plain sets: data folders, launchers and trash folders by name. */
+class FakeHosts implements ClaudeHostTransport {
+  calls: string[] = [];
+  data: Record<ClaudeHost, Set<string>> = { mac: new Set(), windows: new Set() };
+  launchers: Record<ClaudeHost, Set<string>> = { mac: new Set(), windows: new Set() };
+  trashDirs: Record<ClaudeHost, Set<string>> = { mac: new Set(), windows: new Set() };
+  fail: Partial<Record<string, ClaudeHost>> = {};
+  running = new Set<string>();
+  unknown = new Set<string>();
+  crossVolume = new Set<ClaudeHost>();
+
+  private check(op: string, host: ClaudeHost) {
+    this.calls.push(`${op}:${host}`);
+    if (this.fail[op] === host) throw new Error('ssh: connect to host failed /private/path');
+  }
+
+  async create(host: ClaudeHost, input: { profileId: string; sshHost: string }) {
+    this.check('create', host);
+    const launcher: ClaudeHostLauncher = {
+      launcherName: `Claude (${input.profileId})`,
+      launcherPath: `/fake/${host}/Claude (${input.profileId}).app`,
+      profilePath: `/fake/${host}/Claude-${input.profileId}`,
+      sshHost: input.sshHost,
+    };
+    this.data[host].add(launcher.profilePath);
+    this.launchers[host].add(launcher.launcherPath as string);
+    return launcher;
+  }
+
+  async undoCreate(host: ClaudeHost, input: ClaudeHostStep) {
+    this.check('undo', host);
+    this.data[host].delete(input.launcher.profilePath);
+    this.launchers[host].delete(input.launcher.launcherPath as string);
+  }
+
+  async appState(host: ClaudeHost, input: { launcher: ClaudeHostLauncher }) {
+    this.check('state', host);
+    if (this.unknown.has(input.launcher.profilePath)) throw new Error('unreachable');
+    return this.running.has(input.launcher.profilePath) ? 'running' : 'stopped';
+  }
+
+  async trash(host: ClaudeHost, input: ClaudeHostStep & { trashName: string }) {
+    this.check('trash', host);
+    if (this.crossVolume.has(host)) return 'cross_volume' as const;
+    this.data[host].delete(input.launcher.profilePath);
+    this.launchers[host].delete(input.launcher.launcherPath as string);
+    this.trashDirs[host].add(input.trashName);
+    return 'moved' as const;
+  }
+
+  async restore(host: ClaudeHost, input: ClaudeHostStep & { trashName: string }) {
+    this.check('restore', host);
+    this.trashDirs[host].delete(input.trashName);
+    this.data[host].add(input.launcher.profilePath);
+    this.launchers[host].add(input.launcher.launcherPath as string);
+  }
+
+  async purge(host: ClaudeHost, input: { sshHost: string; trashName: string }) {
+    this.check('purge', host);
+    this.trashDirs[host].delete(input.trashName);
+  }
+}
+
+function setup(enabled = true) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-claude-lifecycle-'));
+  dirs.push(root);
+  process.env.CCS_HOME = root;
+  const ccsDir = path.join(root, '.ccs');
+  fs.mkdirSync(ccsDir, { recursive: true });
+  const inventory = {
+    version: 1,
+    note: 'kept as is',
+    profiles: [
+      {
+        id: 'gmail',
+        email: 'gmail@example.com',
+        mac: {
+          launcherName: 'Claude-gmail',
+          launcherPath: '/fake/mac/Claude (gmail@example.com).app',
+          profilePath: '/fake/mac/Claude-gmail',
+          sshHost: 'jared-mac',
+        },
+        windows: { launcherName: 'Claude', isDefault: true, sshHost: 'jared-windows' },
+      },
+      {
+        id: 'party',
+        email: 'party@example.com',
+        mac: {
+          launcherName: 'Claude-party',
+          launcherPath: '/fake/mac/Claude (party@example.com).app',
+          profilePath: '/fake/mac/Claude-party',
+          sshHost: 'jared-mac',
+        },
+        windows: {
+          launcherName: 'Claude (party)',
+          launcherPath: 'C:\\Users\\x\\Desktop\\Claude (party@example.com).lnk',
+          profilePath: 'C:\\Users\\x\\AppData\\Roaming\\Claude-party',
+          sshHost: 'jared-windows',
+        },
+      },
+    ],
+  };
+  fs.writeFileSync(
+    path.join(ccsDir, 'claude-desktop-profiles.json'),
+    JSON.stringify(inventory, null, 2)
+  );
+  const hosts = new FakeHosts();
+  hosts.data.mac.add('/fake/mac/Claude-party');
+  hosts.data.windows.add('C:\\Users\\x\\AppData\\Roaming\\Claude-party');
+  let now = START;
+  const lifecycle = new ClaudeAccountLifecycle({
+    ccsDir: () => ccsDir,
+    transport: hosts,
+    enabled,
+    now: () => now,
+  });
+  return {
+    ccsDir,
+    hosts,
+    lifecycle,
+    advance: (ms: number) => {
+      now += ms;
+    },
+    inventory: () =>
+      JSON.parse(fs.readFileSync(path.join(ccsDir, 'claude-desktop-profiles.json'), 'utf8')),
+  };
+}
+
+describe('Claude Add', () => {
+  it('creates launchers on both hosts and waits in the pending store', async () => {
+    const { ccsDir, hosts, lifecycle } = setup();
+    const profile = await lifecycle.add({ profileId: 'work2', label: 'Work 2' });
+    expect(profile).toMatchObject({
+      id: 'work2',
+      label: 'Work 2',
+      createdAt: '2026-10-02T08:00:00Z',
+    });
+    expect(profile.mac.sshHost).toBe('jared-mac');
+    expect(profile.windows.sshHost).toBe('jared-windows');
+    expect(hosts.calls).toEqual(['create:mac', 'create:windows']);
+    const pending = path.join(ccsDir, 'accounts', 'claude-pending.json');
+    expect(fs.statSync(pending).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.dirname(pending)).mode & 0o777).toBe(0o700);
+    expect((await lifecycle.listPending()).map((entry) => entry.id)).toEqual(['work2']);
+    expect(await lifecycle.count()).toBe(3);
+    // The version 1 inventory is untouched and still parses.
+    expect((await listClaudeDesktopProfiles()).map((entry) => entry.id)).toEqual([
+      'gmail',
+      'party',
+    ]);
+  });
+
+  it('is all or nothing: a failing second host removes the first host again', async () => {
+    const { hosts, lifecycle } = setup();
+    hosts.fail.create = 'windows';
+    await expect(lifecycle.add({ profileId: 'work2', label: null })).rejects.toMatchObject({
+      code: 'host_unreachable',
+      host: 'windows',
+    });
+    expect(hosts.calls).toEqual(['create:mac', 'create:windows', 'undo:mac']);
+    expect([...hosts.data.mac]).toEqual(['/fake/mac/Claude-party']);
+    expect(hosts.launchers.mac.size).toBe(0);
+    expect(await lifecycle.listPending()).toEqual([]);
+  });
+
+  it('refuses an id in use (inventory, pending or trash, any case) and runs nothing', async () => {
+    const { hosts, lifecycle } = setup();
+    await lifecycle.add({ profileId: 'work2', label: null });
+    hosts.calls = [];
+    for (const id of ['party', 'work2']) {
+      await expect(lifecycle.add({ profileId: id, label: null })).rejects.toMatchObject({
+        code: 'id_in_use',
+      });
+    }
+    expect(hosts.calls).toEqual([]);
+  });
+
+  it('answers not_implemented while host steps are switched off', async () => {
+    const { hosts, lifecycle } = setup(false);
+    await expect(lifecycle.add({ profileId: 'work2', label: null })).rejects.toMatchObject({
+      code: 'not_implemented',
+    });
+    const party = await lifecycle.findProfile('party');
+    await expect(lifecycle.remove(party as never)).rejects.toMatchObject({
+      code: 'not_implemented',
+    });
+    expect(await lifecycle.purgeDue()).toBe(0);
+    expect(hosts.calls).toEqual([]);
+  });
+
+  it('moves a pending profile into the inventory once its email is confirmed', async () => {
+    const { lifecycle, inventory } = setup();
+    await lifecycle.add({ profileId: 'work2', label: 'Work 2' });
+    expect(await lifecycle.confirmPending('work2', 'work2@example.com')).toBe(true);
+    expect(await lifecycle.listPending()).toEqual([]);
+    expect(inventory().note).toBe('kept as is');
+    const parsed = await listClaudeDesktopProfiles();
+    expect(parsed.map((entry) => [entry.id, entry.email])).toEqual([
+      ['gmail', 'gmail@example.com'],
+      ['party', 'party@example.com'],
+      ['work2', 'work2@example.com'],
+    ]);
+    expect(parsed[2].mac?.sshHost).toBe('jared-mac');
+    expect(await lifecycle.confirmPending('work2', 'work2@example.com')).toBe(false);
+  });
+});
+
+describe('Claude Remove and trash', () => {
+  it('refuses the default launcher, a running app and an unknown app state', async () => {
+    const { hosts, lifecycle } = setup();
+    const gmail = await lifecycle.findProfile('gmail');
+    expect(await lifecycle.removeRefusal(gmail as never, true)).toBe('account_default');
+    const party = await lifecycle.findProfile('party');
+    hosts.running.add('C:\\Users\\x\\AppData\\Roaming\\Claude-party');
+    expect(await lifecycle.removeRefusal(party as never, true)).toBe('app_running');
+    hosts.running.clear();
+    hosts.unknown.add('/fake/mac/Claude-party');
+    expect(await lifecycle.removeRefusal(party as never, true)).toBe('app_state_unknown');
+    hosts.unknown.clear();
+    expect(await lifecycle.removeRefusal(party as never, true)).toBeNull();
+    expect(await lifecycle.removeRefusal(party as never, false)).toBeNull();
+  });
+
+  it('trashes both hosts, drops only that inventory entry and keeps 30 days', async () => {
+    const { ccsDir, hosts, lifecycle, inventory } = setup();
+    const party = await lifecycle.findProfile('party');
+    const result = await lifecycle.remove(party as never);
+    expect(result.trashId).toMatch(/^tr_[a-f0-9]{16}$/);
+    expect(result.purgeAfter).toBe(
+      new Date(START + CLAUDE_TRASH_DAYS * DAY).toISOString().replace('.000Z', 'Z')
+    );
+    expect(hosts.calls).toEqual(['trash:mac', 'trash:windows']);
+    expect([...hosts.trashDirs.mac]).toEqual(['party-20261002T080000Z']);
+    expect(hosts.data.mac.size + hosts.data.windows.size).toBe(0);
+    expect(inventory().profiles.map((entry: { id: string }) => entry.id)).toEqual(['gmail']);
+    expect(inventory().note).toBe('kept as is');
+    expect((await listClaudeDesktopProfiles()).map((entry) => entry.id)).toEqual(['gmail']);
+    const trashFile = path.join(ccsDir, 'accounts', 'trash.json');
+    expect(fs.statSync(trashFile).mode & 0o777).toBe(0o600);
+    const listed = await lifecycle.listTrash();
+    expect(listed).toEqual([
+      {
+        trashId: result.trashId,
+        provider: 'claude',
+        label: 'party@example.com',
+        trashedAt: '2026-10-02T08:00:00Z',
+        purgeAfter: result.purgeAfter,
+        state: 'trashed',
+      },
+    ]);
+    // Host paths stay on the server.
+    expect(JSON.stringify(listed)).not.toContain('/fake/');
+    expect(JSON.stringify(listed)).not.toContain('Roaming');
+  });
+
+  it('puts the first host back when the second cannot move, and refuses another volume', async () => {
+    const { hosts, lifecycle, inventory } = setup();
+    const party = await lifecycle.findProfile('party');
+    hosts.fail.trash = 'windows';
+    await expect(lifecycle.remove(party as never)).rejects.toMatchObject({
+      code: 'remove_failed',
+      host: 'windows',
+    });
+    expect(hosts.calls).toEqual(['trash:mac', 'trash:windows', 'restore:mac']);
+    expect(hosts.data.mac.has('/fake/mac/Claude-party')).toBe(true);
+    expect(hosts.trashDirs.mac.size).toBe(0);
+    hosts.fail = {};
+    hosts.calls = [];
+    hosts.crossVolume.add('windows');
+    await expect(lifecycle.remove(party as never)).rejects.toMatchObject({
+      code: 'trash_cross_volume',
+    });
+    expect(hosts.calls).toEqual(['trash:mac', 'trash:windows', 'restore:mac']);
+    expect(inventory().profiles).toHaveLength(2);
+    expect(await lifecycle.listTrash()).toEqual([]);
+  });
+
+  it('restores everything within 30 days, and refuses an id that was reused', async () => {
+    const { hosts, lifecycle, inventory } = setup();
+    const party = await lifecycle.findProfile('party');
+    const { trashId } = await lifecycle.remove(party as never);
+    const entry = await lifecycle.findTrash(trashId);
+    expect(lifecycle.restoreFingerprint(entry as never)).toMatch(/^[a-f0-9]{64}$/);
+    expect(await lifecycle.restore(trashId)).toEqual({ accountId: 'claude:party' });
+    expect(hosts.data.mac.has('/fake/mac/Claude-party')).toBe(true);
+    expect(
+      hosts.launchers.windows.has('C:\\Users\\x\\Desktop\\Claude (party@example.com).lnk')
+    ).toBe(true);
+    expect(inventory().profiles.map((item: { id: string }) => item.id)).toEqual(['gmail', 'party']);
+    expect(await lifecycle.listTrash()).toEqual([]);
+    const again = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
+    const reused = setupReuse(inventory());
+    fs.writeFileSync(reused.file, JSON.stringify(reused.document));
+    await expect(lifecycle.restore(again.trashId)).rejects.toMatchObject({ code: 'id_in_use' });
+    await expect(lifecycle.restore('tr_0000000000000000')).rejects.toBeInstanceOf(
+      ClaudeLifecycleError
+    );
+  });
+
+  it('purges only entries past 30 days and keeps an unreachable host as deleting', async () => {
+    const { hosts, lifecycle, advance } = setup();
+    const { trashId } = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
+    hosts.calls = [];
+    advance(29 * DAY);
+    expect(await lifecycle.purgeDue()).toBe(0);
+    expect(hosts.calls).toEqual([]);
+    advance(2 * DAY);
+    hosts.fail.purge = 'windows';
+    expect(await lifecycle.purgeDue()).toBe(0);
+    expect((await lifecycle.listTrash())[0]).toMatchObject({ trashId, state: 'deleting' });
+    hosts.fail = {};
+    expect(await lifecycle.purgeDue()).toBe(1);
+    expect(await lifecycle.listTrash()).toEqual([]);
+    expect(hosts.trashDirs.mac.size + hosts.trashDirs.windows.size).toBe(0);
+  });
+});
+
+function setupReuse(document: { profiles: Array<Record<string, unknown>> }) {
+  const file = path.join(process.env.CCS_HOME as string, '.ccs', 'claude-desktop-profiles.json');
+  return {
+    file,
+    document: {
+      ...document,
+      profiles: [
+        ...document.profiles,
+        { id: 'party', email: 'new@example.com', mac: { launcherName: 'x' } },
+      ],
+    },
+  };
+}

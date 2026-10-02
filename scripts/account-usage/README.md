@@ -46,3 +46,12 @@ Key file format, which the key store writer must produce exactly:
   capsule. The folder gets no extra ACL check: DPAPI CurrentUser already limits decryption
   to the same Windows user, and a linked file is still refused.
 
+The writer is `key_store.py put|delete --provider <kimi-code|zai|opencode-go> --key-id
+<8 hex>`. The key arrives on stdin only (one trailing newline allowed), never in argv or
+the environment. It creates the folder at 0700 (tightening a looser one, refusing a link),
+writes the record atomically at 0600 and prints only
+`{"ok":true,"fingerprint":"sha256:...","last4":"..."}` (`{"ok":true}` for delete). A
+refused key or a write failure prints nothing and exits 1; usage errors exit 2. The
+dashboard writes keys for its own host in-process in the same format and uses this
+helper over ssh only for a key kept on another host.
+

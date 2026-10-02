@@ -192,8 +192,15 @@ describe('providers[] in the dashboard DTO', () => {
     ]);
   });
 
-  it('reports every sign-in as not implemented until the lifecycle routes ship', async () => {
-    const dashboard = await new AccountDashboardService(deps()).get('mac', false, {
+  it('reports every sign-in as not implemented when the lifecycle routes are not served', async () => {
+    const dashboard = await new AccountDashboardService(
+      deps({
+        providerFacts: (context) => ({
+          lifecycleRoutes: false,
+          secureTransport: context.secureTransport === true,
+        }),
+      })
+    ).get('mac', false, {
       secureTransport: true,
     });
     for (const entry of dashboard.providers ?? []) {
@@ -234,7 +241,7 @@ describe('providers[] in the dashboard DTO', () => {
     expect(byId(secure, 'cursor')?.capabilities).toMatchObject({
       multiAccount: false,
       add: false,
-      openApp: ['mac', 'windows'],
+      openApp: ['mac'],
       signInAgain: true,
     });
     expect(byId(secure, 'qwen')?.capabilities.add).toBe(false);

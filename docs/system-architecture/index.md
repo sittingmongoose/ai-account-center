@@ -42,6 +42,17 @@ each account `hidden` from the [visibility store](../../src/web-server/services/
 `GET`/`PUT /api/accounts/visibility` read and replace that store; a saved change
 sends `{"type":"accounts-changed"}` to the signed-in `/ws` clients as a hint to re-read.
 
+The [lifecycle routes](../../src/web-server/routes/account-lifecycle-routes.ts) under
+`/api/accounts` add, sign in again, replace keys, remove, re-check, relabel, open
+Cursor, list the 30-day trash and restore from it. They need a signed-in browser
+session (a device token gets `device_scope`), the dashboard origin, JSON and a strict
+body; keys and device codes need a secure transport (HTTPS, a trusted local TLS proxy
+or a loopback tunnel, [`isSecureTransport`](../../src/web-server/middleware/secure-transport.ts)).
+Destructive actions take a one-use [confirmation token](../../src/web-server/services/account-confirmations.ts)
+bound to the session and to the reviewed state. Codex sign-ins run as in-memory
+[jobs](../../src/web-server/services/signin-jobs.ts) whose state is pushed to `/ws` as
+`{"type":"signin-job"}` (without the code for sockets on a plain transport) and polled.
+
 A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
 is tracked as an operation, and the profile list reports its progress as
 `openOperation` (counts and fixed sentences only). A request that sends

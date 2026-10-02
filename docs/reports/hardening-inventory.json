@@ -2,7 +2,7 @@
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
     "totalOccurrences": 1165,
-    "filesAffected": 114,
+    "filesAffected": 115,
     "hotpathOccurrences": 511,
     "hotpathFilesAffected": 65,
     "topHotpathFiles": [
@@ -516,12 +516,18 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 380,
-      "typedThrows": 116,
+      "totalThrows": 506,
+      "typedThrows": 131,
       "plainThrows": 70,
-      "otherThrows": 194,
-      "adoptionRatio": 0.3053,
+      "otherThrows": 305,
+      "adoptionRatio": 0.2589,
       "topSubdomainsByThrows": [
+        {
+          "subdomain": "web-server",
+          "count": 209,
+          "typed": 68,
+          "plain": 10
+        },
         {
           "subdomain": "antigravity",
           "count": 106,
@@ -533,12 +539,6 @@
           "count": 95,
           "typed": 6,
           "plain": 25
-        },
-        {
-          "subdomain": "web-server",
-          "count": 83,
-          "typed": 53,
-          "plain": 10
         },
         {
           "subdomain": "commands",
@@ -597,9 +597,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 27,
-      "totalSourceFiles": 352,
-      "coverageRatio": 0.0767,
+      "filesWithCreateLogger": 28,
+      "totalSourceFiles": 377,
+      "coverageRatio": 0.0743,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -625,8 +625,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 74,
-          "withLogger": 6
+          "count": 98,
+          "withLogger": 7
         },
         {
           "subdomain": "utils",
@@ -644,14 +644,14 @@
           "withLogger": 5
         },
         {
+          "subdomain": "codex-auth",
+          "count": 26,
+          "withLogger": 9
+        },
+        {
           "subdomain": "config",
           "count": 26,
           "withLogger": 0
-        },
-        {
-          "subdomain": "codex-auth",
-          "count": 25,
-          "withLogger": 9
         },
         {
           "subdomain": "antigravity",
@@ -744,8 +744,8 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 34,
-      "countOver600": 14,
+      "countOver400": 37,
+      "countOver600": 15,
       "topOver400": [
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
@@ -792,20 +792,20 @@
           "loc": 646
         },
         {
+          "file": "src/web-server/services/additional-account-service.ts",
+          "loc": 636
+        },
+        {
           "file": "src/cliproxy/services/usage-compatibility-transformer.ts",
           "loc": 632
         },
         {
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 622
+        },
+        {
           "file": "src/cliproxy/services/stats-fetcher.ts",
           "loc": 614
-        },
-        {
-          "file": "src/web-server/services/additional-account-service.ts",
-          "loc": 602
-        },
-        {
-          "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
-          "loc": 598
         }
       ]
     }

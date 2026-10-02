@@ -37,11 +37,9 @@ import {
   VisibilityMemory,
   type AccountVisibilityRead,
 } from './account-visibility';
-import {
-  buildDashboardProviders,
-  DEFAULT_PROVIDER_REGISTRY_FACTS,
-  type ProviderRegistryFacts,
-} from './dashboard-provider-registry';
+import { buildDashboardProviders, type ProviderRegistryFacts } from './dashboard-provider-registry';
+import { getSignInJobRunner, lifecycleProviderFacts } from './account-lifecycle-runtime';
+import { readPendingProfiles, type PendingClaudeProfile } from './claude-account-stores';
 import { getOpenCodeConsoleWalletAccounts } from './opencode-console-wallet-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import {
@@ -55,7 +53,13 @@ import type {
   DashboardAccount,
   DashboardServerInfo,
 } from './account-dashboard-types';
-import { withAccountState, withThresholdUsedPercent } from './account-dashboard-state';
+import {
+  pendingClaudeAccount,
+  withAccountState,
+  withThresholdUsedPercent,
+  withJobState,
+  type AccountJobStates,
+} from './account-dashboard-state';
 import { getDashboardServerInfo } from './dashboard-server-info';
 
 import {
@@ -90,6 +94,10 @@ export interface AccountDashboardDeps {
   readVisibility?: (scope: string) => Promise<AccountVisibilityRead>;
   /** Live facts behind providers[].signIn and capabilities. */
   providerFacts?: (context: AccountDashboardRequestContext) => ProviderRegistryFacts;
+  /** Running sign-in jobs by account id (lifecycle.state signing_in or verifying). */
+  accountJobStates?: () => AccountJobStates;
+  /** Claude profiles created by Add that wait for their first sign-in. */
+  listClaudePending?: () => Promise<PendingClaudeProfile[]>;
   getOptionalWalletAccounts?: (refresh: boolean) => Promise<DashboardAccount[]>;
   getAutoSwitchStatus?: () => Omit<AccountDashboard['codexAutoSwitch'], 'thresholdUsedPercent'>;
   hasAntigravityProfiles?: () => boolean;
@@ -382,6 +390,18 @@ export class AccountDashboardService {
     return [...state.codex, ...state.claude, ...state.additional, ...state.antigravity];
   }
 
+  /** After a lifecycle change: the next response collects again instead of serving the cache. */
+  invalidate(): void {
+    for (const state of this.states.values()) state.fetchedAt = -Infinity;
+  }
+
+  /** A re-checked additional account replaces its cached row in every scope and platform. */
+  replaceAdditionalRow(account: DashboardAccount): void {
+    for (const state of this.states.values()) {
+      state.additional = state.additional.map((row) => (row.id === account.id ? account : row));
+    }
+  }
+
   async get(
     platform: ClaudeDashboardPlatform = 'mac',
     refresh = false,
@@ -435,7 +455,7 @@ export class AccountDashboardService {
       0,
       (this.deps.responseBudgetMs ?? 2500) - (Date.now() - startedAt)
     );
-    const [summary, selectedAntigravityProfileId, visibility] = await Promise.all([
+    const [summary, selectedAntigravityProfileId, visibility, pendingClaude] = await Promise.all([
       this.bounded(
         Promise.resolve().then(() => (this.deps.getCodexSummary ?? getCodexAuthProfilesSummary)()),
         () => null,
@@ -462,6 +482,14 @@ export class AccountDashboardService {
           .catch((): AccountVisibilityRead => ({ state: 'unavailable' }))
           .then((read) => this.visibility.record(scope, read)),
         () => this.visibility.current(scope),
+        Math.max(remainingBudget, VISIBILITY_BUDGET_FLOOR_MS)
+      ),
+      // A small private file that exists only after a Claude Add; unreadable means no rows.
+      this.bounded(
+        Promise.resolve()
+          .then(() => (this.deps.listClaudePending ?? (() => readPendingProfiles(scope)))())
+          .catch((): PendingClaudeProfile[] => []),
+        (): PendingClaudeProfile[] => [],
         Math.max(remainingBudget, VISIBILITY_BUDGET_FLOOR_MS)
       ),
     ]);
@@ -491,15 +519,20 @@ export class AccountDashboardService {
         };
       });
     }
+    const claudeIds = new Set(state.claude.map((account) => account.id));
     const accounts = [
       ...state.codex,
       ...state.claude,
+      ...pendingClaude
+        .map((profile) => pendingClaudeAccount(profile, platform))
+        .filter((account) => !claudeIds.has(account.id)),
       ...state.additional.filter(
         (account) => !(registeredAntigravity && account.provider === 'antigravity')
       ),
       ...(registeredAntigravity ? state.antigravity : []),
     ];
     const server = (this.deps.serverInfo ?? getDashboardServerInfo)();
+    const jobs = (this.deps.accountJobStates ?? (() => getSignInJobRunner().accountStates()))();
     const rows = accounts.flatMap((account) => {
       let current = account;
       let codexAuthValid: boolean | undefined;
@@ -522,19 +555,22 @@ export class AccountDashboardService {
       }
       return [
         {
-          ...withAccountState(
-            {
-              ...current,
-              status: usedCache && current.status === 'ok' ? 'cached' : current.status,
-              isActive:
-                current.provider === 'codex'
-                  ? summary?.activated?.name === current.capabilities.codexProfile
-                  : current.provider === 'antigravity' &&
-                    registeredAntigravity &&
-                    selectedAntigravityProfileId !== null &&
-                    selectedAntigravityProfileId === current.capabilities.antigravityProfileId,
-            },
-            codexAuthValid
+          ...withJobState(
+            withAccountState(
+              {
+                ...current,
+                status: usedCache && current.status === 'ok' ? 'cached' : current.status,
+                isActive:
+                  current.provider === 'codex'
+                    ? summary?.activated?.name === current.capabilities.codexProfile
+                    : current.provider === 'antigravity' &&
+                      registeredAntigravity &&
+                      selectedAntigravityProfileId !== null &&
+                      selectedAntigravityProfileId === current.capabilities.antigravityProfileId,
+              },
+              codexAuthValid
+            ),
+            jobs
           ),
           // Display only: hidden rows stay in the list, collected and switchable.
           hidden: hiddenProviders.has(current.provider) || hiddenAccountIds.has(current.id),
@@ -553,10 +589,7 @@ export class AccountDashboardService {
       providers: buildDashboardProviders(
         rows,
         visibility.hiddenProviders,
-        this.deps.providerFacts?.(context) ?? {
-          ...DEFAULT_PROVIDER_REGISTRY_FACTS,
-          secureTransport: context.secureTransport === true,
-        }
+        (this.deps.providerFacts ?? lifecycleProviderFacts)(context)
       ),
       accounts: rows,
       antigravityAutoSwitch: (
@@ -578,4 +611,12 @@ export function getAccountDashboard(
 ): Promise<AccountDashboard> {
   service ??= new AccountDashboardService();
   return service.get(platform, refresh, context);
+}
+
+export function invalidateAccountDashboard(): void {
+  service?.invalidate();
+}
+
+export function replaceAccountDashboardRow(account: DashboardAccount): void {
+  service?.replaceAdditionalRow(account);
 }

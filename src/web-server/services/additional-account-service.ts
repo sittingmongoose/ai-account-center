@@ -541,6 +541,20 @@ export class AdditionalAccountService {
   }
 
   /**
+   * Re-check one account now (CONTRACT-registry-lifecycle 6.5): the cache TTL
+   * is skipped, the failure backoff and the refresh debounce are not. Null when
+   * the current list does not name the account.
+   */
+  async refreshAccount(id: string): Promise<DashboardAccount | null> {
+    const config = await this.loadManifest();
+    if (!config.valid) return null;
+    const source = config.sources.find(
+      (candidate) => (candidate.account?.id ?? `${candidate.provider}:usage`) === id
+    );
+    return source ? this.getSource(source, true) : null;
+  }
+
+  /**
    * Placeholder rows for the accounts the last loaded list names, for a
    * response that cannot wait for collection; null before the first load.
    */
@@ -563,6 +577,22 @@ export class AdditionalAccountService {
           )
         ),
     };
+  }
+}
+
+/**
+ * Run one source once, outside every cache (a new key's check, 6.2 and 6.4).
+ * A transport failure reads as an `error` row; nothing is retained.
+ */
+export async function probeAdditionalSource(
+  source: AdditionalUsageSource,
+  runSource: (source: AdditionalUsageSource) => Promise<string> = runAdditionalUsageSource
+): Promise<DashboardAccount> {
+  if (!isCollectableSource(source)) return unavailable(source);
+  try {
+    return normalize(source, await runSource(source)).account;
+  } catch {
+    return unavailable(source, 'error', 'Account usage is temporarily unavailable.');
   }
 }
 
@@ -599,4 +629,8 @@ export function getConfiguredAdditionalAccounts(
   opts: { excludeAntigravity?: boolean } = {}
 ): AdditionalAccountsSnapshot | null {
   return services.get(path.resolve(getCcsDir()))?.configured(opts) ?? null;
+}
+
+export function refreshAdditionalAccount(id: string): Promise<DashboardAccount | null> {
+  return scopedService().refreshAccount(id);
 }

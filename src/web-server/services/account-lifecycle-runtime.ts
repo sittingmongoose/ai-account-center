@@ -1,0 +1,158 @@
+import { getCcsDir } from '../../utils/config-manager';
+import { createLogger } from '../../services/logging';
+import { broadcastDashboardEvent } from '../dashboard-events';
+import { ClaudeAccountLifecycle } from './claude-account-lifecycle';
+import { SshClaudeHostTransport } from './claude-host-transport';
+import { CodexAccountLifecycle } from './codex-account-lifecycle';
+import type { ProviderRegistryFacts } from './dashboard-provider-registry';
+import { SignInJobRunner, type SignInJob } from './signin-jobs';
+
+/**
+ * The lifecycle runtime: one sign-in job runner, the Codex and Claude flows,
+ * the provider facts the dashboard advertises, and the startup and daily
+ * maintenance (staging sweep, trash purge).
+ *
+ * Claude Add, Remove and Restore are implemented against a host transport,
+ * but they stay off here until the contract's prerequisite ships (the Windows
+ * launcher helper and the usage helper reading profile ids from the inventory
+ * instead of their hard-coded lists) and a supervised dry run on both hosts is
+ * approved. While off, the Claude add, remove and restore routes answer 409
+ * `not_implemented`, and the dashboard advertises neither.
+ */
+export const CLAUDE_HOST_LIFECYCLE_ENABLED = false;
+const DAY_MS = 24 * 60 * 60_000;
+
+const logger = createLogger('account-lifecycle');
+
+/** A job as a client on a plain transport sees it: no verification URL or code. */
+export function redactSignInJob<T extends { verification: unknown }>(job: T): T {
+  return { ...job, verification: null };
+}
+
+export function auditLifecycle(event: string, data: Record<string, unknown>): void {
+  try {
+    logger.info(event, 'Account lifecycle event', data);
+  } catch {
+    /* Logging is best effort. */
+  }
+}
+
+/**
+ * What a saved change does beyond the audit line: by default only the /ws hint.
+ * The lifecycle environment also drops the dashboard cache (it owns that import).
+ */
+let accountsChanged: () => void = () => {
+  broadcastDashboardEvent({ type: 'accounts-changed' });
+};
+
+export function setAccountsChangedHandler(handler: () => void): void {
+  accountsChanged = handler;
+}
+
+export function notifyAccountsChanged(): void {
+  try {
+    accountsChanged();
+  } catch {
+    /* Clients also refresh on their own schedule. */
+  }
+}
+
+let runner: SignInJobRunner | null = null;
+let codex: CodexAccountLifecycle | null = null;
+let claude: ClaudeAccountLifecycle | null = null;
+
+export function getSignInJobRunner(): SignInJobRunner {
+  runner ??= new SignInJobRunner({
+    onChange: (job: SignInJob) => {
+      broadcastDashboardEvent((client) => ({
+        type: 'signin-job',
+        job: client.secure ? job : redactSignInJob(job),
+      }));
+    },
+    onFinish: (job) => {
+      // Values never; the account is named by provider and mode only.
+      auditLifecycle('accounts.signin.job', {
+        provider: job.provider,
+        kind: job.kind,
+        mode: job.mode,
+        state: job.state,
+      });
+      if (job.state === 'succeeded') notifyAccountsChanged();
+    },
+  });
+  return runner;
+}
+
+export function getCodexLifecycle(): CodexAccountLifecycle {
+  codex ??= new CodexAccountLifecycle();
+  return codex;
+}
+
+export function getClaudeLifecycle(): ClaudeAccountLifecycle {
+  claude ??= new ClaudeAccountLifecycle({
+    ccsDir: getCcsDir,
+    transport: new SshClaudeHostTransport(),
+    enabled: CLAUDE_HOST_LIFECYCLE_ENABLED,
+  });
+  return claude;
+}
+
+export interface LifecycleFactsSources {
+  codexCliAvailable: () => boolean;
+  claudeEnabled: () => boolean;
+}
+
+/** What the lifecycle routes can do now, for `providers[]` (contract section 2). */
+export function lifecycleProviderFacts(
+  context: { secureTransport?: boolean },
+  sources: LifecycleFactsSources = {
+    codexCliAvailable: () => getCodexLifecycle().codexCli() !== null,
+    claudeEnabled: () => getClaudeLifecycle().enabled,
+  }
+): ProviderRegistryFacts {
+  const claudeEnabled = sources.claudeEnabled();
+  return {
+    lifecycleRoutes: true,
+    secureTransport: context.secureTransport === true,
+    flows: {
+      ...(sources.codexCliAvailable() ? {} : { codex: 'tool_missing' as const }),
+      ...(claudeEnabled ? {} : { claude: 'not_implemented' as const }),
+      // Muse's Mac CLI path and device-code output are not verified; Antigravity
+      // sign-in belongs to Codex's isolated runtime lane.
+      muse: 'not_implemented',
+      antigravity: 'not_implemented',
+    },
+    remove: { antigravity: false, claude: claudeEnabled },
+    recheck: { codex: false, claude: false, antigravity: false },
+  };
+}
+
+let maintenance: ReturnType<typeof setInterval> | null = null;
+
+async function runMaintenance(): Promise<void> {
+  try {
+    await getCodexLifecycle().sweepStaging();
+  } catch {
+    /* Retried at the next sweep. */
+  }
+  try {
+    const count = await getClaudeLifecycle().purgeDue();
+    if (count > 0) auditLifecycle('accounts.trash.purge', { count });
+  } catch {
+    /* Retried at the next sweep. */
+  }
+}
+
+/** At startup and once a day. */
+export function startAccountLifecycleMaintenance(): void {
+  if (maintenance) return;
+  void runMaintenance();
+  maintenance = setInterval(() => void runMaintenance(), DAY_MS);
+  maintenance.unref?.();
+}
+
+export function stopAccountLifecycleMaintenance(): void {
+  if (maintenance) clearInterval(maintenance);
+  maintenance = null;
+  runner?.shutdown();
+}
