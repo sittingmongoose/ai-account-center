@@ -798,11 +798,12 @@ export function accountSwitches(id, { idsKnown, hiddenIds, trayIdsKnown, trayHid
     shownTray,
     dashEnabled: idsKnown && visibilityOk && !visWaiting('acct-show:'),
     trayAcctEnabled: trayIdsKnown && visibilityOk && !visWaiting('acct-tray:'),
+    // the tips do not depend on the state: a tip stays on screen while the pointer rests after a click
     dashTip: !visibilityOk ? 'The saved choices could not be read safely, so changing them waits for the next refresh.'
-      : shownDash ? 'Shown on the dashboard. The trays keep their own switch.' : 'Hidden from the dashboard. The trays keep their own switch.',
+      : 'Show this account on the dashboard. The trays keep their own switch.',
     trayAcctTip: !trayIdsKnown ? 'Hiding one account in the trays is not on this server yet.'
       : !visibilityOk ? 'The saved choices could not be read safely, so changing them waits for the next refresh.'
-      : shownTray ? 'Shown in the Mac and Windows trays. The dashboard keeps its own switch.' : 'Hidden from the Mac and Windows trays. The dashboard keeps its own switch.',
+      : 'Show this account in the Mac and Windows trays. The dashboard keeps its own switch.',
   };
 }
 

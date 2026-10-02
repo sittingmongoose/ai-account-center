@@ -487,9 +487,9 @@ test("each account row draws its own Show on dashboard and Show in tray, indepen
   // [shown on the dashboard, shown in the tray]
   assert.deepEqual(ids.map(id => [row(vm, id).shownDash, row(vm, id).shownTray]), [[true, true], [false, true], [true, false], [false, false]]);
   assert.ok(ids.every(id => row(vm, id).dashEnabled && row(vm, id).trayAcctEnabled));
-  assert.match(row(vm, 'codex:dash-only').dashTip, /Hidden from the dashboard\. The trays keep their own switch\./);
-  assert.match(row(vm, 'codex:dash-only').trayAcctTip, /^Shown in the Mac and Windows trays/);
-  assert.match(row(vm, 'codex:tray-only').trayAcctTip, /^Hidden from the Mac and Windows trays/);
+  assert.equal(row(vm, 'codex:dash-only').dashTip, 'Show this account on the dashboard. The trays keep their own switch.');
+  assert.equal(row(vm, 'codex:tray-only').trayAcctTip, 'Show this account in the Mac and Windows trays. The dashboard keeps its own switch.');
+  assert.equal(row(vm, 'codex:both').trayAcctTip, row(vm, 'codex:tray-only').trayAcctTip);
   // every row stays listed on Accounts & Settings, and the provider switches do not move
   assert.equal(provider(vm, 'codex').rows.length, 4);
   assert.deepEqual([provider(vm, 'codex').visible, provider(vm, 'codex').trayVisible], [true, true]);
