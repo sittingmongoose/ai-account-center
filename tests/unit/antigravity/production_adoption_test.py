@@ -56,7 +56,7 @@ class ProductionAdoptionTests(unittest.TestCase):
             while current != self.home:
                 current.chmod(0o700)
                 current = current.parent
-        for name in ('native_status_config.py', 'native_status_attestor.py'):
+        for name in ('native_status_config.py', 'native_status_attestor.py', 'native_status_hook_cleanup.py', 'runtime_continuity.py', 'linux_process_guard.py'):
             shutil.copyfile(SOURCE_DIRECTORY / 'runtime' / name, self.library / name)
         self.original_command = "printf 'fixture prior status'; true"
         status = {
@@ -106,7 +106,7 @@ class ProductionAdoptionTests(unittest.TestCase):
             patch.object(adoption, 'runtime_release', return_value=True)
         )
         self.saved_import_path = list(sys.path)
-        names = ('native_status_config', 'native_status_attestor')
+        names = ('native_status_config', 'native_status_attestor', 'native_status_hook_cleanup')
         self.saved_modules = {name: sys.modules.pop(name, None) for name in names}
         self.addCleanup(self.restore_imports)
 
@@ -190,6 +190,21 @@ class ProductionAdoptionTests(unittest.TestCase):
         self.assertEqual(self.unit.stat().st_mode & 0o777, 0o600)
         self.assertIn(b'Restart=no\n', self.unit.read_bytes())
         self.assertEqual(json.loads(self.checkpoint.read_bytes())['phase'], 'adopted')
+
+    def test_native_settings_reformat_preserves_unrelated_edits_restores_only_original_hook(self):
+        self.adopt()
+        value=json.loads(self.settings.read_bytes());value['nativeAdded']={'keep':[3,1]}
+        value['theme']['name']='native-changed'
+        raw=json.dumps(value,indent=3).encode()+b'\n';self.settings.write_bytes(raw);self.settings.chmod(0o600)
+        sys.path.insert(0,str(self.library))
+        import runtime_continuity
+        with patch.object(runtime_continuity,'census_cli',return_value=[]):
+            adoption.rollback(self.home,runner=self.runner)
+        expected=json.loads(raw);expected['statusLine']=json.loads(self.originals[self.settings]['raw'])['statusLine']
+        self.assertEqual(json.loads(self.settings.read_bytes()),expected)
+        self.assertIn(b'"nativeAdded": {\n      "keep": [',self.settings.read_bytes())
+        self.assertIn(b'"name": "native-changed"',self.settings.read_bytes())
+        self.assert_rollback_material_removed()
 
     def test_rollback_restores_exact_bytes_modes_mtimes_and_removes_owned_material(self):
         self.adopt()

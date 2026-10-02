@@ -11,7 +11,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from native_status_attestor import (MAX_NATIVE_STDIN, StatusError,
-    project_native_status, send_projection, bounded_json, fail)
+    bounded_json, fail)
+from native_status_present import project_present_status, send_present_projection
 
 
 def read_original_command(path):
@@ -34,7 +35,7 @@ def read_original_command(path):
     except OSError: fail('status-original-command-unavailable')
 
 
-def forward_native_status(raw, socket_path, original_command, *, sender=send_projection,
+def forward_native_status(raw, socket_path, original_command, *, sender=send_present_projection,
                           runner=subprocess.run):
     # Native JSON is kept transiently so an existing user statusLine script sees
     # exactly the original stdin. Only the whitelist crosses the private socket.
@@ -42,7 +43,7 @@ def forward_native_status(raw, socket_path, original_command, *, sender=send_pro
         fail('status-input-size')
     accepted = False
     try:
-        projection = project_native_status(raw)
+        projection = project_present_status(raw)
         sender(Path(socket_path), projection)
         accepted = True
     except StatusError:

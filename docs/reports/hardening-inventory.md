@@ -6,7 +6,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1176 |
+| Sync fs occurrences (all) | 1196 |
 | Sync fs files affected (all) | 118 |
 | Sync fs occurrences (runtime hotpaths) | 522 |
 | Sync fs files affected (runtime hotpaths) | 68 |
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 25.5% (133/521) |
+| typed-error adoption (typed/total throws) | 24.9% (133/533) |
 | typed-error adoption (P4 locked subdomains) | 88.2% (15/17), target 40% |
-| hotpath console.error/warn occurrences | 83 (291 total, 208 CLI-UX exempt) |
-| hotpath console.error/warn files | 20 |
+| hotpath console.error/warn occurrences | 86 (294 total, 208 CLI-UX exempt) |
+| hotpath console.error/warn files | 21 |
 | files with createLogger | 33/394 |
 | subdomains with zero createLogger | 20 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, shared, targets, types) |
 | files > 400 LOC | 39 |
-| files > 600 LOC | 15 |
+| files > 600 LOC | 16 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -75,12 +75,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/targets/codex-detector.ts` | 5 |
 | `src/utils/claude-detector.ts` | 4 |
 | `src/utils/platform-commands.ts` | 4 |
+| `src/antigravity/registry.ts` | 3 |
 | `src/auth/profile-continuity-inheritance.ts` | 3 |
 | `src/auth/profile-detector.ts` | 3 |
 | `src/ccs.ts` | 2 |
 | `src/cliproxy/accounts/registry.ts` | 2 |
 | `src/config/loader/config-getters.ts` | 2 |
-| `src/config/migration-manager.ts` | 2 |
 
 ### Files > 400 LOC (top 15)
 
@@ -96,9 +96,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/cliproxy/accounts/account-safety.ts` | 787 |
 | `src/web-server/usage/aggregator.ts` | 782 |
 | `src/auth/profile-detector.ts` | 767 |
+| `src/antigravity/registry.ts` | 750 |
 | `src/config/migration-manager.ts` | 646 |
 | `src/web-server/services/additional-account-service.ts` | 636 |
 | `src/cliproxy/services/usage-compatibility-transformer.ts` | 632 |
 | `src/web-server/services/account-dashboard-service.ts` | 622 |
-| `src/cliproxy/services/stats-fetcher.ts` | 614 |
 

@@ -94,6 +94,7 @@ class FixtureDriver implements AntigravitySwitchDriver {
   inspectHook?: (count: number) => ProcessPlan;
   inspections = 0;
   runtimeHook?: (expected: VerifiedIdentity) => void;
+  approveOwnedIdlePlan?: AntigravitySwitchDriver['approveOwnedIdlePlan'];
   private proofFailed = false;
 
   async canProveRuntimeIdentity(): Promise<boolean> {
@@ -771,4 +772,65 @@ test('partial reviewed stop cannot proceed to install or return active', async (
   });
   expect(response.status).toBe('failed-rolled-back');
   expect(driver.events).not.toContain('install');
+});
+
+test('a broker that cannot honour the stop is never offered as stop-and-switch', async () => {
+  const { directory, driver, service } = await setup();
+  driver.plan = runningPlan();
+  const approvals: Array<{
+    plan: ProcessPlan;
+    expected: VerifiedIdentity;
+    fingerprint: string;
+  }> = [];
+  driver.approveOwnedIdlePlan = async (plan, expected, fingerprint) => {
+    approvals.push({ plan, expected, fingerprint });
+    return false;
+  };
+  const registryDirectory = path.join(directory, '.ccs', 'antigravity-profiles');
+  const before = fs.readdirSync(registryDirectory);
+  const response = await service.activate({
+    profileId: 'second',
+    hostId: 'ubuntu',
+    mode: 'manual',
+  });
+  expect(response.status).toBe('busy');
+  expect(response.reason).toBe('running-processes');
+  expect(response.confirmation).toBeUndefined();
+  expect(approvals.length).toBe(1);
+  expect(approvals[0].plan).toEqual(runningPlan());
+  expect(approvals[0].expected.email).toBe('first@example.com');
+  expect(approvals[0].fingerprint).toBe(credentialFingerprint(driver.current));
+  expect(driver.events).not.toContain('stop');
+  expect(driver.events).not.toContain('install');
+  expect(fs.readdirSync(registryDirectory)).toEqual(before);
+});
+
+test('a broker that can honour the stop still offers review and completes the confirmed switch', async () => {
+  const { driver, service } = await setup();
+  driver.plan = runningPlan();
+  let approvals = 0;
+  driver.approveOwnedIdlePlan = async () => {
+    approvals++;
+    return true;
+  };
+  const review = await service.activate({
+    profileId: 'second',
+    hostId: 'ubuntu',
+    mode: 'manual',
+  });
+  expect(review.status).toBe('confirmation-required');
+  expect(review.confirmation?.processes).toEqual([
+    { pid: 41001, role: 'cli', label: 'Antigravity CLI' },
+  ]);
+  expect(approvals).toBe(1);
+  const response = await service.activate({
+    profileId: 'second',
+    hostId: 'ubuntu',
+    mode: 'manual',
+    confirmationToken: review.confirmation!.token,
+  });
+  expect(response.status).toBe('active');
+  // One probe at offer time plus the re-approval under the confirmed switch.
+  expect(approvals).toBe(2);
+  expect(driver.events).toContain('stop');
 });

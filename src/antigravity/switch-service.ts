@@ -215,6 +215,22 @@ export class AntigravitySwitchService {
               reason: 'unreviewed-processes',
             });
           }
+          // Never offer a stop-and-switch the broker cannot honour: the same
+          // owned-idle approval the confirmed switch requires (switchUnderLock)
+          // is probed first, and its refusal keeps the existing busy result.
+          if (
+            this.driver.approveOwnedIdlePlan &&
+            !(await this.driver.approveOwnedIdlePlan(
+              initialPlan,
+              current,
+              credentialFingerprint(currentCredential)
+            ))
+          ) {
+            return result('busy', {
+              ...publicIdentity,
+              reason: 'running-processes',
+            });
+          }
           return result('confirmation-required', {
             ...publicIdentity,
             confirmation: this.confirmations.issue(binding, target.email, initialPlan, this.now()),

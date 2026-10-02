@@ -172,6 +172,49 @@ class NativeWorkerProtocolTests(unittest.TestCase):
             status = worker.main()
         return status, output.getvalue(), diagnostic.getvalue(), constructor, reads
 
+    def test_bind_current_readonly_google_profile_keeps_exact_native_revision_and_file(self):
+        original = self.file_identity(self.file)
+        userinfo = Mock(return_value={'email': 'FIXTURE@example.com', 'id': '123456789', 'verified_email': True})
+        result = worker.execute({'operation':'bind-current'}, self.store, userinfo=userinfo)
+        self.assertEqual(result['email'], 'fixture@example.com')
+        self.assertEqual(result['subject'], '123456789')
+        self.assertEqual(result['source'], 'Google OAuth2 userinfo')
+        self.assertEqual(result['credentialFingerprint'], auth.revision(self.original))
+        self.assertEqual(result['nativeSnapshotIdentity'], (original[0], original[1], original[2], auth.revision(self.original)))
+        self.assertTrue(result['credentialCurrent'])
+        self.assertEqual(self.store.calls, ['read','read'])
+        self.assertEqual(self.file_identity(self.file), original)
+        userinfo.assert_called_once_with('invented-fixture-access-original')
+
+    def test_bind_current_changed_inode_same_bytes_during_userinfo_is_refused(self):
+        def userinfo(_):
+            changed=self.file.with_name('fixture-foreign')
+            changed.write_bytes(self.original);changed.chmod(0o600);changed.replace(self.file)
+            return {'email':'fixture@example.com','id':'123456789','verified_email':True}
+        with self.assertRaises(ValueError):worker.execute({'operation':'bind-current'},self.store,userinfo=userinfo)
+        self.assertEqual(self.file.read_bytes(),self.original)
+        self.assertEqual(self.store.calls,['read','read'])
+
+    def test_bind_current_unverified_subject_and_extra_keys_cannot_produce_identity(self):
+        for value in ({'email':'fixture@example.com','id':'not-numeric','verified_email':True},
+                      {'email':'fixture@example.com','id':'123','verified_email':False}):
+            with self.assertRaises(auth.IdentityMismatch):
+                worker.execute({'operation':'bind-current'},self.store,userinfo=lambda _,value=value:value)
+        reader=Mock(side_effect=AssertionError('not allowed'))
+        with self.assertRaises(ValueError):worker.execute({'operation':'bind-current','extra':True},self.store,userinfo=reader)
+        reader.assert_not_called()
+
+    def test_bind_current_401_403_and_transient_failures_make_no_refresh_or_write(self):
+        from urllib.error import HTTPError
+        original=self.file_identity(self.file)
+        for status in (401,403,503):
+            reader=Mock(side_effect=HTTPError('https://example.invalid',status,'fixture',{},None))
+            with self.assertRaises(auth.NeedsSignIn if status in (401,403) else auth.IdentityUnavailable):
+                worker.execute({'operation':'bind-current'},self.store,userinfo=reader)
+            reader.assert_called_once()
+        self.assertEqual(self.file_identity(self.file),original)
+        self.assertNotIn('install',self.store.calls);self.assertNotIn('rollback',self.store.calls)
+
     def test_import_and_injected_store_do_not_construct_ubuntu_backend(self):
         self.assertEqual(self.store.calls, [])
         self.assertEqual(self.file.read_bytes(), self.original)

@@ -8,6 +8,12 @@ const MAX_REGISTRY_BYTES = 1024 * 1024;
 const PROFILE_ID = /^[a-z][a-z0-9_-]{0,47}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const FORMAT = /^[a-z][a-z0-9_.-]{1,63}$/;
+const LOCK_HOLDER_FILE = 'holder.json';
+const LOCK_HOLDER_BYTES = 512;
+/** The switch flow bounds nothing longer (broker approval TTL 60s, runtime-proof
+ * budget 10s, identity max age 5min); stale locks age out after 10 minutes. */
+const STALE_LOCK_TIMEOUT_MS = 10 * 60_000;
+const CREDENTIAL_FILE = /^credential-([a-f0-9]{64})\.bin$/;
 
 interface CredentialRecord {
   fingerprint: string;
@@ -155,6 +161,161 @@ function assertDirectory(target: string, expected: DirectoryIdentity): void {
   if (!sameDirectory(expected, fs.lstatSync(target))) throw new PrivateStorageError('unsafe');
 }
 
+function ownedPrivateDirectory(target: string): DirectoryIdentity {
+  checkAncestors(target);
+  const stat = fs.lstatSync(target);
+  if (
+    !stat.isDirectory() ||
+    stat.isSymbolicLink() ||
+    (process.platform !== 'win32' &&
+      ((stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())))
+  )
+    throw new PrivateStorageError('unsafe');
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function readLockHolder(lock: string): { pid: number; startedAt: number } | null {
+  const holder = path.join(lock, LOCK_HOLDER_FILE);
+  try {
+    const stat = fs.lstatSync(holder);
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size > LOCK_HOLDER_BYTES ||
+      (process.platform !== 'win32' &&
+        ((stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())))
+    )
+      return null;
+    const fd = fs.openSync(holder, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(fd, 'utf8'));
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const { pid, startedAt } = parsed as { pid?: unknown; startedAt?: unknown };
+    if (!Number.isSafeInteger(pid) || (pid as number) <= 0 || typeof startedAt !== 'string')
+      return null;
+    const started = Date.parse(startedAt);
+    return Number.isFinite(started) ? { pid: pid as number, startedAt: started } : null;
+  } catch {
+    return null;
+  }
+}
+
+function holderAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // ESRCH proves exit; anything else (for example EPERM) still counts as live.
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/** One-line reason when the lock is provably abandoned, otherwise null. */
+function staleLockReason(lock: string, now: number): string | null {
+  const holder = readLockHolder(lock);
+  if (holder) {
+    if (!holderAlive(holder.pid)) return `holder pid ${holder.pid} is dead`;
+    if (now - holder.startedAt > STALE_LOCK_TIMEOUT_MS)
+      return `holder pid ${holder.pid} held the lock for ${now - holder.startedAt}ms`;
+    return null;
+  }
+  // A crashed writer or a pre-holder record lock ages out on its directory time.
+  try {
+    if (now - fs.lstatSync(lock).mtimeMs > STALE_LOCK_TIMEOUT_MS)
+      return `lock is older than ${STALE_LOCK_TIMEOUT_MS}ms without a holder record`;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** A displaced lock is removed only when it holds nothing but our own holder record. */
+function discardStaleLock(aside: string): void {
+  try {
+    const entries = fs.readdirSync(aside);
+    if (entries.length === 1 && entries[0] === LOCK_HOLDER_FILE)
+      fs.unlinkSync(path.join(aside, LOCK_HOLDER_FILE));
+    if (fs.readdirSync(aside).length === 0) fs.rmdirSync(aside);
+  } catch {
+    /* Whatever cannot be proven ours is preserved for review. */
+  }
+}
+
+export interface CredentialPruneReport {
+  deleted: string[];
+  skipped: string[];
+}
+
+/**
+ * Credential retention: keep the current file plus ONE previous copy for
+ * rollback. Unlinks only owned 0600 regular files directly inside `directory`,
+ * selected by the exact credential filename; symlinks are never followed and
+ * anything else is left alone and reported.
+ */
+export function pruneSupersededCredentials(
+  directory: string,
+  currentFingerprint: string,
+  previousFingerprint?: string
+): CredentialPruneReport {
+  if (
+    !HASH.test(currentFingerprint) ||
+    (previousFingerprint !== undefined && !HASH.test(previousFingerprint))
+  )
+    throw new PrivateStorageError('unsafe');
+  ownedPrivateDirectory(directory);
+  const report: CredentialPruneReport = { deleted: [], skipped: [] };
+  const candidates: Array<{
+    name: string;
+    fingerprint: string;
+    mtimeMs: number;
+    safe: boolean;
+  }> = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const match = CREDENTIAL_FILE.exec(entry.name);
+    if (!match || match[1] === currentFingerprint) continue;
+    let mtimeMs = -Infinity;
+    let safe = false;
+    try {
+      const stat = fs.lstatSync(path.join(directory, entry.name));
+      mtimeMs = stat.mtimeMs;
+      safe =
+        stat.isFile() &&
+        !stat.isSymbolicLink() &&
+        stat.size <= MAX_NATIVE_BYTES &&
+        (process.platform === 'win32' ||
+          ((stat.mode & 0o777) === 0o600 && (!process.getuid || stat.uid === process.getuid())));
+    } catch {
+      safe = false;
+    }
+    candidates.push({ name: entry.name, fingerprint: match[1], mtimeMs, safe });
+  }
+  const previous =
+    previousFingerprint !== undefined && previousFingerprint !== currentFingerprint
+      ? previousFingerprint
+      : candidates
+          .filter((candidate) => candidate.safe)
+          .sort((left, right) => right.mtimeMs - left.mtimeMs || (right.name > left.name ? 1 : -1))
+          .map((candidate) => candidate.fingerprint)[0];
+  for (const candidate of candidates) {
+    if (candidate.fingerprint === previous) continue;
+    if (!candidate.safe) {
+      report.skipped.push(candidate.name);
+      continue;
+    }
+    try {
+      fs.unlinkSync(path.join(directory, candidate.name));
+      report.deleted.push(candidate.name);
+    } catch {
+      report.skipped.push(candidate.name);
+    }
+  }
+  return report;
+}
+
 function readPrivateFile(filename: string, maxBytes: number): Buffer {
   checkAncestors(path.dirname(filename));
   const before = fs.lstatSync(filename);
@@ -283,8 +444,11 @@ function validateState(raw: unknown): RegistryState {
 /**
  * Storage lives below the existing private .ccs directory. Both credential and
  * metadata publications are immutable; revisions never overwrite predecessors.
- * Locks are never silently broken after a crash. An unresolved intent blocks
- * another switch until a separately reviewed recovery verifies the native state.
+ * A held transaction lock is taken over only when its recorded holder is dead
+ * or the lock aged past a bounded timeout, and every takeover is logged; an
+ * unresolved intent still blocks another switch until a separately reviewed
+ * recovery verifies the native state. Superseded credential generations are
+ * pruned by pruneSupersededCredentials to the current plus one previous copy.
  */
 export class AntigravityProfileRegistry {
   private readonly profilesDirectory: string;
@@ -304,13 +468,7 @@ export class AntigravityProfileRegistry {
   async withLock<T>(operation: () => Promise<T>): Promise<T> {
     assertDirectory(this.profilesDirectory, this.profilesIdentity);
     const lock = path.join(this.profilesDirectory, '.transaction-lock');
-    try {
-      fs.mkdirSync(lock, { mode: 0o700 });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new PrivateStorageError('busy');
-      throw new PrivateStorageError('unsafe');
-    }
-    const owner = fs.lstatSync(lock);
+    const owner = this.acquireLockDirectory(lock);
     this.lockHeld = true;
     try {
       return await operation();
@@ -319,8 +477,71 @@ export class AntigravityProfileRegistry {
       assertDirectory(this.profilesDirectory, this.profilesIdentity);
       const current = fs.lstatSync(lock);
       if (!sameDirectory(owner, current)) throw new PrivateStorageError('unsafe');
-      // Empty directory removal refuses foreign contents and foreign replacement.
+      // Remove our own holder record; empty directory removal still refuses
+      // foreign contents and foreign replacement.
+      try {
+        fs.unlinkSync(path.join(lock, LOCK_HOLDER_FILE));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
       fs.rmdirSync(lock);
+    }
+  }
+
+  /** A live, recent holder always wins; only a provably abandoned lock is taken over. */
+  private acquireLockDirectory(lock: string): DirectoryIdentity {
+    try {
+      fs.mkdirSync(lock, { mode: 0o700 });
+      this.writeLockHolder(lock);
+      return fs.lstatSync(lock);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
+        throw new PrivateStorageError('unsafe');
+    }
+    const reason = staleLockReason(lock, Date.now());
+    if (!reason) throw new PrivateStorageError('busy');
+    // Atomic takeover: exactly one racer can rename a given source aside; every
+    // other racer observes it gone (ENOENT) and yields to that winner as busy.
+    const aside = `${lock}.stale-${process.pid}-${Date.now()}`;
+    try {
+      fs.renameSync(lock, aside);
+    } catch (error) {
+      throw new PrivateStorageError(
+        (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'busy' : 'unsafe'
+      );
+    }
+    try {
+      fs.mkdirSync(lock, { mode: 0o700 });
+      this.writeLockHolder(lock);
+    } catch (error) {
+      discardStaleLock(aside);
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new PrivateStorageError('busy');
+      throw new PrivateStorageError('unsafe');
+    }
+    const owner = fs.lstatSync(lock);
+    discardStaleLock(aside);
+    console.warn(`antigravity: recovered a stale transaction lock (${reason})`);
+    return owner;
+  }
+
+  private writeLockHolder(lock: string): void {
+    const holder = path.join(lock, LOCK_HOLDER_FILE);
+    try {
+      fs.writeFileSync(
+        holder,
+        JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+        { flag: 'wx', mode: 0o600 }
+      );
+    } catch {
+      // A lock without a holder record could survive our own crash; never hold
+      // it half-written.
+      try {
+        fs.rmSync(holder, { force: true });
+        fs.rmdirSync(lock);
+      } catch {
+        /* Release-time identity checks still refuse foreign replacement. */
+      }
+      throw new PrivateStorageError('unsafe');
     }
   }
 
@@ -477,6 +698,21 @@ export class AntigravityProfileRegistry {
     };
     state.profiles = [...state.profiles.filter((profile) => profile.id !== profileId), record];
     this.publish(state);
+    // Retention: the published revision references `fingerprint`; keep exactly
+    // one previous generation for rollback and delete older copies safely.
+    try {
+      const pruned = pruneSupersededCredentials(
+        hostDirectory,
+        fingerprint,
+        existing && existing.credential.fingerprint !== fingerprint
+          ? existing.credential.fingerprint
+          : undefined
+      );
+      for (const name of pruned.skipped)
+        console.warn(`antigravity: superseded credential ${name} was left in place for review`);
+    } catch {
+      console.warn('antigravity: superseded credential cleanup was skipped for safety');
+    }
   }
 
   beginTransaction(targetId: string, previousId: string, now: number): void {

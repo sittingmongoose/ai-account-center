@@ -134,6 +134,13 @@ def stop_reviewed(identities, executable_paths, timeout_seconds=8.0):
                 signal.pidfd_send_signal(fd, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            except FileNotFoundError:
+                # A reviewed child can exit after readiness was checked, for
+                # example when its reviewed parent receives SIGTERM first.
+                # Only this already-open exact pidfd may prove that it exited;
+                # missing metadata for a live pidfd remains a hard refusal.
+                if not select.select([fd], [], [], 0)[0]:
+                    raise
         deadline = time.monotonic() + timeout_seconds
         remaining = {fd for fd, _identity in handles}
         while remaining and time.monotonic() < deadline:

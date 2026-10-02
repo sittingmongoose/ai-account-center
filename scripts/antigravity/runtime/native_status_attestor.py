@@ -370,6 +370,7 @@ class NativeStatusSocket:
         if self.listener is None or not 0 < timeout <= 2.0:
             fail('status-socket-not-ready')
         self.listener.settimeout(timeout)
+        peer_identity = None
         try:
             peer, _ = self.listener.accept()
             with peer:
@@ -380,6 +381,7 @@ class NativeStatusSocket:
                     peer.settimeout(remaining)
                     return peer.recv(count)
                 pid, uid, _ = struct.unpack('3i', peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                peer_identity = (pid, uid)
                 def exact(count):
                     output = bytearray()
                     while len(output) < count:
@@ -394,8 +396,14 @@ class NativeStatusSocket:
                 result = self.attestor.accept(raw, peer_pid=pid, peer_uid=uid)
                 peer.sendall(b'\x01')
                 return result
-        except StatusError: raise
-        except OSError: fail('status-socket-receive-failed')
+        except StatusError:
+            if peer_identity is not None and hasattr(self.attestor, 'refuse_peer'):
+                self.attestor.refuse_peer(*peer_identity)
+            raise
+        except OSError:
+            if peer_identity is not None and hasattr(self.attestor, 'refuse_peer'):
+                self.attestor.refuse_peer(*peer_identity)
+            fail('status-socket-receive-failed')
 
     def close(self):
         if self.listener is not None:

@@ -6,12 +6,20 @@
       "sha256": "aae01f928c663bc07ce0749ed715e15779e176de32915901aed1e00203c36605"
     },
     {
+      "path": "auth_platforms.py",
+      "sha256": "e101d8d5d297d09ac4f3d0208507f8dab6d3accb1afdba0cd5f21031dcc99183"
+    },
+    {
       "path": "foreground_launcher.py",
       "sha256": "69c973f014c50b5c4561b7577fde01a99b00c9d0b4f0c06b23084003b83cda5c"
     },
     {
       "path": "linux_process_guard.py",
-      "sha256": "8c6d981f77f9dd8d88ad56ed56982ca8ca67247d8ff3505cad72bee6f7719431"
+      "sha256": "0c59d4f3f8cfce01790ee3a958f7ad7b2c767af0c5ce8b01550e3faaeb6d78ed"
+    },
+    {
+      "path": "native_credential_worker.py",
+      "sha256": "c20f153b5486b807fb40398d150c5b341197015364d175169cbd137b15e000fe"
     },
     {
       "path": "native_header.py",
@@ -23,7 +31,11 @@
     },
     {
       "path": "native_status_attestor.py",
-      "sha256": "bd1d992e1c232129b440831c97eac8d7d19159a8f5d1e278d1a7fddf95fab76e"
+      "sha256": "ae3a2c512bb4ef6ffb4e4fbc78798ecc922e12a9f2041d01f217805b3a099285"
+    },
+    {
+      "path": "native_status_composition.py",
+      "sha256": "d2c6198ddc4b94bf3c245145442f8e7c805f5173d591ce36492aac7ca3e931ad"
     },
     {
       "path": "native_status_config.py",
@@ -31,7 +43,11 @@
     },
     {
       "path": "native_status_hook.py",
-      "sha256": "8058ff4d98d6464e46a53165f36fcae131b256e8d43d172c3fdd2229e4a94b58"
+      "sha256": "831ccc4eeee59bc671813fb6a2b5767c193c47c1a75b5cced9ba4a3eae40d7ce"
+    },
+    {
+      "path": "native_status_hook_cleanup.py",
+      "sha256": "9b2480469aeab4ead9320efe3ae09691b5c285087c8be46c6ddb3860a551e802"
     },
     {
       "path": "native_status_identity_worker.py",
@@ -42,8 +58,28 @@
       "sha256": "7f5949a9759c1c93844e15a8a871a1457afede542b3dd1b1a1d77c99092389e0"
     },
     {
+      "path": "native_status_omitted_counters.py",
+      "sha256": "ef5acc403f20c5f8e808ef7a9e42651e64fa14cf9540efdfba4c050462c68e07"
+    },
+    {
+      "path": "native_status_present.py",
+      "sha256": "464bf9fb1913492abdd43a3572d1689420184148f7592c057a178a6511366286"
+    },
+    {
+      "path": "native_status_publisher.py",
+      "sha256": "c19de5acbecfb902985b1a56b57290510516e5f1a0028ce8c636aaeca06d0b9c"
+    },
+    {
+      "path": "native_status_service.py",
+      "sha256": "b76cefa8c7398dd2d403dc36ecb26a8e23da857fbddd4ace0f2c7203e7ca12bb"
+    },
+    {
       "path": "native_status_spawn_retention.py",
       "sha256": "8b5e6019d511a9c97a67a0b83ec045e7880c0efbda794df0971b4c3c3539a6d9"
+    },
+    {
+      "path": "native_status_userinfo.py",
+      "sha256": "41eef1a3111b64ae52556fe98a577d70270ed1bd9300ff5a42895b4395023cf0"
     },
     {
       "path": "release.json",
@@ -55,19 +91,19 @@
     },
     {
       "path": "resident_broker.py",
-      "sha256": "a5184f0b858e888b510888635e637988d603a0da19d59e759c7d046494e41978"
+      "sha256": "50d11793142f70c22de7bd87dc7c0ae3275fe72f649077f75b230013d111212e"
     },
     {
       "path": "resident_main.py",
-      "sha256": "a993ca8c2e1d711de4eac0c2f786017b750e1219ab59c7801e049ab76b41f65c"
+      "sha256": "b6282bd5068a43efd7956744d6c31d41f1987708559fa183b15a00029cb1cd07"
     },
     {
       "path": "runtime_continuity.py",
-      "sha256": "95b228340bb3ebf962e9b59f445a5061bc3a8c591a7bf4bd1173d3b7f752f2b7"
+      "sha256": "824b8772bbd3228ed0353cc68eadb70ae2ea48d280d326f4f796038bc64f1079"
     },
     {
       "path": "ubuntu_runtime_factory.py",
-      "sha256": "613665437ca0bd43d5e921add6d55dd2e92a0b5ec9b6f1acb9be8713b8fb7c8f"
+      "sha256": "96e5d2318f430864b9579c33b0e8b68af847ea728f6a8d33e86a7d1894376b76"
     }
   ]
 }

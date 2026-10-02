@@ -27,7 +27,18 @@ type Method =
   | 'approve-idle-plan'
   | 'approve-quiesced-stop'
   | 'complete-transaction';
-type Request = (method: Method, parameters?: Record<string, unknown>) => Promise<unknown>;
+type Request = (
+  method: Method,
+  parameters?: Record<string, unknown>,
+  timeoutMs?: number
+) => Promise<unknown>;
+
+/** Only the pinned broker's exact owned-restart readiness response earns this type. */
+export class AntigravityRuntimeStartupNotReadyError extends AntigravityError {
+  constructor() {
+    super('antigravity-runtime-startup-not-ready');
+  }
+}
 
 export interface UbuntuRuntimeBridge {
   /** Private monitor census; cached checkpoints never supply fresh idle state. */
@@ -36,7 +47,7 @@ export interface UbuntuRuntimeBridge {
   inspectProcesses(): Promise<ProcessPlan>;
   stopProcesses(plan: ProcessPlan): Promise<StopReceipt>;
   restartProcesses(receipt: StopReceipt): Promise<void>;
-  proveRuntimeIdentity(expected: VerifiedIdentity): Promise<RuntimeProof>;
+  proveRuntimeIdentity(expected: VerifiedIdentity, timeoutMs?: number): Promise<RuntimeProof>;
   stopOwnedRestarts(): Promise<void>;
   approveOwnedIdlePlan?(
     plan: ProcessPlan,
@@ -121,10 +132,12 @@ export function createUbuntuRuntimeBridge(options: {
 }): UbuntuRuntimeBridge {
   const transport =
     options.request ?? createPrivateUnixRequest(options.socketPath, options.timeoutMs);
-  const request: Request = async (method, parameters) => {
+  const request: Request = async (method, parameters, timeoutMs) => {
     try {
-      return await transport(method, parameters);
-    } catch {
+      return await transport(method, parameters, timeoutMs);
+    } catch (error) {
+      if (method === 'prove' && error instanceof AntigravityRuntimeStartupNotReadyError)
+        throw error;
       return fail();
     }
   };
@@ -245,8 +258,8 @@ export function createUbuntuRuntimeBridge(options: {
       const value = await request('restart', { receipt: stopReceipt });
       if (!record(value) || !exactKeys(value, ['ok']) || value.ok !== true) fail();
     },
-    async proveRuntimeIdentity(expected) {
-      const value = await request('prove', { expected });
+    async proveRuntimeIdentity(expected, timeoutMs) {
+      const value = await request('prove', { expected }, timeoutMs);
       if (
         !record(value) ||
         !exactKeys(value, [
@@ -280,7 +293,10 @@ export function createUbuntuRuntimeBridge(options: {
 
 export function createPrivateUnixRequest(socketPath: string, timeoutMs = 15000): Request {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 20000) fail();
-  return async (method, parameters = {}) => {
+  return async (method, parameters = {}, requestTimeoutMs = timeoutMs) => {
+    if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 20_000)
+      fail();
+    const effectiveTimeoutMs = Math.min(requestTimeoutMs, timeoutMs);
     if (process.platform !== 'linux' || typeof process.getuid !== 'function') fail();
     const directory = await lstat(dirname(socketPath));
     const socketBefore = await lstat(socketPath);
@@ -303,14 +319,17 @@ export function createPrivateUnixRequest(socketPath: string, timeoutMs = 15000):
       const socket = connect(socketPath);
       let pending = Buffer.alloc(0);
       let done = false;
-      const finish = (value?: unknown, failed = false) => {
+      const finish = (value?: unknown, failed = false, startupPending = false) => {
         if (done) return;
         done = true;
+        clearTimeout(deadlineTimer);
         socket.destroy();
-        if (failed) reject(new Error('antigravity-runtime-unavailable'));
+        if (startupPending) reject(new AntigravityRuntimeStartupNotReadyError());
+        else if (failed) reject(new Error('antigravity-runtime-unavailable'));
         else resolve(value);
       };
-      socket.setTimeout(timeoutMs, () => finish(undefined, true));
+      const deadlineTimer = setTimeout(() => finish(undefined, true), effectiveTimeoutMs);
+      socket.setTimeout(effectiveTimeoutMs, () => finish(undefined, true));
       socket.on('error', () => finish(undefined, true));
       socket.on('end', () => {
         if (!done) finish(undefined, true);
@@ -350,6 +369,16 @@ export function createPrivateUnixRequest(socketPath: string, timeoutMs = 15000):
         }
         try {
           const message: unknown = JSON.parse(pending.subarray(4).toString('utf8'));
+          if (
+            method === 'prove' &&
+            record(message) &&
+            exactKeys(message, ['requestId', 'error']) &&
+            message.requestId === requestId &&
+            message.error === 'runtime-startup-not-ready'
+          ) {
+            finish(undefined, false, true);
+            return;
+          }
           if (
             !record(message) ||
             !exactKeys(message, ['requestId', 'result']) ||

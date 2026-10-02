@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1176,
+    "totalOccurrences": 1196,
     "filesAffected": 118,
     "hotpathOccurrences": 522,
     "hotpathFilesAffected": 68,
@@ -198,6 +198,27 @@
         "markers": []
       },
       {
+        "file": "src/antigravity/registry.ts",
+        "count": 45,
+        "calls": [
+          "closeSync",
+          "existsSync",
+          "fstatSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "renameSync",
+          "rmdirSync",
+          "rmSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/cliproxy/accounts/__tests__/account-registry-integrity.test.ts",
         "count": 45,
         "calls": [
@@ -279,24 +300,6 @@
           "realpathSync",
           "renameSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/antigravity/registry.ts",
-        "count": 25,
-        "calls": [
-          "closeSync",
-          "existsSync",
-          "fstatSync",
-          "fsyncSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "rmdirSync",
           "writeFileSync"
         ],
         "markers": []
@@ -516,11 +519,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 521,
+      "totalThrows": 533,
       "typedThrows": 133,
       "plainThrows": 70,
-      "otherThrows": 318,
-      "adoptionRatio": 0.2553,
+      "otherThrows": 330,
+      "adoptionRatio": 0.2495,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -530,13 +533,13 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 106,
+          "count": 117,
           "typed": 0,
           "plain": 0
         },
         {
           "subdomain": "codex-auth",
-          "count": 95,
+          "count": 96,
           "typed": 6,
           "plain": 25
         },
@@ -676,10 +679,10 @@
       ]
     },
     "hotpathConsoleErrors": {
-      "totalOccurrences": 291,
+      "totalOccurrences": 294,
       "exemptOccurrences": 208,
-      "hotpathOccurrences": 83,
-      "filesAffected": 20,
+      "hotpathOccurrences": 86,
+      "filesAffected": 21,
       "topFiles": [
         {
           "file": "src/errors/error-handler.ts",
@@ -718,6 +721,10 @@
           "count": 4
         },
         {
+          "file": "src/antigravity/registry.ts",
+          "count": 3
+        },
+        {
           "file": "src/auth/profile-continuity-inheritance.ts",
           "count": 3
         },
@@ -736,16 +743,12 @@
         {
           "file": "src/config/loader/config-getters.ts",
           "count": 2
-        },
-        {
-          "file": "src/config/migration-manager.ts",
-          "count": 2
         }
       ]
     },
     "largeFiles": {
       "countOver400": 39,
-      "countOver600": 15,
+      "countOver600": 16,
       "topOver400": [
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
@@ -788,6 +791,10 @@
           "loc": 767
         },
         {
+          "file": "src/antigravity/registry.ts",
+          "loc": 750
+        },
+        {
           "file": "src/config/migration-manager.ts",
           "loc": 646
         },
@@ -802,10 +809,6 @@
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
           "loc": 622
-        },
-        {
-          "file": "src/cliproxy/services/stats-fetcher.ts",
-          "loc": 614
         }
       ]
     }
