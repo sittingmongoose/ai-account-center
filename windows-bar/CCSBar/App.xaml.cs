@@ -189,7 +189,8 @@ public partial class App : System.Windows.Application
         if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color or UserPreferenceCategory.VisualStyle)) return;
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (Theme.Mode == ThemeMode.Auto) Theme.Apply(ThemeMode.Auto, animate: true);
+            // Qualified: .NET 9+ added Application.ThemeMode, which would otherwise shadow our enum here.
+            if (Theme.Mode == CCSBar.ThemeMode.Auto) Theme.Apply(CCSBar.ThemeMode.Auto, animate: true);
             tray?.ApplyTheme();
         }));
     }

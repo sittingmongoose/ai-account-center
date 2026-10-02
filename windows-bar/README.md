@@ -1,6 +1,6 @@
 # AI Account Center for Windows
 
-Native C#/.NET 8 WPF tray companion for the [AI Account Center](https://github.com/sittingmongoose/ai-account-center)
+Native C#/.NET 10 WPF tray companion for the [AI Account Center](https://github.com/sittingmongoose/ai-account-center)
 dashboard, with a WinForms `NotifyIcon` in the notification area. It follows the official
 [macOS CCS Bar](https://github.com/kaitranntt/ccs/tree/main/macos-bar) and the approved Daylight Atlas tray design
 (the Windows view of the tray polish concept): today's layout and order, in the dashboard's palette, meters and type.
@@ -180,8 +180,8 @@ Failed refreshes keep the last sample, label it stale and disable account contro
 
 ## Build and install
 
-On Windows x64, install the **.NET 8 SDK** using Microsoft's
-[.NET 8 downloads](https://dotnet.microsoft.com/en-us/download/dotnet/8.0). Run these from `windows-bar` as the target
+On Windows x64, install the **.NET 10 SDK** using Microsoft's
+[.NET 10 downloads](https://dotnet.microsoft.com/en-us/download/dotnet/10.0). Run these from `windows-bar` as the target
 Windows user; the tray installs per user without elevation:
 
 ```powershell
@@ -191,7 +191,7 @@ Windows user; the tray installs per user without elevation:
 ```
 
 Builds are self-contained for Windows x64. Build and Check use an explicit `-Dotnet` path when supplied, otherwise
-`dotnet` on PATH with a .NET 8 SDK, then the legacy private SDK at `%LOCALAPPDATA%\CCS Bar\build\dotnet\dotnet.exe`.
+`dotnet` on PATH with a .NET 10 SDK, then the legacy private SDK at `%LOCALAPPDATA%\CCS Bar\build\dotnet\dotnet.exe`.
 Build's `-OutputDirectory` and Check's `-PublishDirectory` and `-ReportDirectory` support isolated verification.
 
 `Check.ps1` runs, offline and against an isolated state folder: the check suite (formatting, data rules, injection,

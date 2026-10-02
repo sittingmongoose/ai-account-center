@@ -17,11 +17,11 @@ function Resolve-Dotnet([string]$Requested) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         try {
             $sdks = @(& $candidate --list-sdks 2>$null)
-            if ($LASTEXITCODE -eq 0 -and @($sdks | Where-Object { $_ -match '^8\.\d+\.\d+' }).Count -gt 0) { return $candidate }
+            if ($LASTEXITCODE -eq 0 -and @($sdks | Where-Object { $_ -match '^10\.\d+\.\d+' }).Count -gt 0) { return $candidate }
         }
         catch { continue }
     }
-    throw 'A .NET 8 SDK is required. Install the Windows x64 SDK from https://dotnet.microsoft.com/en-us/download/dotnet/8.0, reopen PowerShell, or pass -Dotnet with its dotnet.exe path.'
+    throw 'A .NET 10 SDK is required. Install the Windows x64 SDK from https://dotnet.microsoft.com/en-us/download/dotnet/10.0, reopen PowerShell, or pass -Dotnet with its dotnet.exe path.'
 }
 $source = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $source 'CCSBar\CCSBar.csproj'
