@@ -60,9 +60,6 @@ describe('trusted ranges', () => {
       ['192.168.255.255', true],
       ['192.167.255.255', false],
       ['192.169.0.0', false],
-      ['127.0.0.1', true],
-      ['127.255.255.254', true],
-      ['::1', true],
       ['fc00::1', true],
       ['fd12:3456:789a::42', true],
       ['fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', true],
@@ -126,16 +123,28 @@ describe('trusted ranges', () => {
     expect(isTrustedLocalNetworkPeer(request('127.0.0.1'), vpn)).toBe(false);
   });
 
-  it('parses ranges strictly: host bits cleared, nothing wider than /8 or /7, no zones', () => {
+  it('parses ranges strictly: host bits cleared, nothing wider than /8 or /48, no zones', () => {
     expect(parseTrustedNetwork('192.168.50.1/24')?.cidr).toBe('192.168.50.0/24');
     expect(parseTrustedNetwork('10.6.0.5')?.cidr).toBe('10.6.0.5/32');
     expect(parseTrustedNetwork('fd00::1/8')?.cidr).toBe('fd00::/8');
     expect(parseTrustedNetwork('::ffff:10.0.0.0/104')?.cidr).toBe('10.0.0.0/8');
+    // IPv6: one site's /48 at most, except inside the unique-local block fc00::/7.
+    expect(parseTrustedNetwork('2001:db8:1234::/48')?.cidr).toBe('2001:db8:1234::/48');
+    expect(parseTrustedNetwork('2001:db8:1234:5600::/56')?.cidr).toBe('2001:db8:1234:5600::/56');
+    expect(parseTrustedNetwork('fc00::/7')?.cidr).toBe('fc00::/7');
+    expect(parseTrustedNetwork('fd12:3456::/32')?.cidr).toBe('fd12:3456::/32');
     for (const bad of [
       '0.0.0.0/0',
       '10.0.0.0/7',
       '::/0',
       'fc00::/6',
+      '2000::/7',
+      '2400::/7',
+      '2001:db8::/32',
+      '2001:db8:1200::/47',
+      'fe80::/10',
+      'fe00::/7',
+      '::/47',
       '10.0.0.0/33',
       'fe80::/10%eth0',
       ' 10.0.0.0/8',
@@ -150,6 +159,23 @@ describe('trusted ranges', () => {
     ]) {
       expect([bad, parseTrustedNetwork(bad)]).toEqual([bad, null]);
     }
+  });
+
+  it('refuses loopback-only ranges, since rule 4 never trusts loopback', () => {
+    for (const loopback of [
+      '127.0.0.0/8',
+      '127.0.0.1',
+      '127.1.0.0/16',
+      '::1',
+      '::1/128',
+      '::ffff:127.0.0.0/104',
+      '::ffff:127.0.0.1',
+    ]) {
+      expect([loopback, parseTrustedNetwork(loopback)]).toEqual([loopback, null]);
+    }
+    const listed = parseTrustedNetworks(['192.168.50.0/24', '127.0.0.0/8', '::1/128']);
+    expect(listed.networks.map((network) => network.cidr)).toEqual(['192.168.50.0/24']);
+    expect(listed.rejected).toBe(2);
   });
 
   it('uses the defaults when the list is absent, and trusts less, never more, when it is bad', () => {
@@ -211,15 +237,80 @@ describe('isSecureTransport rule 4', () => {
     expect(isSecureTransport(request('203.0.113.9', { 'x-forwarded-for': '192.168.50.20' }))).toBe(
       false
     );
-    // A private socket stays itself whatever it forwards.
-    expect(isSecureTransport(request('192.168.50.20', { 'x-forwarded-for': '203.0.113.9' }))).toBe(
-      true
-    );
     // A local proxy on loopback forwards someone unknown: rule 4 does not apply to it.
     expect(
       isSecureTransport(request('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }, 'localhost'))
     ).toBe(false);
-    expect(isSecureTransport(request('127.0.0.1', {}, '192.168.50.10:3000'))).toBe(true);
+  });
+
+  it('never trusts a request a proxy forwarded, whatever address the proxy has', () => {
+    setLocalNetworkTrustResolver(() => trust());
+    // A reverse proxy on a NAS or router would pass its trust to everyone behind it.
+    expect(isSecureTransport(request('192.168.50.2'))).toBe(true);
+    for (const header of [
+      'forwarded',
+      'via',
+      'x-forwarded-for',
+      'x-forwarded-host',
+      'x-forwarded-proto',
+      'x-forwarded-port',
+      'x-forwarded-server',
+      'x-original-forwarded-for',
+      'x-real-ip',
+      'x-client-ip',
+      'x-cluster-client-ip',
+      'cf-connecting-ip',
+      'true-client-ip',
+      'fastly-client-ip',
+    ]) {
+      const proxied = request('192.168.50.2', { [header]: '203.0.113.9' });
+      expect([header, isSecureTransport(proxied), describeConnection(proxied).trusted]).toEqual([
+        header,
+        false,
+        false,
+      ]);
+      const mapped = request('::ffff:10.6.0.2', { [header]: '10.6.0.3' });
+      expect([header, isTrustedLocalNetworkPeer(mapped, trust())]).toEqual([header, false]);
+    }
+  });
+
+  it('never applies to a loopback peer: rule 2 and its Host test decide loopback', () => {
+    setLocalNetworkTrustResolver(() => trust());
+    // A raw TCP forward onto 127.0.0.1 (ssh -R, socat, frp) adds no headers and keeps the
+    // remote Host; a DNS-rebinding page names its own host. Neither is secure.
+    for (const peer of ['127.0.0.1', '127.8.9.10', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1']) {
+      for (const host of ['192.168.50.10:3000', 'attacker.example', 'attacker.example:3000']) {
+        expect([peer, host, isSecureTransport(request(peer, {}, host))]).toEqual([
+          peer,
+          host,
+          false,
+        ]);
+      }
+      expect([peer, describeConnection(request(peer, {}, 'localhost:3000')).trusted]).toEqual([
+        peer,
+        false,
+      ]);
+    }
+    // Even a list that names loopback, built without the parser, changes nothing.
+    const loopbackListed: LocalNetworkTrust = {
+      enabled: true,
+      networks: [
+        { family: 4, bytes: Uint8Array.from([127, 0, 0, 0]), prefix: 8, cidr: '127.0.0.0/8' },
+        {
+          family: 6,
+          bytes: Uint8Array.from([...Array<number>(15).fill(0), 1]),
+          prefix: 128,
+          cidr: '::1/128',
+        },
+      ],
+    };
+    expect(isTrustedLocalNetworkPeer(request('127.0.0.1'), loopbackListed)).toBe(false);
+    expect(isTrustedLocalNetworkPeer(request('::1'), loopbackListed)).toBe(false);
+    // Real loopback stays secure by rule 2, switch on or off.
+    expect(isSecureTransport(request('127.0.0.1', {}, 'localhost:3000'))).toBe(true);
+    expect(isSecureTransport(request('::1', {}, '[::1]:3000'))).toBe(true);
+    setLocalNetworkTrustResolver(null);
+    expect(isSecureTransport(request('127.0.0.1', {}, '127.0.0.1:3000'))).toBe(true);
   });
 
   it('fails closed when the resolver throws', () => {

@@ -158,6 +158,77 @@ describe('sensitive auth routes from a private peer', () => {
   });
 });
 
+describe('peers the switch never trusts', () => {
+  it('a loopback peer with a foreign Host: a raw TCP forward or a DNS-rebinding page', async () => {
+    harness = await startAuthHarness({ dashboardNetwork: ON });
+    const token = String((await pairTray(harness)).body.token);
+    for (const host of [PRIVATE_HOST, 'attacker.example:3000']) {
+      atPeer(harness, '127.0.0.1', host);
+      const check = await new Client(harness).send('GET', '/api/auth/check');
+      expect([host, check.body.secureTransport, check.body.connection]).toEqual([
+        host,
+        false,
+        { peer: '127.0.0.1', trusted: false },
+      ]);
+      const browser = await signedIn(harness);
+      const { change, pair, rotate } = await sensitiveAuthRoutes(harness, browser, token);
+      for (const response of [change, pair, rotate]) {
+        expect([host, response.status, response.body.code]).toEqual([
+          host,
+          403,
+          'secure_transport_required',
+        ]);
+      }
+    }
+    // The dashboard computer itself (loopback Host) stays secure by rule 2.
+    atPeer(harness, '127.0.0.1', null);
+    expect((await new Client(harness).send('GET', '/api/auth/check')).body).toMatchObject({
+      secureTransport: true,
+      connection: { peer: '127.0.0.1', trusted: false },
+    });
+  });
+
+  it('a reverse proxy on the LAN, for the clients behind it', async () => {
+    harness = await startAuthHarness({ dashboardNetwork: ON });
+    const token = String((await pairTray(harness)).body.token);
+    atPeer(harness, '192.168.50.2');
+    for (const headers of [
+      { 'x-forwarded-for': PUBLIC_PEER },
+      { forwarded: `for=${PUBLIC_PEER};proto=http` },
+      { via: '1.1 nas.local' },
+      { 'x-forwarded-host': 'dashboard.example' },
+      { 'cf-connecting-ip': PUBLIC_PEER },
+      { 'true-client-ip': PUBLIC_PEER },
+    ]) {
+      harness.peer.headers = headers;
+      const check = await new Client(harness).send('GET', '/api/auth/check');
+      expect([headers, check.body.secureTransport, check.body.connection]).toEqual([
+        headers,
+        false,
+        { peer: '192.168.50.2', trusted: false },
+      ]);
+      const pair = await pairTray(harness, { deviceName: 'fixture-proxied', platform: 'mac' });
+      expect([headers, pair.status, pair.body.code]).toEqual([
+        headers,
+        403,
+        'secure_transport_required',
+      ]);
+      const rotate = await new Client(harness, token).send('POST', '/api/auth/devices/me/rotate');
+      expect([headers, rotate.status, rotate.body.code]).toEqual([
+        headers,
+        403,
+        'secure_transport_required',
+      ]);
+    }
+    // The same peer without proxy headers is trusted.
+    harness.peer.headers = {};
+    expect((await new Client(harness).send('GET', '/api/auth/check')).body).toMatchObject({
+      secureTransport: true,
+      connection: { peer: '192.168.50.2', trusted: true },
+    });
+  });
+});
+
 describe('GET and PUT /api/auth/network', () => {
   it('turns the trust on only from the dashboard computer, and off from any session', async () => {
     harness = await startAuthHarness();
@@ -178,10 +249,11 @@ describe('GET and PUT /api/auth/network', () => {
     const on = await local.send('PUT', '/api/auth/network', { trustLocalNetwork: true });
     expect(on.status).toBe(200);
     expect(on.headers.get('cache-control')).toBe('no-store');
+    // Loopback is secure by rule 2, never by the local network trust.
     expect(on.body).toEqual({
       trustLocalNetwork: true,
       trustedNetworks: [...DEFAULT_TRUSTED_NETWORKS],
-      connection: { peer: '127.0.0.1', trusted: true },
+      connection: { peer: '127.0.0.1', trusted: false },
       canTurnOn: true,
     });
     expect(storedNetwork(harness)).toEqual({ trust_local_network: true });
@@ -260,6 +332,40 @@ describe('GET and PUT /api/auth/network', () => {
     const readQuery = await browser.send('GET', '/api/auth/network?x=1');
     expect([readQuery.status, readQuery.body.code]).toEqual([400, 'unexpected_query']);
     expect(storedNetwork(harness)).toBeUndefined();
+  });
+
+  it('ends a PUT that fails after its checks as a 500 in its own response', async () => {
+    // The /api router forwards a rejected handler promise to its error handler; a
+    // rejection that escaped it would reach unhandledRejection, which exits the dashboard.
+    let failNextResponse = false;
+    harness = await startAuthHarness({
+      before: (app) => {
+        app.use((req, res, next) => {
+          if (req.method === 'PUT' && req.path === '/api/auth/network' && failNextResponse) {
+            failNextResponse = false;
+            const json = res.json.bind(res);
+            let thrown = false;
+            res.json = (body: unknown) => {
+              if (!thrown && res.statusCode === 200) {
+                thrown = true;
+                throw new Error('fixture: the response could not be written');
+              }
+              return json(body);
+            };
+          }
+          next();
+        });
+      },
+    });
+    atPeer(harness, PRIVATE_PEER);
+    const lan = await signedIn(harness);
+    failNextResponse = true;
+    const failed = await lan.send('PUT', '/api/auth/network', { trustLocalNetwork: false });
+    expect(failed.status).toBe(500);
+    expect(failed.body).toEqual({ error: 'The request could not be completed safely.' });
+    // The server is still up and answers the next request normally.
+    const again = await lan.send('PUT', '/api/auth/network', { trustLocalNetwork: false });
+    expect([again.status, again.body.trustLocalNetwork]).toEqual([200, false]);
   });
 
   it('answers 409 auth_not_configured while dashboard sign-in is off', async () => {

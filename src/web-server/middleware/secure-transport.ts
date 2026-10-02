@@ -22,10 +22,13 @@ import {
  *    is `tailscale-serve` or `loopback-https-proxy`, and `X-Forwarded-Proto` is
  *    exactly `https`. Forwarded headers from any other peer are ignored;
  * 4. a trusted local network (amended 2026-10-02, owner's choice): the owner
- *    turned on `dashboard_network.trust_local_network` and the peer address is
- *    in `dashboard_network.trusted_networks` (default the private ranges plus
- *    loopback). Plain HTTP then counts as secure for that peer. Public,
- *    link-local, CGNAT and unknown peers stay refused unless the list names them.
+ *    turned on `dashboard_network.trust_local_network`, the peer address is in
+ *    `dashboard_network.trusted_networks` (default the private ranges), the
+ *    peer is not loopback (loopback is rule 2's alone, Host test included), and
+ *    the request carries no forwarded headers (a proxy's clients are unknown,
+ *    whatever address the proxy itself has). Plain HTTP then counts as secure
+ *    for that peer. Public, link-local, CGNAT and unknown peers stay refused
+ *    unless the list names them.
  *
  * Rules 3 and 4 read config.yaml through resolvers that the server wires at
  * startup (`configureDashboardTransport`); until then both are off.
@@ -87,7 +90,26 @@ function isLoopbackHostName(value: string | null): boolean {
   );
 }
 
-const FORWARDED_HEADERS = ['forwarded', 'x-forwarded-for', 'x-forwarded-proto', 'x-real-ip'];
+/**
+ * Headers that an HTTP proxy, load balancer or CDN adds for the client behind
+ * it. Any one of them means the socket peer is a proxy, not the client.
+ */
+const FORWARDED_HEADERS = [
+  'forwarded',
+  'via',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-forwarded-port',
+  'x-forwarded-server',
+  'x-original-forwarded-for',
+  'x-real-ip',
+  'x-client-ip',
+  'x-cluster-client-ip',
+  'cf-connecting-ip',
+  'true-client-ip',
+  'fastly-client-ip',
+];
 
 export interface SecureTransportOptions {
   trustedProxy?: TrustedProxyKind | null;
@@ -100,8 +122,13 @@ function carriesForwardedHeaders(req: IncomingMessage): boolean {
 
 /**
  * Rule 4. Only the socket's own address counts: X-Forwarded-* never names the
- * peer, and a loopback peer that carries forwarded headers (a local proxy) is
- * not trusted, because the client behind it is unknown.
+ * peer. It never applies to:
+ * - a loopback peer, even when the list names loopback: rule 2 already covers
+ *   real loopback and also requires a loopback Host, so a raw TCP forward onto
+ *   127.0.0.1 (ssh -R, socat, frp) or a DNS-rebinding page gets nothing here;
+ * - a request that carries forwarded headers, from any peer: a reverse proxy
+ *   on the LAN (a NAS or router) would otherwise pass its trust to every client
+ *   behind it, internet clients included.
  */
 export function isTrustedLocalNetworkPeer(
   req: IncomingMessage,
@@ -109,12 +136,16 @@ export function isTrustedLocalNetworkPeer(
 ): boolean {
   if (!trust.enabled) return false;
   const address = parseAddress(req.socket?.remoteAddress);
-  if (!address) return false;
-  if (isLoopbackAddress(address) && carriesForwardedHeaders(req)) return false;
+  if (!address || isLoopbackAddress(address)) return false;
+  if (carriesForwardedHeaders(req)) return false;
   return isAddressInNetworks(address, trust.networks);
 }
 
-/** What Settings shows as "This connection": the normalised peer and whether rule 4 holds. */
+/**
+ * What Settings shows as "This connection": the normalised peer and whether
+ * rule 4 holds. `trusted` is false for a loopback peer: the dashboard computer
+ * itself is secure by rule 2, not by the local network trust.
+ */
 export function describeConnection(req: IncomingMessage): { peer: string; trusted: boolean } {
   return {
     peer: normalizePeerAddress(req.socket?.remoteAddress) ?? 'unknown',

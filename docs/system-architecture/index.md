@@ -80,9 +80,10 @@ and expires after 90 days unused. Password, setup, pairing and rotation need a s
 transport; `dashboard_tls` in config.yaml (a trusted local TLS proxy, an in-process HTTPS
 listener and the public origin) is off by default. So is `dashboard_network`: with
 `trust_local_network: true`, plain HTTP from a peer in `trusted_networks` (by default
-10/8, 172.16/12, 192.168/16, fc00::/7 and loopback; [ranges](../../src/web-server/middleware/trusted-networks.ts),
-IPv4-mapped addresses normalised) counts as secure, while public, link-local and CGNAT
-peers stay refused unless listed. `/api/auth/check` reports the switch and this
+10/8, 172.16/12, 192.168/16 and fc00::/7; [ranges](../../src/web-server/middleware/trusted-networks.ts),
+IPv4-mapped addresses normalised) counts as secure when the request carries no proxy
+headers. Loopback is never trusted this way (its own rule also checks the Host header),
+and public, link-local and CGNAT peers stay refused unless listed. `/api/auth/check` reports the switch and this
 connection; [`PUT /api/auth/network`](../../src/web-server/routes/auth-network-routes.ts)
 turns it off from any signed-in browser and on only from loopback. Credentials set by environment
 variables are read-only. Wrong passwords are limited per address and per server

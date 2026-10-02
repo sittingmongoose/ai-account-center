@@ -101,9 +101,12 @@ async function changeNetwork(req: Request, res: Response): Promise<void> {
   res.json(view(req));
 }
 
+/**
+ * `router` is the /api/auth router from createApiRouter, which forwards a
+ * rejected handler promise to the /api error handler. Register the async
+ * handler itself so that forwarding sees its promise.
+ */
 export function registerAuthNetworkRoutes(router: Router): void {
   router.get('/network', readNetwork);
-  router.put('/network', (req, res) => {
-    void changeNetwork(req, res);
-  });
+  router.put('/network', changeNetwork);
 }

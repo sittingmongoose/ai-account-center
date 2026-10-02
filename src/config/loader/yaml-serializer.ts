@@ -343,7 +343,7 @@ export function generateYamlWithComments(config: UnifiedConfig): string {
     lines.push(
       '# Dashboard network: trust_local_network lets plain HTTP from trusted_networks carry',
       '# passwords, keys and sign-in codes (off by default). trusted_networks defaults to',
-      '# 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, fc00::/7 and ::1/128.',
+      '# 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and fc00::/7.',
       network.trim(),
       ''
     );

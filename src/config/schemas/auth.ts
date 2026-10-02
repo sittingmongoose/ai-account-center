@@ -129,8 +129,9 @@ export interface DashboardNetworkConfig {
   /** Trust peers on the local network (default: false). Only `true` turns it on. */
   trust_local_network?: boolean;
   /**
-   * Trusted ranges as CIDRs (default: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
-   * 127.0.0.0/8, fc00::/7 and ::1/128). A VPN subnet outside them can be added here.
+   * Trusted ranges as CIDRs (default: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+   * and fc00::/7). A VPN subnet outside them can be added here. Loopback is never
+   * trusted by this rule (the dashboard computer is secure by its own rule).
    */
   trusted_networks?: string[];
 }

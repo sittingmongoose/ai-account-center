@@ -9,7 +9,7 @@ import { parseTrustedNetworks, type TrustedNetwork } from '../middleware/trusted
  *
  *   dashboard_network:
  *     trust_local_network: true          # default false
- *     trusted_networks: [10.6.0.0/24]    # default: the private ranges plus loopback
+ *     trusted_networks: [10.6.0.0/24]    # default: the private ranges
  *
  * Only `true` turns the trust on; anything else, a missing block or a config
  * that cannot be read leaves it off.

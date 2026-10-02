@@ -24,19 +24,37 @@ export interface TrustedNetwork {
   cidr: string;
 }
 
-/** The private ranges plus loopback: what `dashboard_network.trusted_networks` means when absent. */
+/**
+ * The private ranges: what `dashboard_network.trusted_networks` means when
+ * absent. Loopback is not one of them: rule 4 never applies to a loopback peer
+ * (rule 2 covers real loopback, with its Host test), so a raw TCP forward onto
+ * 127.0.0.1 or a DNS-rebinding page cannot borrow it.
+ */
 export const DEFAULT_TRUSTED_NETWORKS: readonly string[] = Object.freeze([
   '10.0.0.0/8',
   '172.16.0.0/12',
   '192.168.0.0/16',
-  '127.0.0.0/8',
   'fc00::/7',
-  '::1/128',
 ]);
 
-/** The broadest range a list may name: nothing wider than a /8 (IPv4) or a /7 (IPv6). */
-const MIN_PREFIX: Record<AddressFamily, number> = { 4: 8, 6: 7 };
+/**
+ * The broadest range a list may name: nothing wider than a /8 (IPv4) or a /48
+ * (IPv6, one site's prefix). The IPv6 unique-local block fc00::/7 is the only
+ * wider IPv6 range allowed, and only inside it (fc00::/7, fd00::/8 and so on).
+ */
+const MIN_PREFIX: Record<AddressFamily, number> = { 4: 8, 6: 48 };
+const IPV6_UNIQUE_LOCAL_PREFIX = 7;
 const MAX_ENTRIES = 64;
+
+function isInsideUniqueLocal(bytes: Uint8Array, prefix: number): boolean {
+  return prefix >= IPV6_UNIQUE_LOCAL_PREFIX && (bytes[0] & 0xfe) === 0xfc;
+}
+
+/** A range that holds only loopback addresses (inside 127.0.0.0/8, or ::1/128). */
+function isLoopbackOnlyRange(family: AddressFamily, bytes: Uint8Array, prefix: number): boolean {
+  if (family === 4) return prefix >= 8 && bytes[0] === 127;
+  return prefix === 128 && isLoopbackAddress({ family, bytes });
+}
 
 function parseIPv4(text: string): Uint8Array | null {
   if (net.isIPv4(text) === false) return null;
@@ -143,7 +161,8 @@ function masked(bytes: Uint8Array, prefix: number): Uint8Array {
  * One CIDR (`10.6.0.0/24`, `fd00::/8`) or a single address. Host bits are
  * cleared; an IPv4-mapped IPv6 range of /96 or longer becomes the IPv4 range.
  * Returns null for anything else, including a zone, a range wider than /8
- * (IPv4) or /7 (IPv6), and surrounding text.
+ * (IPv4) or /48 (IPv6, outside fc00::/7), a loopback-only range (rule 4 never
+ * trusts loopback), and surrounding text.
  */
 export function parseTrustedNetwork(value: unknown): TrustedNetwork | null {
   if (typeof value !== 'string' || value.length === 0 || value.length > 64) return null;
@@ -178,8 +197,11 @@ export function parseTrustedNetwork(value: unknown): TrustedNetwork | null {
       prefix -= 96;
     }
   }
-  if (prefix < MIN_PREFIX[family]) return null;
   const network = masked(bytes, prefix);
+  if (prefix < MIN_PREFIX[family] && !(family === 6 && isInsideUniqueLocal(network, prefix))) {
+    return null;
+  }
+  if (isLoopbackOnlyRange(family, network, prefix)) return null;
   return {
     family,
     bytes: network,
