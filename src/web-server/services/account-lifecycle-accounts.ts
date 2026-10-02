@@ -59,6 +59,7 @@ export const LIFECYCLE_MESSAGES: Readonly<Record<string, string>> = Object.freez
   trash_cross_volume: 'The trash is on another disk on that computer. Nothing was moved.',
   remove_failed: 'The account could not be removed safely. Nothing was changed.',
   restore_failed: 'The account could not be restored safely.',
+  purge_failed: 'The profile could not be deleted safely. It stays in the trash.',
   write_failed: 'The change could not be saved safely.',
   registry_unavailable: 'Account list could not be read safely.',
   key_store_unavailable: 'The key could not be stored safely.',

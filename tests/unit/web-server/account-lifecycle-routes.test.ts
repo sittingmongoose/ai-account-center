@@ -409,6 +409,7 @@ describe('lifecycle route scope and guards', () => {
       ['PATCH', '/zai:usage', { label: 'Work' }],
       ['GET', '/trash', undefined],
       ['POST', '/trash/tr_0123456789abcdef/restore', {}],
+      ['POST', '/trash/tr_0123456789abcdef/purge', {}],
       ['GET', '/signin-jobs/job_0123456789abcdef', undefined],
       ['POST', '/signin-jobs/job_0123456789abcdef/cancel', {}],
       ['POST', '/signin-jobs/job_0123456789abcdef/code', { code: 'x' }],
@@ -1250,12 +1251,14 @@ describe('registry, re-check, open, label and trash', () => {
     });
   });
 
-  it('keeps Claude add, remove and restore off until host steps are enabled', async () => {
+  it('keeps Claude add, remove, restore and purge off until host steps are enabled', async () => {
     const off = await fixture();
     const add = await off.request('POST', '/add', { provider: 'claude', profileId: 'work2' });
     expect([add.status, add.body.code]).toEqual([409, 'not_implemented']);
     const restore = await off.request('POST', '/trash/tr_0123456789abcdef/restore', {});
     expect([restore.status, restore.body.code]).toEqual([409, 'not_implemented']);
+    const purge = await off.request('POST', '/trash/tr_0123456789abcdef/purge', {});
+    expect([purge.status, purge.body.code]).toEqual([409, 'not_implemented']);
   });
 
   it("refuses a computer's default Claude profile with account_protected, host steps on or off", async () => {
@@ -1364,6 +1367,78 @@ describe('registry, re-check, open, label and trash', () => {
       'accounts.remove',
       'accounts.trash.restore',
     ]);
+  });
+
+  it('purges one trash entry now with a typed DELETE confirmation', async () => {
+    const f = await fixture({ claudeEnabled: true });
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'party',
+            email: 'party@example.com',
+            mac: {
+              launcherName: 'p',
+              launcherPath: '/a',
+              profilePath: '/fake/mac/Claude-party',
+              sshHost: 'jared-mac',
+            },
+            windows: {
+              launcherName: 'p',
+              profilePath: 'C:\\x\\Claude-party',
+              sshHost: 'jared-windows',
+            },
+          },
+        ],
+      })
+    );
+    const prepared = (await f.request('POST', '/claude:party/remove', {})).body.confirmation as {
+      token: string;
+    };
+    const removed = await f.request('POST', '/claude:party/remove', {
+      confirmationToken: prepared.token,
+    });
+    const trashId = String(removed.body.trashId);
+    const ask = await f.request('POST', `/trash/${trashId}/purge`, {});
+    expect(ask.status).toBe(200);
+    const confirmation = ask.body.confirmation as {
+      token: string;
+      effects: string[];
+      expectsTyped: string;
+    };
+    expect(confirmation.effects).toEqual([
+      'Its Claude data is deleted for good on Mac and Windows.',
+      'This cannot be undone. Type DELETE to confirm.',
+    ]);
+    expect(confirmation.expectsTyped).toBe('DELETE');
+    // A mistyped confirmation keeps the token for a retry.
+    const mistyped = await f.request('POST', `/trash/${trashId}/purge`, {
+      confirmationToken: confirmation.token,
+      confirm: 'delete',
+    });
+    expect([mistyped.status, mistyped.body.code]).toEqual([400, 'invalid_body']);
+    const purged = await f.request('POST', `/trash/${trashId}/purge`, {
+      confirmationToken: confirmation.token,
+      confirm: 'DELETE',
+    });
+    expect(purged.body).toEqual({ purged: true, trashId });
+    expect((await f.request('GET', '/trash')).body.entries).toEqual([]);
+    const again = await f.request('POST', `/trash/${trashId}/purge`, {
+      confirmationToken: confirmation.token,
+      confirm: 'DELETE',
+    });
+    expect([again.status, again.body.code]).toEqual([404, 'unknown_trash']);
+    expect(f.audits.map(([event]) => event)).toContain('accounts.trash.purge');
+  });
+
+  it('purge answers 404 for a malformed or missing trash id', async () => {
+    const f = await fixture({ claudeEnabled: true });
+    const malformed = await f.request('POST', '/trash/nope/purge', {});
+    expect([malformed.status, malformed.body.code]).toEqual([400, 'invalid_account']);
+    const missing = await f.request('POST', '/trash/tr_0123456789abcdef/purge', {});
+    expect([missing.status, missing.body.code]).toEqual([404, 'unknown_trash']);
   });
 });
 

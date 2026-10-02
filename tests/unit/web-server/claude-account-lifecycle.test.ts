@@ -468,6 +468,60 @@ describe('Claude Remove and trash', () => {
     expect(await lifecycle.listTrash()).toEqual([]);
     expect(hosts.trashDirs.mac.size + hosts.trashDirs.windows.size).toBe(0);
   });
+
+  it('purges one entry now on both hosts, before its 30 days', async () => {
+    const { hosts, lifecycle } = setup();
+    const { trashId } = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
+    hosts.calls = [];
+    expect(await lifecycle.purgeOne(trashId)).toEqual({ trashId });
+    expect(hosts.calls).toEqual(['purge:mac', 'purge:windows']);
+    expect(await lifecycle.listTrash()).toEqual([]);
+    expect(hosts.trashDirs.mac.size + hosts.trashDirs.windows.size).toBe(0);
+    await expect(lifecycle.purgeOne(trashId)).rejects.toMatchObject({ code: 'unknown_trash' });
+  });
+
+  it('purgeOne keeps a failed host as deleting and retries it', async () => {
+    const { hosts, lifecycle } = setup();
+    const { trashId } = await lifecycle.remove((await lifecycle.findProfile('party')) as never);
+    hosts.calls = [];
+    hosts.fail.purge = 'windows';
+    await expect(lifecycle.purgeOne(trashId)).rejects.toMatchObject({
+      code: 'host_unreachable',
+      host: 'windows',
+    });
+    expect((await lifecycle.listTrash())[0]).toMatchObject({ trashId, state: 'deleting' });
+    hosts.fail = {};
+    hosts.calls = [];
+    expect(await lifecycle.purgeOne(trashId)).toEqual({ trashId });
+    expect(hosts.calls).toEqual(['purge:mac', 'purge:windows']);
+    expect(await lifecycle.listTrash()).toEqual([]);
+  });
+
+  it('purgeOne refuses a default profile found in the trash and runs nothing', async () => {
+    const { ccsDir, hosts, lifecycle } = setup();
+    const party = await lifecycle.findProfile('party');
+    const { trashId } = await lifecycle.remove(party as never);
+    // A default marker smuggled into the stored entry (Remove never writes one).
+    const file = path.join(ccsDir, 'accounts', 'trash.json');
+    const document = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const entry = document.entries.find((item: { trashId: string }) => item.trashId === trashId);
+    entry.entry.windows = { ...(entry.entry.windows as object), isDefault: true };
+    fs.writeFileSync(file, JSON.stringify(document));
+    hosts.calls = [];
+    await expect(lifecycle.purgeOne(trashId)).rejects.toMatchObject({
+      code: 'account_protected',
+    });
+    expect(hosts.calls).toEqual([]);
+    expect(await lifecycle.listTrash()).toHaveLength(1);
+  });
+
+  it('purgeOne is off while host steps are off', async () => {
+    const { hosts, lifecycle } = setup(false);
+    await expect(lifecycle.purgeOne('tr_0000000000000000')).rejects.toMatchObject({
+      code: 'not_implemented',
+    });
+    expect(hosts.calls).toEqual([]);
+  });
 });
 
 function setupReuse(document: { profiles: Array<Record<string, unknown>> }) {

@@ -36,7 +36,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
-  'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'others-out', 'network-off',
+  'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all',
 ]));
 
@@ -405,6 +405,10 @@ export function createAccountsController(deps) {
         toast('ok', flow.type === 'key-replace' ? `${label(provider)} key replaced` : `${label(provider)} key stored`, last4 ? `It ends in ${last4}; the key itself is never shown again.` : 'The key itself is never shown again.');
         void reload();
       } catch (error) { put({ step: 'key', busy: false, error: errorText(error, { provider, what: flow.type === 'key-replace' ? 'replace' : 'add' }) }); }
+      return;
+    }
+    if (flow.type === 'purge' && flow.step === 'type') {
+      await commitPurge(provider, input);
     }
   }
   async function cancelFlow(provider) {
@@ -516,6 +520,39 @@ export function createAccountsController(deps) {
     } catch (error) { delete state.lines[key]; fail(error, { provider: 'claude' }); void loadRegistry(); }
     changed();
   }
+  /** Delete now: ask for the confirmation, then open the typed-DELETE flow under Claude. */
+  async function askPurge(trashId) {
+    const entry = (state.registry?.trash || []).find(t => t.trashId === trashId);
+    const label = text(entry?.label) || 'this profile';
+    setFlow('claude', { type: 'purge', step: 'asking', trashId, label });
+    try {
+      const { payload } = await call(requests.purgeAsk(trashId));
+      const c = payload?.confirmation;
+      if (!c?.token) throw Object.assign(new Error('no confirmation'), { status: 500 });
+      setFlow('claude', { type: 'purge', step: 'type', trashId, label, token: c.token, effects: Array.isArray(c.effects) ? c.effects : [] });
+    } catch (error) {
+      closeFlow('claude');
+      fail(error, { provider: 'claude' });
+      if (error?.payload?.code === 'unknown_trash') void loadRegistry();
+    }
+  }
+  async function commitPurge(provider, typed) {
+    const flow = state.flows[provider];
+    if (!flow || flow.type !== 'purge' || flow.busy) return;
+    const confirm = String(typed || '').trim();
+    const put = patch => { if (state.flows[provider]?.serial === flow.serial) { state.flows[provider] = { ...state.flows[provider], ...patch }; changed(); } };
+    if (!confirm) { put({ error: { title: 'Type DELETE first.', body: '' } }); return; }
+    put({ busy: true, error: null });
+    try {
+      await call(requests.purgeCommit(flow.trashId, flow.token, confirm));
+      put({ step: 'done', busy: false });
+      toast('ok', `Deleted ${text(flow.label) || 'the Claude profile'} for good`, 'Its Claude data is gone on Mac and Windows.');
+      void reload();
+    } catch (error) {
+      if (error?.payload?.code === 'invalid_body') put({ busy: false, error: { title: 'Type DELETE exactly as shown.', body: '' } });
+      else { put({ busy: false, error: errorText(error, { provider: 'claude' }) }); if (error?.payload?.code === 'unknown_trash' || error?.payload?.code === 'confirmation_stale') void loadRegistry(); }
+    }
+  }
 
   // ------------------------------------------------------------ the Dashboard sign-in block
   async function signOutOthers() {
@@ -626,6 +663,7 @@ export function createAccountsController(deps) {
       case 'remove-commit': await commitRemove(v); return true;
       case 'restore': await askRestore(v); return true;
       case 'restore-commit': await commitRestore(v); return true;
+      case 'purge': await askPurge(v); return true;
       case 'others-out': await signOutOthers(); return true;
       case 'network-off': await setNetwork(false); return true;
       case 'network-on': await setNetwork(true); return true;

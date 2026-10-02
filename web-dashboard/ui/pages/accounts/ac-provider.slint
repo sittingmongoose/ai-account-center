@@ -249,8 +249,8 @@ export component AcRowItem inherits Rectangle {
     ProbeMark { x: 0px; y: 0px; width: root.width; height: line.height; id: "row:" + root.item.id; }
 }
 
-// A Claude profile in the 30-day trash: its label, when it is deleted for good, Restore (and Delete now, which
-// waits for a server route), and its confirmation line.
+// A Claude profile in the 30-day trash: its label, when it is deleted for good, Restore and Delete now
+// (typed DELETE in the Claude flow), and its confirmation line.
 component TrashRowItem inherits Rectangle {
     in property <AcTrashRow> item;
     in property <bool> busy;

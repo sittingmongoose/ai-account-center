@@ -113,3 +113,26 @@ export function pendingRecord(profile: PendingClaudeProfile): ClaudeProfileRecor
     entry: { ...profile },
   };
 }
+
+/**
+ * True when a trash entry's stored profile was a computer's default Claude
+ * profile. The default is never put in the trash (Remove refuses it), so this
+ * is defence in depth for the purge route.
+ */
+export function trashEntryIsDefault(entry: {
+  source: 'inventory' | 'pending';
+  entry: Record<string, unknown>;
+}): boolean {
+  const raw = entry.entry;
+  if (entry.source === 'pending') {
+    const mac = raw.mac as Record<string, unknown> | undefined;
+    const windows = raw.windows as Record<string, unknown> | undefined;
+    return (
+      isDefaultClaudeDataFolder(mac?.profilePath) || isDefaultClaudeDataFolder(windows?.profilePath)
+    );
+  }
+  return (
+    isDefaultLauncher(raw.mac as Record<string, unknown> | undefined) ||
+    isDefaultLauncher(raw.windows as Record<string, unknown> | undefined)
+  );
+}

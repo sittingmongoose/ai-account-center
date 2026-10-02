@@ -36,6 +36,7 @@ const STATUS: Record<string, number> = {
   remove_failed: 500,
   write_failed: 500,
   restore_failed: 500,
+  purge_failed: 500,
   host_unreachable: 502,
   unknown_trash: 404,
 };
@@ -432,4 +433,81 @@ export async function restoreTrash(
   env.audit('accounts.trash.restore', { provider: 'claude' });
   env.onChanged();
   return { status: 200, body: { restored: true, accountId: restored.accountId } };
+}
+
+/** The exact typed confirmation Delete now requires. */
+export const PURGE_TYPED_CONFIRMATION = 'DELETE';
+
+function purgeCommit(body: Record<string, unknown>): { token: string; confirm: string } | null {
+  const names = Object.keys(body);
+  if (names.length === 0) return null;
+  if (
+    names.length !== 2 ||
+    !names.includes('confirmationToken') ||
+    !names.includes('confirm') ||
+    typeof body.confirmationToken !== 'string' ||
+    !CONFIRMATION_TOKEN_PATTERN.test(body.confirmationToken) ||
+    typeof body.confirm !== 'string'
+  ) {
+    throw new LifecycleHttpError(400, 'invalid_body');
+  }
+  return { token: body.confirmationToken, confirm: body.confirm };
+}
+
+/**
+ * POST /api/accounts/trash/:trashId/purge: delete one trashed profile now,
+ * before its 30 days, on both hosts. Two calls: `{}` returns a confirmation
+ * token with effects and `expectsTyped: "DELETE"`, and
+ * `{confirmationToken, confirm: "DELETE"}` performs the purge. A mistyped
+ * confirmation is 400 and keeps the token for a retry.
+ */
+export async function purgeTrash(
+  env: LifecycleEnv,
+  trashId: string,
+  body: Record<string, unknown>,
+  context: LifecycleContext
+): Promise<LifecycleResult> {
+  if (!TRASH_ID.test(trashId)) throw new LifecycleHttpError(400, 'invalid_account');
+  const commit = purgeCommit(body);
+  const claude = env.claude();
+  if (!claude.enabled) throw new LifecycleHttpError(409, 'not_implemented');
+  const entry = await claude.findTrash(trashId).catch(() => null);
+  if (!entry || (entry.state !== 'trashed' && entry.state !== 'deleting')) {
+    throw new LifecycleHttpError(404, 'unknown_trash');
+  }
+  const binding = {
+    action: 'trash-purge' as const,
+    subject: trashId,
+    sessionKey: context.sessionKey,
+    stateFingerprint: claude.purgeFingerprint(entry),
+  };
+  if (commit === null) {
+    return {
+      status: 200,
+      body: {
+        confirmation: {
+          ...env.confirmations().issue(binding),
+          effects: [
+            'Its Claude data is deleted for good on Mac and Windows.',
+            'This cannot be undone. Type DELETE to confirm.',
+          ],
+          expectsTyped: PURGE_TYPED_CONFIRMATION,
+        },
+      },
+    };
+  }
+  if (commit.confirm !== PURGE_TYPED_CONFIRMATION) {
+    throw new LifecycleHttpError(400, 'invalid_body');
+  }
+  if (!env.confirmations().consume(commit.token, binding)) {
+    throw new LifecycleHttpError(409, 'confirmation_stale');
+  }
+  try {
+    await claude.purgeOne(trashId);
+  } catch (error) {
+    throw mapError(error);
+  }
+  env.audit('accounts.trash.purge', { count: 1 });
+  env.onChanged();
+  return { status: 200, body: { purged: true, trashId } };
 }

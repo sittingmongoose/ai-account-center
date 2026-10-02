@@ -186,7 +186,7 @@ test('the page is versioned and lists every provider from the registry, sign-in 
       LIVE.network,
     true
   );
-  assert.equal(LIVE.purgeNow, false);
+  assert.equal(LIVE.purgeNow, true);
 });
 
 test('rows show the status only for an exception, the last sample and the source', () => {
@@ -451,7 +451,7 @@ test("Claude rows open on Mac or Windows; Remove is live, and a computer's defau
   assert.equal(provider(off, 'claude').foot[0].coming, true);
 });
 
-test('the Claude trash lists each profile with Restore; Delete now waits for a server route', () => {
+test('the Claude trash lists each profile with Restore; Delete now is live with a typed DELETE flow', () => {
   const trash = [
     {
       trashId: 'tr_1',
@@ -484,11 +484,19 @@ test('the Claude trash lists each profile with Restore; Delete now waits for a s
     t[0].actions.map((a) => [a.act, a.enabled, a.coming]),
     [
       ['restore', true, false],
-      ['purge', false, true],
+      ['purge', true, false],
     ]
   );
+  assert.match(t[0].actions[1].tip, /Type DELETE to confirm/);
   assert.equal(t[1].sub, 'Deleting for good');
   assert.equal(t[1].actions[0].enabled, false);
+  assert.deepEqual(
+    t[1].actions.map((a) => [a.act, a.enabled, a.coming]),
+    [
+      ['restore', false, false],
+      ['purge', false, false],
+    ]
+  );
   // a restore under review shows its line
   const asking = accountsViewModel(data([], { providers: providers() }), {
     now,
@@ -1419,6 +1427,47 @@ test('flows: Claude profiles, API keys that are never echoed, and guided app or 
     }).done,
     'Session found'
   );
+});
+
+test('flows: Delete now asks for a typed DELETE, then reports it is gone for good', () => {
+  const asking = flowView('claude', {
+    type: 'purge',
+    step: 'asking',
+    trashId: 'tr_1',
+    label: 'party@example.test',
+  });
+  assert.equal(asking.title, 'Delete party@example.test now?');
+  assert.match(asking.waiting, /Checking what deleting/);
+  const type = flowView('claude', {
+    type: 'purge',
+    step: 'type',
+    trashId: 'tr_1',
+    label: 'party@example.test',
+    token: 't',
+    effects: [
+      'Its Claude data is deleted for good on Mac and Windows.',
+      'This cannot be undone. Type DELETE to confirm.',
+    ],
+  });
+  assert.deepEqual(
+    [type.inputKind, type.inputLabel, type.inputPlaceholder],
+    ['purge', 'Type DELETE to confirm', 'DELETE']
+  );
+  assert.match(type.body, /deleted for good/);
+  assert.deepEqual(
+    type.actions.map((a) => [a.act, a.label, a.style]),
+    [
+      ['flow-submit', 'Delete now', 'danger-solid'],
+      ['flow-cancel', 'Cancel', 'ghost'],
+    ]
+  );
+  const done = flowView('claude', {
+    type: 'purge',
+    step: 'done',
+    trashId: 'tr_1',
+    label: 'party@example.test',
+  });
+  assert.equal(done.done, 'party@example.test deleted for good');
 });
 
 test('the line under a row: a remove to confirm with its effects, a refusal with its reason, and a request in flight', () => {

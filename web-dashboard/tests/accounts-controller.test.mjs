@@ -482,6 +482,27 @@ test('Restore from the Claude trash: confirmation, then back on both hosts', asy
   assert.equal(last(fails.toasts).title, 'Not restored');
 });
 
+test('Delete now from the Claude trash: typed DELETE, mistype keeps the token, then gone for good', async () => {
+  const token = 'P'.repeat(43);
+  const h = harness({ routes: {
+    'POST /api/accounts/trash/tr_0123456789abcdef/purge': body => body.confirmationToken
+      ? (body.confirm === 'DELETE' ? { purged: true, trashId: 'tr_0123456789abcdef' } : refusal(400, 'invalid_body'))
+      : { confirmation: { token, effects: ['Its Claude data is deleted for good on Mac and Windows.'], expectsTyped: 'DELETE' } },
+    'GET /api/accounts/registry': { accounts: [], trash: [] },
+  } });
+  h.ctl.state.registry = { accounts: [], trash: [{ trashId: 'tr_0123456789abcdef', provider: 'claude', label: 'party@example.test' }] };
+  await h.ctl.handle('purge', 'tr_0123456789abcdef');
+  assert.equal(h.ctl.state.flows.claude.type, 'purge');
+  assert.equal(h.ctl.state.flows.claude.step, 'type');
+  await h.ctl.handle('flow-submit', 'claude\ndelete\n');
+  assert.equal(h.ctl.state.flows.claude.error.title, 'Type DELETE exactly as shown.');
+  assert.equal(h.ctl.state.flows.claude.step, 'type');
+  await h.ctl.handle('flow-submit', 'claude\nDELETE\n');
+  assert.deepEqual(h.sent[2].body, { confirmationToken: token, confirm: 'DELETE' });
+  assert.equal(h.ctl.state.flows.claude.step, 'done');
+  assert.equal(last(h.toasts).title, 'Deleted party@example.test for good');
+});
+
 test('guided sign-ins: Qwen and Cursor open their guide, add their one account first, re-check and open the app', async () => {
   const h = harness({ routes: {
     'POST /api/accounts/qwen%3Ausage/signin-again': { guide: { kind: 'browser-extension', platform: 'windows' } },
