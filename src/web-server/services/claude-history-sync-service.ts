@@ -51,11 +51,15 @@ interface HistoryCore {
     directory: string,
     profileId: string,
     platform: 'mac' | 'windows'
-  ) => {
-    assertBound: () => void;
-    finish: (receipt: unknown) => void;
-    release: () => void;
-  };
+  ) => HistoryMarker;
+}
+/** One Open's durable uncertain-append hold (see armPendingMarker in the core). */
+interface HistoryMarker {
+  assertBound: () => void;
+  finish: (receipt: unknown) => void;
+  /** Back to pending before the next batch; only after this marker's own finish. */
+  rearm: () => void;
+  release: () => void;
 }
 const scriptsRoot = path.resolve(__dirname, '../../../scripts/claude-history');
 // Runtime uses the already packaged scripts directory. It never accepts a
@@ -234,7 +238,11 @@ function wireSnapshot(value: unknown): unknown {
 
 /** Progress callbacks for the Open progress view; counts only, never record contents. */
 export interface ClaudeHistorySyncObserver {
-  /** Whole missing-record plan and records confirmed before the next append. */
+  /**
+   * A bounded batch of the copy is about to be appended. `totalCount` is the
+   * whole plan of missing records and `confirmedCount` the records already
+   * confirmed by earlier batches of this Open (0 before the first batch).
+   */
   copying?: (totalCount: number, confirmedCount?: number) => void;
 }
 
@@ -290,83 +298,91 @@ export async function synchronizeClaudeHistoryBeforeOpen(
         throw new ValidationError('helper_unavailable');
       return response;
     };
-    return await loadCore().synchronizeBeforeProfileOpen({
-      profileId: id,
-      targetPlatform: platform,
-      policy,
-      adapters: {
-        isTargetClosed: async () => {
-          const response = await call(platform, 'closed-check');
-          return object(response) && response.closed === true;
-        },
-        readSource: async (_id, source) =>
-          decodeSnapshot(await call(source as 'mac' | 'windows', 'collect')),
-        readTarget: async () => decodeSnapshot(await call(platform, 'collect')),
-        verifyTranscriptReferences: async (_id, source, records) => {
-          const response = await call(source as 'mac' | 'windows', 'verify-transcripts', {
-            records: (wireSnapshot({ records }) as { records: unknown }).records,
-          });
-          return object(response) && response.verified === true;
-        },
-        targetProtectedStateUnchanged: async (target) => {
-          const response = await call(platform, 'protected-check', {
-            expectedTarget: wireSnapshot(target),
-          });
-          return object(response) && response.unchanged === true;
-        },
-        appendCreateOnly: async (payload) => {
-          const currentPolicy = await loadClaudeHistoryPolicy(profile);
-          if (!currentPolicy || JSON.stringify(currentPolicy) !== JSON.stringify(policy))
-            throw new ValidationError('policy_changed');
-          if (!object(payload)) throw new ValidationError('helper_unavailable');
-          let marker: ReturnType<HistoryCore['armPendingMarker']>;
-          try {
-            marker = loadCore().armPendingMarker(getCcsDir(), id, platform);
-          } catch {
-            // No remote append was invoked. Existing/unknown markers hold Open;
-            // lack of private marker storage alone skips this optional copy.
-            if (claudeHistoryOpenHeld(id, platform)) throw new ValidationError('append_pending');
-            return {
-              status: 'refused',
-              createdCount: 0,
-              recoveryRequired: false,
-              ownedFilesRolledBack: true,
-            };
-          }
-          try {
-            marker.assertBound();
-            const batchCount = Array.isArray(payload.records) ? payload.records.length : null;
-            const totalCount = payload.totalCount ?? batchCount;
-            const confirmedCount = payload.confirmedCount ?? 0;
-            // Counts describe the whole neutral plan, never just this batch.
-            // Invalid observer metadata is ignored; it cannot affect mutation.
-            if (
-              batchCount !== null &&
-              Number.isSafeInteger(totalCount) &&
-              Number.isSafeInteger(confirmedCount) &&
-              typeof totalCount === 'number' &&
-              typeof confirmedCount === 'number' &&
-              totalCount >= batchCount &&
-              totalCount <= 200 &&
-              confirmedCount >= 0 &&
-              confirmedCount + batchCount <= totalCount
-            )
-              notifyObserver(() => observer.copying?.(totalCount, confirmedCount));
-            const result = await call(platform, 'append', {
-              expectedTarget: wireSnapshot(payload.target),
-              records: (wireSnapshot({ records: payload.records }) as { records: unknown }).records,
+    // One durable marker per Open, so the bounded marker capacity counts Opens
+    // that copied, not records. It is armed before the first batch, finished by
+    // each batch's trusted terminal receipt and re-armed before the next batch;
+    // a lost or malformed receipt leaves it pending and stops the sequence.
+    const sequence: { marker: HistoryMarker | null } = { marker: null };
+    const appendCreateOnly = async (payload: unknown): Promise<unknown> => {
+      const currentPolicy = await loadClaudeHistoryPolicy(profile);
+      if (!currentPolicy || JSON.stringify(currentPolicy) !== JSON.stringify(policy))
+        throw new ValidationError('policy_changed');
+      if (!object(payload)) throw new ValidationError('helper_unavailable');
+      let marker: HistoryMarker;
+      try {
+        if (sequence.marker) sequence.marker.rearm();
+        else sequence.marker = loadCore().armPendingMarker(getCcsDir(), id, platform);
+        marker = sequence.marker;
+      } catch {
+        // No remote append was invoked. Existing/unknown markers hold Open;
+        // lack of private marker storage alone skips this optional copy.
+        if (claudeHistoryOpenHeld(id, platform)) throw new ValidationError('append_pending');
+        return {
+          status: 'refused',
+          createdCount: 0,
+          recoveryRequired: false,
+          ownedFilesRolledBack: true,
+        };
+      }
+      marker.assertBound();
+      const batchCount = Array.isArray(payload.records) ? payload.records.length : null;
+      const totalCount = payload.totalCount ?? batchCount;
+      const confirmedCount = payload.confirmedCount ?? 0;
+      // Counts describe the whole neutral plan, never just this batch.
+      // Invalid observer metadata is ignored; it cannot affect mutation.
+      if (
+        batchCount !== null &&
+        Number.isSafeInteger(totalCount) &&
+        Number.isSafeInteger(confirmedCount) &&
+        typeof totalCount === 'number' &&
+        typeof confirmedCount === 'number' &&
+        totalCount >= batchCount &&
+        totalCount <= 200 &&
+        confirmedCount >= 0 &&
+        confirmedCount + batchCount <= totalCount
+      )
+        notifyObserver(() => observer.copying?.(totalCount, confirmedCount));
+      const result = await call(platform, 'append', {
+        expectedTarget: wireSnapshot(payload.target),
+        records: (wireSnapshot({ records: payload.records }) as { records: unknown }).records,
+      });
+      // Only the fixed helper's successful terminal response says its
+      // sole Node mutator is finished/killed and reaped. Lost/malformed
+      // responses retain the durable hold; no automatic retry occurs.
+      marker.finish(result);
+      return result;
+    };
+    try {
+      return await loadCore().synchronizeBeforeProfileOpen({
+        profileId: id,
+        targetPlatform: platform,
+        policy,
+        adapters: {
+          isTargetClosed: async () => {
+            const response = await call(platform, 'closed-check');
+            return object(response) && response.closed === true;
+          },
+          readSource: async (_id, source) =>
+            decodeSnapshot(await call(source as 'mac' | 'windows', 'collect')),
+          readTarget: async () => decodeSnapshot(await call(platform, 'collect')),
+          verifyTranscriptReferences: async (_id, source, records) => {
+            const response = await call(source as 'mac' | 'windows', 'verify-transcripts', {
+              records: (wireSnapshot({ records }) as { records: unknown }).records,
             });
-            // Only the fixed helper's successful terminal response says its
-            // sole Node mutator is finished/killed and reaped. Lost/malformed
-            // responses retain the durable hold; no automatic retry occurs.
-            marker.finish(result);
-            return result;
-          } finally {
-            marker.release();
-          }
+            return object(response) && response.verified === true;
+          },
+          targetProtectedStateUnchanged: async (target) => {
+            const response = await call(platform, 'protected-check', {
+              expectedTarget: wireSnapshot(target),
+            });
+            return object(response) && response.unchanged === true;
+          },
+          appendCreateOnly,
         },
-      },
-    });
+      });
+    } finally {
+      sequence.marker?.release();
+    }
   } catch {
     return skipped('unavailable');
   }

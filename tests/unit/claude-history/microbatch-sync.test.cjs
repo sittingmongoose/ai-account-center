@@ -22,7 +22,7 @@ function fixture(count=18,existing=18){
  const sourceRows=Array.from({length:count},(_,i)=>fx.envelope(fx.record(seed,'windows',{},i+1)));
  const snapshot=(platform,records)=>({profileId:'gmail',platform,identity:{accountSha256:identity.accountSha256,orgSha256:identity.orgSha256},endpoint:seed.endpoint,records,snapshotStable:true,revision:sync.snapshotRevision(records),nativeGuard:{...sync.NATIVE[platform],warmGuardVerified:true,autoResumeGuardVerified:true},noPendingInput:true,noScheduledWork:true,protectedSnapshotStable:true,protectedSnapshot:protectedState});
  const target=()=>snapshot('mac',fs.readdirSync(registry).filter(n=>/^local_.*\.json$/.test(n)).sort().map(name=>{const bytes=fs.readFileSync(path.join(registry,name));return{name,bytes,sha256:fx.digest(bytes)}}));
- const state={appendCalls:0,aggregateProgress:[],closedCalls:0,readTargetCalls:0,fullTransactionGuardCalls:0,afterAppend:null,appendFailure:null,targetMutation:null};
+ const state={appendCalls:0,aggregateProgress:[],closedCalls:0,readTargetCalls:0,fullTransactionGuardCalls:0,afterAppend:null,appendFailure:null,targetMutation:null,marker:null};
  const adapters={
   async isTargetClosed(){state.closedCalls++;return state.closed!==false},
   async readSource(){return snapshot('windows',sourceRows)},
@@ -31,8 +31,10 @@ function fixture(count=18,existing=18){
   async targetProtectedStateUnchanged(expected){return fs.readFileSync(path.join(profile,'config.json')).equals(protectedBytes)&&JSON.stringify(target().protectedSnapshot)===JSON.stringify(expected.protectedSnapshot)},
   async appendCreateOnly(payload){
    state.appendCalls++;assert.equal(payload.records.length,1);state.aggregateProgress.push([payload.totalCount,payload.confirmedCount]);await payload.closedGuard();
-   const marker=sync.armPendingMarker(directory,'gmail','mac');
-   try{
+   // Same as the service: one durable marker per Open, re-armed per batch.
+   if(state.marker)state.marker.rearm();else state.marker=sync.armPendingMarker(directory,'gmail','mac');
+   const marker=state.marker;
+   {
     marker.assertBound();
     if(state.appendFailure&&state.appendCalls===state.appendFailure.at){
      if(state.appendFailure.kind==='lost')throw Error(fx.PRIVATE_ERROR);
@@ -53,10 +55,12 @@ function fixture(count=18,existing=18){
     assert.equal(result.status,'created_metadata');assert.equal(result.createdCount,1);
     const terminal={...result,writerQuiescent:true};marker.finish(terminal);
     if(state.afterAppend)state.afterAppend();return terminal;
-   }finally{marker.release()}
+   }
   },
  };
- return {directory,profile,registry,state,adapters,policy,baseline,sourceRows,target,run:()=>sync.synchronizeBeforeProfileOpen({profileId:'gmail',targetPlatform:'mac',policy,adapters}),cleanup:()=>fs.rmSync(directory,{recursive:true,force:true})};
+ const markers=()=>{const root=path.join(directory,'claude-history-pending');return fs.existsSync(root)?fs.readdirSync(root):[]};
+ const run=async()=>{try{return await sync.synchronizeBeforeProfileOpen({profileId:'gmail',targetPlatform:'mac',policy,adapters})}finally{state.marker?.release();state.marker=null}};
+ return {directory,profile,registry,state,adapters,policy,baseline,sourceRows,target,markers,run,cleanup:()=>fs.rmSync(directory,{recursive:true,force:true})};
 }
 async function withFixture(count,existing,run){const f=fixture(count,existing);try{await run(f)}finally{f.cleanup()}}
 for(const count of [18,32])test('real tempFS composition appends all '+count+' in one-record guarded transactions',async()=>withFixture(count,count,async f=>{
@@ -69,9 +73,11 @@ for(const count of [18,32])test('real tempFS composition appends all '+count+' i
  for(const row of f.sourceRows){const value=JSON.parse(fs.readFileSync(path.join(f.registry,row.name)));assert.equal(value.cliSessionId,JSON.parse(row.bytes).cliSessionId);assert.equal(value.resumeConfirmed,false);assert.equal(value.permissionMode,'default');assert.equal(value.remoteControlAutoEligible,false);assert.equal(value.sshConfig.sshHost,fx.bindings('A').aliases.mac)}
  assert.equal(result.resumedSessions,0);assert.equal(result.copiedTranscripts,0);assert.equal(JSON.stringify(result).includes(fx.PRIVATE_TITLE),false);
  assert.ok(f.state.fullTransactionGuardCalls>=count*12);
+ assert.equal(f.markers().length,1);
 }));
 test('lost second acknowledgement preserves first commit and durable hold, never invokes batch3',async()=>withFixture(18,18,async f=>{
  f.state.appendFailure={at:2,kind:'lost'};const result=await f.run();assert.equal(result.reason,'create_only_transaction_unconfirmed');assert.equal(result.createdCount,1);assert.equal(result.recoveryRequired,true);assert.equal(f.state.appendCalls,2);assert.equal(f.target().records.length,19);assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,true);
+ assert.equal(f.markers().length,1);
 }));
 test('clean second refusal preserves confirmed count without unknown-writer claim',async()=>withFixture(18,18,async f=>{
  f.state.appendFailure={at:2,kind:'clean'};const result=await f.run();assert.equal(result.reason,'create_only_transaction_refused');assert.equal(result.createdCount,1);assert.equal(result.recoveryRequired,false);assert.equal(f.state.appendCalls,2);assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);
@@ -101,4 +107,21 @@ for(const [name,mutate] of [
 }));
 test('registry 200 bound refuses before creating any pending marker or descriptor',async()=>withFixture(32,180,async f=>{
  const result=await f.run();assert.equal(result.reason,'registry_invalid');assert.equal(f.state.appendCalls,0);assert.equal(f.target().records.length,180);assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);
+}));
+test('registry bound accepts exactly 200 rows in one-record batches',async()=>withFixture(32,168,async f=>{
+ assert.equal(sync.REGISTRY_LIMIT,200);assert.equal(sync.MICROBATCH_RECORDS,1);
+ const result=await f.run();assert.equal(result.status,'synchronized');assert.equal(result.createdCount,32);
+ assert.equal(f.state.appendCalls,32);assert.equal(f.target().records.length,200);
+ assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);assert.equal(f.markers().length,1);
+}));
+test('between-batch read failure keeps confirmed rows without a hold or another append',async()=>withFixture(18,18,async f=>{
+ const read=f.adapters.readTarget;f.adapters.readTarget=async()=>{if(f.state.appendCalls)throw Error(fx.PRIVATE_ERROR);return read()};
+ const result=await f.run();assert.equal(result.status,'refused');assert.equal(result.reason,'unavailable');assert.equal(result.createdCount,1);
+ assert.equal(result.recoveryRequired,false);assert.equal(f.state.appendCalls,1);assert.equal(f.target().records.length,19);
+ assert.equal(JSON.stringify(result).includes(fx.PRIVATE_ERROR),false);assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);
+}));
+test('appendCreateOnly receives whole-plan progress counts with every one-record batch',async()=>withFixture(4,4,async f=>{
+ const seen=[];const append=f.adapters.appendCreateOnly;f.adapters.appendCreateOnly=async payload=>{seen.push(Object.keys(payload).sort().join(','));return append(payload)};
+ const result=await f.run();assert.equal(result.createdCount,4);assert.deepEqual(f.state.aggregateProgress,[[4,0],[4,1],[4,2],[4,3]]);
+ assert.deepEqual([...new Set(seen)],['closedGuard,confirmedCount,profileId,records,target,targetPlatform,totalCount']);
 }));

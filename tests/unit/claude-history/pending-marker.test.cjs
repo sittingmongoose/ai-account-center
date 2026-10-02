@@ -105,3 +105,89 @@ test('bounded finished-marker capacity skips another copy without inventing a pe
   assert.equal(hold(),false);assert.throws(() => core.armPendingMarker(root,'platyr','windows'),
     error => error.reason === 'history_marker_unavailable');assert.equal(hold(),false);
 });
+
+// One Open's microbatches share one marker: pending only while a batch's append
+// may be in flight, finished between batches.
+const pendingFile = (profileId, platform, nonceDigit) => {
+  fs.mkdirSync(markerRoot(), {recursive:true, mode:0o700});
+  const nonce = nonceDigit.repeat(32);
+  const filename = path.join(markerRoot(), `${profileId}-${platform}-${nonce}.json`);
+  fs.writeFileSync(filename, JSON.stringify({version:1, profileId, targetPlatform:platform, nonce,
+    state:'pending', createdAt:'2026-10-02T00:00:00.000Z'}), {mode:0o600});
+  return filename;
+};
+test('a batch sequence re-arms its own finished marker and uses one marker slot', () => {
+  const marker = core.armPendingMarker(root, 'platyr', 'windows');
+  for (let batch = 0; batch < 5; batch++) {
+    if (batch) marker.rearm();
+    assert.equal(hold(), true);
+    marker.finish(receipt());
+    assert.equal(hold(), false);
+  }
+  marker.release();
+  assert.equal(fs.readdirSync(markerRoot()).length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(markerFile())).state, 'finished');
+});
+test('a re-armed marker left pending by a lost reply holds across restart', () => {
+  const marker = core.armPendingMarker(root, 'platyr', 'windows');
+  marker.finish(receipt()); marker.rearm(); marker.release();
+  delete require.cache[corePath];
+  assert.equal(require(corePath).pendingMarkerState(root, 'platyr', 'windows').held, true);
+  assert.throws(() => core.armPendingMarker(root, 'platyr', 'windows'));
+  assert.equal(fs.readdirSync(markerRoot()).length, 1);
+});
+test('rearm refuses before its own finish, after release and after a second finish', () => {
+  const pending = core.armPendingMarker(root, 'platyr', 'windows');
+  assert.throws(() => pending.rearm(), error => error.reason === 'history_append_pending');
+  assert.equal(hold(), true); pending.release();
+  fs.rmSync(markerRoot(), {recursive:true});
+  const released = core.armPendingMarker(root, 'platyr', 'windows');
+  released.finish(receipt()); released.release();
+  assert.throws(() => released.rearm(), error => error.reason === 'history_append_pending');
+  assert.equal(hold(), false);
+  fs.rmSync(markerRoot(), {recursive:true});
+  const twice = core.armPendingMarker(root, 'platyr', 'windows'); twice.finish(receipt());
+  assert.throws(() => twice.finish(receipt())); twice.release();
+  assert.equal(hold(), false);
+});
+test('rearm refuses while another operation holds the same profile and platform', () => {
+  const marker = core.armPendingMarker(root, 'platyr', 'windows'); marker.finish(receipt());
+  const finished = fs.readFileSync(markerFile());
+  const foreign = pendingFile('platyr', 'windows', 'f');
+  assert.throws(() => marker.rearm(), error => error.reason === 'history_append_pending'); marker.release();
+  const own = fs.readdirSync(markerRoot()).map(name => path.join(markerRoot(), name)).find(name => name !== foreign);
+  assert.deepEqual(fs.readFileSync(own), finished);
+  assert.equal(hold(), true);
+});
+test('another profile or platform pending marker does not stop a re-arm', () => {
+  const marker = core.armPendingMarker(root, 'platyr', 'windows'); marker.finish(receipt());
+  pendingFile('platyr', 'mac', 'a'); pendingFile('gmail', 'windows', 'b');
+  marker.rearm(); assert.equal(hold(), true); marker.finish(receipt()); marker.release();
+  assert.equal(hold(), false);
+});
+test('a replaced or edited finished marker is never re-armed', () => {
+  const marker = core.armPendingMarker(root, 'platyr', 'windows'); marker.finish(receipt());
+  const filename = markerFile(), bytes = fs.readFileSync(filename);
+  fs.renameSync(filename, path.join(root, 'preserved-original'));
+  fs.writeFileSync(filename, bytes, {mode:0o600});
+  assert.throws(() => marker.rearm()); marker.release();
+  assert.deepEqual(fs.readFileSync(filename), bytes); assert.equal(hold(), false);
+  fs.rmSync(markerRoot(), {recursive:true});
+  const edited = core.armPendingMarker(root, 'platyr', 'windows'); edited.finish(receipt());
+  const editedFile = markerFile(), row = JSON.parse(fs.readFileSync(editedFile));
+  fs.writeFileSync(editedFile, JSON.stringify({...row, finishedAt:'2026-10-02T00:00:09.000Z'}));
+  assert.throws(() => edited.rearm()); edited.release();
+  assert.equal(JSON.parse(fs.readFileSync(editedFile)).state, 'finished');
+});
+test('rearm never needs a new marker slot at full capacity', () => {
+  const marker = core.armPendingMarker(root, 'platyr', 'windows'); marker.finish(receipt());
+  for (let i = 1; i < core.MARKER_LIMIT; i++) {
+    const nonce = i.toString(16).padStart(32, '0');
+    fs.writeFileSync(path.join(markerRoot(), `gmail-mac-${nonce}.json`), JSON.stringify({version:1,
+      profileId:'gmail', targetPlatform:'mac', nonce, state:'finished', createdAt:'2026-10-02T00:00:00Z',
+      finishedAt:'2026-10-02T00:00:01Z', terminalReceiptSha256:'0'.repeat(64)}), {mode:0o600});
+  }
+  assert.equal(fs.readdirSync(markerRoot()).length, core.MARKER_LIMIT);
+  marker.rearm(); marker.finish(receipt()); marker.release();
+  assert.equal(fs.readdirSync(markerRoot()).length, core.MARKER_LIMIT); assert.equal(hold(), false);
+});

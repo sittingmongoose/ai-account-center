@@ -185,15 +185,22 @@ export class ClaudeOpenOperations {
         /* Logging never changes how an Open ends. */
       }
     };
+    // The copy runs in bounded batches. Counts cover the whole plan and only move
+    // forward: a confirmed record is never un-confirmed within one Open.
+    const forward = (count: number): boolean =>
+      Number.isSafeInteger(count) && count >= (entry.operation.confirmedCount ?? 0);
     const observer: ClaudeOpenObserver = {
-      copying: (totalCount, confirmedCount = 0) =>
-        update({ state: 'copying', totalCount, confirmedCount }),
+      copying: (totalCount, confirmedCount = 0) => {
+        if (forward(confirmedCount) && confirmedCount <= totalCount)
+          update({ state: 'copying', totalCount, confirmedCount });
+      },
       synchronized: ({ status, createdCount }) => {
+        // A refusal after some batches keeps their confirmed count; a refusal
+        // before any batch leaves the count unset (totalCount is null).
         if (
-          ['synchronized', 'refused'].includes(status) &&
+          (status === 'synchronized' || status === 'refused') &&
           entry.operation.totalCount !== null &&
-          Number.isSafeInteger(createdCount) &&
-          createdCount >= 0 &&
+          forward(createdCount) &&
           createdCount <= entry.operation.totalCount
         )
           update({ confirmedCount: createdCount });
