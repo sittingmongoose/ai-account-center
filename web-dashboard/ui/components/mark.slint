@@ -117,3 +117,26 @@ export component PlatformGlyph inherits Image {
     colorize: root.tint;
     image-fit: contain;
 }
+
+// Boot preloader (dark-marks fix): instantiates every mark and platform image once, invisibly, so
+// the browser starts decoding all of them on page boot instead of when their first row is created
+// seconds later. A late first use can otherwise finish loading after the event loop went idle and
+// miss its repaint, leaving blank marks until the next hover, scroll or theme switch. Opacity 0
+// still draws (and so still decodes); `visible: false` might not, so it is not used. The exact
+// size is irrelevant: the box draws nothing itself and does not clip.
+export component MarksPreloader inherits Rectangle {
+    width: 17px;
+    height: 1px;
+    HorizontalLayout {
+        spacing: 0px;
+        for src in [Marks.claude, Marks.codex, Marks.codex-light, Marks.antigravity, Marks.cursor,
+            Marks.cursor-light, Marks.muse, Marks.kimi-code, Marks.qwen, Marks.qwen-light, Marks.zai,
+            Marks.zai-light, Marks.opencode-go, Marks.opencode-go-light, Marks.platform-apple,
+            Marks.platform-windows, Marks.platform-ubuntu]: Image {
+            width: 1px;
+            height: 1px;
+            source: src;
+            opacity: 0;
+        }
+    }
+}
