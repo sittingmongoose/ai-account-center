@@ -788,21 +788,26 @@ function connectionFacts(ctx) {
  * The two switches on an account row. They are independent: "Show on dashboard" reads only
  * `settings.hiddenAccountIds` and "Show in tray" only `settings.trayHiddenAccountIds`, so all four combinations
  * (shown in both, hidden only from the dashboard, hidden only from the tray, hidden from both) are drawn as saved.
- * A server without the tray list draws "Show in tray" off and flat with its reason.
+ * A server without the tray list draws "Show in tray" off and flat with its reason. While the account's provider is
+ * hidden on a surface (`providerDashHidden`, `providerTrayHidden`), that surface's switch is drawn flat with its saved
+ * value kept, because the provider's switch wins there; the other surface's switch is not affected.
  */
-export function accountSwitches(id, { idsKnown, hiddenIds, trayIdsKnown, trayHiddenIds, visibilityOk, visWaiting }) {
+export function accountSwitches(id, { idsKnown, hiddenIds, trayIdsKnown, trayHiddenIds, visibilityOk, visWaiting, providerDashHidden = false, providerTrayHidden = false }) {
   const shownDash = !hiddenIds.has(id);
   const shownTray = trayIdsKnown ? !trayHiddenIds.has(id) : true;
+  const withProvider = 'Hidden with its provider. Turn the provider\'s switch on first.';
   return {
     shownDash,
     shownTray,
-    dashEnabled: idsKnown && visibilityOk && !visWaiting('acct-show:'),
-    trayAcctEnabled: trayIdsKnown && visibilityOk && !visWaiting('acct-tray:'),
+    dashEnabled: idsKnown && visibilityOk && !providerDashHidden && !visWaiting('acct-show:'),
+    trayAcctEnabled: trayIdsKnown && visibilityOk && !providerTrayHidden && !visWaiting('acct-tray:'),
     // the tips do not depend on the state: a tip stays on screen while the pointer rests after a click
     dashTip: !visibilityOk ? 'The saved choices could not be read safely, so changing them waits for the next refresh.'
+      : providerDashHidden ? withProvider
       : 'Show this account on the dashboard. The trays keep their own switch.',
     trayAcctTip: !trayIdsKnown ? 'Hiding one account in the trays is not on this server yet.'
       : !visibilityOk ? 'The saved choices could not be read safely, so changing them waits for the next refresh.'
+      : providerTrayHidden ? withProvider
       : 'Show this account in the Mac and Windows trays. The dashboard keeps its own switch.',
   };
 }
@@ -873,7 +878,10 @@ export function accountsViewModel(data, ctx = {}) {
         actions: rowActions(entry.id, account, homeRow, canSwitch, c),
         line: lineView(account.id, email, line),
         gone: line?.kind === 'removing',
-        ...accountSwitches(account.id, { idsKnown, hiddenIds, trayIdsKnown, trayHiddenIds, visibilityOk, visWaiting }),
+        ...accountSwitches(account.id, {
+          idsKnown, hiddenIds, trayIdsKnown, trayHiddenIds, visibilityOk, visWaiting,
+          providerDashHidden: hiddenServer, providerTrayHidden: trayKnown && trayHidden.has(entry.id),
+        }),
       };
     });
     const count = rows.length;

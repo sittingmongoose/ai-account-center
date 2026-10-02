@@ -329,7 +329,10 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
   };
 }
 
-function codexSection(accounts, data, now) {
+// `total` counts every account of the provider, the ones hidden from the dashboard too: "Show on dashboard" only
+// changes which rows Home lists, never what the user can operate (the server keeps hidden accounts as switch
+// candidates).
+function codexSection(accounts, data, now, total = accounts.length) {
   const auto = data?.codexAutoSwitch;
   const known = !!auto && finite(auto.thresholdPercent) && auto.thresholdPercent >= 0 && auto.thresholdPercent <= 100;
   const threshold = known ? 100 - auto.thresholdPercent : null;
@@ -365,7 +368,7 @@ function codexSection(accounts, data, now) {
     };
   });
   return {
-    id: 'codex', kind: 'switchable', label: 'Codex', longLabel: 'Codex', switchable: true, canSwitch: rows.length > 1,
+    id: 'codex', kind: 'switchable', label: 'Codex', longLabel: 'Codex', switchable: true, canSwitch: total > 1,
     meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}${active ? ` · ${shortIdentity(active)} active` : ''}`,
     metaRuns: [run(rows.length, true), run(` ${rows.length === 1 ? 'account' : 'accounts'} · `), ...(active ? [run(shortIdentity(active), true, 'good'), run(' active')] : [run('none active')])],
     foot: codexFoot(accounts, auto, known, threshold, now),
@@ -382,7 +385,7 @@ function codexSection(accounts, data, now) {
   };
 }
 
-function antigravitySection(accounts, data, inventory, autoStatus, now) {
+function antigravitySection(accounts, data, inventory, autoStatus, now, total = accounts.length) {
   const native = antigravityView(data, inventory, autoStatus, now);
   const bound = new Map(native.antigravityAccounts.map(row => [row.id, row]));
   const status = native.antigravityAutoKnown ? autoStatus : null;
@@ -419,7 +422,8 @@ function antigravitySection(accounts, data, inventory, autoStatus, now) {
     };
   });
   const activeRow = rows.find(row => row.active);
-  const policyShown = rows.filter(row => !row.setup).length > 1;
+  // Every Antigravity account counts for the "second account" rule, hidden ones included (see codexSection).
+  const policyShown = total > 1;
   const pool = native.antigravityPoolLabel && native.antigravityPoolLabel !== 'Choose quota pool' ? native.antigravityPoolLabel : '';
   return {
     id: 'antigravity', kind: 'switchable', label: 'Antigravity', longLabel: 'Google Antigravity CLI', switchable: true, canSwitch: policyShown,
@@ -435,7 +439,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now) {
       // Switching moves between Antigravity accounts, so the policy starts once a second account is signed in.
       offRuns: policyShown ? [] : [run('Auto-switch '), run('off', true), run(' · needs a second account')],
       setting: native.antigravityAutoSetting,
-      message: rows.length < 2 ? 'Automatic switching needs a second Antigravity account.' : native.antigravityAutoMessage,
+      message: total < 2 ? 'Automatic switching needs a second Antigravity account.' : native.antigravityAutoMessage,
       example: false,
     },
     columns, rows,
@@ -502,13 +506,15 @@ export function dashboardViewModel(data, ctx = {}) {
   const now = ctx.now ?? Date.now();
   // Accounts hidden one by one (`settings.hiddenAccountIds`, saved on the server) leave Home like hidden providers.
   const hiddenIds = new Set(Array.isArray(data?.settings?.hiddenAccountIds) ? data.settings.hiddenAccountIds : []);
-  const accounts = (Array.isArray(data?.accounts) ? data.accounts : []).filter(account => !hiddenIds.has(account?.id));
+  const everyAccount = Array.isArray(data?.accounts) ? data.accounts : [];
+  const accounts = everyAccount.filter(account => !hiddenIds.has(account?.id) && account?.hidden !== true);
   const hidden = hiddenProviders(data);
   const of = provider => accounts.filter(account => account.provider === provider);
+  const countOf = provider => everyAccount.filter(account => account?.provider === provider).length;
   const sections = [];
   if (!hidden.has('claude')) sections.push(claudeSection(of('claude'), ctx.profiles, ctx.platform || 'mac', now, ctx.openProgress));
-  if (!hidden.has('codex')) sections.push(codexSection(of('codex'), data, now));
-  if (!hidden.has('antigravity') && of('antigravity').length) sections.push(antigravitySection(of('antigravity'), data, ctx.antigravityInventory, ctx.antigravityAuto, now));
+  if (!hidden.has('codex')) sections.push(codexSection(of('codex'), data, now, countOf('codex')));
+  if (!hidden.has('antigravity') && of('antigravity').length) sections.push(antigravitySection(of('antigravity'), data, ctx.antigravityInventory, ctx.antigravityAuto, now, countOf('antigravity')));
   return {
     version: VIEW_MODEL_VERSION,
     sections,

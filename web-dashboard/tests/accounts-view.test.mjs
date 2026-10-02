@@ -497,6 +497,14 @@ test("each account row draws its own Show on dashboard and Show in tray, indepen
   const trayProv = accountsViewModel(data(accounts, { providers: providers(), settings: { ...settings, trayHiddenProviders: ['codex'], hiddenProviders: [] } }), { now });
   assert.deepEqual(ids.map(id => row(trayProv, id).shownTray), [true, true, false, false]);
   assert.equal(provider(trayProv, 'codex').trayVisible, false);
+  // ...but drawn flat with its reason while the provider's switch wins; the dashboard switch is untouched
+  assert.ok(ids.every(id => !row(trayProv, id).trayAcctEnabled && row(trayProv, id).dashEnabled));
+  assert.equal(row(trayProv, 'codex:both').trayAcctTip, "Hidden with its provider. Turn the provider's switch on first.");
+  assert.equal(row(trayProv, 'codex:both').dashTip, 'Show this account on the dashboard. The trays keep their own switch.');
+  const dashProv = accountsViewModel(data(accounts, { providers: providers(), settings: { ...settings, hiddenProviders: ['codex'] } }), { now });
+  assert.deepEqual(ids.map(id => [row(dashProv, id).shownDash, row(dashProv, id).shownTray]), [[true, true], [false, true], [true, false], [false, false]]);
+  assert.ok(ids.every(id => !row(dashProv, id).dashEnabled && row(dashProv, id).trayAcctEnabled));
+  assert.equal(row(dashProv, 'codex:both').dashTip, "Hidden with its provider. Turn the provider's switch on first.");
   // a save in flight holds only that kind of switch
   const waiting = accountsViewModel(data(accounts, { providers: providers(), settings }), { now, visPending: ['acct-show:codex:both'] });
   assert.deepEqual([row(waiting, 'codex:both').dashEnabled, row(waiting, 'codex:both').trayAcctEnabled, provider(waiting, 'codex').toggleEnabled], [false, true, true]);

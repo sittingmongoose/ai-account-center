@@ -69,6 +69,25 @@ test('hidden providers are left out of the quota history and the agenda', () => 
   assert.equal([...agenda.a, ...agenda.b].some(r => r.provider === 'kimi-code'), false);
 });
 
+test('accounts hidden from the dashboard one by one leave Analytics; the tray switch never does', () => {
+  const ids = ctx => quotaAccounts(analytics, { now, ...ctx }).map(a => a.id);
+  const all = ids({ dashboard });
+  assert.ok(all.includes('codex:a') && all.includes('codex:b'));
+  // by the saved list
+  const byList = { ...dashboard, settings: { hiddenAccountIds: ['codex:a'] } };
+  assert.deepEqual(ids({ dashboard: byList }), all.filter(id => id !== 'codex:a'));
+  // by the row's own flag
+  const byFlag = { ...dashboard, accounts: dashboard.accounts.map(a => a.id === 'codex:b' ? { ...a, hidden: true } : a) };
+  assert.deepEqual(ids({ dashboard: byFlag }), all.filter(id => id !== 'codex:b'));
+  // hidden only from the tray: still on Analytics
+  const trayOnly = { ...dashboard, settings: { trayHiddenAccountIds: ['codex:a'] }, accounts: dashboard.accounts.map(a => a.id === 'codex:a' ? { ...a, trayHidden: true } : a) };
+  assert.deepEqual(ids({ dashboard: trayOnly }), all);
+  // the agenda follows the same list
+  const agendaWith = ctx => JSON.stringify(agendaView(analytics, { now, ...ctx }));
+  assert.ok(agendaWith({ dashboard: byFlag }).includes('a@example.test'));
+  assert.equal(agendaWith({ dashboard: byList }).includes('a@example.test'), false);
+});
+
 test('focus chart labels never overlap each other and stay inside the chart', () => {
   const accounts = quotaAccounts(analytics, { now, dashboard });
   for (const [id, compare] of [['codex:b', false], ['codex:b', true], ['claude:max', false]]) {

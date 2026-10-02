@@ -127,7 +127,14 @@ const accounts = createAccountsController({
   toast: (kind, title, body, ms) => toast(kind, title, body, ms),
   refresh: () => refresh(true),
   data: () => serverData,
-  setData: next => { serverData = next; data = next; render(); },
+  // A save's answer is newer than any dashboard read already in flight: drop that read (it may hold the lists from
+  // before the save) and start a fresh one, so a switch never flips back and the next switch never sends a stale list.
+  setData: next => {
+    const inFlight = !!refreshing;
+    refreshGeneration++;
+    serverData = next; data = next; render();
+    if (inFlight) void refresh(false, true);
+  },
   strength: view => { try { set_accounts_strength(JSON.stringify(view)); } catch {} },
   copy: value => copyText(value),
   open: url => { try { globalThis.open?.(url, '_blank', 'noopener'); } catch {} },
@@ -257,9 +264,9 @@ const antigravityConfirmation = createAntigravityConfirmation({
   error: message => failure(message, 'Antigravity switch failed'),
 });
 
-async function refresh(force = false) {
+async function refresh(force = false, restart = false) {
   if (!authenticated) return;
-  if (refreshing && !force) return refreshing;
+  if (refreshing && !force && !restart) return refreshing;
   const generation = ++refreshGeneration;
   renderChrome(true);
   const operation = (async () => {

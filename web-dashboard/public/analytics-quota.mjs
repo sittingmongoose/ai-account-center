@@ -73,7 +73,10 @@ export function quotaAccounts(payload, ctx = {}) {
   const current = Array.isArray(ctx.dashboard?.accounts) ? ctx.dashboard.accounts.filter(a => text(a?.id)) : [...history.values()];
   const known = new Set(QUOTA_PROVIDERS.map(([id]) => id));
   const now = Number.isFinite(ctx.now) ? ctx.now : Date.now();
-  return current.filter(a => known.has(a.provider) && !hidden.has(a.provider)).map(a => {
+  // Accounts hidden from the dashboard one by one leave Analytics as they leave Home (`accounts[].hidden`,
+  // `settings.hiddenAccountIds`). The trays' own switch (`trayHidden`) is never read here.
+  const hiddenIds = new Set(Array.isArray(ctx.dashboard?.settings?.hiddenAccountIds) ? ctx.dashboard.settings.hiddenAccountIds : []);
+  return current.filter(a => known.has(a.provider) && !hidden.has(a.provider) && a.hidden !== true && !hiddenIds.has(a.id)).map(a => {
     const windows = visibleUsageWindows(a.provider, a.windows).map(w => ({
       key: text(w.key), label: text(w.label), short: windowLabel(a.provider, w), period: period(w), fable: isFable(w),
       // a reading from before a reset that has passed is no current reading (F6)

@@ -194,7 +194,7 @@ export function errorText(error, ctx = {}) {
     case 'setup_code_invalid': return t("That setup code isn't right", 'It has 8 letters and digits, printed in the server\'s terminal and saved in ~/.ccs/auth/setup-code.');
     case 'invalid_username': return t('Username not accepted', 'Start with a letter; use 3 or more letters, numbers, - or _.');
     // visibility
-    case 'visibility_unavailable': return t('Visibility unavailable', 'The saved choices could not be read safely, so every provider is shown.');
+    case 'visibility_unavailable': return t('Visibility unavailable', 'The saved choices could not be read safely, so nothing was changed; the last saved choices stay in force. Fix or remove ~/.ccs/account-visibility.json to change them again.');
     case 'visibility_write_failed': return t('Not saved', 'The visibility choice could not be saved safely. Try again.');
     // account lifecycle
     case 'registry_unavailable': return t('Account list unavailable', 'The account list could not be read safely. Nothing was changed.');

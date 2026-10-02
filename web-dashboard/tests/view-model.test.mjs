@@ -201,6 +201,27 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
   assert.equal(runs(ag.metaRuns), 'Google Antigravity CLI · *1* account');
 });
 
+test('hiding one of two accounts from the dashboard keeps switching for the other (Codex and Antigravity)', () => {
+  const ag = id => account({ id: `antigravity:${id}`, provider: 'antigravity', email: `${id}@example.test`, windows: [window({ key: 'gemini-weekly', label: 'Gemini Models · Weekly' })], capabilities: {} });
+  const accounts = [account({ id: 'codex:a', isActive: true }), account({ id: 'codex:b', email: 'b@example.test' }), ag('x'), ag('y')];
+  const byList = data(accounts, { settings: { refreshIntervalSeconds: 60, hiddenAccountIds: ['codex:b', 'antigravity:y'] } });
+  const vm = dashboardViewModel(byList, { now });
+  const codex = section(vm, 'codex'); const agy = section(vm, 'antigravity');
+  // Home lists only the shown rows, but the "two accounts" rule counts every account, as the server does
+  assert.deepEqual(codex.rows.map(row => row.id), ['codex:a']);
+  assert.deepEqual(agy.rows.map(row => row.id), ['antigravity:x']);
+  assert.equal(codex.canSwitch, true);
+  assert.equal(agy.canSwitch, true); assert.equal(agy.auto.shown, true); assert.deepEqual(agy.auto.offRuns, []);
+  assert.notEqual(agy.auto.message, 'Automatic switching needs a second Antigravity account.');
+  // the row's own flag (accounts[].hidden) leaves Home the same way and keeps switching too
+  const byFlag = dashboardViewModel(data(accounts.map(a => a.id === 'antigravity:y' ? { ...a, hidden: true } : a)), { now });
+  assert.deepEqual(section(byFlag, 'antigravity').rows.map(row => row.id), ['antigravity:x']);
+  assert.equal(section(byFlag, 'antigravity').canSwitch, true);
+  // hidden only from the tray: Home keeps both rows
+  const trayOnly = dashboardViewModel(data(accounts.map(a => a.id === 'antigravity:y' ? { ...a, trayHidden: true } : a)), { now });
+  assert.equal(section(trayOnly, 'antigravity').rows.length, 2);
+});
+
 test('provider cards carry the concept footer, plan note and shared pack expiry without inventing readings (W2)', () => {
   const qwen = account({ id: 'qwen:a', provider: 'qwen', email: 'q@example.test', plan: 'pro', platform: 'windows', status: 'cached', sampledAt: at(-2), windows: [
     window({ key: 'monthly', label: 'Monthly', usedPercent: 25.061, windowMinutes: null, used: 45109.83, limit: 180000, unit: 'credits' }),
