@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ANALYTICS_PROVIDERS, activityView, analyticsChoiceId, analyticsView, buildQuotaPlot } from '../public/analytics-data.mjs';
+import { ANALYTICS_PROVIDERS, activityView, analyticsChoiceId, analyticsSlintModel, analyticsView, buildQuotaPlot } from '../public/analytics-data.mjs';
 
 const range = { preset: '7d', from: '2026-09-24T00:00:00Z', to: '2026-10-01T00:00:00Z', bucketMinutes: 60 };
 const sample = (overrides = {}) => ({ sampledAt: '2026-09-30T00:00:00Z', observedAt: '2026-09-30T00:01:00Z', usedPercent: 42, remainingPercent: 58, used: null, limit: null, remaining: null, status: 'ok', source: 'Native subscription', platform: 'ubuntu', resetAt: '2026-10-02T00:00:00Z', expiresAt: null, isActive: false, ...overrides });
@@ -12,18 +12,36 @@ const key = (id, window, metadata = {}) => JSON.stringify([id, window, metadata.
 const totals = { inputTokens: 100, outputTokens: 25, cacheCreationTokens: 10, cacheReadTokens: 15, estimatedCostUsd: 0.0125 };
 const native = (overrides = {}) => ({ status: 'ok', scope: 'ubuntu-local-cli', totals, message: 'All available records read; 7 files have unfinished records.', fetchedAt: range.to, providers: [{ provider: 'codex', label: 'Codex', totals, usageEvents: 2, sessionCount: 1 }], byDay: [{ date: '2026-09-30', provider: 'codex', ...totals }], byHour: [{ hour: '2026-09-30T01:00Z', provider: 'codex', ...totals }], models: [{ model: 'test-model', provider: 'codex', ...totals }], ...overrides });
 
-test('All histories includes every account/window equally and never defaults to active Codex', () => {
-  const accounts = [account({ id: 'active', email: 'z@example.test', windows: [metric(), metric({ key: 'rolling', label: '5-hour' })] }), account({ id: 'other', email: 'a@example.test', isActive: false }), account({ id: 'claude', provider: 'claude', providerLabel: 'Claude', isActive: false, windows: [metric({ key: 'seven_day_fable', label: 'Fable · weekly' })] })];
+test('quota history lists every account once by provider, summarises its main window and never defaults to active Codex', () => {
+  const accounts = [
+    account({ id: 'active', email: 'z@example.test', windows: [metric({ key: 'rolling', label: '5-hour', windowMinutes: 300 }), metric({ key: 'seven_day', label: 'Weekly usage', usedPercent: 61.237, remainingPercent: 38.763, points: [sample({ sampledAt: '2026-09-29T00:00:00Z', usedPercent: 40 }), sample({ usedPercent: 61.237 })] })] }),
+    account({ id: 'other', email: 'a@example.test', isActive: false, windows: [metric({ key: 'seven_day', label: 'Weekly usage', usedPercent: null, remainingPercent: null, points: [] })] }),
+    account({ id: 'claude', provider: 'claude', providerLabel: 'Claude', isActive: false, windows: [metric({ key: 'seven_day_fable', label: 'Fable · weekly' }), metric({ key: 'seven_day', label: 'Weekly usage', usedPercent: 12 })] }),
+  ];
   const view = analyticsView(payload({ accounts, summary: { activeCodexAccountId: 'active' } }), {}, now);
-  assert.equal(view.metricValue, 'All histories');
+  assert.equal(view.version, 2);
   assert.equal(view.selection.metricKey, 'all');
-  assert.equal(view.quotaCharts.length, 4);
-  assert.deepEqual(new Set(view.quotaCharts.map(row => row.key)), new Set([key('active', 'weekly'), key('active', 'rolling', { label: '5-hour' }), key('other', 'weekly'), key('claude', 'seven_day_fable', { label: 'Fable · weekly' })]));
-  assert.equal(view.quotaCharts[0].key, key('claude', 'seven_day_fable', { label: 'Fable · weekly' }));
-  assert.equal(view.quotaCharts[1].key, key('other', 'weekly'));
-  assert.deepEqual(analyticsView(payload({ accounts: accounts.toReversed() }), {}, now).quotaCharts.map(row => row.key), view.quotaCharts.map(row => row.key));
-  assert.equal(view.points.length, 0);
-  assert.equal(view.metrics.length, 0);
+  // grouped in provider order, every account exactly once, ordered by identity, not by active state
+  assert.deepEqual(view.quotaHistory.map(group => group.provider), ['claude', 'codex']);
+  assert.deepEqual(view.quotaHistory.flatMap(group => group.rows.map(row => row.id)), ['claude', 'other', 'active']);
+  const rows = Object.fromEntries(view.quotaHistory.flatMap(group => group.rows).map(row => [row.id, row]));
+  // the main window is the canonical weekly window, never Fable and never the 5-hour window
+  assert.equal(rows.claude.windowLabel, 'Weekly usage');
+  assert.equal(rows.active.windowLabel, 'Weekly usage');
+  assert.equal(rows.active.key, key('active', 'seven_day'));
+  // at most two decimals; a missing current reading stays unavailable, never zero
+  assert.equal(rows.active.valueText, '61.24'); assert.equal(rows.active.value, 61.237); assert.equal(rows.active.hasValue, true);
+  assert.equal(rows.other.hasValue, false); assert.equal(rows.other.valueText, ''); assert.equal(rows.other.sparkPoints, 0);
+  // the sparkline is the window's own history: two real observations, no invented points
+  assert.equal(rows.active.sparkPoints, 2); assert.match(rows.active.spark, /^M\S+ \S+ L\S+ \S+$/);
+  assert.equal(rows.active.reset, 'resets in 1d 0h');
+  assert.equal(rows.active.active, true); assert.equal(rows.other.active, false);
+  // the Slint seam carries the same groups
+  const slint = analyticsSlintModel(view);
+  assert.equal(slint.version, 2); assert.deepEqual(slint.quotaGroups, view.quotaHistory); assert.equal(slint.head.range, '7d');
+  // per-window history data stays available for a row's focus chart; nothing is summed across accounts
+  assert.equal(view.quotaCharts.some(chart => chart.key === rows.active.key), true);
+  assert.deepEqual(analyticsView(payload({ accounts: accounts.toReversed() }), {}, now).quotaHistory, view.quotaHistory);
 });
 test('an explicit history selection identifies account and window even with duplicate window labels', () => {
   const accounts = [account(), account({ id: 'codex-two', email: 'two@example.test', windows: [metric(), metric({ key: 'model-weekly' })] })];

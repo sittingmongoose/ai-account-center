@@ -1,0 +1,242 @@
+// View-model structs shared by Rust (src/lib.rs) and the pages. bridge.js builds them as JSON
+// (view model version 2, see public/view-model.mjs); lib.rs deserializes and keeps one persistent
+// VecModel per list, updated in place by id, so changed values animate instead of re-mounting.
+
+// One usage window drawn as a meter. `value` is the reported used percentage and may exceed 100.
+export struct MeterView {
+    key: string,
+    label: string,
+    full-label: string,
+    has-value: bool,
+    value: float,
+    value-text: string,
+    over-text: string,
+    reset: string,
+    reset-exact: string,
+    reset-soon: bool,
+    na-text: string,
+    na-sub: string,
+    amount: string,
+    left: string,
+    sampled: string,
+    source: string,
+    caption: string,
+    caption-tip: string,
+    notch: float,
+    notch-faint: bool,
+    notch-off: bool,
+}
+
+// Packs, balances, credits and spend: shown as amounts, never as fake meters.
+export struct AmountView {
+    key: string,
+    label: string,
+    value: string,
+    unit: string,
+    sub: string,
+    icon: string,
+    spent: bool,
+}
+
+export struct ColumnView {
+    key: string,
+    label: string,
+}
+
+export struct AccountRowView {
+    id: string,
+    provider: string,
+    profile: string,
+    email: string,
+    plan: string,
+    meta: string,
+    status: string,
+    note: string,
+    platform: string,
+    active: bool,
+    active-label: string,
+    setup: bool,
+    can-activate: bool,
+    activate-kind: string,
+    activate-hint: string,
+    can-mac: bool,
+    can-windows: bool,
+    amounts-line: string,
+    cells: [MeterView],
+}
+
+export struct AutoSwitchView {
+    known: bool,
+    enabled: bool,
+    available: bool,
+    can-enable: bool,
+    threshold-used: int,
+    threshold-label: string,
+    setting: string,
+    message: string,
+    example: bool,
+}
+
+// A provider section on Home: Claude (desktop profiles) or a switchable provider (Codex, Antigravity).
+export struct SectionView {
+    id: string,
+    kind: string,
+    label: string,
+    long-label: string,
+    meta: string,
+    count: int,
+    switchable: bool,
+    active-id: string,
+    active-label: string,
+    empty: string,
+    auto: AutoSwitchView,
+    columns: [ColumnView],
+    rows: [AccountRowView],
+}
+
+// An "other provider" card: up to three meters plus amounts.
+export struct ProviderCardView {
+    id: string,
+    account-id: string,
+    label: string,
+    identity: string,
+    plan: string,
+    status: string,
+    source: string,
+    note: string,
+    meters: [MeterView],
+    amounts: [AmountView],
+}
+
+// The provider registry, derived client-side until the backend sends one.
+export struct RegistryView {
+    id: string,
+    label: string,
+    long-label: string,
+    sign-in: string,
+    multi: bool,
+    switchable: bool,
+    visible: bool,
+    count: int,
+}
+
+export struct ChromeView {
+    status-lead: string,
+    status-strong: string,
+    status-more: string,
+    status-tip: string,
+    refreshing: bool,
+    username: string,
+    host: string,
+}
+
+export struct UpdateView {
+    running: bool,
+    done: bool,
+    count: int,
+    total: int,
+    tip: string,
+    summary: string,
+}
+
+export struct ToastView {
+    id: int,
+    kind: string,
+    title: string,
+    body: string,
+    ms: int,
+}
+
+export struct FactView {
+    label: string,
+    value: string,
+    mono: bool,
+}
+
+export struct DetailsView {
+    id: string,
+    provider: string,
+    title: string,
+    sub: string,
+    state: string,
+    active: bool,
+    switchable: bool,
+    can-activate: bool,
+    activate-kind: string,
+    profile: string,
+    can-mac: bool,
+    can-windows: bool,
+    note: string,
+    meter-count: int,
+    amount-count: int,
+    meters: [MeterView],
+    amounts: [AmountView],
+    facts: [FactView],
+}
+
+export struct ProcessView {
+    label: string,
+    pid: string,
+    role: string,
+}
+
+export struct ConfirmationView {
+    open: bool,
+    product: string,
+    target: string,
+    warning: string,
+    expires: string,
+    error: string,
+    valid: bool,
+    busy: bool,
+}
+
+// The sign-in layer: default, connecting, wrong, limited, expired, setup, success, loading.
+export struct AuthView {
+    state: string,
+    message: string,
+    username: string,
+    host: string,
+    retry: string,
+}
+
+export struct KpiView {
+    key: string,
+    label: string,
+    value: string,
+    sub: string,
+}
+
+// One row of the Analytics quota history (the former Headroom): the account's main window.
+export struct QuotaRowView {
+    id: string,
+    key: string,
+    provider: string,
+    label: string,
+    sub: string,
+    window-label: string,
+    has-value: bool,
+    value: float,
+    value-text: string,
+    reset: string,
+    active: bool,
+    spark: string,
+    spark-points: int,
+}
+
+export struct QuotaGroupView {
+    provider: string,
+    label: string,
+    count: int,
+    rows: [QuotaRowView],
+}
+
+export struct AnalyticsHeadView {
+    loading: bool,
+    error: string,
+    updated: string,
+    range: string,
+    provider: string,
+    note: string,
+    has-activity: bool,
+}

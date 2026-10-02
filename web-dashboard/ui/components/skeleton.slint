@@ -1,0 +1,18 @@
+// Loading placeholder: a soft shimmer sweep on first load only. The sheen is one Rectangle whose x is a
+// function of animation-tick() while `active`; when the data lands `active` turns off and nothing loops.
+import { Theme, Motion } from "../theme.slint";
+
+export component Skeleton inherits Rectangle {
+    in property <bool> active: true;
+    background: Theme.paper-3;
+    border-radius: 6px;
+    clip: true;
+    property <float> phase: root.active && Motion.on ? mod(animation-tick() / 1500ms, 1) : 0;
+    if root.active && Motion.on: Rectangle {
+        x: -root.width + root.phase * root.width * 2;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: @linear-gradient(90deg, Theme.paper.with-alpha(0) 0%, Theme.paper.with-alpha(Theme.dark ? 0.08 : 0.6) 50%, Theme.paper.with-alpha(0) 100%);
+    }
+}

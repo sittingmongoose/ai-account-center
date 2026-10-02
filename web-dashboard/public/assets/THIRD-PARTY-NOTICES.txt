@@ -1,9 +1,36 @@
-Provider artwork attribution
+Third-party artwork, icons and fonts in the AI Account Center dashboard
 
-Provider artwork identifies the corresponding services. Product names and marks remain their respective owners' trademarks.
+The dashboard UI (web-dashboard/ui) embeds the files below into its WebAssembly bundle.
+Product names and marks remain their respective owners' trademarks; they identify the
+corresponding services only.
+
+Fonts (web-dashboard/ui/fonts)
+- Instrument Sans: Copyright 2022 The Instrument Sans Project Authors
+  (https://github.com/Instrument/instrument-sans). SIL Open Font License 1.1, full text in
+  ui/fonts/OFL-InstrumentSans.txt. Shipped as InstrumentSans.ttf (width axis pinned at 100,
+  subset to Latin) and InstrumentSansTab.ttf, a renamed copy with the OpenType tnum feature
+  frozen into its character map ("Instrument Sans Tab"). ui/fonts/build_fonts.py rebuilds both.
+- Martian Mono: Copyright 2021 The Martian Mono Project Authors (https://github.com/evilmartians/mono).
+  SIL Open Font License 1.1, full text in ui/fonts/OFL-MartianMono.txt. Shipped as MartianMono.ttf
+  (width axis pinned at 87.5, subset to Latin).
+
+Icons (web-dashboard/ui/icons)
+- Lucide 0.460.0 icon geometry (https://lucide.dev), ISC License, full text in
+  ui/icons/LICENSE-lucide.txt. Portions are from Feather (MIT), Copyright (c) 2013-2022 Cole Bemis.
+
+Platform glyphs (web-dashboard/ui/marks/platform-*.svg)
+- Apple, Windows and Ubuntu glyphs from Simple Icons 16.33.0 (https://simpleicons.org), CC0 1.0,
+  licence in ui/marks/simple-icons-LICENSE.md. Used only as platform indicators.
+
+Provider marks (web-dashboard/ui/marks)
+Official artwork, unmodified apart from the crop recorded in ui/marks/sources.json, which also lists
+each source URL and SHA-256 and the optical scale the dashboard applies:
+- Claude Spark (Anthropic press kit), Codex: OpenAI Blossom (OpenAI brand pack), Google Antigravity,
+  Cursor 2D cube (Cursor brand assets), Muse Code: Meta mark, Kimi Code app icon (Moonshot AI,
+  downscaled to 128 px with its own plate), Qwen symbol (Alibaba Qwen), Z.ai, OpenCode Go.
 
 OpenCode
-Official OpenCode dark-surface mark from anomalyco/opencode commit 63cf236140b11c15cd645e90a7ded77bdc2193b4.
+Official OpenCode mark from anomalyco/opencode.
 
 MIT License
 
@@ -27,11 +54,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Cursor
-Official default 2D cube from https://cursor.com/brand and its published Cursor brand archive. Vendor trademark artwork; no separate open-source asset license was found.
-
-Qwen
-Official favicon published by https://qwen.ai (Alibaba Qwen). Vendor trademark artwork; no separate asset license was found.
-
-Muse Code (Meta publisher mark)
-Unchanged official https://dev.meta.ai/favicon.ico pixels, extracted to PNG. The installed Muse launcher is byte-identical to https://api.meta.ai/muse-launcher.sh and embeds api.meta.ai/muse-code endpoints; the official product page is https://dev.meta.ai/products/muse-code. No distinct Muse product icon is published. Meta trademark artwork, governed by https://www.meta.com/brand/resources/meta/company-brand/.
+AI Account Center logo
+The Apex Soft logo (ui/components/logo.slint, public/assets/aac-logo.svg, favicon.svg) is this
+project's own artwork.

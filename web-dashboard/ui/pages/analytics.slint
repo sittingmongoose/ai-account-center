@@ -1,0 +1,177 @@
+// Analytics (W1 stub): header with the range control, the KPI row and the quota-history rows from the
+// version 2 analytics view model. The Usage charts, cost by model, donut, session stats, heatmap and
+// the resets agenda are built by the Analytics task on top of this seam.
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { KpiView, QuotaGroupView, QuotaRowView, AnalyticsHeadView } from "../models.slint";
+import { Icon } from "../components/icon.slint";
+import { ProviderMark } from "../components/mark.slint";
+import { Caps, ValueUnit } from "../components/text.slint";
+import { Button } from "../components/button.slint";
+import { IconButton } from "../components/icon-button.slint";
+import { Segmented, SegItem } from "../components/segmented.slint";
+import { Plate } from "../components/card.slint";
+import { Skeleton } from "../components/skeleton.slint";
+import { Reveal } from "../components/reveal.slint";
+
+component Kpi inherits Plate {
+    in property <KpiView> kpi;
+    in property <bool> loading;
+    min-height: col.preferred-height;
+    col := VerticalLayout {
+        padding: 18px;
+        spacing: 6px;
+        Caps { text: root.kpi.label.to-uppercase(); }
+        if root.loading: Skeleton { height: 26px; width: 120px; }
+        if !root.loading: Text { text: root.kpi.value; font-family: Type.tab; font-size: 26px; font-weight: 620; color: Theme.ink; }
+        Text { text: root.kpi.sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+    }
+}
+
+component QuotaRow inherits Rectangle {
+    in property <QuotaRowView> item;
+    callback opened(string);
+    height: 40px;
+    background: ta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    animate background { duration: 180ms; }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.opened(root.item.key); }
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 14px;
+            VerticalLayout { alignment: center; ProviderMark { provider: root.item.provider; size: 20px; } }
+            VerticalLayout {
+                alignment: center;
+                width: 300px;
+                Text { text: root.item.label; font-size: 13px; font-weight: root.item.active ? 640 : 520; color: Theme.ink; overflow: elide; }
+            }
+            Text { text: root.item.window-label; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; width: 140px; overflow: elide; }
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 120px;
+                if root.item.spark-points > 1: Path {
+                    x: 0px;
+                    y: 8px;
+                    width: parent.width;
+                    height: parent.height - 16px;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    commands: root.item.spark;
+                    stroke: Theme.provider-hue(root.item.provider);
+                    stroke-width: 1.5px;
+                    fill: transparent;
+                }
+                if root.item.spark-points <= 1: Text {
+                    y: (parent.height - self.preferred-height) / 2;
+                    text: "Too little history to draw";
+                    font-size: Type.small;
+                    color: Theme.ink-4;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                width: 70px;
+                if root.item.has-value: ValueUnit { value: root.item.value-text; size: 14px; ink: Theme.sev-text(Theme.severity(true, root.item.value)); }
+                if !root.item.has-value: Text { text: "Unavailable"; font-size: Type.small; color: Theme.ink-3; }
+            }
+            Text { text: root.item.reset; width: 140px; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
+        }
+    }
+}
+
+export component AnalyticsPage inherits Rectangle {
+    in property <AnalyticsHeadView> head;
+    in property <[KpiView]> kpis;
+    in property <[QuotaGroupView]> quota-groups;
+    in property <bool> ready;
+    in-out property <string> range: "7d";
+    callback range-picked(string);
+    callback refresh();
+    callback open-quota(string);
+
+    min-height: page.preferred-height;
+    preferred-height: page.preferred-height;
+
+    page := VerticalLayout {
+        spacing: 20px;
+        Reveal {
+            armed: root.ready;
+            delay: 40ms;
+            HorizontalLayout {
+                spacing: 16px;
+                VerticalLayout {
+                    alignment: end;
+                    Text { text: "Analytics"; font-size: Type.page-title; font-weight: 620; color: Theme.ink; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    Segmented {
+                        mono: true;
+                        items: [{ value: "24h", label: "24H" }, { value: "7d", label: "7D" }, { value: "30d", label: "30D" }];
+                        value <=> root.range;
+                        changed-value(v) => { root.range-picked(v); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text { text: root.head.updated; font-size: 12.5px; color: Theme.ink-3; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton { icon: "refresh"; hint: "Refresh analytics"; spinning: root.head.loading; clicked => { root.refresh(); } }
+                }
+            }
+        }
+        if root.head.error != "": Text { text: root.head.error; font-size: 12.5px; color: Theme.crit-text; wrap: word-wrap; }
+        Reveal {
+            armed: root.ready;
+            delay: 80ms;
+            kpi-row := HorizontalLayout {
+                spacing: 20px;
+                for kpi in root.kpis: Kpi { kpi: kpi; loading: root.head.loading && root.kpis.length == 0; horizontal-stretch: 1; }
+                if root.kpis.length == 0: Plate {
+                    height: 96px;
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+                        Skeleton { height: 12px; width: 120px; active: root.head.loading; }
+                        Skeleton { height: 26px; width: 200px; active: root.head.loading; }
+                    }
+                }
+            }
+        }
+        Reveal {
+            armed: root.ready;
+            delay: 120ms;
+            Plate {
+                min-height: quota.preferred-height;
+                quota := VerticalLayout {
+                    spacing: 0px;
+                    HorizontalLayout {
+                        padding: 20px;
+                        spacing: 10px;
+                        Text { text: "Quota history"; font-size: Type.title; font-weight: 630; color: Theme.ink; }
+                        Text { text: "Main window per account, last 7 days"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+                    }
+                    for group in root.quota-groups: VerticalLayout {
+                        Rectangle {
+                            height: 30px;
+                            background: Theme.paper-2;
+                            Caps { x: 20px; text: group.label.to-uppercase() + " · " + group.count; }
+                        }
+                        for row in group.rows: QuotaRow { item: row; opened(key) => { root.open-quota(key); } }
+                    }
+                    if root.quota-groups.length == 0: Text {
+                        text: root.head.loading ? "Loading account history…" : "No account history in this range yet.";
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                    }
+                    Rectangle { height: 12px; }
+                }
+            }
+        }
+    }
+}

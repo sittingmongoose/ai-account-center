@@ -1,0 +1,210 @@
+// Details: the content of the right-hand slide-over for one account. Every visible window as a meter,
+// balances as amounts, and where the reading came from. Sections stagger in when it opens.
+import { Theme, Motion, Type } from "../theme.slint";
+import { DetailsView, MeterView, AmountView, FactView, AccountRowView } from "../models.slint";
+import { Icon } from "../components/icon.slint";
+import { ProviderMark } from "../components/mark.slint";
+import { Caps } from "../components/text.slint";
+import { Button } from "../components/button.slint";
+import { IconButton } from "../components/icon-button.slint";
+import { Meter } from "../components/meter.slint";
+import { ActiveMark } from "home.slint";
+
+component Stagger inherits Rectangle {
+    in property <int> index;
+    in property <bool> run;
+    property <bool> shown: !Motion.on;
+    min-height: inner.preferred-height;
+    preferred-height: inner.preferred-height;
+    t := Timer {
+        interval: max(1ms, (160 + root.index * 45) * 1ms);
+        running: root.run && !root.shown && Motion.on;
+        triggered => { self.running = false; root.shown = true; }
+    }
+    changed run => { if !root.run && Motion.on { root.shown = false; } }
+    Rectangle {
+        x: root.shown ? 0px : 18px;
+        width: root.width;
+        height: root.height;
+        opacity: root.shown ? 1 : 0;
+        animate x { duration: Motion.on ? 460ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? 340ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        inner := VerticalLayout { @children }
+    }
+}
+
+export component DetailsPanel inherits Rectangle {
+    in property <DetailsView> data;
+    in property <bool> open;
+    in property <bool> busy;
+    callback close();
+    callback launch(string, string);
+    callback activate(string, string);
+    callback go-accounts();
+
+    head := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: head-row.preferred-height;
+        head-row := HorizontalLayout {
+            padding-left: 22px;
+            padding-right: 22px;
+            padding-top: 20px;
+            padding-bottom: 16px;
+            spacing: 14px;
+            VerticalLayout {
+                alignment: start;
+                padding-top: 2px;
+                ProviderMark { provider: root.data.provider; size: 32px; }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 3px;
+                Text { text: root.data.title; font-size: 18px; font-weight: 640; color: Theme.ink; overflow: elide; }
+                Text { text: root.data.sub; font-size: 12.5px; color: Theme.ink-3; overflow: elide; }
+            }
+            VerticalLayout {
+                alignment: start;
+                IconButton { icon: "close"; hint: "Close"; clicked => { root.close(); } }
+            }
+        }
+        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.rule-2; }
+    }
+    scroll := Flickable {
+        x: 0px;
+        y: head.height;
+        width: root.width;
+        height: root.height - head.height;
+        content-height: body.preferred-height;
+        body := VerticalLayout {
+            width: scroll.width;
+            padding-left: 22px;
+            padding-right: 22px;
+            padding-top: 8px;
+            padding-bottom: 30px;
+            spacing: 0px;
+            Stagger {
+                index: 0;
+                run: root.open;
+                VerticalLayout {
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    spacing: 12px;
+                    Caps { text: "USAGE WINDOWS · " + root.data.meter-count; }
+                    for m[i] in root.data.meters: Meter {
+                        data: m;
+                        show-label: true;
+                        played: root.open;
+                        delay: (240 + i * 40) * 1ms;
+                        owner-label: root.data.title;
+                    }
+                    if root.data.meter-count == 0: Text {
+                        text: "No usage windows reported yet.";
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                    }
+                    if root.data.note != "": HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout { alignment: start; padding-top: 2px; Icon { name: "clock"; tint: Theme.ink-3; width: 15px; height: 15px; } }
+                        Text { text: root.data.note; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; horizontal-stretch: 1; }
+                    }
+                }
+            }
+            if root.data.amount-count > 0: Rectangle { height: 1px; background: Theme.rule-2; }
+            if root.data.amount-count > 0: Stagger {
+                index: 1;
+                run: root.open;
+                VerticalLayout {
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    spacing: 0px;
+                    Caps { text: "BALANCES, PACKS AND CREDITS · " + root.data.amount-count; }
+                    Rectangle { height: 8px; }
+                    for a[k] in root.data.amounts: VerticalLayout {
+                        spacing: 0px;
+                        if k > 0: Rectangle { height: 1px; background: Theme.rule; }
+                        HorizontalLayout {
+                            padding-top: 7px;
+                            padding-bottom: a.sub == "" ? 7px : 2px;
+                            spacing: 8px;
+                            VerticalLayout { alignment: center; Icon { name: a.icon; tint: Theme.ink-3; width: 16px; height: 16px; } }
+                            Text { text: a.label; font-size: 12.5px; color: Theme.ink-2; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                            Text {
+                                text: a.value + (a.unit != "" ? " " + a.unit : "");
+                                font-family: Type.tab;
+                                font-size: 12.5px;
+                                font-weight: 600;
+                                color: a.spent ? Theme.crit-text : Theme.ink;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if a.sub != "": HorizontalLayout {
+                            padding-left: 24px;
+                            padding-bottom: 7px;
+                            Text { text: a.sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                        }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Stagger {
+                index: 2;
+                run: root.open;
+                VerticalLayout {
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    spacing: 8px;
+                    Caps { text: "READING"; }
+                    for f in root.data.facts: HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: f.label; width: 110px; font-size: 13px; color: Theme.ink-3; }
+                        Text {
+                            text: f.value;
+                            font-family: f.mono ? Type.mono : Type.tab;
+                            font-size: f.mono ? 12px : 13px;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Stagger {
+                index: 3;
+                run: root.open;
+                HorizontalLayout {
+                    padding-top: 16px;
+                    spacing: 8px;
+                    alignment: start;
+                    if root.data.provider == "claude": Button {
+                        small: true;
+                        platform: "apple";
+                        text: "Open on Mac";
+                        enabled: root.data.can-mac && !root.busy;
+                        clicked => { root.launch(root.data.profile, "mac"); }
+                    }
+                    if root.data.provider == "claude": Button {
+                        small: true;
+                        platform: "windows";
+                        text: "Open on Windows";
+                        enabled: root.data.can-windows && !root.busy;
+                        clicked => { root.launch(root.data.profile, "windows"); }
+                    }
+                    if root.data.switchable && root.data.active: ActiveMark { where: "on Ubuntu"; }
+                    if root.data.switchable && !root.data.active: Button {
+                        small: true;
+                        kind: "accent-line";
+                        icon: "swap";
+                        text: "Activate";
+                        enabled: root.data.can-activate && !root.busy;
+                        clicked => { root.activate(root.data.activate-kind, root.data.profile); }
+                    }
+                    Button { small: true; kind: "ghost"; text: "Manage in Accounts & Settings"; clicked => { root.go-accounts(); } }
+                }
+            }
+        }
+    }
+}

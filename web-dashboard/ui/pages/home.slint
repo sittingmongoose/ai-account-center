@@ -1,0 +1,530 @@
+// Home (W1 foundation): the provider sections and the other-provider cards, built from the shared
+// components so the data seam, meters, selected-row highlight and hover cards can be verified. Later
+// tasks refine the layout against the concept (alignment measurements, confirm lines, Fable examples).
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { SectionView, AccountRowView, ProviderCardView, MeterView, ColumnView } from "../models.slint";
+import { Icon } from "../components/icon.slint";
+import { ProviderMark } from "../components/mark.slint";
+import { Caps, ValueUnit } from "../components/text.slint";
+import { Button } from "../components/button.slint";
+import { IconButton } from "../components/icon-button.slint";
+import { Toggle } from "../components/toggle.slint";
+import { Select } from "../components/select.slint";
+import { Meter } from "../components/meter.slint";
+import { Plate, Card } from "../components/card.slint";
+import { Reveal } from "../components/reveal.slint";
+import { Hover } from "../components/hover-card.slint";
+
+// "Active" in the Activate button's slot: plain check-circle and text, no button chrome. Its icon and
+// label start at exactly the x of the small Activate button's icon and label (the button's own left
+// padding and icon gap), so the column lines up in every row.
+export component ActiveMark inherits HorizontalLayout {
+    in property <string> where: "on Ubuntu";
+    in property <bool> drawn: true;
+    padding-left: 10px;
+    spacing: 7px;
+    alignment: start;
+    VerticalLayout {
+        alignment: start;
+        padding-top: 2px;
+        Rectangle {
+            width: 15px;
+            height: 15px;
+            border-radius: 7.5px;
+            background: Theme.accent;
+            transform-scale: root.drawn ? 1 : 0.4;
+            animate transform-scale { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+            // the check draws in through a clipping rectangle whose width animates (no animated dashes)
+            Rectangle {
+                x: 3px;
+                y: 3px;
+                height: 9px;
+                width: root.drawn ? 9px : 0px;
+                clip: true;
+                animate width { duration: Motion.on ? 280ms : 0ms; delay: Motion.on ? 120ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                Path {
+                    x: 0px;
+                    y: 0px;
+                    width: 9px;
+                    height: 9px;
+                    viewbox-width: 9;
+                    viewbox-height: 9;
+                    commands: "M1.6 4.7 L3.7 6.7 L7.4 2.6";
+                    stroke: Theme.accent-ink;
+                    stroke-width: 1.6px;
+                    stroke-line-cap: round;
+                    fill: transparent;
+                }
+            }
+        }
+    }
+    VerticalLayout {
+        spacing: 0px;
+        Text { text: "Active"; font-size: 12.5px; font-weight: 600; color: Theme.accent-text; }
+        Text { text: root.where; font-size: Type.small; color: Theme.ink-3; }
+    }
+}
+
+// The fixed action slot of a switchable row: Activate, with the Active mark stacked on top; they
+// cross-fade by opacity so the slot never changes size.
+export component SwitchSlot inherits Rectangle {
+    in property <AccountRowView> account;
+    in property <bool> busy: false;
+    callback activate(string, string);
+    width: 104px;
+    height: 40px;
+    property <bool> show-button: !root.account.active && !root.account.setup;
+    // The button is content-sized and right-aligned in the fixed slot; the Active mark starts at the
+    // button's x and uses the button's own left padding and icon gap.
+    btn := Button {
+        x: parent.width - self.width;
+        y: (parent.height - self.height) / 2;
+        width: self.preferred-width;
+        small: true;
+        kind: "accent-line";
+        icon: "swap";
+        text: "Activate";
+        enabled: root.account.can-activate && !root.busy && root.show-button;
+        hint: root.account.activate-hint;
+        opacity: root.show-button ? (self.enabled ? 1 : 0.45) : 0;
+        animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        clicked => { root.activate(root.account.activate-kind, root.account.profile); }
+    }
+    ActiveMark {
+        x: btn.x;
+        y: (parent.height - self.preferred-height) / 2;
+        width: parent.width - btn.x;
+        padding-left: btn.pad-left;
+        spacing: btn.icon-gap;
+        drawn: root.account.active;
+        opacity: root.account.active ? 1 : 0;
+        animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        where: root.account.active-label != "" ? root.account.active-label : "on " + root.account.platform;
+    }
+    if root.account.setup: Text {
+        x: btn.x + btn.pad-left;
+        y: (parent.height - self.preferred-height) / 2;
+        text: "Needs setup";
+        font-size: 12.5px;
+        font-weight: 600;
+        color: Theme.warn-text;
+    }
+}
+
+export component AccountRow inherits Rectangle {
+    in property <AccountRowView> account;
+    in property <SectionView> section;
+    in property <length> ident-w;
+    in property <length> slot-w;
+    in property <bool> played;
+    in property <int> index;
+    in property <bool> busy;
+    in property <bool> selected;
+    callback open-details(string);
+    callback launch(string, string);
+    callback activate(string, string);
+    out property <bool> hovered: ta.has-hover;
+
+    min-height: max(72px, row-layout.preferred-height);
+    background: root.account.active && root.section.switchable ? Theme.row-hover.with-alpha(0)
+        : root.selected ? Theme.row-sel
+        : root.hovered ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    animate background { duration: 180ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open-details(root.account.id); }
+        row-layout := HorizontalLayout {
+            padding-left: Breakpoints.compact ? 18px : 20px;
+            padding-right: Breakpoints.compact ? 18px : 20px;
+            padding-top: 14px;
+            padding-bottom: 14px;
+            spacing: 20px;
+            ident := HorizontalLayout {
+                width: root.ident-w;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    ProviderMark { provider: root.account.provider; size: 22px; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: root.account.email;
+                        font-size: Type.body;
+                        font-weight: root.account.active && root.section.switchable ? 640 : 520;
+                        color: root.section.switchable && !root.account.active ? Theme.ink-2 : Theme.ink;
+                        overflow: elide;
+                    }
+                    Text { text: root.account.meta; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                    if root.account.amounts-line != "": Text {
+                        text: root.account.amounts-line;
+                        font-family: Type.tab;
+                        font-size: Type.small;
+                        color: Theme.ink-3;
+                        overflow: elide;
+                    }
+                }
+            }
+            for cell[c] in root.account.cells: Rectangle {
+                horizontal-stretch: 1;
+                min-width: 80px;
+                if cell.key != "": Meter {
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width;
+                    height: self.preferred-height;
+                    data: cell;
+                    played: root.played;
+                    delay: (root.index * 48 + c * 16) * 1ms;
+                    hot: root.hovered;
+                    owner-label: root.section.label + " · " + root.account.email;
+                    clicked => { root.open-details(root.account.id); }
+                }
+            }
+            slot := HorizontalLayout {
+                width: root.slot-w;
+                alignment: end;
+                spacing: 6px;
+                if root.section.kind == "claude": VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        platform: "apple";
+                        small: true;
+                        enabled: root.account.can-mac && !root.busy;
+                        hint: "Open " + root.account.email + " on Mac";
+                        clicked => { root.launch(root.account.profile, "mac"); }
+                    }
+                }
+                if root.section.kind == "claude": VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        platform: "windows";
+                        small: true;
+                        enabled: root.account.can-windows && !root.busy;
+                        hint: "Open " + root.account.email + " on Windows";
+                        clicked => { root.launch(root.account.profile, "windows"); }
+                    }
+                }
+                if root.section.switchable: VerticalLayout {
+                    alignment: center;
+                    SwitchSlot {
+                        account: root.account;
+                        busy: root.busy;
+                        activate(kind, profile) => { root.activate(kind, profile); }
+                    }
+                }
+            }
+        }
+    }
+    // hairline under every row but the last
+    Rectangle {
+        x: 0px;
+        y: root.height - 1px;
+        width: root.width;
+        height: 1px;
+        background: Theme.rule-2;
+        visible: root.index < root.section.count - 1;
+    }
+}
+
+export component AccountSection inherits Plate {
+    in property <SectionView> section;
+    in property <bool> played;
+    in property <bool> busy;
+    in property <string> selected-id;
+    callback open-details(string);
+    callback launch(string, string);
+    callback activate(string, string);
+    callback auto-toggled(string, bool);
+    callback threshold-picked(string, string);
+
+    property <length> ident-w: Breakpoints.compact ? 230px : Breakpoints.ultra ? 320px : 270px;
+    property <length> slot-w: root.section.switchable ? 104px : 62px;
+    // the one selected-row highlight per section
+    property <length> hl-y: 0px;
+    property <length> hl-h: 0px;
+    property <bool> hl-ready: false;
+
+    min-height: body.preferred-height;
+    preferred-height: body.preferred-height;
+
+    body := VerticalLayout {
+        spacing: 0px;
+        head := HorizontalLayout {
+            padding-left: Breakpoints.compact ? 18px : 20px;
+            padding-right: Breakpoints.compact ? 18px : 20px;
+            padding-top: 14px;
+            padding-bottom: 13px;
+            spacing: 16px;
+            min-height: 70px;
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    ProviderMark { provider: root.section.id; size: 30px; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text { text: root.section.label; font-size: Type.title; font-weight: 630; color: Theme.ink; }
+                    Text { text: root.section.meta; font-size: 12.5px; color: Theme.ink-3; overflow: elide; }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.section.switchable && root.section.count > 0: VerticalLayout {
+                alignment: center;
+                auto := Rectangle {
+                    height: 40px;
+                    width: auto-row.preferred-width;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: Theme.rule-2;
+                    background: Theme.paper-2;
+                    auto-row := HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 6px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.section.auto.enabled;
+                                enabled: root.section.auto.available && !root.busy;
+                                label: "Auto-switch";
+                                toggled(on) => { root.auto-toggled(root.section.id, on); }
+                            }
+                        }
+                        Text { text: "at"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+                        VerticalLayout {
+                            alignment: center;
+                            Select {
+                                small: true;
+                                width: 78px;
+                                menu-width: 120px;
+                                options: ["75%", "80%", "85%", "90%", "95%", "99%"];
+                                value: root.section.auto.threshold-label;
+                                enabled: root.section.auto.available && !root.busy;
+                                selected(v) => { root.threshold-picked(root.section.id, v); }
+                            }
+                        }
+                        Text { text: "used"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+                    }
+                    TouchArea {
+                        changed has-hover => {
+                            if self.has-hover {
+                                Hover.tip("auto:" + root.section.id, self.absolute-position, self.width, self.height, root.section.auto.message + (root.section.auto.setting != "" ? " · " + root.section.auto.setting : ""));
+                            } else {
+                                Hover.leave("auto:" + root.section.id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if root.section.count > 0: colhead := Rectangle {
+            height: 34px;
+            background: Theme.paper-2;
+            Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.rule-2; }
+            HorizontalLayout {
+                padding-left: Breakpoints.compact ? 18px : 20px;
+                padding-right: Breakpoints.compact ? 18px : 20px;
+                spacing: 20px;
+                Caps { width: root.ident-w; text: "ACCOUNT"; }
+                for col in root.section.columns: Caps {
+                    horizontal-stretch: 1;
+                    min-width: 80px;
+                    text: col.label.to-uppercase();
+                }
+                Rectangle { width: root.slot-w; }
+            }
+        }
+        rows-box := Rectangle {
+            min-height: rows.preferred-height;
+            preferred-height: rows.preferred-height;
+            // Selected row: one tinted, outlined rectangle that glides between rows (no side bar).
+            if root.section.switchable && root.hl-h > 0: Rectangle {
+                x: 8px;
+                y: root.hl-y + 3px;
+                width: parent.width - 16px;
+                height: root.hl-h - 6px;
+                border-radius: 10px;
+                background: Theme.sel-fill;
+                border-width: 1px;
+                border-color: Theme.sel-line;
+                animate y, height { duration: root.hl-ready && Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            }
+            rows := VerticalLayout {
+                spacing: 0px;
+                for row[i] in root.section.rows: AccountRow {
+                    account: row;
+                    section: root.section;
+                    index: i;
+                    ident-w: root.ident-w;
+                    slot-w: root.slot-w;
+                    played: root.played;
+                    busy: root.busy;
+                    selected: row.id == root.selected-id;
+                    init => { if row.active { root.hl-y = self.y; root.hl-h = self.height; } }
+                    changed y => { if self.account.active { root.hl-y = self.y; } }
+                    changed height => { if self.account.active { root.hl-h = self.height; } }
+                    changed account => {
+                        if self.account.active {
+                            root.hl-ready = true;
+                            root.hl-y = self.y;
+                            root.hl-h = self.height;
+                        }
+                    }
+                    open-details(id) => { root.open-details(id); }
+                    launch(id, target) => { root.launch(id, target); }
+                    activate(kind, profile) => { root.activate(kind, profile); }
+                }
+            }
+        }
+        if root.section.count == 0: Text {
+            text: root.section.empty;
+            font-size: 12.5px;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component ProviderCard inherits Card {
+    in property <ProviderCardView> card;
+    in property <bool> played;
+    in property <int> index;
+    in property <string> selected-id;
+    selected: root.card.account-id == root.selected-id && root.selected-id != "";
+    HorizontalLayout {
+        spacing: 12px;
+        VerticalLayout {
+            alignment: start;
+            ProviderMark { provider: root.card.id; size: 28px; }
+        }
+        VerticalLayout {
+            spacing: 1px;
+            horizontal-stretch: 1;
+            Text { text: root.card.label; font-size: 15px; font-weight: 630; color: Theme.ink; overflow: elide; }
+            Text { text: root.card.identity; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+        }
+    }
+    Rectangle { height: 14px; }
+    VerticalLayout {
+        spacing: 14px;
+        for m[k] in root.card.meters: Meter {
+            data: m;
+            inline: true;
+            played: root.played;
+            delay: (root.index * 48 + k * 16) * 1ms;
+            hot: root.hovered;
+            owner-label: root.card.label + " · " + root.card.identity;
+            clicked => { root.clicked(); }
+        }
+        if root.card.meters.length == 0: Text {
+            text: root.card.note != "" ? root.card.note : "Usage unavailable";
+            font-size: 12.5px;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+    if root.card.amounts.length > 0: Rectangle { height: 10px; }
+    for a in root.card.amounts: HorizontalLayout {
+        spacing: 8px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        VerticalLayout {
+            alignment: center;
+            Icon { name: a.icon; tint: Theme.ink-3; width: 16px; height: 16px; }
+        }
+        Text { text: a.label; font-size: 12.5px; color: Theme.ink-2; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+        Text {
+            text: a.value + (a.unit != "" ? " " + a.unit : "");
+            font-family: Type.tab;
+            font-size: 12.5px;
+            font-weight: 600;
+            color: a.spent ? Theme.crit-text : Theme.ink;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle { vertical-stretch: 1; }
+    if root.card.source != "": Text {
+        text: root.card.source;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        overflow: elide;
+    }
+}
+
+export component HomePage inherits Rectangle {
+    in property <[SectionView]> sections;
+    in property <[ProviderCardView]> cards;
+    in property <bool> busy;
+    in property <bool> ready;
+    in property <string> selected-id;
+    callback open-details(string);
+    callback launch(string, string);
+    callback activate(string, string);
+    callback auto-toggled(string, bool);
+    callback threshold-picked(string, string);
+
+    property <int> columns: Breakpoints.ultra ? 4 : Breakpoints.compact ? 2 : 3;
+    property <bool> side-by-side: Breakpoints.at-least-wide;
+
+    min-height: page.preferred-height;
+    preferred-height: page.preferred-height;
+
+    page := VerticalLayout {
+        spacing: 20px;
+        for section[s] in root.sections: Reveal {
+            delay: (40 + s * 40) * 1ms;
+            armed: root.ready;
+            AccountSection {
+                section: section;
+                played: root.ready;
+                busy: root.busy;
+                selected-id: root.selected-id;
+                open-details(id) => { root.open-details(id); }
+                launch(id, target) => { root.launch(id, target); }
+                activate(kind, profile) => { root.activate(kind, profile); }
+                auto-toggled(id, on) => { root.auto-toggled(id, on); }
+                threshold-picked(id, v) => { root.threshold-picked(id, v); }
+            }
+        }
+        if root.cards.length > 0: Reveal {
+            delay: (40 + root.sections.length * 40) * 1ms;
+            armed: root.ready;
+            HorizontalLayout {
+                spacing: 12px;
+                padding-top: 10px;
+                padding-left: 2px;
+                Text { text: "Other providers"; font-size: Type.title; font-weight: 630; color: Theme.ink; }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Rectangle { height: 1px; background: Theme.rule; }
+                }
+            }
+        }
+        cards-grid := GridLayout {
+            spacing: 20px;
+            for card[i] in root.cards: ProviderCard {
+                row: floor(i / root.columns);
+                col: mod(i, root.columns);
+                card: card;
+                index: i;
+                played: root.ready;
+                selected-id: root.selected-id;
+                clicked => { root.open-details(card.account-id); }
+            }
+            // keep every column the same width when the last row is short
+            for k in root.columns: Rectangle {
+                row: ceil(root.cards.length / root.columns);
+                col: k;
+                height: 0px;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+}

@@ -1,326 +1,160 @@
-use crate::{
-    AnalyticsAccountView, AnalyticsChartView, AnalyticsMetricView, AnalyticsModelView,
-    AnalyticsPointView, AnalyticsProviderView, AnalyticsStackPointView, AnalyticsSummaryView,
-    Dashboard, model,
-};
+//! Analytics view model (version 2, public/analytics-data.mjs `analyticsSlintModel`): the header
+//! state, the KPI row and the quota-history groups. Persistent models keep row instances alive across
+//! refreshes and range changes so later charts can morph instead of re-mounting.
+use crate::sync::{Nested, sync_rows};
+use crate::{AnalyticsHeadView, Dashboard, KpiView, QuotaGroupView, QuotaRowView};
 use serde::Deserialize;
+use slint::{ModelRc, SharedString, VecModel};
+use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct SummaryDto {
-    label: String,
-    value: String,
-    note: String,
+pub struct AnalyticsModels {
+    kpis: Rc<VecModel<KpiView>>,
+    groups: Rc<VecModel<QuotaGroupView>>,
+    group_rows: Nested<QuotaRowView>,
 }
-impl From<SummaryDto> for AnalyticsSummaryView {
-    fn from(v: SummaryDto) -> Self {
+
+impl Default for AnalyticsModels {
+    fn default() -> Self {
         Self {
-            label: v.label.into(),
-            value: v.value.into(),
-            note: v.note.into(),
+            kpis: Rc::new(VecModel::default()),
+            groups: Rc::new(VecModel::default()),
+            group_rows: Nested::default(),
         }
     }
 }
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct ProviderDto {
-    id: String,
-    label: String,
-    accounts: String,
-    availability: String,
-    sample: String,
+
+pub fn bind(ui: &Dashboard, m: &AnalyticsModels) {
+    ui.set_analytics_kpis(ModelRc::from(m.kpis.clone()));
+    ui.set_analytics_quota_groups(ModelRc::from(m.groups.clone()));
 }
-impl From<ProviderDto> for AnalyticsProviderView {
-    fn from(v: ProviderDto) -> Self {
-        Self {
-            id: v.id.into(),
-            label: v.label.into(),
-            accounts: v.accounts.into(),
-            availability: v.availability.into(),
-            sample: v.sample.into(),
-        }
-    }
-}
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct MetricDto {
-    key: String,
-    label: String,
-    amount: String,
-    reset: String,
-    expiration: String,
-    note: String,
-}
-impl From<MetricDto> for AnalyticsMetricView {
-    fn from(v: MetricDto) -> Self {
-        Self {
-            key: v.key.into(),
-            label: v.label.into(),
-            amount: v.amount.into(),
-            reset: v.reset.into(),
-            expiration: v.expiration.into(),
-            note: v.note.into(),
-        }
-    }
-}
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct PointDto {
-    x: f32,
-    percent: f32,
-    label: String,
-}
-impl From<PointDto> for AnalyticsPointView {
-    fn from(v: PointDto) -> Self {
-        Self {
-            x: v.x,
-            percent: v.percent,
-            label: v.label.into(),
-        }
-    }
-}
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct AccountDto {
-    id: String,
-    label: String,
-    provider: String,
-    status: String,
-    platform: String,
-    source: String,
-    plan: String,
-    active: bool,
-    samples: String,
-}
-impl From<AccountDto> for AnalyticsAccountView {
-    fn from(v: AccountDto) -> Self {
-        Self {
-            id: v.id.into(),
-            label: v.label.into(),
-            provider: v.provider.into(),
-            status: v.status.into(),
-            platform: v.platform.into(),
-            source: v.source.into(),
-            plan: v.plan.into(),
-            active: v.active,
-            samples: v.samples.into(),
-        }
-    }
-}
-#[derive(Default, Deserialize)]
-#[serde(default)]
-#[serde(rename_all = "camelCase")]
-struct ModelDto {
-    label: String,
-    provider: String,
-    input: String,
-    output: String,
-    cache: String,
-    cost: String,
-    cache_created: String,
-    cache_read: String,
-    total: String,
-    share: String,
-    cost_percent: f32,
-    token_percent: f32,
-    has_cost: bool,
-}
-impl From<ModelDto> for AnalyticsModelView {
-    fn from(v: ModelDto) -> Self {
-        Self {
-            label: v.label.into(),
-            provider: v.provider.into(),
-            input: v.input.into(),
-            output: v.output.into(),
-            cache: v.cache.into(),
-            cost: v.cost.into(),
-            cache_created: v.cache_created.into(),
-            cache_read: v.cache_read.into(),
-            total: v.total.into(),
-            share: v.share.into(),
-            cost_percent: v.cost_percent,
-            token_percent: v.token_percent,
-            has_cost: v.has_cost,
-        }
-    }
-}
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct ChartDto {
-    key: String,
-    title: String,
-    subtitle: String,
-    note: String,
-    top: String,
-    middle: String,
-    bottom: String,
-    start: String,
-    end: String,
-    points: Vec<PointDto>,
-}
-impl From<ChartDto> for AnalyticsChartView {
-    fn from(v: ChartDto) -> Self {
-        Self {
-            key: v.key.into(),
-            title: v.title.into(),
-            subtitle: v.subtitle.into(),
-            note: v.note.into(),
-            top: v.top.into(),
-            middle: v.middle.into(),
-            bottom: v.bottom.into(),
-            start: v.start.into(),
-            end: v.end.into(),
-            points: model(v.points.into_iter().map(Into::into).collect()),
-        }
-    }
-}
+
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-struct StackPointDto {
-    x: f32,
-    input: f32,
-    output: f32,
-    cache_created: f32,
-    cache_read: f32,
+struct HeadDto {
+    updated: String,
+    range: String,
+    provider: String,
+    note: String,
+    has_activity: bool,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct KpiDto {
+    key: String,
     label: String,
+    value: String,
+    sub: String,
 }
-impl From<StackPointDto> for AnalyticsStackPointView {
-    fn from(v: StackPointDto) -> Self {
-        Self {
-            x: v.x,
-            input: v.input,
-            output: v.output,
-            cache_created: v.cache_created,
-            cache_read: v.cache_read,
-            label: v.label.into(),
-        }
-    }
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct QuotaRowDto {
+    id: String,
+    key: String,
+    provider: String,
+    label: String,
+    sub: String,
+    window_label: String,
+    has_value: bool,
+    value: f32,
+    value_text: String,
+    reset: String,
+    active: bool,
+    spark: String,
+    spark_points: i32,
 }
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct QuotaGroupDto {
+    provider: String,
+    label: String,
+    rows: Vec<QuotaRowDto>,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct AnalyticsDto {
-    loading: bool,
-    error: String,
-    updated: String,
-    history_note: String,
-    range_value: String,
-    provider_value: String,
-    account_value: String,
-    metric_value: String,
-    provider_options: Vec<String>,
-    account_options: Vec<String>,
-    metric_options: Vec<String>,
-    summaries: Vec<SummaryDto>,
-    providers: Vec<ProviderDto>,
-    accounts: Vec<AccountDto>,
-    metrics: Vec<MetricDto>,
-    points: Vec<PointDto>,
-    selected_account_note: String,
-    chart_title: String,
-    chart_note: String,
-    chart_start: String,
-    chart_end: String,
-    chart_top: String,
-    chart_middle: String,
-    chart_bottom: String,
-    chart_has_points: bool,
-    metric_percent: bool,
-    activity_title: String,
-    activity_note: String,
-    activity_chart_top: String,
-    activity_chart_middle: String,
-    activity_chart_bottom: String,
-    activity_chart_start: String,
-    activity_chart_end: String,
-    activity_has_data: bool,
-    activity_summaries: Vec<SummaryDto>,
-    activity_points: Vec<PointDto>,
-    activity_models: Vec<ModelDto>,
-    activity_providers: Vec<MetricDto>,
-    quota_charts: Vec<ChartDto>,
-    overview_note: String,
-    activity_interval_value: String,
-    activity_stack_points: Vec<StackPointDto>,
-    activity_cost_points: Vec<PointDto>,
-    activity_cost_top: String,
-    activity_cost_middle: String,
-    activity_cost_bottom: String,
-    activity_model_note: String,
+    version: u32,
+    head: HeadDto,
+    kpis: Vec<KpiDto>,
+    quota_groups: Vec<QuotaGroupDto>,
 }
-pub(crate) fn set_analytics(ui: &Dashboard, json: &str) -> Result<(), JsValue> {
-    let v: AnalyticsDto = serde_json::from_str(json)
-        .map_err(|_| JsValue::from_str("Invalid account analytics view"))?;
-    ui.set_analytics_loading(v.loading);
-    ui.set_analytics_error(v.error.into());
-    ui.set_analytics_updated(v.updated.into());
-    ui.set_analytics_history_note(v.history_note.into());
-    ui.set_analytics_provider_options(model(
-        v.provider_options.into_iter().map(Into::into).collect(),
-    ));
-    ui.set_analytics_account_options(model(
-        v.account_options.into_iter().map(Into::into).collect(),
-    ));
-    ui.set_analytics_metric_options(model(
-        v.metric_options.into_iter().map(Into::into).collect(),
-    ));
-    // ComboBox resolves the selection against its model on every model change.
-    // Supply the choices before selecting their labels so refreshed models do
-    // not clear a provider, account or metric selected by the user.
-    ui.set_analytics_range_value(v.range_value.into());
-    ui.set_analytics_provider_value(v.provider_value.into());
-    ui.set_analytics_account_value(v.account_value.into());
-    ui.set_analytics_metric_value(v.metric_value.into());
-    ui.set_analytics_summary(model(v.summaries.into_iter().map(Into::into).collect()));
-    ui.set_analytics_providers(model(v.providers.into_iter().map(Into::into).collect()));
-    ui.set_analytics_accounts(model(v.accounts.into_iter().map(Into::into).collect()));
-    ui.set_analytics_metrics(model(v.metrics.into_iter().map(Into::into).collect()));
-    ui.set_analytics_points(model(v.points.into_iter().map(Into::into).collect()));
-    ui.set_analytics_selected_account_note(v.selected_account_note.into());
-    ui.set_analytics_chart_title(v.chart_title.into());
-    ui.set_analytics_chart_note(v.chart_note.into());
-    ui.set_analytics_chart_start(v.chart_start.into());
-    ui.set_analytics_chart_end(v.chart_end.into());
-    ui.set_analytics_chart_top(v.chart_top.into());
-    ui.set_analytics_chart_middle(v.chart_middle.into());
-    ui.set_analytics_chart_bottom(v.chart_bottom.into());
-    ui.set_analytics_chart_has_points(v.chart_has_points);
-    ui.set_analytics_metric_percent(v.metric_percent);
-    ui.set_analytics_activity_title(v.activity_title.into());
-    ui.set_analytics_activity_note(v.activity_note.into());
-    ui.set_analytics_activity_chart_top(v.activity_chart_top.into());
-    ui.set_analytics_activity_chart_middle(v.activity_chart_middle.into());
-    ui.set_analytics_activity_chart_bottom(v.activity_chart_bottom.into());
-    ui.set_analytics_activity_chart_start(v.activity_chart_start.into());
-    ui.set_analytics_activity_chart_end(v.activity_chart_end.into());
-    ui.set_analytics_activity_has_data(v.activity_has_data);
-    ui.set_analytics_activity_summary(model(
-        v.activity_summaries.into_iter().map(Into::into).collect(),
-    ));
-    ui.set_analytics_activity_points(model(
-        v.activity_points.into_iter().map(Into::into).collect(),
-    ));
-    ui.set_analytics_activity_models(model(
-        v.activity_models.into_iter().map(Into::into).collect(),
-    ));
-    ui.set_analytics_activity_providers(model(
-        v.activity_providers.into_iter().map(Into::into).collect(),
-    ));
-    ui.set_analytics_quota_charts(model(v.quota_charts.into_iter().map(Into::into).collect()));
-    ui.set_analytics_overview_note(v.overview_note.into());
-    ui.set_analytics_activity_interval_value(v.activity_interval_value.into());
-    ui.set_analytics_activity_stack_points(model(
-        v.activity_stack_points
+
+pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Result<(), JsValue> {
+    let v: AnalyticsDto =
+        serde_json::from_str(json).map_err(|_| JsValue::from_str("Invalid analytics view data"))?;
+    if v.version != crate::VIEW_MODEL_VERSION {
+        return Err(JsValue::from_str(
+            "Unsupported analytics view-model version",
+        ));
+    }
+    let previous = ui.get_analytics_head();
+    ui.set_analytics_head(AnalyticsHeadView {
+        loading: previous.loading,
+        error: previous.error,
+        updated: v.head.updated.into(),
+        range: v.head.range.clone().into(),
+        provider: v.head.provider.into(),
+        note: v.head.note.into(),
+        has_activity: v.head.has_activity,
+    });
+    if ["24h", "7d", "30d"].contains(&v.head.range.as_str()) {
+        ui.set_analytics_range(v.head.range.into());
+    }
+    sync_rows(
+        &m.kpis,
+        v.kpis
             .into_iter()
-            .map(Into::into)
+            .map(|k| KpiView {
+                key: k.key.into(),
+                label: k.label.into(),
+                value: k.value.into(),
+                sub: k.sub.into(),
+            })
             .collect(),
-    ));
-    ui.set_analytics_activity_cost_points(model(
-        v.activity_cost_points.into_iter().map(Into::into).collect(),
-    ));
-    ui.set_analytics_activity_cost_top(v.activity_cost_top.into());
-    ui.set_analytics_activity_cost_middle(v.activity_cost_middle.into());
-    ui.set_analytics_activity_cost_bottom(v.activity_cost_bottom.into());
-    ui.set_analytics_activity_model_note(v.activity_model_note.into());
+        |k: &KpiView| k.key.clone(),
+    );
+    let mut live = Vec::new();
+    let mut groups = Vec::new();
+    for group in v.quota_groups {
+        live.push(group.provider.clone());
+        let count = group.rows.len() as i32;
+        let rows = m.group_rows.sync(
+            &group.provider,
+            group
+                .rows
+                .into_iter()
+                .map(|r| QuotaRowView {
+                    id: r.id.into(),
+                    key: r.key.into(),
+                    provider: r.provider.into(),
+                    label: r.label.into(),
+                    sub: r.sub.into(),
+                    window_label: r.window_label.into(),
+                    has_value: r.has_value && r.value.is_finite(),
+                    value: if r.value.is_finite() { r.value } else { 0. },
+                    value_text: r.value_text.into(),
+                    reset: r.reset.into(),
+                    active: r.active,
+                    spark: r.spark.into(),
+                    spark_points: r.spark_points,
+                })
+                .collect(),
+            |r: &QuotaRowView| r.key.clone(),
+        );
+        groups.push(QuotaGroupView {
+            provider: group.provider.into(),
+            label: group.label.into(),
+            count,
+            rows,
+        });
+    }
+    sync_rows(&m.groups, groups, |g: &QuotaGroupView| -> SharedString {
+        g.provider.clone()
+    });
+    m.group_rows.retain(&live);
     Ok(())
 }

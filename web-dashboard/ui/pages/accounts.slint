@@ -1,0 +1,150 @@
+// Accounts & Settings (W1 stub): one row per provider from the registry, the appearance and refresh
+// settings, and About with Slint's required attribution. The per-provider sign-in flows, show/hide
+// toggles, auto-switch policies, update results, password change and paired trays are later tasks.
+import { AboutSlint } from "std-widgets.slint";
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { RegistryView } from "../models.slint";
+import { Icon } from "../components/icon.slint";
+import { ProviderMark } from "../components/mark.slint";
+import { Caps } from "../components/text.slint";
+import { Segmented, SegItem } from "../components/segmented.slint";
+import { Select } from "../components/select.slint";
+import { Plate } from "../components/card.slint";
+import { Reveal } from "../components/reveal.slint";
+
+component SettingRow inherits HorizontalLayout {
+    in property <string> icon;
+    in property <string> label;
+    in property <string> sub;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    spacing: 12px;
+    VerticalLayout { alignment: center; Icon { name: root.icon; tint: Theme.ink-3; width: 18px; height: 18px; } }
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        spacing: 2px;
+        Text { text: root.label; font-size: Type.body; font-weight: 560; color: Theme.ink; }
+        if root.sub != "": Text { text: root.sub; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+    }
+    @children
+}
+
+export component AccountsPage inherits Rectangle {
+    in property <[RegistryView]> registry;
+    in property <bool> ready;
+    in-out property <string> theme-value: "auto";
+    in-out property <string> refresh-interval: "60 s";
+    in property <bool> refresh-known: false;
+    in property <bool> busy: false;
+    callback theme-picked(string);
+    callback refresh-picked(string);
+
+    min-height: page.preferred-height;
+    preferred-height: page.preferred-height;
+
+    page := HorizontalLayout {
+        spacing: 20px;
+        alignment: start;
+        Reveal {
+            armed: root.ready;
+            delay: 40ms;
+            horizontal-stretch: 3;
+            Plate {
+                min-height: providers.preferred-height;
+                providers := VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 16px;
+                    padding-bottom: 8px;
+                    spacing: 0px;
+                    Caps { text: "PROVIDERS"; }
+                    Rectangle { height: 8px; }
+                    for p[i] in root.registry: VerticalLayout {
+                        if i > 0: Rectangle { height: 1px; background: Theme.rule-2; }
+                        HorizontalLayout {
+                            padding-top: 12px;
+                            padding-bottom: 12px;
+                            spacing: 12px;
+                            VerticalLayout { alignment: center; ProviderMark { provider: p.id; size: 24px; dim: !p.visible; } }
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                spacing: 1px;
+                                Text { text: p.long-label; font-size: Type.body; font-weight: 600; color: Theme.ink; }
+                                Text {
+                                    text: (p.count == 1 ? "1 account" : p.count + " accounts") + " · " + p.sign-in + (p.visible ? "" : " · hidden on the dashboard");
+                                    font-size: Type.small;
+                                    color: Theme.ink-3;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: p.switchable ? "Switchable" : ""; font-size: Type.small; color: Theme.ink-3; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Reveal {
+            armed: root.ready;
+            delay: 80ms;
+            horizontal-stretch: 2;
+            min-width: 360px;
+            max-width: 480px;
+            Plate {
+                min-height: settings.preferred-height;
+                settings := VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    spacing: 0px;
+                    Caps { text: "SETTINGS"; }
+                    SettingRow {
+                        icon: "sun";
+                        label: "Appearance";
+                        sub: "Auto follows this browser.";
+                        VerticalLayout {
+                            alignment: center;
+                            Segmented {
+                                items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
+                                value <=> root.theme-value;
+                                changed-value(v) => { root.theme-picked(v); }
+                            }
+                        }
+                    }
+                    Rectangle { height: 1px; background: Theme.rule-2; }
+                    SettingRow {
+                        icon: "clock";
+                        label: "Usage refresh";
+                        sub: root.refresh-known ? "How often the dashboard asks every provider." : "The saved interval could not be read.";
+                        VerticalLayout {
+                            alignment: center;
+                            Select {
+                                width: 110px;
+                                small: true;
+                                options: ["30 s", "1 min", "2 min", "5 min", "10 min", "30 min", "60 min"];
+                                value <=> root.refresh-interval;
+                                enabled: root.refresh-known && !root.busy;
+                                selected(v) => { root.refresh-picked(v); }
+                            }
+                        }
+                    }
+                    Rectangle { height: 1px; background: Theme.rule-2; }
+                    Rectangle { height: 14px; }
+                    Caps { text: "ABOUT"; }
+                    Rectangle { height: 8px; }
+                    Text { text: "AI Account Center"; font-size: Type.body; font-weight: 600; color: Theme.ink; }
+                    Text { text: "Built with Slint 1.18.1"; font-size: Type.small; color: Theme.ink-3; }
+                    Rectangle { height: 10px; }
+                    HorizontalLayout {
+                        alignment: start;
+                        AboutSlint { width: 220px; height: 92px; }
+                    }
+                }
+            }
+        }
+    }
+}

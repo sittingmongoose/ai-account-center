@@ -1,0 +1,107 @@
+// Square icon button.
+import { Theme, Motion, Type } from "../theme.slint";
+import { Icon } from "icon.slint";
+import { PlatformGlyph } from "mark.slint";
+
+// Square icon button (34 px; 28 px small). `bare` drops the border until hover; `pressed-look` is the
+// state of a toggle such as an open menu; `chevron` adds a trailing chevron that flips while pressed.
+export component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> platform;
+    in property <bool> small: false;
+    in property <bool> bare: false;
+    in property <bool> chevron: false;
+    in property <bool> pressed-look: false;
+    in property <bool> enabled: true;
+    in property <string> hint;
+    in property <color> tint: (ta.has-hover || root.pressed-look) && root.enabled ? Theme.ink : Theme.ink-2;
+    // While true the icon spins (one-property loop); on release it eases out to the next rest point.
+    in property <bool> spinning: false;
+    callback clicked();
+
+    property <bool> hovered: ta.has-hover && root.enabled;
+    property <length> side: root.small ? 28px : 34px;
+    property <length> glyph: root.small ? 16px : 18px;
+    property <duration> spin-start: 0ms;
+    property <duration> settle-start: 0ms;
+    property <angle> settle-from: 0deg;
+    property <bool> settling: false;
+    property <duration> period: 900ms;
+    property <angle> live-angle: root.spinning ? mod((animation-tick() - root.spin-start) / root.period, 1) * 360deg : 0deg;
+    property <float> settle-t: root.settling ? clamp((animation-tick() - root.settle-start) / 640ms, 0, 1) : 1;
+    property <angle> settle-angle: root.settle-from + (540deg - root.settle-from) * (1 - pow(1 - root.settle-t, 3));
+    out property <angle> icon-angle: root.spinning ? root.live-angle : root.settling ? root.settle-angle : 0deg;
+
+    changed spinning => {
+        if root.spinning {
+            root.settling = false;
+            root.spin-start = animation-tick();
+        } else if Motion.on {
+            root.settle-from = mod((animation-tick() - root.spin-start) / root.period, 1) * 360deg;
+            root.settle-start = animation-tick();
+            root.settling = true;
+            settle-timer.running = true;
+        }
+    }
+    settle-timer := Timer {
+        interval: 660ms;
+        running: false;
+        triggered => { root.settling = false; self.running = false; }
+    }
+
+    height: root.side;
+    width: root.chevron ? content.preferred-width : root.side;
+    border-radius: root.small ? 7px : 9px;
+    border-width: 1px;
+    background: root.pressed-look ? Theme.paper-3
+        : root.bare ? (root.hovered ? Theme.paper-3 : Theme.paper.with-alpha(0))
+        : (root.hovered ? Theme.paper-2 : Theme.paper);
+    border-color: root.bare ? Theme.rule.with-alpha(0)
+        : root.pressed-look || root.hovered ? Theme.rule-strong : Theme.rule;
+    opacity: root.enabled ? 1 : 0.45;
+    animate background, border-color { duration: Motion.fast; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    transform-scale: ta.pressed && root.enabled ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    accessible-role: button;
+    accessible-label: root.hint;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    content := HorizontalLayout {
+        padding-left: root.chevron ? 9px : 0px;
+        padding-right: root.chevron ? 8px : 0px;
+        spacing: 4px;
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            if root.platform == "": Icon {
+                name: root.icon;
+                tint: root.tint;
+                width: root.glyph;
+                height: root.glyph;
+                transform-rotation: root.icon-angle;
+            }
+            if root.platform != "": PlatformGlyph {
+                platform: root.platform;
+                tint: root.tint;
+                width: root.small ? 14px : 15px;
+                height: root.small ? 14px : 15px;
+            }
+        }
+        if root.chevron: VerticalLayout {
+            alignment: center;
+            Icon {
+                name: "chev-down";
+                tint: Theme.ink-3;
+                width: 14px;
+                height: 14px;
+                transform-rotation: root.pressed-look ? 180deg : 0deg;
+                animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+            }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}

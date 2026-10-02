@@ -1,0 +1,123 @@
+// Toasts: spring up, a 2 px countdown bar, fade out in place, then the slot closes and the row is removed.
+import { Theme, Motion, Type } from "../theme.slint";
+import { ToastView } from "../models.slint";
+import { Icon } from "icon.slint";
+import { IconButton } from "icon-button.slint";
+
+component ToastItem inherits Rectangle {
+    in property <ToastView> data;
+    callback dismissed(int);
+
+    property <bool> entered: false;
+    property <bool> leaving: false;
+    property <bool> gone: false;
+    property <length> natural: inner.preferred-height + 28px;
+
+    init => { root.entered = true; }
+    life := Timer {
+        interval: max(1500ms, root.data.ms * 1ms);
+        running: root.entered && !root.leaving;
+        triggered => { root.leave(); }
+    }
+    fade := Timer {
+        interval: Motion.on ? 220ms : 1ms;
+        running: false;
+        triggered => { self.running = false; root.gone = true; close.running = true; }
+    }
+    close := Timer {
+        interval: Motion.on ? 210ms : 1ms;
+        running: false;
+        triggered => { self.running = false; root.dismissed(root.data.id); }
+    }
+    public function leave() {
+        if !root.leaving {
+            root.leaving = true;
+            fade.running = true;
+        }
+    }
+
+    width: 380px;
+    height: root.gone ? 0px : root.natural;
+    animate height { duration: Motion.on ? 200ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    clip: false;
+
+    card := Rectangle {
+        x: root.leaving ? 8px : 0px;
+        y: root.entered ? 0px : 18px;
+        width: root.width;
+        height: root.natural;
+        opacity: root.entered && !root.leaving ? 1 : 0;
+        transform-scale: root.entered ? 1 : 0.97;
+        animate y, transform-scale { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        animate opacity { duration: Motion.on ? 220ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        animate x { duration: Motion.on ? 220ms : 0ms; easing: cubic-bezier(0.4, 0, 1, 1); }
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.rule;
+        background: Theme.paper;
+        drop-shadow-color: Theme.shadow-pop;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 16px;
+        clip: true;
+
+        inner := HorizontalLayout {
+            padding-left: 15px;
+            padding-right: 12px;
+            padding-top: 13px;
+            padding-bottom: 15px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: start;
+                Icon {
+                    name: root.data.kind == "err" ? "alert-circle" : root.data.kind == "info" ? "info" : "check-circle";
+                    tint: root.data.kind == "err" ? Theme.crit-text : root.data.kind == "info" ? Theme.accent-text : Theme.good-text;
+                    width: 18px;
+                    height: 18px;
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                Text { text: root.data.title; font-size: 13.5px; font-weight: 620; color: Theme.ink; wrap: word-wrap; }
+                if root.data.body != "": Text { text: root.data.body; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; }
+            }
+            VerticalLayout {
+                alignment: start;
+                IconButton { icon: "close"; small: true; bare: true; hint: "Dismiss"; clicked => { root.leave(); } }
+            }
+        }
+        // countdown
+        Rectangle {
+            x: 0px;
+            y: parent.height - 2px;
+            width: parent.width;
+            height: 2px;
+            background: Theme.rule-2;
+            Rectangle {
+                x: 0px;
+                height: 100%;
+                width: root.entered ? 0px : parent.width;
+                animate width { duration: Motion.on ? max(1500ms, root.data.ms * 1ms) : 0ms; easing: linear; }
+                background: root.data.kind == "err" ? Theme.crit : root.data.kind == "ok" ? Theme.calm : Theme.accent;
+                opacity: 0.55;
+            }
+        }
+    }
+}
+
+// Bottom-right stack; steps aside for the slide-over when it is open.
+export component ToastStack inherits Rectangle {
+    in property <[ToastView]> toasts;
+    in property <length> right-inset: 24px;
+    callback dismissed(int);
+    width: 380px;
+    height: col.preferred-height;
+    col := VerticalLayout {
+        alignment: end;
+        spacing: 10px;
+        for t in root.toasts: ToastItem {
+            data: t;
+            dismissed(id) => { root.dismissed(id); }
+        }
+    }
+}

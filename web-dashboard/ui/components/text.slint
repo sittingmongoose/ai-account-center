@@ -1,0 +1,49 @@
+// Typographic helpers. Every number that updates or aligns uses the tabular copy of Instrument Sans.
+import { Theme, Type } from "../theme.slint";
+
+// Martian Mono small caps for column heads, axes and section captions (11 px, never smaller).
+export component Caps inherits Text {
+    font-family: Type.mono;
+    font-size: Type.caption;
+    font-weight: 400;
+    letter-spacing: 0.66px;
+    color: Theme.ink-3;
+    overflow: elide;
+    vertical-alignment: center;
+}
+
+// A number with its unit ("62%", "4.1 h"): the unit is the same family and weight at 88% size on the
+// same baseline, never a tiny superscript. The baseline is matched through font-metrics.ascent.
+export component ValueUnit inherits Rectangle {
+    in property <string> value;
+    in property <string> unit: "%";
+    in property <length> size: 19px;
+    in property <int> weight: 620;
+    in property <color> ink: Theme.ink;
+    in property <float> unit-scale: 0.88;
+    in property <length> unit-gap: 0.5px;
+    min-width: num.preferred-width + (root.unit == "" ? 0px : root.unit-gap + uni.preferred-width);
+    preferred-width: self.min-width;
+    min-height: num.preferred-height;
+    preferred-height: num.preferred-height;
+    num := Text {
+        x: 0px;
+        y: (root.height - self.preferred-height) / 2;
+        text: root.value;
+        font-family: Type.tab;
+        font-size: root.size;
+        font-weight: root.weight;
+        color: root.ink;
+        letter-spacing: -0.01 * root.size;
+    }
+    uni := Text {
+        x: num.preferred-width + root.unit-gap;
+        y: num.y + num.font-metrics.ascent - self.font-metrics.ascent;
+        text: root.unit;
+        visible: root.unit != "";
+        font-family: Type.tab;
+        font-size: root.size * root.unit-scale;
+        font-weight: root.weight;
+        color: root.ink;
+    }
+}

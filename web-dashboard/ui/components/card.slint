@@ -1,0 +1,60 @@
+// Surfaces. Plate: a section on a page (radius 14, hairline border, the small shadow). Card: a provider
+// card that lifts 2 px on hover with a larger shadow (one drop shadow per rectangle). Both keep their
+// layout slot fixed and move an inner surface, so hover never reflows neighbours.
+import { Theme, Motion } from "../theme.slint";
+
+export component Plate inherits Rectangle {
+    in property <bool> flash: false;
+    background: root.flash ? Theme.flash : Theme.paper;
+    animate background { duration: 600ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    border-radius: Theme.r-plate;
+    border-width: 1px;
+    border-color: Theme.rule;
+    drop-shadow-color: Theme.shadow-1;
+    drop-shadow-blur: 3px;
+    drop-shadow-offset-y: 1px;
+    clip: false;
+    @children
+}
+
+export component Card inherits Rectangle {
+    in property <bool> clickable: true;
+    in property <bool> selected: false;
+    in property <bool> flash: false;
+    in property <length> pad: 18px;
+    out property <bool> hovered: ta.has-hover;
+    callback clicked();
+
+    min-height: body.min-height + 2 * root.pad;
+    preferred-height: body.preferred-height + 2 * root.pad;
+    min-width: body.min-width + 2 * root.pad;
+
+    surface := Rectangle {
+        x: 0px;
+        y: root.hovered && root.clickable ? -2px : 0px;
+        width: root.width;
+        height: root.height;
+        animate y { duration: Motion.on ? 220ms : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        border-radius: Theme.r-card;
+        border-width: 1px;
+        border-color: root.selected ? Theme.sel-line : root.hovered && root.clickable ? Theme.rule-strong : Theme.rule;
+        background: root.flash ? Theme.flash : root.selected ? Theme.sel-fill : Theme.paper;
+        animate background { duration: 600ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate border-color { duration: Motion.fast; }
+        drop-shadow-color: root.hovered && root.clickable ? Theme.shadow-2 : Theme.shadow-1;
+        drop-shadow-blur: root.hovered && root.clickable ? 28px : 3px;
+        drop-shadow-offset-y: root.hovered && root.clickable ? 12px : 1px;
+        animate drop-shadow-blur, drop-shadow-offset-y, drop-shadow-color { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        // The body is a child of the TouchArea so hovering a nested meter or button keeps the card lifted.
+        ta := TouchArea {
+            enabled: root.clickable;
+            mouse-cursor: root.clickable ? pointer : default;
+            clicked => { root.clicked(); }
+            body := VerticalLayout {
+                padding: root.pad;
+                spacing: 0px;
+                @children
+            }
+        }
+    }
+}

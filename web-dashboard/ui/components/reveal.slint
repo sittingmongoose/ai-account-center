@@ -1,0 +1,30 @@
+// Load-in helper: the content rises 12 px and fades in after `delay`; its layout slot never moves.
+import { Theme, Motion } from "../theme.slint";
+
+export component Reveal inherits Rectangle {
+    in property <duration> delay: 0ms;
+    in property <length> rise: 12px;
+    in property <bool> armed: true;
+    out property <bool> shown: !Motion.on;
+    min-height: inner.min-height;
+    preferred-height: inner.preferred-height;
+    min-width: inner.min-width;
+    preferred-width: inner.preferred-width;
+    start := Timer {
+        interval: max(1ms, root.delay);
+        running: root.armed && !root.shown && Motion.on;
+        triggered => { self.running = false; root.shown = true; }
+    }
+    surface := Rectangle {
+        x: 0px;
+        y: root.shown ? 0px : root.rise;
+        width: root.width;
+        height: root.height;
+        opacity: root.shown ? 1 : 0;
+        animate y { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? 460ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        inner := VerticalLayout {
+            @children
+        }
+    }
+}

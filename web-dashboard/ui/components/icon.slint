@@ -1,0 +1,119 @@
+// Curated Lucide icons (ISC licence, see icons/LICENSE-lucide.txt): stroke 1.75 on a 24 grid, black ink tinted
+// with `colorize`. Generated list; add a file to icons/ and a line here to use a new one.
+import { Theme } from "../theme.slint";
+
+export global Icons {
+    out property <image> alert: @image-url("../icons/alert.svg");
+    out property <image> alert-circle: @image-url("../icons/alert-circle.svg");
+    out property <image> arrow-down-circle: @image-url("../icons/arrow-down-circle.svg");
+    out property <image> calendar: @image-url("../icons/calendar.svg");
+    out property <image> chart: @image-url("../icons/chart.svg");
+    out property <image> check: @image-url("../icons/check.svg");
+    out property <image> check-circle: @image-url("../icons/check-circle.svg");
+    out property <image> chev-down: @image-url("../icons/chev-down.svg");
+    out property <image> chev-right: @image-url("../icons/chev-right.svg");
+    out property <image> chev-up: @image-url("../icons/chev-up.svg");
+    out property <image> clock: @image-url("../icons/clock.svg");
+    out property <image> copy: @image-url("../icons/copy.svg");
+    out property <image> download: @image-url("../icons/download.svg");
+    out property <image> external: @image-url("../icons/external.svg");
+    out property <image> eye: @image-url("../icons/eye.svg");
+    out property <image> eye-off: @image-url("../icons/eye-off.svg");
+    out property <image> filter: @image-url("../icons/filter.svg");
+    out property <image> globe: @image-url("../icons/globe.svg");
+    out property <image> help: @image-url("../icons/help.svg");
+    out property <image> home: @image-url("../icons/home.svg");
+    out property <image> info: @image-url("../icons/info.svg");
+    out property <image> key: @image-url("../icons/key.svg");
+    out property <image> layers: @image-url("../icons/layers.svg");
+    out property <image> link: @image-url("../icons/link.svg");
+    out property <image> lock: @image-url("../icons/lock.svg");
+    out property <image> lock-open: @image-url("../icons/lock-open.svg");
+    out property <image> login: @image-url("../icons/login.svg");
+    out property <image> logout: @image-url("../icons/logout.svg");
+    out property <image> minus: @image-url("../icons/minus.svg");
+    out property <image> monitor: @image-url("../icons/monitor.svg");
+    out property <image> moon: @image-url("../icons/moon.svg");
+    out property <image> pack: @image-url("../icons/pack.svg");
+    out property <image> plus: @image-url("../icons/plus.svg");
+    out property <image> refresh: @image-url("../icons/refresh.svg");
+    out property <image> rotate: @image-url("../icons/rotate.svg");
+    out property <image> search: @image-url("../icons/search.svg");
+    out property <image> shield: @image-url("../icons/shield.svg");
+    out property <image> sliders: @image-url("../icons/sliders.svg");
+    out property <image> sun: @image-url("../icons/sun.svg");
+    out property <image> swap: @image-url("../icons/swap.svg");
+    out property <image> terminal: @image-url("../icons/terminal.svg");
+    out property <image> timer: @image-url("../icons/timer.svg");
+    out property <image> trash: @image-url("../icons/trash.svg");
+    out property <image> trend-up: @image-url("../icons/trend-up.svg");
+    out property <image> user: @image-url("../icons/user.svg");
+    out property <image> users: @image-url("../icons/users.svg");
+    out property <image> wallet: @image-url("../icons/wallet.svg");
+    out property <image> close: @image-url("../icons/close.svg");
+    out property <image> zap: @image-url("../icons/zap.svg");
+
+    public pure function named(name: string) -> image {
+        if name == "alert" { return alert; }
+        if name == "alert-circle" { return alert-circle; }
+        if name == "arrow-down-circle" { return arrow-down-circle; }
+        if name == "calendar" { return calendar; }
+        if name == "chart" { return chart; }
+        if name == "check" { return check; }
+        if name == "check-circle" { return check-circle; }
+        if name == "chev-down" { return chev-down; }
+        if name == "chev-right" { return chev-right; }
+        if name == "chev-up" { return chev-up; }
+        if name == "clock" { return clock; }
+        if name == "copy" { return copy; }
+        if name == "download" { return download; }
+        if name == "external" { return external; }
+        if name == "eye" { return eye; }
+        if name == "eye-off" { return eye-off; }
+        if name == "filter" { return filter; }
+        if name == "globe" { return globe; }
+        if name == "help" { return help; }
+        if name == "home" { return home; }
+        if name == "info" { return info; }
+        if name == "key" { return key; }
+        if name == "layers" { return layers; }
+        if name == "link" { return link; }
+        if name == "lock" { return lock; }
+        if name == "lock-open" { return lock-open; }
+        if name == "login" { return login; }
+        if name == "logout" { return logout; }
+        if name == "minus" { return minus; }
+        if name == "monitor" { return monitor; }
+        if name == "moon" { return moon; }
+        if name == "pack" { return pack; }
+        if name == "plus" { return plus; }
+        if name == "refresh" { return refresh; }
+        if name == "rotate" { return rotate; }
+        if name == "search" { return search; }
+        if name == "shield" { return shield; }
+        if name == "sliders" { return sliders; }
+        if name == "sun" { return sun; }
+        if name == "swap" { return swap; }
+        if name == "terminal" { return terminal; }
+        if name == "timer" { return timer; }
+        if name == "trash" { return trash; }
+        if name == "trend-up" { return trend-up; }
+        if name == "user" { return user; }
+        if name == "users" { return users; }
+        if name == "wallet" { return wallet; }
+        if name == "close" { return close; }
+        if name == "zap" { return zap; }
+        return info;
+    }
+}
+
+// A UI icon at 16-20 px, tinted with the text colour it sits next to.
+export component Icon inherits Image {
+    in property <string> name;
+    in property <color> tint: Theme.ink-2;
+    width: 16px;
+    height: 16px;
+    source: Icons.named(root.name);
+    colorize: root.tint;
+    image-fit: contain;
+}
