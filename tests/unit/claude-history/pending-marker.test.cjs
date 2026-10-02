@@ -102,8 +102,10 @@ test('bounded finished-marker capacity skips another copy without inventing a pe
       profileId:'platyr',targetPlatform:'windows',nonce,state:'finished',createdAt:'2026-10-02T00:00:00Z',
       finishedAt:'2026-10-02T00:00:01Z',terminalReceiptSha256:'0'.repeat(64)}),{mode:0o600});
   }
+  // A full store has its own reason (not the generic unavailable one), so the
+  // service can log it instead of skipping the copy silently.
   assert.equal(hold(),false);assert.throws(() => core.armPendingMarker(root,'platyr','windows'),
-    error => error.reason === 'history_marker_unavailable');assert.equal(hold(),false);
+    error => error.reason === 'history_marker_store_full');assert.equal(hold(),false);
 });
 
 // One Open's microbatches share one marker: pending only while a batch's append
@@ -190,4 +192,21 @@ test('rearm never needs a new marker slot at full capacity', () => {
   assert.equal(fs.readdirSync(markerRoot()).length, core.MARKER_LIMIT);
   marker.rearm(); marker.finish(receipt()); marker.release();
   assert.equal(fs.readdirSync(markerRoot()).length, core.MARKER_LIMIT); assert.equal(hold(), false);
+});
+test('a rearm interrupted after truncation leaves an empty marker that holds Open', () => {
+  const marker = core.armPendingMarker(root, 'platyr', 'windows'); marker.finish(receipt());
+  assert.equal(hold(), false);
+  const write = fs.writeSync;
+  // The rewrite is lost after ftruncate: the held inode is now empty.
+  fs.writeSync = () => { fs.writeSync = write; throw Object.assign(new Error('synthetic interruption'), {code:'EIO'}); };
+  try { assert.throws(() => marker.rearm()); } finally { fs.writeSync = write; }
+  marker.release();
+  assert.equal(fs.statSync(markerFile()).size, 0);
+  assert.equal(hold(), true);
+  delete require.cache[corePath];
+  const restarted = require(corePath);
+  assert.equal(restarted.pendingMarkerState(root, 'platyr', 'windows').held, true);
+  assert.throws(() => restarted.armPendingMarker(root, 'platyr', 'windows'),
+    error => error.reason === 'history_append_pending');
+  assert.equal(fs.readdirSync(markerRoot()).length, 1);
 });

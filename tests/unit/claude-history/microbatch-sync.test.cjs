@@ -59,8 +59,10 @@ function fixture(count=18,existing=18){
   },
  };
  const markers=()=>{const root=path.join(directory,'claude-history-pending');return fs.existsSync(root)?fs.readdirSync(root):[]};
- const run=async()=>{try{return await sync.synchronizeBeforeProfileOpen({profileId:'gmail',targetPlatform:'mac',policy,adapters})}finally{state.marker?.release();state.marker=null}};
- return {directory,profile,registry,state,adapters,policy,baseline,sourceRows,target,markers,run,cleanup:()=>fs.rmSync(directory,{recursive:true,force:true})};
+ const run=async limits=>{try{return await sync.synchronizeBeforeProfileOpen({profileId:'gmail',targetPlatform:'mac',policy,adapters,limits})}finally{state.marker?.release();state.marker=null}};
+ // Each writer transaction keeps one private snapshot folder in the profile root.
+ const snapshots=()=>fs.readdirSync(profile).filter(n=>n.startsWith('.history-index-snapshot-')).sort();
+ return {directory,profile,registry,state,adapters,policy,baseline,sourceRows,target,markers,snapshots,run,cleanup:()=>fs.rmSync(directory,{recursive:true,force:true})};
 }
 async function withFixture(count,existing,run){const f=fixture(count,existing);try{await run(f)}finally{f.cleanup()}}
 for(const count of [18,32])test('real tempFS composition appends all '+count+' in one-record guarded transactions',async()=>withFixture(count,count,async f=>{
@@ -124,4 +126,54 @@ test('appendCreateOnly receives whole-plan progress counts with every one-record
  const seen=[];const append=f.adapters.appendCreateOnly;f.adapters.appendCreateOnly=async payload=>{seen.push(Object.keys(payload).sort().join(','));return append(payload)};
  const result=await f.run();assert.equal(result.createdCount,4);assert.deepEqual(f.state.aggregateProgress,[[4,0],[4,1],[4,2],[4,3]]);
  assert.deepEqual([...new Set(seen)],['closedGuard,confirmedCount,profileId,records,target,targetPlatform,totalCount']);
+}));
+// Deliberate and pinned (HIST review finding 1): the pinned writer keeps every
+// transaction's private snapshot of the protected files, and a one-record batch
+// is one transaction, so a copy leaves one snapshot folder per copied record.
+// The per-Open bound caps how many one Open can add.
+test('each copied record leaves exactly one private snapshot folder (pinned count)',async()=>withFixture(18,18,async f=>{
+ assert.deepEqual(f.snapshots(),[]);
+ const result=await f.run();assert.equal(result.status,'synchronized');assert.equal(result.createdCount,18);
+ const folders=f.snapshots();assert.equal(folders.length,18);
+ for(const name of folders){
+  const folder=path.join(f.profile,name);
+  assert.equal(fs.lstatSync(folder).mode&0o777,0o700);
+  assert.deepEqual(fs.readdirSync(folder).sort(),['protected-0.bin','snapshot-manifest.json']);
+  assert.deepEqual(fs.readFileSync(path.join(folder,'protected-0.bin')),fs.readFileSync(path.join(f.profile,'config.json')));
+ }
+ // An Open with nothing left to copy runs no transaction and adds none.
+ const again=await f.run();assert.equal(again.status,'unchanged');assert.equal(f.snapshots().length,18);
+}));
+test('the per-Open time budget stops between batches, holds nothing and the next Open copies the rest',async()=>withFixture(18,18,async f=>{
+ let clock=0;const append=f.adapters.appendCreateOnly;f.adapters.appendCreateOnly=async payload=>{const result=await append(payload);clock+=4000;return result};
+ const result=await f.run({budgetMs:10000,now:()=>clock});
+ assert.deepEqual({status:result.status,reason:result.reason,createdCount:result.createdCount,remainingCount:result.remainingCount,recoveryRequired:result.recoveryRequired},
+  {status:'partial',reason:'open_copy_budget_reached',createdCount:3,remainingCount:15,recoveryRequired:false});
+ assert.equal(f.state.appendCalls,3);assert.equal(f.target().records.length,21);assert.equal(f.snapshots().length,3);
+ assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);assert.equal(f.markers().length,1);
+ assert.equal(JSON.stringify(result).includes(fx.PRIVATE_TITLE),false);
+ // The next Open plans only what is missing; the copied rows count as present.
+ f.adapters.appendCreateOnly=append;f.state.aggregateProgress=[];
+ const next=await f.run();assert.equal(next.status,'synchronized');assert.equal(next.createdCount,15);assert.equal(next.alreadyPresentCount,3);
+ assert.deepEqual(f.state.aggregateProgress,Array.from({length:15},(_,i)=>[15,i]));
+ assert.equal(f.target().records.length,36);assert.equal(f.snapshots().length,18);
+ assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);assert.equal(f.markers().length,2);
+}));
+test('the per-Open batch bound stops between batches and callers can only tighten it',async()=>withFixture(60,0,async f=>{
+ assert.equal(sync.MAX_BATCHES_PER_OPEN,50);assert.equal(sync.OPEN_COPY_BUDGET_MS,45000);
+ const tight=await f.run({maxBatches:2,now:()=>0});
+ assert.equal(tight.status,'partial');assert.equal(tight.createdCount,2);assert.equal(tight.remainingCount,58);assert.equal(f.state.appendCalls,2);
+ // A larger bound is clamped to MAX_BATCHES_PER_OPEN; a frozen clock isolates the batch bound.
+ const loose=await f.run({maxBatches:1000,budgetMs:10**9,now:()=>0});
+ assert.equal(loose.status,'partial');assert.equal(loose.createdCount,50);assert.equal(loose.remainingCount,8);
+ assert.equal(f.state.appendCalls,52);assert.equal(f.target().records.length,52);
+ assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);
+}));
+test('an unreadable clock ends the Open copy after its first batch, never extends it',async()=>withFixture(4,4,async f=>{
+ for(const now of [()=>NaN,()=>{throw Error(fx.PRIVATE_ERROR)}]){
+  const before=f.state.appendCalls;const result=await f.run({now});
+  assert.equal(result.status,'partial');assert.equal(result.createdCount,1);assert.equal(f.state.appendCalls-before,1);
+  assert.equal(JSON.stringify(result).includes(fx.PRIVATE_ERROR),false);
+ }
+ assert.equal(sync.pendingMarkerState(f.directory,'gmail','mac').held,false);
 }));

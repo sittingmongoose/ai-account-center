@@ -32,6 +32,25 @@ const snapshotRevision = records => sha(JSON.stringify(records.map(r => [r.name,
 // measured per-platform qualification; never a longer deadline or fewer guards.
 const MICROBATCH_RECORDS = 1;
 const REGISTRY_LIMIT = 200;
+// One Open copies for a bounded time, so Claude opens within the native
+// clients' wait even for a first copy of many records. The bound is checked
+// only between batches, after the last batch's trusted receipt finished the
+// durable marker, so stopping leaves no hold; the next Open's plan skips every
+// record already present and copies the rest. Callers may only tighten it.
+// Each transaction also leaves one private snapshot folder on the target (see
+// docs/claude-history-sync.md), so this bound caps those per Open as well.
+const OPEN_COPY_BUDGET_MS = 45_000;
+const MAX_BATCHES_PER_OPEN = 50;
+function copyLimits(limits) {
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  const now = typeof limits?.now === 'function' ? limits.now : Date.now;
+  return {
+    budgetMs: positive(limits?.budgetMs) ? Math.min(limits.budgetMs, OPEN_COPY_BUDGET_MS) : OPEN_COPY_BUDGET_MS,
+    maxBatches: positive(limits?.maxBatches) ? Math.min(limits.maxBatches, MAX_BATCHES_PER_OPEN) : MAX_BATCHES_PER_OPEN,
+    // An unreadable clock counts as an exhausted budget, never as more time.
+    clock: () => { try { const value = now(); return Number.isFinite(value) ? value : NaN; } catch { return NaN; } },
+  };
+}
 
 function decodeRecords(snapshot) {
   if (!Array.isArray(snapshot.records) || snapshot.records.length > 200) reject('registry_invalid');
@@ -140,12 +159,14 @@ function planMissing(sourceRows, targetRows, sourcePlatform, targetPlatform, pol
   return {records, alreadyPresentCount, skipped};
 }
 
-async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, adapters}) {
+async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, adapters, limits}) {
   if (typeof profileId !== 'string' || typeof targetPlatform !== 'string' || !PROFILES.has(profileId) || !['mac', 'windows'].includes(targetPlatform)) return {status: 'skipped', reason: 'unsupported_profile_or_platform', createdCount: 0};
   const direction = DIRECTIONS[profileId];
   if (!direction || direction[1] !== targetPlatform) return {status: 'skipped', reason: 'unsupported_direction', createdCount: 0};
   const sourcePlatform = direction[0];
-  let confirmedCount = 0;
+  // The per-Open bound counts from the start of this Open's history work.
+  const budget = copyLimits(limits), startedAt = budget.clock();
+  let confirmedCount = 0, batchesRun = 0;
   const skipped = reason => ({status: 'skipped', reason, createdCount: 0});
   try {
     validatePolicy(policy);
@@ -201,8 +222,16 @@ async function synchronizeBeforeProfileOpen({profileId, targetPlatform, policy, 
         createdCountBeforeRefusal: Number.isInteger(result?.createdCountBeforeRefusal) && result.createdCountBeforeRefusal >= 0 && result.createdCountBeforeRefusal <= batch.length ? result.createdCountBeforeRefusal : 0,
       };
       confirmedCount += batch.length;
+      batchesRun++;
       for (const record of batch) authorized.push({...record, sha256: sha(record.bytes)});
       if (confirmedCount === totalCount) break;
+      // Only here, between batches: the last batch's terminal receipt has
+      // finished the marker, so a stop holds nothing and needs no recovery.
+      if (batchesRun >= budget.maxBatches || !(budget.clock() - startedAt < budget.budgetMs)) return {
+        status: 'partial', reason: 'open_copy_budget_reached', createdCount: confirmedCount,
+        remainingCount: totalCount - confirmedCount, recoveryRequired: false, ...publicCounts,
+        originalIdsPreserved: true, explicitNativeConfirmationRequired: true,
+        resumedSessions: 0, copiedTranscripts: 0};
       const current = await adapters.readTarget(profileId, targetPlatform);
       validateSnapshot(current, profileId, targetPlatform, policy);
       if (!nativeGuardVerified(current, targetPlatform)) reject('target_state_changed');
@@ -314,7 +343,8 @@ function armPendingMarker(directory, profileId, targetPlatform) {
   syncDirectory(directory);
   const state = pendingMarkerState(directory, profileId, targetPlatform);
   if (state.held) throw new Refused('history_append_pending');
-  if (state.count >= MARKER_LIMIT) throw new Refused('history_marker_unavailable');
+  // Its own reason, so a full store is visible rather than a silent skip.
+  if (state.count >= MARKER_LIMIT) throw new Refused('history_marker_store_full');
   const nonce = crypto.randomBytes(16).toString('hex');
   const filename = path.join(root, `${profileId}-${targetPlatform}-${nonce}.json`);
   const record = {version:1, profileId, targetPlatform, nonce, state:'pending', createdAt:new Date().toISOString()};
@@ -383,4 +413,5 @@ function createLocalTargetAppender({profileId, targetPlatform, profileRoot, regi
 
 module.exports = {synchronizeBeforeProfileOpen, beforeOrdinaryProfileOpen,
   createLocalTargetAppender, planMissing, neutral, decodeRecords, snapshotRevision, validatePolicy, PROFILES, DIRECTIONS, NATIVE, Refused,
-  pendingMarkerState, armPendingMarker, MICROBATCH_RECORDS, REGISTRY_LIMIT, MARKER_LIMIT};
+  pendingMarkerState, armPendingMarker, MICROBATCH_RECORDS, REGISTRY_LIMIT, MARKER_LIMIT,
+  OPEN_COPY_BUDGET_MS, MAX_BATCHES_PER_OPEN};

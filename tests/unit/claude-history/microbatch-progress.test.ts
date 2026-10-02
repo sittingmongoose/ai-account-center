@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, expect, test, mock, spyOn, setSystemTime } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -31,11 +31,21 @@ let scenario: Scenario = GMAIL;
 let count = 3,
   opened = 0,
   appends = 0;
-let failure: 'none' | 'lost' | 'clean' | 'target-drift' | 'collect-fails' = 'none';
+let failure:
+  | 'none'
+  | 'lost'
+  | 'clean'
+  | 'target-drift'
+  | 'collect-fails'
+  | 'policy-changes'
+  | 'policy-removed-early'
+  | 'target-opens'
+  | 'slow' = 'none';
 let targetRecords: Array<{ name: string; bytes: Buffer; sha256: string }> = [];
 let historyCopies: Array<[number | null, number | null]> = [];
 let markerStatesDuringAppend: boolean[] = [];
 let operations: ClaudeOpenOperations;
+let logEvents: string[] = [];
 
 const markerRoot = () => path.join(directory, 'claude-history-pending');
 const markerNames = () => (fs.existsSync(markerRoot()) ? fs.readdirSync(markerRoot()) : []);
@@ -121,6 +131,14 @@ function writeManifest(): void {
   );
 }
 
+/** Change the private policy in place, as an owner editing or removing it would. */
+function rewritePolicy(change: (entry: Record<string, unknown>) => void): void {
+  const filename = path.join(directory, 'claude-desktop-profiles.json');
+  const manifest = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  change(manifest.profiles[0]);
+  fs.writeFileSync(filename, JSON.stringify(manifest), { mode: 0o600 });
+}
+
 function finishedMarker(profileId: string, platform: Platform, ordinal: number): void {
   const nonce = ordinal.toString(16).padStart(32, '0');
   fs.writeFileSync(
@@ -151,9 +169,12 @@ beforeEach(() => {
   targetRecords = [];
   historyCopies = [];
   markerStatesDuringAppend = [];
+  logEvents = [];
   operations = new ClaudeOpenOperations();
   writeManifest();
-  spyOn(storage, 'appendStructuredLogEntry').mockImplementation(() => {});
+  spyOn(storage, 'appendStructuredLogEntry').mockImplementation((entry) => {
+    if (entry.source === 'web-server:claude-history') logEvents.push(entry.event);
+  });
   spyOn(transport, 'openClaudeMacLauncher').mockImplementation(async () => {
     if (scenario.target !== 'mac') throw Error('unexpected platform');
     opened++;
@@ -165,21 +186,30 @@ beforeEach(() => {
   spyOn(transport, 'runClaudeHistoryHelper').mockImplementation(
     async (_launcher, platform, _profile, request) => {
       let result: unknown;
-      if (request.mode === 'closed-check') result = { closed: true };
+      if (request.mode === 'closed-check')
+        result = { closed: !(failure === 'target-opens' && appends > 0) };
       else if (request.mode === 'collect') {
         if (failure === 'collect-fails' && platform === scenario.target && appends > 0)
           throw Error(privateCanary);
         result = snapshot(platform);
-      } else if (request.mode === 'verify-transcripts') result = { verified: true };
-      else if (request.mode === 'protected-check') result = { unchanged: true };
+      } else if (request.mode === 'verify-transcripts') {
+        if (failure === 'policy-removed-early') rewritePolicy((entry) => delete entry.historySync);
+        result = { verified: true };
+      } else if (request.mode === 'protected-check') result = { unchanged: true };
       else if (request.mode === 'append') {
         appends++;
         expect(platform).toBe(scenario.target);
         // Progress counts stay in this process; the fixed helper's strict request
         // keys never carry them.
-        expect(Object.keys(request).sort()).toEqual(
-          ['expectedEmail', 'expectedTarget', 'mode', 'platform', 'policy', 'profileId', 'records']
-        );
+        expect(Object.keys(request).sort()).toEqual([
+          'expectedEmail',
+          'expectedTarget',
+          'mode',
+          'platform',
+          'policy',
+          'profileId',
+          'records',
+        ]);
         markerStatesDuringAppend.push(
           core.pendingMarkerState(directory, scenario.id, scenario.target).held
         );
@@ -210,6 +240,13 @@ beforeEach(() => {
             protectedBytesUnchanged: true,
             writerQuiescent: true,
           };
+          if (failure === 'policy-changes' && appends === 1)
+            rewritePolicy((entry) => {
+              const policy = entry.historySync as { project: { transcriptRoot: string } };
+              policy.project.transcriptRoot = '/changed-user/.claude/projects';
+            });
+          // Each confirmed batch takes 20 s of (mocked) wall-clock time.
+          if (failure === 'slow') setSystemTime(new Date(Date.now() + 20_000));
         }
       } else throw Error('unexpected mode');
       return Buffer.from(JSON.stringify(result));
@@ -218,6 +255,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemTime();
   mock.restore();
   if (priorDir === undefined) delete process.env.CCS_DIR;
   else process.env.CCS_DIR = priorDir;
@@ -387,4 +425,103 @@ test('Open progress counts only move forward and stay within the plan', async ()
     confirmedCount: 3,
     totalCount: 5,
   });
+});
+
+test('a policy change between batches stops cleanly: no hold, the confirmed count stays, Open proceeds', async () => {
+  failure = 'policy-changes';
+  const { outcome, final } = await runOpen();
+  expect(outcome?.ok).toBe(true);
+  expect(opened).toBe(1);
+  expect(appends).toBe(1);
+  expect(final).toMatchObject({ state: 'opened', confirmedCount: 1, totalCount: 3, message: null });
+  expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
+  expect(markerNames()).toHaveLength(1);
+  expect(logEvents).toEqual(['claude.history.copy_stopped']);
+});
+
+test('a policy change between batches returns a clean refusal with its own reason', async () => {
+  failure = 'policy-changes';
+  const profile = (await listClaudeDesktopProfiles())[0];
+  const result = await synchronizeClaudeHistoryBeforeOpen(profile, 'mac');
+  expect(result).toMatchObject({
+    status: 'refused',
+    reason: 'history_policy_changed',
+    createdCount: 1,
+    recoveryRequired: false,
+  });
+  expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
+});
+
+test('a policy removed before the first batch arms no marker and Opens normally', async () => {
+  failure = 'policy-removed-early';
+  const { outcome, final } = await runOpen();
+  expect(outcome?.ok).toBe(true);
+  expect(opened).toBe(1);
+  expect(appends).toBe(0);
+  expect(final).toMatchObject({ state: 'opened', confirmedCount: null, totalCount: null });
+  expect(markerNames()).toHaveLength(0);
+  expect(logEvents).toEqual(['claude.history.copy_stopped']);
+});
+
+test('the target opening between batches stops the copy, keeps the count and releases the hold', async () => {
+  failure = 'target-opens';
+  const profile = (await listClaudeDesktopProfiles())[0];
+  const result = await synchronizeClaudeHistoryBeforeOpen(profile, 'mac');
+  expect(result).toMatchObject({
+    status: 'refused',
+    reason: 'target_opened',
+    createdCount: 1,
+    recoveryRequired: false,
+  });
+  expect(appends).toBe(1);
+  expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
+});
+
+test('the target opening between batches still Opens the profile once through the Open service', async () => {
+  failure = 'target-opens';
+  const { outcome, final } = await runOpen();
+  expect(outcome?.ok).toBe(true);
+  expect(opened).toBe(1);
+  expect(appends).toBe(1);
+  expect(final).toMatchObject({ state: 'opened', confirmedCount: 1, totalCount: 3 });
+  expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
+});
+
+test('a full marker store has its own reason and a warning log line', async () => {
+  fs.mkdirSync(markerRoot(), { mode: 0o700 });
+  for (let index = 1; index <= core.MARKER_LIMIT; index++) finishedMarker('party', 'mac', index);
+  const profile = (await listClaudeDesktopProfiles())[0];
+  const result = await synchronizeClaudeHistoryBeforeOpen(profile, 'mac');
+  expect(result).toMatchObject({
+    status: 'refused',
+    reason: 'history_marker_store_full',
+    createdCount: 0,
+    recoveryRequired: false,
+  });
+  expect(appends).toBe(0);
+  expect(logEvents).toEqual(['claude.history.marker_store_full']);
+  expect(markerNames()).toHaveLength(core.MARKER_LIMIT);
+});
+
+test('the per-Open time budget opens Claude part-way and the next Open copies the rest', async () => {
+  failure = 'slow';
+  count = 5;
+  const first = await runOpen();
+  expect(first.outcome?.ok).toBe(true);
+  expect(opened).toBe(1);
+  // 20 s per batch against the 45 s budget: the bound is reached after batch 3.
+  expect(appends).toBe(3);
+  expect(first.final).toMatchObject({ state: 'opened', confirmedCount: 3, totalCount: 5 });
+  expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
+  expect(logEvents).toEqual(['claude.history.copy_budget_reached']);
+  // Later click (past the 1 s repeat-click window): only the missing records are planned.
+  failure = 'none';
+  setSystemTime(new Date(Date.now() + 5_000));
+  const second = await runOpen();
+  expect(second.outcome?.ok).toBe(true);
+  expect(opened).toBe(2);
+  expect(appends).toBe(5);
+  expect(second.final).toMatchObject({ state: 'opened', confirmedCount: 2, totalCount: 2 });
+  expect(markerNames()).toHaveLength(2);
+  expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
 });

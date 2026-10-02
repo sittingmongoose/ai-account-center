@@ -41,7 +41,9 @@ is tracked as an operation, and the profile list reports its progress as
 `Prefer: respond-async` gets 202 at once and polls; any other request waits and
 gets the old 200 or refusal. [Operations](../../src/web-server/services/claude-open-operations.ts)
 live in memory, so a restart never resumes one, and a repeated click joins the
-running one. Without a policy the Open answers 200 as before.
+running one. One Open copies for a bounded time (45 s or 50 records), then opens
+Claude with `confirmedCount` below `totalCount`; the next Open copies the rest.
+Without a policy the Open answers 200 as before.
 
 ## Credential and persistence boundaries
 

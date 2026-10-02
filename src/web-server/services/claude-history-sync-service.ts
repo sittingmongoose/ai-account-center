@@ -5,6 +5,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import type { ClaudeDesktopProfile } from './claude-desktop-profile-service';
 import { runClaudeHistoryHelper } from './claude-desktop-transport';
 import { ValidationError } from '../../errors/error-types';
+import { createLogger } from '../../services/logging';
 
 export interface ClaudeHistorySyncPolicy {
   version: 1;
@@ -22,6 +23,8 @@ interface HistoryResult {
   reason?: string;
   createdCount: number;
   recoveryRequired?: boolean;
+  /** Set on `partial`: records the per-Open bound left for the next Open. */
+  remainingCount?: number;
 }
 interface PrivateRecord {
   name: string;
@@ -72,6 +75,21 @@ const MAX_HELPER_BYTES = 24 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const hash = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
 const skipped = (reason: string): HistoryResult => ({ status: 'skipped', reason, createdCount: 0 });
+const logger = createLogger('web-server:claude-history');
+
+/** Counts, platform and fixed reason tokens only: never ids, paths, titles or errors. */
+function logHistory(
+  level: 'info' | 'warn',
+  event: string,
+  message: string,
+  context: Record<string, unknown>
+): void {
+  try {
+    logger[level](event, message, context);
+  } catch {
+    /* Logging never changes the copy or the Open. */
+  }
+}
 
 /** Check before policy lookup and after every optional-copy outcome. A removed
  * policy, repeated click or server restart cannot clear an uncertain append.
@@ -302,27 +320,43 @@ export async function synchronizeClaudeHistoryBeforeOpen(
     // that copied, not records. It is armed before the first batch, finished by
     // each batch's trusted terminal receipt and re-armed before the next batch;
     // a lost or malformed receipt leaves it pending and stops the sequence.
-    const sequence: { marker: HistoryMarker | null } = { marker: null };
+    const sequence: { marker: HistoryMarker | null; stopReason: string | null } = {
+      marker: null,
+      stopReason: null,
+    };
+    // A stop before this batch's marker is armed or re-armed: no remote append
+    // was invoked and no marker is pending, so the copy ends cleanly and Open
+    // proceeds. The next Open's plan skips the records already confirmed.
+    const cleanStop = (reason: string): unknown => {
+      sequence.stopReason = reason;
+      return {
+        status: 'refused',
+        createdCount: 0,
+        recoveryRequired: false,
+        ownedFilesRolledBack: true,
+      };
+    };
     const appendCreateOnly = async (payload: unknown): Promise<unknown> => {
+      // A changed or removed policy (for example, removed to stop a long copy)
+      // stops before this batch; it never claims an unconfirmed append.
       const currentPolicy = await loadClaudeHistoryPolicy(profile);
       if (!currentPolicy || JSON.stringify(currentPolicy) !== JSON.stringify(policy))
-        throw new ValidationError('policy_changed');
-      if (!object(payload)) throw new ValidationError('helper_unavailable');
+        return cleanStop('history_policy_changed');
+      if (!object(payload)) return cleanStop('history_payload_invalid');
       let marker: HistoryMarker;
       try {
         if (sequence.marker) sequence.marker.rearm();
         else sequence.marker = loadCore().armPendingMarker(getCcsDir(), id, platform);
         marker = sequence.marker;
-      } catch {
+      } catch (error) {
         // No remote append was invoked. Existing/unknown markers hold Open;
         // lack of private marker storage alone skips this optional copy.
         if (claudeHistoryOpenHeld(id, platform)) throw new ValidationError('append_pending');
-        return {
-          status: 'refused',
-          createdCount: 0,
-          recoveryRequired: false,
-          ownedFilesRolledBack: true,
-        };
+        return cleanStop(
+          object(error) && error.reason === 'history_marker_store_full'
+            ? 'history_marker_store_full'
+            : 'history_marker_unavailable'
+        );
       }
       marker.assertBound();
       const batchCount = Array.isArray(payload.records) ? payload.records.length : null;
@@ -353,7 +387,7 @@ export async function synchronizeClaudeHistoryBeforeOpen(
       return result;
     };
     try {
-      return await loadCore().synchronizeBeforeProfileOpen({
+      const result = await loadCore().synchronizeBeforeProfileOpen({
         profileId: id,
         targetPlatform: platform,
         policy,
@@ -380,6 +414,38 @@ export async function synchronizeClaudeHistoryBeforeOpen(
           appendCreateOnly,
         },
       });
+      if (
+        sequence.stopReason &&
+        result.status === 'refused' &&
+        result.reason === 'create_only_transaction_refused' &&
+        result.recoveryRequired !== true
+      ) {
+        // Its own reason and log line, so a full marker store or a policy change
+        // is visible rather than a silent skip.
+        const reason = sequence.stopReason;
+        const full = reason === 'history_marker_store_full';
+        logHistory(
+          full ? 'warn' : 'info',
+          full ? 'claude.history.marker_store_full' : 'claude.history.copy_stopped',
+          full
+            ? 'Claude history marker store is full; nothing was copied'
+            : 'Claude history copy stopped before an append',
+          { reason, platform, confirmedCount: result.createdCount }
+        );
+        return { ...result, reason };
+      }
+      if (result.status === 'partial')
+        logHistory(
+          'info',
+          'claude.history.copy_budget_reached',
+          'Claude history copy paused for this Open',
+          {
+            platform,
+            confirmedCount: result.createdCount,
+            remainingCount: result.remainingCount,
+          }
+        );
+      return result;
     } finally {
       sequence.marker?.release();
     }

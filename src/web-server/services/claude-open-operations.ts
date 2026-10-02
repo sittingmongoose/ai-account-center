@@ -196,9 +196,11 @@ export class ClaudeOpenOperations {
       },
       synchronized: ({ status, createdCount }) => {
         // A refusal after some batches keeps their confirmed count; a refusal
-        // before any batch leaves the count unset (totalCount is null).
+        // before any batch leaves the count unset (totalCount is null). A
+        // `partial` copy reached the per-Open bound: the Open still goes ahead
+        // and shows the confirmed part of the plan; the next Open copies the rest.
         if (
-          (status === 'synchronized' || status === 'refused') &&
+          (status === 'synchronized' || status === 'refused' || status === 'partial') &&
           entry.operation.totalCount !== null &&
           forward(createdCount) &&
           createdCount <= entry.operation.totalCount
