@@ -5,13 +5,16 @@ The macOS menu bar app in [AI Account Center](https://github.com/sittingmongoose
 and follows the AI Account Center tray design shared with the Windows tray: the same order, data rules and active-account indicator.
 
 The menu-bar panel is one macOS 27 Liquid Glass surface: a regular `NSGlassEffectView` (20 pt corners) under
-the status item, with content rows on translucent group platters and glass controls (SwiftUI `glassEffect`,
-`GlassEffectContainer`, `glassEffectUnion`, a materializing Settings close button). Under Reduce Transparency the
-system glass turns opaque and the panel's own fills switch to opaque system colours; Increase Contrast adds borders.
+the status item, with content on translucent platters and glass controls (SwiftUI `glassEffect`,
+`GlassEffectContainer`, `glassEffectUnion`, a materializing Settings close button). Every provider has its own
+platter (Claude, Codex and Antigravity hold their header and rows; each other provider holds its row), with a
+hairline edge and 12 pt of panel glass between platters, so the providers read as separate blocks over any
+wallpaper. Under Reduce Transparency the system glass turns opaque and the panel's own fills switch to opaque system
+colours; Increase Contrast adds borders.
 Text is the system font (SF Pro) with tabular digits, and every percent sign is part of its number's run.
 
 The layout and order are today's: header (Apex Soft mark, name, "9 of 9 reporting · cached · updated 3:15 PM", menu);
-Claude; Codex; Antigravity; the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go) as one group;
+Claude; Codex; Antigravity; the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go) in that order;
 and a footer that floats over the list (Codex auto-switch and threshold, Dashboard, Refresh, Settings).
 
 - **Usage is never invented.** A missing reading reads "Unavailable" (or "Not reported yet"), never 0. Values keep at

@@ -8,6 +8,10 @@ enum TrayMetrics {
   static let groupRadius: CGFloat = 12
   static let rowRadius: CGFloat = 8
   static let groupInset: CGFloat = 4
+  /// The strip of panel glass between two provider platters: the divider between providers.
+  static let sectionGap: CGFloat = 12
+  /// Extra room above a section header, inside its platter.
+  static let sectionHeaderTop: CGFloat = 6
   static let markColumn: CGFloat = 22
   static let identityColumn: CGFloat = 168
   static let antigravityIdentityColumn: CGFloat = 180
@@ -74,6 +78,20 @@ struct TrayPalette {
     return dark ? Color.white.opacity(0.055) : Color.white.opacity(0.34)
   }
   var solidGroup: Color { dark ? Self.hex(0x2D2E33) : Self.hex(0xFFFFFF) }
+
+  /// Provider section platters: each provider is its own block of content on the glass, so the fill is a
+  /// firmer lift than `group`, and a hairline edge marks where it ends over any wallpaper. Under Reduce
+  /// Transparency the fill is the same solid lift as `group`; Increase Contrast draws the edge at 1 pt in a
+  /// stronger tone.
+  var section: Color {
+    if reduceTransparency { return solidGroup }
+    return dark ? Color.white.opacity(0.085) : Color.white.opacity(0.6)
+  }
+  var sectionEdge: Color {
+    if increasedContrast { return label4 }
+    if reduceTransparency { return dark ? Color.white.opacity(0.12) : Color.black.opacity(0.12) }
+    return dark ? Color.white.opacity(0.10) : Color.black.opacity(0.07)
+  }
   var rowHover: Color { dark ? Color.white.opacity(0.07) : Self.hex(0x767680, 0.11) }
   var controlInner: Color { dark ? Color.white.opacity(0.09) : Self.hex(0x767680, 0.14) }
 
@@ -147,6 +165,30 @@ struct GroupPlatter: ViewModifier {
 
 extension View {
   func groupPlatter(padding: CGFloat = TrayMetrics.groupInset) -> some View { modifier(GroupPlatter(padding: padding)) }
+}
+
+/// One provider's platter (its header and rows, or one other provider's row): content, not glass, at the
+/// concentric 12 pt radius. Platters are stacked `TrayMetrics.sectionGap` apart, so the panel's own glass
+/// shows between them as the divider. Rows inside keep their 4 pt inset, so the hover and Selected-row
+/// platters stay concentric and inside it.
+struct SectionPlatter: ViewModifier {
+  @Environment(\.colorScheme) private var scheme
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @Environment(\.colorSchemeContrast) private var contrast
+
+  func body(content: Content) -> some View {
+    let palette = TrayPalette(scheme, reduceTransparency: reduceTransparency, increasedContrast: contrast == .increased)
+    let shape = RoundedRectangle(cornerRadius: TrayMetrics.groupRadius, style: .continuous)
+    return content
+      .padding(TrayMetrics.groupInset)
+      .background(palette.section, in: shape)
+      .overlay(shape.strokeBorder(palette.sectionEdge, lineWidth: contrast == .increased ? 1 : 0.5))
+      .containerShape(shape)
+  }
+}
+
+extension View {
+  func sectionPlatter() -> some View { modifier(SectionPlatter()) }
 }
 
 enum GlassShape { case capsule, circle, rounded(CGFloat) }
