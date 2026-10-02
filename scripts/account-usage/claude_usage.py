@@ -14,6 +14,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import ntpath
 import os
 from pathlib import Path
 import re
@@ -23,12 +24,11 @@ import urllib.error
 import urllib.request
 
 
-PROFILE_EMAILS = {
-    "gmail": "sittingmongoose@gmail.com",
-    "platyr": "jared@platyr.com",
-    "party": "jared@sittingmongoose.party",
-    "me": "sittingmongoose@me.com",
-}
+# Same safe-ID rule as the server (CLAUDE_PROFILE_ID_PATTERN). Which IDs exist
+# comes from the caller's manifest entry, passed per invocation below.
+SAFE_PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+EXPECTED_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+EXPECTED_EMAIL_ENV = "CCS_CLAUDE_PROFILE_EMAIL"
 WINDOWS = {
     "five_hour": ("Five-hour usage", 300),
     "seven_day": ("Weekly usage", 10080),
@@ -96,11 +96,45 @@ def decode_base64(value):
         raise UsageUnavailable()
 
 
-def windows_profile_path(profile_id, home=None):
+def valid_profile_id(profile_id):
+    return isinstance(profile_id, str) and SAFE_PROFILE_ID.fullmatch(profile_id) is not None
+
+
+def valid_expected_email(value):
+    return (isinstance(value, str) and len(value) <= 254
+            and EXPECTED_EMAIL.fullmatch(value) is not None)
+
+
+def resolve_expected_email(expected_email=None):
+    """The caller binds one invocation to one manifest email.
+
+    The server passes `--expected-email` from the manifest entry; the env var
+    is the manual-use fallback. Nothing here maps IDs to emails anymore.
+    """
+    candidate = expected_email if expected_email is not None else os.environ.get(EXPECTED_EMAIL_ENV)
+    return candidate if valid_expected_email(candidate) else None
+
+
+def windows_profile_path(profile_id, home=None, is_default=False):
+    """Caller-selected profile directory; the default Store profile is flagged,
+    never guessed from the ID."""
     home = Path.home() if home is None else Path(home)
-    if profile_id == "gmail":
+    if is_default:
         return home / "AppData" / "Local" / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Roaming" / "Claude"
     return home / "AppData" / "Roaming" / ("Claude-" + profile_id)
+
+
+def resolve_profile_path(profile_id, profile_dir, home=None, is_default=False):
+    """Prefer the caller-supplied manifest directory; otherwise derive the
+    generic named-profile directory (or the Store default when flagged)."""
+    if profile_dir is not None:
+        if (not isinstance(profile_dir, str) or not profile_dir or len(profile_dir) > 4096
+                or "\x00" in profile_dir or not ntpath.isabs(profile_dir)):
+            raise UsageUnavailable()
+        return Path(profile_dir)
+    if not valid_profile_id(profile_id):
+        raise UsageUnavailable()
+    return windows_profile_path(profile_id, home, is_default)
 
 
 def unprotect(blob, expected_length=32):
@@ -385,10 +419,13 @@ def normalize_prepaid(value):
         amount / 100 if currency else amount, currency or "credits", expires=reset_at(value.get("next_expires_at")))]
 
 
-def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None):
+def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expected_email=None):
+    expected = resolve_expected_email(expected_email)
+    if not valid_profile_id(profile_id) or expected is None:
+        raise UsageUnavailable()
     home = Path.home() if home is None else Path(home)
     path = home / ".ccs/claude-session-migration" / (profile_id + "-source.dpapi")
-    if profile_id not in PROFILE_EMAILS or path.is_symlink():
+    if path.is_symlink():
         raise UsageUnavailable()
     with path.open("rb") as handle:
         raw = handle.read(MAX_CAPSULE_BYTES + 1)
@@ -396,7 +433,7 @@ def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None):
         raise UsageUnavailable()
     capsule = json.loads(unprotect(raw, expected_length=None))
     if (not isinstance(capsule, dict) or capsule.get("schemaVersion") != 1 or
-        capsule.get("profileId") != profile_id or capsule.get("email") != PROFILE_EMAILS[profile_id] or
+        capsule.get("profileId") != profile_id or capsule.get("email") != expected or
         capsule.get("accountUuid") != account_uuid or not isinstance(capsule.get("cookies"), list) or
         len(capsule["cookies"]) > 20):
         raise UsageUnavailable()
@@ -467,16 +504,19 @@ class WebClient:
             response.close()
 
 
-def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None):
+def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None):
     # This optional path must never turn a valid native OAuth quota failure
     # into a sign-in request, nor an unreadable web balance into a false zero.
     if availability is not None:
         availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
+    expected = resolve_expected_email(expected_email)
+    if expected is None:
+        return []
     try:
-        cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home)
+        cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
         client = WebClient(cookies, organization_uuid)
         account = client.get("/api/account")
-        if account.get("uuid") != account_uuid or account.get("email_address") != PROFILE_EMAILS[profile_id]:
+        if account.get("uuid") != account_uuid or account.get("email_address") != expected:
             return []
         memberships = account.get("memberships")
         if not isinstance(memberships, list) or len(memberships) > 128:
@@ -505,7 +545,7 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
     return windows
 
 
-def collect(profile_id, platform, home=None):
+def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False):
     result = {
         "schemaVersion": 1, "provider": "claude", "profileId": profile_id,
         "platform": platform, "status": "unavailable", "email": None,
@@ -513,10 +553,11 @@ def collect(profile_id, platform, home=None):
         "fetchedAt": None, "accountVerified": False, "organizationVerified": False,
         "windows": [],
     }
-    if profile_id not in PROFILE_EMAILS or platform != "windows" or sys.platform != "win32":
+    expected = resolve_expected_email(expected_email)
+    if not valid_profile_id(profile_id) or expected is None or platform != "windows" or sys.platform != "win32":
         return result
     try:
-        account_uuid, cache = decrypt_cache(windows_profile_path(profile_id, home))
+        account_uuid, cache = decrypt_cache(resolve_profile_path(profile_id, profile_dir, home, is_default))
         candidates = eligible_entries(account_uuid, cache)
         if not candidates:
             raise UsageUnavailable("needs_sign_in")
@@ -532,7 +573,7 @@ def collect(profile_id, platform, home=None):
             if not isinstance(account, dict) or not isinstance(organization, dict):
                 continue
             if (
-                account.get("email") != PROFILE_EMAILS[profile_id]
+                account.get("email") != expected
                 or account.get("uuid") != account_uuid
                 or not isinstance(organization.get("uuid"), str)
                 or organization["uuid"] != identities[2]
@@ -543,9 +584,9 @@ def collect(profile_id, platform, home=None):
             if not windows:
                 raise UsageUnavailable()
             optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
-            windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras))
+            windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected))
             result.update(
-                status="ok", email=PROFILE_EMAILS[profile_id],
+                status="ok", email=expected,
                 plan="max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
                 fetchedAt=now_iso(), accountVerified=True, organizationVerified=True, windows=windows,
                 optionalExtras=optional_extras,
@@ -565,13 +606,27 @@ def collect(profile_id, platform, home=None):
     return result
 
 
+def profile_arg(value):
+    if not valid_profile_id(value):
+        raise argparse.ArgumentTypeError("profile id is not valid")
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description="Read existing Claude Desktop account usage")
     parser.add_argument("--provider", choices=("claude",), required=True)
-    parser.add_argument("--profile", choices=tuple(PROFILE_EMAILS), required=True)
+    parser.add_argument("--profile", type=profile_arg, required=True)
     parser.add_argument("--platform", choices=("ubuntu", "mac", "windows"), required=True)
+    parser.add_argument("--expected-email", default=None,
+                        help="manifest email this invocation is bound to (or %s)" % EXPECTED_EMAIL_ENV)
+    parser.add_argument("--profile-dir", default=None,
+                        help="manifest profile directory; without it the generic named-profile directory is used")
+    parser.add_argument("--default", action="store_true",
+                        help="use the default Store profile directory when --profile-dir is absent")
     args = parser.parse_args()
-    print(json.dumps(collect(args.profile, args.platform), ensure_ascii=True, allow_nan=False, separators=(",", ":")))
+    print(json.dumps(collect(args.profile, args.platform, expected_email=args.expected_email,
+                             profile_dir=args.profile_dir, is_default=args.default),
+                     ensure_ascii=True, allow_nan=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":

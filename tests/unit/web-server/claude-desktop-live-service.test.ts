@@ -160,13 +160,13 @@ describe('identity-bound Claude Desktop live usage', () => {
       "[IO.Path]::Combine($HOME, '.ccs', 'account-usage', 'claude_usage.py')"
     );
     expect(script).toContain("--provider 'claude' --profile 'gmail' --platform 'windows'");
+    expect(script).toContain("--expected-email 'fixture@example.com'");
+    expect(script).toContain("--profile-dir 'C:\\fixture\\claude'");
     expect(script).toContain("'.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe'");
     expect(script).toContain('Test-Path -LiteralPath $venv -PathType Leaf');
     expect(script).toContain("else { 'python.exe' }");
     expect(script).toContain('& $python $helper');
-    expect(script).not.toContain('C:\\fixture');
     expect(script).not.toContain('Invoke-Expression');
-    expect(script).not.toContain('fixture@example.com');
     expect(options).toMatchObject({ timeout: 20000, maxBuffer: 65536, windowsHide: true });
   });
 
@@ -497,6 +497,19 @@ describe('identity-bound Claude Desktop live usage', () => {
     writeProfiles([{ ...profile, windows: undefined }]);
     expect(await getLiveClaudeDesktopUsage('gmail')).toBeNull();
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('accepts a new manifest ID live and cached while an absent ID is refused', async () => {
+    writeProfiles([{ ...profile, id: 'added-profile', email: 'added@example.com' }]);
+    output = payload({ profileId: 'added-profile', email: 'added@example.com' });
+    const live = await getLiveClaudeDesktopUsage('added-profile');
+    expect(live?.profileId).toBe('added-profile');
+    expect(live?.email).toBe('added@example.com');
+    invalidateClaudeDesktopLiveUsageCache();
+    expect(await getCachedClaudeDesktopLiveUsage('added-profile')).toEqual(live);
+    expect(await getLiveClaudeDesktopUsage('gmail')).toBeNull();
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toBeNull();
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it('never executes for a malformed manifest and does not serve stale identity', async () => {

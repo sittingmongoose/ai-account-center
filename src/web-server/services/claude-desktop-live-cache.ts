@@ -2,9 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
+import { CLAUDE_PROFILE_ID_PATTERN } from './claude-desktop-profile-service';
 import type { ClaudeDesktopLiveUsage } from './claude-desktop-live-service';
 
-const PROFILE_IDS = new Set(['gmail', 'platyr', 'party', 'me']);
 const MAX_BYTES = 64 * 1024;
 const DIRECTORY = 'claude-desktop-live-cache';
 
@@ -28,7 +28,10 @@ async function privateDirectory(directory: string, create: boolean): Promise<voi
 }
 
 function cachePath(ccsDir: string, profileId: string, manifestHash: string): string | null {
-  if (!PROFILE_IDS.has(profileId) || !/^[a-f0-9]{64}$/.test(manifestHash)) return null;
+  // Manifest membership is enforced by the caller, which resolves the profile
+  // and binds the snapshot to its manifest hash; this only rejects unsafe names.
+  if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId) || !/^[a-f0-9]{64}$/.test(manifestHash))
+    return null;
   return path.join(ccsDir, DIRECTORY, `${profileId}.json`);
 }
 

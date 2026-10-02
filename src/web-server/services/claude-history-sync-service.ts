@@ -2,7 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
-import type { ClaudeDesktopProfile } from './claude-desktop-profile-service';
+import {
+  CLAUDE_PROFILE_ID_PATTERN,
+  type ClaudeDesktopProfile,
+} from './claude-desktop-profile-service';
 import { runClaudeHistoryHelper } from './claude-desktop-transport';
 import { ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
@@ -38,6 +41,8 @@ interface PrivateSnapshot {
   [key: string]: unknown;
 }
 interface HistoryCore {
+  /** IDs the pinned copy core supports; the server keeps no copy of this list. */
+  PROFILES: ReadonlySet<string>;
   validatePolicy: (policy: unknown) => ClaudeHistorySyncPolicy;
   synchronizeBeforeProfileOpen: (request: {
     profileId: string;
@@ -95,11 +100,14 @@ function logHistory(
  * policy, repeated click or server restart cannot clear an uncertain append.
  */
 export function claudeHistoryOpenHeld(profileId: string, platform: 'mac' | 'windows'): boolean {
-  // Optional history copying supports only these managed profiles. Other Mac
-  // launchers never arm a history transaction and must retain ordinary Open.
-  if (!['platyr', 'gmail', 'party', 'me'].includes(profileId)) return false;
   try {
-    return loadCore().pendingMarkerState(getCcsDir(), profileId, platform).held;
+    // The pinned core reports every ID outside its own set as held, but only
+    // IDs in that set can ever arm a marker. Ask the core which IDs those are
+    // instead of keeping a server-side copy, so other launchers keep ordinary
+    // Open and new manifest IDs are never held by an impossible marker.
+    const core = loadCore();
+    if (!core.PROFILES.has(profileId)) return false;
+    return core.pendingMarkerState(getCcsDir(), profileId, platform).held;
   } catch {
     try {
       fs.lstatSync(path.join(getCcsDir(), 'claude-history-pending'));
@@ -157,7 +165,10 @@ export function parseClaudeHistoryPolicy(value: unknown): ClaudeHistorySyncPolic
 export async function loadClaudeHistoryPolicy(
   profile: ClaudeDesktopProfile
 ): Promise<ClaudeHistorySyncPolicy | null> {
-  if (!profile.id || !['platyr', 'gmail', 'party', 'me'].includes(profile.id)) return null;
+  // The profile is already manifest-resolved; the manifest entry below is
+  // re-validated before any policy is returned. Only the policy file decides
+  // which copy directions are allowed.
+  if (!profile.id || !CLAUDE_PROFILE_ID_PATTERN.test(profile.id)) return null;
   const filename = path.join(getCcsDir(), 'claude-desktop-profiles.json');
   let handle: fs.promises.FileHandle | undefined;
   try {

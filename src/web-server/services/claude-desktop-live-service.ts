@@ -1,7 +1,10 @@
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
-import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
+import {
+  CLAUDE_PROFILE_ID_PATTERN,
+  listClaudeDesktopProfiles,
+} from './claude-desktop-profile-service';
 import type { DashboardAccountWindow } from './account-dashboard-types';
 import {
   readClaudeDesktopLiveSnapshot,
@@ -25,7 +28,6 @@ export interface ClaudeDesktopLiveUsage {
   };
 }
 
-const PROFILE_IDS = new Set(['gmail', 'platyr', 'party', 'me']);
 const CACHE_TTL_MS = 120_000;
 const RETAINED_SAMPLE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const FAILURE_BACKOFF_MS = 30_000;
@@ -353,8 +355,26 @@ function nonnegative(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-/** Fixed helper path and allowlisted profile only; no credential ever traverses SSH stdout. */
-async function runWindowsHelper(sshHost: string, profileId: string): Promise<string> {
+/** Quote one PowerShell single-quoted argument; the caller validated the shape already. */
+function psArgument(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Fixed helper path and manifest-resolved profile only; no credential ever
+ * traverses SSH stdout. The expected email and profile directory come from the
+ * same manifest entry, so the collector holds no hard-coded mapping.
+ */
+async function runWindowsHelper(
+  sshHost: string,
+  profileId: string,
+  expectedEmail: string,
+  profileDir: string | undefined
+): Promise<string> {
+  const helperCall =
+    `& $python $helper --provider 'claude' --profile ${psArgument(profileId)}` +
+    ` --platform 'windows' --expected-email ${psArgument(expectedEmail)}` +
+    (profileDir === undefined ? '' : ` --profile-dir ${psArgument(profileDir)}`);
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$env:PYTHONIOENCODING = 'utf-8'",
@@ -362,7 +382,7 @@ async function runWindowsHelper(sshHost: string, profileId: string): Promise<str
     "$helper = [IO.Path]::Combine($HOME, '.ccs', 'account-usage', 'claude_usage.py')",
     "$venv = [IO.Path]::Combine($HOME, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
     "$python = if (Test-Path -LiteralPath $venv -PathType Leaf) { $venv } else { 'python.exe' }",
-    `& $python $helper --provider 'claude' --profile '${profileId}' --platform 'windows'`,
+    helperCall,
     'exit $LASTEXITCODE',
   ].join('; ');
   const command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
@@ -410,7 +430,7 @@ export async function getLiveClaudeDesktopUsage(
   profileId: string,
   options: { refresh?: boolean } = {}
 ): Promise<ClaudeDesktopLiveUsage | null> {
-  if (!PROFILE_IDS.has(profileId)) return null;
+  if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) return null;
   try {
     const profiles = await listClaudeDesktopProfiles();
     const profile = profiles.find((candidate) => candidate.id === profileId);
@@ -434,7 +454,12 @@ export async function getLiveClaudeDesktopUsage(
     if (existing) cache.delete(key);
     const previousInMemory =
       existing && !existing.pending && !existing.failed ? existing.promise : Promise.resolve(null);
-    const promise = runWindowsHelper(sshHost, profileId)
+    const promise = runWindowsHelper(
+      sshHost,
+      profileId,
+      profile.email,
+      profile.windows?.profilePath
+    )
       .then(async (contents) => {
         let usage = normalizeUsage(contents, profileId, profile.email);
         if (usage && cache.get(key) === entry && scope === getCcsDir()) {
@@ -492,7 +517,7 @@ export async function getLiveClaudeDesktopUsage(
 export async function getCachedClaudeDesktopLiveUsage(
   profileId: string
 ): Promise<ClaudeDesktopLiveUsage | null> {
-  if (!PROFILE_IDS.has(profileId)) return null;
+  if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) return null;
   try {
     const profiles = await listClaudeDesktopProfiles();
     const profile = profiles.find((candidate) => candidate.id === profileId);

@@ -1,7 +1,9 @@
 """Offline Claude Desktop quota reader identity and output-boundary regressions."""
 
 import json
+import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import time
@@ -18,6 +20,9 @@ CLIENT = "22222222-2222-2222-2222-222222222222"
 ORG = "33333333-3333-3333-3333-333333333333"
 OTHER = "44444444-4444-4444-4444-444444444444"
 TOKEN = "fixture-private-access-token"
+# Fixture caller binding: the manifest email the server would pass per call.
+EMAIL = "fixture-profile@example.com"
+OTHER_EMAIL = "other-profile@example.com"
 
 
 def key(account=ACCOUNT, client=CLIENT, org=ORG, host="https://api.anthropic.com", scopes="user:inference user:profile"):
@@ -33,7 +38,7 @@ def cache(cache_key=None, **overrides):
 
 def profile(**overrides):
     return {
-        "account": {"uuid": ACCOUNT, "email": usage.PROFILE_EMAILS["gmail"], "has_claude_max": True},
+        "account": {"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
         "organization": {"uuid": ORG}, "private": "upstream-private-sentinel", **overrides,
     }
 
@@ -58,7 +63,7 @@ class IdentityTests(unittest.TestCase):
                 mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, saved_cache or cache())), \
                 mock.patch.object(usage, "Client", return_value=client), \
                 mock.patch.object(usage, "optional_web_windows", return_value=[]):
-            result = usage.collect("gmail", "windows")
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
         return result, client
 
     def test_exact_native_key_and_scope_are_eligible(self):
@@ -94,7 +99,7 @@ class IdentityTests(unittest.TestCase):
             "secret": "upstream-secret-sentinel",
         }])
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["email"], usage.PROFILE_EMAILS["gmail"])
+        self.assertEqual(result["email"], EMAIL)
         self.assertEqual(result["plan"], "max")
         self.assertTrue(result["accountVerified"])
         self.assertTrue(result["organizationVerified"])
@@ -110,7 +115,7 @@ class IdentityTests(unittest.TestCase):
     def test_wrong_email_account_and_org_cannot_produce_quota(self):
         wrong_profiles = [
             profile(account={"uuid": ACCOUNT, "email": "different@example.com"}),
-            profile(account={"uuid": OTHER, "email": usage.PROFILE_EMAILS["gmail"]}),
+            profile(account={"uuid": OTHER, "email": EMAIL}),
             profile(organization={"uuid": CLIENT}),
             profile(organization={"uuid": OTHER}),
         ]
@@ -143,16 +148,65 @@ class IdentityTests(unittest.TestCase):
     def test_unavailable_platform_does_not_read_any_credentials(self):
         with mock.patch.object(usage, "decrypt_cache") as decrypt:
             for platform in ("mac", "ubuntu"):
-                self.assertEqual(usage.collect("gmail", platform)["status"], "unavailable")
+                self.assertEqual(usage.collect("gmail", platform, expected_email=EMAIL)["status"], "unavailable")
             decrypt.assert_not_called()
 
     def test_native_failure_does_not_emit_exception_or_partial_identity(self):
         with mock.patch.object(usage.sys, "platform", "win32"), \
                 mock.patch.object(usage, "decrypt_cache", side_effect=RuntimeError("PRIVATE_PATH_TOKEN")):
-            result = usage.collect("gmail", "windows")
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
         self.assertEqual(result["status"], "unavailable")
         self.assertIsNone(result["email"])
         self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_new_profile_id_with_caller_email_is_accepted(self):
+        client = FakeClient(profile(), {"five_hour": {"utilization": 3}})
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), \
+                mock.patch.object(usage, "Client", return_value=client), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]):
+            result = usage.collect("added-profile", "windows", expected_email=EMAIL,
+                                   profile_dir="C:\\Users\\fixture\\AppData\\Roaming\\Claude-added-profile")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["profileId"], "added-profile")
+        self.assertEqual(result["email"], EMAIL)
+        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage"])
+
+    def test_missing_invalid_email_or_unsafe_id_reads_no_credentials(self):
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache") as decrypt, \
+                mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop(usage.EXPECTED_EMAIL_ENV, None)
+            for profile_id, email in [("added-profile", None), ("added-profile", "not-an-email"),
+                                      ("added-profile", "x" * 250 + "@example.com"),
+                                      ("bad;id", EMAIL), ("../gmail", EMAIL), ("", EMAIL)]:
+                with self.subTest(profile_id=profile_id, email=email):
+                    result = usage.collect(profile_id, "windows", expected_email=email)
+                    self.assertEqual(result["status"], "unavailable")
+                    self.assertIsNone(result["email"])
+            decrypt.assert_not_called()
+
+    def test_expected_email_env_fallback_binds_one_invocation(self):
+        client = FakeClient(profile(), {"five_hour": {"utilization": 3}})
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), \
+                mock.patch.object(usage, "Client", return_value=client), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]), \
+                mock.patch.dict("os.environ", {usage.EXPECTED_EMAIL_ENV: EMAIL}):
+            self.assertEqual(usage.collect("gmail", "windows")["status"], "ok")
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), \
+                mock.patch.object(usage, "Client", return_value=FakeClient(profile(), {"five_hour": {"utilization": 3}})), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]), \
+                mock.patch.dict("os.environ", {usage.EXPECTED_EMAIL_ENV: "not-an-email"}):
+            self.assertEqual(usage.collect("gmail", "windows")["status"], "unavailable")
+
+    def test_collector_source_holds_no_email_mapping_or_addresses(self):
+        self.assertFalse(hasattr(usage, "PROFILE_EMAILS"))
+        source = (HELPERS / "claude_usage.py").read_text()
+        self.assertNotIn("PROFILE_EMAILS", source)
+        remaining = "\n".join(line for line in source.splitlines() if "EXPECTED_EMAIL = " not in line)
+        self.assertEqual(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", remaining), [])
 
 
 class WindowTests(unittest.TestCase):
@@ -257,15 +311,29 @@ class WindowTests(unittest.TestCase):
         for value in ("2026-10-01T00:00:00", "2026-02-31T00:00:00Z", "token-secret", True, None):
             self.assertIsNone(usage.reset_at(value))
 
-    def test_windows_profile_paths_are_fixed_and_do_not_use_caller_path(self):
+    def test_windows_profile_paths_are_selected_by_caller_not_guessed_from_id(self):
         home = Path("/fixture")
-        self.assertEqual(usage.windows_profile_path("gmail", home), home / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude")
-        self.assertEqual(usage.windows_profile_path("party", home), home / "AppData/Roaming/Claude-party")
+        self.assertEqual(usage.windows_profile_path("gmail", home, True),
+                         home / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude")
+        self.assertEqual(usage.windows_profile_path("gmail", home),
+                         home / "AppData/Roaming/Claude-gmail")
+        self.assertEqual(usage.windows_profile_path("added-profile", home),
+                         home / "AppData/Roaming/Claude-added-profile")
+        explicit = "C:\\Users\\fixture\\AppData\\Roaming\\Claude-added-profile"
+        self.assertEqual(usage.resolve_profile_path("added-profile", explicit, home), Path(explicit))
+        self.assertEqual(usage.resolve_profile_path("added-profile", None, home),
+                         home / "AppData/Roaming/Claude-added-profile")
+        for bad in ("relative\\path", "", "C:\\bad\x00path", "x" * 4097):
+            with self.subTest(bad=bad):
+                with self.assertRaises(usage.UsageUnavailable):
+                    usage.resolve_profile_path("added-profile", bad, home)
+        with self.assertRaises(usage.UsageUnavailable):
+            usage.resolve_profile_path("bad;id", None, home)
 
 
 class WebExtraTests(unittest.TestCase):
     def capsule(self, **overrides):
-        return {"schemaVersion": 1, "profileId": "gmail", "email": usage.PROFILE_EMAILS["gmail"],
+        return {"schemaVersion": 1, "profileId": "gmail", "email": EMAIL,
                 "accountUuid": ACCOUNT, "capturedAt": "2020-01-01T00:00:00Z", "cookies": [
                     {"name": "sessionKey", "host_key": ".claude.ai", "path": "/", "top_frame_site_key": "",
                      "value": "fixture-private-session", "is_secure": 1, "is_httponly": 1,
@@ -277,12 +345,12 @@ class WebExtraTests(unittest.TestCase):
             path = Path(home) / ".ccs/claude-session-migration/gmail-source.dpapi"
             path.parent.mkdir(parents=True); path.write_bytes(b"fixture-protected")
             with mock.patch.object(usage, "unprotect", return_value=json.dumps(self.capsule()).encode()) as decrypt:
-                cookies = usage.capsule_cookies("gmail", ACCOUNT, ORG, home)
+                cookies = usage.capsule_cookies("gmail", ACCOUNT, ORG, home, EMAIL)
             self.assertEqual([cookie["name"] for cookie in cookies], ["sessionKey", "lastActiveOrg"])
             decrypt.assert_called_once_with(b"fixture-protected", expected_length=None)
 
     def test_capsule_scope_account_and_expired_cookie_fail_before_http(self):
-        cases = [self.capsule(profileId="party"), self.capsule(email=usage.PROFILE_EMAILS["party"]),
+        cases = [self.capsule(profileId="party"), self.capsule(email=OTHER_EMAIL),
                  self.capsule(accountUuid=OTHER)]
         for field, value in (("host_key", ".evil.invalid"), ("path", "/other"), ("is_httponly", 0),
                              ("expires_utc", 1), ("value", "secret;foreign=header")):
@@ -294,7 +362,7 @@ class WebExtraTests(unittest.TestCase):
             path.parent.mkdir(parents=True); path.write_bytes(b"fixture-protected")
             for case in cases:
                 with self.subTest(case=case), mock.patch.object(usage, "unprotect", return_value=json.dumps(case).encode()), self.assertRaises(usage.UsageUnavailable):
-                    usage.capsule_cookies("gmail", ACCOUNT, ORG, home)
+                    usage.capsule_cookies("gmail", ACCOUNT, ORG, home, EMAIL)
 
     def test_duplicate_native_org_selectors_coalesce_only_when_identical_and_bound(self):
         value = self.capsule()
@@ -303,10 +371,10 @@ class WebExtraTests(unittest.TestCase):
             path = Path(home) / ".ccs/claude-session-migration/gmail-source.dpapi"
             path.parent.mkdir(parents=True); path.write_bytes(b"fixture-protected")
             with mock.patch.object(usage, "unprotect", return_value=json.dumps(value).encode()):
-                self.assertEqual(len(usage.capsule_cookies("gmail", ACCOUNT, ORG, home)), 2)
+                self.assertEqual(len(usage.capsule_cookies("gmail", ACCOUNT, ORG, home, EMAIL)), 2)
             value["cookies"][-1]["value"] = OTHER
             with mock.patch.object(usage, "unprotect", return_value=json.dumps(value).encode()), self.assertRaises(usage.UsageUnavailable):
-                usage.capsule_cookies("gmail", ACCOUNT, ORG, home)
+                usage.capsule_cookies("gmail", ACCOUNT, ORG, home, EMAIL)
 
     def test_historical_used_reset_expiry_is_separate_from_available_zero(self):
         windows = usage.normalize_reset_credits({"eligible": True, "grants": [{
@@ -364,15 +432,15 @@ class WebExtraTests(unittest.TestCase):
         client = mock.Mock()
         client.get.side_effect = responses
         with mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]), mock.patch.object(usage, "WebClient", return_value=client):
-            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, availability=availability)
+            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, availability=availability, expected_email=EMAIL)
         return windows, client
 
     def web_account(self, **overrides):
-        return {"email_address": usage.PROFILE_EMAILS["gmail"], "uuid": ACCOUNT,
+        return {"email_address": EMAIL, "uuid": ACCOUNT,
                 "memberships": [{"organization": {"uuid": ORG}}], **overrides}
 
     def test_optional_extras_verify_email_uuid_and_org_before_fetch(self):
-        for account in (self.web_account(email_address=usage.PROFILE_EMAILS["me"]),
+        for account in (self.web_account(email_address=OTHER_EMAIL),
                         self.web_account(uuid=OTHER), self.web_account(memberships=[{"organization": {"uuid": OTHER}}])):
             windows, client = self.web_windows(account)
             self.assertEqual(windows, [])
@@ -389,7 +457,7 @@ class WebExtraTests(unittest.TestCase):
         windows, _ = self.web_windows(self.web_account(), {"cedar_ember": {"eligible": False, "grants": []}}, RuntimeError("private-error"))
         self.assertEqual([window["key"] for window in windows], ["reset_credits_available"])
         with mock.patch.object(usage, "capsule_cookies", side_effect=RuntimeError("private-path")):
-            self.assertEqual(usage.optional_web_windows("gmail", ACCOUNT, ORG), [])
+            self.assertEqual(usage.optional_web_windows("gmail", ACCOUNT, ORG, expected_email=EMAIL), [])
 
     def test_optional_group_markers_distinguish_failure_from_successful_empty_null_and_zero(self):
         availability = {}
@@ -413,7 +481,7 @@ class WebExtraTests(unittest.TestCase):
         web = mock.Mock()
         web.get.side_effect = [self.web_account(), {"cedar_ember": None}, {"amount": None}]
         with mock.patch.object(usage.sys, "platform", "win32"), mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), mock.patch.object(usage, "Client", return_value=client), mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]), mock.patch.object(usage, "WebClient", return_value=web):
-            result = usage.collect("gmail", "windows")
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["optionalExtras"], {"resetCredits": "ok", "prepaidBalance": "ok"})
         self.assertEqual([window["key"] for window in result["windows"]], ["five_hour", "seven_day_fable"])
@@ -421,7 +489,7 @@ class WebExtraTests(unittest.TestCase):
     def test_native_quota_survives_missing_optional_session(self):
         client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
         with mock.patch.object(usage.sys, "platform", "win32"), mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), mock.patch.object(usage, "Client", return_value=client), mock.patch.object(usage, "capsule_cookies", side_effect=ValueError("PRIVATE")):
-            result = usage.collect("gmail", "windows")
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["windows"][0]["usedPercent"], 7)
         self.assertEqual(result["optionalExtras"], {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})

@@ -4,7 +4,7 @@ import fs from 'fs';
 import { createHash } from 'crypto';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import {
-  CLAUDE_WINDOWS_PROFILE_IDS,
+  CLAUDE_PROFILE_ID_PATTERN,
   type ClaudeDesktopLauncher,
 } from './claude-desktop-profile-service';
 
@@ -125,7 +125,9 @@ export async function openClaudeWindowsLauncher(
   launcher: ClaudeDesktopLauncher,
   profileId: string
 ): Promise<void> {
-  if (!CLAUDE_WINDOWS_PROFILE_IDS.has(profileId)) {
+  // The caller resolved this launcher from the manifest, which proves the ID
+  // exists; this only rejects unsafe strings before they reach the command.
+  if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) {
     throw new ValidationError('Select a configured Claude Windows account.');
   }
   const script = [
@@ -201,7 +203,7 @@ export async function runClaudeHistoryHelper(
   request: Record<string, unknown>
 ): Promise<Buffer> {
   if (
-    !CLAUDE_WINDOWS_PROFILE_IDS.has(profileId) ||
+    !CLAUDE_PROFILE_ID_PATTERN.test(profileId) ||
     request.profileId !== profileId ||
     request.platform !== platform ||
     typeof request.mode !== 'string' ||

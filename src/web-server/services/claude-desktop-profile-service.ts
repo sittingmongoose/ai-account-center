@@ -132,11 +132,16 @@ export function canOpenClaudeMacProfile(profile: ClaudeDesktopProfile): boolean 
   );
 }
 
-export const CLAUDE_WINDOWS_PROFILE_IDS = new Set(['platyr', 'gmail', 'party', 'me']);
+/**
+ * Safe profile-ID shape shared by every Claude desktop path. Membership ("must
+ * exist in the manifest") is checked against the manifest at runtime; this
+ * pattern only rejects unsafe strings before any lookup or transport.
+ */
+export const CLAUDE_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export function canOpenClaudeWindowsProfile(profile: ClaudeDesktopProfile): boolean {
   return Boolean(
-    profile.id && CLAUDE_WINDOWS_PROFILE_IDS.has(profile.id) && profile.windows?.sshHost
+    profile.id && CLAUDE_PROFILE_ID_PATTERN.test(profile.id) && profile.windows?.sshHost
   );
 }
 

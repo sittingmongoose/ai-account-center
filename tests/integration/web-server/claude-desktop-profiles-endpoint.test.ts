@@ -119,7 +119,7 @@ describe('Claude desktop launch and cached usage', () => {
         mac: { ...fakeProfiles[0]!.mac, canOpen: true },
         windows: {
           ...fakeProfiles[0]!.windows,
-          canOpen: false,
+          canOpen: true,
           launchUri: 'ccs-claude://launch/work',
         },
         openOperation: null,
@@ -146,7 +146,7 @@ describe('Claude desktop launch and cached usage', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it('launches only an allowlisted configured Windows task with a same-origin session', async () => {
+  it('launches only a manifest-configured Windows task with a same-origin session', async () => {
     authenticated = true;
     writeManifest({
       version: 1,
@@ -180,6 +180,40 @@ describe('Claude desktop launch and cached usage', () => {
         )
       ).status
     ).toBe(400);
+    expect(
+      (await request('POST', '/absent-id/open', openOptions({ platform: 'windows' }))).status
+    ).toBe(404);
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a new manifest ID on Windows end to end while an absent ID is refused', async () => {
+    authenticated = true;
+    writeManifest({
+      version: 1,
+      profiles: [
+        {
+          ...fakeProfiles[0],
+          id: 'added-profile',
+          mac: { ...fakeProfiles[0]!.mac, sshHost: 'example-mac' },
+          windows: { ...fakeProfiles[0]!.windows, sshHost: 'example-windows' },
+        },
+      ],
+    });
+    const launch = spyOn(transport, 'openClaudeWindowsLauncher').mockResolvedValue(undefined);
+    expect(
+      await request('POST', '/added-profile/open', openOptions({ platform: 'windows' }))
+    ).toEqual({
+      status: 200,
+      body: { opened: true, id: 'added-profile', platform: 'windows' },
+    });
+    expect(launch).toHaveBeenCalledWith(
+      { ...fakeProfiles[0]!.windows, sshHost: 'example-windows' },
+      'added-profile'
+    );
+    expect(
+      (await request('POST', '/no-such-profile/open', openOptions({ platform: 'windows' })))
+        .status
+    ).toBe(404);
     expect(launch).toHaveBeenCalledTimes(1);
   });
 
@@ -194,12 +228,15 @@ describe('Claude desktop launch and cached usage', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it('rejects client hosts, paths, commands, identifiers and Windows remote launches', async () => {
+  it('rejects client hosts, paths, commands and identifiers', async () => {
     writeLaunchProfile();
     authenticated = true;
     const launch = spyOn(transport, 'openClaudeMacLauncher').mockResolvedValue(undefined);
+    const windowsLaunch = spyOn(transport, 'openClaudeWindowsLauncher').mockResolvedValue(
+      undefined
+    );
     for (const body of [
-      { platform: 'windows' },
+      { platform: 'windows', host: 'attacker' },
       { platform: 'mac', host: 'attacker' },
       { platform: 'mac', path: '/tmp/untrusted.app' },
       { platform: 'mac', command: 'anything' },
@@ -208,6 +245,7 @@ describe('Claude desktop launch and cached usage', () => {
     }
     expect((await request('POST', '/bad%3Bid/open', openOptions())).status).toBe(400);
     expect(launch).not.toHaveBeenCalled();
+    expect(windowsLaunch).not.toHaveBeenCalled();
   });
 
   it('distinguishes missing and unconfigured profiles', async () => {

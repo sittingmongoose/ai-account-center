@@ -73,7 +73,7 @@ describe('Claude desktop transport', () => {
     expect(command).not.toContain('credentials');
   });
 
-  it.each(['gmail', 'platyr', 'party', 'me'])(
+  it.each(['gmail', 'platyr', 'party', 'me', 'work', 'added-profile'])(
     'starts only the fixed same-user limited interactive Windows task for %s',
     async (id) => {
       const exec = mockSsh();
@@ -102,8 +102,10 @@ describe('Claude desktop transport', () => {
     }
   );
 
-  it.each(['work', 'gmail;anything', "gmail'", '../gmail', 'GMAIL'])(
-    'rejects non-allowlisted Windows profile %s before SSH',
+  // Manifest membership is enforced by the callers, which resolve the launcher
+  // from the manifest; the transport only rejects unsafe strings before SSH.
+  it.each(['gmail;anything', "gmail'", '../gmail', '', '-bad', 'bad id', 'x'.repeat(65)])(
+    'rejects unsafe Windows profile %s before SSH',
     async (id) => {
       const exec = mockSsh();
       await expect(openClaudeWindowsLauncher(windows, id)).rejects.toThrow();

@@ -5,10 +5,7 @@ import {
   isDashboardWebSocketOriginAllowed,
   requireDashboardSession,
 } from '../middleware/auth-middleware';
-import {
-  CLAUDE_WINDOWS_PROFILE_IDS,
-  listClaudeDesktopProfileMetadata,
-} from '../services/claude-desktop-profile-service';
+import { listClaudeDesktopProfileMetadata } from '../services/claude-desktop-profile-service';
 import {
   assertClaudeDesktopOpenAllowed,
   CLAUDE_HISTORY_UNCONFIRMED_MESSAGE,
@@ -86,11 +83,13 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
     res.status(415).json({ error: 'Claude account launch requires application/json.' });
     return;
   }
+  // Manifest membership and per-platform launchers are resolved from the
+  // manifest by the Open operation below (404 unknown, 409 unconfigured);
+  // this only rejects unsafe IDs and malformed bodies before any lookup.
   if (
     !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(req.params.id) ||
     !req.body ||
     (req.body.platform !== 'mac' && req.body.platform !== 'windows') ||
-    (req.body.platform === 'windows' && !CLAUDE_WINDOWS_PROFILE_IDS.has(req.params.id)) ||
     Object.keys(req.body).some((key) => key !== 'platform')
   ) {
     res.status(400).json({ error: 'Select a configured Claude desktop account and platform.' });

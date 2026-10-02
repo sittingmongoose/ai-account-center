@@ -70,6 +70,17 @@ describe('protected persisted Claude quota snapshots', () => {
     expect(fs.readdirSync(directory)).toEqual(['gmail.json']);
   });
 
+  it('round-trips a new safe ID while refusing unsafe names', async () => {
+    const added = { ...sample, profileId: 'added-profile', email: 'added@example.com' };
+    await writeClaudeDesktopLiveSnapshot(root, 'added-profile', manifest, added);
+    expect(await readClaudeDesktopLiveSnapshot(root, 'added-profile', manifest)).toEqual(added);
+    for (const unsafe of ['', '-bad', 'bad id', 'bad;id', 'x'.repeat(65)]) {
+      expect(await readClaudeDesktopLiveSnapshot(root, unsafe, manifest)).toBeNull();
+      await writeClaudeDesktopLiveSnapshot(root, unsafe, manifest, added);
+    }
+    expect(fs.readdirSync(directory)).toEqual(['added-profile.json']);
+  });
+
   it('persists only whitelisted optional-group availability and original cached window time', async () => {
     const value = {
       ...sample,

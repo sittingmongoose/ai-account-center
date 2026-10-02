@@ -332,10 +332,11 @@ describe('Claude Open with a managed history copy', () => {
     expect(await currentOperation()).toBeNull();
   });
 
-  it('keeps the old refusals for an unknown profile and a configured launcher', async () => {
+  it('refuses an unknown manifest ID while a malformed identifier stays 400', async () => {
     for (const headers of [ASYNC, {}]) {
-      expect((await request('POST', '/missing/open', headers)).status).toBe(400);
+      expect((await request('POST', '/missing/open', headers)).status).toBe(404);
       expect((await request('POST', '/gmail/open', headers)).status).toBe(404);
+      expect((await request('POST', '/bad%3Bid/open', headers)).status).toBe(400);
     }
   });
 
