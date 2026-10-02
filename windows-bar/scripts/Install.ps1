@@ -42,12 +42,22 @@ foreach ($taskName in @('AI Account Center', 'CCS Bar')) {
 }
 if (Test-Path $destination) { Copy-Item -LiteralPath $destination -Destination (Join-Path $backup 'primary-app') -Recurse -Force }
 if (Test-Path $legacyDestination) { Copy-Item -LiteralPath $legacyDestination -Destination (Join-Path $backup 'legacy-app') -Recurse -Force }
-# Save shortcut state and identify only files this installation would introduce.
+# Save shortcut state and identify only files this installation would introduce. Start-menu shortcuts and the
+# Desktop shortcut reopen the tray: launching again tells the running instance to show its panel.
 $shell = New-Object -ComObject WScript.Shell
-foreach ($shortcutName in @('AI Account Center.lnk', 'CCS Bar.lnk')) {
-    $shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) $shortcutName
-    if (Test-Path $shortcutPath) { Copy-Item -LiteralPath $shortcutPath -Destination (Join-Path $backup $shortcutName) -Force }
+$startMenu = [Environment]::GetFolderPath('Programs')
+$desktop = [Environment]::GetFolderPath('Desktop')
+$shortcuts = @(
+    [PSCustomObject]@{ Path = (Join-Path $startMenu 'AI Account Center.lnk'); Backup = 'AI Account Center.lnk' },
+    [PSCustomObject]@{ Path = (Join-Path $startMenu 'CCS Bar.lnk'); Backup = 'CCS Bar.lnk' },
+    [PSCustomObject]@{ Path = (Join-Path $desktop 'AI Account Center.lnk'); Backup = 'Desktop-AI Account Center.lnk' }
+)
+foreach ($entry in $shortcuts) {
+    if (Test-Path -LiteralPath $entry.Path) { Copy-Item -LiteralPath $entry.Path -Destination (Join-Path $backup $entry.Backup) -Force }
 }
+# The plated Apex Soft app icon for shortcuts: legible on any wallpaper, Start menu or taskbar theme, and it stays
+# right when the theme changes later. The bare tray glyphs are notification-area art only.
+$shortcutIcon = Join-Path $destination 'Resources\Icons\AppIcon.ico'
 $introducedDirectories = @()
 foreach ($rootPath in @($destination, $legacyDestination)) {
     if (-not (Test-Path -LiteralPath $rootPath)) { $introducedDirectories += $rootPath }
@@ -87,7 +97,8 @@ try {
         else { Copy-Item -LiteralPath $item.FullName -Destination $legacyDestination -Recurse -Force }
     }
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $action = New-ScheduledTaskAction -Execute $exe -WorkingDirectory $destination
+    # The logon task starts the tray hidden in the notification area; shortcuts start it with its panel open.
+    $action = New-ScheduledTaskAction -Execute $exe -Argument '--background' -WorkingDirectory $destination
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
     $settings = if ($previousTask) { $previousTask.Settings } else {
         New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
@@ -101,15 +112,16 @@ try {
         New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
     }
     Register-ScheduledTask -TaskName 'CCS Bar' -Action $action -Principal $principal -Settings $aliasSettings -Description 'Compatibility alias for AI Account Center. The AI Account Center task preserves your logon preference.' -Force | Out-Null
-    foreach ($shortcutName in @('AI Account Center.lnk', 'CCS Bar.lnk')) {
-        $shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) $shortcutName
-        if (-not (Test-Path $shortcutPath)) { $introducedShortcuts += $shortcutPath }
-        $shortcut = $shell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $exe; $shortcut.WorkingDirectory = $destination; $shortcut.Description = 'AI Account Center usage and accounts'; $shortcut.Save()
+    foreach ($entry in $shortcuts) {
+        if (-not (Test-Path -LiteralPath $entry.Path)) { $introducedShortcuts += $entry.Path }
+        $shortcut = $shell.CreateShortcut($entry.Path)
+        $shortcut.TargetPath = $exe; $shortcut.WorkingDirectory = $destination; $shortcut.Description = 'AI Account Center usage and accounts'
+        if (Test-Path -LiteralPath $shortcutIcon) { $shortcut.IconLocation = $shortcutIcon + ',0' }
+        $shortcut.Save()
     }
     $started = -not $NoStart -and $startupEnabled
     if ($started) { Start-ScheduledTask -TaskName 'AI Account Center' }
-    [PSCustomObject]@{ installed=$true; executable=$exe; startupTask='AI Account Center'; startupEnabled=$startupEnabled; startupTriggerCount=$startupTriggers.Count; compatibilityTask='CCS Bar'; legacyExecutable=$legacyExe; privateStorePreserved=$true; stagedVerificationPassed=$true; rollbackBackup=$backup; started=$started } | ConvertTo-Json -Compress
+    [PSCustomObject]@{ installed=$true; executable=$exe; startupTask='AI Account Center'; startupEnabled=$startupEnabled; startupTriggerCount=$startupTriggers.Count; compatibilityTask='CCS Bar'; legacyExecutable=$legacyExe; shortcuts=@($shortcuts | ForEach-Object { $_.Path }); privateStorePreserved=$true; stagedVerificationPassed=$true; rollbackBackup=$backup; started=$started } | ConvertTo-Json -Compress
 }
 catch {
     $installFailure = $_
@@ -136,9 +148,9 @@ catch {
         else { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
         if ($taskStates[$taskName] -eq 'Running') { Start-ScheduledTask -TaskName $taskName -ErrorAction Continue }
     }
-    foreach ($shortcutName in @('AI Account Center.lnk', 'CCS Bar.lnk')) {
-        $saved = Join-Path $backup $shortcutName
-        if (Test-Path $saved) { Copy-Item -LiteralPath $saved -Destination (Join-Path ([Environment]::GetFolderPath('Programs')) $shortcutName) -Force -ErrorAction Continue }
+    foreach ($entry in $shortcuts) {
+        $saved = Join-Path $backup $entry.Backup
+        if (Test-Path $saved) { Copy-Item -LiteralPath $saved -Destination $entry.Path -Force -ErrorAction Continue }
     }
     throw $installFailure
 }

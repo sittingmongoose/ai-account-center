@@ -1,9 +1,36 @@
 Provider artwork attribution
 
-Provider artwork identifies the corresponding services. Product names and marks remain their respective owners' trademarks.
+Provider artwork identifies the corresponding services. Product names and marks remain their respective owners' trademarks. Marks are shown unmodified, never recoloured.
+
+claude
+Claude and the Claude Spark are Anthropic trademarks. Official press-kit artwork, shown unmodified to identify the provider.
+
+codex
+OpenAI and the Blossom are OpenAI trademarks. Official brand-pack artwork, unmodified. Codex publishes no separate product mark (developers.openai.com/codex uses only UI icons), so the OpenAI Blossom identifies it.
+
+antigravity
+Google Antigravity is a Google trademark. Official vector artwork from antigravity.google, unmodified; the lockup is cropped to its symbol and the wordmark paths that fall outside the crop are dropped (render verified pixel-identical).
+
+cursor
+Cursor is an Anysphere trademark. Official brand-kit SVGs, unmodified.
+
+muse
+Meta and the Meta symbol are Meta Platforms trademarks. The Muse Code product page publishes no separate Muse Code mark (its only images are the Meta lockups, a 64px favicon of the same symbol and a background), so Meta's publisher symbol identifies it. Vector, unmodified; wordmark paths outside the crop dropped (pixel-identical render).
+
+kimi-code
+Kimi is a Moonshot AI trademark. Kimi publishes its colour K (white K, blue dot) only as an app icon on a black plate (kimi.com pwa-192/512, favicons, Kimi Code docs and VS Code extension). The bare mark here is Kimi's own web-UI glyph, geometry unmodified; it is a currentColor glyph, rendered in the black/white pair Kimi uses for its official KIMI wordmark on light and dark. No blue dot exists in any bare official artwork.
+
+qwen
+Qwen and Qwen Cloud are Alibaba Cloud trademarks. The Token Plan is a Qwen Cloud product (docs.qwencloud.com/token-plan; the collector reads home.qwencloud.com), so the Qwen Cloud symbol is used. Vector, unmodified; wordmark paths outside the crop dropped (pixel-identical render).
+
+zai
+Z.ai is a Zhipu AI trademark. Official bare Z artwork from chat.z.ai, vector, unmodified.
+
+opencode-go
+OpenCode marks belong to the OpenCode project (anomalyco/opencode, code under MIT). Official brand-page SVGs, unmodified.
 
 OpenCode
-Official OpenCode dark-surface mark from anomalyco/opencode commit 63cf236140b11c15cd645e90a7ded77bdc2193b4.
+Official OpenCode marks are MIT licensed:
 
 MIT License
 
@@ -27,11 +54,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Cursor
-Official default 2D cube from https://cursor.com/brand and its published Cursor brand archive. Vendor trademark artwork; no separate open-source asset license was found.
+Platform glyphs
+Apple and Windows glyphs: Simple Icons (CC0-1.0); the logos are Apple Inc. and Microsoft trademarks, used only as platform indicators.
 
-Qwen
-Official favicon published by https://qwen.ai (Alibaba Qwen). Vendor trademark artwork; no separate asset license was found.
-
-Muse Code (Meta publisher mark)
-Unchanged official https://dev.meta.ai/favicon.ico pixels, extracted to PNG. The installed Muse launcher is byte-identical to https://api.meta.ai/muse-launcher.sh and embeds api.meta.ai/muse-code endpoints; the official product page is https://dev.meta.ai/products/muse-code. No distinct Muse product icon is published. Meta trademark artwork, governed by https://www.meta.com/brand/resources/meta/company-brand/.
+Instrument Sans
+Copyright 2022 The Instrument Sans Project Authors (https://github.com/Instrument/instrument-sans), SIL Open Font License 1.1 (OFL.txt). Static instances with tabular figures made with fontTools; the family name is unchanged.

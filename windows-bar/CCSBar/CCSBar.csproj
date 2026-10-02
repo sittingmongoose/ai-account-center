@@ -8,19 +8,27 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>CCSBar</AssemblyName>
     <RootNamespace>CCSBar</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Title>AI Account Center</Title>
     <Product>AI Account Center</Product>
     <Description>Native accounts and usage tray for AI Account Center</Description>
+    <ApplicationIcon>Resources/Icons/AppIcon.ico</ApplicationIcon>
     <PublishSingleFile>false</PublishSingleFile>
     <DebugType>none</DebugType>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
   <ItemGroup>
-    <Resource Include="Resources/HeaderLogo.png" />
+    <!-- Instrument Sans (OFL), static faces with tabular digits frozen in; see Resources/Fonts/README.md. -->
+    <Resource Include="Resources/Fonts/*.ttf" />
+    <!-- Apex Soft: the plated app icon (exe, window, shortcuts) and notification-area art for light and dark taskbars. -->
+    <EmbeddedResource Include="Resources/Icons/*.ico" LogicalName="CCSBar.Icons.%(Filename)%(Extension)" />
+    <Content Include="Resources/Icons/*.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Official provider marks (marks-v2), with light-surface variants where the provider publishes one. -->
     <Resource Include="Resources/Providers/*.png" />
     <Content Include="Resources/Providers/THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Resources/Providers/sources.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <EmbeddedResource Include="Resources/MenuBarColor.png" />
+    <Content Include="Resources/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Sanitized example.com fixture for the offline render checks (the render-fixture mode). -->
+    <EmbeddedResource Include="Fixtures/dashboard.json" LogicalName="CCSBar.Fixtures.dashboard.json" />
   </ItemGroup>
 </Project>

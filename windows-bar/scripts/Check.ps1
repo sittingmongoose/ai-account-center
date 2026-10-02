@@ -30,6 +30,30 @@ $evidence = if ($ReportDirectory) { $ExecutionContext.SessionState.Path.GetUnres
 New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 $mode = if ($Live) { '--check-live' } else { '--check' }
 $report = Join-Path $evidence $(if ($Live) { 'live-check.json' } else { 'checks.json' })
-& $dotnetCommand $dll $mode $report
-if ($LASTEXITCODE -ne 0) { throw "AI Account Center verification failed. See $report" }
-Get-Content -LiteralPath $report
+# Offline checks and renders run against an isolated state folder (AAC_TRAY_STATE_DIR), so nothing they do can reach
+# the tray's real connection or preferences. The sign-in checks also keep their fixture store in a folder of their own.
+$isolatedState = $null
+if (-not $Live) {
+    $isolatedState = Join-Path ([IO.Path]::GetTempPath()) ('aac-check-state-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $isolatedState | Out-Null
+    $env:AAC_TRAY_STATE_DIR = $isolatedState
+}
+try {
+    & $dotnetCommand $dll $mode $report
+    if ($LASTEXITCODE -ne 0) { throw "AI Account Center verification failed. See $report" }
+    Get-Content -LiteralPath $report
+    if (-not $Live) {
+        # Offline render checks from the bundled sanitized fixture (one theme per process) and the installer checks.
+        foreach ($theme in @('light', 'dark')) {
+            & $dotnetCommand $dll --render-fixture (Join-Path $evidence 'render') $theme
+            if ($LASTEXITCODE -ne 0) { throw "AI Account Center $theme render checks failed. See $(Join-Path $evidence 'render')" }
+        }
+    }
+}
+finally {
+    if ($isolatedState) { Remove-Item Env:\AAC_TRAY_STATE_DIR -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force $isolatedState -ErrorAction SilentlyContinue }
+}
+if (-not $Live) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-InstallScripts.ps1') | Set-Content -LiteralPath (Join-Path $evidence 'install-script-checks.json')
+    if ($LASTEXITCODE -ne 0) { throw "Installer script checks failed. See $(Join-Path $evidence 'install-script-checks.json')" }
+}

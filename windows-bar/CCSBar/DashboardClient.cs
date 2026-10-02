@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace CCSBar;
 
-internal enum DashboardRequestKind { General, Usage, AutoSwitch, ClaudeOpen, CodexActivation }
+internal enum DashboardRequestKind { General, Usage, AutoSwitch, ClaudeOpen, CodexActivation, AntigravityActivation, AntigravityAutoSwitch }
 
 public sealed class DashboardClient : IDisposable
 {
@@ -53,9 +53,30 @@ public sealed class DashboardClient : IDisposable
         return Request<JsonElement>(HttpMethod.Post, "api/codex/profiles/" + Uri.EscapeDataString(profile) + "/activate", body, profile, retryAuthentication: confirmationToken is null, requestKind: DashboardRequestKind.CodexActivation);
     }
 
+    /// <summary>Antigravity's own policy (commit 9cf75fbe): PUT /api/antigravity/auto-switch with only the changed keys.</summary>
+    public Task<AntigravityAutoStatus> SetAntigravityAutoSwitch(bool? enabled = null, int? thresholdUsedPercent = null)
+    {
+        if (thresholdUsedPercent is < 1 or > 99) throw new ArgumentException("Select a threshold between 1% and 99% used.");
+        if (enabled is null && thresholdUsedPercent is null) throw new ArgumentException("Choose a setting to change.");
+        var body = new System.Collections.Generic.Dictionary<string, object>();
+        if (enabled is bool on) body["enabled"] = on;
+        if (thresholdUsedPercent is int used) body["thresholdUsedPercent"] = used;
+        return Request<AntigravityAutoStatus>(HttpMethod.Put, "api/antigravity/auto-switch", body, requestKind: DashboardRequestKind.AntigravityAutoSwitch);
+    }
+
+    /// <summary>POST /api/antigravity/profiles/{id}/activate, or /confirm with the reviewed token (Ubuntu host only).</summary>
+    public Task<JsonElement> ActivateAntigravity(string profileId, string? confirmationToken = null)
+    {
+        if (!Formatting.IsSafeId(profileId)) throw new ArgumentException("Choose a configured Antigravity account.");
+        if (confirmationToken is not null && !AntigravityConfirmation.IsToken(confirmationToken)) throw new ArgumentException("The switch confirmation is invalid. Refresh and try again.");
+        object body = confirmationToken is null ? new { hostId = "ubuntu" } : new { hostId = "ubuntu", confirmationToken };
+        var path = "api/antigravity/profiles/" + Uri.EscapeDataString(profileId) + (confirmationToken is null ? "/activate" : "/confirm");
+        return Request<JsonElement>(HttpMethod.Post, path, body, profileId, retryAuthentication: confirmationToken is null, requestKind: DashboardRequestKind.AntigravityActivation);
+    }
+
     public Task<JsonElement> OpenClaudeOnMac(string profile)
     {
-        if (!Formatting.IsWindowsClaudeProfile(profile)) throw new ArgumentException("Choose a configured Claude account.");
+        if (!Formatting.IsSafeClaudeProfile(profile)) throw new ArgumentException("Choose a configured Claude account.");
         return Request<JsonElement>(HttpMethod.Post, "api/claude/desktop-profiles/" + Uri.EscapeDataString(profile) + "/open", new { platform = "mac" }, requestKind: DashboardRequestKind.ClaudeOpen);
     }
 
@@ -70,17 +91,65 @@ public sealed class DashboardClient : IDisposable
         return await Decode<T>(second, confirmationProfile, requestKind);
     }
 
-    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body)
+    /// <summary>
+    /// Sign-in and Change: proves the entered address and login before anything is saved. One login (no retry and
+    /// no failure backoff), then GET /api/accounts/settings, a small read that always needs the session and answers
+    /// with the dashboard's refresh settings. A rejected login, an address that does not answer as the dashboard, or
+    /// the time limit throws <see cref="ConnectionCheckException"/> with fixed client text; Cancel throws
+    /// <see cref="OperationCanceledException"/>. Server strings never reach the screen.
+    /// </summary>
+    public async Task Verify(TimeSpan timeout, CancellationToken cancel)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        limit.CancelAfter(timeout);
+        try
+        {
+            using (var login = await Send(HttpMethod.Post, "api/auth/login", new { username = settings.Username, password = settings.Password }, limit.Token))
+                if (!login.IsSuccessStatusCode) throw new ConnectionCheckException(LoginFailure(login.StatusCode));
+            using var read = await Send(HttpMethod.Get, "api/accounts/settings", null, limit.Token);
+            if (read.StatusCode == HttpStatusCode.Unauthorized) throw new ConnectionCheckException("The dashboard accepted the sign-in but did not keep the session. Try again.");
+            if (!read.IsSuccessStatusCode || !IsRefreshSettings(await read.Content.ReadAsStringAsync(limit.Token)))
+                throw new ConnectionCheckException(NotTheDashboard);
+            lastLoginAttempt = DateTimeOffset.MinValue;
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { throw new ConnectionCheckException("The dashboard took too long to answer."); }
+        catch (HttpRequestException) { throw new ConnectionCheckException("Could not reach a dashboard at that address."); }
+    }
+
+    private const string NotTheDashboard = "That address answered, but not as an AI Account Center dashboard.";
+
+    internal static string LoginFailure(HttpStatusCode status) => status switch
+    {
+        HttpStatusCode.Unauthorized => "The dashboard did not accept that username and password.",
+        HttpStatusCode.TooManyRequests => "The dashboard is limiting sign-in attempts. Wait 15 minutes, then try again.",
+        HttpStatusCode.BadRequest => "The dashboard rejected this sign-in. Check that its password sign-in is set up.",
+        HttpStatusCode.Forbidden => "The dashboard rejected a sign-in from this address. Check the address.",
+        HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed => NotTheDashboard,
+        _ when (int)status is >= 300 and < 400 => NotTheDashboard,
+        _ => "The dashboard could not check this sign-in. Try again."
+    };
+
+    private static bool IsRefreshSettings(string body)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            return json.RootElement.ValueKind == JsonValueKind.Object && json.RootElement.TryGetProperty("refreshIntervalSeconds", out var interval) && interval.ValueKind == JsonValueKind.Number;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private Task<HttpResponseMessage> Send(HttpMethod method, string path, object? body, CancellationToken cancel = default)
     {
         var request = new HttpRequestMessage(method, path);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body, Formatting.Json), Encoding.UTF8, "application/json");
-        return SendAndDispose(request);
+        return SendAndDispose(request, cancel);
     }
 
-    private async Task<HttpResponseMessage> SendAndDispose(HttpRequestMessage request)
+    private async Task<HttpResponseMessage> SendAndDispose(HttpRequestMessage request, CancellationToken cancel)
     {
         // These small JSON responses are buffered so HttpClient's timeout covers the body.
-        using (request) return await http.SendAsync(request, HttpCompletionOption.ResponseContentRead);
+        using (request) return await http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancel);
     }
 
     private async Task Login()
@@ -121,6 +190,29 @@ public sealed class DashboardClient : IDisposable
             }
             catch (JsonException) { }
         }
+        if (requestKind == DashboardRequestKind.AntigravityActivation && confirmationProfile is not null && !response.IsSuccessStatusCode)
+        {
+            string? status = null, reason = null;
+            try
+            {
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var root = body.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (root.TryGetProperty("status", out var statusValue) && statusValue.ValueKind == JsonValueKind.String) status = statusValue.GetString();
+                    if (root.TryGetProperty("reason", out var reasonValue) && reasonValue.ValueKind == JsonValueKind.String) reason = reasonValue.GetString();
+                    if (response.StatusCode == HttpStatusCode.Conflict && status == "confirmation-required" && root.TryGetProperty("confirmation", out var proposed))
+                    {
+                        var confirmation = proposed.Deserialize<AntigravityConfirmation>(Formatting.Json);
+                        if (confirmation is not null && confirmation.IsValidFor(confirmationProfile))
+                            throw new AntigravityConfirmationRequiredException(confirmation);
+                        throw new InvalidOperationException("The switch confirmation is invalid. Refresh and try again.");
+                    }
+                }
+            }
+            catch (JsonException) { }
+            throw new InvalidOperationException(AntigravityError(response.StatusCode, status, reason));
+        }
         if (!response.IsSuccessStatusCode)
         {
             string? publicCode = null, publicReason = null;
@@ -150,6 +242,27 @@ public sealed class DashboardClient : IDisposable
         catch (JsonException) { throw new InvalidOperationException("The dashboard returned an unreadable accounts response."); }
     }
 
+    /// <summary>Fixed public messages for Antigravity activation; server strings are never shown.</summary>
+    internal static string AntigravityError(HttpStatusCode status, string? result, string? reason)
+    {
+        if (status == HttpStatusCode.Conflict) switch (result)
+        {
+            case "busy": return reason == "activation-running" ? "Another Antigravity switch is already running. Wait for it to finish." : "Antigravity is busy. Try switching after its work finishes.";
+            case "stale-confirmation": return "The running Antigravity programs or account changed. Activate again to review a new warning.";
+            case "deferred": return "Antigravity deferred the switch. Try again in a moment.";
+            case "unsupported-runtime-probe": return "Antigravity switching is not available on this server yet.";
+            case "confirmation-required": return "The switch confirmation is invalid. Refresh and try again.";
+        }
+        if (status == HttpStatusCode.BadRequest) return result == "invalid-profile" ? "The selected Antigravity account has no valid saved login." : "The dashboard rejected this switch. Refresh and try again.";
+        if (status == HttpStatusCode.InternalServerError) return result switch
+        {
+            "failed-rolled-back" => "The Antigravity switch failed and was rolled back. Refresh before retrying.",
+            "recovery-required" => "The Antigravity switch needs recovery. Open the dashboard before retrying.",
+            _ => "Antigravity account activation failed safely. Refresh before retrying."
+        };
+        return PublicError(status, DashboardRequestKind.General, null, null);
+    }
+
     private static string PublicError(HttpStatusCode status, DashboardRequestKind kind, string? code, string? reason)
     {
         if (kind == DashboardRequestKind.CodexActivation)
@@ -176,6 +289,8 @@ public sealed class DashboardClient : IDisposable
             if (status is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable) return "Claude could not be opened on the selected computer. Check its profile setup and connection.";
             if (status == HttpStatusCode.NotFound) return "The selected Claude profile is not available on that computer.";
         }
+        if (kind == DashboardRequestKind.AntigravityAutoSwitch && status is HttpStatusCode.BadRequest or HttpStatusCode.UnsupportedMediaType or HttpStatusCode.UnprocessableEntity) return "The Antigravity switching settings were rejected. Refresh and try again.";
+        if (kind == DashboardRequestKind.AntigravityAutoSwitch && status == HttpStatusCode.InternalServerError) return "Antigravity automatic switching is not available on this server yet.";
         if (kind == DashboardRequestKind.AutoSwitch && status is HttpStatusCode.BadRequest or HttpStatusCode.UnsupportedMediaType or HttpStatusCode.UnprocessableEntity) return "The automatic switching settings were rejected. Refresh and try again.";
         return status switch
         {
@@ -192,4 +307,10 @@ public sealed class DashboardClient : IDisposable
     }
 
     public void Dispose() { http.Dispose(); loginGate.Dispose(); }
+}
+
+/// <summary>A connection check that failed before anything was saved; the message is fixed client text.</summary>
+public sealed class ConnectionCheckException : Exception
+{
+    public ConnectionCheckException(string message) : base(message) { }
 }

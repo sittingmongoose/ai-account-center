@@ -52,3 +52,46 @@ public static class CodexSwitchFlow
         }
     }
 }
+
+/// <summary>The server's Antigravity switch offer (antigravity-routes.ts activationResponse), validated before display.</summary>
+public sealed class AntigravityConfirmation
+{
+    public string Token { get; set; } = "";
+    public string ExpiresAt { get; set; } = "";
+    public string ProfileId { get; set; } = "";
+    public string HostId { get; set; } = "";
+    public string? Email { get; set; }
+    public string Warning { get; set; } = "";
+    public List<CodexSwitchProcess> Processes { get; set; } = new();
+
+    public static bool IsToken(string? token) => token is { Length: >= 16 and <= 256 } && token.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+
+    public bool IsValidFor(string profileId) => ProfileId == profileId && Formatting.IsSafeId(profileId) && HostId == "ubuntu" && IsToken(Token)
+        && DateTimeOffset.TryParse(ExpiresAt, out _) && Processes is { Count: <= 32 }
+        && Processes.All(process => process is not null && process.Pid > 0 && process.Label is { Length: > 0 and <= 300 } && process.Role is { Length: <= 100 });
+    public bool Expired => !DateTimeOffset.TryParse(ExpiresAt, out var expires) || expires <= DateTimeOffset.UtcNow;
+}
+
+public sealed class AntigravityConfirmationRequiredException : InvalidOperationException
+{
+    public AntigravityConfirmation Confirmation { get; }
+    public AntigravityConfirmationRequiredException(AntigravityConfirmation confirmation) : base("Running Antigravity programs need your confirmation before switching.") => Confirmation = confirmation;
+}
+
+/// <summary>Same rules as Codex: Cancel never sends the token; an expired or changed offer needs a fresh Activate.</summary>
+public static class AntigravitySwitchFlow
+{
+    public static async Task<bool> Run(string profileId, Func<string?, Task> activate, Func<AntigravityConfirmation, Task<bool>> approve)
+    {
+        try { await activate(null); return true; }
+        catch (AntigravityConfirmationRequiredException error)
+        {
+            var proposal = error.Confirmation;
+            if (!proposal.IsValidFor(profileId)) throw new InvalidOperationException("The switch confirmation is invalid. Refresh and try again.");
+            if (!await approve(proposal)) return false;
+            if (proposal.Expired) throw new InvalidOperationException("The confirmation expired. Activate again to review the current programs.");
+            await activate(proposal.Token);
+            return true;
+        }
+    }
+}

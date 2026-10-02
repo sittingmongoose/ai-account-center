@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CCSBar;
@@ -15,6 +16,9 @@ public sealed class CheckReport
     public string CheckedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public bool Passed { get; set; }
     public Dictionary<string, bool> Checks { get; set; } = new();
+    public Dictionary<string, double> Measurements { get; set; } = new();
+    /// <summary>Exception types from offline checks only (fixtures, never connection data).</summary>
+    public Dictionary<string, string> Notes { get; set; } = new();
     public int? Accounts { get; set; }
     public Dictionary<string, int>? Providers { get; set; }
     public bool? AutoSwitchEnabled { get; set; }
@@ -88,14 +92,18 @@ public static class Checks
         var cachedWindow = JsonSerializer.Deserialize<QuotaWindow>("{\"kind\":\"balance\",\"remaining\":42.75,\"status\":\"cached\",\"sampledAt\":\"2026-09-28T13:00:00Z\"}", Formatting.Json)!;
         report.Checks["retained_window_cache_decodes_original_sample_timestamp"] = cachedWindow.Status == "cached" && cachedWindow.SampledAt == "2026-09-28T13:00:00Z" && cachedWindow.Remaining == 42.75;
         report.Checks["cached_window_missing_sample_time_stays_unknown"] = Formatting.WindowSample(new QuotaWindow { Status = "cached" }.SampledAt) == "Sample time unavailable" && Formatting.WindowSample("invalid") == "Sample time unavailable";
-        report.Checks["profile_path_and_uri_injection_rejected"] = !Formatting.IsSafeProfile("../gmail") && !Formatting.IsSafeProfile("gmail?x=1") && !Formatting.IsWindowsClaudeProfile("gmail/../../") && !Formatting.IsWindowsClaudeProfile("arbitrary");
-        report.Checks["four_windows_launch_ids_allowed"] = new[] { "platyr", "gmail", "party", "me" }.All(Formatting.IsWindowsClaudeProfile);
+        report.Checks["profile_path_and_uri_injection_rejected"] = !Formatting.IsSafeProfile("../gmail") && !Formatting.IsSafeProfile("gmail?x=1") && !Formatting.IsSafeClaudeProfile("gmail/../../") && !Formatting.IsSafeClaudeProfile("me?x=1") && !Formatting.IsSafeClaudeProfile("") && !Formatting.IsSafeClaudeProfile(null) && !Formatting.IsSafeClaudeProfile("-leading") && !Formatting.IsSafeClaudeProfile(new string('a', 65));
+        // No allowlist: any id the dashboard reports is launched when it is URI and path safe.
+        report.Checks["claude_launch_ids_follow_the_data"] = new[] { "platyr", "gmail", "party", "me", "claude-example-1", "work_2" }.All(Formatting.IsSafeClaudeProfile);
+        NewBehaviourChecks(report);
         report.Checks["connection_with_path_rejected"] = RejectConnection("http://127.0.0.1:3000/account");
         report.Checks["cleartext_remote_connection_rejected"] = RejectConnection("http://example.com");
         report.Checks["dpapi_round_trip"] = SecureStore.CheckRoundTrip(Encoding.UTF8.GetBytes("test-only-secret-value"));
         await PublicErrorChecks(report);
         await ConfirmationChecks(report);
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
+        ResetPendingChecks(report);
+        await SignInChangeChecks(report);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
@@ -112,9 +120,10 @@ public static class Checks
             var dashboard = await client.Dashboard(false);
             report.Checks["schema_v1"] = dashboard.SchemaVersion == 1;
             report.Checks["account_inventory_present"] = dashboard.Accounts.Count > 0;
-            report.Checks["only_requested_providers"] = dashboard.Accounts.All(a => a.Provider is "codex" or "claude" or "antigravity" or "muse" or "cursor" or "kimi-code" or "qwen" or "zai" or "opencode-go");
+            report.Checks["provider_ids_are_safe"] = dashboard.Accounts.All(a => Formatting.IsSafeId(a.Provider));
             report.Checks["safe_codex_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.CodexProfile is not null).All(a => a.Provider == "codex" && Formatting.IsSafeProfile(a.Capabilities.CodexProfile));
-            report.Checks["safe_claude_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.ClaudeProfileId is not null).All(a => a.Provider == "claude" && Formatting.IsWindowsClaudeProfile(a.Capabilities.ClaudeProfileId));
+            report.Checks["safe_claude_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.ClaudeProfileId is not null).All(a => a.Provider == "claude" && Formatting.IsSafeClaudeProfile(a.Capabilities.ClaudeProfileId));
+            report.Checks["safe_antigravity_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.AntigravityProfileId is not null).All(a => a.Provider == "antigravity" && Formatting.IsSafeId(a.Capabilities.AntigravityProfileId));
             report.Accounts = dashboard.Accounts.Count;
             report.Providers = dashboard.Accounts.GroupBy(a => a.Provider).ToDictionary(g => g.Key, g => g.Count());
             report.AutoSwitchEnabled = dashboard.CodexAutoSwitch.Enabled;
@@ -141,7 +150,7 @@ public static class Checks
         var valid = true;
         var loop = Task.Run(async () =>
         {
-            for (int i = 0; i < 10; i++)
+            for (int i = 0; i < 13; i++)
             {
                 var context = await listener.GetContextAsync();
                 var request = context.Request;
@@ -191,6 +200,27 @@ public static class Checks
                         else { valid &= token.GetString() == "fixture-confirmation-token"; payload = new { success = true }; }
                     }
                 }
+                else if (path == "/api/antigravity/auto-switch")
+                {
+                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    valid &= request.HttpMethod == "PUT" && request.ContentType?.StartsWith("application/json", StringComparison.Ordinal) == true
+                        && json.RootElement.EnumerateObject().Count() == 1 && !json.RootElement.GetProperty("enabled").GetBoolean();
+                    payload = new { enabled = false, thresholdUsedPercent = 95, pollIntervalSeconds = 60, outcome = "disabled", message = "Off", activationInProgress = false };
+                }
+                else if (path == "/api/antigravity/profiles/example-2/activate")
+                {
+                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    valid &= request.HttpMethod == "POST" && json.RootElement.EnumerateObject().Count() == 1 && json.RootElement.GetProperty("hostId").GetString() == "ubuntu";
+                    context.Response.StatusCode = 409;
+                    payload = new { status = "confirmation-required", profileId = "example-2", hostId = "ubuntu", reason = "running-processes", confirmation = AntigravityProposal() };
+                }
+                else if (path == "/api/antigravity/profiles/example-2/confirm")
+                {
+                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    valid &= request.HttpMethod == "POST" && json.RootElement.EnumerateObject().Count() == 2 && json.RootElement.GetProperty("hostId").GetString() == "ubuntu"
+                        && json.RootElement.GetProperty("confirmationToken").GetString() == "fixture_antigravity_token_0001";
+                    payload = new { status = "active", profileId = "example-2", hostId = "ubuntu" };
+                }
                 else
                 {
                     valid &= request.HttpMethod == "POST" && path is "/api/codex/profiles/gmail/activate" or "/api/claude/desktop-profiles/platyr/open";
@@ -214,11 +244,370 @@ public static class Checks
             try { await client.Activate("party", "fixture-session-changed"); }
             catch (InvalidOperationException error) { authRejected = error.Message.Contains("session changed"); }
             valid &= authRejected;
+            valid &= !(await client.SetAntigravityAutoSwitch(enabled: false)).Enabled;
+            int antigravityApprovals = 0;
+            valid &= await AntigravitySwitchFlow.Run("example-2", async token => { await client.ActivateAntigravity("example-2", token); }, confirmation => { antigravityApprovals++; return Task.FromResult(confirmation.Processes.Count == 1 && confirmation.Processes[0].Label == "Antigravity CLI"); });
+            valid &= antigravityApprovals == 1;
             await loop.WaitAsync(TimeSpan.FromSeconds(10));
         }
         catch { valid = false; }
         finally { listener.Stop(); }
         return valid;
+    }
+
+    private static object AntigravityProposal() => new
+    {
+        token = "fixture_antigravity_token_0001", expiresAt = DateTimeOffset.UtcNow.AddMinutes(1).ToString("O"), profileId = "example-2", hostId = "ubuntu",
+        email = "antigravity-2@example.com", warning = "Fixture only.", processes = new[] { new { pid = 4321, role = "cli", label = "Antigravity CLI" } },
+    };
+
+    private static void NewBehaviourChecks(CheckReport report)
+    {
+        report.Checks["max_plan_detection_for_fable"] = new[] { "max", "Max", "max_5x", "Max 20x", "claude_max" }.All(Formatting.IsMaxPlan) && !new[] { "pro", "maximum", "", null }.Any(Formatting.IsMaxPlan);
+        var mixed = new[] { "zai", "newcode", "codex", "claude", "antigravity", "zai" }.Select(provider => new DashboardAccount { Provider = provider }).ToArray();
+        report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
+        var hiddenTop = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"hiddenProviders\":[\"kimi-code\",\"../x\"]}", Formatting.Json)!;
+        var hiddenNested = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{},\"settings\":{\"refreshIntervalSeconds\":60,\"hiddenProviders\":[\"qwen\"]}}", Formatting.Json)!;
+        var hiddenNone = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[],\"codexAutoSwitch\":{}}", Formatting.Json)!;
+        report.Checks["hidden_providers_honoured_when_present"] = hiddenTop.Hidden.SetEquals(new[] { "kimi-code" }) && hiddenNested.Hidden.SetEquals(new[] { "qwen" }) && hiddenNone.Hidden.Count == 0 && !hiddenNone.ReportsHidden && hiddenTop.ReportsHidden;
+        var antigravity = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"isActive\":true,\"capabilities\":{\"antigravityProfileId\":\"a\",\"antigravityHostIds\":[\"ubuntu\"],\"antigravityCanActivate\":true}}],\"codexAutoSwitch\":{},\"antigravityAutoSwitch\":{\"enabled\":true,\"thresholdUsedPercent\":90,\"activationInProgress\":false}}", Formatting.Json)!;
+        report.Checks["antigravity_dto_decoded"] = antigravity.Accounts[0].Capabilities.AntigravityProfileId == "a" && antigravity.Accounts[0].Capabilities.AntigravityCanActivate && antigravity.AntigravityAutoSwitch?.ThresholdUsedPercent == 90 && antigravity.AntigravityAutoSwitch.Enabled;
+        var proposal = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!;
+        var badToken = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!; badToken.Token = "short";
+        var otherHost = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!; otherHost.HostId = "mac";
+        report.Checks["antigravity_confirmation_validated"] = proposal.IsValidFor("example-2") && !proposal.IsValidFor("example-1") && !badToken.IsValidFor("example-2") && !otherHost.IsValidFor("example-2") && !proposal.Expired;
+        int calls = 0; bool tokenSent = false;
+        var cancelled = AntigravitySwitchFlow.Run("example-2", token => { calls++; tokenSent |= token is not null; throw new AntigravityConfirmationRequiredException(proposal); }, _ => Task.FromResult(false)).GetAwaiter().GetResult();
+        report.Checks["antigravity_cancel_never_posts_token"] = !cancelled && calls == 1 && !tokenSent;
+        report.Checks["antigravity_errors_use_fixed_public_messages"] =
+            DashboardClient.AntigravityError(HttpStatusCode.Conflict, "busy", "activation-running") == "Another Antigravity switch is already running. Wait for it to finish."
+            && DashboardClient.AntigravityError(HttpStatusCode.Conflict, "stale-confirmation", null).StartsWith("The running Antigravity programs", StringComparison.Ordinal)
+            && DashboardClient.AntigravityError(HttpStatusCode.BadRequest, "invalid-profile", null) == "The selected Antigravity account has no valid saved login."
+            && DashboardClient.AntigravityError(HttpStatusCode.InternalServerError, "recovery-required", null).Contains("needs recovery", StringComparison.Ordinal)
+            && !DashboardClient.AntigravityError(HttpStatusCode.Conflict, "FIXTURE_ONLY_PRIVATE", "token=fixture").Contains("FIXTURE", StringComparison.Ordinal);
+        var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", Capabilities = new AccountCapabilities { CodexProfile = "b" }, Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
+        var tooltip = Formatting.TrayTooltip(dashboard);
+        report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex: codex-2, 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
+            && Formatting.TrayTooltip(null, configured: false) == "AI Account Center · not connected" && Formatting.TrayTooltip(new AccountDashboard()) == "AI Account Center"
+            && Formatting.TrayTooltip(new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = new string('x', 200) + "@example.com", Windows = { new QuotaWindow { Key = "seven_day", UsedPercent = 1 } } } } }).Length <= 127;
+        report.Checks["value_easing_never_overshoots"] = Motion.NeverOvershoots(Motion.Out) && Motion.NeverOvershoots(Motion.InOut) && !Motion.NeverOvershoots(Motion.Spring);
+        report.Checks["severity_ramp_matches_dashboard"] = Theme.Severity(79.99) == "calm" && Theme.Severity(80) == "warn" && Theme.Severity(95) == "crit" && Theme.Severity(100) == "crit" && Theme.Severity(100.01) == "over" && Theme.Severity(null) == "na" && Theme.Severity(double.NaN) == "na";
+        var dot = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+        report.Checks["percent_is_one_run_two_decimals_max"] = Formatting.Percent(0.0886) == "0" + dot + "09%" && Formatting.Percent(9) == "9%" && Formatting.Percent(25.06101624978289) == "25" + dot + "06%" && Formatting.PercentWith(91, Formatting.Decimals(91)) == "91%";
+        var saved = Formatting.Now;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-10-01T15:00:00Z");
+            Formatting.Now = () => now;
+            report.Checks["reset_short_forms"] = Formatting.ResetShort("2026-10-08T05:00:00Z") == "6d 14h" && Formatting.ResetShort("2026-10-01T20:15:00Z") == Formatting.Clock(DateTimeOffset.Parse("2026-10-01T20:15:00Z")) && Formatting.ResetShort("2026-10-01T14:00:00Z") == "due" && Formatting.ResetShort(null) == ""
+                && Formatting.Relative("2026-10-01T14:59:21Z") == "39s ago" && Formatting.Relative("2026-10-01T14:59:58Z") == "just now"
+                && Formatting.ResetFallbacks("2026-10-01T20:15:00Z").SequenceEqual(new[] { "5h 15m", "5h" }) && Formatting.ResetFallbacks("2026-10-01T15:45:00Z").SequenceEqual(new[] { "45m" })
+                && Formatting.ResetFallbacks("2026-10-08T05:00:00Z").SequenceEqual(new[] { "6d" }) && Formatting.ResetFallbacks("2026-10-01T14:00:00Z").Length == 0;
+        }
+        finally { Formatting.Now = saved; }
+        var temporary = Path.Combine(Path.GetTempPath(), "aac-preferences-check-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            new Preferences { Theme = "dark", Hotkey = false }.Save(temporary);
+            var loaded = Preferences.Load(temporary);
+            File.WriteAllText(temporary, "{\"theme\":\"neon\"}");
+            report.Checks["preferences_round_trip_and_reject_unknown_theme"] = loaded.Mode == ThemeMode.Dark && !loaded.Hotkey && Preferences.Load(temporary).Mode == ThemeMode.Auto && Preferences.Load(temporary + ".missing").Hotkey;
+        }
+        finally { File.Delete(temporary); }
+        bool icons = true;
+        foreach (var data in Icons.Lucide.Values.Concat(Icons.Platform.Values.Select(item => item.Path)).Append(Icons.ApexInk).Append(Icons.ApexMeter))
+        {
+            try { icons &= !Icons.Geometry(data).Bounds.IsEmpty; } catch { icons = false; }
+        }
+        report.Checks["vector_icons_parse"] = icons;
+        report.Checks["tabular_instrument_sans_embedded"] = FixtureRender.FontResolves();
+        try
+        {
+            using var light = TrayIcon.LoadIcon(true, 16); using var dark = TrayIcon.LoadIcon(false, 32);
+            report.Checks["apex_tray_icons_load_light_and_dark"] = light.Width == 16 && dark.Width == 32;
+            // Light-taskbar art is dark ink and dark-taskbar art is light ink (mean luminance of the opaque pixels).
+            static double Ink(bool lightTaskbar)
+            {
+                using var icon = TrayIcon.LoadIcon(lightTaskbar, 16); using var bitmap = icon.ToBitmap();
+                double sum = 0, weight = 0;
+                for (int y = 0; y < bitmap.Height; y++) for (int x = 0; x < bitmap.Width; x++)
+                {
+                    var c = bitmap.GetPixel(x, y); if (c.A < 128) continue;
+                    sum += (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255; weight++;
+                }
+                return weight == 0 ? double.NaN : sum / weight;
+            }
+            var lightInk = Ink(true); var darkInk = Ink(false);
+            report.Measurements["tray_icon_ink_light_taskbar"] = Math.Round(lightInk, 3); report.Measurements["tray_icon_ink_dark_taskbar"] = Math.Round(darkInk, 3);
+            report.Checks["tray_icon_ink_contrasts_with_taskbar"] = lightInk < 0.35 && darkInk > 0.65;
+        }
+        catch (Exception error) { report.Checks["apex_tray_icons_load_light_and_dark"] = false; report.Notes["apex_tray_icons"] = error.GetType().Name + ": " + error.Message; }
+        try
+        {
+            // The plated app icon (exe, window, shortcuts): every Windows shell size, PNG frames.
+            using var stream = TrayIcon.AppIconStream();
+            using var reader = new BinaryReader(stream);
+            reader.ReadUInt16(); var type = reader.ReadUInt16(); var count = reader.ReadUInt16();
+            var sizes = new List<int>();
+            for (int i = 0; i < count; i++) { var width = reader.ReadByte(); reader.ReadBytes(15); sizes.Add(width == 0 ? 256 : width); }
+            report.Checks["app_icon_is_plated_apex_at_shell_sizes"] = type == 1 && new[] { 16, 20, 24, 32, 40, 48, 64, 256 }.All(sizes.Contains);
+        }
+        catch (Exception error) { report.Checks["app_icon_is_plated_apex_at_shell_sizes"] = false; report.Notes["app_icon"] = error.GetType().Name; }
+        report.Checks["menu_font_is_instrument_sans"] = PrivateFonts.Family.Name == "Instrument Sans";
+        var fixture = FixtureRender.LoadFixture(out _);
+        report.Checks["fixture_is_sanitized"] = fixture.Accounts.Count > 0 && fixture.Accounts.All(account => account.Email is null || account.Email.EndsWith("@example.com", StringComparison.Ordinal));
+    }
+
+    /// <summary>F6: after a window's reset, a reading sampled before it is not shown (no number, no fill, never 0%).</summary>
+    private static void ResetPendingChecks(CheckReport report)
+    {
+        var saved = Formatting.Now;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-10-02T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+            Formatting.Now = () => now;
+            const string past = "2026-10-02T11:00:00Z", future = "2026-10-02T15:00:00Z";
+            static QuotaWindow Window(string reset, string? sampled = null) => new() { Key = "five_hour", Label = "5h", Kind = "rate_limit", WindowMinutes = 300, UsedPercent = 37, ResetAt = reset, SampledAt = sampled };
+            var older = new DashboardAccount { Provider = "claude", Plan = "max", SampledAt = "2026-10-02T10:00:00Z" };
+            var newer = new DashboardAccount { Provider = "claude", Plan = "max", SampledAt = "2026-10-02T11:30:00Z" };
+            var unknown = new DashboardAccount { Provider = "claude", Plan = "max" };
+            var resetAt = DateTimeOffset.Parse(past, System.Globalization.CultureInfo.InvariantCulture);
+            report.Checks["reset_passed_with_older_sample_is_pending"] = Formatting.PendingReset(older, Window(past)) == resetAt;
+            report.Checks["reset_passed_with_newer_sample_shows_normally"] = Formatting.PendingReset(newer, Window(past)) is null;
+            report.Checks["reset_in_future_shows_normally"] = Formatting.PendingReset(older, Window(future)) is null && Formatting.PendingReset(unknown, Window(future)) is null;
+            report.Checks["reset_passed_with_unknown_sample_is_pending"] = Formatting.PendingReset(unknown, Window(past)) == resetAt && Formatting.PendingReset(unknown, Window(past, "not-a-time")) == resetAt;
+            report.Checks["reset_pending_reads_window_sample_before_account_sample"] = Formatting.PendingReset(older, Window(past, "2026-10-02T11:45:00Z")) is null && Formatting.PendingReset(newer, Window(past, "2026-10-02T10:30:00Z")) == resetAt;
+            report.Checks["reset_pending_leaves_amounts_unlimited_and_disabled"] = Formatting.PendingReset(older, new QuotaWindow { Key = "credits", Kind = "balance", Remaining = 4, ResetAt = past }) is null
+                && Formatting.PendingReset(older, new QuotaWindow { Key = "x", Unlimited = true, ResetAt = past }) is null && Formatting.PendingReset(older, new QuotaWindow { Key = "y", Enabled = false, ResetAt = past }) is null;
+            var forms = Formatting.PendingForms(resetAt);
+            report.Checks["reset_pending_text_names_the_reset_and_no_number"] = forms[0] == Formatting.ResetAt(resetAt) + " · new reading pending" && forms[0].StartsWith("Reset at ", StringComparison.Ordinal)
+                && forms.All(form => !form.Contains('%')) && Formatting.ResetPendingLong(resetAt).EndsWith(" · new reading pending", StringComparison.Ordinal);
+            report.Notes["reset_pending_text"] = forms[0];
+            var codex = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", SampledAt = "2026-10-02T10:00:00Z", Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080, ResetAt = past } } } } };
+            var pendingTip = Formatting.TrayTooltip(codex);
+            codex.Accounts[0].SampledAt = "2026-10-02T11:30:00Z";
+            report.Checks["tray_tooltip_hides_weekly_percent_after_its_reset"] = pendingTip == "AI Account Center · Codex: codex-2, weekly reset, new reading pending" && Formatting.TrayTooltip(codex) == "AI Account Center · Codex: codex-2, 90.75% weekly left";
+        }
+        finally { Formatting.Now = saved; }
+    }
+
+    /// <summary>
+    /// Sign-in and Change verify before they save. Every case runs the tray's own Change path
+    /// (<see cref="MainWindow.SubmitConnection"/>) against loopback fixture servers, with the connection stored in an
+    /// isolated temporary folder, never the tray's real store. Each failure must leave the stored file's bytes and
+    /// the running client exactly as they were; success must replace both, through the same DPAPI writer.
+    /// </summary>
+    private static async Task SignInChangeChecks(CheckReport report)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "aac-signin-check-" + Guid.NewGuid().ToString("N"));
+        var store = Path.Combine(folder, "connection.dpapi");
+        var firstRunStore = Path.Combine(folder, "first-run", "connection.dpapi");
+        var real = Path.GetFullPath(SecureStore.StateDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var isolated = !Path.GetFullPath(store).StartsWith(real, StringComparison.OrdinalIgnoreCase) && !Path.GetFullPath(firstRunStore).StartsWith(real, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(Path.GetFullPath(store), Path.GetFullPath(SecureStore.SettingsPath), StringComparison.OrdinalIgnoreCase);
+        report.Checks["sign_in_checks_use_an_isolated_store"] = isolated;
+        if (!isolated) return; // never risk the tray's real connection
+        using var fixture = new SignInFixture();
+        using var elsewhere = new NotDashboardFixture();
+        MainWindow? window = null, first = null, third = null;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-old" }, store);
+            var panel = window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            panel.UseConnectionStoreForCheck(store);
+            var bytes = File.ReadAllBytes(store);
+            var liveClient = panel.ClientForCheck; var liveConnection = panel.ConnectionForCheck;
+            bool Unchanged() => liveClient is not null && File.ReadAllBytes(store).AsSpan().SequenceEqual(bytes) && ReferenceEquals(panel.ClientForCheck, liveClient)
+                && ReferenceEquals(panel.ConnectionForCheck, liveConnection) && !Directory.EnumerateFiles(folder, "*.tmp-*", SearchOption.AllDirectories).Any() && !panel.CheckingConnection;
+
+            var refused = await panel.SubmitConnection(ClosedLoopbackOrigin(), "fixture", "fixture-new");
+            report.Notes["sign_in_wrong_address_message"] = refused ?? "";
+            report.Checks["sign_in_wrong_address_keeps_saved_connection_and_client"] = refused == "Could not reach a dashboard at that address. The saved connection was not changed." && Unchanged();
+            var wrongServer = await panel.SubmitConnection(elsewhere.Origin, "fixture", "fixture-new");
+            report.Checks["sign_in_address_that_is_not_the_dashboard_keeps_saved_connection"] = wrongServer == "That address answered, but not as an AI Account Center dashboard. The saved connection was not changed." && Unchanged();
+
+            var rejected = await panel.SubmitConnection(fixture.Origin, "fixture", "wrong-password");
+            report.Notes["sign_in_wrong_login_message"] = rejected ?? "";
+            report.Checks["sign_in_wrong_login_keeps_saved_connection_and_client"] = rejected == "The dashboard did not accept that username and password. The saved connection was not changed." && Unchanged() && fixture.SettingsReads == 0;
+
+            // Cancel while the server is still answering the login: the same call the Cancel button and Escape make.
+            fixture.ArmSlowLogin();
+            var slow = panel.SubmitConnection(fixture.Origin, "fixture-slow", "fixture-new");
+            var arrived = await Task.WhenAny(fixture.SlowLoginArrived, Task.Delay(10000)) == fixture.SlowLoginArrived;
+            var checking = panel.CheckingConnection;
+            panel.CancelConnectionCheck();
+            var cancelled = await slow;
+            report.Notes["sign_in_cancel_message"] = cancelled ?? "";
+            report.Checks["sign_in_cancel_mid_check_keeps_saved_connection_and_client"] = arrived && checking && cancelled == "Connection check cancelled. The saved connection was not changed." && Unchanged();
+
+            fixture.ArmSlowLogin();
+            panel.ConnectionCheckTimeout = TimeSpan.FromMilliseconds(500);
+            var late = await panel.SubmitConnection(fixture.Origin, "fixture-slow", "fixture-new");
+            panel.ConnectionCheckTimeout = TimeSpan.FromSeconds(15);
+            report.Checks["sign_in_timeout_keeps_saved_connection_and_client"] = late == "The dashboard took too long to answer. The saved connection was not changed." && Unchanged();
+
+            var invalid = await panel.SubmitConnection("http://127.0.0.1:3000/account", "fixture", "fixture-new");
+            report.Checks["sign_in_invalid_address_never_contacts_or_saves"] = invalid is not null && Unchanged();
+
+            var before = fixture.Requests.Count;
+            var ok = await panel.SubmitConnection(fixture.Origin, " fixture ", "fixture-new");
+            var saved = SecureStore.Load(store);
+            var sequence = fixture.Requests.Skip(before).ToArray();
+            report.Checks["sign_in_success_logs_in_then_reads_with_the_session"] = sequence.SequenceEqual(new[] { "POST /api/auth/login 200", "GET /api/accounts/settings 200" });
+            report.Checks["sign_in_success_replaces_saved_connection_and_client"] = ok is null && !File.ReadAllBytes(store).AsSpan().SequenceEqual(bytes)
+                && saved is { Username: "fixture", Password: "fixture-new" } && saved.BaseURL == fixture.Origin
+                && panel.ClientForCheck is { } replaced && !ReferenceEquals(replaced, liveClient) && replaced.BaseURL == new Uri(fixture.Origin + "/")
+                && panel.ConnectionForCheck is { Password: "fixture-new" } && !Directory.EnumerateFiles(folder, "*.tmp-*", SearchOption.AllDirectories).Any();
+            report.Checks["sign_in_success_keeps_the_dpapi_json_shape"] = SecureStore.StoredKeysForCheck(store).SequenceEqual(new[] { "baseURL", "username", "password" });
+
+            var verifiedClient = panel.ClientForCheck;
+            var blank = await panel.SubmitConnection(fixture.Origin, "fixture", "");
+            report.Checks["sign_in_blank_password_rechecks_the_saved_password"] = blank is null && SecureStore.Load(store)?.Password == "fixture-new" && !ReferenceEquals(panel.ClientForCheck, verifiedClient);
+
+            // First run: nothing stored yet. A failure saves nothing and leaves no client; success saves and connects.
+            var fresh = first = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            fresh.UseConnectionStoreForCheck(firstRunStore);
+            var firstRejected = await fresh.SubmitConnection(fixture.Origin, "fixture", "wrong-password");
+            var firstRefused = await fresh.SubmitConnection(ClosedLoopbackOrigin(), "fixture", "fixture-new");
+            report.Checks["first_run_failure_saves_nothing"] = firstRejected == "The dashboard did not accept that username and password. Nothing was saved."
+                && firstRefused == "Could not reach a dashboard at that address. Nothing was saved."
+                && !File.Exists(firstRunStore) && fresh.ClientForCheck is null && fresh.ConnectionForCheck is null;
+            var firstOk = await fresh.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
+            report.Checks["first_run_success_saves_the_verified_connection"] = firstOk is null && SecureStore.Load(firstRunStore) is { Password: "fixture-new" } && fresh.ClientForCheck is not null;
+            // Other stored members (a device token from a later pairing) survive a verified Change exactly.
+            var withToken = Path.Combine(folder, "with-token", "connection.dpapi");
+            using (var token = JsonDocument.Parse("{\"deviceToken\":\"fixture-device-token\",\"pairedAt\":1}"))
+                SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-old", Extra = token.RootElement.EnumerateObject().ToDictionary(item => item.Name, item => item.Value.Clone()) }, withToken);
+            var paired = third = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            paired.UseConnectionStoreForCheck(withToken);
+            var pairedFailed = await paired.SubmitConnection(fixture.Origin, "fixture", "wrong-password");
+            var pairedOk = await paired.SubmitConnection(fixture.Origin, "fixture", "fixture-new");
+            var reloaded = SecureStore.Load(withToken);
+            report.Checks["sign_in_change_keeps_other_stored_members_exactly"] = pairedFailed is not null && pairedOk is null && reloaded is { Password: "fixture-new" }
+                && reloaded.Extra?["deviceToken"].GetString() == "fixture-device-token" && reloaded.Extra?["pairedAt"].GetInt32() == 1
+                && SecureStore.StoredKeysForCheck(withToken).OrderBy(key => key, StringComparer.Ordinal).SequenceEqual(new[] { "baseURL", "deviceToken", "pairedAt", "password", "username" });
+            report.Checks["sign_in_requests_reach_only_the_loopback_fixtures"] = fixture.Requests.Count > 0 && fixture.Unexpected == 0;
+        }
+        catch (Exception error)
+        {
+            report.Checks["sign_in_change_checks_completed"] = false;
+            report.Notes["sign_in_change_checks"] = error.GetType().Name + ": " + error.Message;
+        }
+        finally
+        {
+            foreach (var shown in new[] { window, first, third }) if (shown is not null) { shown.AllowClose = true; shown.Close(); }
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
+    private static string ClosedLoopbackOrigin()
+    {
+        var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+        var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+        return $"http://127.0.0.1:{port}";
+    }
+
+    /// <summary>A loopback stand-in for the dashboard's sign-in: POST /api/auth/login accepts only fixture/fixture-new
+    /// and sets an HttpOnly session cookie; GET /api/accounts/settings needs that cookie. "fixture-slow" logins are
+    /// held open until the check cancels or times out.</summary>
+    private sealed class SignInFixture : IDisposable
+    {
+        private readonly HttpListener listener = new();
+        private readonly CancellationTokenSource stop = new();
+        private TaskCompletionSource slowArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string Origin { get; }
+        public List<string> Requests { get; } = new();
+        public int SettingsReads, Unexpected;
+        public Task SlowLoginArrived => slowArrived.Task;
+
+        public SignInFixture()
+        {
+            var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+            var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+            Origin = $"http://127.0.0.1:{port}";
+            listener.Prefixes.Add(Origin + "/"); listener.Start();
+            _ = Task.Run(Loop);
+        }
+
+        public void ArmSlowLogin() => slowArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private async Task Loop()
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                HttpListenerContext context;
+                try { context = await listener.GetContextAsync(); } catch { return; }
+                _ = Task.Run(() => Handle(context));
+            }
+        }
+
+        private async Task Handle(HttpListenerContext context)
+        {
+            try
+            {
+                var request = context.Request; var path = request.Url!.AbsolutePath;
+                int status; object payload;
+                if (request.HttpMethod == "POST" && path == "/api/auth/login")
+                {
+                    using var reader = new StreamReader(request.InputStream);
+                    using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
+                    var username = json.RootElement.GetProperty("username").GetString();
+                    var password = json.RootElement.GetProperty("password").GetString();
+                    if (username == "fixture-slow") { slowArrived.TrySetResult(); await Task.Delay(Timeout.Infinite, stop.Token); return; }
+                    if (username == "fixture" && password == "fixture-new")
+                    {
+                        context.Response.SetCookie(new Cookie("fixture-session", "yes", "/") { HttpOnly = true });
+                        status = 200; payload = new { success = true, username };
+                    }
+                    else { status = 401; payload = new { error = "Invalid credentials" }; }
+                }
+                else if (request.HttpMethod == "GET" && path == "/api/accounts/settings")
+                {
+                    Interlocked.Increment(ref SettingsReads);
+                    if (request.Cookies["fixture-session"]?.Value == "yes") { status = 200; payload = new { refreshIntervalSeconds = 60 }; }
+                    else { status = 401; payload = new { error = "Authentication required" }; }
+                }
+                else { Interlocked.Increment(ref Unexpected); status = 404; payload = new { error = "Not found" }; }
+                lock (Requests) Requests.Add($"{request.HttpMethod} {path} {status}");
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, Formatting.Json);
+                context.Response.StatusCode = status; context.Response.ContentType = "application/json"; context.Response.ContentLength64 = bytes.Length;
+                await context.Response.OutputStream.WriteAsync(bytes); context.Response.Close();
+            }
+            catch { try { context.Response.Abort(); } catch { } }
+        }
+
+        public void Dispose() { stop.Cancel(); try { listener.Stop(); listener.Close(); } catch { } }
+    }
+
+    /// <summary>A loopback server that is not the dashboard: every path is a 404 web page.</summary>
+    private sealed class NotDashboardFixture : IDisposable
+    {
+        private readonly HttpListener listener = new();
+        public string Origin { get; }
+        public NotDashboardFixture()
+        {
+            var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start();
+            var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
+            Origin = $"http://127.0.0.1:{port}";
+            listener.Prefixes.Add(Origin + "/"); listener.Start();
+            _ = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    HttpListenerContext context;
+                    try { context = await listener.GetContextAsync(); } catch { return; }
+                    try
+                    {
+                        var bytes = Encoding.UTF8.GetBytes("<html><body>Not found</body></html>");
+                        context.Response.StatusCode = 404; context.Response.ContentType = "text/html"; context.Response.ContentLength64 = bytes.Length;
+                        await context.Response.OutputStream.WriteAsync(bytes); context.Response.Close();
+                    }
+                    catch { }
+                }
+            });
+        }
+        public void Dispose() { try { listener.Stop(); listener.Close(); } catch { } }
     }
 
     private static CodexSwitchConfirmation Proposal() => new()

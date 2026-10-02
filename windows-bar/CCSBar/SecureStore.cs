@@ -12,7 +12,9 @@ namespace CCSBar;
 public static class SecureStore
 {
     // Intentional compatibility: branding never rewrites the existing private store or DPAPI purpose.
-    public static readonly string StateDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CCS Bar");
+    // AAC_TRAY_STATE_DIR (an absolute path) isolates test runs, such as the single-instance check, from the real store.
+    public static readonly string StateDirectory = Environment.GetEnvironmentVariable("AAC_TRAY_STATE_DIR") is { Length: > 0 } isolated && Path.IsPathFullyQualified(isolated)
+        ? isolated : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CCS Bar");
     public static readonly string SettingsPath = Path.Combine(StateDirectory, "connection.dpapi");
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("CCSBar/dashboard-connection/v1");
 
@@ -23,10 +25,13 @@ public static class SecureStore
     [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CryptUnprotectData(ref DataBlob input, IntPtr description, ref DataBlob entropy, IntPtr reserved, IntPtr prompt, int flags, out DataBlob output);
     [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr data);
 
-    public static ConnectionSettings? Load()
+    public static ConnectionSettings? Load() => Load(SettingsPath);
+
+    /// <summary>The same store at another path: the checks' isolated folders. The tray itself uses <see cref="SettingsPath"/>.</summary>
+    public static ConnectionSettings? Load(string path)
     {
-        if (!File.Exists(SettingsPath)) return null;
-        byte[] decrypted = Transform(File.ReadAllBytes(SettingsPath), false);
+        if (!File.Exists(path)) return null;
+        byte[] decrypted = Transform(File.ReadAllBytes(path), false);
         try
         {
             var settings = JsonSerializer.Deserialize<ConnectionSettings>(decrypted, Formatting.Json);
@@ -36,23 +41,41 @@ public static class SecureStore
         finally { CryptographicOperations.ZeroMemory(decrypted); }
     }
 
-    public static void Save(ConnectionSettings settings)
+    public static void Save(ConnectionSettings settings) => Save(settings, SettingsPath);
+
+    /// <summary>Writes the whole file or nothing (a temporary file, then a replacing move), with the same JSON shape,
+    /// DPAPI scope and entropy whatever the path.</summary>
+    public static void Save(ConnectionSettings settings, string path)
     {
         settings.Validate();
         var bytes = JsonSerializer.SerializeToUtf8Bytes(settings, Formatting.Json);
         try
         {
             var encrypted = Transform(bytes, true);
-            Directory.CreateDirectory(StateDirectory);
-            var temporary = SettingsPath + ".tmp-" + Guid.NewGuid().ToString("N");
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            var temporary = path + ".tmp-" + Guid.NewGuid().ToString("N");
             try
             {
                 File.WriteAllBytes(temporary, encrypted);
-                File.Move(temporary, SettingsPath, true);
+                File.Move(temporary, path, true);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    /// <summary>Checks only, on fixture files: the JSON property names a stored file holds, never their values.</summary>
+    internal static string[] StoredKeysForCheck(string path)
+    {
+        byte[] decrypted = Transform(File.ReadAllBytes(path), false);
+        try
+        {
+            using var json = JsonDocument.Parse(decrypted);
+            var keys = new System.Collections.Generic.List<string>();
+            foreach (var property in json.RootElement.EnumerateObject()) keys.Add(property.Name);
+            return keys.ToArray();
+        }
+        finally { CryptographicOperations.ZeroMemory(decrypted); }
     }
 
     internal static bool CheckRoundTrip(byte[] plaintext)
