@@ -17,6 +17,22 @@ import type {
   AccountAnalyticsQuery,
 } from './account-analytics-types';
 
+const ACTIVITY_PROVIDERS: readonly AccountAnalyticsActivityProvider[] = [
+  'claude',
+  'codex',
+  'omp',
+  'muse',
+  'zcode',
+];
+
+const ACTIVITY_PROVIDER_LABELS: Record<AccountAnalyticsActivityProvider, string> = {
+  claude: 'Claude Code logs',
+  codex: 'Codex logs',
+  omp: 'OMP logs',
+  muse: 'Muse logs',
+  zcode: 'zcode logs',
+};
+
 /**
  * Pure projection of the retained local CLI snapshot into the Analytics
  * activity block: totals, per-type cost estimates, local-day buckets, the
@@ -24,9 +40,9 @@ import type {
  * anomaly rules. Nothing here reads disk or attributes activity to accounts.
  */
 
-/** One local CLI source as the activity reader retains it. */
+/** One CLI source as the activity reader retains it (all hosts merged). */
 export interface SourceData {
-  provider: 'claude' | 'codex';
+  provider: AccountAnalyticsActivityProvider;
   data: UsageWorkerResult[];
   fetchedAt: string;
 }
@@ -57,7 +73,14 @@ const RATE_KEYS = [
   'cacheReadPerMillion',
   'source',
 ] as const;
-const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set(['claude', 'codex', 'droid']);
+const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([
+  'claude',
+  'codex',
+  'droid',
+  'omp',
+  'muse',
+  'zcode',
+]);
 const MAX_SESSION_SAMPLE = 50;
 const MAX_NAMED_DAY_MODELS = 12;
 const OTHER_MODELS = 'Other models';
@@ -67,6 +90,8 @@ export interface AccountAnalyticsProjectionOptions {
   tz?: string;
   /** Pricing lookup; memoised per model for one projection. */
   pricing?: AccountAnalyticsPricingLookup;
+  /** Per-tool, per-host collection states; empty when unknown. */
+  sources?: AccountAnalyticsActivity['sources'];
 }
 
 function finite(value: unknown): number {
@@ -263,9 +288,7 @@ export function accountAnalyticsActivityCoverage(
       }
   return {
     oldestHourAt: Number.isFinite(oldest) ? oldest : null,
-    providersWithActivity: (['claude', 'codex'] as const).filter((provider) =>
-      active.has(provider)
-    ),
+    providersWithActivity: ACTIVITY_PROVIDERS.filter((provider) => active.has(provider)),
   };
 }
 
@@ -288,7 +311,7 @@ export function projectAccountAnalyticsActivity(
   const tz = options.tz ?? 'UTC';
   const base: AccountAnalyticsActivity = {
     status,
-    scope: 'ubuntu-local-cli',
+    scope: 'multi-host-cli',
     timezone: tz,
     accountAttribution: 'unavailable',
     costBasis: 'estimated-api-equivalent',
@@ -302,6 +325,7 @@ export function projectAccountAnalyticsActivity(
     byDayModel: [],
     sessions: null,
     anomalies: null,
+    sources: options.sources ?? [],
   };
   if (query.account !== 'all')
     return {
@@ -317,10 +341,9 @@ export function projectAccountAnalyticsActivity(
     return {
       ...base,
       status: status === 'loading' ? 'loading' : 'unavailable',
-      message:
-        query.provider !== 'all' && query.provider !== 'claude' && query.provider !== 'codex'
-          ? 'This provider reports quota and balance observations; local token and session history is not available.'
-          : message,
+      message: (ACTIVITY_PROVIDERS as readonly string[]).includes(query.provider)
+        ? message
+        : 'This provider reports quota and balance observations; token and session history is not available.',
     };
   base.fetchedAt = selected.map((source) => source.fetchedAt).sort()[0] ?? null;
   if (tz !== 'UTC' && hasPartialHourOffset(tz, from, to))
@@ -454,7 +477,7 @@ export function projectAccountAnalyticsActivity(
     merge(combined, sourceTotals);
     base.providers.push({
       provider: source.provider,
-      label: source.provider === 'claude' ? 'Claude Code logs' : 'Codex logs',
+      label: ACTIVITY_PROVIDER_LABELS[source.provider],
       totals: publish(sourceTotals),
       usageEvents,
       sessionCount: sessions.size,

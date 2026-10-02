@@ -88,7 +88,21 @@ export interface AccountAnalyticsModelRates {
   source: ModelPricingSource;
 }
 
-export type AccountAnalyticsActivityProvider = 'claude' | 'codex';
+export type AccountAnalyticsActivityProvider = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
+
+export type AccountAnalyticsSourceState = 'ok' | 'cached' | 'unavailable' | 'not_installed';
+
+export interface AccountAnalyticsSource {
+  tool: AccountAnalyticsActivityProvider | 'antigravity' | 'cursor';
+  host: 'ubuntu' | 'mac' | 'windows';
+  state: AccountAnalyticsSourceState;
+  /** Last successful scan, null when never scanned. */
+  lastScanAt: string | null;
+  /** Usage events retained from this tool and host. */
+  rowCount: number;
+  /** Fixed reason, e.g. why a tool has no local usage log. */
+  detail: string | null;
+}
 
 export interface AccountAnalyticsSessionRow extends AccountAnalyticsActivityTotals {
   /** First 16 hex of SHA-256('aac-session-v1:' + provider + ':' + sessionId); stable and not reversible. */
@@ -132,7 +146,7 @@ export interface AccountAnalyticsAnomalies {
 
 export interface AccountAnalyticsActivity {
   status: 'ok' | 'cached' | 'loading' | 'unavailable';
-  scope: 'ubuntu-local-cli';
+  scope: 'multi-host-cli';
   /** The zone used for `byDay`, `byDayModel` and anomaly dates. `byHour[].hour` stays a UTC instant. */
   timezone: string;
   accountAttribution: 'unavailable';
@@ -184,6 +198,8 @@ export interface AccountAnalyticsActivity {
     truncated: boolean;
   } | null;
   anomalies: AccountAnalyticsAnomalies | null;
+  /** One row per tool and host, in tool/host order; fixed entries explain missing tools. */
+  sources: AccountAnalyticsSource[];
 }
 
 /** Internal facts the activity reader passes to the analytics service; never serialised. */

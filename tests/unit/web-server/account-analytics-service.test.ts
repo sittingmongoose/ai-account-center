@@ -24,7 +24,7 @@ const QUERY: AccountAnalyticsQuery = {
 };
 const noActivity: AccountAnalyticsActivity = {
   status: 'unavailable',
-  scope: 'ubuntu-local-cli',
+  scope: 'multi-host-cli',
   timezone: 'UTC',
   accountAttribution: 'unavailable',
   costBasis: 'estimated-api-equivalent',

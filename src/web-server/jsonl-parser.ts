@@ -32,6 +32,12 @@ export interface RawUsageEntry {
   projectPath: string;
   version?: string;
   target?: string;
+  /**
+   * Logged USD cost for this entry (OMP `usage.cost.total`), present only
+   * when nonzero. A logged 0 is "not logged", never free, and falls through
+   * to the price resolver.
+   */
+  costUsd?: number;
 }
 
 /** Internal structure matching JSONL assistant entries */

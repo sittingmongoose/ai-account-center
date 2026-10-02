@@ -2,6 +2,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { getAccountDashboard } from './account-dashboard-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import {
+  fixedAnalyticsSourceEntries,
   getAccountAnalyticsActivity,
   type AccountAnalyticsActivityResult,
 } from './account-analytics-activity';
@@ -69,7 +70,7 @@ const MAX_POINTS_PER_WINDOW = 249;
 function unavailableActivity(message: string, tz: string): AccountAnalyticsActivity {
   return {
     status: 'unavailable',
-    scope: 'ubuntu-local-cli',
+    scope: 'multi-host-cli',
     timezone: tz,
     accountAttribution: 'unavailable',
     costBasis: 'estimated-api-equivalent',
@@ -83,6 +84,7 @@ function unavailableActivity(message: string, tz: string): AccountAnalyticsActiv
     byDayModel: [],
     sessions: null,
     anomalies: null,
+    sources: fixedAnalyticsSourceEntries(),
   };
 }
 

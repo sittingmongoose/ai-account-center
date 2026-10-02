@@ -65,7 +65,7 @@ function account(id: string, email = `${id}@example.com`): DashboardAccount {
 }
 const NO_ACTIVITY: AccountAnalyticsActivity = {
   status: 'unavailable',
-  scope: 'ubuntu-local-cli',
+  scope: 'multi-host-cli',
   timezone: 'UTC',
   accountAttribution: 'unavailable',
   costBasis: 'estimated-api-equivalent',

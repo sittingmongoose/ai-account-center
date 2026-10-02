@@ -9,12 +9,19 @@ import {
   parseCodexNativeUsageLine,
   type CodexNativeParserState,
 } from './codex-native-usage-collector';
+import {
+  isOmpSessionFilename,
+  ompSessionIdForFile,
+  parseOmpUsageLine,
+} from './omp-native-usage-collector';
+import { museSessionIdForFile, parseMuseUsageLine } from './muse-native-usage-collector';
+import { queryLocalZcodeUsage } from './zcode-native-usage-collector';
 import { getModelPricing, type ModelPricing } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
 import type { ModelBreakdown } from './types';
 import type { UsageWorkerRequest, UsageWorkerResult } from './worker-client';
 
-interface CompactEntry {
+export interface CompactEntry {
   entry: RawUsageEntry;
   events: number;
 }
@@ -55,6 +62,18 @@ const MAX_TOTAL_ROWS = 100_000;
 
 function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
+
+function wantedFile(kind: string, name: string): boolean {
+  if (kind === 'claude') return name.endsWith('.jsonl');
+  if (kind === 'codex') return name.endsWith('.jsonl') && name.startsWith('rollout-');
+  // OMP session files (`<ts>_<uuid>[.jsonl]`, `__advisor.jsonl`, `SubAgent/`
+  // records); Muse keeps `session.jsonl` per session and subagent.
+  if (kind === 'omp') return name.endsWith('.jsonl') || isOmpSessionFilename(name);
+  if (kind === 'muse') return name === 'session.jsonl';
+  return false;
 }
 async function filesUnder(
   root: string,
@@ -97,12 +116,7 @@ async function filesUnder(
           if (current.depth >= maxDepth || pending.length + visitedDirectories >= maxDirectories) {
             issues.failed++;
           } else pending.push({ directory: file, depth: current.depth + 1 });
-        } else if (
-          item.isFile() &&
-          item.name.endsWith('.jsonl') &&
-          (kind === 'claude' || item.name.startsWith('rollout-'))
-        )
-          result.push(file);
+        } else if (item.isFile() && wantedFile(kind, item.name)) result.push(file);
       }
     } catch {
       issues.failed++;
@@ -206,6 +220,8 @@ function addEntry(rows: Map<string, CompactEntry>, entry: RawUsageEntry, minDate
       'cacheReadTokens',
     ] as const)
       existing.entry[field] += entry[field];
+    if (entry.costUsd !== undefined)
+      existing.entry.costUsd = (existing.entry.costUsd ?? 0) + entry.costUsd;
     existing.entry.timestamp =
       existing.entry.timestamp > timestamp ? existing.entry.timestamp : timestamp;
     existing.events++;
@@ -221,12 +237,15 @@ function rowKey(row: CompactEntry): string {
 }
 
 /** Pricing is stable for one bounded read, so resolve each native model once. */
-function aggregateRows(
+export function aggregateRows(
   rows: CompactEntry[],
   source: string
 ): Pick<UsageWorkerResult, 'hourly' | 'session'> {
   interface Bucket {
     models: Map<string, ModelBreakdown>;
+    /** OMP logged cost per model; those tokens are not priced again. */
+    loggedCost: Map<string, number>;
+    unlogged: Map<string, { input: number; output: number; write: number; read: number }>;
     requestCount: number;
     firstActivity: string;
     lastActivity: string;
@@ -236,15 +255,18 @@ function aggregateRows(
   const hours = new Map<string, Bucket>();
   const sessions = new Map<string, Bucket>();
   const pricing = new Map<string, ModelPricing>();
+  const blankBucket = (): Bucket => ({
+    models: new Map(),
+    loggedCost: new Map(),
+    unlogged: new Map(),
+    requestCount: 0,
+    firstActivity: '',
+    lastActivity: '',
+    versions: new Set(),
+  });
   const add = (map: Map<string, Bucket>, key: string, row: CompactEntry): void => {
     const entry = row.entry;
-    const bucket: Bucket = map.get(key) ?? {
-      models: new Map(),
-      requestCount: 0,
-      firstActivity: '',
-      lastActivity: '',
-      versions: new Set(),
-    };
+    const bucket: Bucket = map.get(key) ?? blankBucket();
     const provider = normalizeUsageProvider(entry.target);
     const modelKey = `${provider ?? ''}\0${entry.model}`;
     const model = bucket.models.get(modelKey) ?? {
@@ -263,6 +285,16 @@ function aggregateRows(
       'cacheReadTokens',
     ] as const)
       model[field] += entry[field];
+    if (entry.costUsd !== undefined && entry.costUsd > 0) {
+      bucket.loggedCost.set(modelKey, (bucket.loggedCost.get(modelKey) ?? 0) + entry.costUsd);
+    } else {
+      const pending = bucket.unlogged.get(modelKey) ?? { input: 0, output: 0, write: 0, read: 0 };
+      pending.input += entry.inputTokens;
+      pending.output += entry.outputTokens;
+      pending.write += entry.cacheCreationTokens;
+      pending.read += entry.cacheReadTokens;
+      bucket.unlogged.set(modelKey, pending);
+    }
     bucket.models.set(modelKey, model);
     bucket.requestCount += row.events;
     if (entry.timestamp > bucket.lastActivity) bucket.lastActivity = entry.timestamp;
@@ -285,11 +317,14 @@ function aggregateRows(
         rates = getModelPricing(model.modelName, { provider: model.provider });
         pricing.set(key, rates);
       }
+      // Logged OMP cost wins where present; the rest prices at list rates.
+      const unlogged = bucket.unlogged.get(key) ?? { input: 0, output: 0, write: 0, read: 0 };
       model.cost =
-        (model.inputTokens / 1_000_000) * rates.inputPerMillion +
-        (model.outputTokens / 1_000_000) * rates.outputPerMillion +
-        (model.cacheCreationTokens / 1_000_000) * rates.cacheCreationPerMillion +
-        (model.cacheReadTokens / 1_000_000) * rates.cacheReadPerMillion;
+        (bucket.loggedCost.get(key) ?? 0) +
+        (unlogged.input / 1_000_000) * rates.inputPerMillion +
+        (unlogged.output / 1_000_000) * rates.outputPerMillion +
+        (unlogged.write / 1_000_000) * rates.cacheCreationPerMillion +
+        (unlogged.read / 1_000_000) * rates.cacheReadPerMillion;
     }
     modelBreakdowns.sort((left, right) => right.cost - left.cost);
     return {
@@ -326,7 +361,7 @@ async function readBatch(
   file: string,
   value: Checkpoint,
   stats: fs.Stats,
-  kind: 'claude' | 'codex',
+  kind: ActivityKind,
   options: AccountActivityScanOptions,
   deadline: number
 ): Promise<void> {
@@ -351,16 +386,23 @@ async function readBatch(
     end: end - 1,
     highWaterMark: 1024 * 1024,
   });
+  const fileSessionId =
+    kind === 'omp' ? ompSessionIdForFile(file) : kind === 'muse' ? museSessionIdForFile(file) : '';
   const consume = (buffer: Buffer): void => {
     const line = buffer.toString('utf8');
     // Avoid parsing conversations/prompts: only actual native usage and the
     // Codex metadata required to interpret its cumulative counters are read.
-    const entry =
-      kind === 'codex'
-        ? parseCodexNativeUsageLine(line, value.state)
-        : /"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line)
-          ? parseUsageEntry(line, '')
-          : null;
+    let entry: RawUsageEntry | null = null;
+    if (kind === 'codex') entry = parseCodexNativeUsageLine(line, value.state);
+    else if (kind === 'claude') {
+      if (/"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line))
+        entry = parseUsageEntry(line, '');
+    } else if (kind === 'omp') {
+      if (/"type"\s*:\s*"message"/.test(line) && /"usage"\s*:/.test(line))
+        entry = parseOmpUsageLine(line, fileSessionId);
+    } else if (kind === 'muse') {
+      if (line.includes('model_completed')) entry = parseMuseUsageLine(line, fileSessionId);
+    }
     if (entry && !addEntry(rows, entry, options.minDate)) value.skippedLines++;
   };
   try {
@@ -427,39 +469,183 @@ async function readBatch(
   }
 }
 
+interface ZcodeCache {
+  version: 1;
+  minDate: number;
+  fingerprints: Record<string, { size: number; mtimeMs: number }>;
+  rows: CompactEntry[];
+}
+
+function zcodeCachePath(directory: string, dbPath: string): string {
+  return path.join(directory, `${hash(`zcode:${dbPath}`)}.json`);
+}
+
+function loadZcodeCache(cache: string, minDate: number): ZcodeCache {
+  try {
+    if (fs.statSync(cache).size > MAX_CACHE_BYTES)
+      return { version: 1, minDate, fingerprints: {}, rows: [] };
+    const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as ZcodeCache;
+    if (
+      value.version !== 1 ||
+      !Number.isFinite(value.minDate) ||
+      value.minDate > minDate ||
+      !value.fingerprints ||
+      typeof value.fingerprints !== 'object' ||
+      !Array.isArray(value.rows) ||
+      value.rows.length > MAX_TOTAL_ROWS
+    )
+      return { version: 1, minDate, fingerprints: {}, rows: [] };
+    value.rows = value.rows.filter((row) => Date.parse(row.entry.timestamp) >= minDate);
+    return value;
+  } catch {
+    return { version: 1, minDate, fingerprints: {}, rows: [] };
+  }
+}
+
+function saveZcodeCache(cache: string, value: ZcodeCache): void {
+  const body = JSON.stringify({ ...value, rows: value.rows.slice(0, MAX_TOTAL_ROWS) });
+  if (Buffer.byteLength(body) > MAX_CACHE_BYTES)
+    throw new CCSError('Native checkpoint exceeds limit');
+  const temporary = `${cache}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, body, { mode: 0o600 });
+  fs.renameSync(temporary, cache);
+  fs.chmodSync(cache, 0o600);
+}
+
+async function collectZcodeAccountActivity(
+  dbPath: string,
+  options: AccountActivityScanOptions,
+  directory: string,
+  deadline: number
+): Promise<UsageWorkerResult> {
+  const cache = zcodeCachePath(directory, dbPath);
+  const cached = loadZcodeCache(cache, options.minDate);
+  let failed = 0;
+  let truncated = false;
+  if (Date.now() < deadline) {
+    try {
+      const fresh = queryLocalZcodeUsage(dbPath, options.minDate, cached.fingerprints, {
+        timeoutMs: Math.max(1000, deadline - Date.now()),
+      });
+      if (fresh.state === 'not_installed') throw new CCSError('Native log sources are unavailable');
+      truncated = fresh.truncated;
+      cached.fingerprints = fresh.fingerprints;
+      const live = new Set(Object.keys(fresh.fingerprints));
+      const rows = cached.rows.filter(
+        (row) =>
+          live.has((row.entry as { fileKey?: string }).fileKey ?? '') &&
+          Date.parse(row.entry.timestamp) >= options.minDate
+      );
+      for (const helperRow of fresh.rows) {
+        const timestamp = `${helperRow.h.replace(' ', 'T')}:00Z`;
+        if (Date.parse(timestamp) < options.minDate) continue;
+        const entry: RawUsageEntry & { fileKey: string } = {
+          inputTokens: helperRow.i,
+          outputTokens: helperRow.o,
+          cacheCreationTokens: helperRow.cw,
+          cacheReadTokens: helperRow.cr,
+          model: helperRow.m,
+          sessionId: '',
+          timestamp,
+          projectPath: '',
+          target: helperRow.p ?? 'zcode',
+          fileKey: helperRow.f,
+        };
+        // Helper rows are already per model and hour; merge duplicates.
+        const key = `${timestamp.slice(0, 13)}\0${entry.model}\0\0${entry.target ?? ''}`;
+        const existing = rows.find(
+          (row) =>
+            `${row.entry.timestamp.slice(0, 13)}\0${row.entry.model}\0${row.entry.sessionId}\0${row.entry.target ?? ''}` ===
+            key
+        );
+        if (existing) {
+          existing.entry.inputTokens += entry.inputTokens;
+          existing.entry.outputTokens += entry.outputTokens;
+          existing.entry.cacheCreationTokens += entry.cacheCreationTokens;
+          existing.entry.cacheReadTokens += entry.cacheReadTokens;
+          existing.events += helperRow.n;
+        } else if (rows.length < MAX_TOTAL_ROWS) {
+          rows.push({ entry, events: helperRow.n });
+        } else failed++;
+      }
+      cached.rows = rows;
+      cached.minDate = options.minDate;
+      saveZcodeCache(cache, cached);
+    } catch (error) {
+      if (error instanceof CCSError) throw error;
+      failed++;
+    }
+  }
+  if (!cached.rows.length && failed > 0) throw new CCSError('Native log sources could not be read');
+  const { hourly, session } = aggregateRows(cached.rows, 'zcode-native');
+  return {
+    daily: [],
+    monthly: [],
+    hourly,
+    session,
+    eventCount: cached.rows.reduce((sum, row) => sum + row.events, 0),
+    scan: {
+      complete: !truncated && failed === 0,
+      completedFiles: failed === 0 ? 1 : 0,
+      totalFiles: 1,
+      skippedLines: 0,
+      failedFiles: failed,
+      readBytes: 0,
+      unfinishedFiles: 0,
+    },
+  };
+}
+
 /** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
 export async function collectAccountActivity(
-  request: Extract<UsageWorkerRequest, { kind: 'claude' | 'codex' }>,
+  request: Extract<UsageWorkerRequest, { kind: ActivityKind }>,
   options: AccountActivityScanOptions
 ): Promise<UsageWorkerResult> {
-  const root =
-    request.kind === 'claude' ? request.projectsDir : path.join(request.codexHome, 'sessions');
+  const roots =
+    request.kind === 'claude'
+      ? [request.projectsDir]
+      : request.kind === 'codex'
+        ? [path.join(request.codexHome, 'sessions')]
+        : request.kind === 'omp'
+          ? request.roots
+          : request.kind === 'muse'
+            ? [request.sessionsDir]
+            : [];
   const directory = path.join(
     options.cacheDir,
     'account-activity-v1',
-    hash(`${request.kind}:${root}`)
+    hash(`${request.kind}:${roots.join('\n')}`)
   );
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
   const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
+  if (request.kind === 'zcode')
+    return collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
   const issues = { failed: 0 };
   const files: Array<{ file: string; stats: fs.Stats }> = [];
-  for (const file of await filesUnder(
-    root,
-    request.kind,
-    issues,
-    deadline,
-    options.traversalLimits
-  )) {
-    if (Date.now() >= deadline) {
-      issues.failed++;
-      break;
+  for (const root of roots) {
+    for (const file of await filesUnder(
+      root,
+      request.kind,
+      issues,
+      deadline,
+      options.traversalLimits
+    )) {
+      if (Date.now() >= deadline) {
+        issues.failed++;
+        break;
+      }
+      try {
+        files.push({ file, stats: fs.statSync(file) });
+      } catch {
+        issues.failed++;
+      }
+      if (files.length >= MAX_FILES) {
+        issues.failed++;
+        break;
+      }
     }
-    try {
-      files.push({ file, stats: fs.statSync(file) });
-    } catch {
-      issues.failed++;
-    }
+    if (files.length >= MAX_FILES || Date.now() >= deadline) break;
   }
   if (!files.length && issues.failed) throw new CCSError('Native log sources are unavailable');
   files.sort(
@@ -494,7 +680,14 @@ export async function collectAccountActivity(
     // Keep already-checkpointed records available even after the scan budget.
     // Loading every remaining small cache is bounded by MAX_FILES/MAX_TOTAL_ROWS.
   }
-  const source = request.kind === 'codex' ? 'codex-native' : 'custom-parser';
+  const source =
+    request.kind === 'codex'
+      ? 'codex-native'
+      : request.kind === 'omp'
+        ? 'omp-native'
+        : request.kind === 'muse'
+          ? 'muse-native'
+          : 'custom-parser';
   if (!rows.length && failed >= files.length && failed > 0)
     throw new CCSError('Native log sources could not be read');
   const { hourly, session } = aggregateRows(rows, source);

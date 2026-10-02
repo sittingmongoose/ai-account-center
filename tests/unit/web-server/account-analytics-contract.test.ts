@@ -1196,6 +1196,7 @@ describe('analytics contract: providers from data', () => {
 
   it('computes coverage from the retained snapshot for every provider', async () => {
     const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
       now: () => NOW,
       scope: () => `${ccsHome}/coverage`,
       responseBudgetMs: 100,
@@ -1236,7 +1237,7 @@ describe('analytics contract: truthfulness kept', () => {
       { tz: 'America/New_York' }
     );
     expect(activity.accountAttribution).toBe('unavailable');
-    expect(activity.scope).toBe('ubuntu-local-cli');
+    expect(activity.scope).toBe('multi-host-cli');
     expect(activity.costBasis).toBe('estimated-api-equivalent');
     const filtered = project(
       [
