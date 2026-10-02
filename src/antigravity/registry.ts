@@ -57,7 +57,9 @@ interface DirectoryIdentity {
 }
 
 export class PrivateStorageError extends Error {
-  constructor(public readonly code: 'busy' | 'unsafe' | 'corrupt' | 'recovery-required') {
+  constructor(
+    public readonly code: 'busy' | 'unsafe' | 'corrupt' | 'recovery-required' | 'missing'
+  ) {
     super(`Antigravity private storage: ${code}.`);
     this.name = 'PrivateStorageError';
   }
@@ -768,5 +770,84 @@ export class AntigravityProfileRegistry {
     const state = this.readState();
     state.transaction = null;
     this.publish(state);
+  }
+
+  /** True while a switch, import or remove holds the transaction lock (stale or not). */
+  lockPresent(): boolean {
+    try {
+      fs.lstatSync(path.join(this.profilesDirectory, '.transaction-lock'));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw new PrivateStorageError('unsafe');
+    }
+  }
+
+  /**
+   * Remove one saved profile snapshot (CONTRACT-registry-lifecycle 6.7): a new
+   * registry revision without it, then its own credential generations. Must be
+   * called under withLock. The native login, shared history and every other
+   * profile stay untouched; the registry's last runtime-verified active profile
+   * and a profile an unresolved switch names are refused. Credential files that
+   * cannot be proven ours (wrong name, owner, mode or type) are left in place.
+   */
+  removeProfile(profileId: string): { leftInPlace: number } {
+    assertProfileId(profileId);
+    if (!this.lockHeld) throw new PrivateStorageError('unsafe');
+    const state = this.readState();
+    if (!state.profiles.some((profile) => profile.id === profileId))
+      throw new PrivateStorageError('missing');
+    if (state.transaction) throw new PrivateStorageError('recovery-required');
+    if (state.active?.profileId === profileId) throw new PrivateStorageError('unsafe');
+    state.profiles = state.profiles.filter((profile) => profile.id !== profileId);
+    this.publish(state);
+    return { leftInPlace: this.deleteProfileFiles(profileId) };
+  }
+
+  private deleteProfileFiles(profileId: string): number {
+    let left = 0;
+    try {
+      assertDirectory(this.instancesDirectory, this.instancesIdentity);
+    } catch {
+      return 1;
+    }
+    const profileDirectory = path.join(this.instancesDirectory, profileId);
+    const hostDirectory = path.join(profileDirectory, 'ubuntu');
+    let entries: string[] = [];
+    try {
+      ownedPrivateDirectory(profileDirectory);
+      ownedPrivateDirectory(hostDirectory);
+      entries = fs.readdirSync(hostDirectory);
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 0 : 1;
+    }
+    for (const name of entries) {
+      const filename = path.join(hostDirectory, name);
+      try {
+        const stat = fs.lstatSync(filename);
+        if (
+          !CREDENTIAL_FILE.test(name) ||
+          !stat.isFile() ||
+          stat.isSymbolicLink() ||
+          stat.size > MAX_NATIVE_BYTES ||
+          (process.platform !== 'win32' &&
+            ((stat.mode & 0o777) !== 0o600 || (process.getuid && stat.uid !== process.getuid())))
+        ) {
+          left += 1;
+          continue;
+        }
+        fs.unlinkSync(filename);
+      } catch {
+        left += 1;
+      }
+    }
+    for (const directory of [hostDirectory, profileDirectory]) {
+      try {
+        fs.rmdirSync(directory);
+      } catch {
+        /* Not empty: whatever is left stays for review. */
+      }
+    }
+    return left;
   }
 }
