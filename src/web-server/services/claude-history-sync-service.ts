@@ -73,6 +73,9 @@ const skipped = (reason: string): HistoryResult => ({ status: 'skipped', reason,
  * policy, repeated click or server restart cannot clear an uncertain append.
  */
 export function claudeHistoryOpenHeld(profileId: string, platform: 'mac' | 'windows'): boolean {
+  // Optional history copying supports only these managed profiles. Other Mac
+  // launchers never arm a history transaction and must retain ordinary Open.
+  if (!['platyr', 'gmail', 'party', 'me'].includes(profileId)) return false;
   try {
     return loadCore().pendingMarkerState(getCcsDir(), profileId, platform).held;
   } catch {

@@ -608,6 +608,7 @@ describe('identity-bound Claude Desktop live usage', () => {
 
   it('keeps valid live quota available when protected cache storage cannot be written', async () => {
     fs.mkdirSync(path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache'), { mode: 0o755 });
+    fs.chmodSync(path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache'), 0o755);
     const current = await getLiveClaudeDesktopUsage('gmail');
     expect(current?.windows[0].usedPercent).toBe(0);
     expect(current?.windows[1].resetAt).toBe('2026-10-02T02:59:59.716Z');

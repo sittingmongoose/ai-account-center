@@ -87,6 +87,7 @@ describe('explicit own private state file', () => {
       },
       (file: string) => {
         fs.writeFileSync(file, '{}', { mode: 0o644 });
+        fs.chmodSync(file, 0o644);
       },
       (file: string) => {
         fs.writeFileSync(file, 'x'.repeat(16_385), { mode: 0o600 });
