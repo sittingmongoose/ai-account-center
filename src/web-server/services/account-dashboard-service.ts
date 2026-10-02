@@ -39,7 +39,10 @@ import type {
   AccountDashboard,
   ClaudeDashboardPlatform,
   DashboardAccount,
+  DashboardServerInfo,
 } from './account-dashboard-types';
+import { withAccountState, withThresholdUsedPercent } from './account-dashboard-state';
+import { getDashboardServerInfo } from './dashboard-server-info';
 
 import {
   ADDITIONAL_PROVIDERS,
@@ -66,7 +69,7 @@ export interface AccountDashboardDeps {
   getCachedLiveClaudeUsage?: (profileId: string) => Promise<ClaudeDesktopLiveUsage | null>;
   getAdditionalAccounts?: () => Promise<DashboardAccount[]>;
   getOptionalWalletAccounts?: (refresh: boolean) => Promise<DashboardAccount[]>;
-  getAutoSwitchStatus?: () => AccountDashboard['codexAutoSwitch'];
+  getAutoSwitchStatus?: () => Omit<AccountDashboard['codexAutoSwitch'], 'thresholdUsedPercent'>;
   hasAntigravityProfiles?: () => boolean;
   getAntigravityAccounts?: (refresh: boolean) => Promise<AntigravityDashboardAccount[]>;
   getCachedAntigravityAccounts?: () => AntigravityDashboardAccount[];
@@ -77,6 +80,7 @@ export interface AccountDashboardDeps {
   responseBudgetMs?: number;
   scope?: () => string;
   refreshIntervalSeconds?: () => number;
+  serverInfo?: () => DashboardServerInfo | undefined;
 }
 
 const REFRESH_DEBOUNCE_MS = 5_000;
@@ -430,17 +434,20 @@ export class AccountDashboardService {
       ),
       ...(registeredAntigravity ? state.antigravity : []),
     ];
+    const server = (this.deps.serverInfo ?? getDashboardServerInfo)();
     return {
       schemaVersion: 1,
       updatedAt: new Date((this.deps.now ?? Date.now)()).toISOString(),
       settings: { refreshIntervalSeconds },
       accounts: accounts.flatMap((account) => {
         let current = account;
+        let codexAuthValid: boolean | undefined;
         if (account.provider === 'codex' && summary) {
           const profile = summary.profiles.find(
             (candidate) => candidate.name === account.capabilities.codexProfile
           );
           if (!profile) return [];
+          codexAuthValid = profile.authValid;
           const previous = this.codexInventories
             .get(scope)
             ?.profiles.find((candidate) => candidate.name === profile.name);
@@ -453,25 +460,29 @@ export class AccountDashboardService {
           }
         }
         return [
-          {
-            ...current,
-            status: usedCache && current.status === 'ok' ? 'cached' : current.status,
-            isActive:
-              current.provider === 'codex'
-                ? summary?.activated?.name === current.capabilities.codexProfile
-                : current.provider === 'antigravity' &&
-                  registeredAntigravity &&
-                  selectedAntigravityProfileId !== null &&
-                  selectedAntigravityProfileId === current.capabilities.antigravityProfileId,
-          },
+          withAccountState(
+            {
+              ...current,
+              status: usedCache && current.status === 'ok' ? 'cached' : current.status,
+              isActive:
+                current.provider === 'codex'
+                  ? summary?.activated?.name === current.capabilities.codexProfile
+                  : current.provider === 'antigravity' &&
+                    registeredAntigravity &&
+                    selectedAntigravityProfileId !== null &&
+                    selectedAntigravityProfileId === current.capabilities.antigravityProfileId,
+            },
+            codexAuthValid
+          ),
         ];
       }),
       antigravityAutoSwitch: (
         this.deps.getAntigravityAutoSwitchStatus ?? getAntigravityAutoSwitchStatus
       )(),
-      codexAutoSwitch: (
-        this.deps.getAutoSwitchStatus ?? (() => getCodexAutoSwitchService().getStatus())
-      )(),
+      codexAutoSwitch: withThresholdUsedPercent(
+        (this.deps.getAutoSwitchStatus ?? (() => getCodexAutoSwitchService().getStatus()))()
+      ),
+      ...(server ? { server } : {}),
     };
   }
 }

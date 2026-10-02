@@ -204,4 +204,56 @@ describe('native Codex automatic switching routes', () => {
     expect(await response.text()).not.toContain(tmpDir);
     expect(fs.statSync(path.join(tmpDir, 'codex-auto-switch.json')).isDirectory()).toBe(true);
   });
+
+  it('reports the threshold in % used next to % remaining', async () => {
+    const response = await request('GET');
+    expect(await response.json()).toMatchObject({ thresholdPercent: 5, thresholdUsedPercent: 95 });
+  });
+
+  it.each([
+    [{ thresholdUsedPercent: 95 }, 5],
+    [{ thresholdUsedPercent: 80, enabled: true }, 20],
+    [{ thresholdUsedPercent: 1 }, 99],
+    [{ thresholdUsedPercent: 99 }, 1],
+  ])('stores thresholdUsedPercent %j as thresholdPercent %d', async (body, stored) => {
+    const response = await request('PUT', body);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      thresholdPercent: stored,
+      thresholdUsedPercent: 100 - stored,
+    });
+    const file = JSON.parse(fs.readFileSync(path.join(tmpDir, 'codex-auto-switch.json'), 'utf8'));
+    expect(file.thresholdPercent).toBe(stored);
+    expect(file).not.toHaveProperty('thresholdUsedPercent');
+    expect(await (await request('GET')).json()).toMatchObject({
+      thresholdUsedPercent: 100 - stored,
+    });
+  });
+
+  it('rejects a body with both threshold fields', async () => {
+    const response = await request('PUT', { thresholdPercent: 5, thresholdUsedPercent: 95 });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Provide thresholdPercent or thresholdUsedPercent, not both.',
+    });
+    expect(fs.existsSync(path.join(tmpDir, 'codex-auto-switch.json'))).toBe(false);
+  });
+
+  it.each([0, 100, 50.5, '95', null, -5])(
+    'rejects thresholdUsedPercent %p',
+    async (thresholdUsedPercent) => {
+      const response = await request('PUT', { thresholdUsedPercent });
+      expect(response.status).toBe(400);
+      expect(fs.existsSync(path.join(tmpDir, 'codex-auto-switch.json'))).toBe(false);
+    }
+  );
+
+  it('rejects unknown keys next to thresholdUsedPercent', async () => {
+    const response = await request('PUT', {
+      thresholdUsedPercent: 90,
+      host: 'attacker.example.test',
+    });
+    expect(response.status).toBe(400);
+    expect(fs.existsSync(path.join(tmpDir, 'codex-auto-switch.json'))).toBe(false);
+  });
 });

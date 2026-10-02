@@ -6,6 +6,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { ConfigError } from '../../errors/error-types';
 
 import {
+  EXPECTED_RESULTS,
   MESSAGES,
   PLATFORMS,
   MAX_OUTPUT,
@@ -135,6 +136,7 @@ export class AppUpdateService {
       finishedAt: null,
       activePlatform: null,
       results: [],
+      expectedResults: EXPECTED_RESULTS,
     };
     try {
       this.save();
@@ -270,7 +272,7 @@ export class AppUpdateService {
         raw.startedAt.length > 40 ||
         !Number.isFinite(Date.parse(raw.startedAt)) ||
         !Array.isArray(raw.results) ||
-        raw.results.length > 21
+        raw.results.length > EXPECTED_RESULTS
       )
         return;
       const results: AppUpdateResult[] = [];
@@ -309,6 +311,13 @@ export class AppUpdateService {
             ? (raw.activePlatform as UpdatePlatform)
             : null,
         results,
+        expectedResults:
+          typeof raw.expectedResults === 'number' &&
+          Number.isSafeInteger(raw.expectedResults) &&
+          raw.expectedResults >= results.length &&
+          raw.expectedResults <= EXPECTED_RESULTS
+            ? raw.expectedResults
+            : null,
       };
     } catch {
       /* An absent/corrupt result never triggers or replays an update. */

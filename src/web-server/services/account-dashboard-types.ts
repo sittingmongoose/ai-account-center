@@ -39,6 +39,19 @@ export interface DashboardAccountWindow {
   modelIds?: string[];
 }
 
+/** Account lifecycle (CONTRACT-registry-lifecycle section 2). */
+export type DashboardAccountLifecycleState =
+  | 'ready'
+  | 'pending_sign_in'
+  | 'signing_in'
+  | 'verifying';
+
+export interface DashboardAccountLifecycle {
+  state: DashboardAccountLifecycleState;
+  /** The running sign-in job for this account, if any. */
+  jobId: string | null;
+}
+
 export interface DashboardAccount {
   id: string;
   provider: DashboardProvider;
@@ -62,6 +75,33 @@ export interface DashboardAccount {
     antigravityHostIds?: Array<'ubuntu'>;
     antigravityCanActivate?: boolean;
   };
+  /**
+   * The provider is switchable and this account can be a switch target. Always
+   * set on GET /api/accounts/dashboard rows; optional for other producers.
+   */
+  switchable?: boolean;
+  /** Always set on GET /api/accounts/dashboard rows; optional for other producers. */
+  lifecycle?: DashboardAccountLifecycle;
+}
+
+export interface CodexAutoSwitchDashboardStatus {
+  enabled: boolean;
+  /** Switch when the active account has this % remaining (5 means at 95% used). */
+  thresholdPercent: number;
+  /** The same threshold in % used: 100 - thresholdPercent. */
+  thresholdUsedPercent: number;
+  pollIntervalSeconds: number;
+  outcome: string;
+  message: string;
+  activationInProgress: boolean;
+  lastCheckedAt?: string;
+  lastSwitchedAt?: string;
+}
+
+/** The running server: package version and the build's commit. No paths or hosts. */
+export interface DashboardServerInfo {
+  version: string;
+  commit: string | null;
 }
 
 export interface AccountDashboard {
@@ -70,14 +110,6 @@ export interface AccountDashboard {
   settings?: { refreshIntervalSeconds: number };
   accounts: DashboardAccount[];
   antigravityAutoSwitch?: AntigravityAutoSwitchStatus;
-  codexAutoSwitch: {
-    enabled: boolean;
-    thresholdPercent: number;
-    pollIntervalSeconds: number;
-    outcome: string;
-    message: string;
-    activationInProgress: boolean;
-    lastCheckedAt?: string;
-    lastSwitchedAt?: string;
-  };
+  codexAutoSwitch: CodexAutoSwitchDashboardStatus;
+  server?: DashboardServerInfo;
 }

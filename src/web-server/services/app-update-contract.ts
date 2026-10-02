@@ -42,6 +42,11 @@ export interface AppUpdateJob {
   finishedAt: string | null;
   activePlatform: UpdatePlatform | null;
   results: AppUpdateResult[];
+  /**
+   * How many results the job will produce (apps times platforms attempted),
+   * fixed when it starts; null for a job saved before this field existed.
+   */
+  expectedResults: number | null;
 }
 
 export const MESSAGES = {
@@ -62,6 +67,8 @@ export const MESSAGES = {
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows'];
+/** Every platform yields one result per app, a failure row included when its host is down. */
+export const EXPECTED_RESULTS = PLATFORMS.length * Object.keys(UPDATE_APP_LABELS).length;
 const STATUSES: UpdateResultStatus[] = [
   'updated',
   'current',

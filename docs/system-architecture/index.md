@@ -35,6 +35,12 @@ snapshots are not additive token totals.
 [App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
 jobs triggered explicitly, never from startup or routine polling.
 
+A Claude Open whose profile has a verified [history policy](../claude-history-sync.md)
+answers 202 and runs in the background; the profile list reports its progress as
+`openOperation` (counts and fixed sentences only). [Operations](../../src/web-server/services/claude-open-operations.ts)
+live in memory, so a restart never resumes one, and a repeated click joins the
+running one. Without a policy the Open answers 200 as before.
+
 ## Credential and persistence boundaries
 
 Private state remains under `~/.ccs/`, resolved by
@@ -53,6 +59,16 @@ Slint and public inputs, compiles locked WASM and stages directly into `dist/ui/
 [Validation](../../scripts/validate-ui.js) and
 [verification](../../scripts/verify-bundle.js) bind packaged runtime to current
 source. Native and bridge source roots have independent offline checks.
+
+The wasm-pack output is staged in `dist/ui/pkg/<buildId>/`, where `buildId` is the
+first 12 hex characters of the wasm SHA-256, and only the packaged `bridge.js`
+import is rewritten to that folder. Larger wasm and text files also ship as `.br`
+and `.gz` copies listed in `ui-build-manifest.json`; folders are 0755 and files
+0644. The [static server](../../src/web-server/static-ui.ts) checks those copies
+at startup and negotiates them by `Accept-Encoding`, caches `pkg/<buildId>/**` as
+immutable and revalidates everything else, and answers the page routes `/`,
+`/login`, `/analytics`, `/accounts` and `/accounts/<provider>` with `index.html`.
+API responses are never compressed, and an unmatched `/api` request is a JSON 404.
 
 [Docker](../../docker/README.md) builds the same source and starts only the
 dashboard on port 3000. Retired routing/runtime/tooling workflows are not part of

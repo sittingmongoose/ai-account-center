@@ -36,7 +36,10 @@ export type CodexAutoSwitchOutcome =
 
 export interface CodexAutoSwitchStatus {
   enabled: boolean;
+  /** Remaining usage percentage that triggers a switch. */
   thresholdPercent: number;
+  /** The same threshold in % used (100 - thresholdPercent), the unit Antigravity uses. */
+  thresholdUsedPercent: number;
   pollIntervalSeconds: number;
   outcome: CodexAutoSwitchOutcome;
   message: string;
@@ -302,6 +305,7 @@ export class CodexAutoSwitchService {
     return {
       enabled,
       thresholdPercent,
+      thresholdUsedPercent: 100 - thresholdPercent,
       pollIntervalSeconds: POLL_MS / 1000,
       outcome,
       message: messages[outcome],

@@ -8,16 +8,31 @@ import {
   CLAUDE_WINDOWS_PROFILE_IDS,
   listClaudeDesktopProfileMetadata,
 } from '../services/claude-desktop-profile-service';
-import { openClaudeDesktopProfile } from '../services/claude-desktop-open-service';
+import {
+  assertClaudeDesktopOpenAllowed,
+  CLAUDE_HISTORY_UNCONFIRMED_MESSAGE,
+  ClaudeHistoryOpenHeldError,
+  claudeOpenUsesManagedHistory,
+  openClaudeDesktopProfile,
+} from '../services/claude-desktop-open-service';
+import { getClaudeOpenOperations } from '../services/claude-open-operations';
 import { ClaudeDesktopTransportError } from '../services/claude-desktop-transport';
 import { getClaudeDesktopUsage } from '../services/claude-desktop-usage-service';
+import { getCcsDir } from '../../utils/config-manager';
 
 const router = createApiRouter();
 
 router.get('/desktop-profiles', async (req, res): Promise<void> => {
   if (!requireDashboardSession(req, res)) return;
   try {
-    res.json({ profiles: await listClaudeDesktopProfileMetadata() });
+    const operations = getClaudeOpenOperations();
+    const scope = getCcsDir();
+    // `openOperation` is the progress of a 202 Open (null when none is known). Only a
+    // profile with a manifest id can be opened, so only those rows carry the field.
+    const profiles = (await listClaudeDesktopProfileMetadata()).map((profile) =>
+      profile.id ? { ...profile, openOperation: operations.forProfile(scope, profile.id) } : profile
+    );
+    res.json({ profiles });
   } catch {
     res.status(500).json({ error: 'Claude desktop profiles could not be read safely.' });
   }
@@ -61,12 +76,37 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
     return;
   }
 
+  const id = req.params.id;
+  const platform: 'mac' | 'windows' = req.body.platform;
+  const scope = getCcsDir();
+  const operations = getClaudeOpenOperations();
+  // A click while its Open still runs joins it; the copy's own hold must not refuse it.
+  const running = operations.running(scope, id, platform);
+  if (running) {
+    res.status(202).json({ id, platform, state: running.state, operationId: running.id });
+    return;
+  }
   try {
-    await openClaudeDesktopProfile(req.params.id, req.body.platform);
-    res.json({ opened: true, id: req.params.id, platform: req.body.platform });
+    if (!(await claudeOpenUsesManagedHistory(id, platform))) {
+      // No managed history copy: the ordinary Open, answered when it is done.
+      await openClaudeDesktopProfile(id, platform);
+      res.json({ opened: true, id, platform });
+      return;
+    }
+    // The same refusals as before, answered before any work starts.
+    await assertClaudeDesktopOpenAllowed(id, platform);
+    const operation = operations.start(scope, id, platform, (observer) =>
+      openClaudeDesktopProfile(id, platform, observer)
+    );
+    res.status(202).json({ id, platform, state: operation.state, operationId: operation.id });
   } catch (error) {
     if (error instanceof ProfileError) {
       res.status(404).json({ error: 'Claude desktop profile was not found.' });
+    } else if (error instanceof ClaudeHistoryOpenHeldError) {
+      // Same 409 as before, now with the reason the clients should show.
+      res
+        .status(409)
+        .json({ error: CLAUDE_HISTORY_UNCONFIRMED_MESSAGE, code: 'history_unconfirmed' });
     } else if (error instanceof ConfigError) {
       res
         .status(409)

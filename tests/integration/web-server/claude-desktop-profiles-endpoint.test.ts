@@ -122,6 +122,7 @@ describe('Claude desktop launch and cached usage', () => {
           canOpen: false,
           launchUri: 'ccs-claude://launch/work',
         },
+        openOperation: null,
       },
     ]);
     expect(JSON.stringify(response.body)).not.toContain('example-mac');

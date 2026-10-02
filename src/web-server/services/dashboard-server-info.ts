@@ -1,10 +1,7 @@
 import { getVersion } from '../../utils/version';
+import type { DashboardServerInfo } from './account-dashboard-types';
 
-/** `AccountDashboard.server`: the running package version and the build's commit. */
-export interface DashboardServerInfo {
-  version: string;
-  commit: string | null;
-}
+export type { DashboardServerInfo } from './account-dashboard-types';
 
 let buildCommit: string | null = null;
 
