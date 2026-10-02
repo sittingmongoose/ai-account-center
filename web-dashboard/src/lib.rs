@@ -7,6 +7,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::prelude::*;
 slint::include_modules!();
+mod accounts;
 mod analytics;
 mod sync;
 use sync::{Nested, sync_rows};
@@ -43,6 +44,7 @@ struct Models {
     details_facts: Rc<VecModel<FactView>>,
     processes: Rc<VecModel<ProcessView>>,
     analytics: analytics::AnalyticsModels,
+    accounts: accounts::AccountsModels,
 }
 
 impl Models {
@@ -64,6 +66,7 @@ impl Models {
             details_facts: Rc::new(VecModel::default()),
             processes: Rc::new(VecModel::default()),
             analytics: analytics::AnalyticsModels::default(),
+            accounts: accounts::AccountsModels::default(),
         }
     }
 }
@@ -405,9 +408,32 @@ struct UpdateDto {
 struct AuthDto {
     state: String,
     message: String,
+    message_sub: String,
+    notice: bool,
     username: String,
     host: String,
     retry: String,
+    banner_title: String,
+    banner_body: String,
+    banner_strong: String,
+    retry_seconds: i32,
+    limit_seconds: i32,
+    setup_form: bool,
+    code_required: bool,
+    field: String,
+    transport_note: String,
+    session_hours: i32,
+    nonce: i32,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct StrengthDto {
+    lv: i32,
+    pct: f32,
+    word: String,
+    hint: String,
+    matches: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -649,6 +675,7 @@ pub fn start_dashboard(width: f32, height: f32, scale_factor: f32) -> Result<(),
     ui.set_toasts(ModelRc::from(models.toasts.clone()));
     ui.set_confirmation_processes(ModelRc::from(models.processes.clone()));
     analytics::bind(&ui, &models.analytics);
+    accounts::bind(&ui, &models.accounts);
     ui.on_action(|action, value| dispatch_action(action.as_str(), value.as_str()));
     let ax = ui.global::<AxData>();
     ax.on_action(|action, value| dispatch_action(action.as_str(), value.as_str()));
@@ -719,9 +746,22 @@ pub fn set_auth(authenticated: bool, json: &str) -> Result<(), JsValue> {
         ui.set_auth(AuthView {
             state: v.state.into(),
             message: v.message.into(),
+            message_sub: v.message_sub.into(),
+            notice: v.notice,
             username: v.username.into(),
             host: v.host.into(),
             retry: v.retry.into(),
+            banner_title: v.banner_title.into(),
+            banner_body: v.banner_body.into(),
+            banner_strong: v.banner_strong.into(),
+            retry_seconds: v.retry_seconds.max(0),
+            limit_seconds: v.limit_seconds.max(0),
+            setup_form: v.setup_form,
+            code_required: v.code_required,
+            field: v.field.into(),
+            transport_note: v.transport_note.into(),
+            session_hours: v.session_hours.max(0),
+            nonce: v.nonce,
         });
         if authenticated {
             ui.set_password(SharedString::default());
@@ -729,6 +769,27 @@ pub fn set_auth(authenticated: bool, json: &str) -> Result<(), JsValue> {
             ui.set_details_open(false);
             ui.set_data_ready(false);
         }
+    });
+    Ok(())
+}
+
+/// The first-run form's password strength and whether the confirmation matches (public/auth-view.mjs).
+#[wasm_bindgen]
+pub fn set_signin_strength(json: &str) -> Result<(), JsValue> {
+    let v: StrengthDto =
+        serde_json::from_str(json).map_err(|_| JsValue::from_str("Invalid strength hint"))?;
+    with_ui(|ui| {
+        ui.set_strength(StrengthView {
+            lv: v.lv.clamp(0, 5),
+            pct: if v.pct.is_finite() {
+                v.pct.clamp(0., 100.)
+            } else {
+                0.
+            },
+            word: v.word.into(),
+            hint: v.hint.into(),
+            matches: v.matches,
+        })
     });
     Ok(())
 }
@@ -963,6 +1024,19 @@ pub fn set_analytics_trend_paths(json: &str) -> Result<(), JsValue> {
 #[wasm_bindgen]
 pub fn set_analytics_loading(loading: bool, error: &str) {
     with_ui(|ui| analytics::set_loading(ui, loading, error));
+}
+
+/// The Accounts & Settings view model (version 1, public/accounts-view.mjs).
+#[wasm_bindgen]
+pub fn set_accounts(json: &str) -> Result<(), JsValue> {
+    UI.with(|slot| {
+        if let Some(ui) = slot.borrow().as_ref() {
+            with_models(|m| accounts::set_accounts(ui, &mut m.accounts, json))
+                .unwrap_or_else(|| Err(JsValue::from_str("Dashboard not initialized")))
+        } else {
+            Err(JsValue::from_str("Dashboard not initialized"))
+        }
+    })
 }
 
 /// "home" | "analytics" | "accounts"; the shell animates the change.

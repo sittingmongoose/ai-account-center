@@ -1,159 +1,153 @@
-// Accounts & Settings (W1 stub): one row per provider from the registry, the appearance and refresh
-// settings, and About with Slint's required attribution. The per-provider sign-in flows, show/hide
-// toggles, auto-switch policies, update results, password change and paired trays are later tasks.
-import { AboutSlint } from "std-widgets.slint";
+// Accounts & Settings, built like the concept (c-daylight-atlas/app-accounts.js, the Dashboard sign-in block of
+// app-auth.js, styles.css and auth.css). No page title (the nav names the page), no provider shortcut row.
+// One section per provider from the registry with its accounts and fixed, aligned action slots; then the
+// settings column: Dashboard sign-in, Settings, Update apps, Connection and About with AboutSlint.
+//
+// Widths (the concept's named sizes): below 1280 px the providers fill the page and the settings sit below them
+// in two columns; from 1280 the settings column stands beside the providers (380 px, 420 from 1600, 440 from
+// 2200) and from 1280 to 1439 the source column folds into the identity line; from 2200 the providers split into
+// two columns, the ones with their own sign-in flows first. Every value comes from the AcData global
+// (public/accounts-view.mjs); intent goes out through action(kind, value).
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
-import { RegistryView } from "../models.slint";
-import { Icon } from "../components/icon.slint";
-import { ProviderMark } from "../components/mark.slint";
-import { Caps } from "../components/text.slint";
-import { Segmented, SegItem } from "../components/segmented.slint";
-import { Select } from "../components/select.slint";
-import { Plate } from "../components/card.slint";
 import { Reveal } from "../components/reveal.slint";
+import { AcData, AcProvider } from "accounts/ac-data.slint";
+import { ProviderSection } from "accounts/ac-provider.slint";
+import { SettingsColumn } from "accounts/ac-settings.slint";
 
-component SettingRow inherits HorizontalLayout {
-    in property <string> icon;
-    in property <string> label;
-    in property <string> sub;
-    padding-top: 12px;
-    padding-bottom: 12px;
-    spacing: 12px;
-    VerticalLayout { alignment: center; Icon { name: root.icon; tint: Theme.ink-3; width: 18px; height: 18px; } }
-    VerticalLayout {
-        alignment: center;
-        horizontal-stretch: 1;
-        spacing: 2px;
-        Text { text: root.label; font-size: Type.body; font-weight: 560; color: Theme.ink; }
-        if root.sub != "": Text { text: root.sub; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+component ProviderList inherits VerticalLayout {
+    in property <[AcProvider]> list;
+    in property <int> offset: 0;
+    in property <bool> busy;
+    in property <string> selected-id;
+    in property <bool> show-src;
+    in property <duration> base;
+    callback open-details(string);
+    callback act(string, string);
+    spacing: 16px;
+    alignment: start;
+    for p[i] in root.list: Reveal {
+        delay: root.base + (root.offset + i) * 40ms;
+        ProviderSection {
+            provider: p;
+            busy: root.busy;
+            selected-id: root.selected-id;
+            show-src: root.show-src;
+            open-details(id) => { root.open-details(id); }
+            act(kind, value) => { root.act(kind, value); }
+        }
     }
-    @children
 }
 
 export component AccountsPage inherits Rectangle {
-    in property <[RegistryView]> registry;
-    in property <bool> ready;
-    in-out property <string> theme-value: "auto";
-    in-out property <string> refresh-interval: "60 s";
-    in property <bool> refresh-known: false;
     in property <bool> busy: false;
+    in property <string> selected-id;
+    in property <string> theme-value: "auto";
+    in property <bool> first: false;
     callback theme-picked(string);
-    callback refresh-picked(string);
+    callback open-details(string);
+    callback act(string, string);
+
+    property <duration> base: root.first ? 180ms : 40ms;
+    property <bool> show-src: Breakpoints.width < 1280px || Breakpoints.width >= 1440px;
+    property <length> settings-w: Breakpoints.ultra ? 440px : Breakpoints.wide ? 420px : 380px;
 
     min-height: page.preferred-height;
     preferred-height: page.preferred-height;
 
-    page := HorizontalLayout {
-        spacing: 20px;
+    page := VerticalLayout {
         alignment: start;
-        // each column keeps its own height (top-aligned), the row does not stretch the shorter one
-        VerticalLayout {
-        alignment: start;
-        horizontal-stretch: 3;
-        Reveal {
-            armed: root.ready;
-            delay: 40ms;
-            Plate {
-                min-height: providers.preferred-height;
-                providers := VerticalLayout {
-                    alignment: start;
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    padding-top: 16px;
-                    padding-bottom: 8px;
-                    spacing: 0px;
-                    Caps { text: "PROVIDERS"; }
-                    Rectangle { height: 8px; }
-                    for p[i] in root.registry: VerticalLayout {
-                        if i > 0: Rectangle { height: 1px; background: Theme.rule-2; }
-                        HorizontalLayout {
-                            padding-top: 12px;
-                            padding-bottom: 12px;
-                            spacing: 12px;
-                            VerticalLayout { alignment: center; ProviderMark { provider: p.id; size: 24px; dim: !p.visible; } }
-                            VerticalLayout {
-                                alignment: center;
-                                horizontal-stretch: 1;
-                                spacing: 1px;
-                                Text { text: p.long-label; font-size: Type.body; font-weight: 600; color: Theme.ink; }
-                                Text {
-                                    text: (p.count == 1 ? "1 account" : p.count + " accounts") + " · " + p.sign-in + (p.visible ? "" : " · hidden on the dashboard");
-                                    font-size: Type.small;
-                                    color: Theme.ink-3;
-                                }
-                            }
-                            VerticalLayout {
-                                alignment: center;
-                                Text { text: p.switchable ? "Switchable" : ""; font-size: Type.small; color: Theme.ink-3; }
-                            }
-                        }
-                    }
+        if AcData.ready && Breakpoints.compact: VerticalLayout {
+            spacing: 24px;
+            VerticalLayout {
+                spacing: 16px;
+                ProviderList {
+                    list: AcData.col-a;
+                    busy: root.busy;
+                    selected-id: root.selected-id;
+                    show-src: root.show-src;
+                    base: root.base;
+                    open-details(id) => { root.open-details(id); }
+                    act(kind, value) => { root.act(kind, value); }
+                }
+                ProviderList {
+                    list: AcData.col-b;
+                    offset: AcData.col-a.length;
+                    busy: root.busy;
+                    selected-id: root.selected-id;
+                    show-src: root.show-src;
+                    base: root.base;
+                    open-details(id) => { root.open-details(id); }
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+            Reveal {
+                delay: root.base + 80ms;
+                SettingsColumn {
+                    two-col: true;
+                    theme-value: root.theme-value;
+                    busy: root.busy;
+                    theme-picked(v) => { root.theme-picked(v); }
+                    act(kind, value) => { root.act(kind, value); }
                 }
             }
         }
-        }
-        VerticalLayout {
-        alignment: start;
-        horizontal-stretch: 2;
-        min-width: 360px;
-        max-width: 480px;
-        Reveal {
-            armed: root.ready;
-            delay: 80ms;
-            Plate {
-                min-height: settings.preferred-height;
-                settings := VerticalLayout {
+        if AcData.ready && !Breakpoints.compact: HorizontalLayout {
+            spacing: 24px;
+            alignment: stretch;
+            // the providers: one column, or two on ultra-wide screens
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 20px;
+                alignment: stretch;
+                VerticalLayout {
+                    horizontal-stretch: 1;
                     alignment: start;
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    padding-top: 16px;
-                    padding-bottom: 16px;
-                    spacing: 0px;
-                    Caps { text: "SETTINGS"; }
-                    SettingRow {
-                        icon: "sun";
-                        label: "Appearance";
-                        sub: "Auto follows this browser.";
-                        VerticalLayout {
-                            alignment: center;
-                            Segmented {
-                                items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
-                                value <=> root.theme-value;
-                                changed-value(v) => { root.theme-picked(v); }
-                            }
-                        }
+                    spacing: 16px;
+                    ProviderList {
+                        list: AcData.col-a;
+                        busy: root.busy;
+                        selected-id: root.selected-id;
+                        show-src: root.show-src;
+                        base: root.base;
+                        open-details(id) => { root.open-details(id); }
+                        act(kind, value) => { root.act(kind, value); }
                     }
-                    Rectangle { height: 1px; background: Theme.rule-2; }
-                    SettingRow {
-                        icon: "clock";
-                        label: "Usage refresh";
-                        sub: root.refresh-known ? "How often the dashboard asks every provider." : "The saved interval could not be read.";
-                        VerticalLayout {
-                            alignment: center;
-                            Select {
-                                width: 110px;
-                                small: true;
-                                options: ["30 s", "1 min", "2 min", "5 min", "10 min", "30 min", "60 min"];
-                                value <=> root.refresh-interval;
-                                enabled: root.refresh-known && !root.busy;
-                                selected(v) => { root.refresh-picked(v); }
-                            }
-                        }
+                    if !Breakpoints.ultra: ProviderList {
+                        list: AcData.col-b;
+                        offset: AcData.col-a.length;
+                        busy: root.busy;
+                        selected-id: root.selected-id;
+                        show-src: root.show-src;
+                        base: root.base;
+                        open-details(id) => { root.open-details(id); }
+                        act(kind, value) => { root.act(kind, value); }
                     }
-                    Rectangle { height: 1px; background: Theme.rule-2; }
-                    Rectangle { height: 14px; }
-                    Caps { text: "ABOUT"; }
-                    Rectangle { height: 8px; }
-                    Text { text: "AI Account Center"; font-size: Type.body; font-weight: 600; color: Theme.ink; }
-                    Text { text: "Built with Slint 1.18.1"; font-size: Type.small; color: Theme.ink-3; }
-                    Rectangle { height: 10px; }
-                    HorizontalLayout {
-                        alignment: start;
-                        AboutSlint { width: 220px; height: 92px; }
+                }
+                if Breakpoints.ultra: ProviderList {
+                    horizontal-stretch: 1;
+                    list: AcData.col-b;
+                    offset: 1;
+                    busy: root.busy;
+                    selected-id: root.selected-id;
+                    show-src: root.show-src;
+                    base: root.base;
+                    open-details(id) => { root.open-details(id); }
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+            VerticalLayout {
+                width: root.settings-w;
+                alignment: start;
+                Reveal {
+                    delay: root.base + 40ms;
+                    SettingsColumn {
+                        theme-value: root.theme-value;
+                        busy: root.busy;
+                        theme-picked(v) => { root.theme-picked(v); }
+                        act(kind, value) => { root.act(kind, value); }
                     }
                 }
             }
-        }
         }
     }
 }

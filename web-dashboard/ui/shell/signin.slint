@@ -1,20 +1,27 @@
-// The sign-in layer: a full-window gate above the dashboard in the Daylight Atlas language. States:
-// loading, default, connecting, wrong (inline, no layout jump), limited (rate limited), expired (session
-// ended), setup (no sign-in configured on the server yet), success (cross-fades into the load-in).
-// The contour motif is static geometry from the concept (app-auth.js): nested rounded triangles around
-// the Apex mark that scale in from the summit, plus a map scale bar.
+// The sign-in page: the real login screen, a full-window gate above the dashboard, built like the concept
+// (c-daylight-atlas/app-auth.js and auth.css). States: loading, default, connecting, wrong (inline, no layout
+// jump: the message slot keeps its height), limited (rate limited, with a countdown and a draining bar),
+// expired (the session ended), setup (first run: the form when the server can create the sign-in, otherwise
+// the command that does it on the server), success (the button turns into a check and the page cross-fades
+// into the dashboard load-in). Every word comes from bridge.js (public/auth-view.mjs).
+//
+// The atlas motif: contour lines of one summit with the Apex mark at the top and a map scale bar; the rings
+// grow from the summit on entry, the scale bar sweeps while connecting and fills on success, and the rings dim
+// while sign-in is paused. Only opacity, scale and one clip width move; nothing loops while idle.
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
-import { AuthView } from "../models.slint";
+import { AuthView, StrengthView } from "../models.slint";
 import { Icon } from "../components/icon.slint";
 import { AppLogo } from "../components/logo.slint";
-import { Caps } from "../components/text.slint";
 import { Field } from "../components/field.slint";
+import { Reveal } from "../components/reveal.slint";
 
 struct Ring { d: string, idx: bool, label: string, lx: float, ly: float }
 
 component Motif inherits Rectangle {
     in property <bool> run;
     in property <bool> success;
+    in property <bool> connecting;
+    in property <bool> paused;
     property <[Ring]> rings: [
         { d: "M365 97.4C389.5 111.9 412.9 155.2 435.2 185.3C457.5 215.4 478.6 248.5 498.8 278.1C519 307.8 550.1 337.4 556.3 363.1C562.5 388.8 562.9 421.5 535.8 432.2C508.8 442.9 439.9 429.9 394.1 427.6C348.3 425.2 303.5 421.2 261.1 418.3C218.7 415.5 171.3 417.2 139.5 410.4C107.7 403.6 67.9 399.6 70.2 377.5C72.4 355.5 127.8 309.9 153 278.2C178.2 246.6 199 217.6 221.6 187.6C244.1 157.7 264.3 113.6 288.2 98.6C312.1 83.5 340.5 83 365 97.4Z", idx: true, label: "", lx: 0, ly: 0 },
         { d: "M363.8 109.9C386.1 123 408.3 162.2 428 189.3C447.7 216.5 463.3 245.6 481.9 272.8C500.6 300 534.1 329.6 539.8 352.5C545.5 375.5 541 401.6 516 410.6C490.9 419.5 430.1 408.5 389.5 406.1C348.8 403.7 310.9 397.6 271.9 396.2C232.9 394.7 184.4 402.7 155.2 397.3C126 391.9 93.8 384.4 96.8 363.8C99.8 343.2 150.2 302.1 173.2 273.5C196.3 244.9 215 219.3 235.1 192.2C255.3 165.1 272.7 124.6 294.1 110.9C315.6 97.2 341.4 96.8 363.8 109.9Z", idx: false, label: "", lx: 0, ly: 0 },
@@ -30,45 +37,51 @@ component Motif inherits Rectangle {
     property <float> k: min(root.width / 640px, root.height / 560px);
     property <length> ox: (root.width - 640px * root.k) / 2;
     property <length> oy: (root.height - 560px * root.k) / 2;
-    for ring[i] in root.rings: Rectangle {
-        property <bool> shown: !Motion.on;
-        t1 := Timer {
-            interval: ((root.rings.length - 1 - i) * 55 + 160) * 1ms;
-            running: root.run && !parent.shown && Motion.on;
-            triggered => { self.running = false; parent.shown = true; }
-        }
-        x: root.ox;
-        y: root.oy;
-        width: 640px * root.k;
-        height: 560px * root.k;
-        opacity: self.shown ? 1 : 0;
-        transform-scale: self.shown ? 1 : 0.86;
-        transform-origin: { x: 352px * root.k, y: 232px * root.k };
-        animate opacity { duration: Motion.on ? 520ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-        animate transform-scale { duration: Motion.on ? 900ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-        Path {
-            width: parent.width;
-            height: parent.height;
-            viewbox-width: 640;
-            viewbox-height: 560;
-            commands: ring.d;
-            fill: transparent;
-            stroke: root.success ? (ring.idx ? Theme.accent.mix(Theme.rule-strong, 0.52) : Theme.accent.mix(Theme.grid-strong, 0.3)) : (ring.idx ? Theme.rule-strong : Theme.grid-strong);
-            stroke-width: ring.idx ? 1.35px : 1px;
-            animate stroke { duration: Motion.tint(Motion.slow); }
-        }
-        if ring.label != "": Text {
-            x: ring.lx * root.k * 1px - self.preferred-width / 2;
-            y: ring.ly * root.k * 1px - 11px;
-            text: ring.label;
-            font-family: Type.mono;
-            font-size: Type.caption;
-            color: Theme.ink-4;
+    property <color> apex-a: #2F6BFF;
+    property <color> apex-b: #1FC6EE;
+    rings-layer := Rectangle {
+        opacity: root.paused ? 0.55 : 1;
+        animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        for ring[i] in root.rings: Rectangle {
+            property <bool> shown: !Motion.on;
+            Timer {
+                interval: ((root.rings.length - 1 - i) * 55 + 160) * 1ms;
+                running: root.run && !parent.shown && Motion.on;
+                triggered => { self.running = false; parent.shown = true; }
+            }
+            x: root.ox;
+            y: root.oy;
+            width: 640px * root.k;
+            height: 560px * root.k;
+            opacity: self.shown ? 1 : 0;
+            transform-scale: self.shown ? 1 : 0.94;
+            transform-origin: { x: 352px * root.k, y: 232px * root.k };
+            animate opacity { duration: Motion.on ? 520ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            animate transform-scale { duration: Motion.on ? 900ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            Path {
+                width: parent.width;
+                height: parent.height;
+                viewbox-width: 640;
+                viewbox-height: 560;
+                commands: ring.d;
+                fill: transparent;
+                stroke: root.success ? (ring.idx ? Theme.accent.mix(Theme.rule-strong, 0.52) : Theme.accent.mix(Theme.grid-strong, 0.3)) : (ring.idx ? Theme.rule-strong : Theme.grid-strong);
+                stroke-width: ring.idx ? 1.35px : 1px;
+                animate stroke { duration: Motion.tint(Motion.slow); }
+            }
+            if ring.label != "": Text {
+                x: ring.lx * root.k * 1px - self.preferred-width / 2;
+                y: ring.ly * root.k * 1px - 11px;
+                text: ring.label;
+                font-family: Type.mono;
+                font-size: Type.caption;
+                color: Theme.ink-4;
+            }
         }
     }
     summit := Rectangle {
         property <bool> shown: !Motion.on;
-        t2 := Timer {
+        Timer {
             interval: 620ms;
             running: root.run && !parent.shown && Motion.on;
             triggered => { self.running = false; parent.shown = true; }
@@ -78,12 +91,13 @@ component Motif inherits Rectangle {
         width: 42px * root.k;
         height: 42px * root.k;
         opacity: self.shown ? 1 : 0;
-        transform-scale: self.shown ? 1 : 0.6;
-        animate opacity { duration: Motion.on ? 420ms : 0ms; }
-        animate transform-scale { duration: Motion.on ? 700ms : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        transform-scale: !self.shown ? 0.6 : root.success ? 1.08 : 1;
+        animate opacity { duration: Motion.on ? 260ms : 0ms; }
+        animate transform-scale { duration: Motion.on ? 520ms : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
         AppLogo { size: parent.width; }
     }
-    // scale bar: four alternating 64-unit segments, labelled 0..100
+    // scale bar: four alternating 64-unit segments, labelled 0..100; it sweeps while connecting and fills with
+    // the Apex ramp on success
     scalebar := Rectangle {
         x: root.ox + 52px * root.k;
         y: root.oy + 498px * root.k;
@@ -93,12 +107,13 @@ component Motif inherits Rectangle {
         border-color: Theme.rule-strong;
         background: Theme.paper;
         property <bool> filled: !Motion.on;
-        t3 := Timer {
+        Timer {
             interval: 760ms;
             running: root.run && !parent.filled && Motion.on;
             triggered => { self.running = false; parent.filled = true; }
         }
         Rectangle {
+            x: 0px;
             width: scalebar.filled ? parent.width : 0px;
             clip: true;
             animate width { duration: Motion.on ? 900ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -109,6 +124,27 @@ component Motif inherits Rectangle {
                 background: mod(k, 2) == 0 ? Theme.ink-3 : Theme.paper;
                 border-width: 1px;
                 border-color: mod(k, 2) == 0 ? Theme.ink-3 : Theme.rule-strong;
+            }
+        }
+        // success: the Apex ramp fills the bar left to right
+        Rectangle {
+            x: 0px;
+            width: root.success ? parent.width : 0px;
+            animate width { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            background: @linear-gradient(90deg, root.apex-a 0%, root.apex-b 100%);
+        }
+        // connecting: one bright segment travels along the bar (a loop only while the request runs)
+        Rectangle {
+            x: 0px;
+            width: parent.width;
+            clip: true;
+            opacity: root.connecting ? 1 : 0;
+            animate opacity { duration: Motion.on ? Motion.med : 0ms; }
+            if root.connecting: Rectangle {
+                property <float> t: Motion.on ? mod(animation-tick() / 1100ms, 1) : 0.6;
+                x: (-72 + self.t * (256 + 72)) * root.k * 1px;
+                width: 72px * root.k;
+                background: @linear-gradient(90deg, root.apex-a.with-alpha(0) 0%, root.apex-a.with-alpha(0.85) 60%, root.apex-b 100%);
             }
         }
         for k in 5: Text {
@@ -131,22 +167,130 @@ component Motif inherits Rectangle {
     }
 }
 
+// The faint cartographic grid behind the page: 24 px minor and 96 px major lines (the dashboard's PaperGrid).
+component SignInGrid inherits Rectangle {
+    property <int> cols: ceil(root.width / 24px) + 1;
+    property <int> rows: ceil(root.height / 24px) + 1;
+    for i in root.cols: Rectangle {
+        x: i * 24px;
+        width: 1px;
+        height: root.height;
+        background: mod(i, 4) == 0 ? Theme.paper-grid-major : Theme.paper-grid-minor;
+    }
+    for j in root.rows: Rectangle {
+        y: j * 24px;
+        width: root.width;
+        height: 1px;
+        background: mod(j, 4) == 0 ? Theme.paper-grid-major : Theme.paper-grid-minor;
+    }
+}
+
+// The password strength meter of the first-run form: one bar with quarter ticks; the fill eases to its width
+// (never past it) and takes the severity colour of its level.
+component StrengthMeter inherits VerticalLayout {
+    in property <StrengthView> data;
+    spacing: 6px;
+    Rectangle {
+        height: 6px;
+        border-radius: 3px;
+        background: Theme.track;
+        clip: true;
+        Rectangle {
+            x: 0px;
+            width: parent.width * clamp(root.data.pct, 0, 100) / 100;
+            border-radius: 3px;
+            background: root.data.lv >= 4 ? @linear-gradient(90deg, Theme.calm-a 0%, Theme.calm 100%)
+                : root.data.lv == 3 ? @linear-gradient(90deg, Theme.warn-a 0%, Theme.warn 100%)
+                : @linear-gradient(90deg, Theme.crit-a 0%, Theme.crit 100%);
+            animate width { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        }
+        for t in 3: Rectangle { x: (t + 1) * parent.width / 4; y: 1px; width: 1px; height: 4px; background: Theme.track-tick; }
+    }
+    HorizontalLayout {
+        spacing: 12px;
+        Text { text: root.data.hint; font-size: Type.small; color: Theme.ink-3; overflow: elide; horizontal-stretch: 1; }
+        Text {
+            text: root.data.word;
+            font-size: 12.5px;
+            font-weight: 640;
+            color: root.data.lv >= 4 ? Theme.good-text : root.data.lv == 3 ? Theme.warn-text : root.data.lv > 0 ? Theme.crit-text : Theme.ink-3;
+            horizontal-stretch: 0;
+        }
+    }
+}
+
 export component SignInLayer inherits Rectangle {
     in property <AuthView> auth;
+    in property <StrengthView> strength;
     in property <bool> busy;
     in property <bool> shown;
     in-out property <string> username;
     in-out property <string> password;
     callback submit(string, string);
+    callback create(string, string, string, string);
+    callback typing(string, string);
+    callback recheck();
+    callback limit-over();
 
-    property <bool> success: root.auth.state == "success";
-    property <bool> loading: root.auth.state == "loading";
-    property <bool> setup: root.auth.state == "setup";
-    property <bool> limited: root.auth.state == "limited";
-    property <bool> wrong: root.auth.state == "wrong";
-    property <bool> can-submit: !root.busy && !root.loading && !root.setup && !root.limited && !root.success;
+    property <string> state: root.auth.state;
+    property <bool> success: root.state == "success";
+    property <bool> loading: root.state == "loading";
+    property <bool> connecting: root.state == "connecting" || (root.busy && !root.success);
+    property <bool> setup: root.state == "setup";
+    property <bool> form: !root.setup || root.auth.setup-form;
+    property <bool> limited: root.state == "limited";
+    property <bool> wrong: root.state == "wrong";
+    property <bool> expired: root.state == "expired";
+    property <bool> can-submit: !root.busy && !root.loading && !root.limited && !root.success && !root.connecting && root.form;
+    property <bool> has-banner: root.expired || root.limited || (root.setup && !root.auth.setup-form);
+    property <bool> short: root.height < 760px;
+    property <string> confirm-text;
+    property <string> code-text;
     property <bool> entered: false;
     init => { root.entered = true; }
+    // a paused sign-in forgets the typed password, as the concept does
+    changed state => { if root.limited { root.password = ""; } }
+
+    // rate limited: the countdown runs from the server's Retry-After, a second at a time
+    property <int> left: root.auth.retry-seconds;
+    property <int> limit-total: max(1, root.auth.limit-seconds > 0 ? root.auth.limit-seconds : root.auth.retry-seconds);
+    property <int> retry-seed: root.auth.retry-seconds;
+    changed retry-seed => { root.left = root.retry-seed; }
+    Timer {
+        interval: 1s;
+        running: root.limited && root.left > 0;
+        triggered => {
+            root.left = max(0, root.left - 1);
+            if root.left == 0 { root.limit-over(); }
+        }
+    }
+    pure function mmss(s: int) -> string {
+        return floor(s / 60) + ":" + (mod(s, 60) < 10 ? "0" : "") + mod(s, 60);
+    }
+
+    // a wrong password or a refused first-run field shakes the fields: a short decaying sideways oscillation
+    property <int> nonce: root.auth.nonce;
+    property <duration> shake-start: 0ms;
+    property <bool> shaking: false;
+    changed nonce => {
+        if Motion.on {
+            root.shake-start = animation-tick();
+            root.shaking = true;
+            shake-end.running = true;
+        }
+    }
+    shake-end := Timer { interval: 460ms; running: false; triggered => { self.running = false; root.shaking = false; } }
+    property <float> shake-p: root.shaking ? clamp((animation-tick() - root.shake-start) / 440ms, 0, 1) : 1;
+    property <length> shake-x: root.shaking ? 7px * pow(1 - root.shake-p, 2) * sin(root.shake-p * 4 * 360deg) : 0px;
+
+    function go() {
+        if !root.can-submit { return; }
+        if root.setup {
+            root.create(root.username, root.password, root.confirm-text, root.code-text);
+        } else {
+            root.submit(root.username, root.password);
+        }
+    }
 
     background: Theme.bg;
     opacity: root.shown ? 1 : 0;
@@ -155,12 +299,24 @@ export component SignInLayer inherits Rectangle {
 
     // swallow input meant for the dashboard underneath
     TouchArea { }
+    SignInGrid { width: root.width; height: root.height; }
+    // a quiet daylight wash centred on the summit
+    // a square, so the circle fades to nothing before any edge (no visible box)
+    Rectangle {
+        property <length> side: max(root.width * 0.8, root.height * 1.3);
+        x: root.width * 0.68 - self.side / 2;
+        y: root.height * 0.42 - self.side / 2;
+        width: self.side;
+        height: self.side;
+        background: @radial-gradient(circle, Theme.accent.with-alpha(Theme.dark ? 0.09 : 0.07) 0%, Theme.accent.with-alpha(0) 68%);
+    }
 
     top := HorizontalLayout {
-        x: 0px;
-        y: 0px;
-        width: root.width;
+        x: max(0px, (root.width - Breakpoints.max-content) / 2);
+        y: root.entered || !Motion.on ? 0px : -8px;
+        width: min(root.width, Breakpoints.max-content);
         height: 62px;
+        animate y { duration: Motion.on ? 520ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         padding-left: Breakpoints.gutter;
         padding-right: Breakpoints.gutter;
         spacing: 10px;
@@ -169,193 +325,388 @@ export component SignInLayer inherits Rectangle {
         Text { text: "AI Account Center"; font-size: 15.5px; font-weight: 640; color: Theme.ink; vertical-alignment: center; }
     }
 
+    property <length> main-max: Breakpoints.ultra ? 1680px : 1400px;
+    property <length> main-pad: Breakpoints.compact ? 32px : 48px;
+    property <length> card-w: Breakpoints.ultra ? 440px : Breakpoints.compact ? 384px : 404px;
+    property <length> card-pad: Breakpoints.ultra ? 36px : Breakpoints.compact ? 28px : 32px;
+    property <length> foot-h: root.short ? 46px : 56px;
     main := HorizontalLayout {
-        x: 0px;
+        x: max(0px, (root.width - root.main-max) / 2);
         y: 62px;
-        width: root.width;
-        height: root.height - 62px - 56px;
-        padding-left: max(Breakpoints.gutter, (root.width - 1360px) / 2);
-        padding-right: max(Breakpoints.gutter, (root.width - 1360px) / 2);
-        spacing: 48px;
+        width: min(root.width, root.main-max);
+        height: root.height - 62px - root.foot-h;
+        padding-left: root.main-pad;
+        padding-right: root.main-pad;
+        padding-top: root.short ? 0px : 12px;
+        padding-bottom: root.short ? 12px : 20px;
+        spacing: Breakpoints.compact ? 44px : clamp(root.width * 0.052, 40px, 120px);
         VerticalLayout {
             alignment: center;
-            width: min(460px, root.width * 0.42);
-            card := Rectangle {
-                min-height: form.preferred-height;
-                preferred-height: form.preferred-height;
-                border-radius: 16px;
-                border-width: 1px;
-                border-color: Theme.rule;
-                background: Theme.paper;
-                drop-shadow-color: Theme.shadow-2;
-                drop-shadow-blur: 28px;
-                drop-shadow-offset-y: 12px;
-                opacity: root.entered ? 1 : 0;
-                animate opacity { duration: Motion.on ? 460ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-                form := VerticalLayout {
-                    padding: 30px;
-                    spacing: 16px;
-                    VerticalLayout {
-                        spacing: 6px;
+            width: root.card-w;
+            Reveal {
+                delay: 124ms;
+                card := Rectangle {
+                    min-height: form.preferred-height;
+                    preferred-height: form.preferred-height;
+                    border-radius: 16px;
+                    border-width: 1px;
+                    border-color: Theme.rule;
+                    background: Theme.paper;
+                    drop-shadow-color: Theme.shadow-2;
+                    drop-shadow-blur: 28px;
+                    drop-shadow-offset-y: 12px;
+                    // leaving: the card steps back a little while the page fades into the dashboard
+                    transform-scale: root.success && !root.shown ? 0.99 : 1;
+                    animate transform-scale { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    form := VerticalLayout {
+                        padding-left: root.card-pad;
+                        padding-right: root.card-pad;
+                        padding-top: root.short ? 22px : root.card-pad - 2px;
+                        padding-bottom: root.short ? 18px : 24px;
+                        spacing: 0px;
+                        // title and lede
                         Text {
-                            text: root.success ? "Signed in" : root.setup ? "Set up sign-in" : root.auth.state == "expired" ? "Sign in again" : "Sign in";
-                            font-size: 26px;
+                            text: root.success ? "Signed in" : root.setup ? "Set up sign-in" : root.expired ? "Sign in again" : "Sign in";
+                            font-size: root.short ? 24px : Breakpoints.ultra ? 30px : Breakpoints.compact ? 25px : 27px;
                             font-weight: 640;
+                            letter-spacing: -0.6px;
                             color: Theme.ink;
                         }
-                        Text {
+                        Rectangle { height: root.short ? 5px : 7px; }
+                        if root.success || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == "": Text {
                             text: root.success ? "Opening your dashboard."
-                                : root.setup ? "No sign-in is set up for this dashboard yet."
                                 : root.loading ? "Connecting to AI Account Center…"
-                                : root.auth.host != "" ? "Dashboard on " + root.auth.host : "Your accounts and subscription usage";
-                            font-size: 13px;
+                                : root.setup ? "No sign-in is set up yet. Choose the username and password for this dashboard; each tray asks for them once."
+                                : "Your accounts and subscription usage";
+                            font-size: root.short ? 13px : 13.5px;
                             color: Theme.ink-3;
                             wrap: word-wrap;
                         }
-                    }
-                    if root.auth.state == "expired" || root.limited || root.setup: Rectangle {
-                        min-height: banner.preferred-height;
-                        border-radius: 10px;
-                        background: root.limited ? Theme.warn.mix(Theme.paper, 0.08) : Theme.paper-2;
-                        border-width: 1px;
-                        border-color: root.limited ? Theme.warn.mix(Theme.rule, 0.35) : Theme.rule;
-                        banner := HorizontalLayout {
-                            padding: 12px;
-                            spacing: 10px;
-                            VerticalLayout {
+                        if !(root.success || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == ""): HorizontalLayout {
+                            spacing: 0px;
+                            alignment: start;
+                            Text { text: "Dashboard on "; font-size: root.short ? 13px : 13.5px; color: Theme.ink-3; }
+                            Text { text: root.auth.host; font-family: Type.tab; font-size: root.short ? 13px : 13.5px; font-weight: 580; color: Theme.ink-2; overflow: elide; }
+                        }
+                        Rectangle { height: root.short ? 14px : 20px; }
+
+                        // the banner: session ended, rate limited, or set up on the server (no tinted box, no side bar)
+                        banner-box := Rectangle {
+                            property <length> natural: banner.preferred-height;
+                            height: root.has-banner ? self.natural : 0px;
+                            animate height { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                            clip: true;
+                            banner := VerticalLayout {
+                                y: 0px;
+                                height: banner-box.natural;
+                                spacing: 0px;
+                                opacity: root.has-banner ? 1 : 0;
+                                animate opacity { duration: Motion.on ? Motion.med : 0ms; delay: Motion.on && root.has-banner ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    padding-top: 2px;
+                                    VerticalLayout {
+                                        alignment: start;
+                                        padding-top: 1px;
+                                        horizontal-stretch: 0;
+                                        Icon {
+                                            name: root.limited ? "timer" : root.setup ? "terminal" : "logout";
+                                            tint: root.limited ? Theme.warn-text : Theme.accent-text;
+                                            width: 18px;
+                                            height: 18px;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        spacing: 2px;
+                                        horizontal-stretch: 1;
+                                        Text { text: root.auth.banner-title; font-size: 14px; font-weight: 640; color: Theme.ink; wrap: word-wrap; }
+                                        StyledText {
+                                            text: root.auth.banner-strong != ""
+                                                ? @markdown("\{root.auth.banner-body} **\{root.auth.banner-strong}**.")
+                                                : @markdown("\{root.auth.banner-body}");
+                                            default-color: Theme.ink-2;
+                                            default-font-size: 13px;
+                                            default-font-family: Type.tab;
+                                        }
+                                    }
+                                    if root.limited && root.auth.retry-seconds > 0: VerticalLayout {
+                                        horizontal-stretch: 0;
+                                        alignment: start;
+                                        spacing: 5px;
+                                        Text {
+                                            text: root.mmss(root.left);
+                                            font-family: Type.tab;
+                                            font-size: 26px;
+                                            font-weight: 640;
+                                            letter-spacing: -0.4px;
+                                            color: Theme.warn-text;
+                                            horizontal-alignment: right;
+                                        }
+                                        Text { text: "left"; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: right; }
+                                    }
+                                }
+                                if root.limited && root.auth.retry-seconds > 0: HorizontalLayout {
+                                    padding-left: 30px;
+                                    padding-top: 10px;
+                                    Rectangle {
+                                        height: 6px;
+                                        border-radius: 3px;
+                                        background: Theme.track;
+                                        clip: true;
+                                        Rectangle {
+                                            x: 0px;
+                                            width: parent.width * clamp(root.left / root.limit-total, 0, 1);
+                                            border-radius: 3px;
+                                            background: @linear-gradient(90deg, Theme.warn-a 0%, Theme.warn 100%);
+                                            animate width { duration: Motion.on ? 1000ms : 0ms; easing: linear; }
+                                        }
+                                    }
+                                }
+                                Rectangle { height: root.short ? 14px : 18px; }
+                                Rectangle { height: 1px; background: Theme.rule-2; }
+                                Rectangle { height: root.short ? 14px : 18px; }
+                            }
+                        }
+
+                        // the fields (hidden while the server has to set sign-in up itself)
+                        if root.form: Rectangle {
+                          min-height: fields.preferred-height;
+                          preferred-height: fields.preferred-height;
+                          fields := VerticalLayout {
+                            x: root.shake-x;
+                            width: parent.width;
+                            height: parent.height;
+                            spacing: root.short ? 10px : 14px;
+                            user := Field {
+                                label: "Username";
+                                aside: root.setup ? "letters, numbers, - and _" : "";
+                                text <=> root.username;
+                                enabled: root.can-submit || root.wrong;
+                                bad: root.setup && root.auth.field == "user";
+                                box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                accepted => { pass.focus-input(); }
+                            }
+                            pass := Field {
+                                label: "Password";
+                                password: true;
+                                text <=> root.password;
+                                enabled: root.can-submit || root.wrong;
+                                bad: root.wrong || (root.setup && root.auth.field == "pass");
+                                box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                edited(v) => { if root.setup { root.typing(v, root.confirm-text); } }
+                                accepted => { if !root.setup { root.go(); } }
+                            }
+                            if root.setup: StrengthMeter { data: root.strength; }
+                            if root.setup: Field {
+                                label: "Confirm password";
+                                password: true;
+                                aside: root.strength.matches ? "Matches" : "";
+                                aside-good: root.strength.matches;
+                                ok: root.strength.matches;
+                                text <=> root.confirm-text;
+                                enabled: root.can-submit;
+                                bad: root.auth.field == "confirm";
+                                box-height: root.short ? 38px : 42px;
+                                edited(v) => { root.typing(root.password, v); }
+                                accepted => { if !root.auth.code-required { root.go(); } }
+                            }
+                            if root.setup && root.auth.code-required: Field {
+                                label: "Setup code";
+                                aside: "printed in the server's terminal";
+                                placeholder: "e.g. EXAM-PLE0";
+                                text <=> root.code-text;
+                                enabled: root.can-submit;
+                                bad: root.auth.field == "code";
+                                box-height: root.short ? 38px : 42px;
+                                accepted => { root.go(); }
+                            }
+                            if root.setup && root.auth.code-required: Text {
+                                text: "Also saved on the server in ~/.ccs/auth/setup-code";
+                                font-size: Type.small;
+                                color: Theme.ink-3;
+                            }
+                          }
+                        }
+                        // the message slot keeps its height, so an error never moves the button
+                        if root.form: Rectangle { height: root.short ? 8px : 12px; }
+                        if root.form: msg := Rectangle {
+                            property <bool> on: root.auth.message != "" || root.connecting;
+                            property <bool> info: root.connecting || root.auth.notice;
+                            min-height: max(root.short ? 34px : 38px, msg-row.preferred-height);
+                            msg-row := HorizontalLayout {
+                                y: msg.on ? 0px : -3px;
+                                height: self.preferred-height;
+                                opacity: msg.on ? 1 : 0;
+                                animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                                animate y { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                                spacing: 8px;
                                 alignment: start;
-                                Icon {
-                                    name: root.limited ? "timer" : root.setup ? "terminal" : "logout";
-                                    tint: root.limited ? Theme.warn-text : Theme.ink-2;
-                                    width: 18px;
-                                    height: 18px;
+                                VerticalLayout {
+                                    alignment: start;
+                                    padding-top: 1px;
+                                    horizontal-stretch: 0;
+                                    Icon {
+                                        name: root.connecting ? "server" : msg.info ? "info" : "alert-circle";
+                                        tint: msg.info ? Theme.accent-text : Theme.crit-text;
+                                        width: 15px;
+                                        height: 15px;
+                                    }
                                 }
-                            }
-                            VerticalLayout {
-                                spacing: 2px;
-                                horizontal-stretch: 1;
-                                Text {
-                                    text: root.limited ? (root.auth.retry != "" ? "Try again in " + root.auth.retry : "Try again later")
-                                        : root.setup ? "Set up sign-in on the server"
-                                        : "Signed out";
-                                    font-size: 13px;
-                                    font-weight: 620;
-                                    color: Theme.ink;
-                                }
-                                Text {
-                                    text: root.limited ? "Too many tries from this address. Sign-in opens again after the pause."
-                                        : root.setup ? "Run: ai-account-center dashboard auth setup"
-                                        : root.auth.message != "" ? root.auth.message : "Your session ended. Your trays stay connected.";
-                                    font-family: root.setup ? Type.mono : Type.sans;
-                                    font-size: Type.small;
-                                    color: Theme.ink-3;
-                                    wrap: word-wrap;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 0px;
+                                    Text {
+                                        text: root.connecting ? (root.setup ? "Creating the sign-in on the server." : "Checking with the server.") : root.auth.message;
+                                        font-size: 12.5px;
+                                        font-weight: msg.info ? 400 : 640;
+                                        color: msg.info ? Theme.ink-2 : Theme.crit-text;
+                                        wrap: word-wrap;
+                                    }
+                                    if root.auth.message-sub != "" && !root.connecting: Text {
+                                        text: root.auth.message-sub;
+                                        font-size: 12.5px;
+                                        color: Theme.ink-3;
+                                        wrap: word-wrap;
+                                    }
                                 }
                             }
                         }
-                    }
-                    user := Field {
-                        label: "Username";
-                        text <=> root.username;
-                        enabled: root.can-submit;
-                        bad: root.wrong;
-                        accepted => { pass.focus-input(); }
-                    }
-                    pass := Field {
-                        label: "Password";
-                        password: true;
-                        text <=> root.password;
-                        enabled: root.can-submit;
-                        bad: root.wrong;
-                        accepted => { if root.can-submit { root.submit(root.username, root.password); } }
-                    }
-                    // the message line keeps its height so an error never moves the button
-                    Rectangle {
-                        height: 18px;
-                        Text {
-                            width: 100%;
-                            text: root.wrong ? (root.auth.message != "" ? root.auth.message : "That username and password don't match.")
-                                : (root.auth.state == "default" || root.auth.state == "connecting") ? root.auth.message : "";
-                            font-size: 12.5px;
-                            color: root.wrong ? Theme.crit-text : Theme.ink-3;
-                            overflow: elide;
-                        }
-                    }
-                    submit-btn := Rectangle {
-                        height: 44px;
-                        border-radius: 10px;
-                        background: root.success ? Theme.calm : !root.can-submit && !root.busy ? Theme.accent.mix(Theme.paper, 0.45) : sb-ta.has-hover ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
-                        animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
-                        transform-scale: sb-ta.pressed && root.can-submit ? 0.98 : 1;
-                        animate transform-scale { duration: Motion.fast; }
-                        HorizontalLayout {
-                            alignment: center;
-                            spacing: 8px;
-                            if root.busy || root.auth.state == "connecting": VerticalLayout {
-                                alignment: center;
-                                Icon {
-                                    name: "refresh";
-                                    tint: Theme.accent-ink;
-                                    width: 16px;
-                                    height: 16px;
-                                    transform-rotation: mod(animation-tick() / 900ms, 1) * 360deg;
-                                }
-                            }
-                            if root.success: VerticalLayout {
-                                alignment: center;
-                                Icon { name: "check"; tint: Theme.accent-ink; width: 16px; height: 16px; }
-                            }
+                        if root.form: Rectangle { height: root.short ? 8px : 12px; }
+
+                        // submit: the label, a spinner and a check cross-fade in one button
+                        submit-btn := Rectangle {
+                            property <bool> off: (root.limited || root.loading) && !root.success;
+                            height: root.short ? 40px : Breakpoints.ultra ? 48px : 44px;
+                            border-radius: 10px;
+                            clip: true;
+                            background: root.success ? Theme.calm
+                                : self.off ? Theme.paper-3
+                                : sb-ta.has-hover && root.can-submit ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
+                            animate background { duration: Motion.tint(Motion.med); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                            transform-scale: sb-ta.pressed && root.can-submit ? 0.97 : 1;
+                            animate transform-scale { duration: 120ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                            property <color> fg: root.success ? Theme.paper : self.off ? Theme.ink-3 : Theme.accent-ink;
+                            property <string> label: root.setup && !root.auth.setup-form ? "Check again" : root.setup ? "Create sign-in" : "Sign in";
+                            // idle label
                             Text {
-                                text: root.success ? "Signed in" : root.busy || root.auth.state == "connecting" ? "Signing in" : "Sign in";
-                                font-size: 14px;
+                                y: (parent.height - self.preferred-height) / 2 + (root.connecting || root.success ? -10px : 0px);
+                                opacity: root.connecting || root.success ? 0 : 1;
+                                animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                                text: submit-btn.label;
+                                font-size: Breakpoints.ultra ? 15px : 14px;
                                 font-weight: 620;
-                                color: Theme.accent-ink;
-                                vertical-alignment: center;
+                                color: submit-btn.fg;
+                            }
+                            // busy
+                            HorizontalLayout {
+                                y: (parent.height - 18px) / 2 + (root.connecting ? 0px : 10px);
+                                height: 18px;
+                                opacity: root.connecting ? 1 : 0;
+                                animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                                alignment: center;
+                                spacing: 9px;
+                                Rectangle {
+                                    width: 17px;
+                                    height: 17px;
+                                    transform-rotation: root.connecting ? mod(animation-tick() / 800ms, 1) * 360deg : 0deg;
+                                    Path {
+                                        width: 17px; height: 17px; viewbox-width: 24; viewbox-height: 24;
+                                        commands: "M12 3 A9 9 0 1 1 11.99 3";
+                                        stroke: Theme.accent-ink.with-alpha(0.28); stroke-width: 2.2px; fill: transparent;
+                                    }
+                                    Path {
+                                        width: 17px; height: 17px; viewbox-width: 24; viewbox-height: 24;
+                                        commands: "M21 12 A9 9 0 0 0 12 3";
+                                        stroke: Theme.accent-ink; stroke-width: 2.2px; stroke-line-cap: round; fill: transparent;
+                                    }
+                                }
+                                Text {
+                                    text: root.setup ? "Creating sign-in" : "Signing in";
+                                    font-size: 14px;
+                                    font-weight: 620;
+                                    color: Theme.accent-ink;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            // done
+                            HorizontalLayout {
+                                y: (parent.height - 18px) / 2 + (root.success ? 0px : 10px);
+                                height: 18px;
+                                opacity: root.success ? 1 : 0;
+                                animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                                alignment: center;
+                                spacing: 9px;
+                                VerticalLayout { alignment: center; Icon { name: "check"; tint: Theme.paper; width: 18px; height: 18px; } }
+                                Text { text: "Signed in"; font-size: 14px; font-weight: 620; color: Theme.paper; vertical-alignment: center; }
+                            }
+                            sb-ta := TouchArea {
+                                mouse-cursor: root.can-submit ? pointer : root.connecting ? progress : default;
+                                clicked => {
+                                    if root.setup && !root.auth.setup-form {
+                                        if !root.busy { root.recheck(); }
+                                    } else {
+                                        root.go();
+                                    }
+                                }
                             }
                         }
-                        sb-ta := TouchArea {
-                            mouse-cursor: root.can-submit ? pointer : default;
-                            clicked => { if root.can-submit { root.submit(root.username, root.password); } }
-                        }
-                    }
-                    Rectangle { height: 1px; background: Theme.rule-2; }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        VerticalLayout { alignment: start; padding-top: 1px; Icon { name: "lock"; tint: Theme.ink-3; width: 15px; height: 15px; } }
-                        Text {
-                            text: "On a plain HTTP address the password crosses your network unencrypted.";
-                            font-size: Type.small;
-                            color: Theme.ink-3;
-                            wrap: word-wrap;
-                            horizontal-stretch: 1;
+
+                        // the network note
+                        Rectangle { height: root.short ? 12px : 16px; }
+                        Rectangle { height: 1px; background: Theme.rule-2; }
+                        Rectangle { height: root.short ? 11px : 14px; }
+                        Rectangle {
+                            min-height: note.preferred-height;
+                            preferred-height: note.preferred-height;
+                            note := VerticalLayout {
+                                padding-left: 24px;
+                                Text { text: root.auth.transport-note; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; }
+                            }
+                            Icon { x: 0px; y: 1px; name: "lock"; tint: Theme.ink-3; width: 15px; height: 15px; }
                         }
                     }
                 }
             }
         }
-        if Breakpoints.at-least-regular: Motif {
+        Reveal {
+            delay: 188ms;
             horizontal-stretch: 1;
-            run: root.entered;
-            success: root.success;
+            Motif {
+                min-height: 200px;
+                run: root.entered;
+                success: root.success;
+                connecting: root.connecting;
+                paused: root.limited;
+            }
         }
     }
     foot := HorizontalLayout {
-        x: 0px;
-        y: root.height - 56px;
-        width: root.width;
-        height: 56px;
-        padding-left: Breakpoints.gutter;
+        x: max(0px, (root.width - root.main-max) / 2);
+        y: root.height - root.foot-h;
+        width: min(root.width, root.main-max);
+        height: root.foot-h;
+        padding-left: root.main-pad;
+        padding-right: root.main-pad;
+        padding-bottom: root.short ? 14px : 22px;
         spacing: 18px;
         alignment: start;
+        opacity: root.entered || !Motion.on ? 1 : 0;
+        animate opacity { duration: Motion.on ? 520ms : 0ms; delay: Motion.on ? 252ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
         HorizontalLayout {
-            spacing: 6px;
-            VerticalLayout { alignment: center; Icon { name: "clock"; tint: Theme.ink-3; width: 14px; height: 14px; } }
-            Text { text: "Sessions last 24 hours"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+            spacing: 8px;
+            VerticalLayout { alignment: center; Icon { name: "clock"; tint: Theme.ink-4; width: 15px; height: 15px; } }
+            Text {
+                text: "Sessions last " + (root.auth.session-hours > 0 ? root.auth.session-hours : 24) + " hours";
+                font-size: 12.5px;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+            }
         }
+        VerticalLayout { alignment: center; Rectangle { width: 1px; height: 14px; background: Theme.rule-strong; } }
         HorizontalLayout {
-            spacing: 6px;
-            VerticalLayout { alignment: center; Icon { name: "link"; tint: Theme.ink-3; width: 14px; height: 14px; } }
-            Text { text: "The Mac and Windows trays sign in on their own"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+            spacing: 8px;
+            VerticalLayout { alignment: center; Icon { name: "link"; tint: Theme.ink-4; width: 15px; height: 15px; } }
+            Text { text: "The Mac and Windows trays sign in on their own"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
         }
     }
 }

@@ -88,6 +88,21 @@ page as file:// or configure a cross-origin API URL.
   logged estimate; otherwise the split shows token shares and says so. Month,
   All and custom ranges read the covering 24h, 7d or 30d response and are cut in
   the browser; per-model and session data then say which logs they cover.
+- Accounts & Settings lists every provider with its accounts: status only for
+  an exception, the last sample, how it signs in, and fixed, aligned action
+  slots. Codex and Antigravity Activate, Claude Open on Mac or Windows, the
+  Codex and Antigravity auto-switch policies, the refresh interval and the
+  appearance are live; Add account, Sign in again, Replace key, Remove, app
+  sign-in, Re-check, Change password, other browsers and paired trays are shown
+  in place as "coming" until their server routes exist. "Show on dashboard" is
+  saved in this browser until the server stores visibility. The settings column
+  holds the Dashboard sign-in block, Update apps results by computer, read-only
+  connection facts and About.
+- The sign-in page is the login screen: wrong passwords show the tries left from
+  the login limiter's headers, a pause shows its countdown from `Retry-After`, a
+  session that ran out says so, and first-run setup appears only when the server
+  reports setup mode (the in-page form only once the server offers it; otherwise
+  the setup command).
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
@@ -105,7 +120,10 @@ version 2 dashboard view models (sections, Fable, switchable providers, hidden
 providers) and the version 3 analytics model (rate mirror parity with
 `model-pricing.ts`, per-type cost reconciliation, unavailable activity and cost,
 ranges and local-time buckets, the provider filter, heatmap gaps, quota history,
-focus-chart label placement and the resets agenda).
+focus-chart label placement and the resets agenda), the version 1 Accounts &
+Settings model (registry sections, fixed slots, live versus coming actions,
+local visibility, Update apps results, the refresh scale) and the sign-in
+rules (strength hint, first-run checks, limiter headers, ended sessions).
 
 For automated Chromium DPI checks, launch a disposable browser with
 `--force-device-scale-factor=N` and a new context with `device_scale_factor=N`

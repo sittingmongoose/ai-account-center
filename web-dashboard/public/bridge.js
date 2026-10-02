@@ -1,5 +1,7 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval } from './pkg/ccs_account_dashboard.js';
-import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength } from './pkg/ccs_account_dashboard.js';
+import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, hiddenProviders, PROVIDER_REGISTRY } from './view-model.mjs';
+import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
+import { strength, validateSetup, triesLeft, triesLine, limitWindowMinutes, retrySeconds, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner } from './auth-view.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
 import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
 import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
@@ -13,6 +15,9 @@ import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './ren
 // window.ccsDashboardAction(kind, value). See web-dashboard/ui/README-ARCHITECTURE.md.
 let authenticated = false;
 let busy = false;
+// `serverData` is the dashboard response as received; `data` is the same with this browser's hidden providers
+// added to settings.hiddenProviders, so Home, Details and Analytics honour a "Show on dashboard" choice.
+let serverData = null;
 let data = null;
 let profiles = [];
 let antigravityInventory = null;
@@ -29,6 +34,26 @@ let analyticsPayload = null;
 let analyticsModel = null;
 let analyticsGeneration = 0;
 let openDetailsId = '';
+// Sign-in: the session length from GET /api/auth/setup, and what the first-run form may do.
+let sessionHours = 24;
+let setupInfo = { form: false, codeRequired: false };
+let authNonce = 0;
+const transport = transportOf(location.protocol, location.hostname);
+const origin = typeof location.origin === 'string' ? location.origin : '';
+// "Show on dashboard": saved in this browser until the server stores visibility (CONTRACT-registry-lifecycle 4).
+const HIDDEN_KEY = 'aac-hidden-providers';
+function storedHidden() {
+  try {
+    const list = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]');
+    return new Set(Array.isArray(list) ? list.filter(id => PROVIDER_REGISTRY.some(row => row.id === id)) : []);
+  } catch { return new Set(); }
+}
+let localHidden = storedHidden();
+function withLocalHidden(next) {
+  if (!next) return next;
+  const hidden = new Set([...hiddenProviders(next), ...localHidden]);
+  return { ...next, settings: { ...(next.settings || {}), hiddenProviders: [...hidden] } };
+}
 const PAGES = ['home', 'analytics', 'accounts'];
 /** URL state: ?view=home|analytics|accounts. The legacy /analytics path and ?view=analytics still work. */
 function pageFromLocation() {
@@ -54,16 +79,25 @@ function setBusy(value) { busy = value; set_busy(value); }
 /** Results and failures appear as toasts on any page, never buried at the bottom. */
 function toast(kind, title, body = '', ms = 4800) { push_toast(kind, title, body, ms); }
 function failure(message, title = 'That did not work') { toast('err', title, message, 6400); }
-function auth(signedIn, state, extra = {}) { authenticated = signedIn; set_auth(signedIn, JSON.stringify({ state, host, username, ...extra })); }
+let authState = 'loading';
+function auth(signedIn, state, extra = {}) {
+  authenticated = signedIn;
+  authState = state;
+  set_auth(signedIn, JSON.stringify({
+    state, host, username, transportNote: transportNote(transport), sessionHours, nonce: authNonce,
+    setupForm: setupInfo.form, codeRequired: setupInfo.codeRequired, ...extra,
+  }));
+}
 
 async function request(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    if (response.status === 401 && path !== '/api/auth/login' && authenticated) auth(false, 'expired', { message: 'Your session ended. Sign in again.' });
+    if (response.status === 401 && path !== '/api/auth/login' && authenticated) sessionEnded();
     const error = new Error(payload?.error || `Request failed (${response.status}).`);
     error.status = response.status;
     error.payload = payload;
+    error.headers = response.headers;
     error.retryAfter = response.headers?.get?.('Retry-After') || response.headers?.get?.('RateLimit-Reset') || '';
     throw error;
   }
@@ -80,8 +114,20 @@ function render() {
   if (!data) return;
   set_dashboard(JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))));
   if (openDetailsId) renderDetails(openDetailsId);
+  renderAccounts();
   // the quota history and the agenda read the current readings too
   if (currentPage === 'analytics' && analyticsPayload) renderAnalytics();
+}
+/** Accounts & Settings (version 1, accounts-view.mjs): drawn while the page is open. */
+function renderAccounts() {
+  if (!serverData || currentPage !== 'accounts') return;
+  try {
+    set_accounts(JSON.stringify(accountsViewModel(serverData, context({
+      refreshing: false, serverHidden: hiddenProviders(serverData), localHidden,
+      refreshSeconds: refreshIntervalSeconds, refreshKnown: refreshSettingsKnown, updateJob,
+      origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
+    }))));
+  } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
 }
 function renderChrome(isRefreshing = false) {
   if (data || isRefreshing) set_chrome(JSON.stringify(chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host })));
@@ -140,7 +186,8 @@ async function refresh(force = false) {
       ]);
       if (generation !== refreshGeneration || !authenticated) return;
       if (next?.schemaVersion !== 1 || !Array.isArray(next.accounts)) throw new Error('Unsupported account dashboard response.');
-      data = next;
+      serverData = next;
+      data = withLocalHidden(next);
       if (Number.isInteger(next.settings?.refreshIntervalSeconds)) applyRefreshInterval(next.settings.refreshIntervalSeconds);
       profiles = Array.isArray(inventory?.profiles) ? inventory.profiles : profiles;
       antigravityInventory = antigravityProfiles;
@@ -293,13 +340,14 @@ function applyRefreshInterval(seconds, confirmed = true) {
   refreshIntervalSeconds = seconds;
   refreshSettingsKnown = confirmed;
   set_refresh_interval(seconds, confirmed);
+  renderAccounts();
   if (usageTimer) clearInterval(usageTimer);
   usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(); } }, seconds * 1000);
 }
 async function loadSettings() {
   try { const result = await request('/api/accounts/settings'); applyRefreshInterval(result?.refreshIntervalSeconds); } catch {}
 }
-function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); }
+function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); renderAccounts(); }
 async function updateStatus() {
   if (!authenticated) return;
   const wasRunning = updateJob?.state === 'running';
@@ -327,46 +375,102 @@ function navigate(page, { replace = false } = {}) {
   const url = page === 'home' ? location.pathname === '/analytics' ? '/' : location.pathname : `${location.pathname === '/analytics' ? '/' : location.pathname}?view=${page}`;
   try { globalThis.history?.[replace ? 'replaceState' : 'pushState']?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) void refreshAnalytics();
+  if (page === 'accounts' && authenticated) renderAccounts();
+}
+async function loadAuthSetup() {
+  try {
+    const setup = await request('/api/auth/setup');
+    if (Number.isInteger(setup?.sessionTimeoutHours) && setup.sessionTimeoutHours > 0) sessionHours = setup.sessionTimeoutHours;
+    // The first-run form needs POST /api/auth/setup; the server announces that route with `setupCodeRequired`
+    // (CONTRACT-auth-devices.md section 4). Until then the setup state shows the command that sets sign-in up.
+    setupInfo = { form: typeof setup?.setupCodeRequired === 'boolean', codeRequired: setup?.setupCodeRequired === true };
+  } catch {}
+}
+function showSetup(extra = {}) {
+  if (setupInfo.form && authState !== 'setup') set_signin_strength(JSON.stringify({ ...strength(''), matches: false }));
+  auth(false, 'setup', setupInfo.form ? extra : {
+    bannerTitle: 'Set up sign-in on the server',
+    bannerBody: 'Run ai-account-center dashboard auth setup on the dashboard host, then check again here.',
+    ...extra,
+  });
+}
+/** The server no longer knows this browser's session: say whether it ran out or ended early. */
+function sessionEnded(reason = endedReason(signedInAt(globalThis.localStorage), sessionHours) || 'ended') {
+  forgetSignIn(globalThis.localStorage);
+  const banner = expiredBanner(reason, sessionHours);
+  auth(false, 'expired', { bannerTitle: banner.title, bannerBody: banner.body });
+}
+async function enterDashboard() {
+  await loadSettings(); await refresh(true); await updateStatus();
+  if (currentPage === 'analytics') await refreshAnalytics();
 }
 async function checkSession() {
   try {
+    await loadAuthSetup();
     const status = await request('/api/auth/check');
     username = typeof status?.username === 'string' ? status.username : '';
     if (status.authenticated === true || status.authRequired === false) {
       auth(true, 'default');
       await loadSettings(); await refresh(); await updateStatus();
       if (currentPage === 'analytics') await refreshAnalytics();
-    } else auth(false, status.accessMode === 'setup' ? 'setup' : 'default');
+    } else if (status.accessMode === 'setup') showSetup();
+    else {
+      const reason = endedReason(signedInAt(globalThis.localStorage), sessionHours);
+      if (reason) sessionEnded(reason); else auth(false, 'default');
+    }
   } catch { auth(false, 'default', { message: 'Unable to connect to AI Account Center. Try refreshing this page.' }); }
+}
+async function signedIn(name) {
+  username = name;
+  rememberSignIn(globalThis.localStorage);
+  setBusy(false);
+  // Success: the button turns into a check, then the page cross-fades into the dashboard load-in.
+  auth(false, 'success');
+  await new Promise(resolve => setTimeout(resolve, motionReduced ? 120 : 650));
+  auth(true, 'default');
+  await enterDashboard();
 }
 async function signIn(value) {
   if (busy) return;
   const separator = value.indexOf('\n');
-  const user = value.slice(0, separator), password = value.slice(separator + 1);
-  if (!user || !password) { auth(false, 'wrong', { message: 'Enter the username and the password.' }); return; }
+  const user = value.slice(0, separator).trim(), password = value.slice(separator + 1);
+  if (!user || !password) { authNonce++; auth(false, 'default', { message: 'Enter your username and password.' }); return; }
   auth(false, 'connecting'); setBusy(true);
   try {
     const result = await mutation('/api/auth/login', { username: user, password });
-    username = typeof result?.username === 'string' ? result.username : user;
-    setBusy(false);
-    // Success: the sign-in layer shows "Signed in", then cross-fades into the dashboard load-in.
-    auth(false, 'success');
-    await new Promise(resolve => setTimeout(resolve, 450));
-    auth(true, 'default');
-    await loadSettings(); await refresh(true); await updateStatus();
-    if (currentPage === 'analytics') await refreshAnalytics();
+    await signedIn(typeof result?.username === 'string' ? result.username : user);
   } catch (error) {
     setBusy(false);
-    if (error.status === 429) auth(false, 'limited', { retry: retryLabel(error.retryAfter) });
-    else if (error.status === 401) auth(false, 'wrong', { message: "That username and password don't match." });
-    else if (error.status === 400 && /not configured/i.test(error.message)) auth(false, 'setup');
+    authNonce++;
+    const window = limitWindowMinutes(error.headers);
+    if (error.status === 429) {
+      const limit = limitedView(retrySeconds(error.headers));
+      auth(false, 'limited', { bannerTitle: limit.title, bannerBody: limit.body, bannerStrong: limit.until, retrySeconds: limit.seconds, limitSeconds: window * 60 });
+    } else if (error.status === 401) {
+      auth(false, 'wrong', { message: "Username or password isn't right.", messageSub: triesLine(triesLeft(error.headers), window) });
+    } else if (error.status === 400 && /not configured/i.test(error.message)) showSetup();
     else auth(false, 'default', { message: error.message || 'Sign-in failed.' });
   }
 }
-function retryLabel(value) {
-  const seconds = Number(value);
-  if (!Number.isFinite(seconds) || seconds <= 0) return '';
-  return seconds >= 60 ? `${Math.ceil(seconds / 60)} minutes` : `${Math.ceil(seconds)} seconds`;
+/** The first-run form (only when the server offers POST /api/auth/setup). */
+async function createSignIn(value) {
+  if (busy || !setupInfo.form) return;
+  const [user = '', password = '', confirm = '', code = ''] = String(value).split('\n');
+  const bad = validateSetup({ username: user, password, confirm, code }, { codeRequired: setupInfo.codeRequired });
+  if (bad) { authNonce++; showSetup({ field: bad[0], message: bad[1] }); return; }
+  setBusy(true); showSetup();
+  try {
+    const result = await mutation('/api/auth/setup', { username: user.trim(), password, ...(setupInfo.codeRequired ? { setupCode: code.trim() } : {}) });
+    await signedIn(typeof result?.username === 'string' ? result.username : user.trim());
+  } catch (error) {
+    setBusy(false);
+    authNonce++;
+    const code = error.payload?.code;
+    if (code === 'already_configured') { await checkSession(); return; }
+    if (code === 'setup_code_required' || code === 'setup_code_invalid') { showSetup({ field: 'code', message: "That setup code isn't right. It has 8 letters and digits." }); return; }
+    if (code === 'secure_transport_required') { showSetup({ message: 'Setting up from another computer needs HTTPS or an encrypted tunnel. Use the dashboard host itself, or run ai-account-center dashboard auth setup there.' }); return; }
+    showSetup({ message: error.message || 'The sign-in could not be created.' });
+  }
 }
 
 // ---------------------------------------------------------------- actions from the UI
@@ -384,11 +488,33 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'details') { renderDetails(value); return; }
     if (action === 'details-closed') { openDetailsId = ''; return; }
     if (action === 'login') { await signIn(value); return; }
+    if (action === 'setup') { await createSignIn(value); return; }
+    if (action === 'setup-typing') {
+      const [pass = '', confirm = ''] = String(value).split('\n');
+      set_signin_strength(JSON.stringify({ ...strength(pass), matches: !!confirm && confirm === pass }));
+      return;
+    }
+    if (action === 'auth-recheck') { if (!authenticated && !busy) await checkSession(); return; }
+    if (action === 'login-limit-over') { if (!authenticated && !busy) auth(false, 'default', { notice: true, message: 'Sign-in is open again.' }); return; }
+    if (action === 'accounts-show') {
+      if (!authenticated) return;
+      const [id, mode] = String(value).split(':');
+      const entry = PROVIDER_REGISTRY.find(row => row.id === id);
+      if (!entry || !['show', 'hide'].includes(mode)) return;
+      if (mode === 'hide') localHidden.add(id); else localHidden.delete(id);
+      try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...localHidden])); } catch {}
+      data = withLocalHidden(serverData);
+      render();
+      toast('info', mode === 'hide' ? `${entry.label} hidden from Home` : `${entry.label} shown on Home`,
+        'Saved in this browser. The trays and other browsers follow once the server stores it.');
+      return;
+    }
     if (!authenticated || busy || pendingActivation()) return;
     if (action === 'logout') {
       await mutation('/api/auth/logout', {});
-      analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
-      auth(false, 'default', { message: 'Signed out.' }); return;
+      forgetSignIn(globalThis.localStorage);
+      analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
+      auth(false, 'default', { notice: true, message: 'Signed out.' }); return;
     }
     if (action === 'refresh') { await refresh(true); if (currentPage === 'analytics') await refreshAnalytics(true); return; }
     if (action === 'launch') {
@@ -416,8 +542,13 @@ window.ccsDashboardAction = async (action, value) => {
       refreshGeneration++;
       await antigravityConfirmation.begin(value); return;
     }
-    if (['antigravity-automatic', 'antigravity-threshold', 'antigravity-pool'].includes(action)) {
-      const patch = antigravitySettingsPatch(antigravityModel(), action, value);
+    if (['antigravity-automatic', 'antigravity-threshold', 'antigravity-pool', 'antigravity-cooldown'].includes(action)) {
+      const model = antigravityModel();
+      const seconds = Number(value);
+      // the cooldown is part of the same existing PUT /api/antigravity/auto-switch (60 to 3600 seconds)
+      const patch = action === 'antigravity-cooldown'
+        ? (model.antigravitySettingsAvailable && Number.isInteger(seconds) && seconds >= 60 && seconds <= 3600 ? { cooldownSeconds: seconds } : null)
+        : antigravitySettingsPatch(model, action, value);
       if (!patch) { render(); failure('Antigravity controls need verified Ubuntu support, two accounts and a fresh reported quota pool.', 'Antigravity'); return; }
       refreshGeneration++;
       setBusy(true);
@@ -504,7 +635,11 @@ try {
   set_current_page(currentPage);
   const resize = () => resize_dashboard(innerWidth, innerHeight);
   addEventListener('resize', resize); resize();
-  addEventListener('popstate', () => { currentPage = pageFromLocation(); set_current_page(currentPage); if (currentPage === 'analytics' && authenticated) void refreshAnalytics(); });
+  addEventListener('popstate', () => {
+    currentPage = pageFromLocation(); set_current_page(currentPage);
+    if (currentPage === 'analytics' && authenticated) void refreshAnalytics();
+    if (currentPage === 'accounts' && authenticated) renderAccounts();
+  });
   set_theme_mode(THEMES[storedTheme()]);
   // Auto follows the browser: the scheme is pushed now and on every change.
   watchMedia('(prefers-color-scheme: dark)', dark => set_system_dark(dark));
@@ -512,6 +647,7 @@ try {
   const headless = /HeadlessChrome/.test(navigator.userAgent) && !/[?&]motion\b/.test(location.search);
   watchMedia('(prefers-reduced-motion: reduce)', reduced => { motionReduced = reduced || headless; set_reduced_motion(motionReduced); });
   document.querySelector('#loading').hidden = true;
+  auth(false, 'loading');
   await checkSession();
   applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
   setInterval(() => { activationConfirmation.expire(); antigravityConfirmation.expire(); }, 1_000);

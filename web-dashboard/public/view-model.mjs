@@ -108,7 +108,7 @@ export function fullWindowLabel(provider, w) {
   if (provider === 'claude') return { 'Five-hour usage': '5-hour usage' }[text(w.label)] || text(w.label) || 'Usage';
   return text(w.label) || 'Usage';
 }
-function statusWord(account) {
+export function statusWord(account) {
   return { ok: 'Live', cached: 'Cached', needs_sign_in: 'Sign-in needed', error: 'Refresh failed', unavailable: 'Unavailable' }[account?.status] || 'Unavailable';
 }
 function sampledText(account, w, now) {

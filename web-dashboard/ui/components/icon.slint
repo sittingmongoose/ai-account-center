@@ -52,9 +52,17 @@ export global Icons {
     out property <image> wallet: @image-url("../icons/wallet.svg");
     out property <image> close: @image-url("../icons/close.svg");
     out property <image> zap: @image-url("../icons/zap.svg");
+    out property <image> laptop: @image-url("../icons/laptop.svg");
+    out property <image> app-window: @image-url("../icons/app-window.svg");
+    out property <image> code: @image-url("../icons/code.svg");
+    out property <image> server: @image-url("../icons/server.svg");
 
     public pure function named(name: string) -> image {
         if name == "alert" { return alert; }
+        if name == "laptop" { return laptop; }
+        if name == "app-window" { return app-window; }
+        if name == "code" { return code; }
+        if name == "server" { return server; }
         if name == "alert-circle" { return alert-circle; }
         if name == "arrow-down-circle" { return arrow-down-circle; }
         if name == "calendar" { return calendar; }

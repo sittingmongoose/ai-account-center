@@ -1,0 +1,680 @@
+// One provider section on Accounts & Settings, built like the concept (c-daylight-atlas/app-accounts.js and the
+// .prov / .acc-row rules in styles.css): the head with the mark, the kind line and "Show on dashboard"; one row per
+// account with its identity, status, source and fixed, aligned action slots; the Antigravity policy box; and
+// the footer with how the provider signs in and its add or check actions.
+//
+// Slots: every row of a section has the same slots in the same columns, each as wide as its widest content
+// across the rows (rows report their natural widths, the section keeps the largest), so a wider status
+// ("Active on Ubuntu") never pushes the buttons beside it. A switchable provider's first slot is the Home
+// SwitchSlot (Activate with the plain Active mark on the button's own grid) and starts at the slot's left edge.
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { RunView } from "../../models.slint";
+import { Icon } from "../../components/icon.slint";
+import { ProviderMark } from "../../components/mark.slint";
+import { Caps } from "../../components/text.slint";
+import { Button } from "../../components/button.slint";
+import { IconButton } from "../../components/icon-button.slint";
+import { Toggle } from "../../components/toggle.slint";
+import { Segmented } from "../../components/segmented.slint";
+import { Plate } from "../../components/card.slint";
+import { Hover } from "../../components/hover-card.slint";
+import { SwitchSlot, ConfirmLine, Stepper, Runs } from "../home.slint";
+import { AcData, AcAction, AcRow, AcProvider, AcAgPolicy } from "ac-data.slint";
+
+// "coming": the concept's quiet mono caption (its "proposal" word), for an action whose server route has not
+// landed yet. No pill, no box.
+export component ComingWord inherits Text {
+    text: "coming";
+    font-family: Type.mono;
+    font-size: Type.caption;
+    letter-spacing: 0.33px;
+    color: Theme.ink-3;
+    vertical-alignment: center;
+}
+
+// A hover tip for whatever sits inside it, including a disabled control (which takes no pointer events itself).
+// A click on it is taken here, so a nested control never also opens the row's Details.
+export component TipArea inherits TouchArea {
+    in property <string> tip;
+    in property <string> owner;
+    changed has-hover => {
+        if self.has-hover {
+            Hover.tip(root.owner, self.absolute-position, self.width, self.height, root.tip);
+        } else {
+            Hover.leave(root.owner);
+        }
+    }
+}
+
+// A wrapped note with a leading 15 px icon. The text sits directly in a VerticalLayout so its wrapped height is
+// measured at its real width (a wrapping Text inside a HorizontalLayout reports one line); the icon is placed
+// beside it on the first line.
+export component IconNote inherits Rectangle {
+    in property <string> icon: "info";
+    in property <string> text;
+    in property <color> ink: Theme.ink-3;
+    in property <color> icon-ink: Theme.ink-3;
+    in property <length> size: 12.5px;
+    in property <length> gap: 9px;
+    min-height: lay.preferred-height;
+    preferred-height: lay.preferred-height;
+    lay := VerticalLayout {
+        padding-left: 15px + root.gap;
+        Text { text: root.text; font-size: root.size; color: root.ink; wrap: word-wrap; }
+    }
+    Icon { x: 0px; y: 2px; width: 15px; height: 15px; name: root.icon; tint: root.icon-ink; }
+}
+
+// One action: a button, an icon-only button or a quiet word. A "coming" action is dimmed and says on hover what
+// it will do.
+export component ActionControl inherits Rectangle {
+    in property <AcAction> data;
+    in property <string> owner;
+    in property <bool> busy;
+    in property <bool> align-end: true;
+    callback act(string, string);
+    out property <length> natural: root.data.kind == "button" ? btn.preferred-width
+        : root.data.kind == "icon" ? 28px
+        : root.data.kind == "quiet" ? quiet.preferred-width : 0px;
+    min-height: 28px;
+    tip := TipArea {
+        x: root.align-end ? root.width - root.natural : 0px;
+        y: (root.height - 28px) / 2;
+        width: root.natural;
+        height: 28px;
+        visible: root.data.kind == "button" || root.data.kind == "icon" || root.data.kind == "quiet";
+        owner: root.owner;
+        tip: root.data.tip;
+        btn := Button {
+            x: 0px;
+            y: 0px;
+            width: self.preferred-width;
+            visible: root.data.kind == "button";
+            small: true;
+            text: root.data.label;
+            icon: root.data.icon;
+            platform: root.data.platform;
+            kind: root.data.style == "" ? "default" : root.data.style;
+            enabled: root.data.enabled && !root.busy;
+            hint: root.data.tip;
+            clicked => { root.act(root.data.act, root.data.value); }
+        }
+        IconButton {
+            x: 0px;
+            y: 0px;
+            visible: root.data.kind == "icon";
+            small: true;
+            bare: true;
+            icon: root.data.icon;
+            enabled: root.data.enabled && !root.busy;
+            hint: root.data.label;
+            clicked => { root.act(root.data.act, root.data.value); }
+        }
+        quiet := Text {
+            x: 0px;
+            y: (parent.height - self.preferred-height) / 2;
+            visible: root.data.kind == "quiet";
+            text: root.data.label;
+            font-size: 12.5px;
+            color: Theme.ink-3;
+        }
+    }
+}
+
+// One account row: identity, status and last sample, source, then the fixed action slots.
+export component AcRowItem inherits Rectangle {
+    in property <AcRow> item;
+    in property <AcProvider> provider;
+    in property <length> w0;
+    in property <length> w1;
+    in property <length> w2;
+    in property <length> acts-w;
+    in property <bool> show-src: true;
+    in property <bool> selected;
+    in property <bool> busy;
+    in property <bool> confirming;
+    callback open-details(string);
+    callback act(string, string);
+    callback measured(int, length);
+    callback ask-confirm(string);
+    callback cancel-confirm();
+    out property <bool> hovered: ta.has-hover;
+    out property <length> line-height: line.height;
+    property <bool> is-active: root.item.active && root.provider.switchable;
+
+    min-height: body.min-height;
+    preferred-height: body.preferred-height;
+
+    body := VerticalLayout {
+        spacing: 0px;
+        line := Rectangle {
+            min-height: max(56px, row-layout.min-height);
+            preferred-height: max(56px, row-layout.preferred-height);
+            background: root.is-active ? Theme.row-hover.with-alpha(0)
+                : root.selected ? Theme.row-sel
+                : ta.pressed ? Theme.row-hover.mix(Theme.rule, 0.7)
+                : ta.has-hover ? Theme.row-hover
+                : Theme.row-hover.with-alpha(0);
+            animate background { duration: Motion.tint(160ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            // the hairline above every row (the first one separates the rows from the head)
+            Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.open-details(root.item.id); }
+                row-layout := HorizontalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 11px;
+                    padding-bottom: 11px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1.3;
+                        min-width: 180px;
+                        spacing: 1px;
+                        Text {
+                            text: root.item.email;
+                            font-size: Type.body;
+                            font-weight: root.is-active ? 640 : 520;
+                            color: Theme.ink;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: root.item.meta + (root.show-src ? "" : (root.item.meta != "" ? " · " : "") + root.item.src-inline);
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            overflow: elide;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0.7;
+                        min-width: 110px;
+                        spacing: 1px;
+                        if root.item.status != "": Text {
+                            text: root.item.status;
+                            font-size: 12.5px;
+                            font-weight: 620;
+                            color: Theme.warn-text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: root.item.sampled;
+                            font-family: Type.tab;
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            overflow: elide;
+                        }
+                    }
+                    if root.show-src: VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        min-width: 140px;
+                        spacing: 1px;
+                        Text { text: root.item.src; font-size: 12.5px; color: Theme.ink-2; overflow: elide; }
+                        Text { text: root.item.src-sub; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                    }
+                    acts := HorizontalLayout {
+                        width: root.acts-w;
+                        spacing: 6px;
+                        alignment: end;
+                        for a[i] in root.item.actions: Rectangle {
+                            width: i == 0 ? root.w0 : i == 1 ? root.w1 : root.w2;
+                            property <length> natural: a.kind == "switch" ? sw.natural : ctl.natural;
+                            init => { root.measured(i, self.natural); }
+                            changed natural => { root.measured(i, self.natural); }
+                            sw := SwitchSlot {
+                                x: 0px;
+                                y: (parent.height - self.preferred-height) / 2;
+                                width: parent.width;
+                                height: self.preferred-height;
+                                visible: a.kind == "switch";
+                                account: {
+                                    id: root.item.id,
+                                    active: root.item.active,
+                                    active-label: root.item.active-label,
+                                    can-activate: a.enabled,
+                                    activate-hint: root.item.activate-hint,
+                                    platform: "Ubuntu",
+                                };
+                                can-switch: root.provider.can-switch;
+                                busy: root.busy;
+                                activate => {
+                                    if root.item.confirm {
+                                        root.ask-confirm(root.item.id);
+                                    } else {
+                                        root.act(a.act, a.value);
+                                    }
+                                }
+                            }
+                            ctl := ActionControl {
+                                width: parent.width;
+                                height: parent.height;
+                                visible: a.kind != "switch" && a.kind != "empty";
+                                data: a;
+                                owner: "acc:" + root.item.id + ":" + i;
+                                busy: root.busy;
+                                act(kind, value) => { root.act(kind, value); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if root.item.confirm: ConfirmLine {
+            runs: root.item.confirm-runs;
+            open: root.confirming;
+            busy: root.busy;
+            keep => { root.cancel-confirm(); }
+            confirm => {
+                root.cancel-confirm();
+                root.act(root.item.activate-kind, root.item.profile);
+            }
+        }
+    }
+}
+
+// The Antigravity policy's controls: each a caption over its control, bottoms aligned in their row.
+component AgParam inherits VerticalLayout {
+    in property <string> caption;
+    in property <bool> live;
+    alignment: end;
+    spacing: 6px;
+    opacity: root.live ? 1 : 0.5;
+    animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    Caps { text: root.caption; min-width: self.preferred-width; }
+    @children
+}
+component AgToggle inherits VerticalLayout {
+    in property <AcAgPolicy> ag;
+    in property <bool> busy;
+    callback act(string, string);
+    alignment: end;
+    property <bool> on: root.ag.enabled;
+    changed on => { tg.on = self.on; }
+    TipArea {
+        owner: "ag-auto";
+        tip: root.ag.toggle-tip;
+        height: 32px;
+        width: tg-row.preferred-width;
+        tg-row := HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                tg := Toggle {
+                    on: root.ag.enabled;
+                    enabled: root.ag.toggle-enabled && !root.busy;
+                    label: "Auto-switch";
+                    toggled(on) => { root.act("antigravity-automatic", on ? "true" : "false"); }
+                }
+            }
+            if !root.ag.enabled: Text {
+                text: "Off";
+                font-size: 12.5px;
+                font-weight: 600;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+component AgStep inherits AgParam {
+    in property <AcAgPolicy> ag;
+    in property <bool> busy;
+    in property <int> shown;
+    callback step(int);
+    caption: "SWITCH AT % USED";
+    live: root.ag.live;
+    HorizontalLayout {
+        alignment: start;
+        padding-bottom: 4px;
+        Stepper {
+            value: root.shown;
+            min: root.ag.min;
+            max: root.ag.max;
+            known: root.ag.threshold >= 0;
+            enabled: root.ag.step-enabled && !root.busy;
+            step(d) => { root.step(d); }
+        }
+    }
+}
+component AgPool inherits AgParam {
+    in property <AcAgPolicy> ag;
+    in property <bool> busy;
+    callback act(string, string);
+    caption: "WATCH POOL";
+    live: root.ag.live;
+    if root.ag.pools.length > 0: Segmented {
+        items: root.ag.pools;
+        value: root.ag.pool;
+        enabled: root.ag.pool-enabled && !root.busy;
+        changed-value(v) => { root.act("antigravity-pool", v); }
+    }
+    if root.ag.pools.length == 0: Text { height: 36px; text: "No quota pool reported yet"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+}
+component AgCool inherits AgParam {
+    in property <AcAgPolicy> ag;
+    in property <bool> busy;
+    callback act(string, string);
+    caption: "COOLDOWN";
+    live: root.ag.live;
+    Segmented {
+        items: root.ag.cooldowns;
+        value: root.ag.cooldown;
+        enabled: root.ag.cooldown-enabled && !root.busy;
+        changed-value(v) => { root.act("antigravity-cooldown", v); }
+    }
+}
+
+// The Antigravity policy under its rows: the toggle, the switch point, the watched pool and the cooldown. Before
+// a second account is signed in the toggle is drawn off and inert and the values are greyed, as in the concept.
+component AgPolicyBox inherits Rectangle {
+    in property <AcAgPolicy> ag;
+    in property <bool> busy;
+    callback act(string, string);
+    // the stepper's value before it is saved; -1 when nothing is pending
+    property <int> pending: -1;
+    property <int> shown: root.pending >= 0 ? root.pending : root.ag.threshold;
+    property <int> reported: root.ag.threshold;
+    changed reported => { if root.pending == root.reported { root.pending = -1; } }
+    send := Timer {
+        interval: 600ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.pending >= 0 { root.act("antigravity-threshold", root.pending + "%"); release.running = true; }
+        }
+    }
+    release := Timer { interval: 5s; running: false; triggered => { self.running = false; root.pending = -1; } }
+    function step(d: int) {
+        root.pending = clamp(root.shown + d, root.ag.min, root.ag.max);
+        release.running = false;
+        send.running = false;
+        send.running = true;
+    }
+    // the box is wide enough for one row of controls (the providers column at these widths, see accounts.slint)
+    property <bool> one-row: Breakpoints.compact || Breakpoints.width >= 1360px;
+
+    min-height: inner.preferred-height;
+    preferred-height: inner.preferred-height;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.rule;
+    background: Theme.paper-2;
+    inner := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 12px;
+        IconNote {
+            gap: 8px;
+            ink: Theme.ink-2;
+            text: root.ag.note-strong != "" ? root.ag.note-strong + " " + root.ag.note : root.ag.note;
+        }
+        // one row when the box is wide enough, otherwise the cooldown moves to a second row
+        if root.one-row: HorizontalLayout {
+            spacing: 22px;
+            alignment: start;
+            AgToggle { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            AgStep { ag: root.ag; busy: root.busy; shown: root.shown; step(d) => { root.step(d); } }
+            AgPool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+        }
+        if !root.one-row: VerticalLayout {
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 22px;
+                alignment: start;
+                AgToggle { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+                AgStep { ag: root.ag; busy: root.busy; shown: root.shown; step(d) => { root.step(d); } }
+                AgPool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            }
+            HorizontalLayout {
+                alignment: start;
+                AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            }
+        }
+    }
+}
+
+// The section footer: how the provider signs in, then its add or check actions (and "coming" when they wait
+// on the server).
+component SectionFoot inherits Rectangle {
+    in property <AcProvider> provider;
+    in property <bool> busy;
+    callback act(string, string);
+    property <bool> any-coming: root.provider.foot.length > 0;
+    property <length> text-w: max(160px, root.width - 36px - 15px - 8px - 14px - btns.preferred-width);
+    min-height: max(how.preferred-height, 28px) + 24px;
+    preferred-height: self.min-height;
+    Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
+    Icon {
+        x: 18px;
+        y: (root.height - max(how.preferred-height, 17px)) / 2 + 1px;
+        name: "info";
+        tint: Theme.ink-3;
+        width: 15px;
+        height: 15px;
+    }
+    how := Text {
+        x: 18px + 15px + 8px;
+        y: (root.height - self.preferred-height) / 2;
+        width: root.text-w;
+        text: root.provider.how;
+        font-size: 12.5px;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+    btns := HorizontalLayout {
+        x: root.width - 18px - self.preferred-width;
+        y: (root.height - 28px) / 2;
+        height: 28px;
+        spacing: 8px;
+        for f[i] in root.provider.foot: ActionControl {
+            width: self.natural;
+            align-end: false;
+            data: f;
+            owner: "foot:" + root.provider.id + ":" + i;
+            busy: root.busy;
+            act(kind, value) => { root.act(kind, value); }
+        }
+        if root.any-coming: ComingWord { }
+    }
+}
+
+export component ProviderSection inherits Plate {
+    in property <AcProvider> provider;
+    in property <bool> busy;
+    in property <string> selected-id;
+    in property <bool> show-src: true;
+    callback open-details(string);
+    callback act(string, string);
+
+    // measured slot widths (only ever grow while the section lives); the actions column is their sum, at least
+    // the concept's width for this kind of provider
+    property <length> w0: 0px;
+    property <length> w1: 0px;
+    property <length> w2: 0px;
+    property <length> acts-w: max(root.provider.acts-min, root.w0 + root.w1 + root.w2 + 6px * max(0, root.provider.slots - 1));
+    property <string> confirm-id;
+
+    // Selected row: ONE tinted, outlined highlight per switchable section that glides between rows (translate
+    // and height, ease-out, never past its target), inset 4 px top and bottom and 8 px from the sides.
+    property <length> hl-y: 0px;
+    property <length> hl-h: 0px;
+    property <bool> hl-glide: false;
+    property <bool> hl-placed: false;
+    property <bool> hl-hover: false;
+    property <bool> hl-on: root.provider.switchable && root.hl-placed && root.active-count > 0;
+    property <int> active-count: 0;
+    glide-end := Timer { interval: 600ms; running: false; triggered => { self.running = false; root.hl-glide = false; } }
+    function place(y: length, h: length, glide: bool) {
+        root.hl-glide = glide && root.hl-placed && Motion.on;
+        if root.hl-glide { glide-end.running = true; }
+        root.hl-y = y;
+        root.hl-h = h;
+        root.hl-placed = true;
+    }
+
+    // "Show on dashboard" follows the model (a click assigns the toggle, which would end a plain binding)
+    property <bool> shown: root.provider.visible;
+    changed shown => { show-toggle.on = self.shown; }
+
+    min-height: body.min-height;
+    preferred-height: body.preferred-height;
+
+    body := VerticalLayout {
+        spacing: 0px;
+        HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            padding-top: 15px;
+            padding-bottom: 13px;
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                ProviderMark { provider: root.provider.id; size: 28px; }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                spacing: 1px;
+                opacity: root.provider.visible ? 1 : 0.55;
+                animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                Text {
+                    text: root.provider.label;
+                    font-size: 16px;
+                    font-weight: 640;
+                    color: Theme.ink;
+                    overflow: elide;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    VerticalLayout { alignment: center; Icon { name: root.provider.kind-icon; tint: Theme.ink-3; width: 15px; height: 15px; } }
+                    Text {
+                        text: root.provider.kind-label + " · " + root.provider.count-text;
+                        font-family: Type.tab;
+                        font-size: 12.5px;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                spacing: 2px;
+                TipArea {
+                    owner: "show:" + root.provider.id;
+                    tip: root.provider.toggle-tip;
+                    height: 22px;
+                    width: show-toggle.preferred-width;
+                    show-toggle := Toggle {
+                        y: (parent.height - self.height) / 2;
+                        on: root.provider.visible;
+                        enabled: root.provider.toggle-enabled;
+                        label: "Show on dashboard";
+                        toggled(on) => { root.act("accounts-show", root.provider.id + ":" + (on ? "show" : "hide")); }
+                    }
+                }
+                if root.provider.hidden-note != "": Text {
+                    text: root.provider.hidden-note;
+                    font-size: Type.small;
+                    color: Theme.ink-3;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+        rows-box := Rectangle {
+            min-height: rows.min-height;
+            preferred-height: rows.preferred-height;
+            opacity: root.provider.visible ? 1 : 0.55;
+            animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            if root.provider.switchable: Rectangle {
+                x: 8px;
+                y: root.hl-y + 4px;
+                width: parent.width - 16px;
+                height: max(0px, root.hl-h - 8px);
+                border-radius: 10px;
+                background: Theme.accent.mix(Theme.paper, root.hl-hover ? 0.11 : 0.07);
+                border-width: 1px;
+                border-color: Theme.accent.mix(Theme.paper, 0.42);
+                opacity: root.hl-on ? 1 : 0;
+                animate y, height { duration: root.hl-glide ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                animate background { duration: Motion.tint(160ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            }
+            rows := VerticalLayout {
+                spacing: 0px;
+                for row[i] in root.provider.rows: AcRowItem {
+                    item: row;
+                    provider: root.provider;
+                    w0: root.w0;
+                    w1: root.w1;
+                    w2: root.w2;
+                    acts-w: root.acts-w;
+                    show-src: root.show-src;
+                    busy: root.busy;
+                    selected: row.id == root.selected-id;
+                    confirming: root.confirm-id == row.id;
+                    init => {
+                        if row.active {
+                            root.active-count = 1;
+                            root.place(self.y, self.line-height, false);
+                        }
+                    }
+                    changed y => { if self.item.active { root.place(self.y, self.line-height, false); } }
+                    changed line-height => { if self.item.active { root.place(self.y, self.line-height, false); } }
+                    changed item => {
+                        if self.item.active {
+                            root.active-count = 1;
+                            root.place(self.y, self.line-height, true);
+                        }
+                        if !self.item.confirm && root.confirm-id == self.item.id { root.confirm-id = ""; }
+                    }
+                    changed hovered => { if self.item.active { root.hl-hover = self.hovered; } }
+                    measured(index, width) => {
+                        if index == 0 { root.w0 = max(root.w0, width); }
+                        if index == 1 { root.w1 = max(root.w1, width); }
+                        if index == 2 { root.w2 = max(root.w2, width); }
+                    }
+                    open-details(id) => { root.open-details(id); }
+                    act(kind, value) => { root.act(kind, value); }
+                    ask-confirm(id) => { root.confirm-id = id; }
+                    cancel-confirm => { root.confirm-id = ""; }
+                }
+            }
+        }
+        if root.provider.count == 0: Rectangle {
+            min-height: 46px;
+            Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
+            Text {
+                x: 18px;
+                y: (parent.height - self.preferred-height) / 2;
+                text: root.provider.empty;
+                font-size: 12.5px;
+                color: Theme.ink-3;
+            }
+        }
+        if root.provider.ag: HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            padding-top: 4px;
+            padding-bottom: 14px;
+            AgPolicyBox {
+                ag: AcData.ag;
+                busy: root.busy;
+                act(kind, value) => { root.act(kind, value); }
+            }
+        }
+        SectionFoot {
+            provider: root.provider;
+            busy: root.busy;
+            act(kind, value) => { root.act(kind, value); }
+        }
+    }
+}

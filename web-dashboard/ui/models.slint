@@ -235,13 +235,43 @@ export struct ConfirmationView {
     busy: bool,
 }
 
-// The sign-in layer: default, connecting, wrong, limited, expired, setup, success, loading.
+// The sign-in layer: loading, default, connecting, wrong, limited, expired, setup, success
+// (public/auth-view.mjs builds the words; bridge.js the state).
 export struct AuthView {
     state: string,
     message: string,
+    // the second line under an error ("4 tries left before sign-in pauses for 15 minutes.")
+    message-sub: string,
+    // the message is information ("Signed out."), not an error
+    notice: bool,
     username: string,
     host: string,
     retry: string,
+    // the expired, rate-limited or set-up-on-the-server banner
+    banner-title: string,
+    banner-body: string,
+    banner-strong: string,
+    // rate limited: seconds left when the state began, and the limiter's window for the drain bar
+    retry-seconds: int,
+    limit-seconds: int,
+    // first run: the form appears only when the server can create the sign-in (POST /api/auth/setup)
+    setup-form: bool,
+    code-required: bool,
+    // the field an error belongs to: user, pass, confirm, code
+    field: string,
+    transport-note: string,
+    session-hours: int,
+    // bumped on every failed attempt, so the form shakes again
+    nonce: int,
+}
+
+// The first-run form's password strength (public/auth-view.mjs strength) and whether the confirmation matches.
+export struct StrengthView {
+    lv: int,
+    pct: float,
+    word: string,
+    hint: string,
+    matches: bool,
 }
 
 // The Analytics header (version 3): loading and error come from set_analytics_loading, the rest from the view model.

@@ -1,0 +1,573 @@
+// The settings column of Accounts & Settings (concept: settingsHTML in app-accounts.js and the Dashboard sign-in
+// block of app-auth.js): Dashboard sign-in, Settings (appearance, usage refresh, auto-switch policies), Update
+// apps results, Connection (read only) and About with Slint's AboutSlint attribution.
+import { AboutSlint } from "std-widgets.slint";
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { RunView, FactView } from "../../models.slint";
+import { Icon } from "../../components/icon.slint";
+import { ProviderMark, PlatformGlyph } from "../../components/mark.slint";
+import { AppLogo } from "../../components/logo.slint";
+import { Caps } from "../../components/text.slint";
+import { Button } from "../../components/button.slint";
+import { Toggle } from "../../components/toggle.slint";
+import { Segmented } from "../../components/segmented.slint";
+import { Plate } from "../../components/card.slint";
+import { Stepper, Runs, DashedRule } from "../home.slint";
+import { AcData, AcPolicy, AcUpdHost, AcUpdItem } from "ac-data.slint";
+import { ComingWord, TipArea, IconNote } from "ac-provider.slint";
+
+// A settings card: the title (and an optional quiet note or "coming" on its right), then its items.
+component SetGroup inherits Plate {
+    in property <string> title;
+    in property <string> note;
+    in property <bool> coming: false;
+    min-height: col.min-height;
+    preferred-height: col.preferred-height;
+    col := VerticalLayout {
+        spacing: 0px;
+        HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            padding-top: 15px;
+            padding-bottom: 4px;
+            spacing: 10px;
+            Text { text: root.title; font-size: 16px; font-weight: 640; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+            Rectangle { horizontal-stretch: 1; }
+            if root.note != "": Text { text: root.note; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
+            if root.coming: ComingWord { }
+        }
+        @children
+    }
+}
+
+// One block inside a settings card, with the hairline above it (the first one has none).
+component SetItem inherits VerticalLayout {
+    in property <bool> first: false;
+    in property <string> label;
+    in property <string> aside;
+    in property <bool> aside-strong: false;
+    padding-left: 18px;
+    padding-right: 18px;
+    padding-top: root.first ? 9px : 13px;
+    padding-bottom: 13px;
+    spacing: 9px;
+    if root.label != "": HorizontalLayout {
+        spacing: 10px;
+        Text { text: root.label; font-size: 13.5px; font-weight: 600; color: Theme.ink; horizontal-stretch: 0; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        if root.aside != "": Text {
+            text: root.aside;
+            font-family: root.aside-strong ? Type.tab : Type.sans;
+            font-size: root.aside-strong ? 13.5px : 12.5px;
+            font-weight: root.aside-strong ? 640 : 400;
+            color: root.aside-strong ? Theme.ink : Theme.ink-3;
+            vertical-alignment: center;
+        }
+    }
+    @children
+}
+component Hairline inherits Rectangle { height: 1px; background: Theme.rule-2; }
+
+// A label and its value (the concept's dl.conn / dl.aa-facts): the label in a fixed column, the value wrapping
+// beside it. The value sits directly in a VerticalLayout so its wrapped height is measured at its real width.
+component FactLine inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> mono: false;
+    in property <bool> strong: false;
+    in property <length> label-w: 112px;
+    min-height: lay.preferred-height;
+    preferred-height: lay.preferred-height;
+    lay := VerticalLayout {
+        padding-left: root.label-w + 12px;
+        Text {
+            text: root.value;
+            font-family: root.mono ? Type.mono : Type.tab;
+            font-size: root.mono ? 11.5px : 13px;
+            font-weight: root.strong ? 620 : 400;
+            color: Theme.ink;
+            wrap: word-wrap;
+        }
+    }
+    Text { x: 0px; y: root.mono ? 1px : 0.5px; width: root.label-w; text: root.label; font-size: 12.5px; color: Theme.ink-3; }
+}
+component Facts inherits VerticalLayout {
+    in property <[FactView]> facts;
+    in property <length> label-w: 112px;
+    spacing: 8px;
+    for f in root.facts: FactLine { label: f.label; value: f.value; mono: f.mono; label-w: root.label-w; }
+}
+
+// Usage refresh: any whole number of seconds from 30 to 3600 on a log scale, snapping to the marks within 3.5% of
+// the track. The value is saved when the pointer is released (PUT /api/accounts/settings).
+export component RefreshSlider inherits Rectangle {
+    in property <int> seconds;
+    in property <bool> enabled: true;
+    callback committed(int);
+    out property <int> shown: root.dragging || root.pending > 0 ? root.pending : root.seconds;
+    property <bool> dragging: false;
+    property <int> pending: 0;
+    // the saved value arrives with the next settings answer; then the pending one is released
+    property <int> reported: root.seconds;
+    changed reported => { if !root.dragging { root.pending = 0; } }
+    release := Timer { interval: 5s; running: false; triggered => { self.running = false; if !root.dragging { root.pending = 0; } } }
+
+    pure function pos(s: int) -> float {
+        return (ln(clamp(s, 30, 3600)) - ln(30)) / (ln(3600) - ln(30));
+    }
+    pure function from(x: float) -> int {
+        if abs(x - root.pos(30)) < 0.035 { return 30; }
+        if abs(x - root.pos(60)) < 0.035 { return 60; }
+        if abs(x - root.pos(120)) < 0.035 { return 120; }
+        if abs(x - root.pos(300)) < 0.035 { return 300; }
+        if abs(x - root.pos(600)) < 0.035 { return 600; }
+        if abs(x - root.pos(900)) < 0.035 { return 900; }
+        if abs(x - root.pos(1800)) < 0.035 { return 1800; }
+        if abs(x - root.pos(3600)) < 0.035 { return 3600; }
+        return clamp(round(exp(ln(30) + clamp(x, 0, 1) * (ln(3600) - ln(30)))), 30, 3600);
+    }
+    property <length> px: root.pos(root.shown) * root.width;
+    property <bool> settle: !root.dragging;
+    height: 44px;
+    opacity: root.enabled ? 1 : 0.5;
+
+    Rectangle { x: 0px; y: 11px; width: root.width; height: 6px; border-radius: 3px; background: Theme.track; }
+    Rectangle {
+        x: 0px;
+        y: 11px;
+        width: root.px;
+        height: 6px;
+        border-radius: 3px;
+        background: Theme.accent;
+        animate width { duration: root.settle && Motion.on ? 300ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        Rectangle { border-radius: 3px; background: @linear-gradient(90deg, Theme.fill-wash 0%, Theme.fill-wash.with-alpha(0) 100%); }
+    }
+    for s in [30, 60, 120, 300, 600, 900, 1800, 3600]: Rectangle {
+        x: root.pos(s) * root.width;
+        y: 21px;
+        width: 1px;
+        height: 5px;
+        background: Theme.rule-strong;
+    }
+    for l[i] in [{ s: 30, t: "30 s" }, { s: 120, t: "2 min" }, { s: 600, t: "10 min" }, { s: 3600, t: "60 min" }]: Text {
+        x: i == 0 ? 0px : i == 3 ? root.width - self.preferred-width : root.pos(l.s) * root.width - self.preferred-width / 2;
+        y: 28px;
+        text: l.t;
+        font-family: Type.mono;
+        font-size: Type.caption;
+        color: Theme.ink-3;
+    }
+    thumb := Rectangle {
+        x: root.px - 9px;
+        y: 5px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: Theme.paper;
+        border-width: 2px;
+        border-color: Theme.accent;
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
+        transform-scale: root.dragging ? 1.22 : ta.has-hover && root.enabled ? 1.12 : 1;
+        animate transform-scale { duration: Motion.on ? 200ms : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        animate x { duration: root.settle && Motion.on ? 300ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                root.dragging = true;
+                root.pending = root.from(self.mouse-x / max(1px, root.width));
+            }
+            if e.kind == PointerEventKind.up && root.dragging {
+                root.dragging = false;
+                if root.pending != root.seconds {
+                    release.running = false;
+                    release.running = true;
+                    root.committed(root.pending);
+                } else {
+                    root.pending = 0;
+                }
+            }
+        }
+        moved => {
+            if root.dragging { root.pending = root.from(self.mouse-x / max(1px, root.width)); }
+        }
+    }
+}
+global AcFormat {
+    // "30 s", "1 min", "7 min 17 s" (public/view-model.mjs intervalLabel).
+    public pure function interval(s: int) -> string {
+        if s < 60 { return s + " s"; }
+        if mod(s, 60) == 0 { return floor(s / 60) + " min"; }
+        return floor(s / 60) + " min " + mod(s, 60) + " s";
+    }
+}
+
+component PolicyRow inherits VerticalLayout {
+    in property <AcPolicy> policy;
+    in property <bool> busy;
+    callback act(string, string);
+    property <int> pending: -1;
+    property <int> shown: root.pending >= 0 ? root.pending : root.policy.threshold;
+    property <int> reported: root.policy.threshold;
+    changed reported => { if root.pending == root.reported { root.pending = -1; } }
+    property <bool> on: root.policy.enabled;
+    changed on => { tg.on = self.on; }
+    send := Timer {
+        interval: 600ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.pending >= 0 {
+                root.act(root.policy.provider == "antigravity" ? "antigravity-threshold" : "threshold", root.pending + "%");
+                release.running = true;
+            }
+        }
+    }
+    release := Timer { interval: 5s; running: false; triggered => { self.running = false; root.pending = -1; } }
+    spacing: 2px;
+    HorizontalLayout {
+        spacing: 8px;
+        VerticalLayout { alignment: center; ProviderMark { provider: root.policy.provider; size: 20px; } }
+        Text { min-width: 76px; text: root.policy.name; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+        TipArea {
+            owner: "policy:" + root.policy.provider;
+            tip: root.policy.tip;
+            width: tg.preferred-width;
+            tg := Toggle {
+                y: (parent.height - self.height) / 2;
+                on: root.policy.enabled;
+                enabled: root.policy.toggle-enabled && !root.busy;
+                toggled(on) => { root.act(root.policy.provider == "antigravity" ? "antigravity-automatic" : "automatic", on ? "true" : "false"); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            opacity: root.policy.wait ? 0.5 : 1;
+            Text { text: "at"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+            VerticalLayout {
+                alignment: center;
+                Stepper {
+                    value: root.shown;
+                    min: root.policy.min;
+                    max: root.policy.max;
+                    known: root.policy.threshold >= 0;
+                    enabled: root.policy.step-enabled && !root.busy;
+                    step(d) => {
+                        root.pending = clamp(root.shown + d, root.policy.min, root.policy.max);
+                        release.running = false;
+                        send.running = false;
+                        send.running = true;
+                    }
+                }
+            }
+            Text { text: "used"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    // under the name, after the mark and its gap
+    if root.policy.sub != "": VerticalLayout {
+        padding-left: 28px;
+        Text {
+            text: root.policy.sub;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// One Update apps result line: the app and what happened, on a dashed rule; a quiet bar runs while it is busy.
+component UpdLine inherits VerticalLayout {
+    in property <AcUpdItem> item;
+    in property <bool> first;
+    spacing: 0px;
+    if !root.first: DashedRule { }
+    TipArea {
+        owner: "upd:" + root.item.key;
+        tip: root.item.tip;
+        min-height: 30px;
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: root.item.app; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            Text {
+                text: root.item.result;
+                font-size: 12.5px;
+                font-weight: root.item.tone == "good" ? 600 : 400;
+                color: root.item.tone == "good" ? Theme.good-text : root.item.tone == "crit" ? Theme.crit-text : root.item.tone == "run" ? Theme.accent-text : Theme.ink-3;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+        }
+        if root.item.running: Rectangle {
+            y: parent.height - 3px;
+            height: 3px;
+            border-radius: 2px;
+            background: Theme.track;
+            clip: true;
+            Rectangle {
+                // one segment travelling while the host is busy (stops when it is not)
+                x: (mod(animation-tick() / 1400ms, 1) * 1.3 - 0.3) * parent.width;
+                width: parent.width * 0.3;
+                border-radius: 2px;
+                background: Theme.accent;
+            }
+        }
+    }
+}
+
+// The Dashboard sign-in block (app-auth.js renderSettingsSection). Only what the server reports is shown as a
+// value; Change password, other browsers and paired trays wait for CONTRACT-auth-devices.md and say so.
+component SigninGroup inherits SetGroup {
+    title: "Dashboard sign-in";
+    SetItem {
+        first: true;
+        FactLine { label: "Signed in as"; value: AcData.signin.username; strong: true; }
+        FactLine { label: "Connection"; value: AcData.signin.connection; }
+        TipArea {
+            owner: "session";
+            tip: AcData.signin.session-tip;
+            min-height: session-line.preferred-height;
+            session-line := FactLine {
+                label: "This session";
+                value: AcData.signin.session + (AcData.signin.session-sub != "" ? " · " + AcData.signin.session-sub : "");
+            }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Text { width: 112px; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                TipArea {
+                    owner: "others";
+                    tip: AcData.signin.other-tip;
+                    width: others-btn.preferred-width;
+                    height: 28px;
+                    others-btn := Button { small: true; text: "Sign out other browsers"; enabled: false; }
+                }
+                ComingWord { }
+            }
+        }
+    }
+    Hairline { }
+    SetItem {
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Password"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+            Rectangle { horizontal-stretch: 1; }
+            TipArea {
+                owner: "password";
+                tip: AcData.signin.password-tip;
+                width: pw-btn.preferred-width;
+                height: 28px;
+                pw-btn := Button { small: true; text: "Change password"; enabled: false; }
+            }
+            ComingWord { }
+        }
+    }
+    Hairline { }
+    SetItem {
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Paired tray apps"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+            Rectangle { horizontal-stretch: 1; }
+            TipArea {
+                owner: "devices";
+                tip: AcData.signin.devices-tip;
+                width: 50px;
+                height: 20px;
+                ComingWord { }
+            }
+        }
+        IconNote { icon: "link"; text: AcData.signin.devices-note; }
+        HorizontalLayout {
+            alignment: start;
+            TipArea {
+                owner: "revoke-all";
+                tip: AcData.signin.revoke-all-tip;
+                width: all-btn.preferred-width;
+                height: 28px;
+                all-btn := Button { small: true; kind: "danger-text"; icon: "logout"; text: "Sign out all devices"; enabled: false; }
+            }
+        }
+    }
+    Hairline { }
+    SetItem {
+        Rectangle {
+            min-height: pairing.preferred-height;
+            preferred-height: pairing.preferred-height;
+            pairing := VerticalLayout {
+                padding-left: 25px;
+                StyledText {
+                    text: AcData.pairing-note.length >= 2
+                        ? @markdown("<font color='\{Theme.ink}'>**\{AcData.pairing-note[0].text}**</font>\{AcData.pairing-note[1].text}")
+                        : @markdown("");
+                    default-color: Theme.ink-2;
+                    default-font-size: 12.5px;
+                }
+            }
+            Icon { x: 0px; y: 2px; width: 15px; height: 15px; name: "info"; tint: Theme.ink-3; }
+        }
+    }
+}
+
+component SettingsGroup inherits SetGroup {
+    in property <string> theme-value;
+    in property <bool> busy;
+    callback theme-picked(string);
+    callback act(string, string);
+    title: "Settings";
+    SetItem {
+        first: true;
+        label: "Appearance";
+        aside: "Auto follows the system";
+        HorizontalLayout {
+            alignment: start;
+            Segmented {
+                items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
+                value: root.theme-value;
+                changed-value(v) => { root.theme-picked(v); }
+            }
+        }
+    }
+    Hairline { }
+    SetItem {
+        label: "Usage refresh";
+        aside: AcData.refresh-known ? "Every " + AcFormat.interval(slider.shown) : "Not reported";
+        aside-strong: AcData.refresh-known;
+        slider := RefreshSlider {
+            seconds: AcData.refresh-seconds;
+            enabled: AcData.refresh-known && !root.busy;
+            committed(s) => { root.act("refresh-interval", s + "s"); }
+        }
+        Text {
+            text: AcData.refresh-known ? "Any value from 30 seconds to 60 minutes; it snaps to the marks." : "The saved interval could not be read, so it cannot be changed here.";
+            font-size: Type.small;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+    Hairline { }
+    SetItem {
+        label: "Auto-switch policies";
+        aside: "Both in % used";
+        VerticalLayout {
+            spacing: 10px;
+            for p in AcData.policies: PolicyRow {
+                policy: p;
+                busy: root.busy;
+                act(kind, value) => { root.act(kind, value); }
+            }
+        }
+    }
+}
+
+component UpdateGroup inherits SetGroup {
+    title: "Update apps";
+    note: "Runs from Update apps in the header";
+    SetItem {
+        first: true;
+        Runs {
+            runs: AcData.update-head;
+            size: 12.5px;
+            ink: Theme.ink-3;
+            strong-ink: Theme.ink-2;
+            strong-weight: 600;
+            tabular: true;
+        }
+        for h in AcData.update-hosts: VerticalLayout {
+            spacing: 0px;
+            padding-top: 4px;
+            HorizontalLayout {
+                spacing: 7px;
+                padding-top: 4px;
+                padding-bottom: 2px;
+                VerticalLayout { alignment: center; PlatformGlyph { platform: h.platform; tint: Theme.ink-3; width: 13px; height: 13px; } }
+                Caps { text: h.label.to-uppercase(); }
+            }
+            for item[i] in h.items: UpdLine { item: item; first: i == 0; }
+        }
+    }
+}
+
+component ConnectionGroup inherits SetGroup {
+    title: "Connection";
+    SetItem {
+        first: true;
+        Facts { facts: AcData.connection; label-w: 104px; }
+        Text { text: "Read only."; font-size: Type.small; color: Theme.ink-3; }
+    }
+}
+
+component AboutGroup inherits SetGroup {
+    title: "About";
+    SetItem {
+        first: true;
+        HorizontalLayout {
+            spacing: 14px;
+            VerticalLayout { alignment: center; AppLogo { size: 34px; } }
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+                Text { text: "AI Account Center"; font-size: 13.5px; font-weight: 640; color: Theme.ink; }
+                Text { text: AcData.about-version + " · built with Slint 1.18.1"; font-size: 12.5px; color: Theme.ink-3; }
+            }
+        }
+        // Slint's required attribution
+        HorizontalLayout {
+            alignment: start;
+            AboutSlint { width: 220px; height: 92px; }
+        }
+    }
+}
+
+// The settings groups in one column (from 1280 px, beside the providers) or two (below them, narrower).
+export component SettingsColumn inherits VerticalLayout {
+    in property <bool> two-col: false;
+    in property <string> theme-value;
+    in property <bool> busy;
+    callback theme-picked(string);
+    callback act(string, string);
+    spacing: 16px;
+    alignment: start;
+    SigninGroup { }
+    if !root.two-col: VerticalLayout {
+        spacing: 16px;
+        SettingsGroup {
+            theme-value: root.theme-value;
+            busy: root.busy;
+            theme-picked(v) => { root.theme-picked(v); }
+            act(k, v) => { root.act(k, v); }
+        }
+        UpdateGroup { }
+        ConnectionGroup { }
+        AboutGroup { }
+    }
+    if root.two-col: HorizontalLayout {
+        spacing: 16px;
+        alignment: stretch;
+        VerticalLayout {
+            spacing: 16px;
+            alignment: start;
+            horizontal-stretch: 1;
+            SettingsGroup {
+                theme-value: root.theme-value;
+                busy: root.busy;
+                theme-picked(v) => { root.theme-picked(v); }
+                act(k, v) => { root.act(k, v); }
+            }
+            ConnectionGroup { }
+        }
+        VerticalLayout {
+            spacing: 16px;
+            alignment: start;
+            horizontal-stretch: 1;
+            UpdateGroup { }
+            AboutGroup { }
+        }
+    }
+}

@@ -257,7 +257,7 @@ export component ConfirmBox inherits Rectangle {
 
 // The inline question before activating an account that is already past the switch point. It opens
 // below its row with an animated height and a content fade.
-component ConfirmLine inherits Rectangle {
+export component ConfirmLine inherits Rectangle {
     in property <[RunView]> runs;
     in property <bool> open;
     in property <bool> busy;
@@ -623,7 +623,7 @@ component StepButton inherits Rectangle {
 }
 
 // The auto-switch point as a "% used" stepper.
-component Stepper inherits Rectangle {
+export component Stepper inherits Rectangle {
     in property <int> value;
     in property <int> min: 50;
     in property <int> max: 99;
@@ -1097,7 +1097,7 @@ export component AccountSection inherits Plate {
 }
 
 // A dashed hairline (Slint draws no dash arrays): 3 px dashes, 3 px apart.
-component DashedRule inherits Rectangle {
+export component DashedRule inherits Rectangle {
     height: 1px;
     property <int> dashes: max(1, ceil(root.width / 6px));
     for i in root.dashes: Rectangle {

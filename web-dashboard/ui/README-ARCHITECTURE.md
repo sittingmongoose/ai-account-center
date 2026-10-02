@@ -12,10 +12,13 @@ public/bridge.js          network, session, timers, URL state; the only code tha
 public/view-model.mjs     DTO -> view model v2 for Home, Details, header, Update apps (pure, tested)
 public/analytics-data.mjs DTO -> analytics view + analyticsSlintModel() v3 (pure, tested)
 public/analytics-usage.mjs, analytics-quota.mjs, model-rates.mjs   the Analytics page's numbers and chart geometry
+public/accounts-view.mjs  DTO -> Accounts & Settings view model v1 (pure, tested); LIVE lists what the server can do
+public/auth-view.mjs      the sign-in page's words and rules: strength, setup checks, limiter headers (pure, tested)
 public/*-data.mjs, *-confirmation.mjs, visible-usage.mjs   truthfulness and switching rules (tested)
 src/lib.rs                wasm entry points; JSON -> Slint structs; persistent models updated in place
 src/sync.rs               sync_rows() and Nested<T>: diff by id with set_row_data
 src/analytics.rs          analytics v3 JSON -> the AxData global (persistent models)
+src/accounts.rs           accounts v1 JSON -> the AcData global (persistent models)
 ui/dashboard.slint        the shell: header, routing, overlays, sign-in layer; re-exports models.slint
 ui/models.slint           every view-model struct (the contract between Rust and the pages)
 ui/theme.slint            Theme / Motion / Type / Breakpoints globals and the embedded fonts
@@ -36,7 +39,9 @@ reading in Slint, never add or average across accounts, never turn a missing val
   ("user\npassword"), `details` (account id), `details-closed`, `launch` ("profile:mac|windows"), `activate`
   (Codex profile), `antigravity-activate` (profile id), `automatic`, `threshold` ("95%"),
   `antigravity-automatic`, `antigravity-threshold`, `antigravity-pool`, `refresh-interval` ("1 min"),
-  `activation-confirm`, `activation-cancel`, the Analytics kinds listed under Analytics v3,
+  `activation-confirm`, `activation-cancel`, `accounts-show` ("provider:show|hide"), `antigravity-cooldown`
+  (seconds), `setup` ("user\npassword\nconfirm\ncode"), `setup-typing` ("password\nconfirm"), `auth-recheck`,
+  `login-limit-over`, the Analytics kinds listed under Analytics v3,
   `analytics-metric-key` (quota-history key), and the older `analytics-provider|account|metric|account-id|
   activity-interval`. Add new kinds; never repurpose one.
 - **State comes in through wasm exports** (src/lib.rs): `set_dashboard(json)` (view model v2),
@@ -45,9 +50,10 @@ reading in Slint, never add or average across accounts, never turn a missing val
   `close_details`, `set_update_status(json)`, `show_activation_confirmation(json)`,
   `close_activation_confirmation`, `set_analytics(json)`, `set_analytics_head(json)`,
   `set_analytics_trend_paths(json)` (one morph frame), `set_analytics_loading`, `set_current_page`,
-  `set_refresh_interval`.
+  `set_refresh_interval`, `set_accounts(json)` (Accounts & Settings v1), `set_signin_strength(json)`.
 - **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs,
   and `ANALYTICS_VIEW_VERSION = 3` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
+  and `ACCOUNTS_VIEW_VERSION = 1` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
   a mismatch is refused, not half-rendered. Bump the pair together when its structs change shape.
 - **In-place updates**: lib.rs owns one `Rc<VecModel<T>>` per list (sections, cards, registry, toasts, Details
   meters/amounts/facts, processes, KPIs, quota groups) and a `Nested<T>` per nested list (a section's rows, a
@@ -148,6 +154,55 @@ bridge.js interpolates the 360-sample point arrays every frame and pushes only t
 the exact text from bridge.js; the donut sweeps and morphs, the gauge arc and its number share one ease-out,
 bars grow in sequence, rows of the quota history and the agenda rise in with a stagger. Nothing loops while
 idle; the recent-sessions skeleton shimmers twice on first view.
+
+### Accounts & Settings v1
+
+The page (W4) is built like the concept's `app-accounts.js` and the Dashboard sign-in block of `app-auth.js`.
+`accountsViewModel(serverData, ctx)` (public/accounts-view.mjs) returns `{ version, colA, colB, ag, policies,
+refresh, update, signin, connection, about }`; src/accounts.rs writes it into the `AcData` global
+(ui/pages/accounts/ac-data.slint) with persistent models (sections, rows by id, each row's actions, footers,
+policies, Update apps hosts and their lines).
+
+- **Providers**: every provider of the registry, the ones with their own sign-in flows (`colA`: Claude, Codex,
+  Antigravity) before the rest (`colB`), even at 0 accounts (an empty line and its add action). `ACCOUNT_KINDS`
+  holds each provider's kind line, source label, slot count and the concept's minimum actions width. Qwen and the
+  OpenCode console wallet are browser sessions, never API keys (CONTRACT-registry-lifecycle section 7).
+- **Rows**: identity and meta (plan · label), the status word only for an exception (Stale after 30 minutes, or
+  the status word), "sampled 1m ago", the source and where; fixed action slots (`actions`, one `AcAction` per
+  slot: `switch`, `button`, `icon`, `quiet`, `empty`). Switch state (active, `activeLabel`, `canActivate`, the
+  inline confirm past the switch point) comes from the Home view model computed with no provider hidden, so a
+  provider hidden on Home still switches here. The full row opens Details; nested actions never do.
+- **What is live**: `LIVE` in accounts-view.mjs. Activate (Codex, Antigravity), Claude Open on Mac or Windows, the
+  Codex and Antigravity policies (toggle, threshold, pool, cooldown through the existing PUT routes), the
+  refresh interval and the theme are live. Add account, Sign in again, Replace key, Remove, app Sign in,
+  Re-check, server-side visibility, Change password, other browsers and paired trays are drawn in their places,
+  dimmed, with a `coming` caption and a tip that says what they will do; worktrees/status/W4.md lists the
+  contracts. When a route lands: flip its `LIVE` entry and add its handler in bridge.js.
+- **Show on dashboard**: saved in this browser (`localStorage['aac-hidden-providers']`) until the server stores
+  visibility. bridge.js keeps the response as `serverData` and renders everything else from `data`, the same
+  response with this browser's hidden providers added to `settings.hiddenProviders`, so Home, Details and
+  Analytics honour it. A section hidden here says "Hidden in this browser"; one hidden by the server "Hidden
+  everywhere".
+- **Settings column**: Dashboard sign-in (signed in as, connection, this session from the stored sign-in time,
+  and the coming items), Settings (Light/Dark/Auto, the usage refresh slider: any whole number of seconds from 30
+  to 3600 on a log scale that snaps within 3.5% of its marks, saved on release; the auto-switch policies in %
+  used), Update apps results by computer (Mac, Windows, Ubuntu; "Waiting for its turn" and a running bar while a
+  job runs), Connection (read only) and About with `AboutSlint`.
+
+### Sign-in (shell/signin.slint)
+
+The real login screen. bridge.js builds `AuthView` with the words from public/auth-view.mjs:
+- default, connecting (the scale bar sweeps), wrong (inline under the password, "N tries left before sign-in
+  pauses for 15 minutes" from `RateLimit-Remaining` and `RateLimit-Policy`; the fields shake), limited (from a 429:
+  "Try again in 15 minutes", the clock time from `Retry-After`, a mm:ss countdown and a draining bar; the rings
+  dim), expired (a stored sign-in time says whether the session ran out after its hours or ended early),
+  setup (only when `/api/auth/check` reports `accessMode: "setup"`), success (the button turns into a check, the
+  bar fills with the Apex ramp, then the layer cross-fades into the dashboard load-in);
+- the first-run form (username, password with the strength meter, confirmation with "Matches", setup code) shows
+  only when `GET /api/auth/setup` reports `setupCodeRequired`, the signal that comes with `POST /api/auth/setup`
+  (CONTRACT-auth-devices section 4); until then the setup state shows the command that sets sign-in up on the
+  server and a Check again button;
+- the network note says whether this address is plain HTTP, HTTPS or the dashboard host itself.
 
 ### URL state
 
@@ -280,6 +335,17 @@ Gotchas found while building Analytics (W3):
 - `StyledText` with `@markdown("<font color='\{Theme.ink-2}'>**\{lead}**</font>\{rest}")` mixes weights in
   a wrapping line (the KPI subtitles); interpolated strings are escaped.
 
+Gotchas found while building Accounts & Settings and sign-in (W4):
+- `row` is reserved on components too (`in property <AcRow> row` fails): name it `item`.
+- A wrapping Text given an explicit `width` from its container inside a layout makes a binding loop through
+  every ancestor's min-width (Reveal included). Put the Text directly in a VerticalLayout with padding for its
+  icon or label and place the icon or label absolutely beside it (`IconNote`, `FactLine`).
+- A callback cannot share a name with a property (`setup` the bool and `setup(...)` the callback).
+- A layout child cannot set `y`; use `transform-scale` or a wrapper for a small leave motion.
+- A Toggle assigns its own `on` when clicked, which ends a plain binding: re-assign it from a `changed` handler
+  on the model value (`ProviderSection.shown`, `PolicyRow.on`).
+- `StyledText` with `@markdown` mixes weights in a wrapping line (the pairing note, the limited banner's time).
+
 ## Pages
 
 - `pages/home.slint` (W2, built like the concept's Home):
@@ -307,11 +373,14 @@ Gotchas found while building Analytics (W3):
   `ax-trend.slint`, `ax-models.slint` (cost by model, model popover, donut), `ax-stats.slint` (sessions, token
   breakdown, cache gauge), `ax-time.slint` (heatmap, daily cost), `ax-quota.slint` (quota history and focus
   charts) and `ax-agenda.slint`. Chart rows reflow 3 -> 2 columns at 1600 px.
-- `pages/accounts.slint` (stub): provider registry rows, Appearance, Usage refresh, About with `AboutSlint`
-  (Slint's required attribution; keep it).
+- `pages/accounts.slint` (W4): the page layout by width (below 1280 px the settings sit under the providers in two
+  columns; from 1280 a 380 / 420 / 440 px settings column beside them, the source column folding into the
+  identity line from 1280 to 1439; from 2200 two provider columns). `pages/accounts/` holds `ac-data.slint`
+  (structs and the `AcData` global), `ac-provider.slint` (the provider section, rows with fixed slots measured
+  across the section, the selected-row highlight, the Antigravity policy box, the footer, `TipArea`,
+  `ComingWord`, `IconNote`) and `ac-settings.slint` (the settings groups, `RefreshSlider`, `AboutSlint`).
 - `pages/details.slint`: the Details content for the slide-over.
-- `shell/signin.slint`: the sign-in layer (states loading, default, connecting, wrong, limited, expired,
-  setup, success) with the contour motif.
+- `shell/signin.slint`: the sign-in page (see Sign-in above) with the contour motif.
 
 ## Visual check
 

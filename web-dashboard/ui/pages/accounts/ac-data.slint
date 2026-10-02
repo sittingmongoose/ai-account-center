@@ -1,0 +1,148 @@
+// The Accounts & Settings view model (version 1, public/accounts-view.mjs `accountsViewModel`), written by
+// src/accounts.rs into the AcData global. Rows and their actions are persistent models updated in place by id,
+// so a switch moves the selected-row highlight instead of re-mounting the list.
+import { RunView, FactView } from "../../models.slint";
+import { SegItem } from "../../components/segmented.slint";
+
+// One fixed action slot. kind: "switch" (Activate / Active), "button", "icon" (icon-only), "quiet" (a word),
+// "empty". A "coming" action is drawn dimmed and explains itself on hover.
+export struct AcAction {
+    kind: string,
+    act: string,
+    value: string,
+    label: string,
+    icon: string,
+    platform: string,
+    style: string,
+    enabled: bool,
+    coming: bool,
+    tip: string,
+}
+
+export struct AcRow {
+    id: string,
+    provider: string,
+    email: string,
+    meta: string,
+    src-inline: string,
+    status: string,
+    sampled: string,
+    sampled-tip: string,
+    src: string,
+    src-sub: string,
+    active: bool,
+    active-label: string,
+    can-activate: bool,
+    activate-kind: string,
+    profile: string,
+    activate-hint: string,
+    confirm: bool,
+    confirm-runs: [RunView],
+    actions: [AcAction],
+}
+
+export struct AcProvider {
+    id: string,
+    label: string,
+    kind-label: string,
+    kind-icon: string,
+    count: int,
+    count-text: string,
+    visible: bool,
+    hidden-note: string,
+    toggle-enabled: bool,
+    toggle-tip: string,
+    switchable: bool,
+    can-switch: bool,
+    slots: int,
+    acts-min: length,
+    how: string,
+    empty: string,
+    ag: bool,
+    foot: [AcAction],
+    rows: [AcRow],
+}
+
+// The Antigravity policy box under its rows.
+export struct AcAgPolicy {
+    shown: bool,
+    live: bool,
+    known: bool,
+    note-strong: string,
+    note: string,
+    enabled: bool,
+    toggle-enabled: bool,
+    toggle-tip: string,
+    threshold: int,
+    min: int,
+    max: int,
+    step-enabled: bool,
+    pools: [SegItem],
+    pool: string,
+    pool-enabled: bool,
+    cooldowns: [SegItem],
+    cooldown: string,
+    cooldown-enabled: bool,
+}
+
+export struct AcPolicy {
+    provider: string,
+    name: string,
+    known: bool,
+    enabled: bool,
+    toggle-enabled: bool,
+    threshold: int,
+    min: int,
+    max: int,
+    step-enabled: bool,
+    wait: bool,
+    sub: string,
+    tip: string,
+}
+
+export struct AcUpdItem {
+    key: string,
+    app: string,
+    result: string,
+    tone: string,
+    running: bool,
+    tip: string,
+}
+
+export struct AcUpdHost {
+    id: string,
+    label: string,
+    platform: string,
+    items: [AcUpdItem],
+}
+
+export struct AcSignin {
+    username: string,
+    connection: string,
+    session: string,
+    session-sub: string,
+    session-tip: string,
+    other-tip: string,
+    password-tip: string,
+    devices-note: string,
+    devices-tip: string,
+    revoke-all-tip: string,
+}
+
+export global AcData {
+    in-out property <bool> ready: false;
+    in-out property <[AcProvider]> col-a;
+    in-out property <[AcProvider]> col-b;
+    in-out property <AcAgPolicy> ag;
+    in-out property <[AcPolicy]> policies;
+    in-out property <int> refresh-seconds: 60;
+    in-out property <bool> refresh-known: false;
+    in-out property <bool> update-shown: false;
+    in-out property <bool> update-running: false;
+    in-out property <[RunView]> update-head;
+    in-out property <[AcUpdHost]> update-hosts;
+    in-out property <AcSignin> signin;
+    in-out property <[RunView]> pairing-note;
+    in-out property <[FactView]> connection;
+    in-out property <string> about-version;
+}
