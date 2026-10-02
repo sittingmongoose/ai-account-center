@@ -232,6 +232,7 @@ describe('configuration-backed runtime service gate', () => {
     ['config', 'auth', 'setup'],
     ['codex-auth', 'activate', 'saved'],
     ['antigravity', 'signin', 'party'],
+    ['antigravity', 'status'],
     ['bar', 'status'],
   ])('preserves runtime service setup for account operations: %j', async (...args) => {
     expect(await requiresRuntimeServices(args)).toBe(true);

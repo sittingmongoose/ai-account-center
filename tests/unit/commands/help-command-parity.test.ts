@@ -149,7 +149,11 @@ describe('retained help surface', () => {
         errors.push(l)
       )
     ).toBe(1);
-    expect(errors.length).toBe(3);
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['status', 'extra'], (l) => errors.push(l))
+    ).toBe(1);
+    expect(errors.length).toBe(4);
+    expect(lines.join('\n')).toContain('ai-account-center antigravity status');
   });
 
   test('bar help delegates to menu bar help without launching it', async () => {

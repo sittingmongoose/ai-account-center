@@ -8,9 +8,11 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('');
   writeLine('Usage');
   writeLine('  ai-account-center antigravity signin <profile>');
+  writeLine('  ai-account-center antigravity status');
   writeLine('');
   writeLine('Commands');
   writeLine('  signin <profile>   Add a new saved profile, or sign in again to a saved one');
+  writeLine('  status             Show what account switching still needs (read-only)');
   writeLine('');
   writeLine('Notes');
   writeLine('  Runs on Ubuntu in an interactive terminal (over SSH is fine). The official');
@@ -28,6 +30,20 @@ export async function handleAntigravityCommand(
 ): Promise<number> {
   if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
     printAntigravityHelp(writeLine);
+    return 0;
+  }
+  if (args[0] === 'status') {
+    if (args.length !== 1) {
+      writeLine('[X] Usage: ai-account-center antigravity status');
+      return 1;
+    }
+    const { formatAntigravityReleaseStatus, readAntigravityReleaseStatus } = await import(
+      '../antigravity/release-status'
+    );
+    for (const line of formatAntigravityReleaseStatus(
+      readAntigravityReleaseStatus({ ccsDir: getCcsDir(), home: os.homedir() })
+    ))
+      writeLine(line);
     return 0;
   }
   if (args[0] !== 'signin') {

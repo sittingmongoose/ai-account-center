@@ -133,7 +133,10 @@ export async function requiresRuntimeServices(args: string[]): Promise<boolean> 
     );
   }
   if (command === 'antigravity') {
-    return subcommand === 'signin' && !rest.some((arg) => ['--help', '-h'].includes(arg));
+    return (
+      ['signin', 'status'].includes(subcommand) &&
+      !rest.some((arg) => ['--help', '-h'].includes(arg))
+    );
   }
   if (command === 'bar') {
     return (
