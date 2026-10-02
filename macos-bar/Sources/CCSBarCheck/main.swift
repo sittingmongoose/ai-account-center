@@ -1300,6 +1300,19 @@ private func checkDashboardAdditions() throws {
   let dashboardOnly = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hiddenAgy))
   try expect(dashboardOnly.canActivateAntigravity(dashboardOnly.accounts.first { $0.id == "agy-b" }!),
     "Hiding a provider on the dashboard alone leaves it, and its switching, in the tray")
+  // One of two Antigravity accounts hidden in the tray: the other keeps Activate, because the server keeps the hidden
+  // one as a switch candidate and "Show in tray" never changes what the user can operate.
+  var oneHiddenAgy = guarded
+  oneHiddenAgy["accounts"] = guardedAccounts.filter { ["agy-a", "agy-b"].contains($0["id"] as! String) }.map { row -> [String: Any] in
+    var row = row
+    if row["id"] as? String == "agy-a" { row["trayHidden"] = true }
+    return row
+  }
+  let oneHidden = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: oneHiddenAgy))
+  try expect(oneHidden.visibleAccounts.filter { $0.provider == "antigravity" }.map(\.id) == ["agy-b"]
+    && oneHidden.antigravityAccountCount == 2
+    && oneHidden.canActivateAntigravity(oneHidden.accounts.first { $0.id == "agy-b" }!),
+    "Hiding one of two Antigravity accounts in the tray keeps switching for the other")
 
   var malformed = object
   malformed["antigravityAutoSwitch"] = ["enabled": "yes", "thresholdUsedPercent": 400]

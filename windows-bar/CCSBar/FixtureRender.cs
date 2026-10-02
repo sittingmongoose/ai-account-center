@@ -92,6 +92,16 @@ public static class FixtureRender
             var tight = compact.FirstOrDefault(meter => meter.Key == "antigravity:example-2|gemini-weekly");
             report.Notes[$"{name}_tight_reset_shown"] = tight?.ResetShown ?? "missing";
             report.Checks[$"{name}_compact_resets_shown_whole"] = tight is not null && compact.All(meter => !meter.ResetClipped);
+            // The active one of the two hidden in the tray: the other still offers Activate and the Auto-switch toggle
+            // stays live, because "Show in tray" never changes what the user can operate.
+            var agHidden = Clone(twoAg);
+            agHidden.Accounts.First(account => account.Id == "antigravity:example-2").TrayHidden = true;
+            window.ApplyDashboardSample(agHidden);
+            await Settle(window);
+            var agRow = FindUid(window.ContentPanel, "row:antigravity:example-1");
+            var agSection = FindUid(window.ContentPanel, "section:antigravity");
+            report.Checks[$"{name}_antigravity_switching_survives_tray_hiding"] = FindUid(window.ContentPanel, "row:antigravity:example-2") is null
+                && agRow is not null && FindUid(agRow, "mutation:activate") is not null && agSection is not null && FindUid(agSection, "mutation:toggle") is not null;
 
             // Hidden providers are honoured; an unknown provider still renders, with the neutral mark.
             var hidden = Clone(fixture);
@@ -108,6 +118,24 @@ public static class FixtureRender
             report.Checks[$"{name}_hidden_account_is_left_out"] = FindUid(window.ContentPanel, "row:claude:example-4") is null && FindUid(window.ContentPanel, "row:claude:example-1") is not null;
             report.Checks[$"{name}_unknown_provider_renders"] = FindUid(window.ContentPanel, "provider:newcode") is not null;
             report.Checks[$"{name}_status_counts_visible_providers"] = window.StatusText.Text.StartsWith("9 of 9", StringComparison.Ordinal);
+
+            // A provider card's details list only the accounts shown in the tray, on the first click as on a redraw.
+            var detailHidden = Clone(fixture);
+            var zaiShown = detailHidden.Accounts.First(account => account.Provider == "zai");
+            var zaiHidden = Clone(new AccountDashboard { Accounts = { zaiShown } }).Accounts[0];
+            zaiHidden.Id = "zai:example-hidden"; zaiHidden.Email = "zai-hidden@example.com"; zaiHidden.Label = "Z.ai hidden account"; zaiHidden.TrayHidden = true;
+            detailHidden.Accounts.Insert(detailHidden.Accounts.IndexOf(zaiShown) + 1, zaiHidden);
+            window.ApplyDashboardSample(detailHidden);
+            await Settle(window);
+            window.ToggleDetailsForCheck("prov:zai");
+            await Settle(window);
+            bool LeaksHidden() => All(window.ContentPanel).OfType<TextBlock>().Any(text => text.Text.Contains("zai-hidden@example.com", StringComparison.Ordinal) || text.Text.Contains("Z.ai hidden account", StringComparison.Ordinal));
+            var firstClick = FindUid(window.ContentPanel, "details") is not null && !LeaksHidden();
+            window.ApplyDashboardSample(Clone(detailHidden));
+            await Settle(window);
+            report.Checks[$"{name}_provider_details_leave_out_tray_hidden_accounts"] = firstClick && FindUid(window.ContentPanel, "details") is not null && !LeaksHidden();
+            window.ToggleDetailsForCheck("prov:zai");
+            await Settle(window);
 
             // Details: full-row expansion under Claude 1.
             window.ApplyDashboardSample(Clone(fixture));

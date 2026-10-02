@@ -250,9 +250,10 @@ struct AccountsMenuView: View {
     }
     guard let dashboard = model.dashboard else { return "" }
     var text = "Updated \(TrayFormat.relative(AccountFormatting.date(dashboard.updatedAt))). Every reading is the dashboard's sample."
-    if !dashboard.trayHiddenProviders.isEmpty {
-      text += " Hidden in the tray: \(dashboard.trayHiddenProviders.sorted().map(ProviderMark.name).joined(separator: ", "))."
-    }
+    var hidden = dashboard.trayHiddenProviders.sorted().map(ProviderMark.name)
+    let oneByOne = dashboard.trayHiddenAccounts.filter { !dashboard.trayHiddenProviders.contains($0.provider) }.count
+    if oneByOne > 0 { hidden.append("\(oneByOne) account\(oneByOne == 1 ? "" : "s")") }
+    if !hidden.isEmpty { text += " Hidden in the tray: \(hidden.joined(separator: ", "))." }
     return text
   }
 
@@ -291,7 +292,9 @@ struct AccountsMenuView: View {
           .modifier(Entrance(index: 4, context: open))
         }
         if dashboard.visibleAccounts.isEmpty {
-          Text("No accounts are available yet.").font(.system(size: 12.5)).foregroundStyle(palette.label2).padding(20)
+          Text(dashboard.accounts.isEmpty ? "No accounts are available yet."
+            : "Every account is hidden in the tray. Change it in the dashboard.")
+            .font(.system(size: 12.5)).foregroundStyle(palette.label2).padding(20)
         }
       } else {
         HStack(spacing: 8) {

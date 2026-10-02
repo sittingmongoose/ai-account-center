@@ -54,11 +54,16 @@ public struct AccountDashboard: Decodable, Sendable {
     account.canActivate && !codexAutoSwitch.activationInProgress
   }
 
-  /// Antigravity Activate needs a second account to switch to, a runtime-verified Ubuntu profile and no
-  /// activation already running, manual or automatic.
+  /// Every Antigravity account the dashboard reports, tray-hidden ones included. "Show in tray" for one account only
+  /// changes what the panel lists; the server keeps that account as a switch candidate, so the "second account"
+  /// rule counts it too.
+  public var antigravityAccountCount: Int { accounts.filter { $0.provider == "antigravity" }.count }
+
+  /// Antigravity Activate needs a second account to switch to (shown in the tray or not), a runtime-verified Ubuntu
+  /// profile, no activation already running, manual or automatic, and the provider shown in the tray.
   public func canActivateAntigravity(_ account: DashboardAccount) -> Bool {
     account.canActivateAntigravity && antigravityAutoSwitch?.activationInProgress != true
-      && visibleAccounts.filter { $0.provider == "antigravity" }.count >= 2
+      && !trayHiddenProviders.contains("antigravity") && antigravityAccountCount >= 2
   }
 }
 

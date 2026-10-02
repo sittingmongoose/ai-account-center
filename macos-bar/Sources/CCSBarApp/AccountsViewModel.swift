@@ -503,8 +503,8 @@ final class AccountsViewModel: ObservableObject {
   /// Enabling needs the quota pool chosen in the dashboard; the server revalidates every write.
   var antigravityAutoCanEnable: Bool {
     guard let status = dashboard?.antigravityAutoSwitch else { return false }
-    let accounts = dashboard?.visibleAccounts.filter { $0.provider == "antigravity" } ?? []
-    return accounts.count >= 2 && status.requestedPoolId != nil && status.activationInProgress != true
+    // Every Antigravity account counts, tray-hidden ones too: hiding one in the tray never stops switching.
+    return (dashboard?.antigravityAccountCount ?? 0) >= 2 && status.requestedPoolId != nil && status.activationInProgress != true
   }
 
   func toggleAntigravityAutomatic(_ enabled: Bool) {

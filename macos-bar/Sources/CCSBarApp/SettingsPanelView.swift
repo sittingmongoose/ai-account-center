@@ -357,7 +357,7 @@ struct SettingsPanelView: View {
   private func seconds(_ value: Int) -> String { value < 120 ? "Every \(value) s" : "Every \(value / 60) min" }
 
   private func antigravityLine(_ dashboard: AccountDashboard?) -> String {
-    let count = dashboard?.visibleAccounts.filter { $0.provider == "antigravity" }.count ?? 0
+    let count = dashboard?.antigravityAccountCount ?? 0
     guard count >= 2 else { return count == 0 ? "No Antigravity accounts" : "Starts with a second account" }
     guard let status = dashboard?.antigravityAutoSwitch else { return "Status unavailable" }
     var line = "\(status.enabled ? "On" : "Off") · switches at \(status.thresholdUsedPercent)% used"

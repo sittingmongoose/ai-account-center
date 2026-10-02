@@ -455,7 +455,7 @@ enum PreviewRenderer {
       var trackWidths: [Double] = []
       var maxFillError = 0.0, maxTickError = 0.0, maxNotchError = 0.0
       let byID = Dictionary(uniqueKeysWithValues: dashboard.visibleAccounts.map { ($0.id, $0) })
-      let antigravityCount = dashboard.visibleAccounts.filter { $0.provider == "antigravity" }.count
+      let antigravityCount = dashboard.antigravityAccountCount
       for id in AlignmentProbe.frames.keys.sorted() where id.hasPrefix("meter|") && id.hasSuffix("|track") {
         guard let track = AlignmentProbe.frames[id] else { continue }
         // Meter keys join account and window ids with "|", as the pending-reset keys do.

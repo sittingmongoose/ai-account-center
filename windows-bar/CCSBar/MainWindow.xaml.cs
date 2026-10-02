@@ -372,8 +372,10 @@ public partial class MainWindow : Window
         StatusText.Inlines.Add(new Run($"{reporting} of {providers.Length}") { Foreground = Theme.Brush("Ink2"), FontWeight = FontWeights.Medium });
         StatusText.Inlines.Add(new Run(" reporting · " + (cached ? "cached" : "live") + " · updated " + (DateTimeOffset.TryParse(dashboard.UpdatedAt, out var at) ? Formatting.Clock(at) : "time unavailable")));
         if (staleSample) StatusText.Inlines.Add(new Run(" · refresh failed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold });
-        var hiddenNames = hidden.Select(provider => Formatting.ProviderName(provider)).ToArray();
-        StatusText.ToolTip = Ui.Tip($"Updated {Formatting.Relative(dashboard.UpdatedAt)}. Every reading is the dashboard's sample." + (hiddenNames.Length > 0 ? " Hidden in the trays: " + string.Join(", ", hiddenNames) + "." : ""));
+        var hiddenNames = hidden.Select(provider => Formatting.ProviderName(provider)).ToList();
+        var oneByOne = dashboard.TrayHiddenAccountCount;
+        if (oneByOne > 0) hiddenNames.Add(oneByOne + (oneByOne == 1 ? " account" : " accounts"));
+        StatusText.ToolTip = Ui.Tip($"Updated {Formatting.Relative(dashboard.UpdatedAt)}. Every reading is the dashboard's sample." + (hiddenNames.Count > 0 ? " Hidden in the trays: " + string.Join(", ", hiddenNames) + "." : ""));
     }
 
     // ------------------------------------------------------------------ rendering
@@ -397,7 +399,11 @@ public partial class MainWindow : Window
             ContentPanel.Children.Add(provider is "claude" or "codex" or "antigravity" ? AccountSection(provider, accounts) : ProviderCard(provider, accounts));
         }
         if (dashboard.Accounts.Count == 0) RenderEmpty("No accounts found", "Your signed-in accounts appear here when AI Account Center discovers them.");
-        else if (ContentPanel.Children.Count == (staleSample ? 1 : 0)) RenderEmpty("Every provider is hidden in the trays", "Turn on Show in tray for a provider in the dashboard's Accounts and Settings.");
+        else if (ContentPanel.Children.Count == (staleSample ? 1 : 0))
+        {
+            if (hidden.Count == 0) RenderEmpty("Every account is hidden in the tray", "Turn on Tray for an account in the dashboard's Accounts and Settings.");
+            else RenderEmpty("Every provider is hidden in the trays", "Turn on Show in tray for a provider in the dashboard's Accounts and Settings.");
+        }
         RenderFooter();
         if (busy || staleSample) DisableMutations();
         Dispatcher.BeginInvoke(new Action(() => { ContentScroll.ScrollToVerticalOffset(offset); PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
@@ -495,13 +501,25 @@ public partial class MainWindow : Window
 
     private bool AntigravitySwitchable(DashboardAccount[] accounts) => accounts.Count(account => account.Status is "ok" or "cached") >= 2;
 
+    /// <summary>Every Antigravity account the dashboard reports, tray-hidden ones included: "Show in tray" only changes
+    /// what this panel lists, never what the user can operate, and the server keeps hidden accounts as auto-switch
+    /// candidates. Falls back to the given rows when no sample is loaded.</summary>
+    internal static DashboardAccount[] AllAntigravity(AccountDashboard? sample, DashboardAccount[] fallback) =>
+        sample?.Accounts.Where(account => account.Provider == "antigravity").ToArray() ?? fallback;
+
+    /// <summary>The rows a provider's or an account's details may list: only the accounts shown in the tray.</summary>
+    internal static DashboardAccount[] DetailAccounts(AccountDashboard sample, string provider) =>
+        sample.ShownAccounts.Where(account => account.Provider == provider).ToArray();
+
     private UIElement AccountSection(string provider, DashboardAccount[] accounts)
     {
         var columns = Columns(provider, accounts);
         var switchable = provider is "codex" or "antigravity";
         double acts = provider == "claude" ? 62 : 108;
         var stack = new StackPanel();
-        var multiAg = provider == "antigravity" && accounts.Length > 1;
+        // Two Antigravity accounts get the auto-switch tools line, counting one hidden in the tray too: hiding it
+        // never takes away the switch the user can operate.
+        var multiAg = provider == "antigravity" && AllAntigravity(dashboard, accounts).Length > 1;
         stack.Children.Add(SectionHeader(provider, accounts, columns, acts, separateCaptions: multiAg));
         if (multiAg) stack.Children.Add(CaptionRow(columns, acts));
         var rowsGrid = new Grid { Margin = new Thickness(0, 0, 0, 0) };
@@ -740,7 +758,7 @@ public partial class MainWindow : Window
             return ActivateButton(account, () => ActivateCodex(account), dashboard?.CodexAutoSwitch.ActivationInProgress == true);
         }
         // Antigravity
-        var switchable = AntigravitySwitchable(accounts);
+        var switchable = AntigravitySwitchable(AllAntigravity(dashboard, accounts));
         if (switchable && account.Capabilities.AntigravityCanActivate && Formatting.IsSafeId(account.Capabilities.AntigravityProfileId))
             return ActivateButton(account, () => ActivateAntigravity(account), dashboard?.AntigravityAutoSwitch?.ActivationInProgress == true);
         if (accounts.Any(other => other.IsActive)) return null;
@@ -1040,13 +1058,13 @@ public partial class MainWindow : Window
         if (id.StartsWith("prov:", StringComparison.Ordinal))
         {
             var provider = id[5..];
-            body = ProviderDetails(provider, dashboard.Accounts.Where(account => account.Provider == provider).ToArray());
+            body = ProviderDetails(provider, DetailAccounts(dashboard, provider));
         }
         else
         {
-            var account = dashboard.Accounts.FirstOrDefault(candidate => candidate.Id == id);
+            var account = dashboard.ShownAccounts.FirstOrDefault(candidate => candidate.Id == id);
             if (account is null) return;
-            body = AccountDetails(account.Provider, account, dashboard.Accounts.Where(candidate => candidate.Provider == account.Provider).ToArray());
+            body = AccountDetails(account.Provider, account, DetailAccounts(dashboard, account.Provider));
         }
         stack.Children.Insert(index + 1, DetailsHost(body, open: false));
         if (busy || staleSample) DisableMutations();
@@ -1284,7 +1302,7 @@ public partial class MainWindow : Window
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         var status = dashboard?.AntigravityAutoSwitch;
-        if (!AntigravitySwitchable(accounts) || status is null)
+        if (!AntigravitySwitchable(AllAntigravity(dashboard, accounts)) || status is null)
         {
             var off = new ToggleSwitch(false, "Auto-switch", "Switching moves between Antigravity accounts, so it starts once a second account is signed in.");
             off.SetEnabled(false); row.Children.Add(off);
