@@ -15,7 +15,10 @@ import {
   claudeOpenUsesManagedHistory,
   openClaudeDesktopProfile,
 } from '../services/claude-desktop-open-service';
-import { getClaudeOpenOperations } from '../services/claude-open-operations';
+import {
+  getClaudeOpenOperations,
+  type ClaudeOpenOperation,
+} from '../services/claude-open-operations';
 import { ClaudeDesktopTransportError } from '../services/claude-desktop-transport';
 import { getClaudeDesktopUsage } from '../services/claude-desktop-usage-service';
 import { getCcsDir } from '../../utils/config-manager';
@@ -108,27 +111,47 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
     if (outcome && !outcome.ok) throw outcome.error;
     res.json({ opened: true, id, platform });
   };
+  // The Open running for this exact scope, profile and platform, if any.
+  const runningOpen = (): ClaudeOpenOperation | null => operations.running(scope, id, platform);
+  /**
+   * The Open this click answers with: a running one it joins, or the managed one it
+   * starts; null once the ordinary Open (no managed history copy) is done. Another
+   * click can start the managed Open while this one awaits, and that Open's history
+   * copy then holds Open with its marker. So the running Open is looked up again after
+   * every await, and a held refusal joins it when there is one. A hold with no Open
+   * running for this exact scope, profile and platform is durable and keeps its 409.
+   */
+  const startOrJoin = async (): Promise<ClaudeOpenOperation | null> => {
+    try {
+      const managed = await claudeOpenUsesManagedHistory(id, platform);
+      const joined = runningOpen();
+      if (joined) return joined;
+      if (!managed) {
+        // No managed history copy: the ordinary Open, answered when it is done.
+        await openClaudeDesktopProfile(id, platform);
+        return null;
+      }
+      // The same refusals as before, answered before any work starts.
+      await assertClaudeDesktopOpenAllowed(id, platform);
+    } catch (error) {
+      // Only the hold of an Open running now is joined; every other refusal stands.
+      const joined = error instanceof ClaudeHistoryOpenHeldError ? runningOpen() : null;
+      if (joined) return joined;
+      throw error;
+    }
+    // Every managed Open is tracked, so a polling client sees its progress too.
+    return (
+      runningOpen() ??
+      operations.start(scope, id, platform, (observer) =>
+        openClaudeDesktopProfile(id, platform, observer)
+      )
+    );
+  };
   try {
     // A click while its Open still runs joins it; the copy's own hold must not refuse it.
-    const running = operations.running(scope, id, platform);
-    if (running) {
-      if (respondAsync) accepted(running);
-      else await awaitOutcome();
-      return;
-    }
-    if (!(await claudeOpenUsesManagedHistory(id, platform))) {
-      // No managed history copy: the ordinary Open, answered when it is done.
-      await openClaudeDesktopProfile(id, platform);
-      res.json({ opened: true, id, platform });
-      return;
-    }
-    // The same refusals as before, answered before any work starts.
-    await assertClaudeDesktopOpenAllowed(id, platform);
-    // Every managed Open is tracked, so a polling client sees its progress too.
-    const operation = operations.start(scope, id, platform, (observer) =>
-      openClaudeDesktopProfile(id, platform, observer)
-    );
-    if (respondAsync) accepted(operation);
+    const operation = runningOpen() ?? (await startOrJoin());
+    if (!operation) res.json({ opened: true, id, platform });
+    else if (respondAsync) accepted(operation);
     else await awaitOutcome();
   } catch (error) {
     if (error instanceof ProfileError) {
