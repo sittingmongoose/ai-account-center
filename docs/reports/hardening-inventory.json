@@ -800,12 +800,12 @@
           "loc": 614
         },
         {
-          "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
-          "loc": 598
+          "file": "src/web-server/services/account-analytics-projection.ts",
+          "loc": 600
         },
         {
-          "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 588
+          "file": "src/utils/hooks/image-analysis-backend-resolver.ts",
+          "loc": 598
         }
       ]
     }

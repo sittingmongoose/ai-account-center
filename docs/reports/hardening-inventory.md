@@ -99,6 +99,6 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/config/migration-manager.ts` | 646 |
 | `src/cliproxy/services/usage-compatibility-transformer.ts` | 632 |
 | `src/cliproxy/services/stats-fetcher.ts` | 614 |
+| `src/web-server/services/account-analytics-projection.ts` | 600 |
 | `src/utils/hooks/image-analysis-backend-resolver.ts` | 598 |
-| `src/web-server/services/account-analytics-projection.ts` | 588 |
 

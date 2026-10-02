@@ -49,13 +49,22 @@ interface ActivityState {
   partial: boolean;
   /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
   pricing: AccountAnalyticsPricingLookup;
+  /** Recent cost of projecting this snapshot, reserved out of the response budget. */
+  projectionMs: number;
 }
 export interface AccountAnalyticsActivityDeps {
   loadWorker?: (request: UsageWorkerRequest) => Promise<UsageWorkerResult>;
   requests?: () => Array<{ provider: 'claude' | 'codex'; request: UsageWorkerRequest }>;
   now?: () => number;
   scope?: () => string;
+  /**
+   * End-to-end time for one activity answer: waiting for a running collection
+   * plus projecting the snapshot. The wait gives up what recent projections
+   * of this snapshot cost. Defaults to 1.5 s.
+   */
   responseBudgetMs?: number;
+  /** Monotonic milliseconds for measuring projections; `performance.now` by default. */
+  elapsedMs?: () => number;
   refreshIntervalSeconds?: () => number;
   pricing?: AccountAnalyticsPricingLookup;
 }
@@ -270,6 +279,7 @@ export class AccountAnalyticsActivityService {
         sources: [],
         partial: false,
         pricing: this.snapshotPricing(),
+        projectionMs: 0,
       };
       this.states.set(scope, state);
       while (this.states.size > 8) {
@@ -308,13 +318,16 @@ export class AccountAnalyticsActivityService {
       state.generation++;
       this.startCollection(state);
     }
+    const budget = this.deps.responseBudgetMs ?? 1500;
+    const elapsed = this.deps.elapsedMs ?? (() => performance.now());
+    const wait = Math.max(0, budget - state.projectionMs);
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (state.pending) {
       try {
         await Promise.race([
           state.pending,
           new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, this.deps.responseBudgetMs ?? 1500);
+            timer = setTimeout(resolve, wait);
           }),
         ]);
       } finally {
@@ -342,6 +355,7 @@ export class AccountAnalyticsActivityService {
         ? ` All available records have been read; ${unfinishedFiles} local log files end with unfinished records and will be checked for changes.`
         : ` ${completedFiles} of ${totalFiles} local log files have been read; remaining files resume from saved positions on the next check.`
       : '';
+    const projectionStart = elapsed();
     const activity = projectAccountAnalyticsActivity(
       state.sources,
       query,
@@ -360,7 +374,14 @@ export class AccountAnalyticsActivityService {
               : `Local Ubuntu CLI activity, across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
       { tz, pricing: state.pricing }
     );
-    return { ...activity, coverage: accountAnalyticsActivityCoverage(state.sources, from, to) };
+    const coverage = accountAnalyticsActivityCoverage(state.sources, from, to);
+    // Keep the dearest recent projection (halving older ones), capped at the
+    // budget, so a cheap 24h answer does not starve the next 31-day one.
+    state.projectionMs = Math.min(
+      budget,
+      Math.max(elapsed() - projectionStart, state.projectionMs / 2)
+    );
+    return { ...activity, coverage };
   }
 }
 

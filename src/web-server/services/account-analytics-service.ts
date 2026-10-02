@@ -7,12 +7,14 @@ import {
 } from './account-analytics-activity';
 import {
   ACCOUNT_ANALYTICS_RETAINED_MS,
+  canonicalAccountAnalyticsTimeZone,
   localDate,
   localMidnight,
   resolveAccountAnalyticsRange,
   validateAccountAnalyticsRangeShape,
 } from './account-analytics-range';
 import {
+  analyticsProviderRows,
   dashboardRegistryFacts,
   defaultAnalyticsProviderTable,
   type AnalyticsProviderEntry,
@@ -249,14 +251,21 @@ export class AccountAnalyticsService {
     return state;
   }
 
-  async get(query: AccountAnalyticsQuery): Promise<AccountAnalytics> {
+  async get(requested: AccountAnalyticsQuery): Promise<AccountAnalytics> {
     // Malformed ranges and zones fail before any collector or history read.
-    validateAccountAnalyticsRangeShape(query);
-    const tz = query.tz ?? 'UTC';
+    validateAccountAnalyticsRangeShape(requested);
+    const tz = canonicalAccountAnalyticsTimeZone(requested.tz);
+    const query: AccountAnalyticsQuery = { ...requested, tz };
+    const clock = this.deps.now ?? Date.now;
+    // So does a custom range outside retention: a refused request records no
+    // quota snapshot. The range is resolved again after the snapshot, whose
+    // sample times must not fall after `to`.
+    const checkedAt = clock();
+    resolveAccountAnalyticsRange(query, checkedAt, checkedAt - ACCOUNT_ANALYTICS_RETAINED_MS);
     const scope = (this.deps.scope ?? getCcsDir)();
     const dashboard = await (this.deps.getDashboard ?? getAccountDashboard)(query.platform, false);
     const state = await this.record(dashboard.accounts, scope);
-    const now = (this.deps.now ?? Date.now)();
+    const now = clock();
     const retainedFrom = now - ACCOUNT_ANALYTICS_RETAINED_MS;
     // Every range except `all` resolves without the data; `all` reads the
     // whole retained window and then starts at the oldest retained point.
@@ -305,46 +314,14 @@ export class AccountAnalyticsService {
       .filter((stamp): stamp is string => stamp !== null)
       .sort();
 
-    // The provider list does not depend on the provider filter, so a client
-    // can build its filter from it; the three counts follow the account filter.
-    const latestByIdentity = new Map<string, string>();
-    for (const record of state.data?.records ?? []) {
-      const sampled = Date.parse(record.sampledAt);
-      if (!Number.isFinite(sampled) || sampled < from || sampled > to) continue;
-      const previous = latestByIdentity.get(record.identity);
-      if (previous === undefined || Date.parse(previous) < sampled)
-        latestByIdentity.set(record.identity, record.sampledAt);
-    }
-    const withActivity = new Set<string>(coverage?.providersWithActivity ?? []);
-    const providers = registry.table.flatMap((entry) => {
-      const all = dashboard.accounts.filter((account) => account.provider === entry.id);
-      const hasActivity = withActivity.has(entry.id);
-      if (all.length === 0 && !hasActivity) return [];
-      const matching = all.filter(
-        (account) => query.account === 'all' || query.account === account.id
-      );
-      const latest = matching
-        .map((account) => latestByIdentity.get(accountAnalyticsIdentity(account)))
-        .filter((stamp): stamp is string => stamp !== undefined)
-        .sort((a, b) => Date.parse(a) - Date.parse(b))
-        .pop();
-      return [
-        {
-          provider: entry.id,
-          label: entry.label,
-          order: entry.order,
-          visible: registry.visible(entry.id),
-          accountCount: matching.length,
-          availableAccounts: matching.filter(
-            (account) => account.status === 'ok' || account.status === 'cached'
-          ).length,
-          latestSampleAt: latest ?? null,
-          hasQuotaHistory: all.some((account) =>
-            latestByIdentity.has(accountAnalyticsIdentity(account))
-          ),
-          hasActivity,
-        },
-      ];
+    const providers = analyticsProviderRows({
+      registry,
+      accounts: dashboard.accounts,
+      account: query.account,
+      records: state.data?.records ?? [],
+      from,
+      to,
+      providersWithActivity: coverage?.providersWithActivity ?? [],
     });
     const activeAccountIds: AccountAnalytics['summary']['activeAccountIds'] = {};
     for (const entry of registry.table)

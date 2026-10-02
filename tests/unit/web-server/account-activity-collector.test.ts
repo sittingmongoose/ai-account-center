@@ -213,6 +213,19 @@ describe('bounded native account activity checkpoints', () => {
     expect(data.session[0].lastActivity).toBe('2026-10-01T15:05:00.000Z');
   });
 
+  it('reports when each session was first and last active in the retained rows', async () => {
+    write([
+      meta(),
+      model(),
+      tokens(100, 20, 10, '2026-10-01T13:10:00Z'),
+      tokens(150, 30, 20, '2026-10-01T15:05:00Z'),
+    ]);
+    const data = await collect();
+    expect(data.session).toHaveLength(1);
+    expect(data.session[0].firstActivity).toBe('2026-10-01T13:10:00.000Z');
+    expect(data.session[0].lastActivity).toBe('2026-10-01T15:05:00.000Z');
+  });
+
   it('ignores raw legacy caches and excludes CLIProxy token counts even when they dwarf native data', async () => {
     write([meta(), model(), tokens(100, 20, 5)]);
     fs.mkdirSync(path.join(root, 'cache'), { recursive: true });

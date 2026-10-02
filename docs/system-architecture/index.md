@@ -33,10 +33,12 @@ snapshots are not additive token totals.
 or `custom` with inclusive local `from`/`to` days, at most 31 retained days) and
 an IANA `tz` for local-day buckets ([ranges](../../src/web-server/services/account-analytics-range.ts)).
 The [activity projection](../../src/web-server/services/account-analytics-projection.ts)
-adds list-rate cost by token type with a reconciliation flag, per-day model rows,
-request counts (null when a snapshot lacks them), a path-free session sample
-with hashed keys, and the original CCS anomaly rules. The provider filter is
-validated against the server's provider table; errors carry a stable `code`.
+adds list-rate cost by token type with a reconciliation flag (none for a model
+priced only by the unknown-model fallback), per-day model rows, request counts
+(null when a snapshot lacks them), a path-free sample of the sessions active in
+range with hashed keys and whole-session totals, and the original CCS anomaly
+rules. The provider filter is validated against the server's provider table;
+errors carry a stable `code`.
 
 [Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts),
 [guarded activation/rollback](../../src/codex-auth/activate-codex-profile.ts) and idle-only

@@ -1,5 +1,7 @@
 import { ADDITIONAL_PROVIDERS } from './account-dashboard-projection';
+import { accountAnalyticsIdentity } from './account-analytics-history';
 import type { DashboardAccount, DashboardProvider } from './account-dashboard-types';
+import type { AccountAnalytics } from './account-analytics-types';
 
 /** One row of the server's provider table, as Analytics needs it. */
 export interface AnalyticsProviderEntry {
@@ -103,4 +105,65 @@ export function dashboardRegistryFacts(
       return false;
     },
   };
+}
+
+export interface AnalyticsProviderRowsInput {
+  registry: DashboardRegistryFacts;
+  /** Every dashboard account, before the provider and account filters. */
+  accounts: DashboardAccount[];
+  /** The account filter: `all` or one account id. */
+  account: string;
+  /** Retained quota samples. */
+  records: ReadonlyArray<{ identity: string; sampledAt: string }>;
+  from: number;
+  to: number;
+  providersWithActivity: readonly string[];
+}
+
+/**
+ * The response `providers` list. Membership does not depend on the provider
+ * or account filter, so a client can build its provider filter from it: every
+ * provider with an account or local activity in range, in table order. The
+ * counts and both quota fields follow the account filter; `hasActivity` is
+ * the provider's local activity in range, which no account owns.
+ */
+export function analyticsProviderRows(
+  input: AnalyticsProviderRowsInput
+): AccountAnalytics['providers'] {
+  const latestByIdentity = new Map<string, string>();
+  for (const record of input.records) {
+    const sampled = Date.parse(record.sampledAt);
+    if (!Number.isFinite(sampled) || sampled < input.from || sampled > input.to) continue;
+    const previous = latestByIdentity.get(record.identity);
+    if (previous === undefined || Date.parse(previous) < sampled)
+      latestByIdentity.set(record.identity, record.sampledAt);
+  }
+  const withActivity = new Set(input.providersWithActivity);
+  return input.registry.table.flatMap((entry) => {
+    const all = input.accounts.filter((account) => account.provider === entry.id);
+    const hasActivity = withActivity.has(entry.id);
+    if (all.length === 0 && !hasActivity) return [];
+    const matching = all.filter(
+      (account) => input.account === 'all' || input.account === account.id
+    );
+    const sampled = matching
+      .map((account) => latestByIdentity.get(accountAnalyticsIdentity(account)))
+      .filter((stamp): stamp is string => stamp !== undefined)
+      .sort((a, b) => Date.parse(a) - Date.parse(b));
+    return [
+      {
+        provider: entry.id,
+        label: entry.label,
+        order: entry.order,
+        visible: input.registry.visible(entry.id),
+        accountCount: matching.length,
+        availableAccounts: matching.filter(
+          (account) => account.status === 'ok' || account.status === 'cached'
+        ).length,
+        latestSampleAt: sampled[sampled.length - 1] ?? null,
+        hasQuotaHistory: sampled.length > 0,
+        hasActivity,
+      },
+    ];
+  });
 }

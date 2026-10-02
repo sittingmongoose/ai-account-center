@@ -126,6 +126,33 @@ export function isAccountAnalyticsTimeZone(value: unknown): value is string {
   }
 }
 
+let zonesByLowerCase: Map<string, string> | undefined;
+
+/**
+ * The spelling a valid zone is echoed and bucketed under. A name the zone list
+ * holds is kept as sent; a case variant of a listed name takes the listed
+ * spelling, so `america/new_york` becomes `America/New_York`; anything else is
+ * the engine's resolved name. On Node that also turns an alias the list lacks
+ * into its canonical zone (`Asia/Kolkata` becomes `Asia/Calcutta`, `US/Eastern`
+ * becomes `America/New_York`), which has the same days and offsets.
+ * Call only with a value `isAccountAnalyticsTimeZone` accepted.
+ */
+export function canonicalAccountAnalyticsTimeZone(value: string | undefined): string {
+  if (value === undefined || value === 'UTC') return 'UTC';
+  const zones = zoneList();
+  if (zones?.has(value)) return value;
+  if (zones) {
+    zonesByLowerCase ??= new Map([...zones].map((zone) => [zone.toLowerCase(), zone]));
+    const listed = zonesByLowerCase.get(value.toLowerCase());
+    if (listed !== undefined) return listed;
+  }
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
+  } catch {
+    return value;
+  }
+}
+
 interface LocalParts {
   year: number;
   month: number;
@@ -285,10 +312,14 @@ export function resolveAccountAnalyticsRange(
     case 'custom': {
       const first = request.from as string;
       const last = request.to as string;
-      if (last > localDate(now, tz) || first < localDate(now - ACCOUNT_ANALYTICS_RETAINED_MS, tz))
+      const retainedFrom = now - ACCOUNT_ANALYTICS_RETAINED_MS;
+      if (last > localDate(now, tz) || first < localDate(retainedFrom, tz))
         throw analyticsQueryError('invalid_range');
-      from = localMidnight(first, tz);
+      // The oldest retained local day usually began before the retained
+      // window did; the range then starts where the window starts.
+      from = Math.max(localMidnight(first, tz), retainedFrom);
       to = Math.min(now, localMidnight(addCalendarDays(last, 1), tz) - 1000);
+      if (to < from) throw analyticsQueryError('invalid_range');
       break;
     }
   }

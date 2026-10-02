@@ -191,12 +191,14 @@ function priceBreakdowns(
       name === null
         ? null
         : pricing(name, typeof breakdown.provider === 'string' ? breakdown.provider : undefined);
-    const parts = rates
+    // The unknown-model fallback is published for the popover but is no known rate.
+    const listRate = rates?.source === 'fallback' ? null : rates;
+    const parts = listRate
       ? {
-          input: (values.inputTokens / 1_000_000) * rates.inputPerMillion,
-          output: (values.outputTokens / 1_000_000) * rates.outputPerMillion,
-          cacheWrite: (values.cacheCreationTokens / 1_000_000) * rates.cacheCreationPerMillion,
-          cacheRead: (values.cacheReadTokens / 1_000_000) * rates.cacheReadPerMillion,
+          input: (values.inputTokens / 1_000_000) * listRate.inputPerMillion,
+          output: (values.outputTokens / 1_000_000) * listRate.outputPerMillion,
+          cacheWrite: (values.cacheCreationTokens / 1_000_000) * listRate.cacheCreationPerMillion,
+          cacheRead: (values.cacheReadTokens / 1_000_000) * listRate.cacheReadPerMillion,
         }
       : null;
     models.push({ name, values, parts, rates });
@@ -229,6 +231,13 @@ function sessionKey(provider: Provider, sessionId: string): string {
     .update(`aac-session-v1:${provider}:${sessionId}`)
     .digest('hex')
     .slice(0, 16);
+}
+
+/** Compacted rows keep each hour's last event, so first activity counts from its UTC hour. */
+function sessionSpan(session: SessionUsage): { first: number; last: number } {
+  const last = Date.parse(session.lastActivity);
+  const first = Date.parse(session.firstActivity ?? '');
+  return { first: first <= last ? first - (first % 3_600_000) : last, last };
 }
 
 function hourEpoch(hour: unknown): number {
@@ -430,8 +439,9 @@ export function projectAccountAnalyticsActivity(
         if (priced.residual) addDayModel(date, source.provider, null, priced.residual, null);
       }
       for (const session of result.session) {
-        const lastActivity = Date.parse(session.lastActivity);
-        if (lastActivity >= from && lastActivity <= to && typeof session.sessionId === 'string') {
+        // Active in range: its activity overlaps the range, wherever it ends.
+        const { first, last: lastActivity } = sessionSpan(session);
+        if (first <= to && lastActivity >= from && typeof session.sessionId === 'string') {
           sessions.add(session.sessionId);
           // Internal dedupe only; the published key is hashed for the sample alone.
           const key = `${source.provider}\0${session.sessionId}`;
@@ -535,6 +545,8 @@ export function projectAccountAnalyticsActivity(
       };
     });
   const sessionTotal = base.providers.reduce((sum, row) => sum + row.sessionCount, 0);
+  if (usable && sample.length > 0)
+    base.message = `${base.message} Session rows show each session's whole retained totals, which can include activity outside this range.`;
 
   const dayCosts = new Map<string, number>();
   for (const row of byDay)

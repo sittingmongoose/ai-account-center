@@ -240,7 +240,7 @@ export interface AccountAnalytics {
     accountCount: number;
     availableAccounts: number;
     latestSampleAt: string | null;
-    /** At least one retained quota sample in range. */
+    /** At least one retained quota sample in range for an account the account filter matches. */
     hasQuotaHistory: boolean;
     /** Claude Code or Codex local CLI activity in range. */
     hasActivity: boolean;

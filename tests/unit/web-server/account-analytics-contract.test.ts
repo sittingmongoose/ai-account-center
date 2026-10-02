@@ -22,6 +22,7 @@ import {
 } from '../../../src/web-server/services/account-analytics-service';
 import {
   AccountAnalyticsQueryError,
+  canonicalAccountAnalyticsTimeZone,
   isAccountAnalyticsTimeZone,
   localDate,
   localMidnight,
@@ -417,6 +418,86 @@ describe('analytics contract: ranges and time zones', () => {
   });
 });
 
+describe('analytics contract: range review fixes', () => {
+  it('starts a custom range no earlier than the retained window in a zone far ahead of UTC', async () => {
+    // At 2026-10-02T12:00Z the retained window starts at 2026-09-01T12:00Z,
+    // which is already 2026-09-02 in Kiritimati (UTC+14); that local day
+    // began at 2026-09-01T10:00Z.
+    const range = resolveAccountAnalyticsRange(
+      { range: 'custom', from: '2026-09-02', to: '2026-09-03', tz: 'Pacific/Kiritimati' },
+      NOW,
+      NOW
+    );
+    expect(new Date(range.from).toISOString()).toBe('2026-09-01T12:00:00.000Z');
+    expect(new Date(range.to).toISOString()).toBe('2026-09-03T09:59:59.000Z');
+    const result = await analyticsService([account('codex', 'codex:a')], {
+      activity: async () => ({
+        ...noActivity,
+        coverage: { oldestHourAt: NOW - 45 * DAY, providersWithActivity: [] },
+      }),
+    }).get({
+      ...QUERY,
+      range: 'custom',
+      from: '2026-09-02',
+      to: '2026-09-03',
+      tz: 'Pacific/Kiritimati',
+    });
+    expect(result.range.availableFrom).toBe('2026-09-01T12:00:00.000Z');
+    expect(Date.parse(result.range.from)).toBeGreaterThanOrEqual(
+      Date.parse(result.range.availableFrom)
+    );
+  });
+
+  it('echoes a case variant of a zone under its listed spelling', async () => {
+    const seen: Array<string | undefined> = [];
+    const service = analyticsService([account('codex', 'codex:a')], {
+      activity: async (query, _from, _to, options) => {
+        seen.push(query.tz, options?.tz);
+        return noActivity;
+      },
+    });
+    const result = await service.get({ ...QUERY, tz: 'america/new_york' });
+    expect(seen).toEqual(['America/New_York', 'America/New_York']);
+    expect(result.range.tz).toBe('America/New_York');
+    expect(result.range.dayBucketTz).toBe('America/New_York');
+    expect(canonicalAccountAnalyticsTimeZone(undefined)).toBe('UTC');
+    expect(canonicalAccountAnalyticsTimeZone('utc')).toBe('UTC');
+    expect(canonicalAccountAnalyticsTimeZone('Europe/London')).toBe('Europe/London');
+    expect(canonicalAccountAnalyticsTimeZone('EUROPE/LONDON')).toBe('Europe/London');
+  });
+
+  it('records no quota snapshot for a request it refuses', async () => {
+    let dashboards = 0;
+    let writes = 0;
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => {
+        dashboards++;
+        return dashboard([account('codex', 'codex:a')]);
+      },
+      createHistoryStore: () => ({
+        async read() {
+          return null;
+        },
+        async write() {
+          writes++;
+        },
+      }),
+      getActivity: async () => noActivity,
+      now: () => NOW,
+      scope: () => ccsHome,
+    });
+    await expect(
+      service.get({ ...QUERY, range: 'custom', from: '2026-08-01', to: '2026-08-02' })
+    ).rejects.toMatchObject({ code: 'invalid_range' });
+    await expect(service.get({ ...QUERY, tz: 'Mars/Base' })).rejects.toMatchObject({
+      code: 'invalid_tz',
+    });
+    expect([dashboards, writes]).toEqual([0, 0]);
+    await service.get(QUERY);
+    expect([dashboards, writes]).toEqual([1, 1]);
+  });
+});
+
 describe('analytics contract: local day buckets', () => {
   it('puts 03:00Z on the previous day in New York and the same day in UTC', () => {
     const sources = [
@@ -523,6 +604,38 @@ describe('analytics contract: cost by type', () => {
     expect(JSON.stringify(activity.totals)).not.toContain('"input":0');
   });
 
+  it('gives no cost split for a model the default rates price only by the unknown-model fallback', () => {
+    const activity = projectAccountAnalyticsActivity(
+      [
+        source(
+          'claude',
+          result([
+            hourRow('2026-10-02T10:00:00Z', [
+              { model: 'claude-sonnet-4-6', ...tokens },
+              { model: 'aac-fixture-unknown-model', input: 1000 },
+            ]),
+          ])
+        ),
+      ],
+      QUERY,
+      NOW - 7 * DAY,
+      NOW,
+      'ok',
+      'Fixture'
+    );
+    expect(activity.totals?.costByType).toBeNull();
+    expect(activity.totals?.costByTypeReconciled).toBe(false);
+    expect(activity.providers[0].totals.costByType).toBeNull();
+    expect(activity.byDay[0].costByType).toBeNull();
+    expect(activity.byHour[0].costByType).toBeNull();
+    const unknown = activity.models.find((row) => row.model === 'aac-fixture-unknown-model');
+    expect(unknown?.rates?.source).toBe('fallback');
+    expect(unknown?.costByType).toBeNull();
+    const known = activity.models.find((row) => row.model === 'claude-sonnet-4-6');
+    expect(known?.rates?.source).toBe('builtin');
+    expect(known?.costByType).not.toBeNull();
+  });
+
   it('treats tokens no model breakdown names as unpriceable', () => {
     const row = hourRow('2026-10-02T10:00:00Z', []);
     row.inputTokens = 500;
@@ -602,6 +715,52 @@ describe('analytics contract: session sample', () => {
       .slice(0, 16);
     expect(first.sessions?.sample[0].key).toBe(expectedKey);
     for (const row of first.sessions?.sample ?? []) expect(row.key).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('counts sessions whose activity overlaps the range and says rows carry whole-session totals', () => {
+    const from = Date.parse('2026-09-20T00:00:00Z');
+    const to = Date.parse('2026-09-20T23:59:59Z');
+    const spanning = {
+      ...sessionRow('spanning', '2026-09-22T08:00:00Z', [{ model: 'model-a', input: 10 }]),
+      firstActivity: '2026-09-19T22:30:00Z',
+    };
+    const inside = sessionRow('inside', '2026-09-20T12:00:00Z', [{ model: 'model-a', input: 20 }]);
+    const later = {
+      ...sessionRow('later', '2026-09-21T05:00:00Z', [{ model: 'model-a', input: 30 }]),
+      firstActivity: '2026-09-21T01:00:00Z',
+    };
+    const earlier = {
+      ...sessionRow('earlier', '2026-09-19T20:00:00Z', [{ model: 'model-a', input: 40 }]),
+      firstActivity: '2026-09-19T10:00:00Z',
+    };
+    // A row without its first activity is placed at its last activity only.
+    const legacy = sessionRow('legacy', '2026-09-22T09:00:00Z', [{ model: 'model-a', input: 50 }]);
+    const activity = project(
+      [source('claude', result([], [spanning, inside, later, earlier, legacy]))],
+      { from, to }
+    );
+    const key = (id: string) =>
+      createHash('sha256').update(`aac-session-v1:claude:${id}`).digest('hex').slice(0, 16);
+    expect(activity.sessions?.total).toBe(2);
+    expect(activity.providers[0].sessionCount).toBe(2);
+    expect(activity.sessions?.sample.map((row) => row.key)).toEqual([
+      key('spanning'),
+      key('inside'),
+    ]);
+    expect(activity.sessions?.sample[0].inputTokens).toBe(10);
+    expect(activity.message).toContain('whole retained totals');
+
+    // Compacted rows keep the last event of each hour, so the first activity
+    // counts from the start of its UTC hour.
+    const sameHour = {
+      ...sessionRow('same-hour', '2026-09-20T12:00:00Z', [{ model: 'model-a', input: 1 }]),
+      firstActivity: '2026-09-20T10:50:00Z',
+    };
+    const narrow = project([source('claude', result([], [sameHour]))], {
+      from: Date.parse('2026-09-20T09:00:00Z'),
+      to: Date.parse('2026-09-20T10:20:00Z'),
+    });
+    expect(narrow.sessions?.total).toBe(1);
   });
 
   it('is null unless activity is ok or cached', () => {

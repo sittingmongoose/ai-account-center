@@ -91,6 +91,12 @@ export interface SessionUsage {
   cost: number;
   totalCost: number;
   lastActivity: string;
+  /**
+   * Earliest retained activity, when the reader reports it. Compacted native
+   * rows keep the last event of each hour, so this can be up to an hour after
+   * the session's true first event.
+   */
+  firstActivity?: string;
   versions: string[];
   modelsUsed: string[];
   modelBreakdowns: ModelBreakdown[];
