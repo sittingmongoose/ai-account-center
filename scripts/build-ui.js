@@ -5,12 +5,29 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 const { parse } = require('smol-toml');
 
 const SLINT_VERSION = '1.18.1';
 const MINIMUM_RUST_MINOR = 92;
 const WASM_NAME = 'ccs_account_dashboard';
+/** The one import of the wasm-bindgen glue that the packaged bridge.js rewrites. */
+const BRIDGE_IMPORT = `'./pkg/${WASM_NAME}.js'`;
+const BRIDGE_IMPORT_ERROR = `bridge.js must import ./pkg/${WASM_NAME}.js exactly once.`;
+const PRECOMPRESSED_EXTENSIONS = new Set([
+  '.wasm',
+  '.js',
+  '.mjs',
+  '.css',
+  '.html',
+  '.svg',
+  '.json',
+  '.txt',
+]);
+const PRECOMPRESS_MIN_BYTES = 1024;
+/** A variant is kept only when it is smaller than this share of the original. */
+const PRECOMPRESS_MAX_RATIO = 0.9;
 
 function assertSlintPin(manifest) {
   for (const [section, dependency] of [
@@ -100,6 +117,114 @@ function sourceFingerprint(crate) {
   return { sha256: hash.digest('hex'), files: files.length };
 }
 
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function countLiteral(text, literal) {
+  let count = 0;
+  for (let index = text.indexOf(literal); index !== -1; index = text.indexOf(literal, index + 1))
+    count++;
+  return count;
+}
+
+/** The source bridge.js must name the unversioned glue import exactly once. */
+function assertBridgeImport(source) {
+  if (countLiteral(source, BRIDGE_IMPORT) !== 1) throw new Error(BRIDGE_IMPORT_ERROR);
+}
+
+/** Rewrite only the packaged copy; web-dashboard/public/bridge.js stays as written. */
+function versionedBridgeSource(source, buildId) {
+  assertBridgeImport(source);
+  const index = source.indexOf(BRIDGE_IMPORT);
+  return `${source.slice(0, index)}'./pkg/${buildId}/${WASM_NAME}.js'${source.slice(index + BRIDGE_IMPORT.length)}`;
+}
+
+/** Relative POSIX paths of every file below a directory, sorted for reproducible output. */
+function listFiles(directory, relative = '') {
+  const files = [];
+  for (const entry of fs.readdirSync(path.join(directory, relative)).sort()) {
+    const child = relative ? `${relative}/${entry}` : entry;
+    const stat = fs.lstatSync(path.join(directory, child));
+    if (stat.isSymbolicLink()) throw new Error('Dashboard build output must not contain symlinks.');
+    if (stat.isDirectory()) files.push(...listFiles(directory, child));
+    else if (stat.isFile()) files.push(child);
+  }
+  return files;
+}
+
+/**
+ * Brotli (quality 11) and gzip (level 9) copies of the larger text and wasm files.
+ * Node's gzip header carries mtime 0, so the same input gives the same bytes.
+ */
+function precompressUi(uiDir) {
+  const entries = [];
+  for (const relative of listFiles(uiDir)) {
+    const extension = path.extname(relative).toLowerCase();
+    if (!PRECOMPRESSED_EXTENSIONS.has(extension)) continue;
+    const absolute = path.join(uiDir, ...relative.split('/'));
+    const original = fs.readFileSync(absolute);
+    if (original.length < PRECOMPRESS_MIN_BYTES) continue;
+    const variants = [
+      [
+        'br',
+        '.br',
+        zlib.brotliCompressSync(original, {
+          params: {
+            [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+            [zlib.constants.BROTLI_PARAM_SIZE_HINT]: original.length,
+            [zlib.constants.BROTLI_PARAM_MODE]:
+              extension === '.wasm'
+                ? zlib.constants.BROTLI_MODE_GENERIC
+                : zlib.constants.BROTLI_MODE_TEXT,
+          },
+        }),
+      ],
+      ['gzip', '.gz', zlib.gzipSync(original, { level: 9 })],
+    ];
+    for (const [encoding, suffix, bytes] of variants) {
+      if (bytes.length >= original.length * PRECOMPRESS_MAX_RATIO) continue;
+      fs.writeFileSync(`${absolute}${suffix}`, bytes);
+      entries.push({
+        path: relative,
+        encoding,
+        file: `${relative}${suffix}`,
+        bytes: bytes.length,
+        sha256: sha256(bytes),
+      });
+    }
+  }
+  return entries;
+}
+
+/** Packaged modes never depend on the builder's umask or on source file modes. */
+function normalizeModes(directory) {
+  fs.chmodSync(directory, 0o755);
+  for (const entry of fs.readdirSync(directory)) {
+    const absolute = path.join(directory, entry);
+    const stat = fs.lstatSync(absolute);
+    if (stat.isSymbolicLink()) throw new Error('Dashboard build output must not contain symlinks.');
+    if (stat.isDirectory()) normalizeModes(absolute);
+    else fs.chmodSync(absolute, 0o644);
+  }
+}
+
+/** The short commit of the packaged source, or null outside a git checkout. */
+function readBuildCommit(repoRoot) {
+  try {
+    const result = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--short=8', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+      windowsHide: true,
+    });
+    const commit = result.status === 0 ? String(result.stdout).trim() : '';
+    return /^[a-f0-9]{7,40}$/.test(commit) ? commit : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildUi(options = {}) {
   const repoRoot = options.repoRoot ?? path.resolve(__dirname, '..');
   const run = options.run ?? commandRunner;
@@ -145,14 +270,25 @@ function buildUi(options = {}) {
   if (!wasm.subarray(0, 8).equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]))) {
     throw new Error('Slint browser output is not a valid WebAssembly module.');
   }
+  const wasmSha256 = sha256(wasm);
+  // The pkg folder is named after the wasm content, so pkg/<buildId>/** can be cached forever.
+  const buildId = wasmSha256.slice(0, 12);
+  // Checked before the old output is removed, so a bad bridge never leaves dist/ui empty.
+  const bridge = versionedBridgeSource(
+    fs.readFileSync(path.join(publicDir, 'bridge.js'), 'utf8'),
+    buildId
+  );
   fs.rmSync(packagedUi, { recursive: true, force: true });
   fs.mkdirSync(packagedUi, { recursive: true });
   fs.cpSync(publicDir, packagedUi, { recursive: true });
+  fs.writeFileSync(path.join(packagedUi, 'bridge.js'), bridge);
   // wasm-pack's generated '*' ignore rule would hide the runtime from npm pack.
-  fs.cpSync(pkg, path.join(packagedUi, 'pkg'), {
+  fs.cpSync(pkg, path.join(packagedUi, 'pkg', buildId), {
     recursive: true,
     filter: (source) => !['.gitignore', '.npmignore'].includes(path.basename(source)),
   });
+  const precompressed = precompressUi(packagedUi);
+  const commit = (options.readCommit ?? readBuildCommit)(repoRoot);
   const manifest = {
     schemaVersion: 1,
     framework: 'slint',
@@ -160,16 +296,21 @@ function buildUi(options = {}) {
     target: 'wasm32-unknown-unknown',
     entry: 'index.html',
     source: sourceFingerprint(crate),
+    buildId,
+    ...(typeof commit === 'string' && /^[a-f0-9]{7,40}$/.test(commit) ? { commit } : {}),
     wasm: {
-      path: `pkg/${WASM_NAME}_bg.wasm`,
+      path: `pkg/${buildId}/${WASM_NAME}_bg.wasm`,
       bytes: wasm.length,
-      sha256: crypto.createHash('sha256').update(wasm).digest('hex'),
+      sha256: wasmSha256,
     },
+    precompressed,
   };
+  // Written last, then every mode is set explicitly.
   fs.writeFileSync(
     path.join(packagedUi, 'ui-build-manifest.json'),
     `${JSON.stringify(manifest, null, 2)}\n`
   );
+  normalizeModes(packagedUi);
   return manifest;
 }
 
@@ -191,7 +332,12 @@ module.exports = {
   buildUi,
   assertSlintPin,
   assertLockedSlint,
+  assertBridgeImport,
+  versionedBridgeSource,
   sourceFingerprint,
   commandRunner,
   toolPath,
+  BRIDGE_IMPORT_ERROR,
+  PRECOMPRESSED_EXTENSIONS,
+  WASM_NAME,
 };

@@ -318,12 +318,13 @@ describe('F1: API session guard whatever the URL letter case', () => {
   });
 
   it('keeps the static UI paths and legacy redirects', async () => {
-    for (const route of ['/', '/login']) {
+    // Page routes need no session; the API does the auth (CONTRACT-serving-misc section 3).
+    for (const route of ['/', '/login', '/analytics', '/accounts', '/accounts/codex']) {
       const response = await send('GET', route);
       expect(response.status).toBe(200);
       expect(await response.text()).toContain('slint-dashboard');
     }
-    for (const route of ['/codex/accounts', '/LOGIN', '/analytics']) {
+    for (const route of ['/codex/accounts', '/LOGIN', '/Analytics', '/accounts/unknown']) {
       const response = await send('GET', route);
       expect(response.status).toBe(302);
       expect(response.headers.get('location')).toBe('/');

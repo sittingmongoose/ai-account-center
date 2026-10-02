@@ -16,7 +16,10 @@ describe('source-built dashboard Docker lifecycle', () => {
     }
     expect(installCommands.some((command) => command.includes('--production'))).toBe(true);
     expect(dockerfile).toContain('bun run build:all');
-    expect(dockerfile).toContain('dist/ui/pkg/ccs_account_dashboard_bg.wasm');
+    // The wasm moved to dist/ui/pkg/<buildId>/; the manifest-driven check finds it.
+    expect(dockerfile).toContain('test -s dist/ui/ui-build-manifest.json');
+    expect(dockerfile).toContain('node scripts/verify-bundle.js');
+    expect(dockerfile).not.toContain('dist/ui/pkg/ccs_account_dashboard_bg.wasm');
     expect(dockerfile).not.toMatch(/\b(?:npm|bun)\s+(?:install|add)[^\n]*@kaitranntt\/ccs/);
   });
 
