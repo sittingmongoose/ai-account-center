@@ -18,7 +18,7 @@ QUOTA = {"tier": PLAN, "window_weighted_used": "0", "window_weighted_limit": "10
          "window_duration_secs": 18000, "window_resets_at": None,
          "weekly_weighted_used": "63", "weekly_weighted_limit": "1000",
          "weekly_resets_at": "2026-10-05T00:00:00Z"}
-CODES = ["needs_sign_in", "inactive_subscription", "account_mismatch", "plan_mismatch",
+CODES = ["needs_sign_in", "inactive_subscription", "account_mismatch", "identity_unavailable", "plan_mismatch",
          "team_mismatch", "choose_team", "invalid_response", "invalid_request", "error",
          "rate_limited", "provider_error", "network_error", "unexpected_failure"]
 TRANSIENT = {"rate_limited", "provider_error", "network_error"}
@@ -79,7 +79,35 @@ def scenario(code, retain_native=False):
                 "nextRequestAt": cooldown, "externalRequests": 0}
 
 
+def blank_portal_email():
+    """Real fetch_quota: HTTP 200 auth/me without an email, read through the capsule's team."""
+    with tempfile.TemporaryDirectory(prefix="muse-contract-") as folder:
+        home = Path(folder)
+        (home / ".ccs/account-usage").mkdir(parents=True, mode=0o700)
+
+        def portal(_client, route):
+            if route == "/api/auth/me":
+                return {"displayName": "Synthetic", "email": ""}
+            if route == "/api/portal/teams":
+                return {"teams": [{"team_id": 42, "team_name": "Personal"}]}
+            return {"subscription_quota": dict(QUOTA, as_of=1790945289)}
+
+        def offline(*_args, **_kwargs):
+            raise AssertionError("Unexpected network request in Muse interop fixture")
+
+        with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(
+                "dca:synthetic-fixture", email=EMAIL)), \
+             patch("muse_console.read_capsule", return_value=([COOKIE], "42", EMAIL, PLAN)), \
+             patch("muse_console.verify_device_identity", return_value=None), \
+             patch("muse_console.PortalClient.get", autospec=True, side_effect=portal), \
+             patch("muse_console.time.time", return_value=1790945300), \
+             patch("desktop_usage.request_json", side_effect=offline), \
+             patch("urllib.request.OpenerDirector.open", side_effect=offline):
+            return usage.collect("muse", "mac", home)
+
+
 if __name__ == "__main__":
     result = {"cases": [scenario(code) for code in CODES],
-              "nativeRateLimited": scenario("rate_limited", retain_native=True)}
+              "nativeRateLimited": scenario("rate_limited", retain_native=True),
+              "blankPortalEmail": blank_portal_email()}
     print(json.dumps(result, allow_nan=False, separators=(",", ":")))

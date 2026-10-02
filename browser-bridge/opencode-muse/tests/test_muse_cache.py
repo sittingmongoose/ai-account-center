@@ -88,8 +88,17 @@ class CacheTests(unittest.TestCase):
             root = home / ".ccs/account-usage"
             root.mkdir(parents=True, mode=0o700)
             muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+            calls = []
+
+            def portal(route):
+                # No usable email, and this session cannot read the capsule's verified team.
+                calls.append(route)
+                if route == "/api/portal/teams":
+                    return {"teams": [{"team_id": 43, "team_name": "sk-private"}]}
+                return {"email": "", "message": "sk-private"}
+
             client = Client()
-            with patch.object(client, "get", return_value={"email": "", "message": "sk-private"}) as get, \
+            with patch.object(client, "get", side_effect=portal), \
                     patch.object(muse, "PortalClient", return_value=client), \
                     patch.object(muse, "verify_device_identity"), patch.object(usage, "request_json") as request:
                 result = helpers.account("muse", "mac")
@@ -101,7 +110,76 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(result["message"], muse.ERROR_MESSAGES["identity_unavailable"])
             self.assertNotIn("sk-private", json.dumps(result))
             request.assert_not_called()
-            get.assert_called_once_with("/api/auth/me")
+            self.assertEqual(calls, ["/api/auth/me", "/api/portal/teams"])
+
+    def test_collector_reads_the_capsule_team_when_the_portal_omits_the_email(self):
+        # Live 2026-10-02 shape: HTTP 200 auth/me with "email": "", one team, a full quota.
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root = home / ".ccs/account-usage"
+            root.mkdir(parents=True, mode=0o700)
+            muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+            quota = dict(QUOTA, weekly_weighted_used="38146338720", weekly_weighted_limit="300000000000",
+                         window_weighted_limit="100000000000", as_of=1790945289)
+            calls = []
+
+            def portal(route):
+                calls.append(route)
+                if route == "/api/auth/me":
+                    return {"displayName": "Synthetic", "email": "", "userId": "sk-private"}
+                if route == "/api/portal/teams":
+                    return {"teams": [{"team_id": 42, "team_name": "Personal"}]}
+                return {"subscription_quota": quota, "api_key": "sk-private"}
+
+            client = Client()
+            with patch.object(client, "get", side_effect=portal), \
+                    patch.object(muse, "PortalClient", return_value=client), \
+                    patch.object(muse, "verify_device_identity") as identity, \
+                    patch.object(muse.time, "time", return_value=1790945300), \
+                    patch.object(usage, "request_json") as request:
+                result = helpers.account("muse", "mac")
+                usage.fetch_muse(helpers.Credential(ACCESS, email=EMAIL), result, home)
+                cached = helpers.account("muse", "mac")
+                usage.fetch_muse(helpers.Credential(ACCESS, email=EMAIL), cached, home)
+            identity.assert_called_once()
+            request.assert_not_called()
+            self.assertEqual(calls, ["/api/auth/me", "/api/portal/teams", "/api/portal/teams/42/subscription-quota"])
+            self.assertEqual(result["status"], "ok")
+            self.assertNotIn("failureCode", result)
+            self.assertEqual((result["email"], result["plan"]), (EMAIL, PLAN))
+            self.assertEqual(result["sampledAt"], "2026-10-02T12:48:09Z")
+            self.assertEqual([(row["key"], row["usedPercent"], row["used"], row["limit"]) for row in result["windows"]],
+                             [("window", 0, 0, 100000000000), ("weekly", 12.7154, 38146338720, 300000000000)])
+            self.assertEqual(cached["status"], "cached")
+            self.assertEqual(cached["sampledAt"], result["sampledAt"])
+            state = muse.read_usage_state(root)
+            self.assertEqual((state["teamId"], state["lastError"]), ("42", None))
+            self.assertNotIn("sk-private", json.dumps(result) + (root / muse.CACHE_NAME).read_text())
+
+    def test_browser_sync_reads_the_capsule_team_when_the_portal_omits_the_email(self):
+        with tempfile.TemporaryDirectory() as root:
+            muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
+
+            def portal(route):
+                if route == "/api/auth/me":
+                    return {"email": ""}
+                if route == "/api/portal/teams":
+                    return {"teams": [{"team_id": 42}, {"team_id": 43}]}
+                return {"subscription_quota": QUOTA}
+
+            with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(ACCESS, email=EMAIL)), \
+                    patch("muse_console.verify_device_identity"), \
+                    patch("muse_console.PortalClient.get", side_effect=portal), \
+                    patch("desktop_usage.request_json") as native_request:
+                team, sample = muse.collect_browser([COOKIE], root=root)
+                (Path(root) / muse.CACHE_NAME).unlink()
+                with self.assertRaises(muse.MuseError) as error:
+                    # Choosing another team in the popup has no verified binding without an email.
+                    muse.collect_browser([COOKIE], requested="43", root=root)
+            self.assertEqual((team, sample["status"], sample["email"]), ("42", "ok", EMAIL))
+            self.assertEqual([row["usedPercent"] for row in sample["windows"]], [0, 6])
+            self.assertEqual(error.exception.code, "identity_unavailable")
+            native_request.assert_not_called()
 
     def test_success_survives_cold_process_reload_with_original_sample_and_zero(self):
         with tempfile.TemporaryDirectory() as root:

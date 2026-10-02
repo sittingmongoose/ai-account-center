@@ -206,17 +206,35 @@ def team_rows(payload):
     return teams
 
 
-def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=None, now=None):
+def valid_team(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9]{1,32}", value) is not None
+
+
+def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=None, now=None, bound_team=None):
+    """Read one team's subscription quota after binding the web session to the CLI account.
+
+    The portal email must equal the CLI email. When /api/auth/me answers without
+    a usable email (blank, missing or malformed, which proves no other account),
+    the only accepted binding is ``bound_team``: the team that an earlier
+    email-verified reading bound to this same email and plan (the private
+    capsule's teamId). The quota is that team's subscription quota, so the web
+    session must still be able to read that exact team, and its tier must still
+    equal the live CLI plan. A valid different email is always account_mismatch.
+    """
     if not valid_email(expected_email) or not valid_plan(expected_plan):
         raise MuseError("account_mismatch")
     cookies = validate_cookies(cookies)
     client = client or PortalClient(cookies)
     me = client.get("/api/auth/me")
     actual = me.get("email") if isinstance(me, dict) else None
-    if not valid_email(actual):
+    team_bound = False
+    if valid_email(actual):
+        if actual.strip().lower() != expected_email.strip().lower():
+            raise MuseError("account_mismatch")
+    elif valid_team(bound_team) and requested in (None, bound_team):
+        requested, team_bound = bound_team, True
+    else:
         raise MuseError("identity_unavailable")
-    if actual.strip().lower() != expected_email.strip().lower():
-        raise MuseError("account_mismatch")
     teams = team_rows(client.get("/api/portal/teams"))
     if requested is None:
         if len(teams) != 1:
@@ -224,7 +242,8 @@ def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=N
         selected = teams[0]["id"]
     else:
         if not isinstance(requested, str) or requested not in {row["id"] for row in teams}:
-            raise MuseError("team_mismatch")
+            # Without an email, losing the verified team leaves the session unbound.
+            raise MuseError("identity_unavailable" if team_bound else "team_mismatch")
         selected = requested
     try:
         response = client.get("/api/portal/teams/" + selected + "/subscription-quota")
@@ -381,8 +400,13 @@ def cached_quota(root, email, plan, team, access, now=None):
     return None
 
 
-def quota_sample(root, cookies, expected_email, expected_plan, requested, access, client=None, now=None, identity_loader=None):
-    """Persist successful observations and bounded retry state, never inferred quotas."""
+def quota_sample(root, cookies, expected_email, expected_plan, requested, access, client=None, now=None, identity_loader=None,
+                 bound_team=None):
+    """Persist successful observations and bounded retry state, never inferred quotas.
+
+    ``bound_team`` is passed only by callers holding the private capsule binding
+    for this same email and plan; see fetch_quota.
+    """
     from desktop_usage import normalize_muse
     from desktop_helpers import utc_now
     now = time.time() if now is None else now
@@ -411,7 +435,7 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
         try:
             if identity_loader is not None:
                 identity_loader()
-            team, quota = fetch_quota(cookies, expected_email, expected_plan, requested, client, now=now)
+            team, quota = fetch_quota(cookies, expected_email, expected_plan, requested, client, now=now, bound_team=bound_team)
             if not normalize_muse({"subscription_quota": quota}):
                 raise MuseError("invalid_response")
             state = {"schemaVersion": 1, "email": expected_email, "plan": expected_plan, "teamId": team,
@@ -453,6 +477,10 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
 
 
 def write_capsule(root, cookies, team, email, plan):
+    # Invariant: team, email and plan come only from a sample that an
+    # email-verified portal reading produced (fresh, or the identity-bound cache
+    # it wrote). fetch_quota relies on this team binding when the portal omits
+    # the email, so never write a capsule from unverified claims.
     root = private_root(root)
     cookies = validate_cookies(cookies)
     if not isinstance(team, str) or not re.fullmatch(r"[0-9]{1,32}", team) or not valid_email(email) or not valid_plan(plan):
@@ -600,7 +628,8 @@ def collect_browser(cookies, requested=None, root=None):
         _, bound_team, bound_email, bound_plan = read_capsule(root)
         if credential.email and credential.email.lower() == bound_email.lower():
             sample = quota_sample(root, cookies, bound_email, bound_plan, requested or bound_team, credential.access,
-                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan))
+                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan),
+                                  bound_team=bound_team)
             if sample:
                 expected_email, plan = bound_email, bound_plan
     except MuseError as error:

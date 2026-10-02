@@ -88,6 +88,53 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, "identity_unavailable")
                 get.assert_called_once_with("/api/auth/me")
 
+    def test_blank_identity_reads_only_the_capsule_bound_team(self):
+        # Live 2026-10-02: HTTP 200 /api/auth/me with "email": "" for the signed-in session.
+        for requested in (None, "42"):
+            with self.subTest(requested=requested):
+                client = FakeClient(email="", teams=[{"team_id": 42, "team_name": "Personal"}])
+                team, quota = muse.fetch_quota([COOKIE], EMAIL, PLAN, requested, client, bound_team="42")
+                self.assertEqual(team, "42")
+                self.assertEqual(quota, QUOTA)
+                self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams",
+                                                "/api/portal/teams/42/subscription-quota"])
+
+    def test_blank_identity_never_chooses_or_switches_to_another_team(self):
+        for teams in ([{"team_id": 43}], [{"team_id": 43}, {"team_id": 44}]):
+            with self.subTest(teams=teams):
+                client = FakeClient(email="", teams=teams)
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42")
+                self.assertEqual(error.exception.code, "identity_unavailable")
+                self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams"])
+        client = FakeClient(email="", teams=[{"team_id": 42}, {"team_id": 43}])
+        with self.assertRaises(muse.MuseError) as error:
+            muse.fetch_quota([COOKIE], EMAIL, PLAN, "43", client, bound_team="42")
+        self.assertEqual(error.exception.code, "identity_unavailable")
+        self.assertEqual(client.calls, ["/api/auth/me"])
+
+    def test_blank_identity_without_a_valid_binding_stops_before_team_read(self):
+        for bound in (None, "", 42, "abc", "4" * 33, True):
+            with self.subTest(bound=bound):
+                client = FakeClient(email="")
+                with self.assertRaises(muse.MuseError) as error:
+                    muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team=bound)
+                self.assertEqual(error.exception.code, "identity_unavailable")
+                self.assertEqual(client.calls, ["/api/auth/me"])
+
+    def test_valid_different_email_is_never_overridden_by_a_team_binding(self):
+        client = FakeClient(email="other@example.com")
+        with self.assertRaises(muse.MuseError) as error:
+            muse.fetch_quota([COOKIE], EMAIL, PLAN, "42", client, bound_team="42")
+        self.assertEqual(error.exception.code, "account_mismatch")
+        self.assertEqual(client.calls, ["/api/auth/me"])
+
+    def test_team_bound_reading_still_requires_the_live_plan(self):
+        client = FakeClient(email="", quota=dict(QUOTA, tier="Other"))
+        with self.assertRaises(muse.MuseError) as error:
+            muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42")
+        self.assertEqual(error.exception.code, "plan_mismatch")
+
     def test_multiple_teams_need_explicit_choice(self):
         client = FakeClient(teams=[{"team_id": 42, "team_name": "First"}, {"team_id": 43, "team_name": "Second"}])
         with self.assertRaises(muse.MuseError) as error:
@@ -162,6 +209,7 @@ class CollectionTests(unittest.TestCase):
         self.assertIsNone(result["windows"][0]["resetAt"])
         self.assertNotIn("private", json.dumps(result))
         self.assertEqual(quota.call_args.args[2:], (EMAIL, PLAN, "42", "dca:private"))
+        self.assertEqual(quota.call_args.kwargs, {"bound_team": "42"})
 
     @patch("muse_console.read_capsule", return_value=([COOKIE], "42", "other@example.com", PLAN))
     @patch("muse_console.quota_sample")

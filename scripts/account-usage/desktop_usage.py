@@ -166,7 +166,8 @@ def fetch_muse(credential, result, home=None):
         if credential.email and credential.email.lower() == bound_email.lower():
             result.update(email=bound_email, plan=bound_plan)
             cached = quota_sample(root, cookies, bound_email, bound_plan, team, credential.access,
-                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan))
+                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan),
+                                  bound_team=team)
         if cached:
             result.update(email=bound_email, plan=bound_plan, status="cached" if cached["cached"] else "ok", message=cached["message"],
                           sampledAt=cached["sampledAt"], windows=normalize_muse({"subscription_quota": cached["quota"]}))
@@ -209,7 +210,7 @@ def fetch_muse(credential, result, home=None):
         if not result["email"] or not result["plan"] or bound_email.lower() != result["email"].lower() or bound_plan != result["plan"]:
             failed("account_mismatch", ERROR_MESSAGES["account_mismatch"])
             return
-        sample = quota_sample(root, cookies, result["email"], result["plan"], team, credential.access)
+        sample = quota_sample(root, cookies, result["email"], result["plan"], team, credential.access, bound_team=team)
         result["windows"] = normalize_muse({"subscription_quota": sample["quota"]})
         if result["windows"]:
             result["status"] = "cached" if sample["cached"] else "ok"

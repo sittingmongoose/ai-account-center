@@ -50,6 +50,17 @@ in an owner-only directory and file. Dashboard output contains only account
 identity, weighted token usage, actual percentages and reported reset times.
 The regular Muse collector and the browser bridge share an owner-only usage cache. They request fresh quota at most every five minutes across all dashboard and bar callers. Brave startup, extension reload, and exact Muse session-cookie changes resume refresh automatically; the user does not need to keep pressing Sync. A provider HTTP 429 starts a persistent cooldown (ten minutes by default, or bounded Retry-After), and retains the last successful reading with its original observation time and cached status. Restarting AI Account Center or a helper does not bypass that cooldown. The native CLI credential, verified email, selected team, and plan bind each cached observation; a different identity or expired authentication cannot inherit another account’s quota.
 
+Since 2026-10-01 Muse can answer `/api/auth/me` with HTTP 200 and an empty
+`email`. An empty, missing or malformed email proves no other account, so it is
+not `account_mismatch`; a valid different email still is. In that case the
+only accepted binding is the team saved in the private capsule, which an
+earlier email-verified reading bound to the same CLI email and plan. The
+subscription quota belongs to that team, so the collector reads it only when
+the live CLI identity still matches the capsule's email and plan, the web
+session can still list that exact team, and the team's tier still equals the
+plan. It never selects or switches teams on this path. Anything else stays
+`identity_unavailable`.
+
 If the existing browser sign-in is unavailable, the dashboard keeps the
 confirmed account and plan and explains the missing quota. It never invents
 zero usage or treats an omitted key-response quota as a failed CLI login.
