@@ -27,7 +27,8 @@ public partial class MainWindow
         settingsVisible = true;
         SettingsButton.IsChecked = true;
         Motion.To(gearTurn, RotateTransform.AngleProperty, 60, 420, Motion.Spring);
-        RenderSettings();
+        try { RenderSettings(); }
+        catch (Exception error) { RenderSettingsError(error); }
         // Over the sign-in screen, its form (and its Enter-to-connect default button) rests until Settings closes.
         SignInLayer.IsEnabled = false;
         SettingsLayer.Visibility = Visibility.Visible;
@@ -310,6 +311,25 @@ public partial class MainWindow
 
     /// <summary>Checks only: the Settings Connection card's buttons and lines, by Uid.</summary>
     internal FrameworkElement? SettingsElement(string uid) => FixtureRender.FindUid(SettingsPanel, uid);
+
+    /// <summary>Building Settings must never kill the tray: a failure shows inline (with the X, so Escape and
+    /// the gear still close it). The type name only, never the message, which can carry paths or data.</summary>
+    private void RenderSettingsError(Exception error)
+    {
+        SettingsPanel.Children.Clear();
+        var head = new Grid { Margin = new Thickness(4, 2, 0, 10), MinHeight = 34 };
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var title = Ui.Text("Settings", 15, "Ink", FontWeights.SemiBold); title.VerticalAlignment = VerticalAlignment.Center; head.Children.Add(title);
+        var close = Ui.IconButton("x", "Close (Esc)", 28); close.Uid = "settings-close";
+        close.Click += (_, _) => CloseSettings();
+        Grid.SetColumn(close, 1); head.Children.Add(close);
+        SettingsPanel.Children.Add(head);
+        var body = new StackPanel();
+        body.Children.Add(Ui.Text("Settings could not be opened.", 13, "Ink", FontWeights.SemiBold));
+        body.Children.Add(Note("info", "Close Settings and try again. If it keeps happening, reinstall AI Account Center. (" + error.GetType().Name + ")"));
+        SettingsPanel.Children.Add(SettingCard(body));
+    }
 
     private static Segmented Segment((string, string, string?)[] options, string value) => new(options, value);
 

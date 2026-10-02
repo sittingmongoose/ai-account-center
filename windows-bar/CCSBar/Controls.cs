@@ -496,7 +496,9 @@ public sealed class Segmented : Border
         if (target is null || target.ActualWidth <= 0) return;
         var x = target.TranslatePoint(new Point(0, 0), grid).X;
         Motion.To((TranslateTransform)thumb.RenderTransform, TranslateTransform.XProperty, x, animate ? 380 : 0, Motion.Spring);
-        Motion.To(thumb, WidthProperty, target.ActualWidth, animate ? 380 : 0, Motion.Out);
+        // The thumb's Width starts as NaN, and a DoubleAnimation without From throws on its first tick when
+        // the origin is NaN (the 2026-10-02 Settings crash): seed the origin from the target until placed.
+        Motion.To(thumb, WidthProperty, target.ActualWidth, animate ? 380 : 0, Motion.Out, from: double.IsNaN(thumb.Width) ? target.ActualWidth : thumb.Width);
         thumb.Height = target.ActualHeight;
     }
 }
