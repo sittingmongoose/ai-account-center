@@ -364,6 +364,21 @@ test('Antigravity Sign in shows the terminal command the server answers', async 
   await h.ctl.handle('signin-again', 'antigravity:profile:party');
   assert.equal(last(h.toasts).title, 'Sign in from a terminal');
   assert.match(last(h.toasts).body, /ai-account-center antigravity signin party/);
+  // the command also opens as a persistent flow: a vanishing toast alone read as "does nothing"
+  const flow = h.ctl.state.flows.antigravity;
+  assert.equal(flow.type, 'terminal');
+  assert.equal(flow.accountId, 'antigravity:profile:party');
+  assert.equal(flow.command, 'ai-account-center antigravity signin party');
+  const view = flowView('antigravity', flow);
+  assert.equal(view.open, true);
+  assert.match(view.body, /ai-account-center antigravity signin party/);
+  assert.deepEqual(view.actions.map(a => a.act), ['flow-copy', 'flow-cancel']);
+  // Copy command copies the exact command; Close dismisses the flow
+  await h.ctl.handle('flow-copy', 'antigravity');
+  assert.equal(h.copied, 'ai-account-center antigravity signin party');
+  assert.equal(last(h.toasts).title, 'Command copied');
+  await h.ctl.handle('flow-cancel', 'antigravity');
+  assert.equal(h.ctl.state.flows.antigravity, undefined);
 });
 
 test('API keys: add with a label, replace, and every refusal; the key never stays in the state', async () => {

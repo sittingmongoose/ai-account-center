@@ -602,10 +602,11 @@ public partial class MainWindow : Window
 
     private static TextBlock? SectionMeta(string provider, DashboardAccount[] accounts)
     {
-        if (provider == "claude" || provider == "antigravity" && accounts.Length < 2) return null;
+        // Codex shows no header meta: it overlapped the 5-hour column and repeats the selected row.
+        if (provider == "claude" || provider == "codex" || provider == "antigravity" && accounts.Length < 2) return null;
         var active = accounts.FirstOrDefault(account => account.IsActive);
-        var text = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), TextTrimming = TextTrimming.CharacterEllipsis };
-        if (active is null) text.Inlines.Add(new Run(provider == "codex" ? "none active" : "active account not reported yet"));
+        var text = new TextBlock { FontSize = 12, Foreground = Theme.Brush("Ink3"), TextTrimming = TextTrimming.CharacterEllipsis, Uid = "section-meta" };
+        if (active is null) text.Inlines.Add(new Run("active account not reported yet"));
         else
         {
             text.Inlines.Add(new Run(ShortName(active)) { Foreground = Theme.Brush("GoodText"), FontWeight = FontWeights.SemiBold });

@@ -62,6 +62,8 @@ public static class FixtureRender
             report.Checks[$"{name}_provider_order_today"] = Order(window, new[] { "section:claude", "section:codex", "section:antigravity", "provider:cursor", "provider:muse", "provider:kimi-code", "provider:qwen", "provider:zai", "provider:opencode-go" });
             report.Checks[$"{name}_tabular_instrument_sans_resolves"] = FontResolves();
             report.Checks[$"{name}_section_columns_and_names_aligned"] = Columns(window, measures, name);
+            var codexSection = FindUid(window.ContentPanel, "section:codex");
+            report.Checks[$"{name}_codex_header_has_no_active_meta"] = codexSection is not null && FindUid(codexSection, "section-meta") is null;
 
             // Switch: codex-3 becomes active; the platter moves to it and the alignment still holds.
             var switched = Clone(fixture);
@@ -88,6 +90,8 @@ public static class FixtureRender
             report.Checks[$"{name}_antigravity_active_aligned"] = Aligned(window, "antigravity", measures, name + "_ag") && SameLine(measures, name + "_ag_button", name + "_before_button");
             report.Checks[$"{name}_antigravity_platter_on_active_row"] = PlatterOn(window, "antigravity", "row:antigravity:example-2", measures, name + "_ag");
             report.Checks[$"{name}_antigravity_two_columns_and_names_aligned"] = Columns(window, measures, name + "_ag2");
+            var agTwoSection = FindUid(window.ContentPanel, "section:antigravity");
+            report.Checks[$"{name}_antigravity_header_keeps_active_meta"] = agTwoSection is not null && FindUid(agTwoSection, "section-meta") is not null;
             var compact = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Compact && meter.IsVisible).ToArray();
             var tight = compact.FirstOrDefault(meter => meter.Key == "antigravity:example-2|gemini-weekly");
             report.Notes[$"{name}_tight_reset_shown"] = tight?.ResetShown ?? "missing";

@@ -626,8 +626,43 @@ test('Antigravity: Add, Sign in and Remove are served through the terminal fallb
       ]
     );
     assert.match(actions[1].tip, /terminal on Ubuntu/);
+    // saved profiles sign in again, like every other existing signed-in account
+    assert.equal(actions[1].label, 'Sign in again');
   }
   // Activate stays disabled here (no canActivate from the server): the live gate is untouched
+});
+
+test('Antigravity: the live login gets a refuse control that says why, and the terminal flow shows the command', () => {
+  const ag1 = account({
+    id: 'antigravity:profile:gmail',
+    provider: 'antigravity',
+    email: 'gmail@example.test',
+    capabilities: { antigravityProfileId: 'gmail' },
+  });
+  const p = providers({
+    antigravity: {
+      signIn: { available: false, unavailableReason: 'preflight_failed' },
+      capabilities: { add: false, signInAgain: false, remove: true },
+    },
+  });
+  const r = registry([
+    reg('antigravity:profile:gmail', 'antigravity', {
+      actions: { signInAgain: false, remove: true },
+      removeRefusal: 'account_active',
+    }),
+  ]);
+  const vm = accountsViewModel(data([ag1], { providers: p }), { now, registry: r });
+  const actions = row(vm, 'antigravity:profile:gmail').actions;
+  assert.equal(actions[1].act, 'refuse');
+  assert.equal(actions[1].enabled, true);
+  assert.equal(actions[1].label, 'Sign in again');
+  assert.match(actions[1].tip, /active account/);
+  // the terminal flow: title, command in the body, Copy + Close
+  const view = flowView('antigravity', { type: 'terminal', step: 'run', provider: 'antigravity', accountId: ag1.id, email: ag1.email, command: 'ai-account-center antigravity signin gmail' });
+  assert.equal(view.open, true);
+  assert.match(view.title, /gmail@example.test/);
+  assert.match(view.body, /ai-account-center antigravity signin gmail/);
+  assert.deepEqual(view.actions.map(a => a.act), ['flow-copy', 'flow-cancel']);
 });
 
 test('API-key, browser and app providers: keys show their last 4, Replace key and Remove are live, sessions sign in and re-check', () => {

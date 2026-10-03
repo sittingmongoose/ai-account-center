@@ -225,10 +225,16 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
       ];
     }
     case 'cli': {
-      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in', icon: 'login', probe: `signin-again:${account.id}` };
-      const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
-        : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
-          : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command.' });
+      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
+      // The live login cannot sign in again; like the device rows it gets a refuse control that
+      // says why, not a dead button. The registry's refusal is the signal (the native-selected
+      // flag needs the runtime; without it the registry still records the live login).
+      const isLive = homeRow?.active === true || reg?.removeRefusal === 'account_active';
+      const signin = isLive
+        ? action({ ...signinFields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the active account. Activate another account first, then sign in again.' })
+        : !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
+          : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
+            : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command in a panel below.' });
       return [
         canSwitch || homeRow?.active
           ? action({ kind: 'switch', act: 'antigravity-activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '', probe: `activate:${account.id}` })
@@ -314,6 +320,7 @@ const STEPS = {
   'key-add': ['Paste the key', 'Check', 'Stored'],
   'key-replace': ['Paste the key', 'Check', 'Stored'],
   guide: ['Open', 'Sign in', 'Re-check'],
+  terminal: ['Run the command'],
   purge: ['Type DELETE', 'Deleted'],
 };
 const btn = (act, value, label, fields = {}) => action({ act, value, label, enabled: true, probe: `${act}:${value}`, ...fields });
@@ -321,7 +328,7 @@ const expiresLine = (iso, now) => validDate(iso) ? `Code expires at ${clockFmt.f
 
 /**
  * The flow panel under a provider section. `f` is bridge.js's flow state:
- * { type, step, provider, accountId?, email?, name?, job?, error?: {title, body}, result?, guide?, fallback?, busy? }
+ * { type, step, provider, accountId?, email?, name?, job?, error?: {title, body}, result?, guide?, fallback?, command?, busy? }
  */
 export function flowView(provider, f, ctx = {}) {
   const now = ctx.now ?? Date.now();
@@ -475,6 +482,22 @@ export function flowView(provider, f, ctx = {}) {
       v.actions.push(btn('flow-recheck', provider, 'Re-check', { icon: 'refresh', style: 'primary', busy: !!f.busy, enabled: !f.busy && !!f.accountId }));
       v.actions.push(close);
       if (f.found) { v.cur = 3; v.done = 'Session found'; v.body = 'Readings continue on the normal refresh interval.'; v.actions = [doneBtn]; }
+      err();
+      return v;
+    }
+    case 'terminal': {
+      v.steps = STEPS.terminal;
+      v.cur = 0;
+      const who = text(f.email) || 'this account';
+      const command = text(f.command);
+      v.title = `Sign in again as ${who}`;
+      v.body = command
+        ? `Antigravity signs in on Ubuntu, outside the browser. Run this command there: ${command}. The dashboard picks the account up when it is done.`
+        : 'The sign-in command is missing. Close this panel and choose Sign in again once more.';
+      v.actions = [
+        ...(command ? [btn('flow-copy', provider, 'Copy command', { icon: 'copy' })] : []),
+        close,
+      ];
       err();
       return v;
     }
