@@ -995,6 +995,7 @@ export function accountsViewModel(data, ctx = {}) {
     refresh: { seconds: Number.isInteger(c.refreshSeconds) ? c.refreshSeconds : 60, known: c.refreshKnown === true },
     timezone: timezoneView(c.prefs),
     cleanup: cleanupView(c.prefs),
+    logSources: logSourcesView(c.prefs),
     update: updateResultsView(c.updateJob, now),
     signin: signinFacts(c, now),
     connection: connectionFacts(c),
@@ -1027,6 +1028,65 @@ export function timezoneView(prefs) {
     enabled: !!data && prefs?.busy !== 'timezone',
     busy: prefs?.busy === 'timezone',
     tip: 'Every displayed time and the analytics day buckets use this zone.',
+  };
+}
+
+/** The usage-log tools Settings offers: what each extra location points at, and the hosts each tool scans on. */
+export const LOG_SOURCE_TOOLS = [
+  ['omp', 'OMP'],
+  ['muse', 'Muse Code'],
+  ['zcode', 'zcode'],
+  ['claude-code', 'Claude Code'],
+  ['codex', 'Codex'],
+  ['jsonl', 'Generic JSONL'],
+];
+export const LOG_SOURCE_TOOL_LABEL = Object.fromEntries(LOG_SOURCE_TOOLS);
+export const LOG_SOURCE_HOSTS = {
+  omp: ['ubuntu', 'mac', 'windows'],
+  muse: ['ubuntu', 'mac'],
+  zcode: ['ubuntu', 'mac'],
+  'claude-code': ['ubuntu'],
+  codex: ['ubuntu'],
+  jsonl: ['ubuntu'],
+};
+export const LOG_SOURCE_PATH_HINT = {
+  omp: 'an OMP session-root folder',
+  muse: 'a Muse sessions folder',
+  zcode: 'a zcode database file',
+  'claude-code': 'a Claude projects folder',
+  codex: 'a Codex home folder (holding sessions)',
+  jsonl: 'a folder of .jsonl files',
+};
+
+/** One saved generic mapping as readable text (`timestamp: ts, model: model`). */
+export function logSourceMappingSummary(mapping) {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return '';
+  return ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost']
+    .filter(key => typeof mapping[key] === 'string' && mapping[key])
+    .map(key => `${key}: ${mapping[key]}`)
+    .join(', ');
+}
+
+/** The extra usage-log locations: the saved list with remove, plus the add form's options. */
+export function logSourcesView(prefs) {
+  const data = prefs?.data && typeof prefs.data === 'object' ? prefs.data : null;
+  const saved = Array.isArray(data?.usageLogSources) ? data.usageLogSources : [];
+  return {
+    sources: saved.map(entry => ({
+      id: typeof entry?.id === 'string' ? entry.id : '',
+      tool: typeof entry?.tool === 'string' ? entry.tool : '',
+      toolLabel: LOG_SOURCE_TOOL_LABEL[entry?.tool] || String(entry?.tool ?? ''),
+      host: typeof entry?.host === 'string' ? entry.host : '',
+      path: typeof entry?.path === 'string' ? entry.path : '',
+      mapping: logSourceMappingSummary(entry?.fieldMapping),
+    })),
+    tools: LOG_SOURCE_TOOLS.map(([tool, label]) => ({ tool, label })),
+    hosts: { ...LOG_SOURCE_HOSTS },
+    hints: { ...LOG_SOURCE_PATH_HINT },
+    enabled: !!data && prefs?.busy !== 'logsources',
+    busy: prefs?.busy === 'logsources',
+    error: typeof prefs?.logSourcesError === 'string' ? prefs.logSourcesError : '',
+    tip: 'Built-in locations are always scanned. Each extra adds one more usage-log location for that tool on that host; collectors read it from the next refresh.',
   };
 }
 

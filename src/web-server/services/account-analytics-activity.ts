@@ -7,6 +7,7 @@ import { listAccountInstancePaths } from '../../management/instance-directory';
 import { CCSError } from '../../errors/error-types';
 import { resolveCodexConfigPaths } from './compatible-cli-config-paths';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
+import { readDashboardPreferences, type UsageLogSource } from './dashboard-preferences';
 import {
   accountAnalyticsActivityCoverage,
   projectAccountAnalyticsActivity,
@@ -215,13 +216,18 @@ async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
     /* No configured instance history. */
   }
   const unique = new Set<string>();
+  const seen = (kind: string, resolved: string): boolean => {
+    const key = `${kind}:${resolved}`;
+    if (unique.has(key)) return true;
+    unique.add(key);
+    return false;
+  };
   const requests: AccountAnalyticsActivityRequest[] = [];
   for (const directory of claudeRoots) {
     try {
       if (!fs.statSync(directory).isDirectory()) continue;
       const real = fs.realpathSync(directory);
-      if (unique.has(real)) continue;
-      unique.add(real);
+      if (seen('claude', real)) continue;
       requests.push({
         provider: 'claude',
         request: { kind: 'claude', projectsDir: real, activity },
@@ -232,33 +238,155 @@ async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
     if (requests.length >= MAX_DIRECTORIES) break;
   }
   const codexHome = resolveCodexConfigPaths().baseDir;
-  if (fs.existsSync(path.join(codexHome, 'sessions')))
+  if (fs.existsSync(path.join(codexHome, 'sessions'))) {
+    try {
+      seen('codex', fs.realpathSync(path.join(codexHome, 'sessions')));
+    } catch {
+      /* Realpath failure still scans under the configured home. */
+    }
     requests.push({
       provider: 'codex',
       request: { kind: 'codex', codexHome, cacheDir: path.join(ccsDir, 'cache'), activity },
     });
+  }
   try {
     const ompRoots: string[] = [];
     for (const root of await resolveOmpSessionRoots({ cacheDir: path.join(ccsDir, 'cache') }))
       if (await isDirectory(root)) ompRoots.push(root);
-    if (ompRoots.length)
+    if (ompRoots.length) {
+      for (const root of ompRoots) {
+        try {
+          seen('omp', fs.realpathSync(root));
+        } catch {
+          /* Realpath failure still scans under the resolved root. */
+        }
+      }
       requests.push({ provider: 'omp', request: { kind: 'omp', roots: ompRoots, activity } });
+    }
   } catch {
     /* Absent history is not an error or measured zero. */
   }
   try {
     const sessionsDir = resolveMuseSessionsDir();
-    if (fs.statSync(sessionsDir).isDirectory())
+    if (fs.statSync(sessionsDir).isDirectory()) {
+      try {
+        seen('muse', fs.realpathSync(sessionsDir));
+      } catch {
+        /* Realpath failure still scans under the resolved directory. */
+      }
       requests.push({ provider: 'muse', request: { kind: 'muse', sessionsDir, activity } });
+    }
   } catch {
     /* Absent history is not an error or measured zero. */
   }
   try {
     const dbPath = resolveZcodeDbPath();
-    if (fs.statSync(dbPath).isFile())
+    if (fs.statSync(dbPath).isFile()) {
+      try {
+        seen('zcode', fs.realpathSync(dbPath));
+      } catch {
+        /* Realpath failure still scans the resolved database. */
+      }
       requests.push({ provider: 'zcode', request: { kind: 'zcode', dbPath, activity } });
+    }
   } catch {
     /* Absent history is not an error or measured zero. */
+  }
+  try {
+    const prefs = readDashboardPreferences(ccsDir);
+    requests.push(...extraActivityRequests(prefs.usageLogSources, activity, ccsDir, unique));
+  } catch {
+    /* Without prefs the built-in roots still scan. */
+  }
+  return requests;
+}
+
+/**
+ * Saved extra usage-log locations for this host (Ubuntu) as worker requests.
+ * The built-in roots stay the defaults; each extra adds one request. An extra
+ * that resolves to a root already scanned (built-in or an earlier extra) is
+ * skipped, so the same logs are never counted twice; two generic JSONL
+ * sources may share a root only with different field mappings. Unreadable or
+ * unmapped extras are skipped, never a failed collection.
+ */
+export function extraActivityRequests(
+  sources: UsageLogSource[],
+  activity: { minDate: number; cacheDir: string },
+  ccsDir: string,
+  scanned: Set<string>
+): AccountAnalyticsActivityRequest[] {
+  const requests: AccountAnalyticsActivityRequest[] = [];
+  const claim = (kind: string, resolved: string, mapping = ''): boolean => {
+    const key = `${kind}:${resolved}${mapping}`;
+    if (scanned.has(key)) return false;
+    scanned.add(key);
+    return true;
+  };
+  for (const source of sources) {
+    if (requests.length >= MAX_DIRECTORIES) break;
+    if (!source || source.host !== 'ubuntu') continue;
+    try {
+      if (source.tool === 'claude-code') {
+        if (!fs.statSync(source.path).isDirectory()) continue;
+        const real = fs.realpathSync(source.path);
+        if (!claim('claude', real)) continue;
+        requests.push({
+          provider: 'claude',
+          request: { kind: 'claude', projectsDir: real, activity },
+        });
+      } else if (source.tool === 'codex') {
+        if (!fs.existsSync(path.join(source.path, 'sessions'))) continue;
+        const real = fs.realpathSync(path.join(source.path, 'sessions'));
+        if (!claim('codex', real)) continue;
+        requests.push({
+          provider: 'codex',
+          request: {
+            kind: 'codex',
+            codexHome: source.path,
+            cacheDir: path.join(ccsDir, 'cache'),
+            activity,
+          },
+        });
+      } else if (source.tool === 'omp') {
+        if (!fs.statSync(source.path).isDirectory()) continue;
+        const real = fs.realpathSync(source.path);
+        if (!claim('omp', real)) continue;
+        requests.push({ provider: 'omp', request: { kind: 'omp', roots: [real], activity } });
+      } else if (source.tool === 'muse') {
+        if (!fs.statSync(source.path).isDirectory()) continue;
+        const real = fs.realpathSync(source.path);
+        if (!claim('muse', real)) continue;
+        requests.push({ provider: 'muse', request: { kind: 'muse', sessionsDir: real, activity } });
+      } else if (source.tool === 'zcode') {
+        if (!fs.statSync(source.path).isFile()) continue;
+        const real = fs.realpathSync(source.path);
+        if (!claim('zcode', real)) continue;
+        requests.push({ provider: 'zcode', request: { kind: 'zcode', dbPath: real, activity } });
+      } else if (source.tool === 'jsonl') {
+        const fieldMapping = source.fieldMapping;
+        if (!fieldMapping || typeof fieldMapping.timestamp !== 'string') continue;
+        if (!fs.statSync(source.path).isDirectory()) continue;
+        const real = fs.realpathSync(source.path);
+        const mapping = {
+          timestamp: fieldMapping.timestamp,
+          ...(typeof fieldMapping.model === 'string' ? { model: fieldMapping.model } : {}),
+          ...(typeof fieldMapping.inputTokens === 'string'
+            ? { inputTokens: fieldMapping.inputTokens }
+            : {}),
+          ...(typeof fieldMapping.outputTokens === 'string'
+            ? { outputTokens: fieldMapping.outputTokens }
+            : {}),
+          ...(typeof fieldMapping.cost === 'string' ? { cost: fieldMapping.cost } : {}),
+        };
+        if (!claim('jsonl', real, `\n${JSON.stringify(mapping)}`)) continue;
+        requests.push({
+          provider: 'jsonl',
+          request: { kind: 'jsonl', roots: [real], mapping, activity },
+        });
+      }
+    } catch {
+      /* An unreadable extra is skipped, never a failed collection. */
+    }
   }
   return requests;
 }
@@ -266,7 +394,9 @@ async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
 /**
  * Whether each tool's Ubuntu logs exist, for `not_installed` states: the
  * tools that have a local request (a Claude Code projects folder, Codex
- * sessions, an OMP session root, Muse sessions, the zcode database).
+ * sessions, an OMP session root, Muse sessions, the zcode database, a generic
+ * JSONL root). Generic JSONL has no built-in root: presence means a saved
+ * `jsonl` extra for this host resolved to a readable directory.
  */
 function localSourcePresence(
   requests: AccountAnalyticsActivityRequest[]
@@ -277,6 +407,7 @@ function localSourcePresence(
     omp: false,
     muse: false,
     zcode: false,
+    jsonl: false,
   };
   for (const entry of requests) presence[entry.provider] = true;
   return presence;
@@ -414,7 +545,7 @@ export class AccountAnalyticsActivityService {
     const now = (this.deps.now ?? Date.now)();
     const fetchedAt = new Date(now).toISOString();
     const updated: SourceData[] = [];
-    for (const provider of ['claude', 'codex', 'omp', 'muse', 'zcode'] as const) {
+    for (const provider of ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'] as const) {
       const data = collected.get(provider);
       if (data) updated.push({ provider, data, fetchedAt });
       else {
@@ -451,7 +582,7 @@ export class AccountAnalyticsActivityService {
     const previous = new Map(
       state.sourceStates.map((entry) => [`${entry.tool}\0${entry.host}`, entry])
     );
-    for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode'] as const) {
+    for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'] as const) {
       const key = `${tool}\0ubuntu`;
       const old = previous.get(key);
       if (succeeded.has(tool)) {
@@ -520,7 +651,7 @@ export class AccountAnalyticsActivityService {
     }
     entries.push(...fixedAnalyticsSourceEntries());
     const order = (tool: string): number =>
-      ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor'].indexOf(tool);
+      ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity', 'cursor'].indexOf(tool);
     const hostOrder = (host: string): number => ['ubuntu', 'mac', 'windows'].indexOf(host);
     entries.sort((a, b) => order(a.tool) - order(b.tool) || hostOrder(a.host) - hostOrder(b.host));
     return entries;

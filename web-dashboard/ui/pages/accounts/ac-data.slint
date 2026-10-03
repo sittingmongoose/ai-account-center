@@ -173,6 +173,15 @@ export struct AcPolicy {
     tip: string,
 }
 
+export struct AcLogSource {
+    id: string,
+    tool: string,
+    tool-label: string,
+    host: string,
+    path: string,
+    mapping: string,
+}
+
 export struct AcUpdItem {
     key: string,
     app: string,
@@ -261,6 +270,11 @@ export global AcData {
     in-out property <bool> cleanup-busy: false;
     in-out property <string> cleanup-note: "";
     in-out property <string> cleanup-tip: "";
+    in-out property <[AcLogSource]> log-sources;
+    in-out property <bool> log-sources-enabled: false;
+    in-out property <bool> log-sources-busy: false;
+    in-out property <string> log-sources-error: "";
+    in-out property <string> log-sources-tip: "";
     in-out property <bool> update-shown: false;
     in-out property <bool> update-running: false;
     in-out property <bool> update-cancelling: false;

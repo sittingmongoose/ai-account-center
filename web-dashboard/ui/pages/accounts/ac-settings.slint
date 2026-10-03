@@ -872,6 +872,165 @@ component SettingsGroup inherits SetGroup {
     }
 }
 
+component LogSourceRow inherits HorizontalLayout {
+    in property <string> id;
+    in property <string> tool-label;
+    in property <string> host;
+    in property <string> location;
+    in property <string> mapping;
+    in property <bool> enabled;
+    callback act(string, string);
+    spacing: 8px;
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 1px;
+        Text { text: tool-label + " · " + host; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; }
+        Text { text: location; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+        if mapping != "": Text { text: mapping; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+    }
+    VerticalLayout {
+        alignment: center;
+        Button {
+            small: true;
+            text: "Remove";
+            enabled: root.enabled;
+            clicked => { root.act("logsource-remove", root.id); }
+        }
+    }
+}
+
+component LogSourcesGroup inherits SetGroup {
+    in property <bool> busy;
+    callback act(string, string);
+    title: "Usage log sources";
+    // the tool id behind the tool label (Select shows strings only)
+    property <string> tool-id: tool-sel.value == "Muse Code" ? "muse" : tool-sel.value == "zcode" ? "zcode" : tool-sel.value == "Claude Code" ? "claude-code" : tool-sel.value == "Codex" ? "codex" : tool-sel.value == "Generic JSONL" ? "jsonl" : "omp";
+    property <[string]> host-options: tool-id == "omp" ? ["ubuntu", "mac", "windows"] : tool-id == "muse" || tool-id == "zcode" ? ["ubuntu", "mac"] : ["ubuntu"];
+    // the mapping fields live under an `if`: their text is hoisted here so the
+    // submitted JSON never reads an uninstantiated element
+    property <string> map-ts-text;
+    property <string> map-model-text;
+    property <string> map-in-text;
+    property <string> map-out-text;
+    property <string> map-cost-text;
+    property <string> mapping-json: "{\"timestamp\":\"" + map-ts-text + "\",\"model\":\"" + map-model-text + "\"" + (map-in-text != "" ? ",\"inputTokens\":\"" + map-in-text + "\"" : "") + (map-out-text != "" ? ",\"outputTokens\":\"" + map-out-text + "\"" : "") + (map-cost-text != "" ? ",\"cost\":\"" + map-cost-text + "\"" : "") + "}";
+    property <bool> form-enabled: AcData.log-sources-enabled && !root.busy && !AcData.log-sources-busy;
+    SetItem {
+        first: true;
+        label: "Extra locations";
+        aside: AcData.log-sources-busy ? "Saving" : "";
+        TipArea {
+            owner: "logsources";
+            tip: AcData.log-sources-tip;
+            VerticalLayout {
+                spacing: 10px;
+                if AcData.log-sources.length == 0: Text {
+                    text: "No extras yet. Built-in locations are always scanned.";
+                    font-size: Type.small;
+                    color: Theme.ink-3;
+                    wrap: word-wrap;
+                }
+                for src in AcData.log-sources: LogSourceRow {
+                    id: src.id;
+                    tool-label: src.tool-label;
+                    host: src.host;
+                    location: src.path;
+                    mapping: src.mapping;
+                    enabled: form-enabled;
+                    act(k, v) => { root.act(k, v); }
+                }
+            }
+        }
+    }
+    Hairline { }
+    SetItem {
+        label: "Add a location";
+        VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 6px;
+                    Text { text: "Tool"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
+                    tool-sel := Select {
+                        options: ["OMP", "Muse Code", "zcode", "Claude Code", "Codex", "Generic JSONL"];
+                        value: "OMP";
+                        enabled: form-enabled;
+                        selected(v) => { host-sel.value = "ubuntu"; }
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 6px;
+                    Text { text: "Host"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
+                    host-sel := Select {
+                        options: host-options;
+                        value: "ubuntu";
+                        enabled: form-enabled;
+                    }
+                }
+            }
+            path-field := Field {
+                label: "Path";
+                placeholder: "/absolute/path or C:\\absolute\\path";
+                enabled: form-enabled;
+            }
+            if tool-id == "jsonl": VerticalLayout {
+                spacing: 8px;
+                Text { text: "Row field mapping: dot paths into each JSON record"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
+                map-ts := Field {
+                    label: "Timestamp";
+                    placeholder: "ts";
+                    enabled: form-enabled;
+                    edited(t) => { map-ts-text = t; }
+                }
+                map-model := Field {
+                    label: "Model";
+                    placeholder: "model";
+                    enabled: form-enabled;
+                    edited(t) => { map-model-text = t; }
+                }
+                map-in := Field {
+                    label: "Input tokens (optional)";
+                    placeholder: "usage.input_tokens";
+                    enabled: form-enabled;
+                    edited(t) => { map-in-text = t; }
+                }
+                map-out := Field {
+                    label: "Output tokens (optional)";
+                    placeholder: "usage.output_tokens";
+                    enabled: form-enabled;
+                    edited(t) => { map-out-text = t; }
+                }
+                map-cost := Field {
+                    label: "Cost in USD (optional)";
+                    placeholder: "cost";
+                    enabled: form-enabled;
+                    edited(t) => { map-cost-text = t; }
+                }
+            }
+            if AcData.log-sources-error != "": Text {
+                text: AcData.log-sources-error;
+                font-size: Type.small;
+                color: Theme.crit;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: start;
+                Button {
+                    small: true;
+                    text: AcData.log-sources-busy ? "Adding" : "Add location";
+                    enabled: form-enabled;
+                    busy: AcData.log-sources-busy;
+                    probe: "logsource-add";
+                    clicked => { root.act("logsource-add", tool-id + "\n" + host-sel.value + "\n" + path-field.text + "\n" + (tool-id == "jsonl" ? mapping-json : "")); }
+                }
+            }
+        }
+    }
+}
+
 component CleanupGroup inherits SetGroup {
     in property <bool> busy;
     callback act(string, string);
@@ -884,11 +1043,11 @@ component CleanupGroup inherits SetGroup {
             tip: AcData.cleanup-tip;
             min-height: 20px;
             CheckLine {
-                label: "Clean up after each copy";
+                text: "Clean up after each copy";
                 sub: "keeps the newest 3 snapshot folders per profile";
                 checked: AcData.cleanup-auto;
                 enabled: AcData.cleanup-enabled && !root.busy;
-                toggled => { root.act("cleanup-auto", ""); }
+                toggled(checked) => { root.act("cleanup-auto", ""); }
             }
         }
     }
@@ -1001,6 +1160,10 @@ export component SettingsColumn inherits VerticalLayout {
             act(k, v) => { root.act(k, v); }
         }
         CleanupGroup {
+            busy: root.busy;
+            act(k, v) => { root.act(k, v); }
+        }
+        LogSourcesGroup {
             busy: root.busy;
             act(k, v) => { root.act(k, v); }
         }

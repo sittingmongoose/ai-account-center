@@ -59,7 +59,13 @@ function isUsageLogSource(value: unknown): value is UsageLogSource {
     typeof source.path !== 'string' ||
     source.path.length === 0 ||
     source.path.length > 1024 ||
-    !path.posix.isAbsolute(source.path) ||
+    source.path.includes('\0') ||
+    // A Windows path follows Windows syntax; every other host is POSIX.
+    // `..` stays refused everywhere so an extra root cannot escape upward.
+    !(
+      path.posix.isAbsolute(source.path) ||
+      (source.host === 'windows' && /^[A-Za-z]:[\\/]/.test(source.path))
+    ) ||
     source.path.includes('..')
   ) {
     return false;

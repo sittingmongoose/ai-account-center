@@ -801,3 +801,68 @@ test('snapshot cleanup toggles automatic retention and cleans up now with a note
   await idle.ctl.handle('cleanup-now', '');
   assert.equal(idle.ctl.state.prefs.cleanupNote, 'Nothing to clean: every profile already keeps only its newest snapshots.');
 });
+
+test('extra usage-log locations add, validate and remove through one preferences save', async () => {
+  const prefs = { timeZone: 'America/New_York', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  const h = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+    },
+  });
+  await h.ctl.loadPrefs();
+  await h.ctl.handle('logsource-add', 'omp\nubuntu\n/home/u/extra-omp\n');
+  assert.equal(h.ctl.state.prefs.logSourcesError ?? '', '');
+  let body = last(h.sent).body;
+  assert.equal(body.usageLogSources.length, 1);
+  assert.match(body.usageLogSources[0].id, /^log-[a-z0-9]{8}$/);
+  assert.deepEqual({ ...body.usageLogSources[0], id: 'x' }, { id: 'x', tool: 'omp', host: 'ubuntu', path: '/home/u/extra-omp' });
+  const count = h.sent.length;
+  // a relative path, a wrong host and a missing mapping refuse without saving
+  await h.ctl.handle('logsource-add', 'omp\nubuntu\nrelative/path\n');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /absolute path/);
+  await h.ctl.handle('logsource-add', 'muse\nwindows\nC:\\muse\n');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on ubuntu, mac/);
+  await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /field mapping/);
+  await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n{"timestamp":"ts"}');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /model/);
+  // a mapped generic source saves with its mapping
+  await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n{"timestamp":"ts","model":"m","inputTokens":"usage.in"}');
+  body = last(h.sent).body;
+  assert.equal(body.usageLogSources.length, 2);
+  assert.deepEqual(body.usageLogSources[1].fieldMapping, { timestamp: 'ts', model: 'm', inputTokens: 'usage.in' });
+  // adding the same location again refuses as a duplicate
+  const beforeDupe = h.sent.length;
+  await h.ctl.handle('logsource-add', 'omp\nubuntu\n/home/u/extra-omp\n');
+  assert.equal(h.sent.length, beforeDupe);
+  assert.match(h.ctl.state.prefs.logSourcesError, /already listed/);
+  // remove drops one entry; an unknown id sends nothing
+  const [first, second] = h.ctl.state.prefs.data.usageLogSources;
+  await h.ctl.handle('logsource-remove', first.id);
+  body = last(h.sent).body;
+  assert.deepEqual(body.usageLogSources.map((entry) => entry.id), [second.id]);
+  const afterRemove = h.sent.length;
+  await h.ctl.handle('logsource-remove', 'log-unknown');
+  assert.equal(h.sent.length, afterRemove);
+});
+
+test('the log source check mirrors the server path and mapping rules', async () => {
+  const { logSourceProblem } = await import('../public/accounts-controller.mjs');
+  assert.equal(logSourceProblem('omp', 'mac', '/Users/u/x', undefined), '');
+  assert.equal(logSourceProblem('omp', 'windows', 'C:\\x\\y', undefined), '');
+  assert.equal(logSourceProblem('omp', 'windows', 'C:/x/y', undefined), '');
+  assert.ok(logSourceProblem('cursor', 'mac', '/x', undefined));
+  assert.ok(logSourceProblem('omp', 'mac', 'relative', undefined));
+  assert.ok(logSourceProblem('omp', 'mac', '/x/../y', undefined));
+  assert.ok(logSourceProblem('omp', 'ubuntu', 'C:\\x', undefined));
+  assert.ok(logSourceProblem('zcode', 'windows', '/x.db', undefined));
+  assert.ok(logSourceProblem('omp', 'mac', '/x', { timestamp: 'ts' }));
+  assert.equal(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: 'm' }), '');
+  assert.ok(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: '0bad' }));
+  assert.ok(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: 'm', bogus: 'x' }));
+});

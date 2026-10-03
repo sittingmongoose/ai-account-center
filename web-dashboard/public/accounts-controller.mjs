@@ -22,6 +22,7 @@ import { setDisplayTimeZone, DEFAULT_DISPLAY_TIME_ZONE } from './time-format.mjs
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord } from './view-model.mjs';
 import { lazyFormat } from './time-format.mjs';
+import { LOG_SOURCE_HOSTS, LOG_SOURCE_TOOL_LABEL, LOG_SOURCE_PATH_HINT } from './accounts-view.mjs';
 
 export const JOB_POLL_MS = 2_000;
 export const LEGACY_HIDDEN_KEY = 'aac-hidden-providers';
@@ -40,8 +41,43 @@ export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
   'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
-  'cleanup-auto', 'cleanup-now',
+  'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
 ]));
+
+const LOG_SOURCE_FIELD_PATH = /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/;
+const LOG_SOURCE_MAPPING_KEYS = ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost'];
+
+/**
+ * Why an extra usage-log location is not addable ('' when it is). Mirrors the server's
+ * `isUsageLogSource` so the form refuses what PUT /api/accounts/preferences would refuse.
+ */
+export function logSourceProblem(tool, host, location, mapping) {
+  const hosts = LOG_SOURCE_HOSTS[tool];
+  if (!hosts) return 'Pick a tool for the extra location.';
+  if (!hosts.includes(host)) {
+    const names = hosts.join(', ');
+    return `${LOG_SOURCE_TOOL_LABEL[tool]} usage is only scanned on ${names}.`;
+  }
+  const hint = LOG_SOURCE_PATH_HINT[tool];
+  if (typeof location !== 'string' || !location || location.length > 1024 || location.includes('\0'))
+    return `Enter the absolute path to ${hint}.`;
+  const absolute = location.startsWith('/') || (host === 'windows' && /^[A-Za-z]:[\\/]/.test(location));
+  if (!absolute || location.includes('..')) return `Enter the absolute path to ${hint}, with no "..".`;
+  if (tool === 'jsonl') {
+    if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping))
+      return 'A generic JSONL source needs its row field mapping: timestamp and model at least.';
+    for (const key of Object.keys(mapping)) {
+      if (!LOG_SOURCE_MAPPING_KEYS.includes(key)) return `The mapping has no "${key}" field.`;
+      if (typeof mapping[key] !== 'string' || !LOG_SOURCE_FIELD_PATH.test(mapping[key]))
+        return `The "${key}" mapping is not a dot path (like usage.input_tokens).`;
+    }
+    if (typeof mapping.timestamp !== 'string') return 'The mapping needs a timestamp field.';
+    if (typeof mapping.model !== 'string') return 'The mapping needs a model field.';
+  } else if (mapping !== undefined && mapping !== null) {
+    return 'Only generic JSONL sources take a field mapping.';
+  }
+  return '';
+}
 
 export function createAccountsController(deps) {
   const {
@@ -686,6 +722,62 @@ export function createAccountsController(deps) {
     } catch (error) { fail(error); }
     finally { p.cleanupBusy = false; changed(); }
   }
+  async function addLogSource(v) {
+    const current = state.prefs.data;
+    if (!current || state.prefs.busy) return;
+    // "tool\nhost\npath\nmapping-json?": the mapping JSON holds no raw newlines, and a path holding
+    // one fails the absolute-path check below, so the split cannot smuggle a bad path through.
+    const [tool = '', host = '', location = '', ...rest] = String(v ?? '').split('\n');
+    const json = rest.join('\n');
+    let mapping;
+    if (json) {
+      try { mapping = JSON.parse(json); } catch { mapping = null; }
+      if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+        state.prefs.logSourcesError = 'The field mapping is not valid JSON.';
+        changed();
+        return;
+      }
+    }
+    const problem = logSourceProblem(tool, host, location, mapping);
+    if (problem) { state.prefs.logSourcesError = problem; changed(); return; }
+    const saved = Array.isArray(current.usageLogSources) ? current.usageLogSources : [];
+    const sameMapping = (a, b) => {
+      if (a === undefined || a === null) return b === undefined || b === null;
+      if (b === undefined || b === null) return false;
+      return ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost']
+        .every(key => (a[key] ?? undefined) === (b[key] ?? undefined));
+    };
+    if (saved.some(entry => entry?.tool === tool && entry?.host === host && entry?.path === location && sameMapping(entry?.fieldMapping, mapping))) {
+      state.prefs.logSourcesError = 'This location is already listed.';
+      changed();
+      return;
+    }
+    let id = '';
+    do { id = `log-${Math.random().toString(36).slice(2, 10)}`; } while (saved.some(entry => entry?.id === id));
+    state.prefs.logSourcesError = '';
+    await savePrefs({
+      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
+      snapshotCleanup: current.snapshotCleanup || { auto: true },
+      usageLogSources: [
+        ...saved,
+        mapping === undefined
+          ? { id, tool, host, path: location }
+          : { id, tool, host, path: location, fieldMapping: mapping },
+      ],
+    }, 'logsources');
+  }
+  async function removeLogSource(id) {
+    const current = state.prefs.data;
+    if (!current || state.prefs.busy) return;
+    const saved = Array.isArray(current.usageLogSources) ? current.usageLogSources : [];
+    if (!saved.some(entry => entry?.id === id)) return;
+    state.prefs.logSourcesError = '';
+    await savePrefs({
+      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
+      snapshotCleanup: current.snapshotCleanup || { auto: true },
+      usageLogSources: saved.filter(entry => entry?.id !== id),
+    }, 'logsources');
+  }
   function togglePassword() {
     const pw = state.signin.pw;
     if (pw.busy) return;
@@ -779,6 +871,8 @@ export function createAccountsController(deps) {
       case 'time-zone': await setTimeZone(v); return true;
       case 'cleanup-auto': await toggleCleanupAuto(); return true;
       case 'cleanup-now': await cleanupNow(); return true;
+      case 'logsource-add': await addLogSource(v); return true;
+      case 'logsource-remove': await removeLogSource(v); return true;
       case 'pw-toggle': togglePassword(); return true;
       case 'pw-typing': typingPassword(v); return true;
       case 'pw-submit': await changePassword(v); return true;

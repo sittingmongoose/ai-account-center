@@ -1808,6 +1808,38 @@ test('the time zone control shows the saved zone and waits without preferences',
   assert.equal(saving.timezone.enabled, false);
 });
 
+test('the log sources control lists saved extras with labels and waits without preferences', () => {
+  const prefs = {
+    data: {
+      timeZone: 'UTC',
+      snapshotCleanup: { auto: true },
+      usageLogSources: [
+        { id: 'a', tool: 'omp', host: 'mac', path: '/Users/u/extra' },
+        { id: 'b', tool: 'jsonl', host: 'ubuntu', path: '/var/log/h', fieldMapping: { timestamp: 'ts', model: 'm' } },
+      ],
+    },
+    busy: '',
+  };
+  const vm = accountsViewModel(data([account()]), { now, prefs });
+  assert.equal(vm.logSources.sources.length, 2);
+  assert.deepEqual(vm.logSources.sources[0], { id: 'a', tool: 'omp', toolLabel: 'OMP', host: 'mac', path: '/Users/u/extra', mapping: '' });
+  assert.equal(vm.logSources.sources[1].toolLabel, 'Generic JSONL');
+  assert.equal(vm.logSources.sources[1].mapping, 'timestamp: ts, model: m');
+  assert.equal(vm.logSources.enabled, true);
+  assert.equal(vm.logSources.busy, false);
+  assert.equal(vm.logSources.error, '');
+  assert.deepEqual(vm.logSources.hosts.omp, ['ubuntu', 'mac', 'windows']);
+  assert.deepEqual(vm.logSources.hosts.jsonl, ['ubuntu']);
+  const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '' } });
+  assert.deepEqual(waiting.logSources.sources, []);
+  assert.equal(waiting.logSources.enabled, false);
+  const saving = accountsViewModel(data([account()]), { now, prefs: { data: { usageLogSources: [] }, busy: 'logsources' } });
+  assert.equal(saving.logSources.busy, true);
+  assert.equal(saving.logSources.enabled, false);
+  const failed = accountsViewModel(data([account()]), { now, prefs: { data: { usageLogSources: [] }, busy: '', logSourcesError: 'Nope.' } });
+  assert.equal(failed.logSources.error, 'Nope.');
+});
+
 test('the default-profile remove flow asks for the account email', () => {
   const v = flowView('claude', { type: 'remove-email', step: 'type', accountId: 'claude:home', name: 'home@example.com', token: 't', effects: ['Default profile.'] });
   assert.equal(v.open, true);

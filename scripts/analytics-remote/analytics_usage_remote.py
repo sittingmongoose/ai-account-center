@@ -2,14 +2,16 @@
 """Aggregate OMP, Muse and zcode usage into per-model, per-hour rows.
 
 Reads one JSON request on stdin, scans the fixed default roots resolved on
-this host, and prints per-model, per-hour aggregates plus per-file
-fingerprints. Only model names, providers, hour buckets and numeric token and
-cost sums leave the host; paths, session ids, prompts, tool output and every
-other conversation content stay here.
+this host plus the validated extra roots in the request, and prints
+per-model, per-hour aggregates plus per-file fingerprints. Only model names,
+providers, hour buckets and numeric token and cost sums leave the host;
+paths, session ids, prompts, tool output and every other conversation content
+stay here.
 
 Request (all fields validated, unknown fields rejected):
   {"kinds": ["omp", "muse", "zcode"], "minDateMs": 123,
    "immutableSqlite": true,
+   "extraRoots": {"omp": ["/abs/sessions"], "muse": [...], "zcode": [...]},
    "fingerprints": {"omp": {"<filekey>": {"size": 1, "mtimeMs": 2}},
                    "muse": {...}, "zcode": {...}}}
 
@@ -270,7 +272,7 @@ def _iter_jsonl_files(root, accept, collector):
                 continue
 
 
-def _omp_roots(home, env, collector):
+def _omp_roots(home, env, collector, extra_roots=()):
     roots = []
     seen = set()
 
@@ -299,7 +301,15 @@ def _omp_roots(home, env, collector):
         _add(found)
     if len(roots) > SCAN_MAX_ROOTS:
         collector.discovery_truncated = True
-    return roots[:SCAN_MAX_ROOTS]
+    trimmed = roots[:SCAN_MAX_ROOTS]
+    # Saved extras are explicit configuration, not discovery: they join after
+    # the discovery cap, never cut by it, and never scanned twice.
+    for candidate in extra_roots:
+        absolute = os.path.abspath(candidate)
+        if absolute not in seen:
+            seen.add(absolute)
+            trimmed.append(absolute)
+    return trimmed
 
 
 def _is_session_filename(name):
@@ -527,10 +537,10 @@ def _drop_resume_copies(paths):
     return [path for path in paths if path not in dropped]
 
 
-def _collect_omp(collector, home, env):
+def _collect_omp(collector, home, env, extra=()):
     roots = [
         root
-        for root in _omp_roots(home, env, collector)
+        for root in _omp_roots(home, env, collector, extra)
         if os.path.isdir(root) and not os.path.islink(root)
     ]
     if not roots:
@@ -675,21 +685,14 @@ def _parse_muse_line(line, collector, kind, filekey):
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
 
 
-def _collect_muse(collector, home, env):
-    override = env.get("MUSE_SESSIONS_DIR")
-    sessions = (
-        os.path.expanduser(override)
-        if override and os.path.isabs(os.path.expanduser(override))
-        else os.path.join(home, ".local", "share", "muse", "sessions")
-    )
-    if not os.path.isdir(sessions) or os.path.islink(sessions):
-        return "not_installed"
+def _scan_muse_dir(collector, directory):
+    """Scan one Muse sessions directory; True when the scan stopped early."""
     for path in _iter_jsonl_files(
-        sessions, lambda name: name == "session.jsonl", collector
+        directory, lambda name: name == "session.jsonl", collector
     ):
         if collector.expired():
             collector.truncated = True
-            return "ok"
+            return True
         filekey = collector.note_file("muse", path)
         if filekey is None:
             staged = _filekey("muse", path)
@@ -704,7 +707,7 @@ def _collect_muse(collector, home, env):
             while True:
                 if collector.expired():
                     collector.truncated = True
-                    return "ok"
+                    return True
                 chunk = handle.readline(MAX_LINE_BYTES + 2)
                 if not chunk:
                     break
@@ -718,9 +721,33 @@ def _collect_muse(collector, home, env):
                     continue
                 _parse_muse_line(line, collector, "muse", filekey)
                 if collector.row_cap:
-                    return "ok"
+                    return True
         collector.confirm_file("muse", filekey)
-    return "ok"
+    return False
+
+
+def _collect_muse(collector, home, env, extra=()):
+    override = env.get("MUSE_SESSIONS_DIR")
+    sessions = (
+        os.path.expanduser(override)
+        if override and os.path.isabs(os.path.expanduser(override))
+        else os.path.join(home, ".local", "share", "muse", "sessions")
+    )
+    seen = set()
+    dirs = []
+    for candidate in (sessions, *extra):
+        absolute = os.path.abspath(candidate)
+        if absolute not in seen:
+            seen.add(absolute)
+            dirs.append(absolute)
+    scanned = False
+    for directory in dirs:
+        if not os.path.isdir(directory) or os.path.islink(directory):
+            continue
+        scanned = True
+        if _scan_muse_dir(collector, directory):
+            return "ok"
+    return "ok" if scanned else "not_installed"
 
 
 def _zcode_fingerprint(db_path):
@@ -748,14 +775,7 @@ def _same_zcode_fingerprint(prior, current):
     )
 
 
-def _collect_zcode(collector, home, env, immutable):
-    override = env.get("ZCODE_DB_PATH")
-    if override and os.path.isabs(os.path.expanduser(override)):
-        db_path = os.path.expanduser(override)
-    else:
-        db_path = os.path.join(home, ".zcode", "cli", "db", "db.sqlite")
-    if not os.path.isfile(db_path) or os.path.islink(db_path):
-        return "not_installed"
+def _scan_zcode_db(collector, db_path, immutable):
     filekey = _filekey("zcode", db_path)
     try:
         current = _zcode_fingerprint(db_path)
@@ -860,6 +880,45 @@ def _collect_zcode(collector, home, env, immutable):
     return "ok"
 
 
+def _collect_zcode(collector, home, env, immutable, extra=()):
+    override = env.get("ZCODE_DB_PATH")
+    if override and os.path.isabs(os.path.expanduser(override)):
+        db_path = os.path.expanduser(override)
+    else:
+        db_path = os.path.join(home, ".zcode", "cli", "db", "db.sqlite")
+    seen = set()
+    dbs = []
+    for candidate in (db_path, *extra):
+        absolute = os.path.abspath(candidate)
+        if absolute not in seen:
+            seen.add(absolute)
+            dbs.append(absolute)
+    states = []
+    for candidate in dbs:
+        if not os.path.isfile(candidate) or os.path.islink(candidate):
+            continue
+        states.append(_scan_zcode_db(collector, candidate, immutable))
+    if not states or all(state == "not_installed" for state in states):
+        return "not_installed"
+    if "error" in states:
+        return "error"
+    return "ok"
+
+
+def _valid_extra_root(candidate):
+    """A saved extra root: an absolute path with no parent escape."""
+    if not isinstance(candidate, str) or not candidate or len(candidate) > 1024:
+        return False
+    if "\x00" in candidate:
+        return False
+    if ".." in candidate.replace("\\", "/").split("/"):
+        return False
+    if os.path.isabs(candidate):
+        return True
+    # A Windows path keeps its shape even when this host is not Windows.
+    return bool(re.match(r"^[A-Za-z]:[\\/]", candidate))
+
+
 def _read_request():
     raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
     if not raw or len(raw) > MAX_REQUEST_BYTES:
@@ -890,6 +949,18 @@ def _read_request():
     fingerprints = request.get("fingerprints", {})
     if not isinstance(fingerprints, dict):
         _fail("request.fingerprints must be an object")
+    extra_roots = request.get("extraRoots", {})
+    if (
+        not isinstance(extra_roots, dict)
+        or any(kind not in ("omp", "muse", "zcode") for kind in extra_roots)
+        or any(
+            not isinstance(paths, list)
+            or len(paths) > 16
+            or any(not _valid_extra_root(path) for path in paths)
+            for paths in extra_roots.values()
+        )
+    ):
+        _fail("request.extraRoots must map kinds to absolute paths")
     deadline_ms = request.get("deadlineMs", 20000)
     if (
         isinstance(deadline_ms, bool)
@@ -898,16 +969,30 @@ def _read_request():
         or deadline_ms > 120000
     ):
         _fail("request.deadlineMs must be within 1s and 120s")
-    allowed = {"kinds", "minDateMs", "immutableSqlite", "fingerprints", "deadlineMs"}
+    allowed = {
+        "kinds",
+        "minDateMs",
+        "immutableSqlite",
+        "fingerprints",
+        "extraRoots",
+        "deadlineMs",
+    }
     if any(key not in allowed for key in request):
         _fail("request has unknown fields")
     # Preserve order, drop duplicates.
     ordered = list(dict.fromkeys(kinds))
-    return ordered, int(min_date_ms), immutable, fingerprints, float(deadline_ms) / 1000.0
+    return (
+        ordered,
+        int(min_date_ms),
+        immutable,
+        fingerprints,
+        extra_roots,
+        float(deadline_ms) / 1000.0,
+    )
 
 
 def main():
-    kinds, min_date_ms, immutable, fingerprints, budget = _read_request()
+    kinds, min_date_ms, immutable, fingerprints, extra_roots, budget = _read_request()
     home = _home()
     env = dict(os.environ)
     collector = Collector(min_date_ms, time.monotonic() + budget, fingerprints, budget)
@@ -915,11 +1000,13 @@ def main():
     for kind in kinds:
         collector.fresh.setdefault(kind, {})
         if kind == "omp":
-            states[kind] = _collect_omp(collector, home, env)
+            states[kind] = _collect_omp(collector, home, env, extra_roots.get("omp", ()))
         elif kind == "muse":
-            states[kind] = _collect_muse(collector, home, env)
+            states[kind] = _collect_muse(collector, home, env, extra_roots.get("muse", ()))
         elif kind == "zcode":
-            states[kind] = _collect_zcode(collector, home, env, immutable)
+            states[kind] = _collect_zcode(
+                collector, home, env, immutable, extra_roots.get("zcode", ())
+            )
         if collector.expired():
             collector.truncated = True
             break

@@ -12,6 +12,7 @@ import {
   type AnalyticsRemoteResponse,
   type AnalyticsRemoteRow,
 } from './analytics-remote-transport';
+import { readDashboardPreferences } from './dashboard-preferences';
 
 export type AnalyticsSourceTool = 'omp' | 'muse' | 'zcode';
 export type AnalyticsSourceState = 'ok' | 'cached' | 'unavailable' | 'not_installed';
@@ -234,6 +235,34 @@ export function loadAnalyticsRemoteCachedSources(
  * failure leaves that source `cached` (previous aggregates) or `unavailable`,
  * never failing the page.
  */
+/**
+ * Saved extra usage-log locations for one remote host, per scanned kind.
+ * Only omp/muse/zcode are ever scanned remotely, so only those tools' extras
+ * travel; a prefs read failure scans the built-in roots alone.
+ */
+export function remoteExtraRoots(
+  host: AnalyticsRemoteHost,
+  kinds: AnalyticsRemoteKind[]
+): Partial<Record<AnalyticsRemoteKind, string[]>> {
+  const extra: Partial<Record<AnalyticsRemoteKind, string[]>> = {};
+  let sources: ReturnType<typeof readDashboardPreferences>['usageLogSources'] = [];
+  try {
+    sources = readDashboardPreferences().usageLogSources;
+  } catch {
+    return extra;
+  }
+  for (const source of sources) {
+    if (source.host !== host) continue;
+    if (source.tool !== 'omp' && source.tool !== 'muse' && source.tool !== 'zcode') continue;
+    if (!kinds.includes(source.tool)) continue;
+    const paths = extra[source.tool] ?? [];
+    if (paths.length >= 16 || paths.includes(source.path)) continue;
+    paths.push(source.path);
+    extra[source.tool] = paths;
+  }
+  return extra;
+}
+
 export async function loadAnalyticsRemoteSources(
   minDateMs: number,
   deps: AnalyticsRemoteSourceDeps = {}
@@ -276,6 +305,7 @@ export async function loadAnalyticsRemoteSources(
             kinds,
             minDateMs,
             fingerprints: cached.fingerprints,
+            extraRoots: remoteExtraRoots(host, kinds),
           });
         } catch {
           // Previous aggregates stay available; nothing remote fails the page.

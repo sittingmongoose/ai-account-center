@@ -9,9 +9,9 @@
 //! the selected-row highlight and cross-fades the Activate slot instead of re-mounting the list.
 use crate::sync::{Nested, sync_rows};
 use crate::{
-    AcAction, AcAgPolicy, AcData, AcDevice, AcFlow, AcLine, AcNetwork, AcPolicy, AcProvider, AcRow,
-    AcSignin, AcTrashRow, AcUpdHost, AcUpdItem, Dashboard, FactView, RunView, SegItem,
-    StrengthView,
+    AcAction, AcAgPolicy, AcData, AcDevice, AcFlow, AcLine, AcLogSource, AcNetwork, AcPolicy,
+    AcProvider, AcRow, AcSignin, AcTrashRow, AcUpdHost, AcUpdItem, Dashboard, FactView, RunView,
+    SegItem, StrengthView,
 };
 use serde_json::Value;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -100,6 +100,7 @@ pub struct AccountsModels {
     runs: Nested<RunView>,
     segs: Nested<SegItem>,
     policies: Rc<VecModel<AcPolicy>>,
+    log_sources: Rc<VecModel<AcLogSource>>,
     hosts: Rc<VecModel<AcUpdHost>>,
     host_items: Nested<AcUpdItem>,
     update_head: Rc<VecModel<RunView>>,
@@ -112,6 +113,7 @@ pub fn bind(ui: &Dashboard, m: &AccountsModels) {
     ac.set_col_a(ModelRc::from(m.col_a.clone()));
     ac.set_col_b(ModelRc::from(m.col_b.clone()));
     ac.set_policies(ModelRc::from(m.policies.clone()));
+    ac.set_log_sources(ModelRc::from(m.log_sources.clone()));
     ac.set_update_hosts(ModelRc::from(m.hosts.clone()));
     ac.set_update_head(ModelRc::from(m.update_head.clone()));
     ac.set_pairing_note(ModelRc::from(m.pairing_note.clone()));
@@ -410,6 +412,26 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     ac.set_cleanup_busy(b(cleanup, "busy"));
     ac.set_cleanup_note(s(cleanup, "note"));
     ac.set_cleanup_tip(s(cleanup, "tip"));
+    let log_sources = g(&v, "logSources");
+    sync_rows(
+        &m.log_sources,
+        arr(&log_sources, "sources")
+            .iter()
+            .map(|entry| AcLogSource {
+                id: s(entry, "id"),
+                tool: s(entry, "tool"),
+                tool_label: s(entry, "toolLabel"),
+                host: s(entry, "host"),
+                path: s(entry, "path"),
+                mapping: s(entry, "mapping"),
+            })
+            .collect(),
+        |entry: &AcLogSource| entry.id.clone(),
+    );
+    ac.set_log_sources_enabled(b(log_sources, "enabled"));
+    ac.set_log_sources_busy(b(log_sources, "busy"));
+    ac.set_log_sources_error(s(log_sources, "error"));
+    ac.set_log_sources_tip(s(log_sources, "tip"));
 
     let update = g(&v, "update");
     ac.set_update_shown(b(update, "shown"));

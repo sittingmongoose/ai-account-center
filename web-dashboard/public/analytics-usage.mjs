@@ -4,8 +4,8 @@
 // and the page state; every chart geometry is computed here and drawn by ui/pages/analytics/*.slint.
 //
 // Truthfulness: activity is the CLI usage logs the server reads (activity.sources says which tools on which
-// computers). Only Claude Code and Codex are providers on this page; OMP, Muse Code and zcode merge into the
-// model views and the totals and never become a filter, legend, row or header. The Tokens by tool line, the
+// computers). Only Claude Code and Codex are providers on this page; OMP, Muse Code, zcode and generic JSONL logs
+// merge into the model views and the totals and never become a filter, legend, row or header. The Tokens by tool line, the
 // trend readout and a model's detail say how much each tool logged and where a model's usage came from; models
 // stay the only division, and every model with usage is listed. Cost is an estimated API equivalent, not a bill; a cost that is neither logged nor priced at a listed rate is "not logged", never zero,
 // and a total that leaves such a cost out says "partial". Activity covers all accounts and is never attributed
@@ -178,8 +178,8 @@ const ownSeries = p => p === 'claude' || p === 'codex';
 /** A provider mark exists for every dashboard provider; "other" has none. */
 const markOf = p => p === 'other' ? '' : p;
 /** The tools whose logs the server reads. Their names say where a model's usage came from, never a division. */
-export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode'];
-export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode' };
+export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'];
+export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL' };
 const toolNames = tools => andList(TOOLS.filter(t => tools.has(t)).map(t => TOOL_LABEL[t]));
 /** Add v to o[k] (per-provider sums over providers that are only known from the data). */
 const bump = (o, k, v) => { o[k] = (o[k] || 0) + v; };
@@ -946,7 +946,7 @@ export function calendarView(A, R, now, apiAll) {
 }
 
 // ---------------------------------------------------------------- included usage (activity.sources)
-const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
+const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
 const SOURCE_HOSTS = [['ubuntu', 'Ubuntu'], ['mac', 'Mac'], ['windows', 'Windows']];
 const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
@@ -1094,7 +1094,7 @@ export function usageView(payload, state, opts = {}) {
       date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
     },
     scope: [
-      { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, grouped by the provider that served it: Claude Code, Codex and Muse Code are their own provider, and OMP and zcode record the route of every call. A route no provider claims is under Other. Tokens by provider, under the totals, says how much each served; pick one to see its usage by model.' },
+      { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, grouped by the provider that served it: Claude Code, Codex and Muse Code are their own provider, OMP and zcode record the route of every call, and generic JSONL logs count under the provider their model names, else Other. A route no provider claims is under Other. Tokens by provider, under the totals, says how much each served; pick one to see its usage by model.' },
       { icon: 'wallet', text: 'Cost is an estimated API equivalent at the rates CCS prices each model at, or the cost the log recorded; it is not a bill. Cost with neither shows as not logged, and totals without it say partial.' },
       { icon: 'users', text: 'Activity covers all accounts together; it cannot be attributed to one account.' },
       { icon: 'layers', text: unrec.length || noRate ? [

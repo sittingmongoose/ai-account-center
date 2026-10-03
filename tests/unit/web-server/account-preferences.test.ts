@@ -81,6 +81,18 @@ describe('dashboard preferences', () => {
     expect(isDashboardPreferences(withSource({ ...good, host: 'mars' }))).toBe(false);
     expect(isDashboardPreferences(withSource({ ...good, path: 'relative/path' }))).toBe(false);
     expect(isDashboardPreferences(withSource({ ...good, path: '/x/../y' }))).toBe(false);
+    expect(isDashboardPreferences(withSource({ ...good, path: '/x\0y' }))).toBe(false);
+    // Windows paths follow Windows syntax, but only on the Windows host.
+    expect(
+      isDashboardPreferences(withSource({ ...good, host: 'windows', path: 'C:\\logs\\omp' }))
+    ).toBe(true);
+    expect(
+      isDashboardPreferences(withSource({ ...good, host: 'windows', path: 'C:/logs/omp' }))
+    ).toBe(true);
+    expect(isDashboardPreferences(withSource({ ...good, path: 'C:\\logs\\omp' }))).toBe(false);
+    expect(
+      isDashboardPreferences(withSource({ ...good, host: 'windows', path: 'C:\\x\\..\\y' }))
+    ).toBe(false);
     expect(
       isDashboardPreferences({ ...base, usageLogSources: [good, { ...good, path: '/other' }] })
     ).toBe(false);

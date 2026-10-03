@@ -190,6 +190,18 @@ test('Included usage names the tools and computers read, and how usage is groupe
   assert.equal(includedView(payload({ sources: [] }), now).shown, false);
 });
 
+test('Included usage lists generic JSONL sources with the other tools', () => {
+  const sources = [
+    ...SOURCES,
+    { tool: 'jsonl', host: 'ubuntu', state: 'ok', lastScanAt: at(1), rowCount: 7, detail: null },
+  ];
+  const inc = includedView(payload({ sources }), now);
+  assert.deepEqual(inc.rows.map(r => r.tool), ['Claude Code', 'Codex', 'OMP', 'Muse Code', 'zcode', 'Generic JSONL', 'Antigravity', 'Cursor']);
+  assert.match(inc.line, /Includes Claude Code, Codex, OMP, Muse Code, zcode and Generic JSONL on Ubuntu/);
+  const cell = inc.rows.find(r => r.tool === 'Generic JSONL').cells[0];
+  assert.deepEqual([cell.text, cell.tone], ['Read 1h 0m ago', 'ok']);
+});
+
 test('cost that is not logged reads "Not logged", never $0.00, and partial cost says so', () => {
   const view = usageView(payload(), state(), { now });
   const row = name => view.cbm.rows.find(r => r.name === name);
