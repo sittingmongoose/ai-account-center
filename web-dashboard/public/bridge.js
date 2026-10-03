@@ -11,6 +11,7 @@ import { analyticsView, analyticsChoiceId, analyticsSlintModel } from './analyti
 import { usageView, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGES, H, D } from './analytics-usage.mjs';
 import { quotaView, agendaView, QUOTA_PROVIDERS } from './analytics-quota.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
+import { premultiplySvgTextureUploads } from './renderer.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 
@@ -786,6 +787,8 @@ function watchMedia(query, apply) {
 // ---------------------------------------------------------------- boot
 try {
   requireWebGL();
+  // Before Slint creates its first image: SVG marks must upload premultiplied (renderer.mjs).
+  premultiplySvgTextureUploads();
   await init();
   startSlintDashboard(() => start_dashboard(innerWidth, innerHeight, devicePixelRatio));
   set_current_page(currentPage);
