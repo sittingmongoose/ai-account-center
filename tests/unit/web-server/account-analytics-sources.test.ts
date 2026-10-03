@@ -18,6 +18,8 @@ function workerResult(
     write: number;
     cost: number;
     fallback?: number;
+    /** The route the log recorded (OMP `message.provider`, zcode `provider_id`). */
+    route?: string;
   }
 ): UsageWorkerResult {
   return {
@@ -44,6 +46,7 @@ function workerResult(
             cacheReadTokens: tokens.read,
             cost: tokens.cost,
             ...(tokens.fallback !== undefined && { fallbackCost: tokens.fallback }),
+            ...(tokens.route !== undefined && { provider: tokens.route }),
           },
         ],
         requestCount: 3,
@@ -73,6 +76,7 @@ async function remoteAnswer() {
           read: 0,
           write: 0,
           cost: 4,
+          route: 'kimi-code',
         }),
       },
     ],
@@ -119,6 +123,7 @@ function service(overrides: AccountAnalyticsActivityDeps = {}) {
           write: 0,
           cost: 1,
         });
+      // a local inference server: a route no dashboard provider claims
       return workerResult('no-such-model-xyz', {
         input: 50,
         output: 5,
@@ -126,6 +131,7 @@ function service(overrides: AccountAnalyticsActivityDeps = {}) {
         write: 0,
         cost: 2,
         fallback: 1.5,
+        route: 'vllm',
       });
     },
     remote: remoteAnswer,
@@ -141,20 +147,30 @@ const QUERY = {
 };
 
 describe('analytics activity across sources', () => {
-  it('merges local and remote sources into one model breakdown', async () => {
+  it('merges local and remote sources and groups them by the provider that served them', async () => {
     const activity = await service().get(QUERY, FROM, TO, { tz: 'UTC' });
     expect(activity.scope).toBe('multi-host-cli');
     expect(activity.totals?.inputTokens).toBe(220);
     expect(activity.totals?.estimatedCostUsd).toBe(7);
     const models = new Map(activity.models.map((row) => [`${row.provider}:${row.model}`, row]));
     expect(models.get('claude:claude-model-a')?.inputTokens).toBe(100);
-    expect(models.get('omp:no-such-model-xyz')?.inputTokens).toBe(50);
-    expect(models.get('omp:remote-model-b')?.inputTokens).toBe(70);
+    // OMP usage counts under its logged route: kimi-code is Kimi Code; vllm is no provider's, so "other"
+    expect(models.get('other:no-such-model-xyz')?.inputTokens).toBe(50);
+    expect(models.get('kimi-code:remote-model-b')?.inputTokens).toBe(70);
+    expect(models.get('kimi-code:remote-model-b')?.tools).toEqual(['omp']);
     const dayModels = new Map(
       activity.byDayModel.map((row) => [`${row.provider}:${row.model}`, row])
     );
-    expect(dayModels.get('omp:remote-model-b')?.outputTokens).toBe(7);
-    expect(activity.providers.map((row) => row.provider).sort()).toEqual(['claude', 'omp']);
+    expect(dayModels.get('kimi-code:remote-model-b')?.outputTokens).toBe(7);
+    expect(activity.providers.map((row) => [row.provider, row.label, row.tools])).toEqual([
+      ['claude', 'Claude', ['claude']],
+      ['kimi-code', 'Kimi Code', ['omp']],
+      ['other', 'Other', ['omp']],
+    ]);
+    // the tool names never become a provider value
+    expect(activity.byHour.every((row) => !['omp', 'muse', 'zcode'].includes(row.provider))).toBe(
+      true
+    );
   });
 
   it('shows unknown-rate models as not logged, never as confident splits', async () => {
@@ -166,10 +182,10 @@ describe('analytics activity across sources', () => {
     // The fallback-priced part travels with every total, so the page shows it as not logged.
     expect(unknown?.fallbackCostUsd).toBe(1.5);
     expect(activity.totals?.fallbackCostUsd).toBe(1.5);
-    expect(activity.providers.find((row) => row.provider === 'omp')?.totals.fallbackCostUsd).toBe(
+    expect(activity.providers.find((row) => row.provider === 'other')?.totals.fallbackCostUsd).toBe(
       1.5
     );
-    expect(activity.byHour.find((row) => row.provider === 'omp')?.fallbackCostUsd).toBe(1.5);
+    expect(activity.byHour.find((row) => row.provider === 'other')?.fallbackCostUsd).toBe(1.5);
     const known = activity.models.find((row) => row.model === 'claude-model-a');
     expect(known?.fallbackCostUsd).toBe(0);
   });

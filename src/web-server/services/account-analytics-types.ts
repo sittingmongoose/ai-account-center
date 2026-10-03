@@ -13,7 +13,7 @@ export type AccountAnalyticsRange = AccountAnalyticsRangePreset;
 export interface AccountAnalyticsQuery {
   platform: ClaudeDashboardPlatform;
   range: AccountAnalyticsRange;
-  provider: DashboardProvider | 'all';
+  provider: AccountAnalyticsUsageProvider | 'all';
   account: string;
   /** Explicit manual refresh of native activity; quota refresh remains separate. */
   refresh?: boolean;
@@ -93,7 +93,15 @@ export interface AccountAnalyticsModelRates {
   source: ModelPricingSource;
 }
 
+/** A tool whose CLI usage logs the server reads (a collection source, not a provider). */
 export type AccountAnalyticsActivityProvider = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
+
+/**
+ * The dashboard provider that served a usage row: the tool's own provider for Claude Code, Codex and the Muse
+ * Code CLI, else the route the log records (account-analytics-attribution.ts). "other" is a route no provider
+ * claims, never a guess.
+ */
+export type AccountAnalyticsUsageProvider = DashboardProvider | 'other';
 
 export type AccountAnalyticsSourceState = 'ok' | 'cached' | 'unavailable' | 'not_installed';
 
@@ -110,9 +118,10 @@ export interface AccountAnalyticsSource {
 }
 
 export interface AccountAnalyticsSessionRow extends AccountAnalyticsActivityTotals {
-  /** First 16 hex of SHA-256('aac-session-v1:' + provider + ':' + sessionId); stable and not reversible. */
+  /** First 16 hex of SHA-256('aac-session-v1:' + tool + ':' + sessionId); stable and not reversible. */
   key: string;
-  provider: AccountAnalyticsActivityProvider;
+  /** The provider that served most of the session's tokens. */
+  provider: AccountAnalyticsUsageProvider;
   lastActivity: string;
   models: string[];
   target: string | null;
@@ -134,7 +143,7 @@ export interface AccountAnalyticsAnomalies {
   items: Array<{
     date: string;
     type: AccountAnalyticsAnomalyType;
-    provider: AccountAnalyticsActivityProvider | null;
+    provider: AccountAnalyticsUsageProvider | null;
     model: string | null;
     value: number;
     threshold: number;
@@ -159,45 +168,56 @@ export interface AccountAnalyticsActivity {
   fetchedAt: string | null;
   message: string;
   totals: AccountAnalyticsActivityTotals | null;
+  /** One row per provider that served usage in range, in the dashboard's provider order, "other" last. */
   providers: Array<{
-    provider: AccountAnalyticsActivityProvider;
+    provider: AccountAnalyticsUsageProvider;
     label: string;
     totals: AccountAnalyticsActivityTotals;
     usageEvents: number;
+    /** Sessions with any usage this provider served; a session can count under several providers. */
     sessionCount: number;
+    /** The tools whose logs hold this usage. */
+    tools: AccountAnalyticsActivityProvider[];
   }>;
   /** `requestCount` is null when any hour in the bucket came from a snapshot without it. */
   byDay: Array<
     AccountAnalyticsActivityTotals & {
       date: string;
-      provider: AccountAnalyticsActivityProvider;
+      provider: AccountAnalyticsUsageProvider;
       requestCount: number | null;
     }
   >;
   byHour: Array<
     AccountAnalyticsActivityTotals & {
       hour: string;
-      provider: AccountAnalyticsActivityProvider;
+      provider: AccountAnalyticsUsageProvider;
       requestCount: number | null;
     }
   >;
+  /**
+   * One row per provider and model with usage in range, ranked by estimated cost and then by tokens. Every such
+   * model is published (bounded at 500 rows); a cheap or unpriced model is never cut to make room.
+   */
   models: Array<
     AccountAnalyticsActivityTotals & {
       model: string;
-      provider: AccountAnalyticsActivityProvider;
+      provider: AccountAnalyticsUsageProvider;
       rates: AccountAnalyticsModelRates | null;
+      /** The tools whose logs hold this provider's usage of the model. */
+      tools: AccountAnalyticsActivityProvider[];
     }
   >;
   /** Top 12 models by estimated cost keep their name; the rest of each day fold into "Other models". */
   byDayModel: Array<
     AccountAnalyticsActivityTotals & {
       date: string;
-      provider: AccountAnalyticsActivityProvider;
+      provider: AccountAnalyticsUsageProvider;
       model: string;
     }
   >;
   /** Sessions active in range, without paths, ids or project names. Null unless status is ok or cached. */
   sessions: {
+    /** Distinct sessions, each counted once however many providers served it. */
     total: number;
     sample: AccountAnalyticsSessionRow[];
     truncated: boolean;
@@ -211,8 +231,8 @@ export interface AccountAnalyticsActivity {
 export interface AccountAnalyticsActivityCoverage {
   /** Oldest retained hourly bucket across both local CLI sources, or null. */
   oldestHourAt: number | null;
-  /** Providers with at least one local hourly bucket in the requested range. */
-  providersWithActivity: AccountAnalyticsActivityProvider[];
+  /** Dashboard providers that served at least one retained hourly bucket in the requested range. */
+  providersWithActivity: DashboardProvider[];
 }
 
 export interface AccountAnalytics {

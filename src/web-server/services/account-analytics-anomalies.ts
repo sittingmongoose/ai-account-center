@@ -1,5 +1,5 @@
 import type {
-  AccountAnalyticsActivityProvider,
+  AccountAnalyticsUsageProvider,
   AccountAnalyticsAnomalies,
 } from './account-analytics-types';
 
@@ -28,7 +28,7 @@ export function detectAccountAnalyticsAnomalies(
   days: Array<{ date: string; cost: number }>,
   models: Array<{
     date: string;
-    provider: AccountAnalyticsActivityProvider;
+    provider: AccountAnalyticsUsageProvider;
     model: string;
     inputTokens: number;
     outputTokens: number;

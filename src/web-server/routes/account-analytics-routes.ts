@@ -66,8 +66,10 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
       reject('invalid_range');
       return;
     }
+    // A provider of the server's table, or "other": CLI usage on a route no provider claims.
     if (
       provider !== 'all' &&
+      provider !== 'other' &&
       !(deps.providerIds ?? defaultAnalyticsProviderIds)().includes(provider)
     ) {
       reject('invalid_provider');

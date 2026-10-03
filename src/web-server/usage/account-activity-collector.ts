@@ -323,6 +323,8 @@ export function aggregateRows(
       pending.read += entry.cacheReadTokens;
       bucket.unlogged.set(modelKey, pending);
     }
+    // Readers that record a route count events per route, so a mixed hour divides by provider exactly.
+    if (entry.provider !== undefined) model.requestCount = (model.requestCount ?? 0) + row.events;
     bucket.models.set(modelKey, model);
     bucket.requestCount += row.events;
     if (entry.timestamp > bucket.lastActivity) bucket.lastActivity = entry.timestamp;

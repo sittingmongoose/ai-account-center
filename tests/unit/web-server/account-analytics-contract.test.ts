@@ -872,6 +872,58 @@ describe('analytics contract: byDayModel', () => {
   });
 });
 
+describe('analytics contract: every model is published', () => {
+  it('lists more than thirty models, never cutting a cheap or unpriced one, ranked by cost then tokens', () => {
+    // 34 priced Claude Code models, then OMP models that logged no cost but used many tokens: before, only the
+    // 30 costliest rows were published, so these were the first to disappear from every model view. They log
+    // no route here, so they count under "other".
+    const claudeModels = Array.from({ length: 34 }, (_, index) => ({
+      model: `claude-model-${String(index).padStart(2, '0')}`,
+      input: (index + 1) * 100_000,
+      output: 1000,
+    }));
+    const ompModels = [
+      { model: 'unpriced-qwen-flash', input: 9_000_000, cacheRead: 600_000_000, costFactor: 0 },
+      { model: 'unpriced-qwen-max', input: 8_000_000, cacheRead: 500_000_000, costFactor: 0 },
+      { model: 'deepseek-fixture', input: 1_000, output: 10, costFactor: 1 },
+    ];
+    const omp: SourceData = {
+      provider: 'omp',
+      data: [result([hourRow('2026-10-01T09:00:00Z', ompModels)])],
+      fetchedAt: new Date(NOW).toISOString(),
+    };
+    const activity = project([
+      source('claude', result([hourRow('2026-10-01T10:00:00Z', claudeModels)])),
+      omp,
+    ]);
+    expect(activity.models.length).toBe(37);
+    const keys = activity.models.map((row) => `${row.provider}:${row.model}`);
+    for (const model of ompModels) expect(keys).toContain(`other:${model.model}`);
+    const tokens = (row: (typeof activity.models)[number]) =>
+      row.inputTokens + row.outputTokens + row.cacheCreationTokens + row.cacheReadTokens;
+    for (let index = 1; index < activity.models.length; index++) {
+      const [before, after] = [activity.models[index - 1], activity.models[index]];
+      expect(before.estimatedCostUsd).toBeGreaterThanOrEqual(after.estimatedCostUsd);
+      if (before.estimatedCostUsd === after.estimatedCostUsd)
+        expect(tokens(before)).toBeGreaterThanOrEqual(tokens(after));
+    }
+    // the two zero-cost models close the list, the larger by tokens first
+    expect(keys.slice(-2)).toEqual(['other:unpriced-qwen-flash', 'other:unpriced-qwen-max']);
+    // every provider's tokens are on its model rows: nothing is left in the totals alone
+    for (const provider of activity.providers) {
+      const listed = activity.models
+        .filter((row) => row.provider === provider.provider)
+        .reduce((sum, row) => sum + tokens(row), 0);
+      expect(listed).toBe(
+        provider.totals.inputTokens +
+          provider.totals.outputTokens +
+          provider.totals.cacheCreationTokens +
+          provider.totals.cacheReadTokens
+      );
+    }
+  });
+});
+
 describe('analytics contract: request counts', () => {
   it('sums complete buckets and gives null, never 0, when any hour lacks a count', () => {
     const activity = project([
