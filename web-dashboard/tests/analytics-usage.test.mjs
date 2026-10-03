@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 // Local time is the page's time; pin it so day and hour buckets are deterministic.
 process.env.TZ = 'UTC';
+const { setDisplayTimeZone } = await import('../public/time-format.mjs');
+setDisplayTimeZone('UTC');
 const U = await import('../public/analytics-usage.mjs');
 const { usageView, apiRangeFor, activityData, trendPaths, mixGeo, dashedRect } = U;
 

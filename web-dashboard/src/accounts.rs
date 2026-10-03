@@ -399,6 +399,11 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     let refresh = g(&v, "refresh");
     ac.set_refresh_seconds(i(refresh, "seconds", 60).clamp(30, 3600));
     ac.set_refresh_known(b(refresh, "known"));
+    let timezone = g(&v, "timezone");
+    ac.set_timezone_value(s(timezone, "value"));
+    ac.set_timezone_enabled(b(timezone, "enabled"));
+    ac.set_timezone_busy(b(timezone, "busy"));
+    ac.set_timezone_tip(s(timezone, "tip"));
 
     let update = g(&v, "update");
     ac.set_update_shown(b(update, "shown"));

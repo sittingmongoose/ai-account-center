@@ -15,6 +15,7 @@ import { premultiplySvgTextureUploads } from './renderer.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
+import { setDisplayTimeZone } from './time-format.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -197,7 +198,7 @@ function renderAccounts() {
       refreshing: false,
       refreshSeconds: refreshIntervalSeconds, refreshKnown: refreshSettingsKnown, updateJob,
       origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
-      registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin,
+      registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin, prefs: st.prefs,
     }));
     if (e2e) globalThis.__aacLastAccounts = vm;
     set_accounts(JSON.stringify(vm));
@@ -450,6 +451,10 @@ function applyRefreshInterval(seconds, confirmed = true) {
 }
 async function loadSettings() {
   try { const result = await request('/api/accounts/settings'); applyRefreshInterval(result?.refreshIntervalSeconds); } catch {}
+  try {
+    const prefs = await request('/api/accounts/preferences');
+    if (prefs && typeof prefs.timeZone === 'string') setDisplayTimeZone(prefs.timeZone);
+  } catch {}
 }
 function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); renderAccounts(); }
 async function updateStatus() {

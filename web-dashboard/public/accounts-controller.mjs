@@ -18,8 +18,10 @@
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
 import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, PROVIDER_LABELS } from './account-actions.mjs';
+import { setDisplayTimeZone } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord } from './view-model.mjs';
+import { lazyFormat } from './time-format.mjs';
 
 export const JOB_POLL_MS = 2_000;
 export const LEGACY_HIDDEN_KEY = 'aac-hidden-providers';
@@ -27,7 +29,7 @@ const PROVIDERS = Object.keys(PROVIDER_LABELS);
 const KEY_PROVIDERS = ['kimi-code', 'zai', 'opencode-go'];
 const text = value => typeof value === 'string' ? value : '';
 const label = provider => PROVIDER_LABELS[provider] || 'This provider';
-const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
 const REFUSALS = new Set(['account_active', 'account_default', 'account_protected', 'last_account', 'activation_running', 'signin_running', 'app_running', 'app_state_unknown']);
 /**
  * The actions that send a change. While an account-switch confirmation is pending, bridge.js holds these (the
@@ -37,7 +39,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
   'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
-  'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime',
+  'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
 ]));
 
 export function createAccountsController(deps) {
@@ -55,6 +57,7 @@ export function createAccountsController(deps) {
     // and one account's own switches: 'acct-show:<id>' and 'acct-tray:<id>'
     visPending: [],
     signin: { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' },
+    prefs: { data: null, busy: '' },
   };
   const timers = {};
   // sign-in jobs this page closed (Cancel, Done, Close): a registry read never opens them again
@@ -125,7 +128,17 @@ export function createAccountsController(deps) {
     s.network = network.status === 'fulfilled' ? network.value.payload : null;
     changed();
   }
-  async function loadAll() { await Promise.all([loadRegistry(), loadSignin()]); }
+  async function loadPrefs() {
+    try {
+      const { payload } = await call(requests.preferences());
+      if (payload && typeof payload === 'object') {
+        state.prefs.data = payload;
+        if (typeof payload.timeZone === 'string') setDisplayTimeZone(payload.timeZone);
+      }
+    } catch { state.prefs.data = state.prefs.data || null; }
+    changed();
+  }
+  async function loadAll() { await Promise.all([loadRegistry(), loadSignin(), loadPrefs()]); }
   /** After a saved change: the dashboard response, then the registry (its actions and refusals follow it). */
   async function reload() { await refresh(); await loadRegistry(); }
 
@@ -593,6 +606,28 @@ export function createAccountsController(deps) {
     } catch (error) { fail(error); }
     finally { s.busy = ''; changed(); }
   }
+  /** Save the whole preferences shape with one field changed; the page follows it without a reload. */
+  async function savePrefs(next, note) {
+    const p = state.prefs;
+    p.busy = note; changed();
+    try {
+      const { payload } = await call(requests.savePreferences(next));
+      p.data = payload && typeof payload === 'object' ? payload : next;
+      if (typeof p.data.timeZone === 'string') setDisplayTimeZone(p.data.timeZone);
+    } catch (error) { fail(error); }
+    finally { p.busy = ''; changed(); }
+  }
+  async function setTimeZone(zone) {
+    const value = String(zone || '');
+    if (!value || value.length > 64) return;
+    const current = state.prefs.data;
+    if (current?.timeZone === value) return;
+    await savePrefs({
+      timeZone: value,
+      snapshotCleanup: current?.snapshotCleanup || { auto: true },
+      usageLogSources: Array.isArray(current?.usageLogSources) ? current.usageLogSources : [],
+    }, 'timezone');
+  }
   function togglePassword() {
     const pw = state.signin.pw;
     if (pw.busy) return;
@@ -683,6 +718,7 @@ export function createAccountsController(deps) {
       case 'network-off': await setNetwork(false); return true;
       case 'network-on': await setNetwork(true); return true;
       case 'session-lifetime': await setLifetime(v); return true;
+      case 'time-zone': await setTimeZone(v); return true;
       case 'pw-toggle': togglePassword(); return true;
       case 'pw-typing': typingPassword(v); return true;
       case 'pw-submit': await changePassword(v); return true;
@@ -697,5 +733,5 @@ export function createAccountsController(deps) {
     state.registry = null; state.flows = {}; state.lines = {}; state.busyAct = ''; state.visPending = [];
     state.signin = { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' };
   }
-  return { state, handle, loadRegistry, loadSignin, loadAll, migrateLocalHidden, reset, pollJob, applyVisibility };
+  return { state, handle, loadRegistry, loadSignin, loadPrefs, loadAll, migrateLocalHidden, reset, pollJob, applyVisibility };
 }

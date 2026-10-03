@@ -11,6 +11,7 @@ import { Caps } from "../../components/text.slint";
 import { Button } from "../../components/button.slint";
 import { Toggle } from "../../components/toggle.slint";
 import { Segmented } from "../../components/segmented.slint";
+import { Select } from "../../components/select.slint";
 import { Plate } from "../../components/card.slint";
 import { Stepper, Runs, DashedRule } from "../home.slint";
 import { AcData, AcPolicy, AcUpdHost, AcUpdItem, AcDevice } from "ac-data.slint";
@@ -840,6 +841,21 @@ component SettingsGroup inherits SetGroup {
             font-size: Type.small;
             color: Theme.ink-3;
             wrap: word-wrap;
+        }
+    }
+    SetItem {
+        label: "Time zone";
+        aside: AcData.timezone-busy ? "Saving" : "";
+        TipArea {
+            owner: "timezone";
+            tip: AcData.timezone-tip;
+            min-height: timezone-sel.preferred-height;
+            timezone-sel := Select {
+                options: ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu", "Europe/London", "Europe/Paris", "Asia/Tokyo", "Australia/Sydney", "UTC"];
+                value: AcData.timezone-value;
+                enabled: AcData.timezone-enabled && !root.busy;
+                selected(v) => { root.act("time-zone", v); }
+            }
         }
     }
     Hairline { }

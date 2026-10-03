@@ -1793,3 +1793,17 @@ test('a Kimi key from the app config shows no key action, only Re-check', () => 
   const qwenFoot = provider(vm, 'qwen').foot;
   assert.equal(qwenFoot[0].label, 'Sign in');
 });
+
+test('the time zone control shows the saved zone and waits without preferences', () => {
+  const vm = accountsViewModel(data([account()]), { now, prefs: { data: { timeZone: 'Asia/Tokyo' }, busy: '' } });
+  assert.equal(vm.timezone.value, 'Asia/Tokyo');
+  assert.equal(vm.timezone.enabled, true);
+  assert.equal(vm.timezone.busy, false);
+  assert.ok(vm.timezone.options.includes('Asia/Tokyo'));
+  const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '' } });
+  assert.equal(waiting.timezone.value, 'America/New_York');
+  assert.equal(waiting.timezone.enabled, false);
+  const saving = accountsViewModel(data([account()]), { now, prefs: { data: { timeZone: 'UTC' }, busy: 'timezone' } });
+  assert.equal(saving.timezone.busy, true);
+  assert.equal(saving.timezone.enabled, false);
+});

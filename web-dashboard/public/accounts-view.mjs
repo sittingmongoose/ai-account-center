@@ -12,6 +12,7 @@ import { antigravityView } from './antigravity-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
+import { lazyFormat } from './time-format.mjs';
 
 export const ACCOUNTS_VIEW_VERSION = 2;
 
@@ -70,9 +71,9 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 const validDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 const text = value => typeof value === 'string' ? value : '';
 const STALE_MS = 30 * 60_000;
-const dateTime = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-const clockFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const dateTime = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
+const clockFmt = lazyFormat({ hour: 'numeric', minute: '2-digit' });
 const article = word => /^[aeiou]/i.test(word) ? 'an' : 'a';
 const isConsole = account => /console/i.test(text(account?.message)) || /^plan-opencode-go-console-/.test(text(account?.id));
 const providerLabel = id => PROVIDER_LABELS[id] || PROVIDER_REGISTRY.find(row => row.id === id)?.label || id;
@@ -980,10 +981,39 @@ export function accountsViewModel(data, ctx = {}) {
     ag,
     policies: policies(data, home, ag),
     refresh: { seconds: Number.isInteger(c.refreshSeconds) ? c.refreshSeconds : 60, known: c.refreshKnown === true },
+    timezone: timezoneView(c.prefs),
     update: updateResultsView(c.updateJob, now),
     signin: signinFacts(c, now),
     connection: connectionFacts(c),
     about: { version: text(c.serverVersion) ? `Version ${c.serverVersion}` : 'Daylight Atlas dashboard' },
+  };
+}
+
+/** The time zones Settings offers (the server takes any IANA name; the list holds the common ones). */
+export const TIME_ZONE_OPTIONS = [
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'UTC',
+];
+
+/** The display time zone control: every displayed time and the analytics day buckets follow it. */
+export function timezoneView(prefs) {
+  const data = prefs?.data && typeof prefs.data === 'object' ? prefs.data : null;
+  const value = typeof data?.timeZone === 'string' && data.timeZone ? data.timeZone : 'America/New_York';
+  return {
+    value,
+    options: TIME_ZONE_OPTIONS.includes(value) ? TIME_ZONE_OPTIONS : [value, ...TIME_ZONE_OPTIONS],
+    enabled: !!data && prefs?.busy !== 'timezone',
+    busy: prefs?.busy === 'timezone',
+    tip: 'Every displayed time and the analytics day buckets use this zone.',
   };
 }
 

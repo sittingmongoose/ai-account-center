@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { AccountAnalyticsService } from '../../../src/web-server/services/account-analytics-service';
 import {
   appendAccountAnalyticsSnapshot,
@@ -14,6 +17,19 @@ import type {
   AccountAnalyticsActivity,
   AccountAnalyticsQuery,
 } from '../../../src/web-server/services/account-analytics-types';
+
+let sandboxHome = '';
+let previousCcsHome: string | undefined;
+beforeAll(() => {
+  previousCcsHome = process.env.CCS_HOME;
+  sandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-analytics-service-'));
+  process.env.CCS_HOME = sandboxHome;
+});
+afterAll(() => {
+  if (previousCcsHome === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = previousCcsHome;
+  fs.rmSync(sandboxHome, { recursive: true, force: true });
+});
 
 const NOW = Date.parse('2026-10-01T16:10:00Z');
 const QUERY: AccountAnalyticsQuery = {
@@ -113,22 +129,28 @@ describe('account quota analytics', () => {
   it('passes explicit activity refresh through without forcing quota sources twice or exposing the flag as a filter', async () => {
     const dashboardCalls: Array<[string | undefined, boolean | undefined]> = [];
     const activityCalls: AccountAnalyticsQuery[] = [];
-    const service = new AccountAnalyticsService({
-      getDashboard: async (...args) => {
-        dashboardCalls.push(args);
-        return dashboard([account()]);
-      },
-      getActivity: async (query) => {
-        activityCalls.push(query);
-        return noActivity;
-      },
-      createHistoryStore: () => memory(),
-      now: () => NOW,
-    });
-    const result = await service.get({ ...QUERY, refresh: true });
-    expect(dashboardCalls).toEqual([['mac', false]]);
-    expect(activityCalls).toEqual([{ ...QUERY, refresh: true, tz: 'UTC' }]);
-    expect(result.filters).toEqual({ platform: 'mac', provider: 'all', account: 'all' });
+    const scopeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-analytics-service-'));
+    try {
+      const service = new AccountAnalyticsService({
+        getDashboard: async (...args) => {
+          dashboardCalls.push(args);
+          return dashboard([account()]);
+        },
+        getActivity: async (query) => {
+          activityCalls.push(query);
+          return noActivity;
+        },
+        createHistoryStore: () => memory(),
+        now: () => NOW,
+        scope: () => scopeDir,
+      });
+      const result = await service.get({ ...QUERY, refresh: true });
+      expect(dashboardCalls).toEqual([['mac', false]]);
+      expect(activityCalls).toEqual([{ ...QUERY, refresh: true, tz: 'America/New_York' }]);
+      expect(result.filters).toEqual({ platform: 'mac', provider: 'all', account: 'all' });
+    } finally {
+      fs.rmSync(scopeDir, { recursive: true, force: true });
+    }
   });
   it('includes all nine providers and all fourteen logical accounts with the actual active Codex row', async () => {
     const accounts = [

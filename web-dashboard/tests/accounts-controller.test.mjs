@@ -730,3 +730,23 @@ test('the session lifetime saves on the server and the page follows it without a
   assert.equal(bad.ctl.state.signin.session.sessionLifetimeDays, 30);
   assert.equal(last(bad.toasts).kind, 'err');
 });
+
+test('the time zone saves the whole preferences shape and the page follows it', async () => {
+  const prefs = { timeZone: 'America/New_York', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  const h = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+    },
+  });
+  await h.ctl.loadPrefs();
+  assert.equal(h.ctl.state.prefs.data.timeZone, 'America/New_York');
+  await h.ctl.handle('time-zone', 'Asia/Tokyo');
+  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/preferences', body: { ...prefs, timeZone: 'Asia/Tokyo' } });
+  assert.equal(h.ctl.state.prefs.data.timeZone, 'Asia/Tokyo');
+  const count = h.sent.length;
+  await h.ctl.handle('time-zone', 'Asia/Tokyo');
+  assert.equal(h.sent.length, count);
+  await h.ctl.handle('time-zone', '');
+  assert.equal(h.sent.length, count);
+});

@@ -52,6 +52,8 @@ export const requests = Object.freeze({
   network: () => ({ method: 'GET', path: '/api/auth/network' }),
   setNetwork: on => ({ method: 'PUT', path: '/api/auth/network', body: { trustLocalNetwork: on === true } }),
   sessionLifetime: days => ({ method: 'PUT', path: '/api/auth/session-lifetime', body: { days } }),
+  preferences: () => ({ method: 'GET', path: '/api/accounts/preferences' }),
+  savePreferences: prefs => ({ method: 'PUT', path: '/api/accounts/preferences', body: prefs }),
   password: (currentPassword, newPassword, signOutOtherBrowsers) => ({ method: 'POST', path: '/api/auth/password', body: { currentPassword, newPassword, signOutOtherBrowsers: signOutOtherBrowsers !== false } }),
   revokeOthers: () => ({ method: 'POST', path: '/api/auth/sessions/revoke-others', body: {} }),
   revokeDevice: id => ({ method: 'DELETE', path: `/api/auth/devices/${enc(id)}`, body: {} }),

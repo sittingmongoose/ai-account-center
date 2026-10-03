@@ -21,6 +21,10 @@ import {
   type AccountAnalyticsDeps,
 } from '../../../src/web-server/services/account-analytics-service';
 import {
+  defaultDashboardPreferences,
+  writeDashboardPreferences,
+} from '../../../src/web-server/services/dashboard-preferences';
+import {
   AccountAnalyticsQueryError,
   canonicalAccountAnalyticsTimeZone,
   isAccountAnalyticsTimeZone,
@@ -373,10 +377,28 @@ describe('analytics contract: ranges and time zones', () => {
     expect(result.range.preset).toBe('all');
     expect(result.range.from).toBe(new Date(oldSample).toISOString());
     expect(result.range.availableFrom).toBe(new Date(oldSample).toISOString());
-    expect(result.range.tz).toBe('UTC');
-    expect(result.range.dayBucketTz).toBe('UTC');
+    expect(result.range.tz).toBe('America/New_York');
+    expect(result.range.dayBucketTz).toBe('America/New_York');
     expect(result.range.bucketMinutes).toBe(180);
     expect(result.accounts[0].sampleCount).toBe(2);
+    // a saved display time zone drives the buckets; an explicit zone still wins
+    writeDashboardPreferences(
+      { ...defaultDashboardPreferences(), timeZone: 'Asia/Tokyo' },
+      ccsHome
+    );
+    try {
+      const tokyo = await analyticsService([codex], { history }).get({ ...QUERY, range: 'all' });
+      expect(tokyo.range.tz).toBe('Asia/Tokyo');
+      expect(tokyo.range.dayBucketTz).toBe('Asia/Tokyo');
+      const explicit = await analyticsService([codex], { history }).get({
+        ...QUERY,
+        range: 'all',
+        tz: 'UTC',
+      });
+      expect(explicit.range.tz).toBe('UTC');
+    } finally {
+      fs.rmSync(path.join(ccsHome, 'dashboard-preferences.json'), { force: true });
+    }
 
     // Older local activity moves the start back, but never past 31 days.
     const calls: number[] = [];

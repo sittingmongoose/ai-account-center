@@ -12,6 +12,7 @@
 // to one or added to quota numbers; a missing reading is unavailable, never zero; at most two decimals; local
 // time throughout.
 import { reconcile, modelRates } from './model-rates.mjs';
+import { displayFormat, zonedAddDays, zonedDayStart, zonedHour, zonedHourStart, zonedMonthStart, zonedWeekday } from './time-format.mjs';
 
 export const H = 3_600_000;
 export const D = 24 * H;
@@ -35,7 +36,7 @@ const moneyAxis = (value, step) => step < 1 ? usd.format(value) : usd0.format(va
 export const share1 = value => !finite(value) ? 'Unavailable' : value > 0 && value < 0.05 ? '<0.1' : value < 100 && value >= 99.95 ? '>99.9' : nf1.format(value);
 export const share2 = value => !finite(value) ? 'Unavailable' : value > 0 && value < 0.005 ? '<0.01' : value < 100 && value > 99.995 ? '>99.99' : nf2v.format(value);
 const intText = value => finite(value) ? nf0.format(Math.round(value)) : 'Unavailable';
-const dtf = options => new Intl.DateTimeFormat(undefined, options);
+const dtf = options => displayFormat(options);
 const F_HOUR = dtf({ hour: 'numeric' });
 const F_CLOCK = dtf({ hour: 'numeric', minute: '2-digit' });
 const F_MD = dtf({ month: 'short', day: 'numeric' });
@@ -64,18 +65,18 @@ export const untilTxt = (t, now) => !finite(t) ? '' : t - now <= 0 ? 'reset due'
 /** A line that mixes weights travels as runs ({ text, strong, tone }), like the Home view model. */
 const run = (value, strong = false, tone = '') => ({ text: String(value), strong: !!strong, tone });
 
-// ---------------------------------------------------------------- local-time calendar
-export const dayStart = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
-export const addDays = (t, n) => { const d = new Date(t); d.setDate(d.getDate() + n); return d.getTime(); };
+// ---------------------------------------------------------------- display-zone calendar
+export const dayStart = t => zonedDayStart(t);
+export const addDays = (t, n) => zonedAddDays(t, n);
 export function bucketStart(t, step) {
-  const d = new Date(t);
-  if (step >= D) d.setHours(0, 0, 0, 0);
-  else { const k = Math.round(step / H); d.setMinutes(0, 0, 0); d.setHours(Math.floor(d.getHours() / k) * k); }
-  return d.getTime();
+  if (step >= D) return zonedDayStart(t);
+  const k = Math.round(step / H);
+  const start = zonedDayStart(t);
+  return start + Math.floor((t - start) / (k * H)) * (k * H);
 }
 export function nextBucket(t, step) {
-  if (step >= D) return addDays(t, 1);
-  const d = new Date(t); d.setHours(d.getHours() + Math.round(step / H)); return d.getTime();
+  if (step >= D) return zonedAddDays(t, 1);
+  return zonedHourStart(t) + Math.round(step / H) * H;
 }
 const sameDay = (a, b) => dayStart(a) === dayStart(b);
 /** YYYY-MM-DD of a local day (the custom-range action carries whole local days). */
@@ -235,7 +236,7 @@ export function apiRangeFor(state, now = Date.now()) {
   if (range === 'custom' && finite(state.from)) return state.from >= now - D ? '24h' : state.from >= now - 7 * D ? '7d' : '30d';
   return '30d';
 }
-const dayStartMonth = now => { const d = new Date(now); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const dayStartMonth = now => zonedDayStart(zonedMonthStart(now));
 
 /**
  * Validated activity rows. Malformed and duplicate rows are dropped, never counted twice. So is `<synthetic>`,
@@ -460,7 +461,7 @@ function xTicks(R, pw) {
   let t = step >= D ? addDays(dayStart(R.a2), 1) : nextBucket(bucketStart(R.a2, step), step);
   if (step >= D && dayStart(R.a2) === R.a2) t = R.a2;
   for (let i = 0; t < R.b && i < 400; i++, t = step >= D ? addDays(t, Math.round(step / D)) : nextBucket(t, step)) {
-    const midnight = new Date(t).getHours() === 0;
+    const midnight = zonedHour(t) === 0;
     out.push({ t, major: midnight, label: step >= D ? mdTxt(t) : midnight ? `${wdTxt(t)} ${new Date(t).getDate()}` : hourTxt(t) });
   }
   return out;
@@ -847,8 +848,8 @@ function heatView(A, R, state, width, height) {
   const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ v: null, n: 0, tok: 0, cost: 0, unk: false })));
   // hours inside the read window count (zero when nothing ran); hours outside it stay empty, never zero;
   // without readable activity every hour stays empty
-  for (let t = Math.ceil(R.a2 / H) * H; A.available && t < R.end; t += H) { const d = new Date(t), c = cells[(d.getDay() + 6) % 7][d.getHours()]; if (c.v === null) c.v = 0; c.n++; }
-  for (const r of rowsIn(A, R, state)) { const d = new Date(r.t), c = cells[(d.getDay() + 6) % 7][d.getHours()]; if (c.v === null) c.v = 0; c.tok += r.in + r.out + r.cw; c.cost += r.cost; if (r.unk) c.unk = true; }
+  for (let t = Math.ceil(R.a2 / H) * H; A.available && t < R.end; t += H) { const c = cells[zonedWeekday(t)][zonedHour(t)]; if (c.v === null) c.v = 0; c.n++; }
+  for (const r of rowsIn(A, R, state)) { const c = cells[zonedWeekday(r.t)][zonedHour(r.t)]; if (c.v === null) c.v = 0; c.tok += r.in + r.out + r.cw; c.cost += r.cost; if (r.unk) c.unk = true; }
   const byCost = state.heat !== 'tokens' && !A.costMissing;
   const partial = byCost && cells.some(row => row.some(c => c.unk));
   for (const row of cells) for (const c of row) if (c.v !== null) c.v = byCost ? c.cost : c.tok;
@@ -906,7 +907,7 @@ function dailyView(A, R, state, size) {
     const served = Object.keys(b.ptok).filter(p => b.ptok[p] > 0 || (b.pc[p] || 0) > TINY).sort(byProviderOrder);
     return {
       h: costOk && sc.top > 0 ? tot / sc.top : 0, cl: tot > 0 ? cl / tot : 0, cx: tot > 0 ? cx / tot : 0,
-      label: i % every ? '' : step === H ? (new Date(b.t).getHours() === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
+      label: i % every ? '' : step === H ? (zonedHour(b.t) === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
       time: `${step === H ? `${wmdTxt(b.t)} · ${hourTxt(b.t)}` : wmdTxt(b.t)}${b.partial ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
       rows: costOk ? served.map(p => ({ p: ownSeries(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
       total: picked ? '' : money(tot),
@@ -932,7 +933,7 @@ function dailyView(A, R, state, size) {
 export function calendarView(A, R, now, apiAll) {
   // the backend keeps up to 30 days of logs; the 30-day window bounds the picker until it reports availableFrom
   const first = dayStart(Math.max(apiAll ?? now - 30 * D, now - 30 * D)), last = dayStart(now);
-  const mon = t => addDays(t, -((new Date(t).getDay() + 6) % 7));
+  const mon = t => zonedAddDays(t, -zonedWeekday(t));
   const g0 = mon(first), g1 = addDays(mon(last), 6);
   const cells = [];
   for (let t = g0, i = 0; t <= g1 && i < 60; t = addDays(t, 1), i++) {

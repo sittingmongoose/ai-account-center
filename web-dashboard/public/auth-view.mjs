@@ -1,3 +1,4 @@
+import { lazyFormat } from './time-format.mjs';
 // The sign-in page's words and rules (c-daylight-atlas/app-auth.js), as pure functions bridge.js uses to build
 // the AuthView it hands Slint (ui/shell/signin.slint). Covered by tests/auth-view.test.mjs.
 //
@@ -12,7 +13,7 @@
 // - POST /api/auth/setup: 201, or 403 secure_transport_required / setup_code_required / setup_code_invalid
 //   (+ triesLeft), 400 invalid_username / weak_password, 409 already_configured / managed_by_env, 429.
 
-const clock = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const clock = lazyFormat({ hour: 'numeric', minute: '2-digit' });
 const bytes = value => new TextEncoder().encode(value).length;
 
 /** Password strength, a hint and never a gate (the server's rule is 8 code points to 72 bytes). lv 0..5. */

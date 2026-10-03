@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 // reads "Not logged", never $0.00, and totals that leave it out say "partial". Local time is pinned so buckets are
 // deterministic.
 process.env.TZ = 'UTC';
+const { setDisplayTimeZone } = await import('../public/time-format.mjs');
+setDisplayTimeZone('UTC');
 const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC } = await import('../public/analytics-usage.mjs');
 const { modelRates } = await import('../public/model-rates.mjs');
 
