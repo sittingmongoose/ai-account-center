@@ -35,8 +35,10 @@ import { ClaudeLifecycleError } from './claude-account-lifecycle';
 import { CLAUDE_PROFILE_ID } from './claude-account-stores';
 import { parseSourceManifest, readSourceManifestFile } from './account-usage-manifest';
 import { addAntigravity, antigravitySignInAgain } from './account-lifecycle-antigravity';
+import { MuseLifecycleError } from './muse-account-lifecycle';
 import {
   CODEX_TERMINAL,
+  MUSE_TERMINAL,
   entryView,
   invalid,
   jobBody,
@@ -370,6 +372,22 @@ export async function signInAgain(
   if (account.kind === 'antigravity' && env.antigravity) {
     return antigravitySignInAgain(env, env.antigravity(), account.profileId, context);
   }
+  if (account.kind === 'additional' && account.provider === 'muse' && env.muse) {
+    secure(context, MUSE_TERMINAL);
+    const state = signInState(env, 'muse', context.secure);
+    if (state.unavailableReason) throw new LifecycleHttpError(409, state.unavailableReason);
+    const running = env.runner().runningForAccount(account.id);
+    if (running) throw new LifecycleHttpError(409, 'job_running', { jobId: running.id });
+    try {
+      const job = startJob(env, env.muse().signInAgainFlow(account.entry));
+      return { status: 202, body: { job: jobBody(job, context) } };
+    } catch (error) {
+      if (error instanceof MuseLifecycleError) {
+        throw new LifecycleHttpError(409, error.code);
+      }
+      throw error;
+    }
+  }
   return { status: 200, body: { guide: guideFor(account) } };
 }
 
@@ -391,7 +409,7 @@ function guideFor(account: ResolvedAccount): Record<string, unknown> {
     }
     if (isKeyProvider(account.provider)) throw new LifecycleHttpError(409, 'use_replace_key');
   }
-  // Muse and Antigravity sign-ins are not served yet.
+  // Antigravity without its lifecycle, and Muse while its flag is off, are not served.
   throw new LifecycleHttpError(409, 'not_implemented');
 }
 

@@ -20,7 +20,12 @@ import {
   type LifecycleEnv,
   type LifecycleResult,
 } from '../services/account-lifecycle-env';
-import { removeAccount, restoreTrash, trashListing } from '../services/account-lifecycle-removal';
+import {
+  purgeTrash,
+  removeAccount,
+  restoreTrash,
+  trashListing,
+} from '../services/account-lifecycle-removal';
 import { JOB_ID_PATTERN } from '../services/signin-jobs';
 import { antigravityTerminal } from '../services/account-lifecycle-helpers';
 
@@ -41,6 +46,7 @@ import { antigravityTerminal } from '../services/account-lifecycle-helpers';
  * PATCH  /:id                            label
  * GET    /trash                          the 30-day trash
  * POST   /trash/:trashId/restore         {} then {confirmationToken}
+ * POST   /trash/:trashId/purge           {} then {confirmationToken, confirm: "DELETE"}
  * GET    /signin-jobs/:jobId             poll a job
  * POST   /signin-jobs/:jobId/cancel      cancel it
  * POST   /signin-jobs/:jobId/code        supervised flows: the authorization code
@@ -143,6 +149,11 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
     '/trash/:trashId/restore',
     guard,
     write((req, body) => restoreTrash(env(), req.params.trashId, body, context(req)))
+  );
+  router.post(
+    '/trash/:trashId/purge',
+    guard,
+    write((req, body) => purgeTrash(env(), req.params.trashId, body, context(req)))
   );
   router.get(
     '/signin-jobs/:jobId',

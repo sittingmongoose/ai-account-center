@@ -104,24 +104,30 @@ export async function registryListing(
     const entry = entries.find((candidate) => candidate.id === row.id);
     if (entry) {
       const view = entryView(entry, await keyInfo(env, entry), canReplace(entry.provider), row);
-      if (entry.provider === 'muse') view.actions.signInAgain = false;
+      if (entry.provider === 'muse') {
+        view.actions.signInAgain =
+          env.muse !== undefined &&
+          signInState(env, 'muse', context.secure).unavailableReason === null;
+      }
       view.removeRefusal = running ? 'signin_running' : null;
       accounts.push(view);
       continue;
     }
-    // Console wallets (and Antigravity without its lifecycle): no lifecycle action.
+    // Console wallets: Remove deletes the stored opt-in source (no provider change).
+    // Antigravity without its lifecycle has no action.
+    const isWallet = row.id.startsWith('plan-opencode-go-console-');
     accounts.push(
       accountView(
         row,
         null,
         {
-          signInAgain: row.id.startsWith('plan-opencode-go-console-'),
+          signInAgain: isWallet,
           replaceKey: false,
-          remove: false,
+          remove: isWallet && facts.remove?.['opencode-go'] !== false,
           open: [],
           recheck: false,
         },
-        null
+        isWallet && running ? 'signin_running' : null
       )
     );
   }

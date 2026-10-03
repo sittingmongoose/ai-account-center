@@ -356,6 +356,16 @@ test('a supervised sign-in sends the pasted code once', async () => {
   assert.match(wrong.ctl.state.flows.antigravity.error.title, /Not waiting for a code/);
 });
 
+test('Antigravity Sign in shows the terminal command the server answers', async () => {
+  const h = harness({ routes: {
+    'POST /api/accounts/antigravity%3Aprofile%3Aparty/signin-again': refusal(409, 'preflight_failed', { fallback: { kind: 'terminal', host: 'ubuntu', command: 'ai-account-center antigravity signin party' } }),
+    'GET /api/accounts/registry': { accounts: [] },
+  }, data: { accounts: [{ id: 'antigravity:profile:party', provider: 'antigravity' }], settings: {} } });
+  await h.ctl.handle('signin-again', 'antigravity:profile:party');
+  assert.equal(last(h.toasts).title, 'Sign in from a terminal');
+  assert.match(last(h.toasts).body, /ai-account-center antigravity signin party/);
+});
+
 test('API keys: add with a label, replace, and every refusal; the key never stays in the state', async () => {
   const account = { id: 'zai:acct:9f2c41d0', provider: 'zai', credential: { kind: 'aac-key', last4: 'x7Qa', fingerprint: 'sha256:0123', storedOn: 'ubuntu' } };
   const h = harness({ routes: { 'POST /api/accounts/add': { status: 201, payload: { account, check: 'ok' } }, 'GET /api/accounts/registry': { accounts: [], trash: [] } } });
@@ -482,6 +492,27 @@ test('Restore from the Claude trash: confirmation, then back on both hosts', asy
   assert.equal(last(fails.toasts).title, 'Not restored');
 });
 
+test('Delete now from the Claude trash: typed DELETE, mistype keeps the token, then gone for good', async () => {
+  const token = 'P'.repeat(43);
+  const h = harness({ routes: {
+    'POST /api/accounts/trash/tr_0123456789abcdef/purge': body => body.confirmationToken
+      ? (body.confirm === 'DELETE' ? { purged: true, trashId: 'tr_0123456789abcdef' } : refusal(400, 'invalid_body'))
+      : { confirmation: { token, effects: ['Its Claude data is deleted for good on Mac and Windows.'], expectsTyped: 'DELETE' } },
+    'GET /api/accounts/registry': { accounts: [], trash: [] },
+  } });
+  h.ctl.state.registry = { accounts: [], trash: [{ trashId: 'tr_0123456789abcdef', provider: 'claude', label: 'party@example.test' }] };
+  await h.ctl.handle('purge', 'tr_0123456789abcdef');
+  assert.equal(h.ctl.state.flows.claude.type, 'purge');
+  assert.equal(h.ctl.state.flows.claude.step, 'type');
+  await h.ctl.handle('flow-submit', 'claude\ndelete\n');
+  assert.equal(h.ctl.state.flows.claude.error.title, 'Type DELETE exactly as shown.');
+  assert.equal(h.ctl.state.flows.claude.step, 'type');
+  await h.ctl.handle('flow-submit', 'claude\nDELETE\n');
+  assert.deepEqual(h.sent[2].body, { confirmationToken: token, confirm: 'DELETE' });
+  assert.equal(h.ctl.state.flows.claude.step, 'done');
+  assert.equal(last(h.toasts).title, 'Deleted party@example.test for good');
+});
+
 test('guided sign-ins: Qwen and Cursor open their guide, add their one account first, re-check and open the app', async () => {
   const h = harness({ routes: {
     'POST /api/accounts/qwen%3Ausage/signin-again': { guide: { kind: 'browser-extension', platform: 'windows' } },
@@ -524,6 +555,17 @@ test('guided sign-ins: Qwen and Cursor open their guide, add their one account f
   const muse = harness({ routes: { 'POST /api/accounts/muse%3Ausage/signin-again': refusal(409, 'not_implemented') }, data: { accounts: [{ id: 'muse:usage', provider: 'muse' }], settings: {} } });
   await muse.ctl.handle('session-signin', 'muse');
   assert.equal(last(muse.toasts).title, 'Not on this server yet');
+});
+
+test('Muse Sign in opens a device-code job on the Mac once the server offers it', async () => {
+  const job = { id: 'job_muse1', provider: 'muse', kind: 'device-code', mode: 'signin-again', accountId: 'muse:usage', platform: 'mac', state: 'starting', verification: null };
+  const h = harness({ routes: {
+    'POST /api/accounts/muse%3Ausage/signin-again': { status: 202, payload: { job } },
+    'GET /api/accounts/registry': { accounts: [] },
+  }, data: { accounts: [{ id: 'muse:usage', provider: 'muse', email: 'muse-user@example.test' }], settings: {} } });
+  await h.ctl.handle('session-signin', 'muse');
+  assert.equal(h.ctl.state.flows.muse.type, 'job-again');
+  assert.equal(h.ctl.state.flows.muse.job.id, 'job_muse1');
 });
 
 test('the Dashboard sign-in block: other browsers, network trust, devices and sign out all devices', async () => {

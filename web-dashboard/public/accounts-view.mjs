@@ -27,7 +27,7 @@ export const LIVE = Object.freeze({
   replaceKey: true,          // PUT /api/accounts/:id/key
   remove: true,              // POST /api/accounts/:id/remove (confirmation token)
   restore: true,             // POST /api/accounts/trash/:trashId/restore (confirmation token)
-  purgeNow: false,           // no route: the trash empties itself after 30 days
+  purgeNow: true,            // POST /api/accounts/trash/:trashId/purge (token + typed DELETE)
   openApp: true,             // POST /api/accounts/:id/open (Cursor)
   recheck: true,             // POST /api/accounts/:id/recheck
   visibilityServer: true,    // PUT /api/accounts/visibility
@@ -47,12 +47,12 @@ export const ACCOUNT_KINDS = {
     how: 'Each account is its own Claude desktop profile; open it on Mac or Windows to sign in.' },
   codex: { kind: 'device', kindLabel: 'Device-code sign-in', icon: 'code', src: 'Codex CLI device login', slots: 3, actsMin: 262,
     how: 'Device-code sign-in: approve a short code in any browser.' },
-  antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 2, actsMin: 160,
+  antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 3, actsMin: 262,
     how: 'The dashboard host runs and supervises the CLI login.' },
   cursor: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Cursor desktop app', slots: 2, actsMin: 150,
     how: 'Sign in inside the Cursor desktop app; the dashboard reads that session.' },
-  muse: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Muse Code app', slots: 2, actsMin: 150,
-    how: 'Sign in inside the Muse Code app; the dashboard reads that session.' },
+  muse: { kind: 'app', kindLabel: 'Device-code sign-in', icon: 'app-window', src: 'Muse Code session', slots: 2, actsMin: 150,
+    how: 'Device-code sign-in on the Mac; then Sync in the Brave extension for quota.' },
   'kimi-code': { kind: 'apikey', kindLabel: 'API key', icon: 'key', src: 'API key', slots: 2, actsMin: 156,
     how: 'Usage is read with an API key.' },
   qwen: { kind: 'browser', kindLabel: 'Console session by browser extension', icon: 'globe', src: 'Console session', slots: 2, actsMin: 156,
@@ -224,13 +224,19 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
         removeControl(provider, account, reg, entry),
       ];
     }
-    case 'cli':
+    case 'cli': {
+      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in', icon: 'login', probe: `signin-again:${account.id}` };
+      const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
+        : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
+          : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command.' });
       return [
         canSwitch || homeRow?.active
           ? action({ kind: 'switch', act: 'antigravity-activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '', probe: `activate:${account.id}` })
           : emptySlot(),
+        signin,
         removeControl(provider, account, reg, entry),
       ];
+    }
     case 'apikey': {
       if (isConsole(account)) {
         const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };
@@ -281,7 +287,8 @@ function footActions(provider, accounts, ctx) {
       const reg = first ? ctx.registry.get(first.id) : null;
       const signInGate = first ? gate(entry, 'signInAgain', provider) : add;
       const signin = gated({ act: 'session-signin', value: provider, label: 'Sign in', icon: def.kind === 'browser' ? 'globe' : 'login', probe: `session-signin:${provider}` }, signInGate,
-        def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
+        provider === 'muse' ? 'Start a device-code sign-in on the Mac; approve a code in any browser, then Sync in the Brave extension.'
+          : def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
       const recheckGate = first ? (reg ? (reg.actions?.recheck === true ? { live: true } : { live: false, coming: false, reason: 'Re-check is not available for this account.' }) : gate(entry, 'recheck', provider))
         : { live: false, coming: false, reason: `Sign in first; there is no ${label} account to check yet.` };
       const recheck = gated({ act: 'recheck', value: first?.id || provider, label: 'Re-check', icon: 'refresh', probe: `recheck:${provider}`, busy: ctx.busyAct === `recheck:${first?.id}` }, recheckGate, 'Read the session again now.');
@@ -307,6 +314,7 @@ const STEPS = {
   'key-add': ['Paste the key', 'Check', 'Stored'],
   'key-replace': ['Paste the key', 'Check', 'Stored'],
   guide: ['Open', 'Sign in', 'Re-check'],
+  purge: ['Type DELETE', 'Deleted'],
 };
 const btn = (act, value, label, fields = {}) => action({ act, value, label, enabled: true, probe: `${act}:${value}`, ...fields });
 const expiresLine = (iso, now) => validDate(iso) ? `Code expires at ${clockFmt.format(new Date(iso))}${Date.parse(iso) - now < 120_000 ? ' (soon)' : ''}` : '';
@@ -470,6 +478,30 @@ export function flowView(provider, f, ctx = {}) {
       err();
       return v;
     }
+    case 'purge': {
+      v.steps = STEPS.purge;
+      const who = text(f.label) || 'this profile';
+      if (f.step === 'asking') {
+        v.title = `Delete ${who} now?`;
+        v.waiting = 'Checking what deleting it does';
+        v.actions = [cancel];
+        return v;
+      }
+      if (f.step === 'done') {
+        v.cur = 2;
+        v.done = `${who} deleted for good`;
+        v.body = 'Its Claude data is gone on Mac and Windows. The trash no longer lists it.';
+        v.actions = [doneBtn];
+        return v;
+      }
+      v.title = `Delete ${who} now?`;
+      const effects = (Array.isArray(f.effects) ? f.effects : []).filter(e => typeof e === 'string').join(' ');
+      v.body = effects || 'Its Claude data is deleted for good on Mac and Windows. This cannot be undone.';
+      Object.assign(v, { inputKind: 'purge', inputLabel: 'Type DELETE to confirm', inputPlaceholder: 'DELETE', inputSeed: '' });
+      v.actions = [btn('flow-submit', provider, 'Delete now', { style: 'danger-solid', busy: !!f.busy, enabled: !f.busy }), cancel];
+      err();
+      return v;
+    }
     default:
       return closed;
   }
@@ -516,8 +548,9 @@ function trashRows(entries, ctx, now) {
     const restore = deleting
       ? action({ act: 'restore', value: entry.trashId, label: 'Restore', icon: 'rotate', enabled: false, tip: 'It is being deleted for good.', probe: `restore:${entry.trashId}` })
       : action({ act: 'restore', value: entry.trashId, label: 'Restore', icon: 'rotate', enabled: true, tip: 'Move its Claude data back on Mac and Windows and list it again.', probe: `restore:${entry.trashId}` });
-    const purge = coming({ act: 'purge', value: entry.trashId, label: 'Delete now', style: 'ghost', probe: `purge:${entry.trashId}` },
-      'Deleting from the trash before the 30 days is not on this server yet; the trash empties itself.');
+    const purge = deleting
+      ? action({ act: 'purge', value: entry.trashId, label: 'Delete now', style: 'ghost', enabled: false, tip: 'It is being deleted for good.', probe: `purge:${entry.trashId}` })
+      : action({ act: 'purge', value: entry.trashId, label: 'Delete now', style: 'ghost', enabled: LIVE.purgeNow, coming: !LIVE.purgeNow, tip: LIVE.purgeNow ? 'Delete its Claude data for good on Mac and Windows now. Type DELETE to confirm.' : 'Deleting from the trash before the 30 days is not on this server yet; the trash empties itself.', probe: `purge:${entry.trashId}` });
     return {
       id: entry.trashId, label: text(entry.label) || 'Claude profile',
       sub: deleting ? 'Deleting for good' : `${validDate(entry.trashedAt) ? `moved to the trash ${relative(entry.trashedAt, now)}` : 'in the trash'}${when ? ` · deleted for good ${when}` : ''}`,

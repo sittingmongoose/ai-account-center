@@ -27,6 +27,7 @@ import type { AdditionalUsageSource } from '../../../src/web-server/services/add
 import { ClaudeAccountLifecycle } from '../../../src/web-server/services/claude-account-lifecycle';
 import type { ClaudeHostTransport } from '../../../src/web-server/services/claude-host-transport';
 import { CodexAccountLifecycle } from '../../../src/web-server/services/codex-account-lifecycle';
+import { MuseAccountLifecycle } from '../../../src/web-server/services/muse-account-lifecycle';
 import { buildDashboardProviders } from '../../../src/web-server/services/dashboard-provider-registry';
 import { SignInJobRunner } from '../../../src/web-server/services/signin-jobs';
 import { setLocalNetworkTrustResolver } from '../../../src/web-server/middleware/secure-transport';
@@ -204,7 +205,11 @@ interface Fixture {
 }
 
 async function fixture(
-  options: { claudeEnabled?: boolean; antigravityFlow?: 'preflight_failed' | 'tool_missing' } = {}
+  options: {
+    claudeEnabled?: boolean;
+    antigravityFlow?: 'preflight_failed' | 'tool_missing';
+    museEnabled?: boolean;
+  } = {}
 ): Promise<Fixture> {
   const audits: Array<[string, Record<string, unknown>]> = [];
   const probes: AdditionalUsageSource[] = [];
@@ -235,11 +240,13 @@ async function fixture(
     purge: async () => undefined,
   };
   const claudeEnabled = options.claudeEnabled === true;
+  const museEnabled = options.museEnabled === true;
   const facts = (context: { secureTransport?: boolean }) =>
     lifecycleProviderFacts(context, {
       codexCliAvailable: () => true,
       claudeEnabled: () => claudeEnabled,
       antigravityFlow: () => options.antigravityFlow ?? 'preflight_failed',
+      museEnabled: () => museEnabled,
     });
   const antigravity = new AntigravityAccountLifecycle({
     ccsDir: () => ccsDir,
@@ -262,6 +269,7 @@ async function fixture(
         now: () => now,
       }),
     antigravity: () => antigravity,
+    muse: () => new MuseAccountLifecycle({ enabled: museEnabled }),
     confirmations: (() => {
       const store = new AccountConfirmationStore(() => now);
       return () => store;
@@ -279,6 +287,7 @@ async function fixture(
         }),
         row('zai:usage'),
         row('cursor:usage', { platform: 'mac' }),
+        row('muse:usage', { platform: 'mac' }),
         row('plan-opencode-go-console-mac-0123456789ab'),
         ...antigravity.listProfiles().map((profile) =>
           row(`antigravity:profile:${profile.id}`, {
@@ -409,6 +418,7 @@ describe('lifecycle route scope and guards', () => {
       ['PATCH', '/zai:usage', { label: 'Work' }],
       ['GET', '/trash', undefined],
       ['POST', '/trash/tr_0123456789abcdef/restore', {}],
+      ['POST', '/trash/tr_0123456789abcdef/purge', {}],
       ['GET', '/signin-jobs/job_0123456789abcdef', undefined],
       ['POST', '/signin-jobs/job_0123456789abcdef/cancel', {}],
       ['POST', '/signin-jobs/job_0123456789abcdef/code', { code: 'x' }],
@@ -808,12 +818,61 @@ describe('remove with a confirmation token', () => {
     expect([spare.status, spare.body.code]).toEqual([409, 'account_default']);
   });
 
-  it('keeps wallets out of Remove and answers 404 for an Antigravity profile not saved', async () => {
+  it('answers 404 for an Antigravity profile not saved', async () => {
     const f = await fixture();
-    const wallet = await f.request('POST', '/plan-opencode-go-console-mac-0123456789ab/remove', {});
-    expect([wallet.status, wallet.body.code]).toEqual([409, 'not_implemented']);
     const missing = await f.request('POST', '/antigravity:profile:party/remove', {});
     expect([missing.status, missing.body.code]).toEqual([404, 'unknown_account']);
+  });
+
+  it('removes a console wallet by deleting its stored source, never the browser session', async () => {
+    const f = await fixture();
+    const id = 'plan-opencode-go-console-mac-0123456789ab';
+    const sourceFile = path.join(ccsDir, 'opencode-console-wallet-source.json');
+    fs.writeFileSync(
+      sourceFile,
+      JSON.stringify({ version: 1, platform: 'mac', sshHost: 'fixture-mac' })
+    );
+    const ask = await f.request('POST', `/${id}/remove`, {});
+    expect(ask.status).toBe(200);
+    const confirmation = ask.body.confirmation as { token: string; effects: string[] };
+    expect(confirmation.effects).toEqual([
+      'The console wallet is no longer read by the dashboard.',
+      'Its sign-in in the browser is not changed.',
+    ]);
+    const commit = await f.request('POST', `/${id}/remove`, {
+      confirmationToken: confirmation.token,
+    });
+    expect(commit.body).toEqual({ removed: true, trashId: null, purgeAfter: null });
+    expect(fs.existsSync(sourceFile)).toBe(false);
+    // A second commit with the same token is stale.
+    const again = await f.request('POST', `/${id}/remove`, {
+      confirmationToken: confirmation.token,
+    });
+    expect([again.status, again.body.code]).toEqual([409, 'confirmation_stale']);
+    expect(f.audits.find(([event]) => event === 'accounts.remove')?.[1]).toMatchObject({
+      provider: 'opencode-go',
+      kind: 'browser-session',
+      trashed: false,
+    });
+  });
+
+  it('wallet Remove is stale when its stored source changes between prepare and commit', async () => {
+    const f = await fixture();
+    const id = 'plan-opencode-go-console-mac-0123456789ab';
+    const sourceFile = path.join(ccsDir, 'opencode-console-wallet-source.json');
+    fs.writeFileSync(
+      sourceFile,
+      JSON.stringify({ version: 1, platform: 'mac', sshHost: 'fixture-mac' })
+    );
+    const ask = await f.request('POST', `/${id}/remove`, {});
+    const token = (ask.body.confirmation as { token: string }).token;
+    fs.writeFileSync(
+      sourceFile,
+      JSON.stringify({ version: 1, platform: 'mac', sshHost: 'other-mac' })
+    );
+    const commit = await f.request('POST', `/${id}/remove`, { confirmationToken: token });
+    expect([commit.status, commit.body.code]).toEqual([409, 'confirmation_stale']);
+    expect(fs.existsSync(sourceFile)).toBe(true);
   });
 });
 
@@ -1097,6 +1156,39 @@ describe('sign-in and guides', () => {
     expect(badCommand.status).toBe(400);
   });
 
+  it('serves Muse Sign in again as a device-code job only with CCS_MUSE_SIGNIN=on', async () => {
+    fs.writeFileSync(
+      path.join(ccsDir, 'account-usage-sources.json'),
+      JSON.stringify({
+        version: 1,
+        sources: [{ provider: 'muse', platform: 'mac', sshHost: 'jared-mac' }],
+      })
+    );
+    const off = await fixture();
+    const refused = await off.request('POST', '/muse:usage/signin-again', {});
+    expect([refused.status, refused.body.code]).toEqual([409, 'not_implemented']);
+    const on = await fixture({ museEnabled: true });
+    const started = await on.request('POST', '/muse:usage/signin-again', {});
+    expect(started.status).toBe(202);
+    expect(started.body.job).toMatchObject({
+      provider: 'muse',
+      kind: 'device-code',
+      mode: 'signin-again',
+      accountId: 'muse:usage',
+      platform: 'mac',
+      state: 'starting',
+    });
+    const again = await on.request('POST', '/muse:usage/signin-again', {});
+    expect([again.status, again.body.code, again.body.jobId]).toEqual([
+      409,
+      'job_running',
+      (started.body.job as { id: string }).id,
+    ]);
+    const plain = await on.request('POST', '/muse:usage/signin-again', {}, PLAIN);
+    expect([plain.status, plain.body.code]).toEqual([403, 'secure_transport_required']);
+    expect(plain.body.fallback).toEqual({ kind: 'terminal', host: 'mac', command: 'muse login' });
+  });
+
   it('adds Cursor or Qwen back only at zero accounts, on their configured host', async () => {
     const f = await fixture();
     const single = await f.request('POST', '/add', { provider: 'cursor' });
@@ -1153,9 +1245,21 @@ describe('registry, re-check, open, label and trash', () => {
       actions: { replaceKey: false, remove: true, recheck: true },
     });
     expect(byId('cursor:usage')).toMatchObject({ actions: { open: ['mac'], signInAgain: true } });
+    expect(byId('muse:usage')).toMatchObject({ actions: { signInAgain: false, recheck: true } });
+    const museOn = await fixture({ museEnabled: true });
+    const museRegistry = await museOn.request('GET', '/registry');
+    const museAccounts = museRegistry.body.accounts as Array<Record<string, unknown>>;
+    expect(museAccounts.find((account) => account.id === 'muse:usage')).toMatchObject({
+      actions: { signInAgain: true, recheck: true },
+    });
+    expect(
+      (museRegistry.body.providers as Array<{ id: string; signIn: { available: boolean } }>).find(
+        (entry) => entry.id === 'muse'
+      )?.signIn.available
+    ).toBe(true);
     expect(byId('claude:party')).toMatchObject({ actions: { remove: false, open: ['mac'] } });
     expect(byId('plan-opencode-go-console-mac-0123456789ab')).toMatchObject({
-      actions: { signInAgain: true, remove: false },
+      actions: { signInAgain: true, remove: true },
     });
     expect(secure.body.trash).toEqual([]);
     expect((secure.body.jobs as unknown[]).length).toBe(1);
@@ -1201,12 +1305,14 @@ describe('registry, re-check, open, label and trash', () => {
     });
   });
 
-  it('keeps Claude add, remove and restore off until host steps are enabled', async () => {
+  it('keeps Claude add, remove, restore and purge off until host steps are enabled', async () => {
     const off = await fixture();
     const add = await off.request('POST', '/add', { provider: 'claude', profileId: 'work2' });
     expect([add.status, add.body.code]).toEqual([409, 'not_implemented']);
     const restore = await off.request('POST', '/trash/tr_0123456789abcdef/restore', {});
     expect([restore.status, restore.body.code]).toEqual([409, 'not_implemented']);
+    const purge = await off.request('POST', '/trash/tr_0123456789abcdef/purge', {});
+    expect([purge.status, purge.body.code]).toEqual([409, 'not_implemented']);
   });
 
   it("refuses a computer's default Claude profile with account_protected, host steps on or off", async () => {
@@ -1315,6 +1421,78 @@ describe('registry, re-check, open, label and trash', () => {
       'accounts.remove',
       'accounts.trash.restore',
     ]);
+  });
+
+  it('purges one trash entry now with a typed DELETE confirmation', async () => {
+    const f = await fixture({ claudeEnabled: true });
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'party',
+            email: 'party@example.com',
+            mac: {
+              launcherName: 'p',
+              launcherPath: '/a',
+              profilePath: '/fake/mac/Claude-party',
+              sshHost: 'jared-mac',
+            },
+            windows: {
+              launcherName: 'p',
+              profilePath: 'C:\\x\\Claude-party',
+              sshHost: 'jared-windows',
+            },
+          },
+        ],
+      })
+    );
+    const prepared = (await f.request('POST', '/claude:party/remove', {})).body.confirmation as {
+      token: string;
+    };
+    const removed = await f.request('POST', '/claude:party/remove', {
+      confirmationToken: prepared.token,
+    });
+    const trashId = String(removed.body.trashId);
+    const ask = await f.request('POST', `/trash/${trashId}/purge`, {});
+    expect(ask.status).toBe(200);
+    const confirmation = ask.body.confirmation as {
+      token: string;
+      effects: string[];
+      expectsTyped: string;
+    };
+    expect(confirmation.effects).toEqual([
+      'Its Claude data is deleted for good on Mac and Windows.',
+      'This cannot be undone. Type DELETE to confirm.',
+    ]);
+    expect(confirmation.expectsTyped).toBe('DELETE');
+    // A mistyped confirmation keeps the token for a retry.
+    const mistyped = await f.request('POST', `/trash/${trashId}/purge`, {
+      confirmationToken: confirmation.token,
+      confirm: 'delete',
+    });
+    expect([mistyped.status, mistyped.body.code]).toEqual([400, 'invalid_body']);
+    const purged = await f.request('POST', `/trash/${trashId}/purge`, {
+      confirmationToken: confirmation.token,
+      confirm: 'DELETE',
+    });
+    expect(purged.body).toEqual({ purged: true, trashId });
+    expect((await f.request('GET', '/trash')).body.entries).toEqual([]);
+    const again = await f.request('POST', `/trash/${trashId}/purge`, {
+      confirmationToken: confirmation.token,
+      confirm: 'DELETE',
+    });
+    expect([again.status, again.body.code]).toEqual([404, 'unknown_trash']);
+    expect(f.audits.map(([event]) => event)).toContain('accounts.trash.purge');
+  });
+
+  it('purge answers 404 for a malformed or missing trash id', async () => {
+    const f = await fixture({ claudeEnabled: true });
+    const malformed = await f.request('POST', '/trash/nope/purge', {});
+    expect([malformed.status, malformed.body.code]).toEqual([400, 'invalid_account']);
+    const missing = await f.request('POST', '/trash/tr_0123456789abcdef/purge', {});
+    expect([missing.status, missing.body.code]).toEqual([404, 'unknown_trash']);
   });
 });
 

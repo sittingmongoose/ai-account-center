@@ -18,6 +18,10 @@ import { ClaudeLifecycleError } from './claude-account-lifecycle';
 import { TRASH_ID } from './claude-account-stores';
 import { CodexLifecycleError } from './codex-account-lifecycle';
 import { AntigravityLifecycleError } from '../../antigravity/account-lifecycle';
+import {
+  deleteOpencodeWalletSource,
+  readOpencodeWalletSource,
+} from './opencode-console-wallet-service';
 
 /**
  * Remove and trash (CONTRACT-registry-lifecycle 6.7 and 6.8). One route, two
@@ -32,6 +36,7 @@ const STATUS: Record<string, number> = {
   remove_failed: 500,
   write_failed: 500,
   restore_failed: 500,
+  purge_failed: 500,
   host_unreachable: 502,
   unknown_trash: 404,
 };
@@ -148,8 +153,87 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
       },
     };
   }
-  // Console wallets.
+  if (account.kind === 'wallet') {
+    return {
+      kind: 'browser-session',
+      effects: [
+        'The console wallet is no longer read by the dashboard.',
+        'Its sign-in in the browser is not changed.',
+      ],
+      refusal: async () => (running() ? 'signin_running' : null),
+      fingerprint: async () => walletFingerprint(env, account.id),
+      commit: () => removeWallet(env, account.id),
+    };
+  }
   throw new LifecycleHttpError(409, 'not_implemented');
+}
+
+async function walletFingerprint(env: LifecycleEnv, id: string): Promise<string> {
+  const source = await readOpencodeWalletSource(env.ccsDir());
+  let entry: RegistryAccount | null = null;
+  try {
+    entry =
+      (await readAdditionalEntries(env.ccsDir())).entries.find(
+        (candidate) => candidate.id === id
+      ) ?? null;
+  } catch {
+    entry = null;
+  }
+  return stateFingerprint({ id, source, entry });
+}
+
+/**
+ * Console wallet Remove: delete the registry entry (when one names this
+ * wallet) and its stored opt-in source. The browser extension's session is
+ * never touched: no ssh, no provider-side change.
+ */
+async function removeWallet(
+  env: LifecycleEnv,
+  id: string
+): Promise<{ trashId: null; purgeAfter: null }> {
+  let entry: RegistryAccount | null = null;
+  try {
+    entry =
+      (await readAdditionalEntries(env.ccsDir())).entries.find(
+        (candidate) => candidate.id === id
+      ) ?? null;
+  } catch {
+    entry = null;
+  }
+  let position = -1;
+  if (entry) {
+    const removed = entry;
+    await updateAccountRegistry(env.ccsDir(), (current) => {
+      position = current.accounts.findIndex((candidate) => candidate.id === id);
+      if (position < 0) throw new LifecycleHttpError(409, 'confirmation_stale');
+      return {
+        ...current,
+        accounts: current.accounts.filter((candidate) => candidate.id !== id),
+      };
+    }).catch((error) => {
+      throw error instanceof LifecycleHttpError
+        ? error
+        : new LifecycleHttpError(500, 'remove_failed');
+    });
+    try {
+      await deleteOpencodeWalletSource(env.ccsDir());
+    } catch {
+      await updateAccountRegistry(env.ccsDir(), (current) => {
+        if (current.accounts.some((candidate) => candidate.id === id)) return current;
+        const accounts = [...current.accounts];
+        accounts.splice(Math.min(position, accounts.length), 0, removed);
+        return { ...current, accounts };
+      }).catch(() => undefined);
+      throw new LifecycleHttpError(500, 'remove_failed');
+    }
+    return { trashId: null, purgeAfter: null };
+  }
+  try {
+    await deleteOpencodeWalletSource(env.ccsDir());
+  } catch {
+    throw new LifecycleHttpError(500, 'remove_failed');
+  }
+  return { trashId: null, purgeAfter: null };
 }
 
 function reviewedEntry(entry: RegistryAccount): string {
@@ -349,4 +433,81 @@ export async function restoreTrash(
   env.audit('accounts.trash.restore', { provider: 'claude' });
   env.onChanged();
   return { status: 200, body: { restored: true, accountId: restored.accountId } };
+}
+
+/** The exact typed confirmation Delete now requires. */
+export const PURGE_TYPED_CONFIRMATION = 'DELETE';
+
+function purgeCommit(body: Record<string, unknown>): { token: string; confirm: string } | null {
+  const names = Object.keys(body);
+  if (names.length === 0) return null;
+  if (
+    names.length !== 2 ||
+    !names.includes('confirmationToken') ||
+    !names.includes('confirm') ||
+    typeof body.confirmationToken !== 'string' ||
+    !CONFIRMATION_TOKEN_PATTERN.test(body.confirmationToken) ||
+    typeof body.confirm !== 'string'
+  ) {
+    throw new LifecycleHttpError(400, 'invalid_body');
+  }
+  return { token: body.confirmationToken, confirm: body.confirm };
+}
+
+/**
+ * POST /api/accounts/trash/:trashId/purge: delete one trashed profile now,
+ * before its 30 days, on both hosts. Two calls: `{}` returns a confirmation
+ * token with effects and `expectsTyped: "DELETE"`, and
+ * `{confirmationToken, confirm: "DELETE"}` performs the purge. A mistyped
+ * confirmation is 400 and keeps the token for a retry.
+ */
+export async function purgeTrash(
+  env: LifecycleEnv,
+  trashId: string,
+  body: Record<string, unknown>,
+  context: LifecycleContext
+): Promise<LifecycleResult> {
+  if (!TRASH_ID.test(trashId)) throw new LifecycleHttpError(400, 'invalid_account');
+  const commit = purgeCommit(body);
+  const claude = env.claude();
+  if (!claude.enabled) throw new LifecycleHttpError(409, 'not_implemented');
+  const entry = await claude.findTrash(trashId).catch(() => null);
+  if (!entry || (entry.state !== 'trashed' && entry.state !== 'deleting')) {
+    throw new LifecycleHttpError(404, 'unknown_trash');
+  }
+  const binding = {
+    action: 'trash-purge' as const,
+    subject: trashId,
+    sessionKey: context.sessionKey,
+    stateFingerprint: claude.purgeFingerprint(entry),
+  };
+  if (commit === null) {
+    return {
+      status: 200,
+      body: {
+        confirmation: {
+          ...env.confirmations().issue(binding),
+          effects: [
+            'Its Claude data is deleted for good on Mac and Windows.',
+            'This cannot be undone. Type DELETE to confirm.',
+          ],
+          expectsTyped: PURGE_TYPED_CONFIRMATION,
+        },
+      },
+    };
+  }
+  if (commit.confirm !== PURGE_TYPED_CONFIRMATION) {
+    throw new LifecycleHttpError(400, 'invalid_body');
+  }
+  if (!env.confirmations().consume(commit.token, binding)) {
+    throw new LifecycleHttpError(409, 'confirmation_stale');
+  }
+  try {
+    await claude.purgeOne(trashId);
+  } catch (error) {
+    throw mapError(error);
+  }
+  env.audit('accounts.trash.purge', { count: 1 });
+  env.onChanged();
+  return { status: 200, body: { purged: true, trashId } };
 }

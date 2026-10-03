@@ -20,6 +20,13 @@ export const CODEX_TERMINAL = {
   command: 'ai-account-center codex-auth login <profile-name>',
 };
 
+/** Run `muse login` in a terminal on the Mac (the insecure-transport fallback). */
+export const MUSE_TERMINAL = {
+  kind: 'terminal' as const,
+  host: 'mac' as const,
+  command: 'muse login',
+};
+
 /** The terminal sign-in for one Antigravity profile (contract 6.6, terminal fallback). */
 export function antigravityTerminal(profileId: string): {
   kind: 'terminal';
@@ -55,7 +62,7 @@ export function label(value: unknown): string | null {
 
 export function secure(
   context: LifecycleContext,
-  fallback: typeof CODEX_TERMINAL | null = null
+  fallback: typeof CODEX_TERMINAL | typeof MUSE_TERMINAL | null = null
 ): void {
   if (!context.secure) {
     throw new LifecycleHttpError(403, 'secure_transport_required', fallback ? { fallback } : {});

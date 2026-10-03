@@ -24,6 +24,8 @@ test('every request goes to the route and body the CLIENT API SHEET names', () =
   assert.deepEqual(requests.recheck('qwen:usage').path, '/api/accounts/qwen%3Ausage/recheck');
   assert.deepEqual(requests.restoreAsk('tr_1'), { method: 'POST', path: '/api/accounts/trash/tr_1/restore', body: {} });
   assert.deepEqual(requests.restoreCommit('tr_1', 't').body, { confirmationToken: 't' });
+  assert.deepEqual(requests.purgeAsk('tr_1'), { method: 'POST', path: '/api/accounts/trash/tr_1/purge', body: {} });
+  assert.deepEqual(requests.purgeCommit('tr_1', 't', 'DELETE').body, { confirmationToken: 't', confirm: 'DELETE' });
   assert.deepEqual(requests.job('job_1'), { method: 'GET', path: '/api/accounts/signin-jobs/job_1' });
   assert.deepEqual(requests.cancelJob('job_1'), { method: 'POST', path: '/api/accounts/signin-jobs/job_1/cancel', body: {} });
   assert.deepEqual(requests.submitCode('job_1', 'c').body, { code: 'c' });

@@ -20,6 +20,7 @@ import {
   inventoryRecord,
   pendingRecord,
   stamp,
+  trashEntryIsDefault,
   trashName,
   type ClaudeProfileRecord,
   type PublicTrashEntry,
@@ -60,6 +61,7 @@ export type ClaudeLifecycleCode =
   | 'remove_failed'
   | 'unknown_trash'
   | 'restore_failed'
+  | 'purge_failed'
   | 'write_failed';
 
 export class ClaudeLifecycleError extends Error {
@@ -381,6 +383,57 @@ export class ClaudeAccountLifecycle {
         result: { accountId: entry.accountId },
       };
     });
+  }
+
+  purgeFingerprint(entry: ClaudeTrashEntry): string {
+    return this.restoreFingerprint(entry);
+  }
+
+  /**
+   * Delete one trash entry now, before its 30 days are up, on both hosts
+   * through the same transport as Remove. An unreachable host keeps the entry
+   * as `deleting` for the next sweep (or a retry) and answers
+   * `host_unreachable`. A default profile is never in the trash; one found
+   * there is refused with `account_protected`.
+   */
+  async purgeOne(trashId: string): Promise<{ trashId: string }> {
+    this.assertEnabled();
+    const entry = await this.findTrash(trashId).catch(() => null);
+    if (!entry || (entry.state !== 'trashed' && entry.state !== 'deleting')) {
+      throw new ClaudeLifecycleError('unknown_trash');
+    }
+    if (trashEntryIsDefault(entry)) throw new ClaudeLifecycleError('account_protected');
+    let failedHost: ClaudeHost | null = null;
+    for (const host of CLAUDE_HOSTS) {
+      const detail = entry.hosts[host];
+      if (!detail) continue;
+      try {
+        await this.deps.transport.purge(host, {
+          sshHost: detail.launcher.sshHost,
+          trashName: detail.trashName,
+        });
+      } catch {
+        failedHost ??= host;
+      }
+    }
+    if (failedHost) {
+      await updateTrash(this.ccsDir(), async (entries) => ({
+        next: entries.map((candidate) =>
+          candidate.trashId === trashId ? { ...candidate, state: 'deleting' as const } : candidate
+        ),
+        result: undefined,
+      })).catch(() => undefined);
+      throw new ClaudeLifecycleError('host_unreachable', failedHost);
+    }
+    try {
+      await updateTrash(this.ccsDir(), async (entries) => ({
+        next: entries.filter((candidate) => candidate.trashId !== trashId),
+        result: undefined,
+      }));
+    } catch {
+      throw new ClaudeLifecycleError('purge_failed');
+    }
+    return { trashId };
   }
 
   /** Delete trash past `purgeAfter`; an unreachable host keeps the entry as `deleting`. */

@@ -131,6 +131,26 @@ describe('lifecycle provider facts', () => {
       openApp: ['mac', 'windows'],
     });
     expect(entry('muse')?.signIn.unavailableReason).toBe('not_implemented');
+    expect(entry('muse')?.capabilities.signInAgain).toBe(false);
+    // With CCS_MUSE_SIGNIN=on the Muse device-code flow is served (still unverified live).
+    const museOn = await new AccountDashboardService(
+      deps({
+        providerFacts: (context) =>
+          lifecycleProviderFacts(context, {
+            codexCliAvailable: () => true,
+            claudeEnabled: () => false,
+            antigravityFlow: () => 'preflight_failed',
+            museEnabled: () => true,
+          }),
+      })
+    ).get('mac', false, { secureTransport: true });
+    const muse = museOn.providers?.find((provider) => provider.id === 'muse');
+    expect(muse?.signIn).toMatchObject({
+      kind: 'device-code',
+      available: true,
+      unavailableReason: null,
+    });
+    expect(muse?.capabilities.signInAgain).toBe(true);
     // Antigravity signs in from a terminal: the UI shows the command (contract 6.2).
     expect(entry('antigravity')?.signIn).toMatchObject({
       kind: 'supervised-cli',

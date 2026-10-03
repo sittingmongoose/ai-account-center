@@ -42,6 +42,8 @@ export const requests = Object.freeze({
   recheck: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/recheck`, body: {} }),
   restoreAsk: trashId => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/restore`, body: {} }),
   restoreCommit: (trashId, confirmationToken) => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/restore`, body: { confirmationToken } }),
+  purgeAsk: trashId => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/purge`, body: {} }),
+  purgeCommit: (trashId, confirmationToken, confirm) => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/purge`, body: { confirmationToken, confirm } }),
   job: jobId => ({ method: 'GET', path: `/api/accounts/signin-jobs/${enc(jobId)}` }),
   cancelJob: jobId => ({ method: 'POST', path: `/api/accounts/signin-jobs/${enc(jobId)}/cancel`, body: {} }),
   submitCode: (jobId, code) => ({ method: 'POST', path: `/api/accounts/signin-jobs/${enc(jobId)}/code`, body: { code } }),
@@ -228,6 +230,7 @@ export function errorText(error, ctx = {}) {
     case 'trash_cross_volume': return t('Trash is on another disk', `${host} keeps the trash on another disk, so nothing was moved.`);
     case 'remove_failed': return t('Not removed', 'The account could not be removed safely. Nothing was changed.');
     case 'restore_failed': return t('Not restored', 'The profile could not be put back safely. It stays in the trash.');
+    case 'purge_failed': return t('Not deleted', 'The profile could not be deleted safely. It stays in the trash.');
     case 'unknown_trash': return t('No longer in the trash', 'It was restored or deleted already. The list is refreshed.');
     case 'confirmation_stale': return t('It changed', 'The account changed since you reviewed it. Review it again.');
     case 'host_unreachable': return t(`${host === 'A computer' ? 'A computer' : host[0].toUpperCase() + host.slice(1)} could not be reached`, 'Nothing was changed. Check that it is on and try again.');

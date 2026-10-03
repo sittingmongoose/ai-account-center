@@ -15,7 +15,7 @@ import { createHash, randomBytes } from 'crypto';
  *   cannot push other sessions' tokens out.
  * - Tokens are never logged.
  */
-export type ConfirmationAction = 'remove' | 'trash-restore' | 'signin-again-active';
+export type ConfirmationAction = 'remove' | 'trash-restore' | 'trash-purge' | 'signin-again-active';
 
 export interface ConfirmationBinding {
   action: ConfirmationAction;

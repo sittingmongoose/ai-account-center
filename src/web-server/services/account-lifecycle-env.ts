@@ -22,6 +22,7 @@ import {
   getAntigravityLifecycle,
   getClaudeLifecycle,
   getCodexLifecycle,
+  getMuseLifecycle,
   getSignInJobRunner,
   lifecycleProviderFacts,
   setAccountsChangedHandler,
@@ -32,6 +33,7 @@ import type { AntigravityAccountLifecycle } from '../../antigravity/account-life
 import type { ClaudeAccountLifecycle } from './claude-account-lifecycle';
 import { runClaudeHostOverSsh } from './claude-host-transport';
 import type { CodexAccountLifecycle } from './codex-account-lifecycle';
+import type { MuseAccountLifecycle } from './muse-account-lifecycle';
 import { providerSignInState, type ProviderRegistryFacts } from './dashboard-provider-registry';
 import type { SignInJobRunner } from './signin-jobs';
 
@@ -47,6 +49,8 @@ export interface LifecycleEnv {
   claude: () => ClaudeAccountLifecycle;
   /** Antigravity saved profiles; without it Antigravity actions answer not_implemented. */
   antigravity?: () => AntigravityAccountLifecycle;
+  /** Muse Sign in again; without it (or while its flag is off) it answers not_implemented. */
+  muse?: () => MuseAccountLifecycle;
   confirmations: () => AccountConfirmationStore;
   providerFacts: (context: { secureTransport?: boolean }) => ProviderRegistryFacts;
   getDashboard: (context: { secureTransport?: boolean }) => Promise<AccountDashboard>;
@@ -98,6 +102,7 @@ export function defaultLifecycleEnv(): LifecycleEnv {
     codex: getCodexLifecycle,
     claude: getClaudeLifecycle,
     antigravity: getAntigravityLifecycle,
+    muse: getMuseLifecycle,
     confirmations: getAccountConfirmations,
     providerFacts: (context) => lifecycleProviderFacts(context),
     getDashboard: (context) => getAccountDashboard('mac', false, context),
