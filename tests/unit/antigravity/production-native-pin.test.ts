@@ -63,12 +63,12 @@ function observedReader(action?: (position: number) => void) {
 }
 
 describe('read-only descriptor-based production native executable pin', () => {
-  test('release remains false and factory construction performs no filesystem proof', () => {
+  test('release is open and factory construction performs no filesystem proof', () => {
     const f = fixture();
     const lstat = spyOn(fs, 'lstatSync');
     const open = spyOn(fs, 'openSync');
     try {
-      expect(ANTIGRAVITY_NATIVE_RELEASED).toBe(false);
+      expect(ANTIGRAVITY_NATIVE_RELEASED).toBe(true);
       expect(typeof createInstalledAntigravityRuntimeFactory({ home: f.directory })).toBe(
         'function'
       );

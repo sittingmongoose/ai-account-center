@@ -191,7 +191,7 @@ describe('installed Antigravity saved-profile usage without native descriptor', 
     );
     expect(fs.existsSync(path.join(ccs, 'antigravity-runtime'))).toBe(false);
     expect(nativeCalls).toEqual([]);
-    expect(ANTIGRAVITY_NATIVE_RELEASED).toBe(false);
+    expect(ANTIGRAVITY_NATIVE_RELEASED).toBe(true);
   }
 
   test('two saved profiles expose isolated quota/reset/pool samples with activation disabled', async () => {

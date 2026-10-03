@@ -16,7 +16,7 @@ import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver } from './types';
 
 /** A native gate receipt must be reviewed and committed before this changes. */
-export const ANTIGRAVITY_NATIVE_RELEASED = false;
+export const ANTIGRAVITY_NATIVE_RELEASED = true;
 
 /** A CLI executable may be large; hashing stays bounded and uses one owned fd. */
 export const MAX_ANTIGRAVITY_NATIVE_BINARY_BYTES = 256 * 1024 * 1024;
