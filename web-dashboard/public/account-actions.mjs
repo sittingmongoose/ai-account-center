@@ -54,6 +54,7 @@ export const requests = Object.freeze({
   sessionLifetime: days => ({ method: 'PUT', path: '/api/auth/session-lifetime', body: { days } }),
   preferences: () => ({ method: 'GET', path: '/api/accounts/preferences' }),
   savePreferences: prefs => ({ method: 'PUT', path: '/api/accounts/preferences', body: prefs }),
+  cleanupSnapshots: () => ({ method: 'POST', path: '/api/claude/history-snapshots/cleanup', body: {} }),
   password: (currentPassword, newPassword, signOutOtherBrowsers) => ({ method: 'POST', path: '/api/auth/password', body: { currentPassword, newPassword, signOutOtherBrowsers: signOutOtherBrowsers !== false } }),
   revokeOthers: () => ({ method: 'POST', path: '/api/auth/sessions/revoke-others', body: {} }),
   revokeDevice: id => ({ method: 'DELETE', path: `/api/auth/devices/${enc(id)}`, body: {} }),

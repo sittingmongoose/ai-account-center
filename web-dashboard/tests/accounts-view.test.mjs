@@ -1817,3 +1817,21 @@ test('the default-profile remove flow asks for the account email', () => {
   assert.equal(v.inputLabel, 'Account email');
   assert.equal(v.actions[0].label, 'Remove');
 });
+
+test('the snapshot cleanup block shows the toggle, the button and the last note', () => {
+  const vm = accountsViewModel(data([account()]), { now, prefs: { data: { snapshotCleanup: { auto: true } }, busy: '', cleanupBusy: false, cleanupNote: 'Deleted 2 older snapshots.' } });
+  assert.deepEqual(vm.cleanup, {
+    auto: true,
+    enabled: true,
+    busy: false,
+    note: 'Deleted 2 older snapshots.',
+    tip: 'After each history copy, the newest 3 snapshot folders per profile stay and older ones the dashboard created are deleted.',
+  });
+  const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '', cleanupBusy: false, cleanupNote: '' } });
+  assert.equal(waiting.cleanup.enabled, false);
+  assert.equal(waiting.cleanup.auto, true);
+  const running = accountsViewModel(data([account()]), { now, prefs: { data: { snapshotCleanup: { auto: false } }, busy: '', cleanupBusy: true, cleanupNote: '' } });
+  assert.equal(running.cleanup.auto, false);
+  assert.equal(running.cleanup.busy, true);
+  assert.equal(running.cleanup.enabled, false);
+});

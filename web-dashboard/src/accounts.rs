@@ -404,6 +404,12 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     ac.set_timezone_enabled(b(timezone, "enabled"));
     ac.set_timezone_busy(b(timezone, "busy"));
     ac.set_timezone_tip(s(timezone, "tip"));
+    let cleanup = g(&v, "cleanup");
+    ac.set_cleanup_auto(b(cleanup, "auto"));
+    ac.set_cleanup_enabled(b(cleanup, "enabled"));
+    ac.set_cleanup_busy(b(cleanup, "busy"));
+    ac.set_cleanup_note(s(cleanup, "note"));
+    ac.set_cleanup_tip(s(cleanup, "tip"));
 
     let update = g(&v, "update");
     ac.set_update_shown(b(update, "shown"));

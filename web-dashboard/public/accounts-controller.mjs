@@ -18,7 +18,7 @@
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
 import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, PROVIDER_LABELS } from './account-actions.mjs';
-import { setDisplayTimeZone } from './time-format.mjs';
+import { setDisplayTimeZone, DEFAULT_DISPLAY_TIME_ZONE } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord } from './view-model.mjs';
 import { lazyFormat } from './time-format.mjs';
@@ -40,6 +40,7 @@ export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
   'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
+  'cleanup-auto', 'cleanup-now',
 ]));
 
 export function createAccountsController(deps) {
@@ -57,7 +58,7 @@ export function createAccountsController(deps) {
     // and one account's own switches: 'acct-show:<id>' and 'acct-tray:<id>'
     visPending: [],
     signin: { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' },
-    prefs: { data: null, busy: '' },
+    prefs: { data: null, busy: '', cleanupBusy: false, cleanupNote: '' },
   };
   const timers = {};
   // sign-in jobs this page closed (Cancel, Done, Close): a registry read never opens them again
@@ -660,6 +661,31 @@ export function createAccountsController(deps) {
       usageLogSources: Array.isArray(current?.usageLogSources) ? current.usageLogSources : [],
     }, 'timezone');
   }
+  async function toggleCleanupAuto() {
+    const current = state.prefs.data;
+    if (!current || state.prefs.busy) return;
+    await savePrefs({
+      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
+      snapshotCleanup: { auto: current.snapshotCleanup?.auto === false },
+      usageLogSources: Array.isArray(current.usageLogSources) ? current.usageLogSources : [],
+    }, 'cleanup-auto');
+  }
+  async function cleanupNow() {
+    const p = state.prefs;
+    if (!p.data || p.cleanupBusy || p.busy) return;
+    p.cleanupBusy = true; p.cleanupNote = ''; changed();
+    try {
+      const { payload } = await call(requests.cleanupSnapshots());
+      const deleted = Number(payload?.deleted) || 0;
+      const skipped = Number(payload?.skipped) || 0;
+      const failed = Number(payload?.failed) || 0;
+      const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+      p.cleanupNote = deleted === 0 && failed === 0
+        ? 'Nothing to clean: every profile already keeps only its newest snapshots.'
+        : `Deleted ${plural(deleted, 'older snapshot', 'older snapshots')}${skipped ? `, skipped ${plural(skipped, 'folder', 'folders')} that ${skipped === 1 ? 'was' : 'were'} not AAC snapshots` : ''}${failed ? `, ${plural(failed, 'target', 'targets')} unreachable` : ''}.`;
+    } catch (error) { fail(error); }
+    finally { p.cleanupBusy = false; changed(); }
+  }
   function togglePassword() {
     const pw = state.signin.pw;
     if (pw.busy) return;
@@ -751,6 +777,8 @@ export function createAccountsController(deps) {
       case 'network-on': await setNetwork(true); return true;
       case 'session-lifetime': await setLifetime(v); return true;
       case 'time-zone': await setTimeZone(v); return true;
+      case 'cleanup-auto': await toggleCleanupAuto(); return true;
+      case 'cleanup-now': await cleanupNow(); return true;
       case 'pw-toggle': togglePassword(); return true;
       case 'pw-typing': typingPassword(v); return true;
       case 'pw-submit': await changePassword(v); return true;

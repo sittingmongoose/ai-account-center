@@ -4,12 +4,14 @@ import { createHash } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   CLAUDE_PROFILE_ID_PATTERN,
+  listClaudeDesktopProfiles as listProfiles,
   type ClaudeDesktopProfile,
 } from './claude-desktop-profile-service';
 import { runClaudeHistoryHelper } from './claude-desktop-transport';
 import { claudeHistoryOpenHeldWithoutCore } from './claude-history-hold-fallback';
 import { ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
+import { readDashboardPreferences } from './dashboard-preferences';
 
 export interface ClaudeHistorySyncPolicy {
   version: 1;
@@ -282,6 +284,107 @@ function notifyObserver(callback: () => void): void {
   }
 }
 
+/** Snapshot retention counts for one profile on one platform (counts only, never names). */
+export interface HistorySnapshotCleanup {
+  kept: number;
+  deleted: number;
+  skipped: number;
+}
+
+function isCleanupResult(
+  value: unknown
+): value is Record<'kept' | 'deleted' | 'skipped', string[]> {
+  if (!object(value)) return false;
+  return (['kept', 'deleted', 'skipped'] as const).every((key) => {
+    const names: unknown = value[key];
+    return (
+      Array.isArray(names) &&
+      names.length <= 1024 &&
+      names.every((name: unknown) => typeof name === 'string' && name.length <= 128)
+    );
+  });
+}
+
+/**
+ * Retention for one profile's history snapshots on one platform, through the
+ * pinned helper path: the fixed helper keeps the newest 3 snapshot folders it
+ * created and deletes older ones. A refused or malformed answer throws; the
+ * caller decides whether the copy or the button press fails with it.
+ */
+export async function cleanupHistorySnapshots(
+  profile: ClaudeDesktopProfile,
+  platform: 'mac' | 'windows'
+): Promise<HistorySnapshotCleanup> {
+  const id = profile.id;
+  const launcher = profile[platform];
+  const policy = await loadClaudeHistoryPolicy(profile);
+  if (!id || !launcher || !policy) throw new ValidationError('helper_unavailable');
+  const data = await runClaudeHistoryHelper(launcher, platform, id, {
+    mode: 'snapshot-cleanup',
+    profileId: id,
+    platform,
+    policy,
+    expectedEmail: profile.email,
+  });
+  if (data.length > MAX_HELPER_BYTES) throw new ValidationError('helper_unavailable');
+  const response: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
+  if (!isCleanupResult(response)) throw new ValidationError('helper_unavailable');
+  return {
+    kept: response.kept.length,
+    deleted: response.deleted.length,
+    skipped: response.skipped.length,
+  };
+}
+
+/** "Clean up now": retention for every known profile on each of its platforms. */
+export interface HistorySnapshotCleanupAll {
+  profiles: number;
+  targets: number;
+  kept: number;
+  deleted: number;
+  skipped: number;
+  failed: number;
+}
+
+export async function cleanupAllHistorySnapshots(
+  list: () => Promise<ClaudeDesktopProfile[]> = listProfiles
+): Promise<HistorySnapshotCleanupAll> {
+  const total: HistorySnapshotCleanupAll = {
+    profiles: 0,
+    targets: 0,
+    kept: 0,
+    deleted: 0,
+    skipped: 0,
+    failed: 0,
+  };
+  let profiles: ClaudeDesktopProfile[];
+  try {
+    profiles = await list();
+  } catch {
+    return total;
+  }
+  for (const profile of profiles) {
+    if (!profile?.id) continue;
+    total.profiles += 1;
+    for (const platform of ['mac', 'windows'] as const) {
+      if (!profile[platform]) continue;
+      total.targets += 1;
+      try {
+        const cleanup = await cleanupHistorySnapshots(profile, platform);
+        total.kept += cleanup.kept;
+        total.deleted += cleanup.deleted;
+        total.skipped += cleanup.skipped;
+      } catch {
+        total.failed += 1;
+      }
+    }
+  }
+  logHistory('info', 'claude.history.snapshots_cleaned', 'History snapshots cleaned now', {
+    ...total,
+  });
+  return total;
+}
+
 /** Called only inside the existing coalesced authenticated Open operation.
  * This does not open/resume/stop an app, write a transcript or return private
  * descriptors. Pre-append skips preserve Open; uncertain append holds Open.
@@ -423,6 +526,35 @@ export async function synchronizeClaudeHistoryBeforeOpen(
           appendCreateOnly,
         },
       });
+      // After each copy that created records, retention runs once for this profile: the newest 3
+      // snapshot folders stay, older ones the helper created go. It never fails the copy or Open;
+      // Settings can turn it off, and "Clean up now" runs it on demand.
+      if (result.createdCount > 0) {
+        let auto = true;
+        try {
+          auto = readDashboardPreferences().snapshotCleanup.auto !== false;
+        } catch {
+          auto = true;
+        }
+        if (auto) {
+          try {
+            const cleanup = await cleanupHistorySnapshots(profile, platform);
+            logHistory('info', 'claude.history.snapshots_retained', 'History snapshots retained', {
+              platform,
+              kept: cleanup.kept,
+              deleted: cleanup.deleted,
+              skipped: cleanup.skipped,
+            });
+          } catch {
+            logHistory(
+              'warn',
+              'claude.history.snapshots_retain_failed',
+              'History snapshot retention did not run',
+              { platform }
+            );
+          }
+        }
+      }
       if (
         sequence.stopReason &&
         result.status === 'refused' &&

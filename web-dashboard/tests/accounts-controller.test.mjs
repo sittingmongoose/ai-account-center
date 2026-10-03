@@ -775,3 +775,29 @@ test('removing a default Claude profile types its account email, and a mistype s
   assert.equal(h.ctl.state.flows.claude, undefined);
   assert.equal(last(h.toasts).title, 'Removed home@example.com');
 });
+
+test('snapshot cleanup toggles automatic retention and cleans up now with a note', async () => {
+  const prefs = { timeZone: 'America/New_York', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  const h = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+      'POST /api/claude/history-snapshots/cleanup': { profiles: 2, targets: 3, kept: 9, deleted: 4, skipped: 1, failed: 0 },
+    },
+  });
+  await h.ctl.loadPrefs();
+  await h.ctl.handle('cleanup-auto', '');
+  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/preferences', body: { ...prefs, snapshotCleanup: { auto: false } } });
+  await h.ctl.handle('cleanup-now', '');
+  assert.deepEqual(last(h.sent), { method: 'POST', path: '/api/claude/history-snapshots/cleanup', body: {} });
+  assert.equal(h.ctl.state.prefs.cleanupNote, 'Deleted 4 older snapshots, skipped 1 folder that was not AAC snapshots.');
+  const idle = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'POST /api/claude/history-snapshots/cleanup': { profiles: 1, targets: 1, kept: 2, deleted: 0, skipped: 0, failed: 0 },
+    },
+  });
+  await idle.ctl.loadPrefs();
+  await idle.ctl.handle('cleanup-now', '');
+  assert.equal(idle.ctl.state.prefs.cleanupNote, 'Nothing to clean: every profile already keeps only its newest snapshots.');
+});

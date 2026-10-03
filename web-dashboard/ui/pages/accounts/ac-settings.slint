@@ -872,6 +872,48 @@ component SettingsGroup inherits SetGroup {
     }
 }
 
+component CleanupGroup inherits SetGroup {
+    in property <bool> busy;
+    callback act(string, string);
+    title: "History snapshots";
+    SetItem {
+        first: true;
+        label: "Automatic cleanup";
+        TipArea {
+            owner: "cleanup";
+            tip: AcData.cleanup-tip;
+            min-height: 20px;
+            CheckLine {
+                label: "Clean up after each copy";
+                sub: "keeps the newest 3 snapshot folders per profile";
+                checked: AcData.cleanup-auto;
+                enabled: AcData.cleanup-enabled && !root.busy;
+                toggled => { root.act("cleanup-auto", ""); }
+            }
+        }
+    }
+    SetItem {
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Button {
+                small: true;
+                text: AcData.cleanup-busy ? "Cleaning" : "Clean up now";
+                enabled: AcData.cleanup-enabled && !root.busy;
+                busy: AcData.cleanup-busy;
+                probe: "cleanup-now";
+                clicked => { root.act("cleanup-now", ""); }
+            }
+        }
+        if AcData.cleanup-note != "": Text {
+            text: AcData.cleanup-note;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+}
+
 component UpdateGroup inherits SetGroup {
     title: "Update apps";
     note: "Runs from Update apps in the header";
@@ -956,6 +998,10 @@ export component SettingsColumn inherits VerticalLayout {
             theme-value: root.theme-value;
             busy: root.busy;
             theme-picked(v) => { root.theme-picked(v); }
+            act(k, v) => { root.act(k, v); }
+        }
+        CleanupGroup {
+            busy: root.busy;
             act(k, v) => { root.act(k, v); }
         }
         UpdateGroup {

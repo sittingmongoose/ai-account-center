@@ -21,6 +21,7 @@ import {
   type ClaudeOpenOperation,
 } from '../services/claude-open-operations';
 import { ClaudeDesktopTransportError } from '../services/claude-desktop-transport';
+import { cleanupAllHistorySnapshots } from '../services/claude-history-sync-service';
 import { getClaudeDesktopUsage } from '../services/claude-desktop-usage-service';
 import { getCcsDir } from '../../utils/config-manager';
 
@@ -173,6 +174,24 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
     } else {
       res.status(500).json({ error: 'Claude account could not be opened safely.' });
     }
+  }
+});
+
+router.post('/history-snapshots/cleanup', async (req, res): Promise<void> => {
+  if (!requireDashboardSession(req, res)) return;
+  if (
+    !req.body ||
+    typeof req.body !== 'object' ||
+    Array.isArray(req.body) ||
+    Object.keys(req.body).length !== 0
+  ) {
+    res.status(400).json({ error: 'History snapshot cleanup takes no fields.' });
+    return;
+  }
+  try {
+    res.json(await cleanupAllHistorySnapshots());
+  } catch {
+    res.status(500).json({ error: 'History snapshots could not be cleaned safely.' });
   }
 });
 

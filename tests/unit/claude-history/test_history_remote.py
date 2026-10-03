@@ -245,5 +245,51 @@ class Fixtures(unittest.TestCase):
             with self.assertRaises(h.Refused):
                 h.directory_identity(self.root)
 
+    def snapshot(self, hex32, age_seconds, extra=None, manifest=True):
+        folder = self.root / ('.history-index-snapshot-' + hex32)
+        folder.mkdir()
+        if manifest:
+            (folder / 'snapshot-manifest.json').write_text('[]')
+        (folder / 'protected-0.bin').write_bytes(b'fixture')
+        if extra:
+            (folder / extra).write_text('foreign')
+        stamp = 1_700_000_000 - age_seconds
+        os.utime(folder, (stamp, stamp))
+        return folder.name
+
+    def test_snapshot_cleanup_keeps_newest_three_and_deletes_older(self):
+        names = [self.snapshot('%032x' % i, age_seconds=(5 - i) * 100) for i in range(5)]
+        result = self.bound.snapshot_cleanup()
+        self.assertEqual(result['kept'], names[2:][::-1])
+        self.assertEqual(sorted(result['deleted']), sorted(names[:2]))
+        self.assertEqual(result['skipped'], [])
+        for name in names[2:]:
+            self.assertTrue((self.root / name).is_dir())
+        for name in names[:2]:
+            self.assertFalse((self.root / name).exists())
+
+    def test_snapshot_cleanup_skips_anything_not_exactly_aac_created(self):
+        foreign_dir = self.root / '.history-index-snapshot-notes'
+        foreign_dir.mkdir()
+        (foreign_dir / 'snapshot-manifest.json').write_text('[]')
+        no_manifest = self.snapshot('a' * 32, age_seconds=10, manifest=False)
+        with_extra = self.snapshot('b' * 32, age_seconds=20, extra='notes.txt')
+        link = self.root / ('.history-index-snapshot-' + 'c' * 32)
+        link.symlink_to(self.root / no_manifest, target_is_directory=True)
+        result = self.bound.snapshot_cleanup()
+        self.assertEqual(result['deleted'], [])
+        self.assertEqual(sorted(result['skipped']), sorted([no_manifest, with_extra, link.name]))
+        self.assertTrue(foreign_dir.is_dir())
+        self.assertTrue((self.root / no_manifest).is_dir())
+        self.assertTrue((self.root / with_extra).is_dir())
+        self.assertTrue(link.is_symlink())
+
+    def test_snapshot_cleanup_with_three_or_fewer_deletes_nothing(self):
+        names = [self.snapshot('%032x' % i, age_seconds=(2 - i) * 100) for i in range(2)]
+        result = self.bound.snapshot_cleanup()
+        self.assertEqual(sorted(result['kept']), sorted(names))
+        self.assertEqual(result['deleted'], [])
+        self.assertEqual(result['skipped'], [])
+
 if __name__ == '__main__':
     unittest.main()

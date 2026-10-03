@@ -994,6 +994,7 @@ export function accountsViewModel(data, ctx = {}) {
     policies: policies(data, home, ag),
     refresh: { seconds: Number.isInteger(c.refreshSeconds) ? c.refreshSeconds : 60, known: c.refreshKnown === true },
     timezone: timezoneView(c.prefs),
+    cleanup: cleanupView(c.prefs),
     update: updateResultsView(c.updateJob, now),
     signin: signinFacts(c, now),
     connection: connectionFacts(c),
@@ -1026,6 +1027,19 @@ export function timezoneView(prefs) {
     enabled: !!data && prefs?.busy !== 'timezone',
     busy: prefs?.busy === 'timezone',
     tip: 'Every displayed time and the analytics day buckets use this zone.',
+  };
+}
+
+/** The history snapshot cleanup: automatic retention after each copy plus "Clean up now". */
+export function cleanupView(prefs) {
+  const data = prefs?.data && typeof prefs.data === 'object' ? prefs.data : null;
+  const busy = prefs?.busy === 'cleanup-auto' || prefs?.cleanupBusy === true;
+  return {
+    auto: data?.snapshotCleanup?.auto !== false,
+    enabled: !!data && !busy,
+    busy,
+    note: typeof prefs?.cleanupNote === 'string' ? prefs.cleanupNote : '',
+    tip: 'After each history copy, the newest 3 snapshot folders per profile stay and older ones the dashboard created are deleted.',
   };
 }
 
