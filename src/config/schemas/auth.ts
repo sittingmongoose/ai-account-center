@@ -95,8 +95,13 @@ export interface DashboardAuthConfig {
   username: string;
   /** Bcrypt-hashed password (use: npx bcrypt-cli hash 'password') */
   password_hash: string;
-  /** Session timeout in hours (default: 24) */
+  /** Session timeout in hours (default: 24; legacy mirror of session_lifetime_days) */
   session_timeout_hours?: number;
+  /**
+   * Dashboard session lifetime in days: 1, 7, 30, 90 or 365 (default: 30).
+   * The session cookie and the idle expiry follow it. Saved from Settings.
+   */
+  session_lifetime_days?: number;
   /** ISO time of the last password change made by the dashboard (CONTRACT-auth-devices 3) */
   password_changed_at?: string;
 }
@@ -140,9 +145,51 @@ export interface DashboardNetworkConfig {
  * Default dashboard auth configuration.
  * Disabled by default - must be explicitly enabled.
  */
+/** The dashboard session lifetimes Settings offers, in days. */
+export const SESSION_LIFETIME_DAYS = [1, 7, 30, 90, 365] as const;
+export type SessionLifetimeDays = (typeof SESSION_LIFETIME_DAYS)[number];
+export const DEFAULT_SESSION_LIFETIME_DAYS: SessionLifetimeDays = 30;
+
+export function isSessionLifetimeDays(value: unknown): value is SessionLifetimeDays {
+  return typeof value === 'number' && (SESSION_LIFETIME_DAYS as readonly number[]).includes(value);
+}
+
+/**
+ * The effective session lifetime in days for a dashboard auth config. A saved
+ * `session_lifetime_days` wins; otherwise a legacy `session_timeout_hours`
+ * maps to the nearest offered lifetime (a bare 24 is the old default, so it
+ * takes the new 30-day default); anything else is the 30-day default.
+ */
+export function effectiveSessionLifetimeDays(auth: {
+  session_lifetime_days?: number;
+  session_timeout_hours?: number;
+}): SessionLifetimeDays {
+  if (isSessionLifetimeDays(auth.session_lifetime_days)) return auth.session_lifetime_days;
+  const hours = auth.session_timeout_hours;
+  if (typeof hours === 'number' && Number.isFinite(hours) && hours > 0 && hours !== 24) {
+    return nearestSessionLifetimeDays(hours);
+  }
+  return DEFAULT_SESSION_LIFETIME_DAYS;
+}
+
+/** A legacy `session_timeout_hours` value maps to the nearest offered lifetime. */
+export function nearestSessionLifetimeDays(hours: number): SessionLifetimeDays {
+  let best: SessionLifetimeDays = DEFAULT_SESSION_LIFETIME_DAYS;
+  let gap = Number.POSITIVE_INFINITY;
+  for (const days of SESSION_LIFETIME_DAYS) {
+    const distance = Math.abs(days * 24 - hours);
+    if (distance < gap) {
+      gap = distance;
+      best = days;
+    }
+  }
+  return best;
+}
+
 export const DEFAULT_DASHBOARD_AUTH_CONFIG: DashboardAuthConfig = {
   enabled: false,
   username: '',
   password_hash: '',
   session_timeout_hours: 24,
+  session_lifetime_days: 30,
 };

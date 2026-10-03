@@ -17,6 +17,7 @@ import {
   getDashboardAuthConfig,
   isDashboardAuthEnabled,
 } from '../../config/config-loader-facade';
+import { effectiveSessionLifetimeDays } from '../../config/schemas/auth';
 import { bearerToken, guardApiRequest } from './api-request-guard';
 import { authKind } from './request-auth';
 import { isSessionEpochCurrent } from '../services/dashboard-auth-state';
@@ -201,12 +202,15 @@ export function createSessionMiddleware(): (
   next: NextFunction
 ) => void {
   const authConfig = getDashboardAuthConfig();
-  const maxAge = (authConfig.session_timeout_hours ?? 24) * 60 * 60 * 1000;
+  const maxAge = effectiveSessionLifetimeDays(authConfig) * 24 * 60 * 60 * 1000;
 
   return session({
     secret: getSessionSecret(),
     resave: false,
     saveUninitialized: false,
+    // Idle expiry: every response restarts the lifetime countdown, so the
+    // cookie expires after a full lifetime of no use (Settings' choice).
+    rolling: true,
     cookie: {
       // Secure whenever the request arrived over TLS (in-process, or a trusted
       // loopback proxy once `trust proxy` is set); plain HTTP keeps working.

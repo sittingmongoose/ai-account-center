@@ -1,7 +1,7 @@
 //! Accounts & Settings view model (version 2, public/accounts-view.mjs `accountsViewModel`): the provider
 //! sections with their account rows, fixed action slots, the line under a row (remove, restore, refusals), the
 //! inline flows (add, sign in again, keys, guided sign-ins) and the Claude trash; the Antigravity policy box;
-//! the settings column (Dashboard sign-in with the trusted local network, password change and paired trays,
+//! the settings column (Sign-in & connection with the trusted local network, password change and paired trays,
 //! refresh interval, auto-switch policies, Update apps results, Connection, About).
 //! Everything lands in the `AcData` global (ui/pages/accounts/ac-data.slint).
 //!
@@ -451,6 +451,10 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
         others_enabled: b(si, "othersEnabled"),
         others_busy: b(si, "othersBusy"),
         others_tip: s(si, "othersTip"),
+        lifetime_value: s(g(si, "lifetime"), "value"),
+        lifetime_enabled: b(g(si, "lifetime"), "enabled"),
+        lifetime_busy: b(g(si, "lifetime"), "busy"),
+        lifetime_tip: s(g(si, "lifetime"), "tip"),
         password_when: s(si, "passwordWhen"),
         password_can: b(si, "passwordCan"),
         password_note: s(si, "passwordNote"),

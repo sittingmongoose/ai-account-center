@@ -19,8 +19,16 @@ export type {
   DashboardAuthConfig,
   DashboardTlsConfig,
   DashboardNetworkConfig,
+  SessionLifetimeDays,
 } from './auth';
-export { DEFAULT_DASHBOARD_AUTH_CONFIG } from './auth';
+export {
+  DEFAULT_DASHBOARD_AUTH_CONFIG,
+  DEFAULT_SESSION_LIFETIME_DAYS,
+  SESSION_LIFETIME_DAYS,
+  effectiveSessionLifetimeDays,
+  isSessionLifetimeDays,
+  nearestSessionLifetimeDays,
+} from './auth';
 
 // CLIProxy provider, variant, routing, safety, logging types
 export { CLIPROXY_SUPPORTED_PROVIDERS, DEFAULT_CLIPROXY_SAFETY_CONFIG } from './cliproxy';

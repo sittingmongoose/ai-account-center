@@ -107,8 +107,9 @@ export function expiredBanner(reason, hours = 24) {
   if (reason === 'revoked') {
     return { title: 'Signed out from another browser', body: 'This browser was signed out from another one, with Sign out other browsers, a password change or Sign out all devices. Sign in again to continue.' };
   }
+  const lasts = hours >= 24 && hours % 24 === 0 ? (hours === 24 ? '1 day' : hours === 168 ? '7 days' : hours === 720 ? '30 days' : hours === 2160 ? '90 days' : hours === 8760 ? '1 year' : `${hours / 24} days`) : `${hours} hours`;
   return reason === 'expired'
-    ? { title: `Signed out after ${hours} hours`, body: `Sessions on this dashboard last ${hours} hours. Your trays stayed connected.` }
+    ? { title: `Signed out after ${lasts}`, body: `Sessions on this dashboard last ${lasts}. Your trays stayed connected.` }
     : { title: 'Your session ended', body: 'The dashboard signed this browser out, for example after it restarted. Your trays stayed connected.' };
 }
 

@@ -568,7 +568,7 @@ test('Muse Sign in opens a device-code job on the Mac once the server offers it'
   assert.equal(h.ctl.state.flows.muse.job.id, 'job_muse1');
 });
 
-test('the Dashboard sign-in block: other browsers, network trust, devices and sign out all devices', async () => {
+test('the Sign-in & connection block: other browsers, network trust, devices and sign out all devices', async () => {
   const session = { username: 'owner', otherBrowsers: 2, managedBy: 'config', secureTransport: true };
   const devices = [{ id: 'dev_0123456789abcdef', name: 'Mac tray', platform: 'mac' }, { id: 'dev_fedcba9876543210', name: 'Windows tray', platform: 'windows' }];
   const network = { trustLocalNetwork: true, trustedNetworks: [], connection: { peer: '192.168.50.20', trusted: true }, canTurnOn: false };
@@ -694,4 +694,39 @@ test('the actions that send a change are named, so a pending account switch can 
   await quiet.ctl.handle('line-cancel', 'codex:one');
   await quiet.ctl.handle('flow-cancel', 'codex');
   assert.deepEqual(quiet.sent, []);
+});
+
+test('the session lifetime saves on the server and the page follows it without a reload', async () => {
+  const session = { username: 'owner', sessionTimeoutHours: 720, sessionLifetimeDays: 30, otherBrowsers: 0 };
+  const h = harness({
+    routes: {
+      'GET /api/auth/session': { ...session },
+      'GET /api/auth/devices': { devices: [] },
+      'GET /api/auth/network': { trustLocalNetwork: false, connection: {} },
+      'PUT /api/auth/session-lifetime': body => ({ days: body.days, hours: body.days * 24, options: [1, 7, 30, 90, 365] }),
+    },
+  });
+  await h.ctl.loadSignin();
+  await h.ctl.handle('session-lifetime', '7');
+  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/auth/session-lifetime', body: { days: 7 } });
+  assert.equal(h.ctl.state.signin.session.sessionLifetimeDays, 7);
+  assert.equal(h.ctl.state.signin.session.sessionTimeoutHours, 168);
+  assert.equal(last(h.toasts).title, 'Sessions now last 7 days');
+  // picking the saved value again sends nothing
+  const count = h.sent.length;
+  await h.ctl.handle('session-lifetime', '7');
+  assert.equal(h.sent.length, count);
+  // a refused save says so and keeps the old value
+  const bad = harness({
+    routes: {
+      'GET /api/auth/session': { ...session },
+      'GET /api/auth/devices': { devices: [] },
+      'GET /api/auth/network': { trustLocalNetwork: false, connection: {} },
+      'PUT /api/auth/session-lifetime': refusal(400, 'invalid_body'),
+    },
+  });
+  await bad.ctl.loadSignin();
+  await bad.ctl.handle('session-lifetime', '90');
+  assert.equal(bad.ctl.state.signin.session.sessionLifetimeDays, 30);
+  assert.equal(last(bad.toasts).kind, 'err');
 });

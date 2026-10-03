@@ -5,6 +5,13 @@ import {
   getDashboardAuthConfig,
   loadOrCreateUnifiedConfig,
 } from '../../config/config-loader-facade';
+import {
+  DEFAULT_SESSION_LIFETIME_DAYS,
+  effectiveSessionLifetimeDays as effectiveLifetimeDays,
+  isSessionLifetimeDays,
+  SESSION_LIFETIME_DAYS,
+  type SessionLifetimeDays,
+} from '../../config/schemas/auth';
 import { createLogger } from '../../services/logging';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { isSecureTransport } from '../middleware/secure-transport';
@@ -88,6 +95,26 @@ export interface DashboardAuthState {
   username: string;
   passwordHash: string;
   sessionTimeoutHours: number;
+  sessionLifetimeDays: number;
+}
+
+export { SESSION_LIFETIME_DAYS, DEFAULT_SESSION_LIFETIME_DAYS, isSessionLifetimeDays };
+export type { SessionLifetimeDays };
+
+/** The effective session lifetime in days (schema rule, defaulting to the live config). */
+export function effectiveSessionLifetimeDays(auth?: {
+  session_lifetime_days?: number;
+  session_timeout_hours?: number;
+}): SessionLifetimeDays {
+  return effectiveLifetimeDays(auth ?? getDashboardAuthConfig());
+}
+
+/** The effective session lifetime in hours (the lifetime in days, times 24). */
+export function effectiveSessionTimeoutHours(auth?: {
+  session_lifetime_days?: number;
+  session_timeout_hours?: number;
+}): number {
+  return effectiveSessionLifetimeDays(auth) * 24;
 }
 
 export function dashboardAuthState(): DashboardAuthState {
@@ -98,7 +125,8 @@ export function dashboardAuthState(): DashboardAuthState {
     managedBy: credentialSource(),
     username: config.username,
     passwordHash: config.password_hash,
-    sessionTimeoutHours: config.session_timeout_hours ?? 24,
+    sessionTimeoutHours: effectiveSessionTimeoutHours(config),
+    sessionLifetimeDays: effectiveSessionLifetimeDays(config),
   };
 }
 
@@ -264,17 +292,30 @@ export interface SignedInSession {
   expiresAt: string | null;
 }
 
+export interface SignedInSessionOptions {
+  /**
+   * False gives a browser-session cookie (no expiry; it dies with the
+   * browser) instead of the configured lifetime. Default true.
+   */
+  remember?: boolean;
+}
+
 /**
  * Regenerate the session (a new id, so no fixation), sign it in for `username`
  * in the current epoch, and save it before answering so the response carries
  * the new cookie. With `credentialHash`, the stored password hash must still
  * be that one once the epoch is read; otherwise nothing changes and the
  * answer is null (a password change finished while the password was checked).
+ *
+ * The cookie's lifetime is set here from the current setting, so a changed
+ * lifetime applies to the next sign-in without a restart. Without "remember",
+ * the cookie carries no expiry and dies with the browser.
  */
 async function beginSignedInSession(
   req: Request,
   username: string,
-  credentialHash: string | null
+  credentialHash: string | null,
+  options: SignedInSessionOptions = {}
 ): Promise<SignedInSession | null> {
   const epoch = await ensureSessionEpoch();
   if (credentialHash !== null && !passwordHashUnchanged(credentialHash)) return null;
@@ -284,28 +325,38 @@ async function beginSignedInSession(
   req.session.authenticated = true;
   req.session.username = username;
   req.session.epoch = epoch;
+  if (req.session.cookie) {
+    if (options.remember === false) {
+      // No expiry serializes with no Expires attribute: a browser-session cookie.
+      req.session.cookie.expires = null;
+    } else {
+      req.session.cookie.maxAge = effectiveSessionTimeoutHours() * 60 * 60 * 1000;
+    }
+  }
   await sessionCall((done) => req.session.save(done));
   const expires = req.session.cookie?.expires ?? null;
-  if (req.sessionID) noteSession(req.sessionID, epoch, expires);
+  if (req.sessionID) noteSession(req.sessionID, epoch, expires instanceof Date ? expires : null);
   // Open /ws connections of browsers this epoch no longer includes close now.
   closeStaleSessionClients((value) => isSessionEpochCurrent(value));
-  return { expiresAt: expires ? expires.toISOString() : null };
+  return { expiresAt: expires instanceof Date ? expires.toISOString() : null };
 }
 
 export async function startSignedInSession(
   req: Request,
-  username: string
+  username: string,
+  options: SignedInSessionOptions = {}
 ): Promise<SignedInSession> {
-  return (await beginSignedInSession(req, username, null)) as SignedInSession;
+  return (await beginSignedInSession(req, username, null, options)) as SignedInSession;
 }
 
 /** A sign-in with a password: null when that password was replaced before the session started. */
 export function startSessionForPassword(
   req: Request,
   username: string,
-  checkedHash: string
+  checkedHash: string,
+  options: SignedInSessionOptions = {}
 ): Promise<SignedInSession | null> {
-  return beginSignedInSession(req, username, checkedHash);
+  return beginSignedInSession(req, username, checkedHash, options);
 }
 
 /** The current session's expiry, as ISO time. */

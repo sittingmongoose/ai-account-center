@@ -29,6 +29,7 @@ import {
   audit,
   BCRYPT_HASH_PATTERN,
   credentialSource,
+  dashboardAuthState,
   isLoginField,
   MAX_PASSWORD_LENGTH,
   MAX_USERNAME_LENGTH,
@@ -41,6 +42,7 @@ import {
 import { registerAuthSessionRoutes } from './auth-session-routes';
 import { registerAuthDeviceRoutes } from './auth-device-routes';
 import { registerAuthNetworkRoutes } from './auth-network-routes';
+import { registerAuthLifetimeRoutes } from './auth-lifetime-routes';
 
 const router = createApiRouter();
 router.use(noStore);
@@ -120,7 +122,7 @@ async function login(req: Request, res: Response): Promise<void> {
   const body: unknown = req.body;
   const fields: Record<string, unknown> =
     body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-  const { username, password } = fields;
+  const { username, password, rememberMe } = fields;
 
   if (
     !isLoginField(username, MAX_USERNAME_LENGTH) ||
@@ -129,6 +131,13 @@ async function login(req: Request, res: Response): Promise<void> {
     res.status(400).json({ error: 'Username and password required' });
     return;
   }
+  // "Remember me" (default on): off gives a browser-session cookie that dies
+  // with the browser; on uses the configured session lifetime.
+  if (rememberMe !== undefined && typeof rememberMe !== 'boolean') {
+    res.status(400).json({ error: 'Username and password required' });
+    return;
+  }
+  const remember = rememberMe !== false;
 
   const authConfig = getDashboardAuthConfig();
 
@@ -164,7 +173,7 @@ async function login(req: Request, res: Response): Promise<void> {
   // current epoch, unless the password was changed while it was being checked.
   let session: Awaited<ReturnType<typeof startSessionForPassword>>;
   try {
-    session = await startSessionForPassword(req, username, checkedHash);
+    session = await startSessionForPassword(req, username, checkedHash, { remember });
   } catch {
     markCredentialsAccepted(res);
     res.status(500).json({ error: 'Session error' });
@@ -229,7 +238,8 @@ router.get('/setup', (req: Request, res: Response) => {
   res.json({
     enabled: authConfig.enabled,
     configured,
-    sessionTimeoutHours: authConfig.session_timeout_hours ?? 24,
+    sessionTimeoutHours: dashboardAuthState().sessionTimeoutHours,
+    sessionLifetimeDays: dashboardAuthState().sessionLifetimeDays,
     // CONTRACT-auth-devices sections 2a and 4 (additive); the code itself is never returned.
     setupCodeRequired: setupCodeRequired(req, configured),
     managedBy: credentialSource(),
@@ -243,5 +253,6 @@ router.get('/setup', (req: Request, res: Response) => {
 registerAuthSessionRoutes(router);
 registerAuthDeviceRoutes(router);
 registerAuthNetworkRoutes(router);
+registerAuthLifetimeRoutes(router);
 
 export default router;

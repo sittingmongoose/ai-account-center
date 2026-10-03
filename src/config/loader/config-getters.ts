@@ -311,6 +311,7 @@ export function getDashboardAuthConfig(): DashboardAuthConfig {
     username: envUsername ?? config.dashboard_auth?.username ?? '',
     password_hash: envPasswordHash ?? config.dashboard_auth?.password_hash ?? '',
     session_timeout_hours: config.dashboard_auth?.session_timeout_hours ?? 24,
+    session_lifetime_days: config.dashboard_auth?.session_lifetime_days ?? 30,
   };
 }
 

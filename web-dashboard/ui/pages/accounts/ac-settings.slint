@@ -1,6 +1,6 @@
 // The settings column of Accounts & Settings (concept: settingsHTML in app-accounts.js and the Dashboard sign-in
-// block of app-auth.js): Dashboard sign-in, Settings (appearance, usage refresh, auto-switch policies), Update
-// apps results, Connection (read only) and About with Slint's AboutSlint attribution.
+// block of app-auth.js): Sign-in & connection, Settings (appearance, usage refresh, auto-switch policies), Update
+// apps results and About with Slint's AboutSlint attribution.
 import { AboutSlint } from "std-widgets.slint";
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { RunView, FactView } from "../../models.slint";
@@ -483,13 +483,14 @@ component DeviceRow inherits VerticalLayout {
     }
 }
 
-// The Dashboard sign-in block (app-auth.js renderSettingsSection), bound to the server: who is signed in, this
-// connection and the trusted local network, this session and the other browsers, the password change, the
-// paired trays with Revoke and Sign out all devices, and Sign out.
+// The Sign-in & connection block (app-auth.js renderSettingsSection), bound to the server: who is signed in,
+// this connection and the trusted local network, the session lifetime, this session and the other browsers,
+// the read-only connection facts, the password change, the paired trays with Revoke and Sign out all devices,
+// and Sign out.
 component SigninGroup inherits SetGroup {
     in property <bool> busy;
     callback act(string, string);
-    title: "Dashboard sign-in";
+    title: "Sign-in & connection";
 
     // the change-password form's fields stay here until they are submitted
     property <string> pw-cur;
@@ -565,6 +566,22 @@ component SigninGroup inherits SetGroup {
         }
     }
     Hairline { }
+    SetItem {
+        label: "Session lifetime";
+        aside: AcData.signin.lifetime-busy ? "Saving" : "";
+        TipArea {
+            owner: "lifetime";
+            tip: AcData.signin.lifetime-tip;
+            min-height: lifetime-seg.preferred-height;
+            lifetime-seg := Segmented {
+                items: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }, { value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
+                value: AcData.signin.lifetime-value;
+                enabled: AcData.signin.lifetime-enabled && !root.busy;
+                changed-value(v) => { root.act("session-lifetime", v); }
+            }
+        }
+    }
+    Hairline { }
     // this connection and the trusted local network (dashboard_network.trust_local_network)
     SetItem {
         HorizontalLayout {
@@ -589,6 +606,12 @@ component SigninGroup inherits SetGroup {
         }
         Text { text: AcData.signin.network.line; font-family: Type.tab; font-size: 13px; color: Theme.ink; wrap: word-wrap; }
         IconNote { icon: AcData.signin.network.on ? "lock-open" : "lock"; text: AcData.signin.network.note; }
+    }
+    Hairline { }
+    // the read-only connection facts (the former Connection section, merged here)
+    SetItem {
+        label: "Connection";
+        Facts { facts: AcData.connection; label-w: 104px; }
     }
     Hairline { }
     SetItem {
@@ -812,8 +835,8 @@ component SettingsGroup inherits SetGroup {
             enabled: AcData.refresh-known && !root.busy;
             committed(s) => { root.act("refresh-interval", s + "s"); }
         }
-        Text {
-            text: AcData.refresh-known ? "Any value from 30 seconds to 60 minutes; it snaps to the marks." : "The saved interval could not be read, so it cannot be changed here.";
+        if !AcData.refresh-known: Text {
+            text: "The saved interval could not be read, so it cannot be changed here.";
             font-size: Type.small;
             color: Theme.ink-3;
             wrap: word-wrap;
@@ -822,7 +845,6 @@ component SettingsGroup inherits SetGroup {
     Hairline { }
     SetItem {
         label: "Auto-switch policies";
-        aside: "Both in % used";
         VerticalLayout {
             spacing: 10px;
             for p in AcData.policies: PolicyRow {
@@ -880,15 +902,6 @@ component UpdateGroup inherits SetGroup {
     }
 }
 
-component ConnectionGroup inherits SetGroup {
-    title: "Connection";
-    SetItem {
-        first: true;
-        Facts { facts: AcData.connection; label-w: 104px; }
-        Text { text: "Read only."; font-size: Type.small; color: Theme.ink-3; }
-    }
-}
-
 component AboutGroup inherits SetGroup {
     title: "About";
     SetItem {
@@ -932,7 +945,6 @@ export component SettingsColumn inherits VerticalLayout {
         UpdateGroup {
             act(k, v) => { root.act(k, v); }
         }
-        ConnectionGroup { }
         AboutGroup { }
     }
     if root.two-col: HorizontalLayout {
@@ -948,7 +960,6 @@ export component SettingsColumn inherits VerticalLayout {
                 theme-picked(v) => { root.theme-picked(v); }
                 act(k, v) => { root.act(k, v); }
             }
-            ConnectionGroup { }
         }
         VerticalLayout {
             spacing: 16px;

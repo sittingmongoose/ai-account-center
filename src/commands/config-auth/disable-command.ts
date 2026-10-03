@@ -55,11 +55,13 @@ export async function handleDisable(): Promise<void> {
 
   // Disable auth
   mutateConfig((fullConfig) => {
+    const lifetime = fullConfig.dashboard_auth?.session_lifetime_days;
     fullConfig.dashboard_auth = {
       enabled: false,
       username: fullConfig.dashboard_auth?.username ?? '',
       password_hash: fullConfig.dashboard_auth?.password_hash ?? '',
       session_timeout_hours: fullConfig.dashboard_auth?.session_timeout_hours ?? 24,
+      ...(typeof lifetime === 'number' ? { session_lifetime_days: lifetime } : {}),
     };
   });
 

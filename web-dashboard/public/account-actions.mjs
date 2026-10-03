@@ -51,6 +51,7 @@ export const requests = Object.freeze({
   devices: () => ({ method: 'GET', path: '/api/auth/devices' }),
   network: () => ({ method: 'GET', path: '/api/auth/network' }),
   setNetwork: on => ({ method: 'PUT', path: '/api/auth/network', body: { trustLocalNetwork: on === true } }),
+  sessionLifetime: days => ({ method: 'PUT', path: '/api/auth/session-lifetime', body: { days } }),
   password: (currentPassword, newPassword, signOutOtherBrowsers) => ({ method: 'POST', path: '/api/auth/password', body: { currentPassword, newPassword, signOutOtherBrowsers: signOutOtherBrowsers !== false } }),
   revokeOthers: () => ({ method: 'POST', path: '/api/auth/sessions/revoke-others', body: {} }),
   revokeDevice: id => ({ method: 'DELETE', path: `/api/auth/devices/${enc(id)}`, body: {} }),
@@ -108,7 +109,7 @@ export function passwordProblem({ current = '', next = '', confirm = '' } = {}) 
 export function unavailableText(reason, provider) {
   switch (reason) {
     case 'not_implemented': return { coming: true, text: `${label(provider)} sign-in from the dashboard is not on this server yet.` };
-    case 'secure_transport_required': return { coming: false, text: 'Needs a trusted connection. Turn on local network trust on the dashboard computer (Settings, Dashboard sign-in), or use the dashboard there.' };
+    case 'secure_transport_required': return { coming: false, text: 'Needs a trusted connection. Turn on local network trust on the dashboard computer (Settings, Sign-in & connection), or use the dashboard there.' };
     case 'tool_missing': return { coming: false, text: `The ${label(provider)} command-line tool is not installed on the dashboard computer.` };
     // Antigravity signs in from a terminal on Ubuntu (the contract's terminal fallback): say the command
     case 'preflight_failed': return provider === 'antigravity'
@@ -184,8 +185,8 @@ export function errorText(error, ctx = {}) {
       : t('Paused after too many tries', `Try again in ${waitText(payload?.retryAfterSeconds)}.`);
     case 'invalid_hash': return t('The saved password cannot be checked', 'Run ai-account-center dashboard auth setup on the dashboard computer to set it again.');
     case 'secure_transport_required': return p
-      ? t('Needs a trusted connection', `Keys and sign-in codes are only sent on a trusted connection. Turn on local network trust on the dashboard computer (Settings, Dashboard sign-in), or use the dashboard there.${payload?.fallback?.command ? ` Or run on Ubuntu: ${payload.fallback.command}` : ''}`)
-      : t('Needs a trusted connection', 'Turn on local network trust on the dashboard computer (Settings, Dashboard sign-in), or do this on the dashboard computer itself.');
+      ? t('Needs a trusted connection', `Keys and sign-in codes are only sent on a trusted connection. Turn on local network trust on the dashboard computer (Settings, Sign-in & connection), or use the dashboard there.${payload?.fallback?.command ? ` Or run on Ubuntu: ${payload.fallback.command}` : ''}`)
+      : t('Needs a trusted connection', 'Turn on local network trust on the dashboard computer (Settings, Sign-in & connection), or do this on the dashboard computer itself.');
     case 'loopback_required': return t('Turn it on at the dashboard computer', 'Local network trust can only be turned on from the dashboard computer itself, or in config.yaml.');
     case 'write_failed': return t('Not saved', 'The change could not be saved safely. Nothing was changed. Try again.');
     case 'unknown_device': return t('Already signed out', 'That tray was already signed out.');

@@ -149,6 +149,9 @@ function sourceLines(provider, account, reg) {
   if (credential?.kind === 'aac-key') {
     return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || account.platform)}`];
   }
+  if (def.kind === 'apikey' && credential?.kind && credential.kind !== 'aac-key') {
+    return ['Signed in through the app', platformLabel(account.platform)];
+  }
   return [def.src, platformLabel(account.platform)];
 }
 
@@ -225,7 +228,7 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
       ];
     }
     case 'cli': {
-      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in', icon: 'login', probe: `signin-again:${account.id}` };
+      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
       const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
         : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
           : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command.' });
@@ -239,10 +242,18 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
     }
     case 'apikey': {
       if (isConsole(account)) {
-        const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };
+        const fields = { act: 'signin', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin:${account.id}` };
         const live = reg ? reg.actions?.signInAgain === true : false;
         return [live ? action({ ...fields, enabled: true, tip: 'Open the OpenCode console in the browser with the extension and sign in there.' })
           : action({ ...fields, enabled: false, tip: reg ? 'Signing in to the console wallet is not available here.' : 'Checking what this account can do' }),
+        removeControl(provider, account, reg, entry)];
+      }
+      // A key the provider's own app or config holds (never AAC-stored): no key action at all, only Re-check.
+      if (reg?.credential?.kind && reg.credential.kind !== 'aac-key') {
+        const check = { act: 'recheck', value: account.id, label: 'Re-check', icon: 'refresh', probe: `recheck:${account.id}` };
+        const live = LIVE.recheck && reg.actions?.recheck !== false;
+        return [live ? action({ ...check, enabled: true, tip: 'Read the session again now.' })
+          : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
         removeControl(provider, account, reg, entry)];
       }
       const g = gate(entry, 'replaceKey', provider);
@@ -250,13 +261,12 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
       let replace;
       if (!g.live) replace = gated(fields, g);
       else if (!reg) replace = action({ ...fields, enabled: false, tip: 'Checking what this account can do' });
-      else if (reg.credential?.kind && reg.credential.kind !== 'aac-key') replace = action({ ...fields, enabled: false, tip: `This account reads a key another app saved on ${platformLabel(account.platform)}. Add a key here to manage it from the dashboard.` });
       else if (reg.actions?.replaceKey !== true) replace = action({ ...fields, enabled: false, tip: 'Replacing this key is not possible now.' });
       else replace = action({ ...fields, enabled: true, tip: 'Store a new key; it is checked first and the old one stays if it is refused.' });
       return [replace, removeControl(provider, account, reg, entry)];
     }
     case 'browser': {
-      const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };
+      const fields = { act: 'signin', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin:${account.id}` };
       const g = gate(entry, 'signInAgain', provider);
       const signin = g.live && (!reg || reg.actions?.signInAgain !== false)
         ? action({ ...fields, enabled: !!reg, tip: 'Open the console in the browser with the extension and sign in there; then re-check.' })
@@ -710,7 +720,7 @@ export function transportNote(transport, check = null) {
   if (transport === 'loopback') return 'You are on the dashboard computer itself, so the password never crosses the network.';
   if (check?.connection?.trusted === true) return TRUSTED_NOTE;
   if (check?.trustedLocalNetwork === true) return 'This address is not on your trusted local network. Sign-in works, but password changes, keys and tray pairing stay off here.';
-  if (check && check.trustedLocalNetwork === false) return 'This address is plain HTTP and local network trust is off, so the password crosses your network unencrypted. Password changes, keys and tray pairing work once trust is turned on from the dashboard computer (Accounts & Settings, Dashboard sign-in).';
+  if (check && check.trustedLocalNetwork === false) return 'This address is plain HTTP and local network trust is off, so the password crosses your network unencrypted. Password changes, keys and tray pairing work once trust is turned on from the dashboard computer (Accounts & Settings, Sign-in & connection).';
   return 'This address is plain HTTP, so the password crosses your network unencrypted.';
 }
 
@@ -750,11 +760,27 @@ export function devicesView(devices, now) {
   });
 }
 
+/** "30 days", "1 year": the session lifetime in the words Settings offers. */
+export function lifetimeWord(days, hours = 0) {
+  if (days === 1) return '1 day';
+  if (days === 7) return '7 days';
+  if (days === 30) return '30 days';
+  if (days === 90) return '90 days';
+  if (days === 365) return '1 year';
+  if (Number.isInteger(hours) && hours > 0 && hours % 24 === 0) return lifetimeWord(hours / 24);
+  if (Number.isInteger(hours) && hours > 0) return `${hours} hours`;
+  return '30 days';
+}
+const LIFETIME_OPTIONS = [1, 7, 30, 90, 365];
+
 function signinFacts(ctx, now) {
   const s = ctx.signin || {};
   const session = s.session || null;
   const hours = Number.isInteger(session?.sessionTimeoutHours) && session.sessionTimeoutHours > 0 ? session.sessionTimeoutHours
     : Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
+  const days = LIFETIME_OPTIONS.includes(session?.sessionLifetimeDays) ? session.sessionLifetimeDays
+    : hours % 24 === 0 && LIFETIME_OPTIONS.includes(hours / 24) ? hours / 24 : 30;
+  const lasts = lifetimeWord(days, hours);
   const host = text(ctx.host) || 'this dashboard';
   const transport = ctx.transport || 'http';
   const ends = session && validDate(session.expiresAt) ? Date.parse(session.expiresAt)
@@ -774,9 +800,15 @@ function signinFacts(ctx, now) {
   return {
     username: text(session?.username) || text(ctx.username) || 'Not reported',
     connection: TRANSPORT_TEXT[transport](host),
-    session: ends && ends > now ? `ends in ${duration(ends - now)}` : `lasts ${hours} hours`,
-    sessionSub: ends && ends > now ? `sessions last ${hours} hours` : '',
-    sessionTip: ends && ends > now ? `This session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard last ${hours} hours from sign-in`,
+    session: ends && ends > now ? `ends in ${duration(ends - now)}` : `lasts ${lasts}`,
+    sessionSub: ends && ends > now ? `sessions last ${lasts}` : '',
+    sessionTip: ends && ends > now ? `This session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard last ${lasts} from sign-in`,
+    lifetime: {
+      value: String(days),
+      enabled: !!session && s.busy !== 'lifetime',
+      busy: s.busy === 'lifetime',
+      tip: session ? 'How long a signed-in browser stays signed in without use. Browsers already signed in keep their own session.' : 'The server did not report the session',
+    },
     othersText: others === null ? 'Not reported' : others === 0 ? 'None signed in' : `${others} signed in`,
     othersEnabled: others !== null && others > 0 && s.busy !== 'others',
     othersBusy: s.busy === 'others',
@@ -811,8 +843,8 @@ function connectionFacts(ctx) {
   return [
     { label: 'Dashboard', value: text(ctx.origin) || 'Unknown', mono: true },
     { label: 'Transport', value: transport === 'https' ? 'HTTPS' : transport === 'loopback' ? 'This computer only' : trusted ? 'Plain HTTP on your trusted local network' : 'Plain HTTP on your network' },
-    { label: 'Tray sign-in', value: 'Device tokens; each paired tray is listed under Dashboard sign-in', mono: false },
-    { label: 'Sessions', value: `${hours} hours from sign-in`, mono: false },
+    { label: 'Tray sign-in', value: 'Device tokens; each paired tray is listed below', mono: false },
+    { label: 'Sessions', value: `${lifetimeWord(0, hours)} from sign-in`, mono: false },
   ];
 }
 

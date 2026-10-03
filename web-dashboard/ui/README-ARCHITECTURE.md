@@ -252,7 +252,7 @@ policies, Update apps hosts and their lines).
 - **E2E probes** (components/probe.slint): with `?e2e` in the address, bridge.js answers `probe_tick()` with
   every probed control's window rectangle (`globalThis.__aacProbe`) and keeps the last views and toasts it handed
   Slint, so a CDP harness can click real controls and check them by pixels. Without `?e2e` nothing is reported.
-- **Settings column**: Dashboard sign-in (signed in as, connection, this session and other browsers from
+- **Settings column**: Sign-in & connection (signed in as, connection, this session and other browsers from
   `GET /api/auth/session` with Sign out other browsers; the trusted local network line and note from
   `GET /api/auth/network` with Turn off, and Turn on only on the dashboard computer (the saved
   `GET /api/auth/check` follows the change, and is read again at every sign-out and ended session, so the

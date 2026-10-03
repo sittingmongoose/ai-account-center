@@ -37,7 +37,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
   'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
-  'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all',
+  'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime',
 ]));
 
 export function createAccountsController(deps) {
@@ -578,6 +578,21 @@ export function createAccountsController(deps) {
     } catch (error) { fail(error); }
     finally { s.busy = ''; await loadSignin(); }
   }
+  const LIFETIME_DAYS = [1, 7, 30, 90, 365];
+  const LIFETIME_WORD = { 1: '1 day', 7: '7 days', 30: '30 days', 90: '90 days', 365: '1 year' };
+  async function setLifetime(value) {
+    const days = Number(value);
+    if (!LIFETIME_DAYS.includes(days)) return;
+    const s = state.signin;
+    if (s.session && s.session.sessionLifetimeDays === days) return;
+    s.busy = 'lifetime'; changed();
+    try {
+      const { payload } = await call(requests.sessionLifetime(days));
+      if (s.session) s.session = { ...s.session, sessionTimeoutHours: payload?.hours ?? days * 24, sessionLifetimeDays: payload?.days ?? days };
+      toast('info', `Sessions now last ${LIFETIME_WORD[days]}`, 'Browsers already signed in keep their own session; the new lifetime applies from the next sign-in.');
+    } catch (error) { fail(error); }
+    finally { s.busy = ''; changed(); }
+  }
   function togglePassword() {
     const pw = state.signin.pw;
     if (pw.busy) return;
@@ -667,6 +682,7 @@ export function createAccountsController(deps) {
       case 'others-out': await signOutOthers(); return true;
       case 'network-off': await setNetwork(false); return true;
       case 'network-on': await setNetwork(true); return true;
+      case 'session-lifetime': await setLifetime(v); return true;
       case 'pw-toggle': togglePassword(); return true;
       case 'pw-typing': typingPassword(v); return true;
       case 'pw-submit': await changePassword(v); return true;

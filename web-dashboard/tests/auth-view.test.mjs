@@ -67,7 +67,10 @@ test('a session that ended is told apart from one that ran out', () => {
   assert.equal(endedReason(null, 24, now), null);
   forgetSignIn(storage);
   assert.equal(signedInAt(storage), null);
-  assert.equal(expiredBanner('expired', 24).title, 'Signed out after 24 hours');
+  assert.equal(expiredBanner('expired', 24).title, 'Signed out after 1 day');
+  assert.equal(expiredBanner('expired', 720).title, 'Signed out after 30 days');
+  assert.equal(expiredBanner('expired', 8760).title, 'Signed out after 1 year');
+  assert.equal(expiredBanner('expired', 36).title, 'Signed out after 36 hours');
   assert.equal(expiredBanner('ended', 24).title, 'Your session ended');
   // storage that throws (private windows) is not an error
   const broken = { setItem() { throw new Error('no'); }, getItem() { throw new Error('no'); }, removeItem() { throw new Error('no'); } };

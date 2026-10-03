@@ -552,6 +552,8 @@ test('Antigravity: one account shows no Activate slot, and the policy waits for 
     r.actions.map((a) => a.act || a.kind),
     ['empty', 'signin-again', 'remove']
   );
+  // an existing account signs in again; only the first sign-in says "Sign in"
+  assert.equal(r.actions[1].label, 'Sign in again');
   assert.equal(provider(vm, 'antigravity').ag, true);
   assert.equal(vm.ag.live, false);
   assert.equal(vm.ag.known, true);
@@ -678,7 +680,7 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
     }),
     reg('opencode-go:usage', 'opencode-go', {
       credential: { kind: 'discover' },
-      actions: { replaceKey: false, signInAgain: false },
+      actions: { replaceKey: false, signInAgain: false, recheck: true },
     }),
     reg('plan-opencode-go-console-1', 'opencode-go', {
       actions: { signInAgain: true, remove: true },
@@ -710,27 +712,33 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       ['remove', true],
     ]
   );
-  // a key another app saved cannot be replaced from here, and says why
+  // a key the provider's own app holds shows no key action at all: Re-check with Remove
   const found = row(vm, 'opencode-go:usage');
-  assert.equal(found.actions[0].enabled, false);
-  assert.match(found.actions[0].tip, /another app saved/);
+  assert.equal(found.src, 'Signed in through the app');
+  assert.deepEqual(
+    found.actions.map((a) => [a.act, a.label, a.enabled]),
+    [
+      ['recheck', 'Re-check', true],
+      ['remove', 'Remove', true],
+    ]
+  );
   // the console wallet signs in through the browser extension; its Remove deletes the stored source
   const wallet = row(vm, 'plan-opencode-go-console-1');
   assert.deepEqual(
-    wallet.actions.map((a) => [a.act, a.enabled, a.coming]),
+    wallet.actions.map((a) => [a.act, a.label, a.enabled, a.coming]),
     [
-      ['signin', true, false],
-      ['remove', true, false],
+      ['signin', 'Sign in again', true, false],
+      ['remove', 'Remove', true, false],
     ]
   );
   assert.equal(wallet.src, 'Console session in a browser');
   // Qwen is a browser session, never an API key (CONTRACT-registry-lifecycle 7)
   assert.equal(provider(vm, 'qwen').kindLabel, 'Console session by browser extension');
   assert.deepEqual(
-    row(vm, 'qwen:usage').actions.map((a) => [a.act, a.enabled]),
+    row(vm, 'qwen:usage').actions.map((a) => [a.act, a.label, a.enabled]),
     [
-      ['signin', true],
-      ['remove', true],
+      ['signin', 'Sign in again', true],
+      ['remove', 'Remove', true],
     ]
   );
   assert.deepEqual(
@@ -1237,7 +1245,7 @@ test('connection facts and the sign-in block say only what the browser and serve
   const none = accountsViewModel(data([account()]), { now });
   assert.equal(none.signin.othersText, 'Not reported');
   assert.equal(none.signin.passwordCan, false);
-  assert.equal(none.signin.session, 'lasts 24 hours');
+  assert.equal(none.signin.session, 'lasts 1 day');
 });
 
 test('the trusted local network line: this computer, trusted, not trusted, and Turn on only where it is allowed', () => {
@@ -1731,4 +1739,57 @@ test('each account row draws its own Show on dashboard and Show in tray, indepen
     [row(unread, 'codex:both').dashEnabled, row(unread, 'codex:both').trayAcctEnabled],
     [false, false]
   );
+});
+
+test('the session lifetime reads in days and offers the five choices', () => {
+  const signin = { session: { username: 'owner', sessionTimeoutHours: 720, sessionLifetimeDays: 30 }, busy: '' };
+  const vm = accountsViewModel(data([account()]), { now, transport: 'http', sessionHours: 720, signin });
+  assert.equal(vm.signin.session, 'lasts 30 days');
+  assert.equal(vm.signin.sessionSub, '');
+  assert.deepEqual(vm.signin.lifetime, {
+    value: '30',
+    enabled: true,
+    busy: false,
+    tip: 'How long a signed-in browser stays signed in without use. Browsers already signed in keep their own session.',
+  });
+  const withExpiry = accountsViewModel(data([account()]), {
+    now,
+    transport: 'http',
+    sessionHours: 8760,
+    signin: { session: { ...signin.session, sessionTimeoutHours: 8760, sessionLifetimeDays: 365, expiresAt: at(60) }, busy: '' },
+  });
+  assert.equal(withExpiry.signin.session, 'ends in 1h 0m');
+  assert.equal(withExpiry.signin.sessionSub, 'sessions last 1 year');
+  assert.equal(withExpiry.signin.lifetime.value, '365');
+  // without a session answer the control waits
+  const unknown = accountsViewModel(data([account()]), { now, transport: 'http', signin: { session: null, busy: '' } });
+  assert.equal(unknown.signin.lifetime.enabled, false);
+  assert.equal(unknown.signin.connection, 'Plain HTTP to this dashboard');
+});
+
+test('a Kimi key from the app config shows no key action, only Re-check', () => {
+  const accounts = [
+    account({ id: 'kimi-code:acct:aa01bb02', provider: 'kimi-code', email: null, label: 'Kimi', capabilities: {} }),
+  ];
+  const r = registry([
+    reg('kimi-code:acct:aa01bb02', 'kimi-code', {
+      credential: { kind: 'config-home', homeId: 'aa01bb02' },
+      actions: { replaceKey: false, signInAgain: false, recheck: true, remove: true },
+    }),
+  ]);
+  const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
+  const kimi = row(vm, 'kimi-code:acct:aa01bb02');
+  assert.equal(kimi.src, 'Signed in through the app');
+  assert.deepEqual(
+    kimi.actions.map((a) => [a.act, a.label, a.enabled]),
+    [
+      ['recheck', 'Re-check', true],
+      ['remove', 'Remove', true],
+    ]
+  );
+  // no disabled Replace key anywhere on the row
+  assert.ok(!kimi.actions.some((a) => a.act === 'replace-key'));
+  // the footer still says "Sign in" for the first sign-in (Qwen has no account here)
+  const qwenFoot = provider(vm, 'qwen').foot;
+  assert.equal(qwenFoot[0].label, 'Sign in');
 });
