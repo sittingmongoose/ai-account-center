@@ -58,7 +58,8 @@ describe('dashboard authentication configuration persistence', () => {
 
       const finalReload = loadUnifiedConfig();
       expect(finalReload?.preferences.theme).toBe('dark');
-      expect(finalReload?.dashboard_auth).toEqual(disabledAuth);
+      // The save fills the derived lifetime: legacy 7 hours map to 1 day.
+      expect(finalReload?.dashboard_auth).toEqual({ ...disabledAuth, session_lifetime_days: 1 });
     });
   });
 
