@@ -94,7 +94,8 @@ test('unavailable local activity shows unavailable blocks, not zeros', () => {
 
 test('malformed, unknown-provider and duplicate hourly rows are never counted', () => {
   const p = payload();
-  p.activity.byHour = [...hours, hours[0], { ...hours[1], provider: 'qwen' }, { ...hours[1], hour: '2026-09-30T11:30:00Z' }, { ...hours[1], hour: '2026-02-30T11:00:00Z' }, { ...hours[1], inputTokens: -1 }];
+  // cliproxy is no provider the response or the dashboard knows; 'Bad id' is malformed
+  p.activity.byHour = [...hours, hours[0], { ...hours[1], provider: 'cliproxy' }, { ...hours[1], provider: 'Bad id' }, { ...hours[1], hour: '2026-09-30T11:30:00Z' }, { ...hours[1], hour: '2026-02-30T11:00:00Z' }, { ...hours[1], inputTokens: -1 }];
   assert.equal(activityData(p, now).hours.length, hours.length);
   const view = usageView(p, state(), { now });
   const all = totals(hours);

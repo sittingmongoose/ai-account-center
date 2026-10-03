@@ -62,8 +62,9 @@ let currentPage = pageFromLocation();
 const analyticsSelection = { range: '7d', provider: 'all', account: 'all', metricKey: '', activityInterval: 'Daily' };
 // The Analytics page state (version 3). Every number and label is computed in analytics-*.mjs from the response.
 const analyticsPage = {
-  range: '7d', from: null, to: null, prov: 'all', split: false, cache: false, donut: 'tokens', heat: 'cost',
-  open: new Set(), compare: new Set(), collapsed: new Set(),
+  range: '7d', from: null, to: null, prov: 'all', split: false, cache: false, donut: 'tokens', heat: 'cost', cbmSort: 'cost',
+  // donutOpen: the donut legend groups that are open (_other: the models under 1%; _undrawn: by cost, no arc)
+  open: new Set(), compare: new Set(), collapsed: new Set(), donutOpen: new Set(),
   // chart boxes reported by the Slint layout (analytics-layout): the charts are laid out in these pixels
   sizes: { trend: null, daily: null, heat: null, focus: null },
 };
@@ -396,13 +397,16 @@ async function analyticsAction(action, value) {
     analyticsPage.range = 'custom'; analyticsPage.from = first; analyticsPage.to = addDays(last, 1);
     await changeAnalyticsRange(); return;
   }
-  if (action === 'analytics-provider' && ['all', 'claude', 'codex'].includes(value)) {
+  // the picker offers All and the providers that served usage (dashboard ids, or "other")
+  if (action === 'analytics-provider' && (value === 'all' || /^[a-z][a-z0-9-]{0,39}$/.test(value))) {
     if (analyticsPage.prov === value) return;
     analyticsPage.prov = value; renderAnalytics('morph'); return;
   }
   if (action === 'analytics-split') { analyticsPage.split = value === 'true'; renderAnalytics('morph'); return; }
   if (action === 'analytics-cache') { analyticsPage.cache = value === 'true'; renderAnalytics('morph'); return; }
   if (action === 'analytics-donut') { if (['tokens', 'cost'].includes(value)) { analyticsPage.donut = value; renderAnalytics(); } return; }
+  if (action === 'analytics-cbm-sort') { if (['cost', 'tokens'].includes(value)) { analyticsPage.cbmSort = value; renderAnalytics(); } return; }
+  if (action === 'analytics-donut-open') { if (['_other', '_undrawn'].includes(value)) { toggleIn(analyticsPage.donutOpen, value); renderAnalytics(); } return; }
   if (action === 'analytics-heat') { if (['cost', 'tokens'].includes(value)) { analyticsPage.heat = value; renderAnalytics(); } return; }
   if (action === 'analytics-focus' || action === 'analytics-compare') {
     if (!analyticsPayload?.accounts?.some(account => account?.id === value) && !data?.accounts?.some(account => account?.id === value)) return;

@@ -28,6 +28,8 @@ export component AxSessionsCard inherits AxCard {
     stop := Timer { interval: 3100ms; running: false; triggered => { self.running = false; root.shimmer = false; } }
     AxCardHead { title: "Session stats"; sub: AxData.sessions.sub; note: AxData.sessions.note; }
     VerticalLayout {
+        // a card stretched by a taller neighbour (an open donut legend) keeps its content at the top
+        alignment: start;
         padding-left: root.pad16 ? 16px : 20px;
         padding-right: self.padding-left;
         padding-top: 2px;

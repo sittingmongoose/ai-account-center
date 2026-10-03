@@ -308,7 +308,7 @@ export function analyticsSlintModel(view, page = null) {
   const { range, ...rest } = usage;
   return {
     ...base,
-    state: { range: state.range, prov: state.prov, split: !!state.split, cache: !!state.cache, donut: state.donut, heat: state.heat },
+    state: { range: state.range, prov: state.prov, split: !!state.split, cache: !!state.cache, donut: state.donut, heat: state.heat, cbmSort: state.cbmSort === 'tokens' ? 'tokens' : 'cost' },
     usage: { ...rest, trend: { ...trend, ...(paths ? { paths } : {}) } },
     quota,
     agenda,
