@@ -172,8 +172,8 @@ const validProvider = p => typeof p === 'string' && /^[a-z][a-z0-9-]{0,39}$/.tes
 const providerRank = p => { const i = PROVIDER_ORDER.indexOf(p); return i < 0 ? PROVIDER_ORDER.length - 1 : i; };
 /** Dashboard order; a provider the table does not list sorts before "other", by id. */
 export const byProviderOrder = (a, b) => providerRank(a) - providerRank(b) || (a === 'other') - (b === 'other') || a.localeCompare(b);
-/** Claude and Codex keep their whole estimate, fallback rate included, as before the other providers were read. */
-const keepsEstimate = p => p === 'claude' || p === 'codex';
+/** Claude and Codex get their own series in the charts; every other provider shares the neutral third one. */
+const ownSeries = p => p === 'claude' || p === 'codex';
 /** A provider mark exists for every dashboard provider; "other" has none. */
 const markOf = p => p === 'other' ? '' : p;
 /** The tools whose logs the server reads. Their names say where a model's usage came from, never a division. */
@@ -190,21 +190,18 @@ export const NOT_LOGGED = 'Not logged';
  * The part of a row's estimate that is not logged: tokens with no logged cost and no listed rate, which the
  * server prices only at its unknown-model fallback (fallbackCostUsd). A response from before that field counts
  * a row with an unknown split and no listed rate as wholly not logged, so a guess is never shown as a cost.
- * Claude and Codex rows (`provider`) keep their estimate as before; every other provider's reads as not logged.
+ * This holds for every provider: a model with no known rate reads as not logged, whoever served it.
  */
-export function notLoggedPart(row, est, provider) {
-  if (est === null || keepsEstimate(provider)) return 0;
+export function notLoggedPart(row, est) {
+  if (est === null) return 0;
   if (finite(row?.fallbackCostUsd) && row.fallbackCostUsd >= 0) return Math.min(est, row.fallbackCostUsd);
   if (row && 'costByType' in row && row.costByType === null && (!row.rates || row.rates.source === 'fallback')) return est;
   return 0;
 }
 const RATE_FIELDS = ['inputPerMillion', 'outputPerMillion', 'cacheCreationPerMillion', 'cacheReadPerMillion'];
-/**
- * The server's published rates for a model, when they are a listed rate (the unknown-model fallback is not). For
- * Claude Code and Codex (`keepFallback`) the fallback stays the estimate's rate, as it was before other tools.
- */
-function listedRate(r, keepFallback = false) {
-  if (!r || typeof r !== 'object' || (r.source === 'fallback' && !keepFallback) || !RATE_FIELDS.every(k => finite(r[k]) && r[k] >= 0)) return null;
+/** The server's published rates for a model, when they are a listed rate (the unknown-model fallback is not). */
+function listedRate(r) {
+  if (!r || typeof r !== 'object' || r.source === 'fallback' || !RATE_FIELDS.every(k => finite(r[k]) && r[k] >= 0)) return null;
   return { in: r.inputPerMillion, out: r.outputPerMillion, cw: r.cacheCreationPerMillion, cr: r.cacheReadPerMillion, source: text(r.source) || 'builtin' };
 }
 /**
@@ -214,13 +211,12 @@ function listedRate(r, keepFallback = false) {
  */
 function modelSplit(row, tok, total, known) {
   const shares = () => Object.fromEntries(TYPES.map(t => [t.k, total > 0 && finite(known) ? tok[t.k] / total * known : 0]));
-  const keepFallback = keepsEstimate(row.provider);
   if (!('rates' in row)) {
     const r = reconcile(row);
-    const rate = r.rate.source === 'fallback' && !keepFallback ? null : r.rate;
+    const rate = r.rate.source === 'fallback' ? null : r.rate;
     return rate && r.reconciled ? { cost: r.cost, mode: 'rates', rate } : { cost: shares(), mode: 'shares', rate };
   }
-  const rate = listedRate(row.rates, keepFallback);
+  const rate = listedRate(row.rates);
   const p = row.costByType;
   if (rate && row.costByTypeReconciled === true && p && ['input', 'output', 'cacheWrite', 'cacheRead'].every(k => finite(p[k]) && p[k] >= 0))
     return { cost: { in: p.input, out: p.output, cw: p.cacheWrite, cr: p.cacheRead }, mode: 'rates', rate };
@@ -270,7 +266,7 @@ export function activityData(payload, now = Date.now()) {
       seen.add(key);
       const est = finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
       if (est === null) costMissing = true;
-      const nl = notLoggedPart(row, est, row.provider);
+      const nl = notLoggedPart(row, est);
       hours.push({ t, p: row.provider, in: row.inputTokens, out: row.outputTokens, cw: row.cacheCreationTokens, cr: row.cacheReadTokens, cost: est === null ? 0 : Math.max(0, est - nl), unk: nl > TINY });
     }
   }
@@ -289,7 +285,7 @@ export function activityData(payload, now = Date.now()) {
       const est = finite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
       // a response without fallbackCostUsd or rates: the mirror's unknown-model fallback is no listed rate either
       const legacy = !('fallbackCostUsd' in row) && !('rates' in row) && !('costByType' in row);
-      const nl = keepsEstimate(row.provider) ? 0 : legacy ? (est !== null && modelRates(row.model).source === 'fallback' ? est : 0) : notLoggedPart(row, est, row.provider);
+      const nl = legacy ? (est !== null && modelRates(row.model).source === 'fallback' ? est : 0) : notLoggedPart(row, est);
       const logged = est === null ? null : Math.max(0, est - nl);
       const split = modelSplit(row, tok, total, logged);
       models.push({ model: row.model, provider: row.provider, tools: toolList(row.tools), tok, total, logged, hasCost: est !== null, unk: nl > TINY, cost: split.cost, mode: split.mode, rate: split.rate });
@@ -323,7 +319,7 @@ export function activityData(payload, now = Date.now()) {
   const sessionSeen = new Set();
   const sessions = providerRows.filter(p => !sessionSeen.has(p.provider) && sessionSeen.add(p.provider)).map(p => {
     const est = finite(p.totals?.estimatedCostUsd) && p.totals.estimatedCostUsd >= 0 ? p.totals.estimatedCostUsd : null;
-    const nl = notLoggedPart(p.totals, est, p.provider);
+    const nl = notLoggedPart(p.totals, est);
     return {
       p: p.provider, label: label(p.provider),
       sessions: Number.isInteger(p.sessionCount) && p.sessionCount >= 0 ? p.sessionCount : null,
@@ -333,8 +329,8 @@ export function activityData(payload, now = Date.now()) {
   });
   // a session several providers served counts under each of them, and once in this total
   const sessionTotal = Number.isInteger(act.sessions?.total) && act.sessions.total >= 0 ? act.sessions.total : null;
-  // usage from a provider other than Claude and Codex (their cost rule differs, and the readout's cost split)
-  const others = hours.some(r => !keepsEstimate(r.p)) || models.some(m => !keepsEstimate(m.provider));
+  // usage from a provider other than Claude and Codex (it shares the charts' neutral third series)
+  const others = hours.some(r => !ownSeries(r.p)) || models.some(m => !ownSeries(m.provider));
   return { available, status: text(act.status), message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, sessionTotal, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom };
 }
 
@@ -411,7 +407,7 @@ export function buckets(A, R, state) {
     b.cost += r.cost; bump(b.pc, r.p, r.cost); bump(b.ptok, r.p, r.in + r.out + r.cw + r.cr);
     // unk: some cost in the bucket is not logged (punk: per provider); others: a provider other than Claude and Codex
     if (r.unk) { b.unk = true; b.punk[r.p] = true; }
-    if (!keepsEstimate(r.p)) b.others = true;
+    if (!ownSeries(r.p)) b.others = true;
   }
   return list;
 }
@@ -892,7 +888,7 @@ function dailyView(A, R, state, size) {
   const pw = W - pad.l - pad.r;
   const costOk = !A.costMissing;
   const picked = allPicked(state) ? '' : state.prov;
-  const rest = b => Object.entries(b.pc).reduce((s, [p, v]) => keepsEstimate(p) ? s : s + v, 0);
+  const rest = b => Object.entries(b.pc).reduce((s, [p, v]) => ownSeries(p) ? s : s + v, 0);
   const max = costOk ? Math.max(0, ...B.map(b => b.cost)) : 0;
   const sc = [3, 4, 5].map(k => niceScale(max * 1.04, k)).sort((a, b) => a.top - b.top || a.k - b.k)[0];
   const n = Math.max(1, B.length), slot = pw / n;
@@ -901,8 +897,8 @@ function dailyView(A, R, state, size) {
   for (let i = 0; i <= sc.k; i++) yTicks.push({ y: i / sc.k, label: costOk ? moneyAxis(sc.step * i, sc.step) : '', base: i === 0 });
   const showClaude = picked ? picked === 'claude' : A.providers.includes('claude');
   const showCodex = picked ? picked === 'codex' : A.providers.includes('codex');
-  const showOther = picked ? !keepsEstimate(picked) : A.others;
-  const otherLabel = picked && !keepsEstimate(picked) ? A.label(picked) : 'Other providers';
+  const showOther = picked ? !ownSeries(picked) : A.others;
+  const otherLabel = picked && !ownSeries(picked) ? A.label(picked) : 'Other providers';
   const bars = B.map((b, i) => {
     const cl = b.pc.claude || 0, cx = b.pc.codex || 0, ot = rest(b), tot = cl + cx + ot;
     const range = b.t1 > A.win1 ? `So far: logs read ${clockTxt(A.win1)}` : b.t < R.a2 ? `Logs start ${clockTxt(R.a2)}` : '';
@@ -912,7 +908,7 @@ function dailyView(A, R, state, size) {
       h: costOk && sc.top > 0 ? tot / sc.top : 0, cl: tot > 0 ? cl / tot : 0, cx: tot > 0 ? cx / tot : 0,
       label: i % every ? '' : step === H ? (new Date(b.t).getHours() === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
       time: `${step === H ? `${wmdTxt(b.t)} · ${hourTxt(b.t)}` : wmdTxt(b.t)}${b.partial ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
-      rows: costOk ? served.map(p => ({ p: keepsEstimate(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
+      rows: costOk ? served.map(p => ({ p: ownSeries(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
       total: picked ? '' : money(tot),
       foot: costOk && b.unk ? [range, 'Partial: some cost is not logged'].filter(Boolean).join(' · ') : range,
     };
@@ -928,7 +924,7 @@ function dailyView(A, R, state, size) {
       : unlogged ? `No ${who ? `${who} ` : ''}cost is logged in this range; the usage is in tokens above.` : `No ${who ? `${who} ` : ''}cost was logged in this range.`,
     showClaude, showCodex, showOther, claudeLabel: A.label('claude'), codexLabel: A.label('codex'), otherLabel,
     // the third series' hue: the picked provider's own, else '' (the neutral colour of every other provider)
-    otherHue: picked && !keepsEstimate(picked) ? markOf(picked) : '',
+    otherHue: picked && !ownSeries(picked) ? markOf(picked) : '',
   };
 }
 

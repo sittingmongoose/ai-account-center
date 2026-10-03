@@ -171,9 +171,9 @@ page labels providers with the response's provider table (`payload.providers`), 
 mark and hue, and merges one model's rows across providers by name (`pageModels`; a model that is no one
 provider's alone has `provider: ""`, no mark and the neutral `Theme.h-model` family). Cost: `fallbackCostUsd` is
 the part of `estimatedCostUsd` the server priced only at its unknown-model fallback (no logged cost, no listed
-rate); for every provider but Claude and Codex the page leaves it out, shows "Not logged" where nothing is
-logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`). Claude and Codex rows keep
-their whole estimate, fallback rate included, exactly as before. "Included usage" in the header (`includedView`,
+rate); for every provider, including Claude and Codex, the page leaves it out, shows "Not logged" where nothing
+is logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`). A model with no known
+rate is never priced at a guess. "Included usage" in the header (`includedView`,
 from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each source's state and
 last scan.
 

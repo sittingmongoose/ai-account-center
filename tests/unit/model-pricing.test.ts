@@ -608,6 +608,13 @@ describe('model-pricing', () => {
       expect(fallback.pricing).toEqual(getModelPricing('aac-unknown-model-for-source-test'));
     });
 
+    it('reports a model with no static or cached rate as fallback, never a guess with a source', () => {
+      // claude-opus-5-5 has no static entry and no models.dev cache entry here, so the Analytics page
+      // must show its cost as "not logged" and leave it out of the totals.
+      expect(getModelPricingWithSource('claude-opus-5-5').source).toBe('fallback');
+      expect(hasCustomPricing('claude-opus-5-5')).toBe(false);
+    });
+
     it('keeps subscription-backed provider pricing distinct from paid API pricing', () => {
       const pricing = getModelPricing('gpt-5.5', { provider: 'github-copilot' });
       expect(pricing.inputPerMillion).toBe(0);

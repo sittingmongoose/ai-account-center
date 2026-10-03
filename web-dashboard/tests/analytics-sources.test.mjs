@@ -230,20 +230,21 @@ test('a range with no logged cost at all reads "Not logged" everywhere, never $0
   assert.ok(!JSON.stringify(v.kpis).includes('$0.00'));
 });
 
-test('not-logged parts come from fallbackCostUsd; Claude and Codex keep their estimate as before', () => {
+test('not-logged parts come from fallbackCostUsd, for every provider including Claude and Codex', () => {
   assert.equal(notLoggedPart({ fallbackCostUsd: 2 }, 5), 2);
   assert.equal(notLoggedPart({ fallbackCostUsd: 9 }, 5), 5);
   assert.equal(notLoggedPart({ fallbackCostUsd: 0, costByType: null }, 5), 0);
   assert.equal(notLoggedPart({ costByType: null }, 5), 5);
   assert.equal(notLoggedPart({ costByType: { input: 1, output: 1, cacheWrite: 0, cacheRead: 0 } }, 5), 0);
   assert.equal(notLoggedPart({ fallbackCostUsd: 3 }, null), 0);
-  const codex = { model: 'gpt-5.5-codex', provider: 'codex', tools: ['codex'], ...tok(1e6, 1e5, 0, 0), estimatedCostUsd: 4.5, fallbackCostUsd: 4.5, costByType: null, costByTypeReconciled: false, rates: FALLBACK };
-  assert.equal(notLoggedPart(codex, 4.5, 'codex'), 0);
-  assert.equal(notLoggedPart(codex, 4.5, 'qwen'), 4.5);
-  const p = payload({ totals: add(M.haiku, codex), byHour: [hour(26, 'claude', M.haiku), hour(25, 'codex', codex)], providers: [PROVIDERS[0], provider('codex', 'Codex', 2, 10, ['codex'], [codex])], models: [M.haiku, codex] });
+  // a model with no known rate (resolver source 'fallback') under Claude: "not logged", left out of the totals
+  const opus = { model: 'claude-opus-5-5', provider: 'claude', tools: ['claude'], ...tok(1e6, 1e5, 0, 0), estimatedCostUsd: 4.5, fallbackCostUsd: 4.5, costByType: null, costByTypeReconciled: false, rates: FALLBACK };
+  assert.equal(notLoggedPart(opus, 4.5), 4.5);
+  const p = payload({ totals: add(M.haiku, opus), byHour: [hour(26, 'claude', M.haiku), hour(25, 'claude', opus)], providers: [provider('claude', 'Claude', 5, 40, ['claude'], [M.haiku, opus])], models: [M.haiku, opus] });
   const view = usageView(p, state(), { now });
-  assert.ok(Math.abs(kpi(view, 'cost').num - (haiku(1e6, 2e5, 1e6, 4e7) + 4.5)) < 1e-9);
-  assert.deepEqual(view.cbm.rows.find(r => r.name === 'gpt-5.5-codex').cost, '$4.50');
+  assert.ok(Math.abs(kpi(view, 'cost').num - haiku(1e6, 2e5, 1e6, 4e7)) < 1e-9);
+  assert.equal(kpi(view, 'cost').sub[0].text, 'Partial');
+  assert.deepEqual(view.cbm.rows.find(r => r.name === 'claude-opus-5-5').cost, 'Not logged');
   // rows of a provider neither the dashboard nor the response knows are dropped
   assert.equal(activityData(payload({ byHour: [{ ...byHour[0], provider: 'cliproxy' }] }), now).hours.length, 0);
 });

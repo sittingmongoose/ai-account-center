@@ -111,8 +111,7 @@ page as file:// or configure a cross-origin API URL.
   models open into their models. "Included usage" in the header lists each
   tool's source state and last scan. Cost with no logged amount and no listed
   rate shows "Not logged", never $0.00, and totals that leave it out say
-  "partial"; Claude and Codex
-  estimates are unchanged. Month,
+  "partial"; this holds for every provider, including Claude and Codex. Month,
   All and custom ranges read the covering 24h, 7d or 30d response and are cut in
   the browser; per-model and session data then say which logs they cover.
 - Accounts & Settings lists every provider with its accounts: status only for
