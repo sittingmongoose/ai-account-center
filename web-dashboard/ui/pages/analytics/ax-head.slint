@@ -563,8 +563,11 @@ component KpiCard inherits Rectangle {
 // logs it came from. It is a summary, never a filter, a legend or a section (the charts stay divided by model).
 component ProvItem inherits Rectangle {
     in property <AxProvItem> t;
+    // natural width only: the line's spare room goes to its end, never between items or within one
+    horizontal-stretch: 0;
     min-width: row.preferred-width;
     preferred-width: row.preferred-width;
+    max-width: row.preferred-width;
     min-height: 22px;
     AxTip {
         tip: root.t.tip;
@@ -592,11 +595,12 @@ export component AxProvLines inherits VerticalLayout {
         if line.first: Caps { text: AxData.prov-summary.label; width: 150px; min-height: 22px; }
         if !line.first: Rectangle { width: 150px; }
         for t[i] in line.items: HorizontalLayout {
+            horizontal-stretch: 0;
             spacing: 10px;
-            if i > 0: Text { text: "·"; font-size: 13px; color: Theme.ink-4; vertical-alignment: center; }
+            if i > 0: Text { text: "·"; font-size: 13px; color: Theme.ink-4; vertical-alignment: center; horizontal-stretch: 0; }
             ProvItem { t: t; }
         }
-        if line.last && Breakpoints.width >= 1180px: Text { text: AxData.prov-summary.note; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+        if line.last && Breakpoints.width >= 1180px: Text { text: AxData.prov-summary.note; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
         Rectangle { horizontal-stretch: 1; }
     }
 }
