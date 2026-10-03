@@ -150,6 +150,7 @@ export struct AxDonut { sub: string, note: string, mode: string, centre: string,
 // ---- session stats, token breakdown, cache efficiency ----
 export struct AxStat { key: string, label: string, num: float, has: bool, fmt: string, text: string }
 export struct AxSessRow { provider: string, label: string, sessions: string, per: string, events: string, events-tip: string }
+export struct AxSessRecent { tool: string, models: string, tokens: string, cost: string, when: string, tip: string }
 export struct AxTokRow { key: string, label: string, wt: float, wc: float, tok: string, tok-tip: string, tok-share: string, cost: string, cost-share: string }
 export struct AxCache {
     sub: string,
@@ -297,6 +298,7 @@ export global AxData {
     in-out property <AxCardText> sessions;
     in-out property <[AxStat]> sess-stats;
     in-out property <[AxSessRow]> sess-rows;
+    in-out property <[AxSessRecent]> sess-recent;
     in-out property <string> tokens-sub;
     in-out property <[AxTokRow]> tokens;
     in-out property <AxCache> cache;

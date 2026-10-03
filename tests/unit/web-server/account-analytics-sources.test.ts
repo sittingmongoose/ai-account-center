@@ -222,7 +222,16 @@ describe('analytics activity across sources', () => {
     });
     const first = await activity.get(QUERY, FROM, TO, { tz: 'UTC' });
     expect(first.totals?.inputTokens).toBe(220);
-    const second = await activity.get({ ...QUERY, refresh: true }, FROM, TO, { tz: 'UTC' });
+    // The refresh answers instantly from the last snapshot while the new scan runs behind it.
+    const refreshing = await activity.get({ ...QUERY, refresh: true }, FROM, TO, { tz: 'UTC' });
+    expect(refreshing.refreshing).toBe(true);
+    expect(refreshing.totals?.inputTokens).toBe(220);
+    let second = refreshing;
+    for (let attempt = 0; attempt < 500 && second.refreshing === true; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      second = await activity.get(QUERY, FROM, TO, { tz: 'UTC' });
+    }
+    expect(second.refreshing).not.toBe(true);
     expect(calls).toBe(2);
     // The Mac's OMP usage stays in the totals, and its cell says it is cached.
     expect(second.totals?.inputTokens).toBe(220);

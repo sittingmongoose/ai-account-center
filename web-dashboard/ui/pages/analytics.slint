@@ -5,11 +5,12 @@
 // analytics view model in AxData (pages/analytics/ax-data.slint); see README-ARCHITECTURE.md.
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 import { AxData } from "analytics/ax-data.slint";
-import { AxReveal } from "analytics/ax-common.slint";
+import { AxReveal, AxCard, AxCardHead } from "analytics/ax-common.slint";
+import { Skeleton } from "../components/skeleton.slint";
 import { AxHeader, AxKpiRow } from "analytics/ax-head.slint";
 import { AxTrendCard } from "analytics/ax-trend.slint";
 import { AxCbmCard, AxDonutCard } from "analytics/ax-models.slint";
-import { AxSessionsCard, AxTokensCard, AxCacheCard } from "analytics/ax-stats.slint";
+import { AxSessionsCard, AxRecentCard, AxTokensCacheCard } from "analytics/ax-stats.slint";
 import { AxHeatCard, AxDailyCard } from "analytics/ax-time.slint";
 import { AxQuotaCard } from "analytics/ax-quota.slint";
 import { AxAgendaCard } from "analytics/ax-agenda.slint";
@@ -29,8 +30,8 @@ export component AnalyticsPage inherits Rectangle {
     property <bool> s-cbm;
     property <bool> s-donut;
     property <bool> s-sess;
-    property <bool> s-tok;
-    property <bool> s-cache;
+    property <bool> s-tokcache;
+    property <bool> s-recent;
     property <bool> s-heat;
     property <bool> s-daily;
 
@@ -41,6 +42,31 @@ export component AnalyticsPage inherits Rectangle {
         spacing: 0px;
         AxReveal { armed: true; scroll: root.scroll; view-bottom: root.view-bottom; delay: 40ms; AxHeader { } }
         Rectangle { height: 20px; }
+        // Before the first answer lands (no persisted snapshot yet): skeleton cards with a calm shimmer, one
+        // row per computer, so the page never sits blank. Concept: the .skel sweep in styles.css.
+        if !root.armed: VerticalLayout {
+            spacing: 18px;
+            AxCard {
+                hover-lift: false;
+                AxCardHead { title: "Loading usage"; sub: "Loading usage from Ubuntu, Mac and Windows…"; }
+                VerticalLayout {
+                    padding-left: 20px; padding-right: 20px; padding-top: 6px; padding-bottom: 18px; spacing: 12px;
+                    for host in ["Ubuntu", "Mac", "Windows"] : VerticalLayout {
+                        spacing: 6px;
+                        Text { text: host; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; }
+                        Skeleton { active: true; height: 12px; }
+                    }
+                }
+            }
+            AxCard {
+                hover-lift: false;
+                VerticalLayout {
+                    padding-left: 20px; padding-right: 20px; padding-top: 18px; padding-bottom: 18px; spacing: 10px;
+                    Skeleton { active: true; height: 64px; }
+                    Skeleton { active: true; height: 12px; }
+                }
+            }
+        }
         kpis := AxReveal {
             armed: root.armed;
             scroll: root.scroll;
@@ -82,17 +108,17 @@ export component AnalyticsPage inherits Rectangle {
                     changed seen => { if self.seen { root.s-sess = true; } }
                     AxSessionsCard { played: sess3.seen; delay: sess3.play-delay; vertical-stretch: 1; }
                 }
-                tok3 := AxReveal {
+                recent3 := AxReveal {
                     horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
-                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-tok;
-                    changed seen => { if self.seen { root.s-tok = true; } }
-                    AxTokensCard { played: tok3.seen; delay: tok3.play-delay; vertical-stretch: 1; }
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-recent;
+                    changed seen => { if self.seen { root.s-recent = true; } }
+                    AxRecentCard { played: recent3.seen; delay: recent3.play-delay; vertical-stretch: 1; }
                 }
-                cache3 := AxReveal {
+                tokcache3 := AxReveal {
                     horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
-                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-cache;
-                    changed seen => { if self.seen { root.s-cache = true; } }
-                    AxCacheCard { played: cache3.seen; delay: cache3.play-delay; vertical-stretch: 1; }
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-tokcache;
+                    changed seen => { if self.seen { root.s-tokcache = true; } }
+                    AxTokensCacheCard { played: tokcache3.seen; delay: tokcache3.play-delay; vertical-stretch: 1; }
                 }
             }
             HorizontalLayout {
@@ -135,17 +161,17 @@ export component AnalyticsPage inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: root.gap;
-                tok2 := AxReveal {
+                recent2 := AxReveal {
                     horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
-                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-tok;
-                    changed seen => { if self.seen { root.s-tok = true; } }
-                    AxTokensCard { played: tok2.seen; delay: tok2.play-delay; vertical-stretch: 1; }
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-recent;
+                    changed seen => { if self.seen { root.s-recent = true; } }
+                    AxRecentCard { played: recent2.seen; delay: recent2.play-delay; vertical-stretch: 1; }
                 }
-                cache2 := AxReveal {
+                tokcache2 := AxReveal {
                     horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
-                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-cache;
-                    changed seen => { if self.seen { root.s-cache = true; } }
-                    AxCacheCard { played: cache2.seen; delay: cache2.play-delay; vertical-stretch: 1; }
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-tokcache;
+                    changed seen => { if self.seen { root.s-tokcache = true; } }
+                    AxTokensCacheCard { played: tokcache2.seen; delay: tokcache2.play-delay; vertical-stretch: 1; }
                 }
             }
             heat2 := AxReveal {

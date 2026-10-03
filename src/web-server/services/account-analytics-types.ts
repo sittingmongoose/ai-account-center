@@ -160,6 +160,11 @@ export interface AccountAnalyticsAnomalies {
 
 export interface AccountAnalyticsActivity {
   status: 'ok' | 'cached' | 'loading' | 'unavailable';
+  /**
+   * A collection is running in the background; the numbers are the last snapshot. Absent (or false)
+   * means this answer is settled: 'cached' without refreshing is the best available, not a stale read.
+   */
+  refreshing?: boolean;
   scope: 'multi-host-cli';
   /** The zone used for `byDay`, `byDayModel` and anomaly dates. `byHour[].hour` stays a UTC instant. */
   timezone: string;

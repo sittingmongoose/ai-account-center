@@ -277,6 +277,7 @@ export struct StrengthView {
 // The Analytics header (version 3): loading and error come from set_analytics_loading, the rest from the view model.
 export struct AnalyticsHeadView {
     loading: bool,
+    refreshing: bool,
     error: string,
     scope: string,
     read: string,

@@ -165,9 +165,11 @@ test('a picked provider shows only the usage it served, divided by model', () =>
   assert.equal(claude.sessions.stats.find(s => s.key === 'sess').num, 3);
   assert.match(claude.trend.sub, /Claude$/);
   assert.equal(kpi(claude, 'cost').sub.some(r => r.text === 'Partial'), false);
-  // under All the sessions are the server's distinct total (a session can count under two providers)
+  // under All the Sessions number is the SESSIONS column's sum (a session two providers served counts under
+  // each, in the rows and in the number alike), and the per-session figures divide by it
   const all = usageView(payload(), state(), { now });
-  assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, 10);
+  assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, 12);
+  assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, all.sessions.rows.reduce((n, r) => n + Number(r.sessions.replace(/,/g, '')), 0));
   assert.deepEqual(all.sessions.rows.map(r => r.label), ['Claude', 'Codex', 'Muse Code', 'Qwen Token Plan', 'Z.ai Coding Plan', 'OpenCode Go', 'Other']);
   assert.match(all.sessions.note, /usage read from the Mac and Windows adds tokens but no sessions/);
   assert.equal(claude.sessions.note, '');
@@ -282,4 +284,29 @@ test('each provider\'s models share its hue; models that are no provider\'s alon
   assert.equal(new Set(neutral).size, 9);
   for (let i = 1; i < neutral.length; i++) assert.ok(Math.abs(neutral[i] - neutral[i - 1]) > 0.2, `${neutral}`);
   assert.deepEqual([shades.c, shades.z1, shades.z2], [1, 1, 0.66]);
+});
+
+test('a listed zero rate reads "Free", never unknown: cost rows, detail, donut and totals', () => {
+  // qwen3.8-27b on a local vLLM server, as the server publishes a free model: zero estimate, zero
+  // fallback, a reconciled zero split and a listed (builtin) all-zero rate
+  const ZERO_RATES = { inputPerMillion: 0, outputPerMillion: 0, cacheCreationPerMillion: 0, cacheReadPerMillion: 0, source: 'builtin' };
+  const free = { model: 'qwen3.8-27b', provider: 'other', tools: ['omp'], ...tok(5e5, 5e4, 0, 1e6), estimatedCostUsd: 0, fallbackCostUsd: 0, costByType: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }, costByTypeReconciled: true, rates: ZERO_RATES };
+  const freeHour = { hour: at(3).replace('.000', ''), provider: 'other', ...add(strip(free)), costByType: null };
+  const freeProvider = provider('other', 'Other', 1, 3, ['omp'], [free]);
+  const activity = { totals: add(free), byHour: [freeHour], providers: [freeProvider], models: [free], sessions: { total: 1, sample: [], truncated: false } };
+  const view = usageView(payload(activity), state({ donut: 'cost', donutOpen: ['_undrawn'] }), { now });
+  const row = view.cbm.rows.find(r => r.name === 'qwen3.8-27b');
+  assert.equal(row.cost, 'Free');
+  assert.equal(row.partial, false);
+  assert.match(row.rate, /^Free: this model has no per-token charge/);
+  assert.ok(row.types.filter(t => t.tok !== 'None').every(t => t.cost === 'Free'), 'every used per-type cost reads Free');
+  // the donut has no arcs to draw, but it is a free range, never an empty one
+  assert.equal(view.donut.centre, 'Free');
+  assert.equal(view.donut.centreLabel, 'estimated cost, free models');
+  assert.equal(view.donut.empty, false);
+  assert.equal(view.donut.legend.find(l => l.kind === 'child').seg.value, 'Free');
+  // totals stay numeric: $0.00 is a true zero here, and nothing is partial
+  assert.equal(kpi(view, 'cost').text, '$0.00');
+  assert.doesNotMatch(JSON.stringify(kpi(view, 'cost').sub), /Partial/);
+  assert.equal(view.trend.legend.find(l => l.key === 'cost').note, 'right axis, USD');
 });

@@ -27,8 +27,8 @@ const payload = (overrides = {}, activity = {}) => ({
   activity: {
     status: 'ok', scope: 'ubuntu-local-cli', fetchedAt: '2026-10-01T11:30:00Z', message: '',
     totals: totals(hours), byHour: hours,
-    providers: [{ provider: 'claude', label: 'Claude Code logs', totals: totals(claudeRows), usageEvents: 30, sessionCount: 3 },
-      { provider: 'codex', label: 'Codex logs', totals: totals(codexRows), usageEvents: 10, sessionCount: 2 }],
+    providers: [{ provider: 'claude', label: 'Claude Code logs', totals: totals(claudeRows), usageEvents: 30, sessionCount: 3, tools: ['claude'] },
+      { provider: 'codex', label: 'Codex logs', totals: totals(codexRows), usageEvents: 10, sessionCount: 2, tools: ['codex'] }],
     models: [modelRow('claude-haiku-4-5', 'claude', claudeRows), modelRow('gpt-5', 'codex', codexRows)],
     ...activity,
   },
@@ -191,4 +191,29 @@ test("Claude Code's <synthetic> placeholder is excluded silently: never listed, 
   const q = payload({}, { models: [modelRow('claude-haiku-4-5', 'claude', claudeRows),
     { model: 'gpt-5', provider: 'codex', inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCostUsd: 0 }] });
   assert.match(usageView(q, state(), { now }).cbm.foot, /gpt-5 is left out/);
+});
+
+test('recent sessions list the sample most recent first, without paths, with a count foot', () => {
+  const sample = [
+    { key: 'a1', tool: 'codex', last: now - 5 * 60e3, tokens: 12000, events: 40, cost: 0.5, unk: false, models: [{ model: 'gpt-5', tokens: 12000, cost: 0.5, unk: false }] },
+    { key: 'b2', tool: 'claude', last: now - 2 * 3600e3, tokens: 3000, events: 9, cost: 0, unk: true, models: [{ model: 'mystery', tokens: 3000, cost: 0, unk: true }] },
+    { key: 'c3', tool: 'claude', last: now - 26 * 3600e3, tokens: 800, events: 3, cost: 0.02, unk: false, models: [{ model: 'claude-haiku-4-5', tokens: 500, cost: 0.02, unk: false }, { model: 'claude-opus-5-5', tokens: 300, cost: 0, unk: false }] },
+  ];
+  const p = payload({}, { sessions: { total: 5, sample, truncated: false } });
+  const view = usageView(p, state(), { now });
+  assert.deepEqual(view.sessions.recent.map(r => r.tool), ['codex', 'claude', 'claude']);
+  assert.equal(view.sessions.recent[0].models, 'gpt-5');
+  assert.equal(view.sessions.recent[0].cost, '$0.50');
+  assert.equal(view.sessions.recent[1].cost, 'Not logged');
+  assert.equal(view.sessions.recent[2].models, 'claude-haiku-4-5, claude-opus-5-5');
+  assert.match(view.sessions.recent[0].tip, /gpt-5 · 40 usage events/);
+  assert.ok(!JSON.stringify(view.sessions.recent).includes('/home/'), 'no paths leak into the list');
+  assert.equal(view.sessions.foot, '');
+  // a picked CLI narrows the list to its sessions
+  const codex = usageView(p, state({ prov: 'codex' }), { now });
+  assert.deepEqual(codex.sessions.recent.map(r => r.tool), ['codex']);
+  // a truncated sample says how many it shows of how many
+  const many = usageView(payload({}, { sessions: { total: 1848, sample: Array.from({ length: 50 }, (_, i) => ({ ...sample[0], key: `k${i}`, last: now - i * 60e3 })), truncated: true } }), state(), { now });
+  assert.equal(many.sessions.recent.length, 10);
+  assert.equal(many.sessions.foot, 'Most recent 10 of 1,848 sessions in this range');
 });

@@ -38,6 +38,9 @@ let usageTimer = null;
 let analyticsPayload = null;
 let analyticsModel = null;
 let analyticsGeneration = 0;
+// While the log scan runs behind the page (loading, or a cached snapshot with a refresh running),
+// the page re-reads the server every few seconds so the new numbers land on their own.
+let analyticsPollTimer = 0;
 let openDetailsId = '';
 // Counts Details opens, so a click outside the panel can tell a row click (which opens that row) from any other.
 let detailsOpens = 0;
@@ -317,8 +320,11 @@ function renderAnalytics(mode = 'static') {
   analyticsModel = analyticsView(analyticsPayload, { catalog: data?.accounts || [], metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval }, now);
   const usage = usageView(analyticsPayload, analyticsPage, { now, sizes: analyticsPage.sizes });
   const ctx = analyticsContext(now);
-  const quota = quotaView(analyticsPayload, ctx);
-  const agenda = agendaView(analyticsPayload, ctx);
+  // quota and agenda times read at minute precision ("in 3h 25m"), so they run on a minute clock: identical
+  // re-renders within the minute build identical models, and the agenda updates only when its data changes
+  const slow = { ...ctx, now: Math.floor(now / 60000) * 60000 };
+  const quota = quotaView(analyticsPayload, slow);
+  const agenda = agendaView(analyticsPayload, slow);
   const next = usage.trend.geo, size = `${usage.trend.pw}x${usage.trend.ph}`;
   const from = shownGeo;
   const morph = mode === 'morph' && !motionReduced && from && shownSize === size && from.lv[0].length === next.lv[0].length;
@@ -327,6 +333,10 @@ function renderAnalytics(mode = 'static') {
   // e2e only (?e2e): the last Analytics view handed to Slint, so a harness can read its words
   if (e2e) globalThis.__aacLastAnalytics = slintView;
   set_analytics(JSON.stringify(slintView));
+  clearTimeout(analyticsPollTimer);
+  const act = analyticsPayload?.activity;
+  if (currentPage === 'analytics' && (act?.status === 'loading' || act?.refreshing === true))
+    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(); }, 5000);
   shownSize = size;
   if (!morph) { shownGeo = next; return; }
   const t0 = performance.now();
@@ -540,7 +550,7 @@ async function signOut() {
     }
   }
   forgetSignIn(globalThis.localStorage);
-  analyticsGeneration++; analyticsPayload = null; analyticsModel = null; data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
+  analyticsGeneration++; analyticsPayload = null; analyticsModel = null; clearTimeout(analyticsPollTimer); data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
   claudeOpen.reset();
   accounts.reset();
   showSignedOut('default', { notice: true, message: 'Signed out.' });

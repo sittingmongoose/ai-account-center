@@ -394,6 +394,8 @@ export component AxHeader inherits Rectangle {
                         vertical-alignment: center;
                         AxTip { tip: AxData.head.read-tip; }
                     }
+                    // the numbers on screen are the last snapshot; the log scan is running behind them
+                    if AxData.head.refreshing: Text { text: "· Refreshing…"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
                     info := AxInfo {
                         open: scope-pop.is-open;
                         clicked => { scope-pop.show(); }
