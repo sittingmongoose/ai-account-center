@@ -200,6 +200,37 @@ describe('Windows host script', () => {
     expect(create).toContain("'ccs-claude://launch/' + $id");
   });
 
+  it('keeps the helper allowlist with the profile: create adds the id, undo drops it', () => {
+    const create = windowsHostScript('create', { profileId: 'work2' });
+    // The allowlist lives beside the helper, under the name the C# helper reads.
+    expect(create).toContain(
+      "$accountsFile = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude', 'ccs-claude-accounts.txt')"
+    );
+    // Only the validated $id reaches the file lines.
+    expect(create).toContain("$id = 'work2'");
+    expect(create).toContain('Make-Task $id; Add-AccountId $id');
+    expect(create).toContain('Drop-Task $id; Drop-AccountId $id');
+    // Append, never reorder: an id already listed stays where it is (the
+    // default stays first), and a file without a trailing newline is fixed first.
+    expect(create).toContain('if ($line.Trim() -ceq $id) { return }');
+    expect(create).toContain('Add-Content -LiteralPath $accountsFile -Value $id -Encoding UTF8');
+    const undo = windowsHostScript('undo', { profileId: 'work2', launcher });
+    expect(undo).toContain('Drop-AccountId $id');
+    // Undo takes out only that exact line, and deletes the file when emptied.
+    expect(undo).toContain('$_.Trim() -cne $id');
+    expect(undo).toContain('Remove-Item -LiteralPath $accountsFile -Force');
+    // Nothing else touches the allowlist: trash keeps the id listed.
+    for (const op of ['trash', 'restore'] as const) {
+      const script = windowsHostScript(op, {
+        profileId: 'party',
+        trashName: 'party-20261002T080000Z',
+        launcher,
+      });
+      expect(script).not.toContain('Add-AccountId $id');
+      expect(script).not.toContain('Drop-AccountId $id');
+    }
+  });
+
   it('rejects quotes, variables and malformed ids before building anything', () => {
     for (const profilePath of [
       "C:\\x\\Claude-a'; Remove-Item C:\\",

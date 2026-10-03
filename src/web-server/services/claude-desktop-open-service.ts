@@ -1,10 +1,13 @@
 import { ConfigError, ProfileError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import {
+  CLAUDE_PROFILE_ID_PATTERN,
   canOpenClaudeMacProfile,
   canOpenClaudeWindowsProfile,
   listClaudeDesktopProfiles,
+  type ClaudeDesktopProfile,
 } from './claude-desktop-profile-service';
+import { readPendingProfiles, type PendingClaudeProfile } from './claude-account-stores';
 import { openClaudeMacLauncher, openClaudeWindowsLauncher } from './claude-desktop-transport';
 import {
   claudeHistoryOpenHeld,
@@ -43,8 +46,44 @@ function notify(callback: () => void): void {
   }
 }
 
+/**
+ * A pending profile as the Open path reads it: the lifecycle wrote both host
+ * launchers at Add time, so they open like manifest launchers. It has no
+ * confirmed email, and the manifest re-check in history policy lookup never
+ * matches it, so Open always skips the managed history copy for it.
+ */
+function pendingOpenProfile(profile: PendingClaudeProfile): ClaudeDesktopProfile {
+  return {
+    id: profile.id,
+    email: '',
+    mac: {
+      launcherName: profile.mac.launcherName,
+      ...(profile.mac.launcherPath ? { launcherPath: profile.mac.launcherPath } : {}),
+      profilePath: profile.mac.profilePath,
+      sshHost: profile.mac.sshHost,
+    },
+    windows: {
+      launcherName: profile.windows.launcherName,
+      ...(profile.windows.launcherPath ? { launcherPath: profile.windows.launcherPath } : {}),
+      profilePath: profile.windows.profilePath,
+      ...(profile.windows.startMenuPath ? { startMenuPath: profile.windows.startMenuPath } : {}),
+      sshHost: profile.windows.sshHost,
+    },
+  };
+}
+
 async function resolveOpenTarget(id: string, platform: 'mac' | 'windows') {
-  const profile = (await listClaudeDesktopProfiles()).find((entry) => entry.id === id);
+  // The safe-ID shape, then membership: the pending registry or the manifest.
+  // Default-ness plays no part here; it only guards Remove.
+  if (!CLAUDE_PROFILE_ID_PATTERN.test(id)) {
+    throw new ProfileError('Claude desktop profile was not found.');
+  }
+  const manifest = await listClaudeDesktopProfiles();
+  const found = manifest.find((entry) => entry.id === id);
+  const pending = found
+    ? null
+    : (await readPendingProfiles(getCcsDir())).find((entry) => entry.id === id);
+  const profile = found ?? (pending ? pendingOpenProfile(pending) : null);
   if (!profile) throw new ProfileError('Claude desktop profile was not found.');
   if (
     platform === 'mac' ? !canOpenClaudeMacProfile(profile) : !canOpenClaudeWindowsProfile(profile)

@@ -3,11 +3,14 @@
  * 6.2, 6.7, 6.8) against a fake host transport and a temporary CCS folder.
  * Nothing here reaches a real host.
  */
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { ProfileError } from '../../../src/errors/error-types';
 import { listClaudeDesktopProfiles } from '../../../src/web-server/services/claude-desktop-profile-service';
+import { openClaudeDesktopProfile } from '../../../src/web-server/services/claude-desktop-open-service';
+import * as desktopTransport from '../../../src/web-server/services/claude-desktop-transport';
 import {
   ClaudeAccountLifecycle,
   ClaudeLifecycleError,
@@ -33,6 +36,7 @@ afterEach(() => {
   if (ORIGINAL_CCS_HOME === undefined) delete process.env.CCS_HOME;
   else process.env.CCS_HOME = ORIGINAL_CCS_HOME;
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  mock.restore();
 });
 
 const DAY = 24 * 60 * 60_000;
@@ -48,6 +52,8 @@ class FakeHosts implements ClaudeHostTransport {
   running = new Set<string>();
   unknown = new Set<string>();
   crossVolume = new Set<ClaudeHost>();
+  /** The Windows helper allowlist, in file order (the first id is the default). */
+  accounts: string[] = ['gmail', 'party'];
 
   private check(op: string, host: ClaudeHost) {
     this.calls.push(`${op}:${host}`);
@@ -64,6 +70,10 @@ class FakeHosts implements ClaudeHostTransport {
     };
     this.data[host].add(launcher.profilePath);
     this.launchers[host].add(launcher.launcherPath as string);
+    // The Windows host step appends the id to ccs-claude-accounts.txt, once.
+    if (host === 'windows' && !this.accounts.includes(input.profileId)) {
+      this.accounts.push(input.profileId);
+    }
     return launcher;
   }
 
@@ -71,6 +81,9 @@ class FakeHosts implements ClaudeHostTransport {
     this.check('undo', host);
     this.data[host].delete(input.launcher.profilePath);
     this.launchers[host].delete(input.launcher.launcherPath as string);
+    if (host === 'windows') {
+      this.accounts = this.accounts.filter((id) => id !== input.profileId);
+    }
   }
 
   async appState(host: ClaudeHost, input: { launcher: ClaudeHostLauncher }) {
@@ -203,6 +216,24 @@ describe('Claude Add', () => {
     expect(await lifecycle.listPending()).toEqual([]);
   });
 
+  it('lists a new id in the Windows helper allowlist, after the default', async () => {
+    const { hosts, lifecycle } = setup();
+    await lifecycle.add({ profileId: 'work2', label: null });
+    // The default stays first; the new id is appended, never reordered.
+    expect(hosts.accounts).toEqual(['gmail', 'party', 'work2']);
+  });
+
+  it('leaves the allowlist unchanged when the Windows step fails', async () => {
+    const { hosts, lifecycle } = setup();
+    hosts.fail.create = 'windows';
+    await expect(lifecycle.add({ profileId: 'work2', label: null })).rejects.toMatchObject({
+      code: 'host_unreachable',
+      host: 'windows',
+    });
+    expect(hosts.accounts).toEqual(['gmail', 'party']);
+    expect(await lifecycle.listPending()).toEqual([]);
+  });
+
   it('refuses an id in use (inventory, pending or trash, any case) and runs nothing', async () => {
     const { hosts, lifecycle } = setup();
     await lifecycle.add({ profileId: 'work2', label: null });
@@ -242,6 +273,44 @@ describe('Claude Add', () => {
     ]);
     expect(parsed[2].mac?.sshHost).toBe('jared-mac');
     expect(await lifecycle.confirmPending('work2', 'work2@example.com')).toBe(false);
+  });
+});
+
+describe('Pending profiles open on both hosts', () => {
+  it('opens a newly added id on Mac and on Windows; an unknown id is refused', async () => {
+    const { lifecycle } = setup();
+    await lifecycle.add({ profileId: 'work2', label: 'Work 2' });
+    const macOpen = spyOn(desktopTransport, 'openClaudeMacLauncher').mockResolvedValue(undefined);
+    const windowsOpen = spyOn(desktopTransport, 'openClaudeWindowsLauncher').mockResolvedValue(
+      undefined
+    );
+    await openClaudeDesktopProfile('work2', 'mac');
+    expect(macOpen).toHaveBeenCalledTimes(1);
+    expect(macOpen).toHaveBeenCalledWith({
+      launcherName: 'Claude (work2)',
+      launcherPath: '/fake/mac/Claude (work2).app',
+      profilePath: '/fake/mac/Claude-work2',
+      sshHost: 'jared-mac',
+    });
+    await openClaudeDesktopProfile('work2', 'windows');
+    expect(windowsOpen).toHaveBeenCalledTimes(1);
+    expect(windowsOpen).toHaveBeenCalledWith(
+      {
+        launcherName: 'Claude (work2)',
+        launcherPath: '/fake/windows/Claude (work2).app',
+        profilePath: '/fake/windows/Claude-work2',
+        sshHost: 'jared-windows',
+      },
+      'work2'
+    );
+    // In neither the pending registry nor the manifest: refused, nothing opens.
+    // A malformed id is refused the same way.
+    for (const id of ['no-such-id', 'bad;id']) {
+      await expect(openClaudeDesktopProfile(id, 'mac')).rejects.toBeInstanceOf(ProfileError);
+      await expect(openClaudeDesktopProfile(id, 'windows')).rejects.toBeInstanceOf(ProfileError);
+    }
+    expect(macOpen).toHaveBeenCalledTimes(1);
+    expect(windowsOpen).toHaveBeenCalledTimes(1);
   });
 });
 

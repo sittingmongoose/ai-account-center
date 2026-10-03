@@ -211,10 +211,78 @@ describe('Claude desktop launch and cached usage', () => {
       'added-profile'
     );
     expect(
-      (await request('POST', '/no-such-profile/open', openOptions({ platform: 'windows' })))
-        .status
+      (await request('POST', '/no-such-profile/open', openOptions({ platform: 'windows' }))).status
     ).toBe(404);
     expect(launch).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a pending lifecycle profile on Mac and Windows while an unknown id is refused', async () => {
+    authenticated = true;
+    // The manifest holds only the old profile; the new id lives in the pending registry.
+    writeManifest({
+      version: 1,
+      profiles: [
+        {
+          ...fakeProfiles[0],
+          id: 'work',
+          mac: { ...fakeProfiles[0]!.mac, sshHost: 'example-mac' },
+          windows: { ...fakeProfiles[0]!.windows, sshHost: 'example-windows' },
+        },
+      ],
+    });
+    const pendingMac = {
+      launcherName: 'Claude (fresh-signin)',
+      launcherPath: '/Users/example/Applications/Claude (fresh-signin).app',
+      profilePath: '/Users/example/Library/Application Support/Claude-fresh-signin',
+      sshHost: 'example-mac',
+    };
+    const pendingWindows = {
+      launcherName: 'Claude (fresh-signin)',
+      launcherPath: 'C:\\Users\\example\\Desktop\\Claude (fresh-signin).lnk',
+      startMenuPath: 'C:\\Users\\example\\Start Menu\\Claude (fresh-signin).lnk',
+      profilePath: 'C:\\Users\\example\\AppData\\Roaming\\Claude-fresh-signin',
+      sshHost: 'example-windows',
+    };
+    fs.mkdirSync(path.join(tempDir, 'accounts'), { recursive: true });
+    const pendingFile = path.join(tempDir, 'accounts', 'claude-pending.json');
+    fs.writeFileSync(
+      pendingFile,
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'fresh-signin',
+            label: null,
+            mac: pendingMac,
+            windows: pendingWindows,
+            createdAt: '2026-10-02T08:00:00Z',
+          },
+        ],
+      })
+    );
+    fs.chmodSync(pendingFile, 0o600);
+    const macLaunch = spyOn(transport, 'openClaudeMacLauncher').mockResolvedValue(undefined);
+    const windowsLaunch = spyOn(transport, 'openClaudeWindowsLauncher').mockResolvedValue(
+      undefined
+    );
+    expect(await request('POST', '/fresh-signin/open', openOptions())).toEqual({
+      status: 200,
+      body: { opened: true, id: 'fresh-signin', platform: 'mac' },
+    });
+    expect(macLaunch).toHaveBeenCalledWith(pendingMac);
+    expect(
+      await request('POST', '/fresh-signin/open', openOptions({ platform: 'windows' }))
+    ).toEqual({
+      status: 200,
+      body: { opened: true, id: 'fresh-signin', platform: 'windows' },
+    });
+    expect(windowsLaunch).toHaveBeenCalledWith(pendingWindows, 'fresh-signin');
+    // In neither the pending registry nor the manifest: refused, nothing opens.
+    expect(
+      (await request('POST', '/no-such-profile/open', openOptions({ platform: 'windows' }))).status
+    ).toBe(404);
+    expect(macLaunch).toHaveBeenCalledTimes(1);
+    expect(windowsLaunch).toHaveBeenCalledTimes(1);
   });
 
   it('rejects cross-origin and non-JSON launch requests before SSH', async () => {
