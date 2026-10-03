@@ -6,18 +6,23 @@ CCS fork, retaining original authorship, license, private state and history.
 
 ## Retained product
 
-- Authenticated account dashboard for Claude, Codex and the configured additional
-  provider collectors.
-- Existing profile/account management and Claude Mac/Windows launcher controls.
+- Authenticated account dashboard (Home, Analytics, Accounts & Settings) for
+  Claude, Codex and the configured additional provider collectors.
+- Existing profile/account management, per-provider and per-account "Show on
+  dashboard" and "Show in tray" switches, server-driven add, sign-in again,
+  replace key, remove and restore, and Claude Mac/Windows launcher controls.
 - Guarded Codex activation on Ubuntu, explicit busy review, rollback and idle-only
   automatic switching.
-- Observed quota Analytics with source/platform/account filters and complete
-  reset/expiration details.
-- Authentic local Ubuntu Claude Code/Codex activity with clearly labeled estimated
-  API-equivalent costs.
+- Observed quota Analytics with range presets, a Claude Code / Codex filter,
+  Included usage sources and complete reset/expiration details.
+- Authentic CLI activity (Claude Code, Codex, OMP, Muse, zcode) with clearly
+  labeled logged, partial and not-logged costs; estimates are not charges.
+- Dashboard sign-in with password change, paired tray devices and the trusted
+  local network setting.
 - Server-confirmed refresh settings and explicitly started allowlisted app-update
-  jobs.
-- Native Mac and Windows clients of the same authenticated account APIs.
+  jobs with Cancel.
+- Native Mac and Windows clients of the same authenticated account APIs, paired
+  with their own device keys.
 - Local source packaging and a dashboard-only Docker build.
 
 The primary command is `ai-account-center dashboard`; `ccs config` is compatible.
