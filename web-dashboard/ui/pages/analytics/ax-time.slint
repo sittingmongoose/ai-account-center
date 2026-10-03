@@ -165,8 +165,6 @@ component BarColumn inherits Rectangle {
     in property <duration> delay;
     in property <bool> hot;
     in property <bool> dimmed;
-    in property <bool> show-claude;
-    in property <bool> show-codex;
     property <length> bw: clamp(root.slot * 0.62, 4px, 64px);
     property <bool> mounted: !Motion.on;
     mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
@@ -177,6 +175,8 @@ component BarColumn inherits Rectangle {
     property <length> total: root.ph * clamp(root.h, 0, 1.2);
     property <float> cl-share: root.bar.cl;
     animate cl-share { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    property <float> cx-share: root.bar.cx;
+    animate cx-share { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
     stack := Rectangle {
         x: (root.width - root.bw) / 2;
         y: root.ph - root.total - (root.hot ? 2px : 0px);
@@ -189,7 +189,9 @@ component BarColumn inherits Rectangle {
         border-bottom-right-radius: 2px;
         clip: true;
         property <length> clh: root.cl-share > 0 ? max(0px, self.height * root.cl-share - (root.cl-share < 1 ? 0.5px : 0px)) : 0px;
-        // Claude Code on top, Codex below, one pixel apart
+        property <length> cx0: stack.clh + (stack.clh > 0 && root.cl-share < 1 ? 1px : 0px);
+        property <length> cxh: root.cx-share > 0 ? max(0px, self.height * root.cx-share - (root.cl-share + root.cx-share < 1 ? 0.5px : 0px)) : 0px;
+        // Claude on top, Codex below it, then every other provider (or the picked one), one pixel apart
         Rectangle {
             y: 0px;
             height: stack.clh;
@@ -198,9 +200,16 @@ component BarColumn inherits Rectangle {
             animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
         }
         Rectangle {
-            y: stack.clh + (stack.clh > 0 && root.cl-share < 1 ? 1px : 0px);
-            height: max(0px, stack.height - self.y);
+            y: stack.cx0;
+            height: stack.cxh;
             background: AxColor.of("codex");
+            opacity: root.dimmed ? 0.55 : 1;
+            animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+        }
+        Rectangle {
+            y: stack.cx0 + stack.cxh + (stack.cxh > 0 && root.cl-share + root.cx-share < 1 ? 1px : 0px);
+            height: max(0px, stack.height - self.y);
+            background: AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model;
             opacity: root.dimmed ? 0.55 : 1;
             animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
         }
@@ -221,8 +230,9 @@ export component AxDailyCard inherits AxCard {
             spacing: 14px;
             alignment: end;
             horizontal-stretch: 0;
-            if AxData.daily.show-claude: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("claude"); label: "Claude Code"; } }
-            if AxData.daily.show-codex: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("codex"); label: "Codex"; } }
+            if AxData.daily.show-claude: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("claude"); label: AxData.daily.claude-label; } }
+            if AxData.daily.show-codex: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("codex"); label: AxData.daily.codex-label; } }
+            if AxData.daily.show-other: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model; label: AxData.daily.other-label; } }
         }
     }
     HorizontalLayout {
@@ -312,8 +322,11 @@ export component AxDailyCard inherits AxCard {
                     padding-bottom: 10px;
                     AxRoTime { text: box.hb.time; }
                     Rectangle { height: 4px; }
-                    if AxData.daily.show-claude: AxRoRow { c: AxColor.of("claude"); label: "Claude Code"; value: box.hb.claude; }
-                    if AxData.daily.show-codex: AxRoRow { c: AxColor.of("codex"); label: "Codex"; value: box.hb.codex; }
+                    for r in box.hb.rows: AxRoRow {
+                        c: r.p == "claude" ? AxColor.of("claude") : r.p == "codex" ? AxColor.of("codex") : AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model;
+                        label: r.label;
+                        value: r.value;
+                    }
                     if box.hb.total != "": Rectangle { height: 11px; Rectangle { y: 5px; height: 1px; background: Theme.rule-2; } }
                     if box.hb.total != "": AxRoRow { no-swatch: true; label: "Total"; value: box.hb.total; strong: true; }
                     if box.hb.foot != "": Text { text: box.hb.foot; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }

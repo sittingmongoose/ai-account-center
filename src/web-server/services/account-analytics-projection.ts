@@ -8,6 +8,9 @@ import {
 } from './account-analytics-pricing';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import type { ModelBreakdown, SessionUsage } from '../usage/types';
+import { attributeActivitySources } from './account-analytics-attribution';
+import { ADDITIONAL_PROVIDERS } from './account-dashboard-projection';
+import type { DashboardProvider } from './account-dashboard-types';
 import type {
   AccountAnalyticsActivity,
   AccountAnalyticsActivityCoverage,
@@ -15,9 +18,10 @@ import type {
   AccountAnalyticsActivityTotals,
   AccountAnalyticsModelRates,
   AccountAnalyticsQuery,
+  AccountAnalyticsUsageProvider,
 } from './account-analytics-types';
 
-const ACTIVITY_PROVIDERS: readonly AccountAnalyticsActivityProvider[] = [
+const TOOLS: readonly AccountAnalyticsActivityProvider[] = [
   'claude',
   'codex',
   'omp',
@@ -25,13 +29,15 @@ const ACTIVITY_PROVIDERS: readonly AccountAnalyticsActivityProvider[] = [
   'zcode',
 ];
 
-const ACTIVITY_PROVIDER_LABELS: Record<AccountAnalyticsActivityProvider, string> = {
-  claude: 'Claude Code logs',
-  codex: 'Codex logs',
-  omp: 'OMP logs',
-  muse: 'Muse logs',
-  zcode: 'zcode logs',
-};
+/** The dashboard's provider labels; "other" is usage on a route no provider claims. */
+const USAGE_PROVIDER_LABELS: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries([
+    ['claude', 'Claude'],
+    ['codex', 'Codex'],
+    ...ADDITIONAL_PROVIDERS,
+    ['other', 'Other'],
+  ])
+);
 
 /**
  * Pure projection of the retained local CLI snapshot into the Analytics
@@ -40,7 +46,7 @@ const ACTIVITY_PROVIDER_LABELS: Record<AccountAnalyticsActivityProvider, string>
  * anomaly rules. Nothing here reads disk or attributes activity to accounts.
  */
 
-/** One CLI source as the activity reader retains it (all hosts merged). */
+/** One CLI source as the activity reader retains it (all hosts merged); the projection regroups it by provider. */
 export interface SourceData {
   provider: AccountAnalyticsActivityProvider;
   data: UsageWorkerResult[];
@@ -56,7 +62,7 @@ const FIELDS = [
   'fallbackCostUsd',
 ] as const;
 
-type Provider = AccountAnalyticsActivityProvider;
+type Provider = AccountAnalyticsUsageProvider;
 type TotalField = (typeof FIELDS)[number];
 type TokenField = Exclude<TotalField, 'estimatedCostUsd' | 'fallbackCostUsd'>;
 const TOKEN_FIELDS: readonly TokenField[] = [
@@ -84,6 +90,12 @@ const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([
 ]);
 const MAX_SESSION_SAMPLE = 50;
 const MAX_NAMED_DAY_MODELS = 12;
+/**
+ * Every model with usage in the range is published, so the page can list each one. The bound only keeps a
+ * pathological snapshot finite; ranking is by estimated cost, then by tokens, so a model whose cost is logged
+ * as zero or not logged at all is never dropped ahead of a costlier one with fewer tokens.
+ */
+const MAX_PUBLISHED_MODELS = 500;
 const OTHER_MODELS = 'Other models';
 
 export interface AccountAnalyticsProjectionOptions {
@@ -187,6 +199,9 @@ function publish(value: Accumulator): AccountAnalyticsActivityTotals {
 function nanoDollars(value: number): number {
   return Math.round(value * 1e9) / 1e9;
 }
+function tokenTotal(value: Record<TokenField, number>): number {
+  return TOKEN_FIELDS.reduce((sum, field) => sum + value[field], 0);
+}
 
 interface PricedBreakdowns {
   /** Parts for everything the breakdowns cover, or null when a model has no rate. */
@@ -257,9 +272,9 @@ function priceBreakdowns(
   };
 }
 
-function sessionKey(provider: Provider, sessionId: string): string {
+function sessionKey(tool: AccountAnalyticsActivityProvider, sessionId: string): string {
   return createHash('sha256')
-    .update(`aac-session-v1:${provider}:${sessionId}`)
+    .update(`aac-session-v1:${tool}:${sessionId}`)
     .digest('hex')
     .slice(0, 16);
 }
@@ -283,18 +298,24 @@ export function accountAnalyticsActivityCoverage(
   to: number
 ): AccountAnalyticsActivityCoverage {
   let oldest = Infinity;
-  const active = new Set<Provider>();
-  for (const source of sources)
+  const active: DashboardProvider[] = [];
+  for (const source of attributeActivitySources(sources))
     for (const result of source.data)
       for (const hour of result.hourly) {
         const epoch = hourEpoch(hour.hour);
         if (!Number.isFinite(epoch)) continue;
         if (epoch < oldest) oldest = epoch;
-        if (epoch >= from && epoch <= to) active.add(source.provider);
+        if (
+          epoch >= from &&
+          epoch <= to &&
+          source.provider !== 'other' &&
+          !active.includes(source.provider)
+        )
+          active.push(source.provider);
       }
   return {
     oldestHourAt: Number.isFinite(oldest) ? oldest : null,
-    providersWithActivity: ACTIVITY_PROVIDERS.filter((provider) => active.has(provider)),
+    providersWithActivity: active,
   };
 }
 
@@ -340,16 +361,18 @@ export function projectAccountAnalyticsActivity(
       message:
         'Local CLI logs do not reliably identify a subscription account. Select all accounts to view local activity; account quota history remains available.',
     };
-  const selected = sources.filter(
+  // Usage is grouped by the provider that served it (the logged route), not by the tool that logged it.
+  const selected = attributeActivitySources(sources).filter(
     (source) => query.provider === 'all' || query.provider === source.provider
   );
   if (selected.length === 0)
     return {
       ...base,
       status: status === 'loading' ? 'loading' : 'unavailable',
-      message: (ACTIVITY_PROVIDERS as readonly string[]).includes(query.provider)
-        ? message
-        : 'This provider reports quota and balance observations; token and session history is not available.',
+      message:
+        query.provider === 'all'
+          ? message
+          : 'No CLI usage log in this range was served by this provider; its quota and balance observations remain available.',
     };
   base.fetchedAt = selected.map((source) => source.fetchedAt).sort()[0] ?? null;
   if (tz !== 'UTC' && hasPartialHourOffset(tz, from, to))
@@ -379,13 +402,21 @@ export function projectAccountAnalyticsActivity(
       totals: Accumulator;
       rates: AccountAnalyticsModelRates | null;
       ratesSeen: boolean;
+      tools: Set<AccountAnalyticsActivityProvider>;
     }
   >();
   const dayModels = new Map<string, DayModelRow>();
   const sessionCandidates = new Map<
     string,
-    { provider: Provider; lastActivity: number; session: SessionUsage }
+    {
+      provider: Provider;
+      tool: AccountAnalyticsActivityProvider;
+      lastActivity: number;
+      session: SessionUsage;
+    }
   >();
+  // A session that several providers served counts under each of them, and once in the total.
+  const distinctSessions = new Set<string>();
   const combined = accumulator();
   const addBucket = (bucket: Bucket, values: Accumulator, requestCount: unknown): void => {
     merge(bucket.totals, values);
@@ -410,10 +441,12 @@ export function projectAccountAnalyticsActivity(
     const sourceTotals = accumulator();
     let usageEvents = 0;
     const sessions = new Set<string>();
+    const tools = new Set<AccountAnalyticsActivityProvider>();
     for (const result of source.data) {
       for (const hour of result.hourly) {
         const epoch = hourEpoch(hour.hour);
         if (!Number.isFinite(epoch) || epoch < from || epoch > to) continue;
+        tools.add(result.tool);
         const date = dateOf(epoch);
         const priced = priceBreakdowns(hour, pricing);
         const values = accumulator();
@@ -451,7 +484,9 @@ export function projectAccountAnalyticsActivity(
             totals: accumulator(),
             rates: null,
             ratesSeen: false,
+            tools: new Set<AccountAnalyticsActivityProvider>(),
           };
+          existing.tools.add(result.tool);
           addValues(existing.totals, model.values);
           addParts(existing.totals, model.parts);
           // One row can mix routing providers; publish rates only when they agree.
@@ -467,26 +502,34 @@ export function projectAccountAnalyticsActivity(
         }
         if (priced.residual) addDayModel(date, source.provider, null, priced.residual, null);
       }
-      for (const session of result.session) {
+      for (const { part, whole, dominant } of result.session) {
         // Active in range: its activity overlaps the range, wherever it ends.
-        const { first, last: lastActivity } = sessionSpan(session);
-        if (first <= to && lastActivity >= from && typeof session.sessionId === 'string') {
-          sessions.add(session.sessionId);
+        const { first, last: lastActivity } = sessionSpan(part);
+        if (first <= to && lastActivity >= from && typeof part.sessionId === 'string') {
           // Internal dedupe only; the published key is hashed for the sample alone.
-          const key = `${source.provider}\0${session.sessionId}`;
+          const key = `${result.tool}\0${part.sessionId}`;
+          sessions.add(key);
+          distinctSessions.add(key);
+          // The sample lists each session once, under the provider that served most of it.
           const previous = sessionCandidates.get(key);
-          if (!previous || lastActivity > previous.lastActivity)
-            sessionCandidates.set(key, { provider: source.provider, lastActivity, session });
+          if (dominant && (!previous || lastActivity > previous.lastActivity))
+            sessionCandidates.set(key, {
+              provider: source.provider,
+              tool: result.tool,
+              lastActivity,
+              session: whole,
+            });
         }
       }
     }
     merge(combined, sourceTotals);
     base.providers.push({
       provider: source.provider,
-      label: ACTIVITY_PROVIDER_LABELS[source.provider],
+      label: USAGE_PROVIDER_LABELS[source.provider] ?? source.provider,
       totals: publish(sourceTotals),
       usageEvents,
       sessionCount: sessions.size,
+      tools: TOOLS.filter((tool) => tools.has(tool)),
     });
   }
   const bucketRow = (bucket: Bucket) => ({
@@ -548,7 +591,7 @@ export function projectAccountAnalyticsActivity(
     .slice(0, MAX_SESSION_SAMPLE)
     .map(([, candidate]) => {
       const session = candidate.session;
-      const key = sessionKey(candidate.provider, session.sessionId);
+      const key = sessionKey(candidate.tool, session.sessionId);
       const priced = priceBreakdowns(session, pricing);
       const values = accumulator();
       addValues(values, totals(session));
@@ -573,7 +616,7 @@ export function projectAccountAnalyticsActivity(
         ...publish(values),
       };
     });
-  const sessionTotal = base.providers.reduce((sum, row) => sum + row.sessionCount, 0);
+  const sessionTotal = distinctSessions.size;
   if (usable && sample.length > 0)
     base.message = `${base.message} Session rows show each session's whole retained totals, which can include activity outside this range.`;
 
@@ -612,13 +655,20 @@ export function projectAccountAnalyticsActivity(
     byDay,
     byHour,
     models: [...modelBuckets.values()]
-      .sort((a, b) => b.totals.estimatedCostUsd - a.totals.estimatedCostUsd)
-      .slice(0, 30)
+      .sort(
+        (a, b) =>
+          b.totals.estimatedCostUsd - a.totals.estimatedCostUsd ||
+          tokenTotal(b.totals) - tokenTotal(a.totals) ||
+          a.provider.localeCompare(b.provider) ||
+          a.model.localeCompare(b.model)
+      )
+      .slice(0, MAX_PUBLISHED_MODELS)
       .map((row) => ({
         model: row.model,
         provider: row.provider,
         ...publish(row.totals),
         rates: row.rates,
+        tools: TOOLS.filter((tool) => row.tools.has(tool)),
       })),
     byDayModel,
     sessions: usable

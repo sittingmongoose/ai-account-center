@@ -3,13 +3,14 @@
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { RunView } from "../../models.slint";
 import { Icon } from "../../components/icon.slint";
+import { ProviderMark } from "../../components/mark.slint";
 import { Hover } from "../../components/hover-card.slint";
 import { IconButton } from "../../components/icon-button.slint";
 import { Button } from "../../components/button.slint";
 import { Caps } from "../../components/text.slint";
 import { HoverShadow } from "../../components/card.slint";
 import { ProbeMark } from "../../components/probe.slint";
-import { AxData, AxKpi, AxDay, AxSrcCell } from "ax-data.slint";
+import { AxData, AxKpi, AxDay, AxSrcCell, AxProvItem, AxPickItem } from "ax-data.slint";
 import { AxColor, AxNum, AxTip, AxSwatch, AxSeg, AxSegItem, AxInfo } from "ax-common.slint";
 
 // A popover body that rises 4 px and fades in when it opens.
@@ -286,10 +287,89 @@ component DateButton inherits Rectangle {
     ta := AxTip { tip: root.open ? "" : "Pick days within the logs that were read"; mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
 }
 
+// The provider picker: a quiet button with the picked provider (its mark) that opens the list of providers with
+// usage in the range, each with its tokens. Picking one shows that provider's usage, divided by model.
+component PickerRow inherits Rectangle {
+    in property <AxPickItem> item;
+    in property <bool> selected;
+    callback picked(string);
+    height: 32px;
+    border-radius: 7px;
+    background: ta.has-hover || root.selected ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    animate background { duration: Motion.tint(Motion.fast); }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(root.item.value); }
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 9px;
+            HorizontalLayout { width: 16px; if root.item.mark != "": VerticalLayout { alignment: center; ProviderMark { provider: root.item.mark; size: 16px; } } }
+            Text {
+                text: root.item.label;
+                font-size: 13px;
+                font-weight: root.selected ? 620 : 500;
+                color: root.item.off ? Theme.ink-3 : Theme.ink;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text { text: root.item.tokens; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; }
+            HorizontalLayout { width: 14px; if root.selected: VerticalLayout { alignment: center; Icon { name: "check"; width: 14px; height: 14px; tint: Theme.accent-text; } } }
+        }
+    }
+}
+component PickerBody inherits VerticalLayout {
+    callback picked(string);
+    spacing: 0px;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-bottom: 6px;
+        Caps { text: "PROVIDER"; horizontal-stretch: 1; }
+        Caps { text: "TOKENS"; horizontal-alignment: right; }
+        Rectangle { width: 31px; }
+    }
+    for it in AxData.picker-items: PickerRow { item: it; selected: it.value == AxData.prov; picked(v) => { root.picked(v); } }
+}
+component PickerButton inherits Rectangle {
+    in property <bool> open;
+    callback clicked();
+    height: 36px;
+    min-width: row.preferred-width;
+    preferred-width: row.preferred-width;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.open || ta.has-hover ? Theme.rule-strong : Theme.rule;
+    background: ta.has-hover || root.open ? Theme.paper-2 : Theme.paper;
+    animate background, border-color { duration: Motion.tint(Motion.fast); }
+    transform-scale: ta.pressed ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    row := HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 10px;
+        spacing: 8px;
+        if AxData.picker-mark != "": VerticalLayout { alignment: center; ProviderMark { provider: AxData.picker-mark; size: 16px; } }
+        Text { text: AxData.picker-label; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                name: "chev-down";
+                width: 13px;
+                height: 13px;
+                tint: Theme.ink-3;
+                transform-rotation: root.open ? 180deg : 0deg;
+                animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            }
+        }
+    }
+    ta := AxTip { tip: root.open ? "" : "Show one provider's usage, by model"; mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
+    ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: "analytics-provider"; }
+}
+
 export component AxHeader inherits Rectangle {
     property <bool> wide: Breakpoints.width >= 1360px;
     property <[AxSegItem]> ranges: [{ value: "24h", label: "24H" }, { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "month", label: "Month" }, { value: "all", label: "All" }];
-    property <[AxSegItem]> provs: [{ value: "all", label: "All" }, { value: "claude", label: "Claude Code", mark: "claude" }, { value: "codex", label: "Codex", mark: "codex" }];
     min-height: lay.min-height;
     preferred-height: lay.preferred-height;
 
@@ -350,14 +430,40 @@ export component AxHeader inherits Rectangle {
                 spacing: 14px;
                 horizontal-stretch: 0;
                 VerticalLayout { alignment: end; HorizontalLayout { spacing: 8px; range-seg-w := AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } } date-w := DateButton { label: AxData.head.date; on: AxData.head.custom; open: dates-w.is-open; clicked => { dates-w.show(); } dates-w := PopupWindow { x: 0px; y: date-w.height + 8px; width: 336px; height: dw-body.preferred-height; close-policy: close-on-click-outside; dw-body := AxPopBody { width: 336px; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-w.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-w.close(); } } } } } } }
-                VerticalLayout { alignment: end; AxSeg { items: root.provs; value: AxData.prov; picked(v) => { AxData.action("analytics-provider", v); } } }
+                VerticalLayout {
+                    alignment: end;
+                    pick-w := PickerButton {
+                        open: picks-w.is-open;
+                        clicked => { picks-w.show(); }
+                        picks-w := PopupWindow {
+                            x: pick-w.width - 320px;
+                            y: pick-w.height + 8px;
+                            width: 320px;
+                            height: pw-body.preferred-height;
+                            close-policy: close-on-click-outside;
+                            pw-body := AxPopBody { width: 320px; height: self.preferred-height; pad-x: 8px; pad-y: 10px; PickerBody { picked(v) => { picks-w.close(); AxData.action("analytics-provider", v); } } }
+                        }
+                    }
+                }
                 VerticalLayout { alignment: end; IconButton { icon: "refresh"; hint: "Refresh now"; spinning: AxData.head.loading; clicked => { AxData.action("analytics-refresh", ""); } } }
             }
         }
         if !root.wide: HorizontalLayout {
             spacing: 14px;
             HorizontalLayout { spacing: 8px; horizontal-stretch: 0; AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } } date-n := DateButton { label: AxData.head.date; on: AxData.head.custom; open: dates-n.is-open; clicked => { dates-n.show(); } dates-n := PopupWindow { x: 0px; y: date-n.height + 8px; width: 336px; height: dn-body.preferred-height; close-policy: close-on-click-outside; dn-body := AxPopBody { width: 336px; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-n.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-n.close(); } } } } } }
-            AxSeg { items: root.provs; value: AxData.prov; picked(v) => { AxData.action("analytics-provider", v); } horizontal-stretch: 0; }
+            pick-n := PickerButton {
+                horizontal-stretch: 0;
+                open: picks-n.is-open;
+                clicked => { picks-n.show(); }
+                picks-n := PopupWindow {
+                    x: 0px;
+                    y: pick-n.height + 8px;
+                    width: 320px;
+                    height: pn-body.preferred-height;
+                    close-policy: close-on-click-outside;
+                    pn-body := AxPopBody { width: 320px; height: self.preferred-height; pad-x: 8px; pad-y: 10px; PickerBody { picked(v) => { picks-n.close(); AxData.action("analytics-provider", v); } } }
+                }
+            }
             Rectangle { horizontal-stretch: 1; }
             IconButton { icon: "refresh"; hint: "Refresh now"; spinning: AxData.head.loading; clicked => { AxData.action("analytics-refresh", ""); } }
         }
@@ -452,6 +558,53 @@ component KpiCard inherits Rectangle {
     }
 }
 
+// "Tokens by provider": how many tokens each provider served in the range, under the KPI cards. The view model
+// packs the items into lines that fit the page; each item's tip has its share, token types, estimated cost and the
+// logs it came from. It is a summary, never a filter, a legend or a section (the charts stay divided by model).
+component ProvItem inherits Rectangle {
+    in property <AxProvItem> t;
+    // natural width only: the line's spare room goes to its end, never between items or within one
+    horizontal-stretch: 0;
+    min-width: row.preferred-width;
+    preferred-width: row.preferred-width;
+    max-width: row.preferred-width;
+    min-height: 22px;
+    AxTip {
+        tip: root.t.tip;
+        row := HorizontalLayout {
+            spacing: 5px;
+            if root.t.mark != "": VerticalLayout { alignment: center; ProviderMark { provider: root.t.mark; size: 16px; } }
+            Text { text: root.t.label; font-size: 13px; color: Theme.ink-2; vertical-alignment: center; }
+            Text {
+                text: root.t.value;
+                font-family: Type.tab;
+                font-size: 13px;
+                font-weight: root.t.quiet ? 500 : 620;
+                color: root.t.quiet ? Theme.ink-3 : Theme.ink;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+export component AxProvLines inherits VerticalLayout {
+    spacing: 2px;
+    for line in AxData.prov-lines: HorizontalLayout {
+        spacing: 10px;
+        padding-left: 2px;
+        // the caption opens the first line; the lines after it start under the first item
+        if line.first: Caps { text: AxData.prov-summary.label; width: 150px; min-height: 22px; }
+        if !line.first: Rectangle { width: 150px; }
+        for t[i] in line.items: HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 10px;
+            if i > 0: Text { text: "·"; font-size: 13px; color: Theme.ink-4; vertical-alignment: center; horizontal-stretch: 0; }
+            ProvItem { t: t; }
+        }
+        if line.last && Breakpoints.width >= 1180px: Text { text: AxData.prov-summary.note; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
 export component AxKpiRow inherits Rectangle {
     in property <bool> played;
     in property <duration> delay;
@@ -485,5 +638,6 @@ export component AxKpiRow inherits Rectangle {
             KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
             KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
         }
+        if !root.loading && AxData.prov-summary.shown: AxProvLines { }
     }
 }

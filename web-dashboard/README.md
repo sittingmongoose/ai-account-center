@@ -92,7 +92,7 @@ page as file:// or configure a cross-origin API URL.
   failure as a toast; unavailable values are never replaced with zero.
 - Analytics is built around Usage, the original CCS analytics page improved: range
   presets (24H, 7D, 30D, Month, All) and a custom range of whole local days, a
-  Claude Code / Codex filter, five KPI cards, the usage-trends chart (tokens and
+  provider picker, five KPI cards, the usage-trends chart (tokens and
   estimated cost on two axes, token types and cache reads toggles, a crosshair
   readout), cost by model with a model popover, the model donut, session stats,
   token breakdown, cache efficiency, a weekday x hour heatmap, daily cost by
@@ -101,11 +101,17 @@ page as file:// or configure a cross-origin API URL.
   Per-type costs use the rates mirrored from `src/web-server/model-pricing.ts`
   (`public/model-rates.mjs`) and are kept only when they add up to each model's
   logged estimate; otherwise the split shows token shares and says so. Usage
-  from OMP, Muse Code and zcode (Ubuntu, Mac and Windows) counts in the totals
-  and merges into the model views under All; they are never a provider, filter
-  or legend. "Included usage" in the header lists each source's state and last
-  scan. Their cost with no logged amount and no listed rate shows "Not logged",
-  never $0.00, and totals that leave it out say "partial"; Claude Code and Codex
+  from OMP, Muse Code and zcode (Ubuntu, Mac and Windows) is grouped under the
+  dashboard provider that served it, from the route each log records (Qwen,
+  Z.ai, Kimi Code, OpenCode Go, Cursor, Muse Code, Antigravity; a route no
+  provider claims is Other); the tools are never providers. The top-right
+  picker lists every provider with usage in the range, a "Tokens by provider"
+  summary sits under the KPI cards, Cost by model lists every model (sortable
+  by cost or tokens), and the donut's "N smaller models" and its not-logged
+  models open into their models. "Included usage" in the header lists each
+  tool's source state and last scan. Cost with no logged amount and no listed
+  rate shows "Not logged", never $0.00, and totals that leave it out say
+  "partial"; Claude and Codex
   estimates are unchanged. Month,
   All and custom ranges read the covering 24h, 7d or 30d response and are cut in
   the browser; per-model and session data then say which logs they cover.

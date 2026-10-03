@@ -8,11 +8,12 @@
 //! changed reading counts up, grows or morphs from its previous value instead of re-mounting.
 use crate::sync::{Nested, sync_rows};
 use crate::{
-    AnalyticsHeadView, AxAgendaRow, AxBar, AxBucket, AxCache, AxCalendar, AxCardText, AxDaily,
-    AxData, AxDay, AxDonut, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat, AxHeatCell,
-    AxIncluded, AxKpi, AxLabel, AxLegendItem, AxModelRow, AxModelType, AxQuotaGroup, AxQuotaRow,
-    AxScopeLine, AxSessRow, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick,
-    AxTokRow, AxTrend, AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
+    AnalyticsHeadView, AxAgendaRow, AxBar, AxBarRow, AxBucket, AxCache, AxCalendar, AxCardText,
+    AxDaily, AxData, AxDay, AxDonut, AxDonutLeg, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat,
+    AxHeatCell, AxIncluded, AxKpi, AxLabel, AxLegendItem, AxModelRow, AxModelType, AxPickItem,
+    AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine, AxSessRow,
+    AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
+    AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
 };
 use serde_json::Value;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -159,6 +160,7 @@ fn bucket(v: &Value) -> AxBucket {
         tcr: s(v, "tcr"),
         tall: s(v, "tall"),
         cr_dim: b(v, "crDim"),
+        by_provider: s(v, "byProvider"),
         foot: s(v, "foot"),
         foot2: s(v, "foot2"),
     }
@@ -225,6 +227,14 @@ fn donut_seg(v: &Value) -> AxDonutSeg {
         value_tip: s(v, "valueTip"),
         label: b(v, "label"),
         idx: i(v, "idx"),
+    }
+}
+fn donut_leg(v: &Value) -> AxDonutLeg {
+    AxDonutLeg {
+        seg: donut_seg(g(v, "seg")),
+        kind: s(v, "kind"),
+        open: b(v, "open"),
+        arc: g(v, "arc").as_f64().map(|n| n as i32).unwrap_or(-1),
     }
 }
 fn stat(v: &Value) -> AxStat {
@@ -482,6 +492,11 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
     ax.set_cache_on(b(state, "cache"));
     ax.set_donut_mode(s(state, "donut"));
     ax.set_heat_mode(s(state, "heat"));
+    ax.set_cbm_sort(if s(state, "cbmSort") == "tokens" {
+        "tokens".into()
+    } else {
+        "cost".into()
+    });
 
     let usage = g(&v, "usage");
     ax.set_head(head(g(usage, "head"), ax.get_head()));
@@ -514,6 +529,36 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         arr(usage, "kpis").iter().map(kpi).collect(),
         |k: &AxKpi| k.key.clone(),
     );
+    // tokens by provider: a summary, packed into lines by the view model; never a section
+    let provs = g(usage, "providers");
+    ax.set_prov_summary(AxProvSummary {
+        shown: b(provs, "shown"),
+        label: s(provs, "label"),
+        note: s(provs, "note"),
+    });
+    ax.set_prov_lines(list(provs, "lines", |l| AxProvLine {
+        items: list(l, "items", |t| AxProvItem {
+            key: s(t, "key"),
+            label: s(t, "label"),
+            mark: s(t, "mark"),
+            value: s(t, "value"),
+            tip: s(t, "tip"),
+            quiet: b(t, "quiet"),
+        }),
+        first: b(l, "first"),
+        last: b(l, "last"),
+    }));
+    // the provider picker: All, then every provider with usage in the range
+    let picker = g(usage, "picker");
+    ax.set_picker_items(list(picker, "items", |p| AxPickItem {
+        value: s(p, "value"),
+        label: s(p, "label"),
+        mark: s(p, "mark"),
+        tokens: s(p, "tokens"),
+        off: b(p, "off"),
+    }));
+    ax.set_picker_label(s(picker, "label"));
+    ax.set_picker_mark(s(picker, "mark"));
 
     // trend: the axes cross-fade when the geometry changes (gen); bridge.js may animate the paths
     let t = g(usage, "trend");
@@ -576,6 +621,7 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         |r: &AxDonutSeg| r.key.clone(),
     );
     ax.set_donut_lut(ints(donut, "lut"));
+    ax.set_donut_legend(list(donut, "legend", donut_leg));
 
     // sessions, tokens, cache
     let sessions = g(usage, "sessions");
@@ -643,6 +689,11 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         empty_text: s(daily, "emptyText"),
         show_claude: b(daily, "showClaude"),
         show_codex: b(daily, "showCodex"),
+        show_other: b(daily, "showOther"),
+        claude_label: s(daily, "claudeLabel"),
+        codex_label: s(daily, "codexLabel"),
+        other_label: s(daily, "otherLabel"),
+        other_hue: s(daily, "otherHue"),
     });
     ax.set_daily_y(list(daily, "yTicks", |y| AxYTick {
         y: f(y, "y"),
@@ -657,10 +708,14 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
             .map(|r| AxBar {
                 h: f(r, "h"),
                 cl: f(r, "cl"),
+                cx: f(r, "cx"),
                 label: s(r, "label"),
                 time: s(r, "time"),
-                claude: s(r, "claude"),
-                codex: s(r, "codex"),
+                rows: list(r, "rows", |x| AxBarRow {
+                    p: s(x, "p"),
+                    label: s(x, "label"),
+                    value: s(x, "value"),
+                }),
                 total: s(r, "total"),
                 foot: s(r, "foot"),
             })

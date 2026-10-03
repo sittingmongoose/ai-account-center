@@ -23,6 +23,12 @@ export interface ModelBreakdown {
    * cost and no listed rate. Absent when zero, and from readers that never price at the fallback.
    */
   fallbackCost?: number;
+  /**
+   * Events behind this breakdown. Only readers that record a routing provider (OMP, Muse, zcode and the
+   * remote hosts) set it, so an hour that mixes routes can be divided by provider without guessing; Claude
+   * Code and Codex rows keep their exact shape.
+   */
+  requestCount?: number;
 }
 
 // ============================================================================

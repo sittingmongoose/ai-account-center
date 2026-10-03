@@ -11,6 +11,13 @@ export struct AxSrcCell { text: string, tone: string, tip: string }
 export struct AxSrcRow { tool: string, cells: [AxSrcCell] }
 export struct AxIncluded { shown: bool, label: string, line: string, foot: string }
 
+// ---- tokens by provider: a summary under the KPI row (packed into lines by the view model); never a section ----
+export struct AxProvItem { key: string, label: string, mark: string, value: string, tip: string, quiet: bool }
+export struct AxProvLine { items: [AxProvItem], first: bool, last: bool }
+export struct AxProvSummary { shown: bool, label: string, note: string }
+// ---- the provider picker: All, then every provider with usage in the range (tokens), in the dashboard's order ----
+export struct AxPickItem { value: string, label: string, mark: string, tokens: string, off: bool }
+
 // ---- KPI row and the count-up numbers (fmt: tok | money | int | pct1 | pct2) ----
 export struct AxKpi {
     key: string,
@@ -46,6 +53,8 @@ export struct AxBucket {
     tcr: string,
     tall: string,
     cr-dim: bool,
+    // with providers other than Claude and Codex in range: the tokens each served in this bucket
+    by-provider: string,
     foot: string,
     foot2: string,
 }
@@ -133,6 +142,9 @@ export struct AxDonutSeg {
     label: bool,
     idx: int,
 }
+// A legend row: kind seg (one arc), group (opens into its models: the models under 1%, or by cost the models with
+// no arc) or child (a model inside an open group; it opens the model's detail). arc: the arc it lights, or -1.
+export struct AxDonutLeg { seg: AxDonutSeg, kind: string, open: bool, arc: int }
 export struct AxDonut { sub: string, note: string, mode: string, centre: string, centre-label: string, unit: string, empty: bool, empty-text: string }
 
 // ---- session stats, token breakdown, cache efficiency ----
@@ -169,8 +181,24 @@ export struct AxCache {
 // state 0: outside the logs in range (empty, never zero); 1: nothing logged; 2: a value (k = sqrt share of max)
 export struct AxHeatCell { state: int, k: float, tip: string }
 export struct AxHeat { mode: string, sub: string, busiest: string, dash: string }
-export struct AxBar { h: float, cl: float, label: string, time: string, claude: string, codex: string, total: string, foot: string }
-export struct AxDaily { title: string, sub: string, empty: bool, empty-text: string, show-claude: bool, show-codex: bool }
+// cl, cx: Claude's and Codex's shares of the bar; the rest is every other provider (neutral) or the picked one.
+// rows: the readout, every provider that served usage in the bucket; p is claude, codex or "" (the third series).
+export struct AxBarRow { p: string, label: string, value: string }
+export struct AxBar { h: float, cl: float, cx: float, label: string, time: string, rows: [AxBarRow], total: string, foot: string }
+export struct AxDaily {
+    title: string,
+    sub: string,
+    empty: bool,
+    empty-text: string,
+    show-claude: bool,
+    show-codex: bool,
+    show-other: bool,
+    claude-label: string,
+    codex-label: string,
+    other-label: string,
+    // the third series' hue: a picked provider's id, or "" for the neutral colour of every other provider
+    other-hue: string,
+}
 
 // ---- custom range picker ----
 export struct AxDay { day: string, n: int, label: string, month: string, off: bool, today: bool, long: string }
@@ -250,6 +278,8 @@ export global AxData {
     in-out property <[string]> included-hosts;
     in-out property <[AxSrcRow]> included-rows;
     in-out property <[AxKpi]> kpis;
+    in-out property <AxProvSummary> prov-summary;
+    in-out property <[AxProvLine]> prov-lines;
     in-out property <AxTrend> trend;
     in-out property <AxTrendPaths> trend-paths;
     in-out property <[AxYTick]> trend-y;
@@ -261,6 +291,7 @@ export global AxData {
     in-out property <[AxModelRow]> models;
     in-out property <AxDonut> donut;
     in-out property <[AxDonutSeg]> donut-segs;
+    in-out property <[AxDonutLeg]> donut-legend;
     // segment index per degree, clockwise from the top (-1 where no segment is drawn)
     in-out property <[int]> donut-lut;
     in-out property <AxCardText> sessions;
@@ -286,9 +317,14 @@ export global AxData {
     // page state echoed back by bridge.js (the controls show it)
     in-out property <string> range: "7d";
     in-out property <string> prov: "all";
+    in-out property <[AxPickItem]> picker-items: [{ value: "all", label: "All providers" }];
+    in-out property <string> picker-label: "All providers";
+    in-out property <string> picker-mark;
     in-out property <bool> split: false;
     in-out property <bool> cache-on: false;
     in-out property <string> donut-mode: "tokens";
+    // Cost by model's order: cost | tokens
+    in-out property <string> cbm-sort: "cost";
     in-out property <string> heat-mode: "cost";
     // intent: analytics-* kinds, forwarded unchanged to window.ccsDashboardAction
     callback action(string, string);

@@ -209,9 +209,13 @@ describe('account analytics route: contract additions', () => {
         });
         expect((await get('?provider=antigravity')).status).toBe(200);
         expect((await get('?provider=all')).status).toBe(200);
+        // CLI usage on a route no provider claims; tool names are never providers
+        expect((await get('?provider=other')).status).toBe(200);
+        expect((await get('?provider=omp')).status).toBe(400);
+        expect((await get('?provider=zcode')).status).toBe(400);
       }
     );
-    expect(seen.map((query) => query.provider)).toEqual(['antigravity', 'all']);
+    expect(seen.map((query) => query.provider)).toEqual(['antigravity', 'all', 'other']);
   });
 
   it('maps service range errors to 400 with their code and keeps fixed error codes', async () => {

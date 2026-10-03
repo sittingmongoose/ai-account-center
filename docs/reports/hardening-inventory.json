@@ -603,8 +603,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 31,
-      "totalSourceFiles": 376,
-      "coverageRatio": 0.0824,
+      "totalSourceFiles": 377,
+      "coverageRatio": 0.0822,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -631,7 +631,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 129,
+          "count": 130,
           "withLogger": 15
         },
         {
@@ -779,7 +779,7 @@
         },
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 830
+          "loc": 832
         },
         {
           "file": "src/web-server/usage/aggregator.ts",
@@ -798,6 +798,10 @@
           "loc": 691
         },
         {
+          "file": "src/web-server/services/account-analytics-projection.ts",
+          "loc": 679
+        },
+        {
           "file": "src/web-server/services/account-dashboard-service.ts",
           "loc": 674
         },
@@ -808,10 +812,6 @@
         {
           "file": "src/cliproxy/services/usage-compatibility-transformer.ts",
           "loc": 632
-        },
-        {
-          "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 629
         }
       ]
     }

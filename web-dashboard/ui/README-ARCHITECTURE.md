@@ -148,27 +148,48 @@ The Analytics page (W3) is built like the concept's `app-analytics.js`. Four pur
 `src/analytics.rs` writes it into the `AxData` global (`ui/pages/analytics/ax-data.slint`), with persistent
 models for everything that animates (KPIs, model bars, donut arcs, stats, token bars, heat cells, daily bars,
 quota groups and rows). Page state lives in bridge.js (`analyticsPage`): range, custom days, provider, the
-trend toggles, donut and heatmap modes, open focus rows, compare and collapsed groups. Kinds:
+trend toggles, donut and heatmap modes, the Cost by model sort, the open donut legend groups, open focus rows,
+compare and collapsed groups. Kinds:
 `analytics-range` (24h|7d|30d|month|all), `analytics-custom` ("YYYY-MM-DD,YYYY-MM-DD", local days),
-`analytics-provider` (all|claude|codex), `analytics-split`, `analytics-cache` ("true"|"false"),
-`analytics-donut`, `analytics-heat`, `analytics-focus` and `analytics-compare` (account id), `analytics-group`
+`analytics-provider` (all, or a provider id from the picker), `analytics-split`, `analytics-cache` ("true"|"false"),
+`analytics-donut`, `analytics-heat`, `analytics-cbm-sort` (cost|tokens), `analytics-donut-open` (`_other` or
+`_undrawn`, toggles that legend group), `analytics-focus` and `analytics-compare` (account id), `analytics-group`
 (provider), `analytics-refresh`, and `analytics-layout` ("kind,width,height": the trend, daily, heat and focus
 boxes report their size, and bridge.js lays those charts out in pixels). The backend accepts 24h, 7d and 30d:
 Month, All and custom ranges request the covering window (`apiRangeFor`) and are cut in the browser; when the
 fetched window differs from the range, cost by model, the donut and session stats say which logs they cover.
 
 Usage sources (activity `scope: multi-host-cli`): the server reads Claude Code and Codex on Ubuntu plus OMP,
-Muse Code and zcode on Ubuntu, Mac and Windows. Only Claude Code and Codex are providers on this page (the
-filter, the session rows, the daily chart, the model marks); `TOOLS` rows of the other tools count in the
-totals, the trend, the heatmap and the model views under All only, merged by model name (`pageModels`; a model
-that is not one provider's alone has `provider: ""`, no mark and the neutral `Theme.h-model` family). Cost:
-`fallbackCostUsd` is the part of `estimatedCostUsd` the server priced only at its unknown-model fallback (no
-logged cost, no listed rate); for the tools that are not providers here the page leaves it out, shows "Not
-logged" where nothing is logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`).
-Claude Code and Codex rows keep their whole estimate, fallback rate included, exactly as before the other tools
-were added. "Included usage" in the header
-(`includedView`, from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each
-source's state and last scan.
+Muse Code and zcode on Ubuntu, Mac and Windows, and groups every row under the dashboard provider that served it
+(`src/web-server/services/account-analytics-attribution.ts`): Claude Code, Codex and the Muse Code CLI are their
+own provider; OMP and zcode record a route per call (`alibaba-token-plan` is Qwen, `zai` and zcode's
+`builtin:zai-coding-plan` are Z.ai, `kimi-code`, `opencode-go` and `opencode-zen` (OpenCode Go), `cursor`,
+`muse-code` (Muse Code), `google-antigravity` (Antigravity), `anthropic` and `openai`). A route no provider
+claims (a local vLLM server, OpenRouter) is `other`, never a guess. So every activity `provider` is a dashboard
+provider id or `other`; tools appear only in `activity.sources`, `providers[].tools` and `models[].tools`. The
+page labels providers with the response's provider table (`payload.providers`), marks each with its official
+mark and hue, and merges one model's rows across providers by name (`pageModels`; a model that is no one
+provider's alone has `provider: ""`, no mark and the neutral `Theme.h-model` family). Cost: `fallbackCostUsd` is
+the part of `estimatedCostUsd` the server priced only at its unknown-model fallback (no logged cost, no listed
+rate); for every provider but Claude and Codex the page leaves it out, shows "Not logged" where nothing is
+logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`). Claude and Codex rows keep
+their whole estimate, fallback rate included, exactly as before. "Included usage" in the header (`includedView`,
+from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each source's state and
+last scan.
+
+Seeing every provider's usage (models stay the division of the charts): the provider picker (`providerChoices`,
+`PickerButton` in the header) lists All and every provider that served usage in the range, in the dashboard's
+order with its mark and tokens, Other last; picking one narrows every block to the usage it served. "Tokens by
+provider" (`providersView`, `AxProvLines` under the KPI cards) is a summary of each provider's tokens in the range,
+largest first, summed from the same hourly rows as Total tokens, packed into lines that fit the reported width.
+The server publishes every model with usage (bounded at 500, ranked by cost then tokens), and Cost by model lists
+them all, by cost or by tokens (`cbmSort`). The donut's "N smaller models" (`_other`) and, by cost, the models
+with no arc (`_undrawn`: not logged or $0.00) are legend groups that open into their models (`donut.legend`: seg,
+group and child rows; a child lights its group's arc and opens its model detail). The daily chart stacks Claude,
+Codex and the other providers together (a picked provider alone, in its hue), and its readout lists each
+provider's cost. With other providers in range the trend readout names each one's tokens in the bucket
+(`byProvider`), and a model's detail says who served it and which logs hold it ("Muse Code · OMP and Muse Code
+logs"). Sessions under All are the server's distinct total; the Mac and Windows logs add usage but no sessions.
 
 Motion: sections play their first view when they first scroll on screen (`AxReveal` reads its absolute
 position against the page scroll). The trend draws on through a clip; on a range, filter or toggle change

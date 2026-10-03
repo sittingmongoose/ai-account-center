@@ -2,6 +2,7 @@
 // model usage donut (tokens or cost, an animated sweep, labels above 5%, a hover readout and the centre total).
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { Icon } from "../../components/icon.slint";
+import { Hover } from "../../components/hover-card.slint";
 import { IconButton } from "../../components/icon-button.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
@@ -231,6 +232,22 @@ export component AxCbmCard inherits AxCard {
                 alignment: center;
                 AxLegendEntry { c: AxColor.of(k); label: k == "in" ? "Input" : k == "out" ? "Output" : k == "cw" ? "Cache write" : "Cache read"; }
             }
+            // the order of the rows: by cost (the default), or by tokens so a model whose cost is not logged
+            // ranks by its usage
+            HorizontalLayout {
+                spacing: 8px;
+                padding-left: 6px;
+                Caps { text: "SORT"; }
+                VerticalLayout {
+                    alignment: start;
+                    AxSeg {
+                        small: true;
+                        items: [{ value: "cost", label: "Cost" }, { value: "tokens", label: "Tokens" }];
+                        value: AxData.cbm-sort;
+                        picked(v) => { AxData.action("analytics-cbm-sort", v); }
+                    }
+                }
+            }
         }
     }
     HorizontalLayout {
@@ -318,27 +335,58 @@ component DonutArc inherits Rectangle {
     }
 }
 
+// A legend row. kind "seg": one arc, its model's detail on click; "group": "N smaller models" (or, by cost, the
+// models with no arc), which opens and closes the list of its models; "child": one model inside an open group,
+// indented, with no swatch of its own (it is drawn in its group's arc, or not drawn).
 component DonutLegendRow inherits Rectangle {
     in property <AxDonutSeg> seg;
+    in property <string> kind: "seg";
+    in property <bool> open;
     in property <bool> hot;
     out property <bool> hovered: ta.has-hover;
     callback clicked();
+    callback toggle();
     height: 29px;
     border-radius: 7px;
-    background: root.hot || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    background: root.hot || ta.has-hover || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); }
     ta := AxTip {
-        tip: root.seg.tip;
-        mouse-cursor: root.seg.model != "" ? pointer : default;
-        clicked => { if root.seg.model != "" { pop.show(); } }
+        tip: root.kind == "group" && root.open ? "" : root.seg.tip;
+        mouse-cursor: root.kind == "group" || root.seg.model != "" ? pointer : default;
+        clicked => { if root.kind == "group" { Hover.clear(); root.toggle(); } else if root.seg.model != "" { pop.show(); } }
         HorizontalLayout {
-            padding-left: 8px;
+            padding-left: root.kind == "child" ? 27px : 8px;
             padding-right: 8px;
             spacing: 9px;
-            VerticalLayout { alignment: center; AxSwatch { c: AxColor.model(root.seg.provider, root.seg.mix, root.seg.other); } }
-            Text { text: root.seg.name; font-size: 12.5px; color: Theme.ink; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
-            Text { text: root.seg.value; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxTip { tip: root.seg.value-tip; clicked => { if root.seg.model != "" { pop.show(); } } } }
-            HorizontalLayout { width: 52px; alignment: end; VerticalLayout { alignment: center; ValueUnit { value: root.seg.share; size: 12.5px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
+            if root.kind != "child": VerticalLayout { alignment: center; AxSwatch { c: AxColor.model(root.seg.provider, root.seg.mix, root.seg.other); } }
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 4px;
+                Text { text: root.seg.name; font-size: 12.5px; color: root.kind == "child" ? Theme.ink-2 : Theme.ink; overflow: elide; vertical-alignment: center; horizontal-stretch: 0; }
+                if root.kind == "group": VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        name: "chev-down";
+                        width: 13px;
+                        height: 13px;
+                        tint: Theme.ink-3;
+                        transform-rotation: root.open ? 180deg : 0deg;
+                        animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Text {
+                text: root.seg.value;
+                font-family: Type.tab;
+                font-size: 12.5px;
+                font-weight: root.seg.value == "Not logged" ? 500 : 600;
+                color: root.seg.value == "Not logged" ? Theme.ink-3 : root.kind == "child" ? Theme.ink-2 : Theme.ink;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                AxTip { tip: root.seg.value-tip; clicked => { if root.kind == "group" { Hover.clear(); root.toggle(); } else if root.seg.model != "" { pop.show(); } } }
+            }
+            HorizontalLayout { width: 52px; alignment: end; if root.seg.share != "": VerticalLayout { alignment: center; ValueUnit { value: root.seg.share; size: 12.5px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
         }
     }
     pop := PopupWindow {
@@ -367,6 +415,7 @@ export component AxDonutCard inherits AxCard {
     animate sweep { duration: Motion.on ? Motion.draw + 200ms : 0ms; delay: Motion.on ? root.delay : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
     swept-timer := Timer { interval: root.delay + Motion.draw + 260ms; running: root.played && !root.swept; triggered => { self.running = false; root.swept = true; } }
     property <int> hot: -1;
+    property <int> hot-row: -1;
     property <int> pop-idx: 0;
     property <bool> labels-on: root.swept && root.calm;
     property <bool> calm: true;
@@ -395,7 +444,8 @@ export component AxDonutCard inherits AxCard {
         vertical-stretch: 1;
         donut := Rectangle {
             x: root.stacked ? (parent.width - root.size) / 2 : 20px;
-            y: root.stacked ? 0px : max(0px, (parent.height - 18px - root.size) / 2);
+            // beside a long legend (an open group) the donut stays at the legend's top instead of mid-list
+            y: root.stacked ? 0px : legend.preferred-height > root.size * 1.4 ? legend.y : max(0px, (parent.height - 18px - root.size) / 2);
             width: root.size;
             height: root.size;
             // the track
@@ -477,13 +527,21 @@ export component AxDonutCard inherits AxCard {
             y: root.stacked ? root.size + 12px : max(0px, (parent.height - 18px - self.preferred-height) / 2);
             width: root.stacked ? parent.width - 32px : parent.width - root.size - 62px;
             spacing: 2px;
-            for s[i] in AxData.donut-segs: DonutLegendRow {
-                seg: s;
-                seg-idx: s.idx;
-                hot: root.hot == i;
-                changed hovered => { if self.hovered { root.hot = i; } else if root.hot == i { root.hot = -1; } }
-            }
             if AxData.donut-segs.length == 0: Text { text: AxData.ready ? AxData.donut.empty-text : ""; font-size: 13px; color: Theme.ink-3; wrap: word-wrap; }
+            // one row per arc; a group opens into its models, so no model is only inside a group
+            for l[j] in AxData.donut-legend: DonutLegendRow {
+                seg: l.seg;
+                kind: l.kind;
+                open: l.open;
+                seg-idx: l.seg.idx;
+                hot: l.kind != "child" && l.arc >= 0 && root.hot == l.arc;
+                // the hovered row lights its arc; rows of one group share an arc, so only the row that set it clears it
+                changed hovered => {
+                    if self.hovered { root.hot-row = j; root.hot = l.arc; }
+                    else if root.hot-row == j { root.hot-row = -1; root.hot = -1; }
+                }
+                toggle => { AxData.action("analytics-donut-open", l.seg.key); }
+            }
         }
     }
 }
