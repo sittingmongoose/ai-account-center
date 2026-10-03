@@ -17,7 +17,7 @@
 //   storage                                     localStorage, for the one-time migration of "Show on dashboard"
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
-import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, PROVIDER_LABELS } from './account-actions.mjs';
+import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
 import { setDisplayTimeZone, DEFAULT_DISPLAY_TIME_ZONE } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord } from './view-model.mjs';
@@ -386,8 +386,22 @@ export function createAccountsController(deps) {
       if (!followAnswer(provider, answer, base)) toast('info', `${label(provider)}`, 'Nothing to do for this account.');
     } catch (error) {
       if (error?.payload?.code === 'account_active') state.lines[id] = { kind: 'refused', code: 'account_active_signin' };
+      else if (openAntigravityTerminal(id, error)) { /* flow set and toast fired inside */ }
       else if (!(await adoptRunning(provider, error))) fail(error, { provider, what: 'signin-again' });
     } finally { state.busyAct = ''; changed(); }
+  }
+  /**
+   * Antigravity signs in on Ubuntu, outside the browser: its terminal command opens as a
+   * persistent flow under the section, since a vanishing toast alone read as "does nothing".
+   * The toast still fires unchanged to announce it. Returns whether it handled the error.
+   */
+  function openAntigravityTerminal(id, error) {
+    if (providerOf(id) !== 'antigravity' || error?.payload?.code !== 'preflight_failed') return false;
+    const command = terminalCommand(error.payload);
+    if (!command) return false;
+    setFlow('antigravity', { type: 'terminal', step: 'run', accountId: id, email: nameOf(id), command });
+    fail(error, { provider: 'antigravity', what: 'signin-again' });
+    return true;
   }
   /** Footer "Sign in" of an app or browser-session provider: add its one account first when it has none. */
   async function sessionSignIn(provider) {
@@ -851,7 +865,9 @@ export function createAccountsController(deps) {
       case 'flow-retry': await retry(v); return true;
       case 'flow-copy': {
         const code = text(state.flows[v]?.job?.verification?.userCode);
-        if (code) { const ok = await copy(code); toast(ok ? 'ok' : 'info', ok ? 'Code copied' : 'Copy the code by hand', ok ? 'Paste it on the verification page.' : 'This browser did not allow copying.'); }
+        const command = code ? '' : text(state.flows[v]?.command);
+        const value = code || command;
+        if (value) { const ok = await copy(value); toast(ok ? 'ok' : 'info', ok ? (code ? 'Code copied' : 'Command copied') : (code ? 'Copy the code by hand' : 'Copy the command by hand'), ok ? (code ? 'Paste it on the verification page.' : 'Run it on Ubuntu.') : 'This browser did not allow copying.'); }
         return true;
       }
       case 'flow-open-url': { const url = text(state.flows[v]?.job?.verification?.url); if (/^https:\/\//.test(url)) open(url); return true; }

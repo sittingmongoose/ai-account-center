@@ -210,7 +210,9 @@ public enum MenuBarMode: String, CaseIterable, Sendable { case remaining = "left
 public struct MenuBarReading: Sendable, Equatable {
   public let value: Double
   public let text: String
-  /// For the tooltip, e.g. "Codex · codex-2 · Weekly used".
+  /// For the tooltip, e.g. "Codex · codex-2 · Weekly used". The account is its short
+  /// (local-part) name, or the full identity when two of the provider's accounts shorten
+  /// the same way, so the tag always names the account actually shown.
   public let detail: String
   /// The provider choice that shows the icon alone, with no number.
   public static let nothingProvider = "none"
@@ -247,7 +249,14 @@ public struct MenuBarReading: Sendable, Equatable {
     guard account.pendingReset(window) == nil, let used = window.meterUsedPercent else { return nil }
     let value = mode == .used ? used : max(0, 100 - used)
     let text = "\(TrayFormat.number(value))%"
-    let who = account.identity.split(separator: "@").first.map(String.init) ?? account.identity
+    // The short name, unless a sibling account shortens the same way: then the full
+    // identity, the same string the Settings picker shows, so the tag names this account.
+    func shortName(_ identity: String) -> String {
+      identity.split(separator: "@").first.map(String.init) ?? identity
+    }
+    let short = shortName(account.identity)
+    let collides = accounts.contains { $0.id != account.id && shortName($0.identity) == short }
+    let who = collides ? account.identity : short
     let span = window.key == fiveHour?.key ? "5-hour" : "Weekly"
     return MenuBarReading(value: value, text: text,
       detail: "\(providerName(provider)) · \(who) · \(span) \(mode == .used ? "used" : "remaining")")

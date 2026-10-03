@@ -267,8 +267,8 @@ struct ClaudeOpenPair: View {
   }
 }
 
-/// The section header: mark, name, count and the active account over the identity column, and the
-/// column captions over their meters.
+/// The section header: mark, name, count and (except Codex, whose selected row already shows it)
+/// the active account over the identity column, and the column captions over their meters.
 struct SectionHeader: View {
   @ObservedObject var model: AccountsViewModel
   let layout: SectionLayout
@@ -323,15 +323,16 @@ struct SectionHeader: View {
   }
 
   @ViewBuilder private func meta(_ palette: TrayPalette) -> some View {
-    if let active = accounts.first(where: \.isActive) {
+    // Codex shows no header meta: it overlapped the 5-hour column and repeats the selected row.
+    if layout.provider == "codex" {
+      EmptyView()
+    } else if let active = accounts.first(where: \.isActive) {
       let name = Text(verbatim: String(active.identity.split(separator: "@").first ?? Substring(active.identity)))
         .fontWeight(.semibold).foregroundColor(palette.label)
       Text("\(name) active")
         .font(.system(size: 12)).foregroundStyle(palette.label2)
         .transition(.opacity)
         .id(active.id)
-    } else if layout.provider == "codex" {
-      Text("none active").font(.system(size: 12)).foregroundStyle(palette.label2)
     } else if accounts.count > 1 {
       Text("Active account not reported yet").font(.system(size: 12)).foregroundStyle(palette.label2)
     }

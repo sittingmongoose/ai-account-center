@@ -2198,6 +2198,24 @@ private func checkMenuBarSelection() throws {
     && MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")?.detail
     == "Claude · claude-b · Weekly used",
     "Claude shows the picked account: its 5-hour window, else its weekly one")
+  // Two accounts sharing one local-part: the tag must name the full identity, the same
+  // string the Settings picker shows, so it names the account actually shown.
+  var collisionObject = original
+  collisionObject["accounts"] = [
+    account("claude-x", "claude", email: "jared@platyr.invalid", windows: [
+      window("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    ]),
+    account("claude-y", "claude", email: "jared@party.invalid", windows: [
+      window("five_hour", "Five-hour usage", ["usedPercent": 34]),
+    ]),
+  ]
+  let collision = try JSONDecoder().decode(AccountDashboard.self,
+    from: JSONSerialization.data(withJSONObject: collisionObject))
+  try expect(MenuBarReading.make(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-y")?.detail
+    == "Claude · jared@party.invalid · 5-hour used"
+    && MenuBarReading.make(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-x")?.detail
+    == "Claude · jared@platyr.invalid · 5-hour used",
+    "When two accounts shorten to one name, the tag must name the full identity")
   try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used)?.value == 12,
     "With no Claude account picked, the first Claude account shows")
   try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "gone")?.value == 12,
