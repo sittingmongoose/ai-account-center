@@ -835,6 +835,19 @@ pub fn set_busy(busy: bool) {
     with_ui(|ui| ui.set_busy(busy));
 }
 
+/// A password manager filled the hidden HTML login form (public/login-bridge.mjs):
+/// copy its values into the visible Slint sign-in fields.
+#[wasm_bindgen]
+pub fn set_login_fields(username: &str, password: &str, remember: bool) {
+    let username = username.to_string();
+    let password = password.to_string();
+    with_ui(|ui| {
+        ui.set_username(username.into());
+        ui.set_password(password.into());
+        ui.set_remember_me(remember);
+    });
+}
+
 /// 0 = Auto (follows the browser), 1 = Light, 2 = Dark.
 #[wasm_bindgen]
 pub fn set_theme_mode(mode: i32) {

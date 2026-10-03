@@ -444,8 +444,8 @@ describe('F2: malformed login requests stay inside the request', () => {
     expect(cookie).toContain('SameSite=Strict');
     const expires = Date.parse(/Expires=([^;]+)/.exec(cookie)?.[1] ?? '');
     const lifetimeHours = (expires - Date.now()) / 3_600_000;
-    expect(lifetimeHours).toBeGreaterThan(23.9);
-    expect(lifetimeHours).toBeLessThanOrEqual(24);
+    expect(lifetimeHours).toBeGreaterThan(719);
+    expect(lifetimeHours).toBeLessThanOrEqual(720);
   });
 
   it('rate limits the sixth failed login attempt within the window', async () => {

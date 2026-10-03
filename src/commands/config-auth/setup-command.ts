@@ -101,11 +101,13 @@ export async function handleSetup(): Promise<AuthSetupResult> {
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     const config = mutateConfig((currentConfig) => {
+      const lifetime = currentConfig.dashboard_auth?.session_lifetime_days;
       currentConfig.dashboard_auth = {
         enabled: true,
         username,
         password_hash: passwordHash,
         session_timeout_hours: currentConfig.dashboard_auth?.session_timeout_hours ?? 24,
+        ...(typeof lifetime === 'number' ? { session_lifetime_days: lifetime } : {}),
       };
     });
 

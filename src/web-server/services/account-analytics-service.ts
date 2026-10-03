@@ -1,6 +1,7 @@
 import { getCcsDir } from '../../utils/config-manager';
 import { getAccountDashboard } from './account-dashboard-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
+import { readDashboardPreferences } from './dashboard-preferences';
 import {
   fixedAnalyticsSourceEntries,
   getAccountAnalyticsActivity,
@@ -256,7 +257,12 @@ export class AccountAnalyticsService {
   async get(requested: AccountAnalyticsQuery): Promise<AccountAnalytics> {
     // Malformed ranges and zones fail before any collector or history read.
     validateAccountAnalyticsRangeShape(requested);
-    const tz = canonicalAccountAnalyticsTimeZone(requested.tz);
+    const scope = (this.deps.scope ?? getCcsDir)();
+    // Without a zone in the request, the day buckets follow the display time
+    // zone from Settings (America/New_York until one is saved).
+    const tz = canonicalAccountAnalyticsTimeZone(
+      requested.tz ?? readDashboardPreferences(scope).timeZone
+    );
     const query: AccountAnalyticsQuery = { ...requested, tz };
     const clock = this.deps.now ?? Date.now;
     // So does a custom range outside retention: a refused request records no
@@ -264,7 +270,6 @@ export class AccountAnalyticsService {
     // sample times must not fall after `to`.
     const checkedAt = clock();
     resolveAccountAnalyticsRange(query, checkedAt, checkedAt - ACCOUNT_ANALYTICS_RETAINED_MS);
-    const scope = (this.deps.scope ?? getCcsDir)();
     const dashboard = await (this.deps.getDashboard ?? getAccountDashboard)(query.platform, false);
     const state = await this.record(dashboard.accounts, scope);
     const now = clock();

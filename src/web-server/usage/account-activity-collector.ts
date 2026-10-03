@@ -20,7 +20,7 @@ import { queryLocalZcodeUsage, type ZcodeFingerprint } from './zcode-native-usag
 import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
 import type { ModelBreakdown } from './types';
-import type { UsageWorkerRequest, UsageWorkerResult } from './worker-client';
+import type { JsonlFieldMapping, UsageWorkerRequest, UsageWorkerResult } from './worker-client';
 
 export interface CompactEntry {
   entry: RawUsageEntry;
@@ -67,7 +67,7 @@ function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
+type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl';
 /**
  * Checkpoints of these kinds hold rows from an older parser and are read
  * again from the start: OMP rows now keep the routing provider and never mix
@@ -82,7 +82,62 @@ function wantedFile(kind: string, name: string): boolean {
   // records); Muse keeps `session.jsonl` per session and subagent.
   if (kind === 'omp') return name.endsWith('.jsonl') || isOmpSessionFilename(name);
   if (kind === 'muse') return name === 'session.jsonl';
+  if (kind === 'jsonl') return name.endsWith('.jsonl');
   return false;
+}
+
+/** One dot-path step into a generic JSONL record; arrays are never traversed. */
+function mappedField(record: unknown, dotPath: string): unknown {
+  let current = record;
+  for (const part of dotPath.split('.')) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function mappedCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
+ * A generic JSONL usage record through a saved field mapping. The timestamp
+ * accepts ISO strings and epoch seconds or milliseconds; token and cost
+ * fields accept non-negative numbers, missing as zero/unlogged. Anything
+ * else on the line (including malformed JSON) is skipped, never an error.
+ */
+export function parseJsonlMappedUsageLine(
+  line: string,
+  mapping: JsonlFieldMapping
+): RawUsageEntry | null {
+  let record: unknown;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const stamp = mappedField(record, mapping.timestamp);
+  let timestamp = '';
+  if (typeof stamp === 'string' && stamp) timestamp = stamp;
+  else if (typeof stamp === 'number' && Number.isFinite(stamp) && stamp > 0)
+    timestamp = new Date(stamp < 1e11 ? stamp * 1000 : stamp).toISOString();
+  if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return null;
+  const model = mapping.model ? mappedField(record, mapping.model) : undefined;
+  const cost = mapping.cost ? mappedField(record, mapping.cost) : undefined;
+  const entry: RawUsageEntry = {
+    inputTokens: mapping.inputTokens ? mappedCount(mappedField(record, mapping.inputTokens)) : 0,
+    outputTokens: mapping.outputTokens ? mappedCount(mappedField(record, mapping.outputTokens)) : 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    model: typeof model === 'string' && model ? model.slice(0, 256) : '',
+    sessionId: '',
+    timestamp,
+    projectPath: '',
+  };
+  // A logged 0 is "not logged", never free, like every other kind.
+  if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) entry.costUsd = cost;
+  return entry;
 }
 async function filesUnder(
   root: string,
@@ -399,7 +454,8 @@ async function readBatch(
   stats: fs.Stats,
   kind: ActivityKind,
   options: AccountActivityScanOptions,
-  deadline: number
+  deadline: number,
+  mapping?: JsonlFieldMapping
 ): Promise<void> {
   if (value.complete && value.offset === stats.size) return;
   value.unfinishedTail = false;
@@ -438,6 +494,8 @@ async function readBatch(
         entry = parseOmpUsageLine(line, fileSessionId);
     } else if (kind === 'muse') {
       if (line.includes('model_completed')) entry = parseMuseUsageLine(line, fileSessionId);
+    } else if (kind === 'jsonl') {
+      if (mapping) entry = parseJsonlMappedUsageLine(line, mapping);
     }
     if (entry && !addEntry(rows, entry, options.minDate)) value.skippedLines++;
   };
@@ -729,11 +787,16 @@ export async function collectAccountActivity(
           ? request.roots
           : request.kind === 'muse'
             ? [request.sessionsDir]
-            : [];
+            : request.kind === 'jsonl'
+              ? request.roots
+              : [];
+  // Two generic sources over one root with different mappings keep separate
+  // checkpoints; otherwise the first mapping's rows would poison the second.
+  const mappingKey = request.kind === 'jsonl' ? `\n${JSON.stringify(request.mapping)}` : '';
   const directory = path.join(
     options.cacheDir,
     'account-activity-v1',
-    hash(`${request.kind}:${roots.join('\n')}`)
+    hash(`${request.kind}:${roots.join('\n')}${mappingKey}`)
   );
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
@@ -784,7 +847,15 @@ export async function collectAccountActivity(
       const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
       const before = value.offset;
       if (Date.now() < deadline) {
-        await readBatch(file, value, stats, request.kind, options, deadline);
+        await readBatch(
+          file,
+          value,
+          stats,
+          request.kind,
+          options,
+          deadline,
+          request.kind === 'jsonl' ? request.mapping : undefined
+        );
         if (value.offset !== before || !fs.existsSync(cache))
           saveCheckpoint(cache, file, value, stats);
       }

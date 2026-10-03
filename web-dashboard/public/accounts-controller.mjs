@@ -18,8 +18,11 @@
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
 import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, PROVIDER_LABELS } from './account-actions.mjs';
+import { setDisplayTimeZone, DEFAULT_DISPLAY_TIME_ZONE } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord } from './view-model.mjs';
+import { lazyFormat } from './time-format.mjs';
+import { LOG_SOURCE_HOSTS, LOG_SOURCE_TOOL_LABEL, LOG_SOURCE_PATH_HINT } from './accounts-view.mjs';
 
 export const JOB_POLL_MS = 2_000;
 export const LEGACY_HIDDEN_KEY = 'aac-hidden-providers';
@@ -27,7 +30,7 @@ const PROVIDERS = Object.keys(PROVIDER_LABELS);
 const KEY_PROVIDERS = ['kimi-code', 'zai', 'opencode-go'];
 const text = value => typeof value === 'string' ? value : '';
 const label = provider => PROVIDER_LABELS[provider] || 'This provider';
-const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
 const REFUSALS = new Set(['account_active', 'account_default', 'account_protected', 'last_account', 'activation_running', 'signin_running', 'app_running', 'app_state_unknown']);
 /**
  * The actions that send a change. While an account-switch confirmation is pending, bridge.js holds these (the
@@ -37,8 +40,44 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
   'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
-  'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all',
+  'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
+  'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
 ]));
+
+const LOG_SOURCE_FIELD_PATH = /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/;
+const LOG_SOURCE_MAPPING_KEYS = ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost'];
+
+/**
+ * Why an extra usage-log location is not addable ('' when it is). Mirrors the server's
+ * `isUsageLogSource` so the form refuses what PUT /api/accounts/preferences would refuse.
+ */
+export function logSourceProblem(tool, host, location, mapping) {
+  const hosts = LOG_SOURCE_HOSTS[tool];
+  if (!hosts) return 'Pick a tool for the extra location.';
+  if (!hosts.includes(host)) {
+    const names = hosts.join(', ');
+    return `${LOG_SOURCE_TOOL_LABEL[tool]} usage is only scanned on ${names}.`;
+  }
+  const hint = LOG_SOURCE_PATH_HINT[tool];
+  if (typeof location !== 'string' || !location || location.length > 1024 || location.includes('\0'))
+    return `Enter the absolute path to ${hint}.`;
+  const absolute = location.startsWith('/') || (host === 'windows' && /^[A-Za-z]:[\\/]/.test(location));
+  if (!absolute || location.includes('..')) return `Enter the absolute path to ${hint}, with no "..".`;
+  if (tool === 'jsonl') {
+    if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping))
+      return 'A generic JSONL source needs its row field mapping: timestamp and model at least.';
+    for (const key of Object.keys(mapping)) {
+      if (!LOG_SOURCE_MAPPING_KEYS.includes(key)) return `The mapping has no "${key}" field.`;
+      if (typeof mapping[key] !== 'string' || !LOG_SOURCE_FIELD_PATH.test(mapping[key]))
+        return `The "${key}" mapping is not a dot path (like usage.input_tokens).`;
+    }
+    if (typeof mapping.timestamp !== 'string') return 'The mapping needs a timestamp field.';
+    if (typeof mapping.model !== 'string') return 'The mapping needs a model field.';
+  } else if (mapping !== undefined && mapping !== null) {
+    return 'Only generic JSONL sources take a field mapping.';
+  }
+  return '';
+}
 
 export function createAccountsController(deps) {
   const {
@@ -55,6 +94,7 @@ export function createAccountsController(deps) {
     // and one account's own switches: 'acct-show:<id>' and 'acct-tray:<id>'
     visPending: [],
     signin: { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' },
+    prefs: { data: null, busy: '', cleanupBusy: false, cleanupNote: '' },
   };
   const timers = {};
   // sign-in jobs this page closed (Cancel, Done, Close): a registry read never opens them again
@@ -125,7 +165,17 @@ export function createAccountsController(deps) {
     s.network = network.status === 'fulfilled' ? network.value.payload : null;
     changed();
   }
-  async function loadAll() { await Promise.all([loadRegistry(), loadSignin()]); }
+  async function loadPrefs() {
+    try {
+      const { payload } = await call(requests.preferences());
+      if (payload && typeof payload === 'object') {
+        state.prefs.data = payload;
+        if (typeof payload.timeZone === 'string') setDisplayTimeZone(payload.timeZone);
+      }
+    } catch { state.prefs.data = state.prefs.data || null; }
+    changed();
+  }
+  async function loadAll() { await Promise.all([loadRegistry(), loadSignin(), loadPrefs()]); }
   /** After a saved change: the dashboard response, then the registry (its actions and refusals follow it). */
   async function reload() { await refresh(); await loadRegistry(); }
 
@@ -410,6 +460,9 @@ export function createAccountsController(deps) {
     if (flow.type === 'purge' && flow.step === 'type') {
       await commitPurge(provider, input);
     }
+    if (flow.type === 'remove-email' && flow.step === 'type') {
+      await commitRemoveEmail(provider, input);
+    }
   }
   async function cancelFlow(provider) {
     const flow = state.flows[provider];
@@ -467,6 +520,13 @@ export function createAccountsController(deps) {
       const { payload } = await call(requests.removeAsk(id));
       const c = payload?.confirmation;
       if (!c?.token) throw Object.assign(new Error('no confirmation'), { status: 500 });
+      // a default Claude profile removes only after its account email is typed: the typed flow
+      if (c.expectsTyped === 'email') {
+        delete state.lines[id];
+        setFlow(providerOf(id), { type: 'remove-email', step: 'type', accountId: id, name: nameOf(id), token: c.token, effects: Array.isArray(c.effects) ? c.effects : [] });
+        changed();
+        return;
+      }
       state.lines[id] = { kind: 'confirm', token: c.token, effects: Array.isArray(c.effects) ? c.effects : [] };
     } catch (error) {
       const code = error?.payload?.code;
@@ -519,6 +579,28 @@ export function createAccountsController(deps) {
       await reload();
     } catch (error) { delete state.lines[key]; fail(error, { provider: 'claude' }); void loadRegistry(); }
     changed();
+  }
+  /** A default Claude profile: commit its removal with the typed account email. */
+  async function commitRemoveEmail(provider, typed) {
+    const flow = state.flows[provider];
+    if (!flow || flow.type !== 'remove-email' || flow.busy) return;
+    const confirm = String(typed || '').trim();
+    const put = patch => { if (state.flows[provider]?.serial === flow.serial) { state.flows[provider] = { ...state.flows[provider], ...patch }; changed(); } };
+    if (!confirm) { put({ error: { title: 'Type the account email first.', body: '' } }); return; }
+    const who = text(flow.name) || 'this account';
+    put({ busy: true, error: null });
+    try {
+      const { payload } = await call(requests.removeCommit(flow.accountId, flow.token, confirm));
+      closeFlow(provider);
+      const purge = Date.parse(payload?.purgeAfter);
+      toast('ok', `Removed ${who}`, payload?.trashId
+        ? `Its Claude data is in the trash on Mac and Windows${Number.isFinite(purge) ? ` until ${dayFmt.format(new Date(purge))}` : ''}; Restore brings it back.`
+        : 'It is no longer read here.');
+      await reload();
+    } catch (error) {
+      if (error?.payload?.code === 'invalid_body') put({ busy: false, error: { title: 'That email does not match this account.', body: 'Type it exactly as the row shows it.' } });
+      else { put({ busy: false, error: errorText(error, { provider }) }); if (error?.payload?.code === 'confirmation_stale' || error?.payload?.code === 'unknown_account') void reload(); }
+    }
   }
   /** Delete now: ask for the confirmation, then open the typed-DELETE flow under Claude. */
   async function askPurge(trashId) {
@@ -577,6 +659,124 @@ export function createAccountsController(deps) {
           : 'Password changes, keys, sign-in codes and tray pairing now work only on the dashboard computer itself.');
     } catch (error) { fail(error); }
     finally { s.busy = ''; await loadSignin(); }
+  }
+  const LIFETIME_DAYS = [1, 7, 30, 90, 365];
+  const LIFETIME_WORD = { 1: '1 day', 7: '7 days', 30: '30 days', 90: '90 days', 365: '1 year' };
+  async function setLifetime(value) {
+    const days = Number(value);
+    if (!LIFETIME_DAYS.includes(days)) return;
+    const s = state.signin;
+    if (s.session && s.session.sessionLifetimeDays === days) return;
+    s.busy = 'lifetime'; changed();
+    try {
+      const { payload } = await call(requests.sessionLifetime(days));
+      if (s.session) s.session = { ...s.session, sessionTimeoutHours: payload?.hours ?? days * 24, sessionLifetimeDays: payload?.days ?? days };
+      toast('info', `Sessions now last ${LIFETIME_WORD[days]}`, 'Browsers already signed in keep their own session; the new lifetime applies from the next sign-in.');
+    } catch (error) { fail(error); }
+    finally { s.busy = ''; changed(); }
+  }
+  /** Save the whole preferences shape with one field changed; the page follows it without a reload. */
+  async function savePrefs(next, note) {
+    const p = state.prefs;
+    p.busy = note; changed();
+    try {
+      const { payload } = await call(requests.savePreferences(next));
+      p.data = payload && typeof payload === 'object' ? payload : next;
+      if (typeof p.data.timeZone === 'string') setDisplayTimeZone(p.data.timeZone);
+    } catch (error) { fail(error); }
+    finally { p.busy = ''; changed(); }
+  }
+  async function setTimeZone(zone) {
+    const value = String(zone || '');
+    if (!value || value.length > 64) return;
+    const current = state.prefs.data;
+    if (current?.timeZone === value) return;
+    await savePrefs({
+      timeZone: value,
+      snapshotCleanup: current?.snapshotCleanup || { auto: true },
+      usageLogSources: Array.isArray(current?.usageLogSources) ? current.usageLogSources : [],
+    }, 'timezone');
+  }
+  async function toggleCleanupAuto() {
+    const current = state.prefs.data;
+    if (!current || state.prefs.busy) return;
+    await savePrefs({
+      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
+      snapshotCleanup: { auto: current.snapshotCleanup?.auto === false },
+      usageLogSources: Array.isArray(current.usageLogSources) ? current.usageLogSources : [],
+    }, 'cleanup-auto');
+  }
+  async function cleanupNow() {
+    const p = state.prefs;
+    if (!p.data || p.cleanupBusy || p.busy) return;
+    p.cleanupBusy = true; p.cleanupNote = ''; changed();
+    try {
+      const { payload } = await call(requests.cleanupSnapshots());
+      const deleted = Number(payload?.deleted) || 0;
+      const skipped = Number(payload?.skipped) || 0;
+      const failed = Number(payload?.failed) || 0;
+      const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+      p.cleanupNote = deleted === 0 && failed === 0
+        ? 'Nothing to clean: every profile already keeps only its newest snapshots.'
+        : `Deleted ${plural(deleted, 'older snapshot', 'older snapshots')}${skipped ? `, skipped ${plural(skipped, 'folder', 'folders')} that ${skipped === 1 ? 'was' : 'were'} not AAC snapshots` : ''}${failed ? `, ${plural(failed, 'target', 'targets')} unreachable` : ''}.`;
+    } catch (error) { fail(error); }
+    finally { p.cleanupBusy = false; changed(); }
+  }
+  async function addLogSource(v) {
+    const current = state.prefs.data;
+    if (!current || state.prefs.busy) return;
+    // "tool\nhost\npath\nmapping-json?": the mapping JSON holds no raw newlines, and a path holding
+    // one fails the absolute-path check below, so the split cannot smuggle a bad path through.
+    const [tool = '', host = '', location = '', ...rest] = String(v ?? '').split('\n');
+    const json = rest.join('\n');
+    let mapping;
+    if (json) {
+      try { mapping = JSON.parse(json); } catch { mapping = null; }
+      if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+        state.prefs.logSourcesError = 'The field mapping is not valid JSON.';
+        changed();
+        return;
+      }
+    }
+    const problem = logSourceProblem(tool, host, location, mapping);
+    if (problem) { state.prefs.logSourcesError = problem; changed(); return; }
+    const saved = Array.isArray(current.usageLogSources) ? current.usageLogSources : [];
+    const sameMapping = (a, b) => {
+      if (a === undefined || a === null) return b === undefined || b === null;
+      if (b === undefined || b === null) return false;
+      return ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost']
+        .every(key => (a[key] ?? undefined) === (b[key] ?? undefined));
+    };
+    if (saved.some(entry => entry?.tool === tool && entry?.host === host && entry?.path === location && sameMapping(entry?.fieldMapping, mapping))) {
+      state.prefs.logSourcesError = 'This location is already listed.';
+      changed();
+      return;
+    }
+    let id = '';
+    do { id = `log-${Math.random().toString(36).slice(2, 10)}`; } while (saved.some(entry => entry?.id === id));
+    state.prefs.logSourcesError = '';
+    await savePrefs({
+      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
+      snapshotCleanup: current.snapshotCleanup || { auto: true },
+      usageLogSources: [
+        ...saved,
+        mapping === undefined
+          ? { id, tool, host, path: location }
+          : { id, tool, host, path: location, fieldMapping: mapping },
+      ],
+    }, 'logsources');
+  }
+  async function removeLogSource(id) {
+    const current = state.prefs.data;
+    if (!current || state.prefs.busy) return;
+    const saved = Array.isArray(current.usageLogSources) ? current.usageLogSources : [];
+    if (!saved.some(entry => entry?.id === id)) return;
+    state.prefs.logSourcesError = '';
+    await savePrefs({
+      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
+      snapshotCleanup: current.snapshotCleanup || { auto: true },
+      usageLogSources: saved.filter(entry => entry?.id !== id),
+    }, 'logsources');
   }
   function togglePassword() {
     const pw = state.signin.pw;
@@ -667,6 +867,12 @@ export function createAccountsController(deps) {
       case 'others-out': await signOutOthers(); return true;
       case 'network-off': await setNetwork(false); return true;
       case 'network-on': await setNetwork(true); return true;
+      case 'session-lifetime': await setLifetime(v); return true;
+      case 'time-zone': await setTimeZone(v); return true;
+      case 'cleanup-auto': await toggleCleanupAuto(); return true;
+      case 'cleanup-now': await cleanupNow(); return true;
+      case 'logsource-add': await addLogSource(v); return true;
+      case 'logsource-remove': await removeLogSource(v); return true;
       case 'pw-toggle': togglePassword(); return true;
       case 'pw-typing': typingPassword(v); return true;
       case 'pw-submit': await changePassword(v); return true;
@@ -681,5 +887,5 @@ export function createAccountsController(deps) {
     state.registry = null; state.flows = {}; state.lines = {}; state.busyAct = ''; state.visPending = [];
     state.signin = { session: null, devices: null, devicesError: false, network: null, pw: blankPassword(), busy: '' };
   }
-  return { state, handle, loadRegistry, loadSignin, loadAll, migrateLocalHidden, reset, pollJob, applyVisibility };
+  return { state, handle, loadRegistry, loadSignin, loadPrefs, loadAll, migrateLocalHidden, reset, pollJob, applyVisibility };
 }

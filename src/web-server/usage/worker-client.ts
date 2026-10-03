@@ -5,12 +5,31 @@ import { CCSError } from '../../errors/error-types';
 import type { DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
 import type { AccountActivityScanOptions } from './account-activity-collector';
 
+/**
+ * Dot paths into a generic JSONL record (`usage.input_tokens`), from a saved
+ * `jsonl` usage-log source. Only `timestamp` is required; a missing token or
+ * cost field counts as zero/unlogged, never as an error.
+ */
+export interface JsonlFieldMapping {
+  timestamp: string;
+  model?: string;
+  inputTokens?: string;
+  outputTokens?: string;
+  cost?: string;
+}
+
 export type UsageWorkerRequest =
   | { kind: 'claude'; projectsDir: string; activity?: AccountActivityScanOptions }
   | { kind: 'codex'; codexHome: string; cacheDir: string; activity?: AccountActivityScanOptions }
   | { kind: 'omp'; roots: string[]; activity?: AccountActivityScanOptions }
   | { kind: 'muse'; sessionsDir: string; activity?: AccountActivityScanOptions }
   | { kind: 'zcode'; dbPath: string; activity?: AccountActivityScanOptions }
+  | {
+      kind: 'jsonl';
+      roots: string[];
+      mapping: JsonlFieldMapping;
+      activity?: AccountActivityScanOptions;
+    }
   | { kind: 'droid'; homeDir: string };
 
 export interface UsageWorkerResult {

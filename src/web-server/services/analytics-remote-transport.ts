@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  '3ca4202100c0e7db7e1068f1017a226aff8ded3943ab1afddcf3c800f75f7428';
+  '383f5645ae141a132a2b3483151cbec3bf6fbf18636ed69d9a5968dea987f44d';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -77,6 +77,12 @@ export interface AnalyticsRemoteRequest {
   minDateMs: number;
   fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>;
   deadlineMs?: number;
+  /**
+   * Saved extra usage-log locations for the target host, from Settings.
+   * omp/muse entries are session-root directories, zcode entries database
+   * files; all are validated absolute paths before they leave this host.
+   */
+  extraRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
 }
 
 export function analyticsHelperPath(): string {
@@ -85,6 +91,33 @@ export function analyticsHelperPath(): string {
 
 function quoteShell(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+const MAX_EXTRA_ROOTS = 16;
+
+function isValidExtraRoot(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 1024 &&
+    !value.includes('\0') &&
+    !value.includes('..') &&
+    (path.posix.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value))
+  );
+}
+
+function isValidExtraRoots(
+  value: unknown
+): value is Partial<Record<AnalyticsRemoteKind, string[]>> {
+  if (value === undefined) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.entries(value as Record<string, unknown>).every(
+    ([kind, roots]) =>
+      (kind === 'omp' || kind === 'muse' || kind === 'zcode') &&
+      Array.isArray(roots) &&
+      roots.length <= MAX_EXTRA_ROOTS &&
+      (roots as unknown[]).every(isValidExtraRoot)
+  );
 }
 
 /** File keys and head/tail fingerprints are SHA-256 hex digests on the helper side; anything else is refused. */
@@ -203,9 +236,10 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
 
 /**
  * ONE fixed packaged helper, streamed on ssh stdin with a JSON request (the
- * `runClaudeHistoryHelper` pattern): no installed copies on the hosts, no
- * client-controlled remote paths — roots are fixed defaults resolved on the
- * host. Returns per-model, per-hour aggregates plus per-file fingerprints.
+ * `runClaudeHistoryHelper` pattern): no installed copies on the hosts. Roots
+ * are fixed defaults resolved on the host plus the saved extra usage-log
+ * locations for that host from Settings, all validated absolute paths.
+ * Returns per-model, per-hour aggregates plus per-file fingerprints.
  */
 export async function runAnalyticsRemoteHelper(
   sshHost: string,
@@ -221,7 +255,8 @@ export async function runAnalyticsRemoteHelper(
     request.kinds.length === 0 ||
     request.kinds.some((kind) => kind !== 'omp' && kind !== 'muse' && kind !== 'zcode') ||
     !Number.isFinite(request.minDateMs) ||
-    request.minDateMs < 0
+    request.minDateMs < 0 ||
+    !isValidExtraRoots(request.extraRoots)
   ) {
     throw new ValidationError('Analytics remote request is invalid.');
   }
@@ -240,6 +275,7 @@ export async function runAnalyticsRemoteHelper(
         minDateMs: Math.floor(request.minDateMs),
         immutableSqlite: true,
         fingerprints: request.fingerprints,
+        extraRoots: request.extraRoots ?? {},
         deadlineMs: 20_000,
       },
     })

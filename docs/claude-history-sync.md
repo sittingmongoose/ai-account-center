@@ -36,19 +36,18 @@ These stops happen before a batch's marker is armed or re-armed, and before any 
 
 A stop at the per-Open bound logs `claude.history.copy_budget_reached` (info). Log lines carry the platform, counts and the fixed reason only, never profile ids, paths, titles or errors.
 
-## What a copy leaves behind (deliberate, not yet cleaned up)
+## What a copy leaves behind (and retention)
 
 **Snapshot folders on the target computer.** The pinned atomic writer (`history_index_transaction_v1.cjs`, sha256 `0b3b4cbb...`) creates one `.history-index-snapshot-<uuid>/` folder in the target profile root for every transaction and never removes it on success. The folder holds private copies of the profile's `config.json`, `ssh_configs.json` and `ssh-remote-server-state.json` (`protected-<n>.bin`) and a `snapshot-manifest.json`.
 - Each record is its own transaction, so **a copy of N records leaves N snapshot folders**: 18 for a first Gmail copy and 32 for a first Platyr copy.
 - Claude Desktop's `config.json` can hold its encrypted sign-in token cache, so each folder is one more copy of it. The folders are private through 0700/0600 modes on the Mac and through the inherited folder ACL on Windows.
 - A test in `microbatch-sync.test.cjs` pins the count. The per-Open bound caps how many one Open can add (50).
 
-Removing them needs a separately reviewed change, because the writer, the Node bridge and the Python helper are hash-pinned to each other and to the transport. The proposed shape:
-- after a trusted `created_metadata` receipt with `protectedBytesUnchanged: true`, the bridge removes only the snapshot folder this transaction created, found by the name the writer returned;
-- it first checks that the folder is a real directory (not a link) holding exactly the expected `protected-<n>.bin` files and manifest, each a single-link regular file whose bytes equal the protected bytes the transaction was given;
-- it then unlinks those files and removes the folder with a plain `rmdir`, which fails safely if anything else appeared;
-- the receipt reports the removal instead of `privateSnapshotsPreserved: true`;
-- snapshots of refused or uncertain transactions stay, as recovery evidence.
+**Retention removes them through the pinned helper path.** The fixed helper's `snapshot-cleanup` mode (transport allow-list, same fixed profile IDs and interpreters, no paths from HTTP) keeps the newest 3 snapshot folders per profile and deletes older ones the writer created:
+- only folders named exactly `.history-index-snapshot-<32 hex>` are candidates, and only when every entry inside is the manifest or a `protected-<n>.bin` regular file (single link, never a symlink); anything else is skipped and reported, never deleted;
+- it re-checks the names right before deleting, unlinks the verified files and removes the folder with a plain `rmdir`, which fails safely if anything else appeared;
+- retention runs automatically after each copy that created records unless Settings turns it off, and on demand from Settings' "Clean up now" (`POST /api/claude/history-snapshots/cleanup`), which covers every known profile on each of its platforms;
+- the writer itself is untouched, so its sha256 pin stays `0b3b4cbb...`; the helper stays under its 128 KB transport check.
 
 A measured, platform-qualified batch size above 1 would also cut the count.
 

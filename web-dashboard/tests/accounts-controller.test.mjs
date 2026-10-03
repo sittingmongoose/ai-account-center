@@ -568,7 +568,7 @@ test('Muse Sign in opens a device-code job on the Mac once the server offers it'
   assert.equal(h.ctl.state.flows.muse.job.id, 'job_muse1');
 });
 
-test('the Dashboard sign-in block: other browsers, network trust, devices and sign out all devices', async () => {
+test('the Sign-in & connection block: other browsers, network trust, devices and sign out all devices', async () => {
   const session = { username: 'owner', otherBrowsers: 2, managedBy: 'config', secureTransport: true };
   const devices = [{ id: 'dev_0123456789abcdef', name: 'Mac tray', platform: 'mac' }, { id: 'dev_fedcba9876543210', name: 'Windows tray', platform: 'windows' }];
   const network = { trustLocalNetwork: true, trustedNetworks: [], connection: { peer: '192.168.50.20', trusted: true }, canTurnOn: false };
@@ -694,4 +694,175 @@ test('the actions that send a change are named, so a pending account switch can 
   await quiet.ctl.handle('line-cancel', 'codex:one');
   await quiet.ctl.handle('flow-cancel', 'codex');
   assert.deepEqual(quiet.sent, []);
+});
+
+test('the session lifetime saves on the server and the page follows it without a reload', async () => {
+  const session = { username: 'owner', sessionTimeoutHours: 720, sessionLifetimeDays: 30, otherBrowsers: 0 };
+  const h = harness({
+    routes: {
+      'GET /api/auth/session': { ...session },
+      'GET /api/auth/devices': { devices: [] },
+      'GET /api/auth/network': { trustLocalNetwork: false, connection: {} },
+      'PUT /api/auth/session-lifetime': body => ({ days: body.days, hours: body.days * 24, options: [1, 7, 30, 90, 365] }),
+    },
+  });
+  await h.ctl.loadSignin();
+  await h.ctl.handle('session-lifetime', '7');
+  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/auth/session-lifetime', body: { days: 7 } });
+  assert.equal(h.ctl.state.signin.session.sessionLifetimeDays, 7);
+  assert.equal(h.ctl.state.signin.session.sessionTimeoutHours, 168);
+  assert.equal(last(h.toasts).title, 'Sessions now last 7 days');
+  // picking the saved value again sends nothing
+  const count = h.sent.length;
+  await h.ctl.handle('session-lifetime', '7');
+  assert.equal(h.sent.length, count);
+  // a refused save says so and keeps the old value
+  const bad = harness({
+    routes: {
+      'GET /api/auth/session': { ...session },
+      'GET /api/auth/devices': { devices: [] },
+      'GET /api/auth/network': { trustLocalNetwork: false, connection: {} },
+      'PUT /api/auth/session-lifetime': refusal(400, 'invalid_body'),
+    },
+  });
+  await bad.ctl.loadSignin();
+  await bad.ctl.handle('session-lifetime', '90');
+  assert.equal(bad.ctl.state.signin.session.sessionLifetimeDays, 30);
+  assert.equal(last(bad.toasts).kind, 'err');
+});
+
+test('the time zone saves the whole preferences shape and the page follows it', async () => {
+  const prefs = { timeZone: 'America/New_York', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  const h = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+    },
+  });
+  await h.ctl.loadPrefs();
+  assert.equal(h.ctl.state.prefs.data.timeZone, 'America/New_York');
+  await h.ctl.handle('time-zone', 'Asia/Tokyo');
+  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/preferences', body: { ...prefs, timeZone: 'Asia/Tokyo' } });
+  assert.equal(h.ctl.state.prefs.data.timeZone, 'Asia/Tokyo');
+  const count = h.sent.length;
+  await h.ctl.handle('time-zone', 'Asia/Tokyo');
+  assert.equal(h.sent.length, count);
+  await h.ctl.handle('time-zone', '');
+  assert.equal(h.sent.length, count);
+});
+
+test('removing a default Claude profile types its account email, and a mistype stays open', async () => {
+  const h = harness({
+    data: { accounts: [{ id: 'claude:home', provider: 'claude', label: 'home', email: 'home@example.com' }] },
+    routes: {
+      'POST /api/accounts/claude%3Ahome/remove': (body) => {
+        if (!body.confirmationToken) return { confirmation: { token: 'tok-email', effects: ['Default.'], expectsTyped: 'email' } };
+        if (body.confirm !== 'home@example.com') throw refusal(400, 'invalid_body');
+        return { removed: true, trashId: 'tr_1', purgeAfter: null };
+      },
+    },
+  });
+  await h.ctl.handle('remove', 'claude:home');
+  assert.equal(h.ctl.state.flows.claude.type, 'remove-email');
+  assert.equal(h.ctl.state.flows.claude.accountId, 'claude:home');
+  assert.equal(h.ctl.state.lines['claude:home'], undefined);
+  await h.ctl.handle('flow-submit', 'claude\nwrong@example.com\n');
+  assert.equal(h.ctl.state.flows.claude.error.title, 'That email does not match this account.');
+  assert.deepEqual(last(h.sent), { method: 'POST', path: '/api/accounts/claude%3Ahome/remove', body: { confirmationToken: 'tok-email', confirm: 'wrong@example.com' } });
+  await h.ctl.handle('flow-submit', 'claude\n\n');
+  assert.equal(h.ctl.state.flows.claude.error.title, 'Type the account email first.');
+  await h.ctl.handle('flow-submit', 'claude\nhome@example.com\n');
+  assert.equal(h.ctl.state.flows.claude, undefined);
+  assert.equal(last(h.toasts).title, 'Removed home@example.com');
+});
+
+test('snapshot cleanup toggles automatic retention and cleans up now with a note', async () => {
+  const prefs = { timeZone: 'America/New_York', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  const h = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+      'POST /api/claude/history-snapshots/cleanup': { profiles: 2, targets: 3, kept: 9, deleted: 4, skipped: 1, failed: 0 },
+    },
+  });
+  await h.ctl.loadPrefs();
+  await h.ctl.handle('cleanup-auto', '');
+  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/preferences', body: { ...prefs, snapshotCleanup: { auto: false } } });
+  await h.ctl.handle('cleanup-now', '');
+  assert.deepEqual(last(h.sent), { method: 'POST', path: '/api/claude/history-snapshots/cleanup', body: {} });
+  assert.equal(h.ctl.state.prefs.cleanupNote, 'Deleted 4 older snapshots, skipped 1 folder that was not AAC snapshots.');
+  const idle = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'POST /api/claude/history-snapshots/cleanup': { profiles: 1, targets: 1, kept: 2, deleted: 0, skipped: 0, failed: 0 },
+    },
+  });
+  await idle.ctl.loadPrefs();
+  await idle.ctl.handle('cleanup-now', '');
+  assert.equal(idle.ctl.state.prefs.cleanupNote, 'Nothing to clean: every profile already keeps only its newest snapshots.');
+});
+
+test('extra usage-log locations add, validate and remove through one preferences save', async () => {
+  const prefs = { timeZone: 'America/New_York', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  const h = harness({
+    routes: {
+      'GET /api/accounts/preferences': { ...prefs },
+      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+    },
+  });
+  await h.ctl.loadPrefs();
+  await h.ctl.handle('logsource-add', 'omp\nubuntu\n/home/u/extra-omp\n');
+  assert.equal(h.ctl.state.prefs.logSourcesError ?? '', '');
+  let body = last(h.sent).body;
+  assert.equal(body.usageLogSources.length, 1);
+  assert.match(body.usageLogSources[0].id, /^log-[a-z0-9]{8}$/);
+  assert.deepEqual({ ...body.usageLogSources[0], id: 'x' }, { id: 'x', tool: 'omp', host: 'ubuntu', path: '/home/u/extra-omp' });
+  const count = h.sent.length;
+  // a relative path, a wrong host and a missing mapping refuse without saving
+  await h.ctl.handle('logsource-add', 'omp\nubuntu\nrelative/path\n');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /absolute path/);
+  await h.ctl.handle('logsource-add', 'muse\nwindows\nC:\\muse\n');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on ubuntu, mac/);
+  await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /field mapping/);
+  await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n{"timestamp":"ts"}');
+  assert.equal(h.sent.length, count);
+  assert.match(h.ctl.state.prefs.logSourcesError, /model/);
+  // a mapped generic source saves with its mapping
+  await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n{"timestamp":"ts","model":"m","inputTokens":"usage.in"}');
+  body = last(h.sent).body;
+  assert.equal(body.usageLogSources.length, 2);
+  assert.deepEqual(body.usageLogSources[1].fieldMapping, { timestamp: 'ts', model: 'm', inputTokens: 'usage.in' });
+  // adding the same location again refuses as a duplicate
+  const beforeDupe = h.sent.length;
+  await h.ctl.handle('logsource-add', 'omp\nubuntu\n/home/u/extra-omp\n');
+  assert.equal(h.sent.length, beforeDupe);
+  assert.match(h.ctl.state.prefs.logSourcesError, /already listed/);
+  // remove drops one entry; an unknown id sends nothing
+  const [first, second] = h.ctl.state.prefs.data.usageLogSources;
+  await h.ctl.handle('logsource-remove', first.id);
+  body = last(h.sent).body;
+  assert.deepEqual(body.usageLogSources.map((entry) => entry.id), [second.id]);
+  const afterRemove = h.sent.length;
+  await h.ctl.handle('logsource-remove', 'log-unknown');
+  assert.equal(h.sent.length, afterRemove);
+});
+
+test('the log source check mirrors the server path and mapping rules', async () => {
+  const { logSourceProblem } = await import('../public/accounts-controller.mjs');
+  assert.equal(logSourceProblem('omp', 'mac', '/Users/u/x', undefined), '');
+  assert.equal(logSourceProblem('omp', 'windows', 'C:\\x\\y', undefined), '');
+  assert.equal(logSourceProblem('omp', 'windows', 'C:/x/y', undefined), '');
+  assert.ok(logSourceProblem('cursor', 'mac', '/x', undefined));
+  assert.ok(logSourceProblem('omp', 'mac', 'relative', undefined));
+  assert.ok(logSourceProblem('omp', 'mac', '/x/../y', undefined));
+  assert.ok(logSourceProblem('omp', 'ubuntu', 'C:\\x', undefined));
+  assert.ok(logSourceProblem('zcode', 'windows', '/x.db', undefined));
+  assert.ok(logSourceProblem('omp', 'mac', '/x', { timestamp: 'ts' }));
+  assert.equal(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: 'm' }), '');
+  assert.ok(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: '0bad' }));
+  assert.ok(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: 'm', bogus: 'x' }));
 });

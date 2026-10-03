@@ -144,6 +144,9 @@ async function changePassword(req: Request, res: Response): Promise<void> {
         username: existing?.username ?? current.username,
         password_hash: hash,
         session_timeout_hours: existing?.session_timeout_hours ?? 24,
+        ...(typeof existing?.session_lifetime_days === 'number'
+          ? { session_lifetime_days: existing.session_lifetime_days }
+          : {}),
         password_changed_at: changedAt,
       };
     });
@@ -222,6 +225,7 @@ function sessionSummary(req: Request, res: Response): void {
   res.json({
     username: req.session.username ?? state.username,
     sessionTimeoutHours: state.sessionTimeoutHours,
+    sessionLifetimeDays: state.sessionLifetimeDays,
     expiresAt: sessionExpiresAt(req),
     otherBrowsers: countOtherSessions(req.sessionID),
     passwordChangedAt: passwordChangedAt(),
@@ -304,11 +308,13 @@ async function completeSetup(req: Request, res: Response): Promise<void> {
     if (current.configured || current.managedBy === 'env') return false;
     const changedAt = isoTime(authNow());
     mutateConfig((config) => {
+      const lifetime = config.dashboard_auth?.session_lifetime_days;
       config.dashboard_auth = {
         enabled: true,
         username: request.username,
         password_hash: hash,
         session_timeout_hours: config.dashboard_auth?.session_timeout_hours ?? 24,
+        ...(typeof lifetime === 'number' ? { session_lifetime_days: lifetime } : {}),
         password_changed_at: changedAt,
       };
     });

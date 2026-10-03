@@ -1,4 +1,5 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { displayFormat } from './time-format.mjs';
 
 export const PROVIDERS = [
   ['cursor', 'Cursor', '◇'], ['muse', 'Muse Code', 'M'],
@@ -13,14 +14,14 @@ export function timeLabel(value, prefix) {
   if (typeof value !== 'string' || !value) return '';
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
-  return `${prefix} ${date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(prefix === 'Resets' ? { timeZoneName: 'short' } : {}) })}`;
+  return `${prefix} ${displayFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(prefix === 'Resets' ? { timeZoneName: 'short' } : {}) }).format(date)}`;
 }
 function compactResetLabel(value) {
   if (typeof value !== 'string' || !value) return '';
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
-  const day = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  const day = displayFormat({ month: 'short', day: 'numeric' }).format(date);
+  const time = displayFormat({ hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(date);
   return `Resets ${day}\n${time}`;
 }
 const number = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);

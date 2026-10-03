@@ -9,6 +9,7 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { usedPercent, currentUsedPercent, isFable, isMeterWindow, period, windowLabel, planLabel, valueText, hiddenProviders } from './view-model.mjs';
 import { H, D, clockTxt, hourTxt, mdTxt, wmdTxt, wdTxt, timeTxt, duration, untilTxt, dayStart, addDays, bucketStart, nextBucket, dashLine, dashPolyline } from './analytics-usage.mjs';
+import { zonedAddDays, zonedHour, zonedHourStart } from './time-format.mjs';
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const text = value => typeof value === 'string' ? value : '';
@@ -161,7 +162,7 @@ export function quotaAxis(payload, now) {
   const step = [H, 2 * H, 3 * H, 6 * H, 12 * H, D].find(s => span / s <= 8) || D;
   const ticks = [];
   for (let t = nextBucket(bucketStart(t0, step), step); t < now - Math.max(step * 0.3, span * 0.16) && ticks.length < 20; t = nextBucket(t, step)) {
-    ticks.push({ pos: (t - t0) / span, label: new Date(t).getHours() === 0 ? wdTxt(t) : hourTxt(t) });
+    ticks.push({ pos: (t - t0) / span, label: zonedHour(t) === 0 ? wdTxt(t) : hourTxt(t) });
   }
   return { t0, ticks };
 }
@@ -271,20 +272,20 @@ export function focusChart(acc, payload, ctx) {
   // x axis: hour ticks in the observed part, day ticks in the forecast; a tick label that would touch its neighbour is dropped
   const span = t1 - t0;
   const stepH = span > 5 * D ? 24 : span > 2 * D ? 12 : span > 20 * H ? 4 : span > 8 * H ? 2 : 1;
-  const first = new Date(t0); first.setMinutes(0, 0, 0); first.setHours(first.getHours() + 1);
+  const first = zonedHourStart(t0) + H;
   const bx = obsEnd + gap / 2;
   placed.push({ x0: bx - 7, x1: bx + 7, y0: pad.t + plotH - 5, y1: pad.t + plotH + 8 });
-  for (let t = first.getTime(); t < t1; t += H) {
-    if (new Date(t).getHours() % stepH) continue;
+  for (let t = first; t < t1; t += H) {
+    if (zonedHour(t) % stepH) continue;
     const x = xo(t);
     if (x < pad.l + 30 || x > obsEnd - 30) continue;
     grid += `M${pt(x)} ${pad.t}V${pt(pad.t + plotH)}`;
     put(stepH >= 24 ? mdTxt(t) : hourTxt(t), [{ x, y: Hc - 10, a: 'middle' }], 'ink-3', BOT);
   }
-  const fd = new Date(now); fd.setHours(24, 0, 0, 0);
+  const fd = zonedAddDays(now, 1);
   const fSpanD = (tf1 - tf0) / D, fStep = fSpanD > 14 ? 7 : fSpanD > 6 ? 2 : 1;
   let fgrid = '';
-  for (let t = fd.getTime(), k = 0; t < tf1; t = addDays(t, 1), k++) {
+  for (let t = fd, k = 0; t < tf1; t = addDays(t, 1), k++) {
     if (k % fStep) continue;
     const x = xf(t);
     if (x > pad.l + plotW - 24 || x < fStart + 24) continue;

@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
+import {
+  collectAccountActivity,
+  parseJsonlMappedUsageLine,
+} from '../../../src/web-server/usage/account-activity-collector';
+import type { JsonlFieldMapping } from '../../../src/web-server/usage/worker-client';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
 const MIN_DATE = NOW - 31 * 86_400_000;
@@ -61,6 +65,13 @@ async function collectOmp(roots: string[]) {
 async function collectMuse(sessionsDir: string) {
   return collectAccountActivity(
     { kind: 'muse', sessionsDir },
+    { minDate: MIN_DATE, cacheDir: path.join(root, 'cache') }
+  );
+}
+
+async function collectJsonl(roots: string[], mapping: JsonlFieldMapping) {
+  return collectAccountActivity(
+    { kind: 'jsonl', roots, mapping },
     { minDate: MIN_DATE, cacheDir: path.join(root, 'cache') }
   );
 }
@@ -222,5 +233,121 @@ describe('omp and muse account activity', () => {
     fs.writeFileSync(path.join(third, name), `${ompLine('glm-5.3-flash', 0.1)}\n`);
     const again = await collectOmp([first, second, third]);
     expect(again.eventCount).toBe(4);
+  });
+});
+
+describe('generic jsonl account activity', () => {
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-activity-jsonl-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  function writeLogs(directory: string, lines: string[]): string {
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, 'usage.jsonl');
+    fs.writeFileSync(file, `${lines.join('\n')}\n`);
+    return directory;
+  }
+
+  it('parses mapped records with nested dot paths and epoch timestamps', async () => {
+    const logs = writeLogs(path.join(root, 'logs'), [
+      JSON.stringify({
+        ts: '2026-10-01T15:05:00Z',
+        model: 'jsonl-model',
+        usage: { input_tokens: 1000, output_tokens: 200 },
+      }),
+      JSON.stringify({
+        ts: Date.parse('2026-10-01T15:35:00Z') / 1000,
+        model: 'jsonl-model',
+        usage: { input_tokens: 500, output_tokens: 50 },
+      }),
+    ]);
+    const data = await collectJsonl([logs], {
+      timestamp: 'ts',
+      model: 'model',
+      inputTokens: 'usage.input_tokens',
+      outputTokens: 'usage.output_tokens',
+    });
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly.map((hour) => hour.hour)).toEqual(['2026-10-01 15:00']);
+    const breakdowns = data.hourly.flatMap((hour) => hour.modelBreakdowns);
+    expect(breakdowns.map((m) => m.modelName)).toEqual(['jsonl-model']);
+    expect(data.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(1500);
+    expect(data.hourly.reduce((sum, hour) => sum + hour.outputTokens, 0)).toBe(250);
+  });
+
+  it('skips malformed lines and unparseable timestamps without failing', async () => {
+    const logs = writeLogs(path.join(root, 'logs'), [
+      'plain content',
+      JSON.stringify({ ts: 'not a date', usage: { input_tokens: 10 } }),
+      JSON.stringify(['ts', '2026-10-01T15:05:00Z']),
+      JSON.stringify({
+        ts: '2026-10-01T15:05:00Z',
+        usage: { input_tokens: 100, output_tokens: 20 },
+      }),
+    ]);
+    const data = await collectJsonl([logs], {
+      timestamp: 'ts',
+      inputTokens: 'usage.input_tokens',
+      outputTokens: 'usage.output_tokens',
+    });
+    expect(data.eventCount).toBe(1);
+    expect(data.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(100);
+    expect(data.scan?.complete).toBe(true);
+  });
+
+  it('keeps logged costs on their own rows and unmapped counts at zero', async () => {
+    const logs = writeLogs(path.join(root, 'logs'), [
+      JSON.stringify({ ts: '2026-10-01T15:05:00Z', price: 0.5 }),
+      JSON.stringify({ ts: '2026-10-01T15:06:00Z', price: 0 }),
+    ]);
+    const data = await collectJsonl([logs], { timestamp: 'ts', cost: 'price' });
+    expect(data.eventCount).toBe(2);
+    const hour = data.hourly.find((entry) => entry.hour === '2026-10-01 15:00');
+    // A logged 0 is "not logged", never free: only the 0.5 counts as logged.
+    expect(hour?.modelBreakdowns.length).toBe(1);
+    expect(hour?.modelBreakdowns[0].cost).toBeCloseTo(0.5, 9);
+  });
+
+  it('keeps separate checkpoints per mapping over one root', async () => {
+    const logs = writeLogs(path.join(root, 'logs'), [
+      JSON.stringify({ ts: '2026-10-01T15:05:00Z', a: 100, b: 7 }),
+    ]);
+    const first = await collectJsonl([logs], { timestamp: 'ts', inputTokens: 'a' });
+    expect(first.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(100);
+    const second = await collectJsonl([logs], { timestamp: 'ts', inputTokens: 'b' });
+    expect(second.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(7);
+    // Neither mapping rereads the file: both checkpoints hold their own rows.
+    const again = await collectJsonl([logs], { timestamp: 'ts', inputTokens: 'a' });
+    expect(again.eventCount).toBe(1);
+    expect(again.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(100);
+  });
+
+  it('parses mapped lines defensively', () => {
+    const mapping: JsonlFieldMapping = { timestamp: 'ts' };
+    expect(parseJsonlMappedUsageLine('nope', mapping)).toBeNull();
+    expect(parseJsonlMappedUsageLine('["ts"]', mapping)).toBeNull();
+    expect(parseJsonlMappedUsageLine(JSON.stringify({}), mapping)).toBeNull();
+    expect(
+      parseJsonlMappedUsageLine(JSON.stringify({ ts: '2026-13-99T99:99:99Z' }), mapping)
+    ).toBeNull();
+    // Epoch milliseconds stay milliseconds; seconds scale up.
+    const ms = parseJsonlMappedUsageLine(
+      JSON.stringify({ ts: Date.parse('2026-10-01T15:05:00Z') }),
+      mapping
+    );
+    expect(ms?.timestamp).toBe('2026-10-01T15:05:00.000Z');
+    const sec = parseJsonlMappedUsageLine(
+      JSON.stringify({ ts: Date.parse('2026-10-01T15:05:00Z') / 1000 }),
+      mapping
+    );
+    expect(sec?.timestamp).toBe('2026-10-01T15:05:00.000Z');
+    // Negative and non-numeric counts are zero, never negative or NaN.
+    const counts = parseJsonlMappedUsageLine(
+      JSON.stringify({ ts: '2026-10-01T15:05:00Z', a: -5, b: 'lots' }),
+      { timestamp: 'ts', inputTokens: 'a', outputTokens: 'b' }
+    );
+    expect(counts?.inputTokens).toBe(0);
+    expect(counts?.outputTokens).toBe(0);
   });
 });

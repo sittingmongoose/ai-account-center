@@ -22,6 +22,7 @@ import {
 
 // Import domain routers
 import accountDashboardRoutes from './account-dashboard-routes';
+import accountPreferencesRoutes from './account-preferences-routes';
 import accountRefreshSettingsRoutes from './account-refresh-settings-routes';
 import accountAnalyticsRoutes from './account-analytics-routes';
 import accountVisibilityRoutes from './account-visibility-routes';
@@ -90,6 +91,7 @@ apiRoutes.use((req, res, next) => {
 
 // Only the account dashboard and native account controls are mounted.
 apiRoutes.use('/accounts', accountDashboardRoutes);
+apiRoutes.use('/accounts', accountPreferencesRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
 apiRoutes.use('/accounts', accountAnalyticsRoutes);
 apiRoutes.use('/accounts', accountVisibilityRoutes);

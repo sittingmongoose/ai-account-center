@@ -5,6 +5,7 @@
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { antigravityView } from './antigravity-data.mjs';
+import { lazyFormat } from './time-format.mjs';
 
 export const VIEW_MODEL_VERSION = 2;
 
@@ -30,9 +31,9 @@ const text = value => typeof value === 'string' ? value : '';
 const nf2 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const nfCompact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 });
 const money = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-const dateTime = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-const clockTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-const dayClock = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const dateTime = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const clockTime = lazyFormat({ hour: 'numeric', minute: '2-digit' });
+const dayClock = lazyFormat({ weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const PLATFORM = { mac: 'Mac', windows: 'Windows', ubuntu: 'Ubuntu', linux: 'Linux' };
 
 export const platformLabel = id => PLATFORM[id] || (id ? id[0].toUpperCase() + id.slice(1) : 'Unknown');

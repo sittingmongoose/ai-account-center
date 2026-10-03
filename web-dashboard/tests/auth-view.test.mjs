@@ -67,7 +67,10 @@ test('a session that ended is told apart from one that ran out', () => {
   assert.equal(endedReason(null, 24, now), null);
   forgetSignIn(storage);
   assert.equal(signedInAt(storage), null);
-  assert.equal(expiredBanner('expired', 24).title, 'Signed out after 24 hours');
+  assert.equal(expiredBanner('expired', 24).title, 'Signed out after 1 day');
+  assert.equal(expiredBanner('expired', 720).title, 'Signed out after 30 days');
+  assert.equal(expiredBanner('expired', 8760).title, 'Signed out after 1 year');
+  assert.equal(expiredBanner('expired', 36).title, 'Signed out after 36 hours');
   assert.equal(expiredBanner('ended', 24).title, 'Your session ended');
   // storage that throws (private windows) is not an error
   const broken = { setItem() { throw new Error('no'); }, getItem() { throw new Error('no'); }, removeItem() { throw new Error('no'); } };
@@ -99,4 +102,12 @@ test('the sign-in page reads tries and the pause from the answer, falling back t
   assert.match(setupFailure(refusal('weak_password', { reason: 'too_long' }))[1], /72 bytes/);
   assert.match(setupFailure(refusal('managed_by_env'))[1], /environment variables/);
   assert.match(setupFailure({ status: 500, payload: null })[1], /could not be created on the dashboard/);
+});
+
+test('the Slint sign-in value carries Remember me; two parts remember', async () => {
+  const { parseLoginValue } = await import('../public/auth-view.mjs');
+  assert.deepEqual(parseLoginValue('owner\ns3cret\n1'), { username: 'owner', password: 's3cret', remember: true });
+  assert.deepEqual(parseLoginValue('owner\ns3cret\n0'), { username: 'owner', password: 's3cret', remember: false });
+  assert.deepEqual(parseLoginValue('  owner  \npass'), { username: 'owner', password: 'pass', remember: true });
+  assert.deepEqual(parseLoginValue(''), { username: '', password: '', remember: true });
 });

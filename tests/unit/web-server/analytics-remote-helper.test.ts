@@ -257,6 +257,62 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     writeFixtures();
     expect(() => runHelper({ kinds: ['cursor'], minDateMs: MIN_DATE })).toThrow();
     expect(() => runHelper({ kinds: ['omp'], minDateMs: MIN_DATE, roots: ['/etc'] })).toThrow();
+    expect(() =>
+      runHelper({ kinds: ['omp'], minDateMs: MIN_DATE, extraRoots: { cursor: ['/x'] } })
+    ).toThrow();
+    expect(() =>
+      runHelper({ kinds: ['omp'], minDateMs: MIN_DATE, extraRoots: { omp: ['relative/path'] } })
+    ).toThrow();
+    expect(() =>
+      runHelper({ kinds: ['omp'], minDateMs: MIN_DATE, extraRoots: { omp: ['/x/../y'] } })
+    ).toThrow();
+  });
+
+  it('scans saved extra roots alongside the defaults without leaking paths', () => {
+    writeFixtures({ muse: false, zcode: false });
+    const extraOmp = path.join(home, 'extra-omp');
+    fs.mkdirSync(path.join(extraOmp, 'slug'), { recursive: true });
+    fs.writeFileSync(
+      path.join(extraOmp, 'slug', '2026-10-01T15-00_uuid3.jsonl'),
+      `${ompRecord('extra-model', 0.75)}\n`
+    );
+    const extraMuse = path.join(home, 'extra-muse', 'uuid-7');
+    fs.mkdirSync(extraMuse, { recursive: true });
+    fs.writeFileSync(path.join(extraMuse, 'session.jsonl'), `${museRecord()}\n`);
+    const response = runHelper({
+      kinds: ['omp', 'muse'],
+      minDateMs: MIN_DATE,
+      extraRoots: { omp: [extraOmp], muse: [path.join(home, 'extra-muse')] },
+    });
+    const kinds = response.kinds as Record<string, { state: string }>;
+    // The default Muse sessions are missing, but the extra still scans.
+    expect(kinds.omp.state).toBe('ok');
+    expect(kinds.muse.state).toBe('ok');
+    const rows = response.rows as Array<Record<string, unknown>>;
+    const byModel = new Map(rows.map((row) => [row.m, row]));
+    expect(byModel.get('extra-model')).toMatchObject({ k: 'omp', c: 0.75, n: 1 });
+    expect(byModel.get('muse-spark-1.3-contributor')).toMatchObject({ k: 'muse', n: 1 });
+    expect(JSON.stringify(response)).not.toContain(home);
+  });
+
+  it('scans extra zcode databases and skips missing extras', () => {
+    writeFixtures({ zcode: false });
+    const extraDb = path.join(home, 'extra', 'db.sqlite');
+    fs.mkdirSync(path.dirname(extraDb), { recursive: true });
+    sqlite(extraDb, [
+      'db.execute("CREATE TABLE model_usage (model_id TEXT, provider_id TEXT, started_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER)")',
+      zcodeInsert('2026-10-01T15:20:00Z', 10000, 9000),
+    ]);
+    const response = runHelper({
+      kinds: ['zcode'],
+      minDateMs: MIN_DATE,
+      extraRoots: { zcode: [extraDb, path.join(home, 'missing', 'db.sqlite')] },
+    });
+    const kinds = response.kinds as Record<string, { state: string }>;
+    expect(kinds.zcode.state).toBe('ok');
+    const rows = response.rows as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ k: 'zcode', m: 'GLM-5.3-Flash', i: 1000, n: 1 });
   });
 
   it('collects local zcode through the helper with one row per model and hour', async () => {

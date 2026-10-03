@@ -1,3 +1,4 @@
+import { lazyFormat } from './time-format.mjs';
 // The sign-in page's words and rules (c-daylight-atlas/app-auth.js), as pure functions bridge.js uses to build
 // the AuthView it hands Slint (ui/shell/signin.slint). Covered by tests/auth-view.test.mjs.
 //
@@ -12,7 +13,7 @@
 // - POST /api/auth/setup: 201, or 403 secure_transport_required / setup_code_required / setup_code_invalid
 //   (+ triesLeft), 400 invalid_username / weak_password, 409 already_configured / managed_by_env, 429.
 
-const clock = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const clock = lazyFormat({ hour: 'numeric', minute: '2-digit' });
 const bytes = value => new TextEncoder().encode(value).length;
 
 /** Password strength, a hint and never a gate (the server's rule is 8 code points to 72 bytes). lv 0..5. */
@@ -107,9 +108,23 @@ export function expiredBanner(reason, hours = 24) {
   if (reason === 'revoked') {
     return { title: 'Signed out from another browser', body: 'This browser was signed out from another one, with Sign out other browsers, a password change or Sign out all devices. Sign in again to continue.' };
   }
+  const lasts = hours >= 24 && hours % 24 === 0 ? (hours === 24 ? '1 day' : hours === 168 ? '7 days' : hours === 720 ? '30 days' : hours === 2160 ? '90 days' : hours === 8760 ? '1 year' : `${hours / 24} days`) : `${hours} hours`;
   return reason === 'expired'
-    ? { title: `Signed out after ${hours} hours`, body: `Sessions on this dashboard last ${hours} hours. Your trays stayed connected.` }
+    ? { title: `Signed out after ${lasts}`, body: `Sessions on this dashboard last ${lasts}. Your trays stayed connected.` }
     : { title: 'Your session ended', body: 'The dashboard signed this browser out, for example after it restarted. Your trays stayed connected.' };
+}
+
+/**
+ * The Slint sign-in value: "user\\npassword\\n1|0" (Remember me). Two parts remember, as before;
+ * single-line fields never hold a newline.
+ */
+export function parseLoginValue(value) {
+  const parts = String(value ?? '').split('\n');
+  return {
+    username: (parts[0] || '').trim(),
+    password: parts[1] || '',
+    remember: parts.length < 3 || parts[2] !== '0',
+  };
 }
 
 /** Tries left after a refused sign-in: the answer's `triesLeft`, else the limiter's RateLimit-Remaining header. */

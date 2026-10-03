@@ -26,6 +26,7 @@ import {
   DEFAULT_DASHBOARD_AUTH_CONFIG,
   DEFAULT_IMAGE_ANALYSIS_CONFIG,
   DEFAULT_LOGGING_CONFIG,
+  effectiveSessionLifetimeDays,
 } from '../unified-config-types';
 import type { UnifiedConfig } from '../unified-config-types';
 import { canonicalizeBrowserConfig, normalizeSessionAffinityTtl } from './normalizers';
@@ -323,6 +324,13 @@ export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfi
       session_timeout_hours:
         partial.dashboard_auth?.session_timeout_hours ??
         DEFAULT_DASHBOARD_AUTH_CONFIG.session_timeout_hours,
+      // A legacy `session_timeout_hours` other than the old 24-hour default maps to
+      // the nearest offered lifetime; a bare 24 is the value our own setup code
+      // wrote when nothing was chosen, so it takes the new 30-day default.
+      session_lifetime_days: effectiveSessionLifetimeDays({
+        session_lifetime_days: partial.dashboard_auth?.session_lifetime_days,
+        session_timeout_hours: partial.dashboard_auth?.session_timeout_hours,
+      }),
       ...(typeof partial.dashboard_auth?.password_changed_at === 'string'
         ? { password_changed_at: partial.dashboard_auth.password_changed_at }
         : {}),

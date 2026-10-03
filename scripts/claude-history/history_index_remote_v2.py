@@ -23,10 +23,15 @@ import sys
 
 PROFILES = frozenset(('platyr', 'gmail', 'party', 'me'))
 PLATFORMS = frozenset(('mac', 'windows'))
-MODES = frozenset(('closed-check', 'collect', 'protected-check', 'verify-transcripts', 'append'))
+MODES = frozenset(('closed-check', 'collect', 'protected-check', 'verify-transcripts', 'append', 'snapshot-cleanup'))
 UUID = re.compile(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}')
 NAME = re.compile(r'local_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.json')
 SHA = re.compile(r'[0-9a-f]{64}')
+SNAPSHOT_DIR = re.compile(r'\.history-index-snapshot-[0-9a-f]{32}')
+SNAPSHOT_PROTECTED = re.compile(r'protected-[0-9]+\.bin')
+SNAPSHOT_MANIFEST = 'snapshot-manifest.json'
+SNAPSHOT_KEEP = 3
+SNAPSHOT_DELETE_CAP = 200
 MAX_FILE = 2_000_000
 MAX_TOTAL = 16_000_000
 MAX_PIPE = 24 * 1024 * 1024
@@ -384,6 +389,81 @@ class BoundProfile:
         endpoint = endpoint_from_config(user_ssh, self.policy['ssh'][self.platform])
         return registry, {'accountSha256': text_sha(account.lower()), 'orgSha256': text_sha(registry.name.lower())}, endpoint
 
+    def snapshot_cleanup(self):
+        # Retention for the writer's per-transaction snapshots: keep the newest SNAPSHOT_KEEP
+        # snapshot folders in this profile root, delete older ones this helper's writer created.
+        # Only folders named exactly by the writer's pattern are candidates, and only when every
+        # entry inside is the manifest or a protected-N.bin regular file; anything else is skipped
+        # and reported, never deleted. The identity bind runs first, so a wrong root refuses.
+        self.bind()
+        candidates = []
+        skipped = []
+        for entry in itertools.islice(self.root.iterdir(), 1024):
+            if not SNAPSHOT_DIR.fullmatch(entry.name):
+                continue
+            try:
+                info = entry.lstat()
+            except OSError:
+                skipped.append(entry.name)
+                continue
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                skipped.append(entry.name)
+                continue
+            try:
+                children = list(itertools.islice(entry.iterdir(), 64))
+            except OSError:
+                skipped.append(entry.name)
+                continue
+            owned = True
+            for child in children:
+                try:
+                    child_info = child.lstat()
+                except OSError:
+                    owned = False
+                    break
+                if (
+                    not stat.S_ISREG(child_info.st_mode)
+                    or stat.S_ISLNK(child_info.st_mode)
+                    or child_info.st_nlink != 1
+                    or (
+                        child.name != SNAPSHOT_MANIFEST
+                        and not SNAPSHOT_PROTECTED.fullmatch(child.name)
+                    )
+                ):
+                    owned = False
+                    break
+            if not owned or not any(child.name == SNAPSHOT_MANIFEST for child in children):
+                skipped.append(entry.name)
+                continue
+            candidates.append((info.st_mtime, entry))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        kept = [entry.name for _, entry in candidates[:SNAPSHOT_KEEP]]
+        deleted = []
+        for _, entry in candidates[SNAPSHOT_KEEP:]:
+            if len(deleted) >= SNAPSHOT_DELETE_CAP:
+                skipped.append(entry.name)
+                continue
+            try:
+                children = sorted(entry.iterdir(), key=lambda child: child.name)
+                if any(
+                    child.name != SNAPSHOT_MANIFEST
+                    and not SNAPSHOT_PROTECTED.fullmatch(child.name)
+                    for child in children
+                ):
+                    skipped.append(entry.name)
+                    continue
+                for child in children:
+                    child_info = child.lstat()
+                    if not stat.S_ISREG(child_info.st_mode) or child_info.st_nlink != 1:
+                        raise OSError('snapshot entry changed')
+                    child.unlink()
+                entry.rmdir()
+            except OSError:
+                skipped.append(entry.name)
+                continue
+            deleted.append(entry.name)
+        return {'kept': kept, 'deleted': deleted, 'skipped': sorted(skipped)}
+
     def protection(self, registry):
         files, buffers = [], {}
         for relative, path in [('config.json', self.root / 'config.json'), ('ssh_configs.json', self.root / 'ssh_configs.json'), ('ssh-remote-server-state.json', self.root / 'ssh-remote-server-state.json'), ('scheduled-tasks.json', registry / 'scheduled-tasks.json'), ('ssh-user-config', self.home / '.ssh/config')]:
@@ -569,6 +649,8 @@ def dispatch(request):
         return {'unchanged': bound.unchanged(request.get('expectedTarget'), request.get('records', []))}
     if mode == 'verify-transcripts':
         return {'verified': bound.verify_transcripts(request.get('records'))}
+    if mode == 'snapshot-cleanup':
+        return bound.snapshot_cleanup()
     return append(bound, request)
 
 def main():

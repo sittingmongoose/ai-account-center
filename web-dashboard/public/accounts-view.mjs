@@ -12,6 +12,7 @@ import { antigravityView } from './antigravity-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
+import { lazyFormat } from './time-format.mjs';
 
 export const ACCOUNTS_VIEW_VERSION = 2;
 
@@ -70,9 +71,9 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 const validDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 const text = value => typeof value === 'string' ? value : '';
 const STALE_MS = 30 * 60_000;
-const dateTime = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-const clockFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const dateTime = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
+const clockFmt = lazyFormat({ hour: 'numeric', minute: '2-digit' });
 const article = word => /^[aeiou]/i.test(word) ? 'an' : 'a';
 const isConsole = account => /console/i.test(text(account?.message)) || /^plan-opencode-go-console-/.test(text(account?.id));
 const providerLabel = id => PROVIDER_LABELS[id] || PROVIDER_REGISTRY.find(row => row.id === id)?.label || id;
@@ -148,6 +149,9 @@ function sourceLines(provider, account, reg) {
   const credential = reg?.credential;
   if (credential?.kind === 'aac-key') {
     return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || account.platform)}`];
+  }
+  if (def.kind === 'apikey' && credential?.kind && credential.kind !== 'aac-key') {
+    return ['Signed in through the app', platformLabel(account.platform)];
   }
   return [def.src, platformLabel(account.platform)];
 }
@@ -225,7 +229,7 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
       ];
     }
     case 'cli': {
-      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in', icon: 'login', probe: `signin-again:${account.id}` };
+      const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
       const signin = !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
         : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
           : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command.' });
@@ -239,10 +243,18 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
     }
     case 'apikey': {
       if (isConsole(account)) {
-        const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };
+        const fields = { act: 'signin', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin:${account.id}` };
         const live = reg ? reg.actions?.signInAgain === true : false;
         return [live ? action({ ...fields, enabled: true, tip: 'Open the OpenCode console in the browser with the extension and sign in there.' })
           : action({ ...fields, enabled: false, tip: reg ? 'Signing in to the console wallet is not available here.' : 'Checking what this account can do' }),
+        removeControl(provider, account, reg, entry)];
+      }
+      // A key the provider's own app or config holds (never AAC-stored): no key action at all, only Re-check.
+      if (reg?.credential?.kind && reg.credential.kind !== 'aac-key') {
+        const check = { act: 'recheck', value: account.id, label: 'Re-check', icon: 'refresh', probe: `recheck:${account.id}` };
+        const live = LIVE.recheck && reg.actions?.recheck !== false;
+        return [live ? action({ ...check, enabled: true, tip: 'Read the session again now.' })
+          : action({ ...check, enabled: false, tip: 'Re-check is not available for this account.' }),
         removeControl(provider, account, reg, entry)];
       }
       const g = gate(entry, 'replaceKey', provider);
@@ -250,13 +262,12 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
       let replace;
       if (!g.live) replace = gated(fields, g);
       else if (!reg) replace = action({ ...fields, enabled: false, tip: 'Checking what this account can do' });
-      else if (reg.credential?.kind && reg.credential.kind !== 'aac-key') replace = action({ ...fields, enabled: false, tip: `This account reads a key another app saved on ${platformLabel(account.platform)}. Add a key here to manage it from the dashboard.` });
       else if (reg.actions?.replaceKey !== true) replace = action({ ...fields, enabled: false, tip: 'Replacing this key is not possible now.' });
       else replace = action({ ...fields, enabled: true, tip: 'Store a new key; it is checked first and the old one stays if it is refused.' });
       return [replace, removeControl(provider, account, reg, entry)];
     }
     case 'browser': {
-      const fields = { act: 'signin', value: account.id, label: 'Sign in', icon: 'login', probe: `signin:${account.id}` };
+      const fields = { act: 'signin', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin:${account.id}` };
       const g = gate(entry, 'signInAgain', provider);
       const signin = g.live && (!reg || reg.actions?.signInAgain !== false)
         ? action({ ...fields, enabled: !!reg, tip: 'Open the console in the browser with the extension and sign in there; then re-check.' })
@@ -315,6 +326,7 @@ const STEPS = {
   'key-replace': ['Paste the key', 'Check', 'Stored'],
   guide: ['Open', 'Sign in', 'Re-check'],
   purge: ['Type DELETE', 'Deleted'],
+  'remove-email': ['Type the email', 'Removed'],
 };
 const btn = (act, value, label, fields = {}) => action({ act, value, label, enabled: true, probe: `${act}:${value}`, ...fields });
 const expiresLine = (iso, now) => validDate(iso) ? `Code expires at ${clockFmt.format(new Date(iso))}${Date.parse(iso) - now < 120_000 ? ' (soon)' : ''}` : '';
@@ -475,6 +487,17 @@ export function flowView(provider, f, ctx = {}) {
       v.actions.push(btn('flow-recheck', provider, 'Re-check', { icon: 'refresh', style: 'primary', busy: !!f.busy, enabled: !f.busy && !!f.accountId }));
       v.actions.push(close);
       if (f.found) { v.cur = 3; v.done = 'Session found'; v.body = 'Readings continue on the normal refresh interval.'; v.actions = [doneBtn]; }
+      err();
+      return v;
+    }
+    case 'remove-email': {
+      v.steps = STEPS['remove-email'];
+      const who = text(f.name) || 'this account';
+      v.title = `Remove ${who}?`;
+      const effects = (Array.isArray(f.effects) ? f.effects : []).filter(e => typeof e === 'string').join(' ');
+      v.body = `${effects || 'Its Claude data moves to the trash on Mac and Windows for 30 days.'} Type the account email to confirm.`;
+      Object.assign(v, { inputKind: 'email', inputLabel: 'Account email', inputPlaceholder: who.includes('@') ? who : 'name@example.com', inputSeed: '' });
+      v.actions = [btn('flow-submit', provider, 'Remove', { style: 'danger-solid', busy: !!f.busy, enabled: !f.busy }), cancel];
       err();
       return v;
     }
@@ -710,7 +733,7 @@ export function transportNote(transport, check = null) {
   if (transport === 'loopback') return 'You are on the dashboard computer itself, so the password never crosses the network.';
   if (check?.connection?.trusted === true) return TRUSTED_NOTE;
   if (check?.trustedLocalNetwork === true) return 'This address is not on your trusted local network. Sign-in works, but password changes, keys and tray pairing stay off here.';
-  if (check && check.trustedLocalNetwork === false) return 'This address is plain HTTP and local network trust is off, so the password crosses your network unencrypted. Password changes, keys and tray pairing work once trust is turned on from the dashboard computer (Accounts & Settings, Dashboard sign-in).';
+  if (check && check.trustedLocalNetwork === false) return 'This address is plain HTTP and local network trust is off, so the password crosses your network unencrypted. Password changes, keys and tray pairing work once trust is turned on from the dashboard computer (Accounts & Settings, Sign-in & connection).';
   return 'This address is plain HTTP, so the password crosses your network unencrypted.';
 }
 
@@ -750,11 +773,27 @@ export function devicesView(devices, now) {
   });
 }
 
+/** "30 days", "1 year": the session lifetime in the words Settings offers. */
+export function lifetimeWord(days, hours = 0) {
+  if (days === 1) return '1 day';
+  if (days === 7) return '7 days';
+  if (days === 30) return '30 days';
+  if (days === 90) return '90 days';
+  if (days === 365) return '1 year';
+  if (Number.isInteger(hours) && hours > 0 && hours % 24 === 0) return lifetimeWord(hours / 24);
+  if (Number.isInteger(hours) && hours > 0) return `${hours} hours`;
+  return '30 days';
+}
+const LIFETIME_OPTIONS = [1, 7, 30, 90, 365];
+
 function signinFacts(ctx, now) {
   const s = ctx.signin || {};
   const session = s.session || null;
   const hours = Number.isInteger(session?.sessionTimeoutHours) && session.sessionTimeoutHours > 0 ? session.sessionTimeoutHours
     : Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
+  const days = LIFETIME_OPTIONS.includes(session?.sessionLifetimeDays) ? session.sessionLifetimeDays
+    : hours % 24 === 0 && LIFETIME_OPTIONS.includes(hours / 24) ? hours / 24 : 30;
+  const lasts = lifetimeWord(days, hours);
   const host = text(ctx.host) || 'this dashboard';
   const transport = ctx.transport || 'http';
   const ends = session && validDate(session.expiresAt) ? Date.parse(session.expiresAt)
@@ -774,9 +813,15 @@ function signinFacts(ctx, now) {
   return {
     username: text(session?.username) || text(ctx.username) || 'Not reported',
     connection: TRANSPORT_TEXT[transport](host),
-    session: ends && ends > now ? `ends in ${duration(ends - now)}` : `lasts ${hours} hours`,
-    sessionSub: ends && ends > now ? `sessions last ${hours} hours` : '',
-    sessionTip: ends && ends > now ? `This session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard last ${hours} hours from sign-in`,
+    session: ends && ends > now ? `ends in ${duration(ends - now)}` : `lasts ${lasts}`,
+    sessionSub: ends && ends > now ? `sessions last ${lasts}` : '',
+    sessionTip: ends && ends > now ? `This session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard last ${lasts} from sign-in`,
+    lifetime: {
+      value: String(days),
+      enabled: !!session && s.busy !== 'lifetime',
+      busy: s.busy === 'lifetime',
+      tip: session ? 'How long a signed-in browser stays signed in without use. Browsers already signed in keep their own session.' : 'The server did not report the session',
+    },
     othersText: others === null ? 'Not reported' : others === 0 ? 'None signed in' : `${others} signed in`,
     othersEnabled: others !== null && others > 0 && s.busy !== 'others',
     othersBusy: s.busy === 'others',
@@ -811,8 +856,8 @@ function connectionFacts(ctx) {
   return [
     { label: 'Dashboard', value: text(ctx.origin) || 'Unknown', mono: true },
     { label: 'Transport', value: transport === 'https' ? 'HTTPS' : transport === 'loopback' ? 'This computer only' : trusted ? 'Plain HTTP on your trusted local network' : 'Plain HTTP on your network' },
-    { label: 'Tray sign-in', value: 'Device tokens; each paired tray is listed under Dashboard sign-in', mono: false },
-    { label: 'Sessions', value: `${hours} hours from sign-in`, mono: false },
+    { label: 'Tray sign-in', value: 'Device tokens; each paired tray is listed below', mono: false },
+    { label: 'Sessions', value: `${lifetimeWord(0, hours)} from sign-in`, mono: false },
   ];
 }
 
@@ -948,10 +993,113 @@ export function accountsViewModel(data, ctx = {}) {
     ag,
     policies: policies(data, home, ag),
     refresh: { seconds: Number.isInteger(c.refreshSeconds) ? c.refreshSeconds : 60, known: c.refreshKnown === true },
+    timezone: timezoneView(c.prefs),
+    cleanup: cleanupView(c.prefs),
+    logSources: logSourcesView(c.prefs),
     update: updateResultsView(c.updateJob, now),
     signin: signinFacts(c, now),
     connection: connectionFacts(c),
     about: { version: text(c.serverVersion) ? `Version ${c.serverVersion}` : 'Daylight Atlas dashboard' },
+  };
+}
+
+/** The time zones Settings offers (the server takes any IANA name; the list holds the common ones). */
+export const TIME_ZONE_OPTIONS = [
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'UTC',
+];
+
+/** The display time zone control: every displayed time and the analytics day buckets follow it. */
+export function timezoneView(prefs) {
+  const data = prefs?.data && typeof prefs.data === 'object' ? prefs.data : null;
+  const value = typeof data?.timeZone === 'string' && data.timeZone ? data.timeZone : 'America/New_York';
+  return {
+    value,
+    options: TIME_ZONE_OPTIONS.includes(value) ? TIME_ZONE_OPTIONS : [value, ...TIME_ZONE_OPTIONS],
+    enabled: !!data && prefs?.busy !== 'timezone',
+    busy: prefs?.busy === 'timezone',
+    tip: 'Every displayed time and the analytics day buckets use this zone.',
+  };
+}
+
+/** The usage-log tools Settings offers: what each extra location points at, and the hosts each tool scans on. */
+export const LOG_SOURCE_TOOLS = [
+  ['omp', 'OMP'],
+  ['muse', 'Muse Code'],
+  ['zcode', 'zcode'],
+  ['claude-code', 'Claude Code'],
+  ['codex', 'Codex'],
+  ['jsonl', 'Generic JSONL'],
+];
+export const LOG_SOURCE_TOOL_LABEL = Object.fromEntries(LOG_SOURCE_TOOLS);
+export const LOG_SOURCE_HOSTS = {
+  omp: ['ubuntu', 'mac', 'windows'],
+  muse: ['ubuntu', 'mac'],
+  zcode: ['ubuntu', 'mac'],
+  'claude-code': ['ubuntu'],
+  codex: ['ubuntu'],
+  jsonl: ['ubuntu'],
+};
+export const LOG_SOURCE_PATH_HINT = {
+  omp: 'an OMP session-root folder',
+  muse: 'a Muse sessions folder',
+  zcode: 'a zcode database file',
+  'claude-code': 'a Claude projects folder',
+  codex: 'a Codex home folder (holding sessions)',
+  jsonl: 'a folder of .jsonl files',
+};
+
+/** One saved generic mapping as readable text (`timestamp: ts, model: model`). */
+export function logSourceMappingSummary(mapping) {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) return '';
+  return ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost']
+    .filter(key => typeof mapping[key] === 'string' && mapping[key])
+    .map(key => `${key}: ${mapping[key]}`)
+    .join(', ');
+}
+
+/** The extra usage-log locations: the saved list with remove, plus the add form's options. */
+export function logSourcesView(prefs) {
+  const data = prefs?.data && typeof prefs.data === 'object' ? prefs.data : null;
+  const saved = Array.isArray(data?.usageLogSources) ? data.usageLogSources : [];
+  return {
+    sources: saved.map(entry => ({
+      id: typeof entry?.id === 'string' ? entry.id : '',
+      tool: typeof entry?.tool === 'string' ? entry.tool : '',
+      toolLabel: LOG_SOURCE_TOOL_LABEL[entry?.tool] || String(entry?.tool ?? ''),
+      host: typeof entry?.host === 'string' ? entry.host : '',
+      path: typeof entry?.path === 'string' ? entry.path : '',
+      mapping: logSourceMappingSummary(entry?.fieldMapping),
+    })),
+    tools: LOG_SOURCE_TOOLS.map(([tool, label]) => ({ tool, label })),
+    hosts: { ...LOG_SOURCE_HOSTS },
+    hints: { ...LOG_SOURCE_PATH_HINT },
+    enabled: !!data && prefs?.busy !== 'logsources',
+    busy: prefs?.busy === 'logsources',
+    error: typeof prefs?.logSourcesError === 'string' ? prefs.logSourcesError : '',
+    tip: 'Built-in locations are always scanned. Each extra adds one more usage-log location for that tool on that host; collectors read it from the next refresh.',
+  };
+}
+
+/** The history snapshot cleanup: automatic retention after each copy plus "Clean up now". */
+export function cleanupView(prefs) {
+  const data = prefs?.data && typeof prefs.data === 'object' ? prefs.data : null;
+  const busy = prefs?.busy === 'cleanup-auto' || prefs?.cleanupBusy === true;
+  return {
+    auto: data?.snapshotCleanup?.auto !== false,
+    enabled: !!data && !busy,
+    busy,
+    note: typeof prefs?.cleanupNote === 'string' ? prefs.cleanupNote : '',
+    tip: 'After each history copy, the newest 3 snapshot folders per profile stay and older ones the dashboard created are deleted.',
   };
 }
 

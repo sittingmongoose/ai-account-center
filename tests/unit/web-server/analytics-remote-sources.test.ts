@@ -13,6 +13,10 @@ import {
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
+import {
+  defaultDashboardPreferences,
+  writeDashboardPreferences,
+} from '../../../src/web-server/services/dashboard-preferences';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 let cache: string;
@@ -117,6 +121,25 @@ describe('analytics remote transport', () => {
       })
     ).rejects.toThrow();
   });
+
+  it('refuses malformed extra roots without running ssh', async () => {
+    const bad = (extraRoots: unknown) =>
+      runAnalyticsRemoteHelper('fine-alias', 'mac', {
+        kinds: ['omp'],
+        minDateMs: MIN_DATE,
+        fingerprints: {},
+        extraRoots: extraRoots as Record<'omp', string[]>,
+      });
+    await expect(bad({ cursor: ['/x'] })).rejects.toThrow('Analytics remote request is invalid.');
+    await expect(bad({ omp: ['relative/path'] })).rejects.toThrow(
+      'Analytics remote request is invalid.'
+    );
+    await expect(bad({ omp: ['/x/../y'] })).rejects.toThrow('Analytics remote request is invalid.');
+    await expect(bad({ omp: ['/x\0y'] })).rejects.toThrow('Analytics remote request is invalid.');
+    await expect(bad({ omp: new Array(17).fill('/x') })).rejects.toThrow(
+      'Analytics remote request is invalid.'
+    );
+  });
 });
 
 describe('analytics remote helper integrity', () => {
@@ -156,6 +179,41 @@ describe('analytics remote sources', () => {
     expect(states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)).toEqual([
       'omp',
     ]);
+  });
+
+  it('sends the saved extra roots for each target host', async () => {
+    const ccsHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-remote-extras-'));
+    const previous = process.env.CCS_HOME;
+    process.env.CCS_HOME = ccsHome;
+    try {
+      writeDashboardPreferences(
+        {
+          ...defaultDashboardPreferences(),
+          usageLogSources: [
+            { id: 'a', tool: 'omp', host: 'mac', path: '/Users/u/extra-omp' },
+            { id: 'b', tool: 'omp', host: 'windows', path: 'C:\\extra\\omp' },
+            { id: 'c', tool: 'omp', host: 'ubuntu', path: '/home/u/extra' },
+          ],
+        },
+        path.join(ccsHome, '.ccs')
+      );
+      const seen = new Map<string, unknown>();
+      const runHelper = async (_alias: string, platform: 'mac' | 'windows', request: unknown) => {
+        seen.set(platform, request);
+        return parseAnalyticsRemoteResponse(JSON.stringify(response()));
+      };
+      await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
+      expect((seen.get('mac') as { extraRoots: unknown }).extraRoots).toEqual({
+        omp: ['/Users/u/extra-omp'],
+      });
+      expect((seen.get('windows') as { extraRoots: unknown }).extraRoots).toEqual({
+        omp: ['C:\\extra\\omp'],
+      });
+    } finally {
+      if (previous === undefined) delete process.env.CCS_HOME;
+      else process.env.CCS_HOME = previous;
+      fs.rmSync(ccsHome, { recursive: true, force: true });
+    }
   });
 
   it('keeps changed-file rows incremental across scans', async () => {

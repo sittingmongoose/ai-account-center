@@ -1,7 +1,7 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
-import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure } from './auth-view.mjs';
+import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue } from './auth-view.mjs';
 import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
 import { copyText, signOutFailureText } from './account-actions.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
@@ -14,6 +14,8 @@ import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './ren
 import { premultiplySvgTextureUploads } from './renderer.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
+import { installLoginBridge } from './login-bridge.mjs';
+import { setDisplayTimeZone } from './time-format.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -196,7 +198,7 @@ function renderAccounts() {
       refreshing: false,
       refreshSeconds: refreshIntervalSeconds, refreshKnown: refreshSettingsKnown, updateJob,
       origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
-      registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin,
+      registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin, prefs: st.prefs,
     }));
     if (e2e) globalThis.__aacLastAccounts = vm;
     set_accounts(JSON.stringify(vm));
@@ -449,6 +451,10 @@ function applyRefreshInterval(seconds, confirmed = true) {
 }
 async function loadSettings() {
   try { const result = await request('/api/accounts/settings'); applyRefreshInterval(result?.refreshIntervalSeconds); } catch {}
+  try {
+    const prefs = await request('/api/accounts/preferences');
+    if (prefs && typeof prefs.timeZone === 'string') setDisplayTimeZone(prefs.timeZone);
+  } catch {}
 }
 function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); renderAccounts(); }
 async function updateStatus() {
@@ -585,14 +591,16 @@ async function signedIn(name) {
   auth(true, 'default');
   await enterDashboard();
 }
+let loginBridge = null;
 async function signIn(value) {
   if (busy) return;
-  const separator = value.indexOf('\n');
-  const user = value.slice(0, separator).trim(), password = value.slice(separator + 1);
+  const { username: user, password, remember } = parseLoginValue(value);
   if (!user || !password) { authNonce++; auth(false, 'default', { message: 'Enter your username and password.' }); return; }
+  // the hidden form holds the same values, so managers offer to save them
+  try { loginBridge?.mirror({ username: user, password, remember }); } catch {}
   auth(false, 'connecting'); setBusy(true);
   try {
-    const result = await mutation('/api/auth/login', { username: user, password });
+    const result = await mutation('/api/auth/login', { username: user, password, rememberMe: remember });
     await signedIn(typeof result?.username === 'string' ? result.username : user);
   } catch (error) {
     setBusy(false);
@@ -791,6 +799,15 @@ try {
   premultiplySvgTextureUploads();
   await init();
   startSlintDashboard(() => start_dashboard(innerWidth, innerHeight, devicePixelRatio));
+  // password managers fill the hidden HTML form; its values land in the Slint fields, and its
+  // submit runs the same login as Sign in
+  try {
+    loginBridge = installLoginBridge({
+      document,
+      onFilled: filled => { if (!authenticated && !busy) set_login_fields(filled.username, filled.password, filled.remember); },
+      onSubmit: filled => { if (!authenticated && !busy) void signIn(`${filled.username}\n${filled.password}\n${filled.remember ? '1' : '0'}`); },
+    });
+  } catch {}
   set_current_page(currentPage);
   const resize = () => resize_dashboard(innerWidth, innerHeight);
   addEventListener('resize', resize); resize();

@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1066,
-    "filesAffected": 108,
-    "hotpathOccurrences": 461,
-    "hotpathFilesAffected": 61,
+    "totalOccurrences": 1097,
+    "filesAffected": 109,
+    "hotpathOccurrences": 492,
+    "hotpathFilesAffected": 62,
     "topHotpathFiles": [
       {
         "file": "src/management/shared-manager/diverged-file-adopter.ts",
@@ -56,6 +56,16 @@
           "renameSync",
           "statSync",
           "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/services/account-analytics-activity.ts",
+        "count": 21,
+        "calls": [
+          "existsSync",
+          "realpathSync",
+          "statSync"
         ],
         "markers": []
       },
@@ -150,18 +160,6 @@
           "statSync",
           "unlinkSync",
           "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/cliproxy/accounts/token-file-ops.ts",
-        "count": 14,
-        "calls": [
-          "existsSync",
-          "mkdirSync",
-          "readdirSync",
-          "renameSync",
-          "unlinkSync"
         ],
         "markers": []
       }
@@ -352,7 +350,7 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 193,
+    "totalMarkers": 197,
     "filesAffected": 74,
     "topFiles": [
       {
@@ -521,16 +519,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 617,
-      "typedThrows": 138,
+      "totalThrows": 621,
+      "typedThrows": 142,
       "plainThrows": 69,
       "otherThrows": 410,
-      "adoptionRatio": 0.2237,
+      "adoptionRatio": 0.2287,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 267,
-          "typed": 76,
+          "count": 271,
+          "typed": 80,
           "plain": 10
         },
         {
@@ -602,9 +600,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 31,
-      "totalSourceFiles": 378,
-      "coverageRatio": 0.082,
+      "filesWithCreateLogger": 32,
+      "totalSourceFiles": 381,
+      "coverageRatio": 0.084,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -631,8 +629,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 131,
-          "withLogger": 15
+          "count": 134,
+          "withLogger": 16
         },
         {
           "subdomain": "utils",
@@ -770,6 +768,10 @@
           "loc": 960
         },
         {
+          "file": "src/web-server/usage/account-activity-collector.ts",
+          "loc": 903
+        },
+        {
           "file": "src/cliproxy/model-catalog.ts",
           "loc": 895
         },
@@ -778,8 +780,8 @@
           "loc": 871
         },
         {
-          "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 832
+          "file": "src/web-server/services/account-analytics-activity.ts",
+          "loc": 822
         },
         {
           "file": "src/web-server/usage/aggregator.ts",
@@ -792,10 +794,6 @@
         {
           "file": "src/auth/profile-detector.ts",
           "loc": 767
-        },
-        {
-          "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 691
         },
         {
           "file": "src/web-server/services/account-analytics-projection.ts",

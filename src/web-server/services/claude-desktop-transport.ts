@@ -188,6 +188,7 @@ const HISTORY_HELPER_MODES = new Set([
   'protected-check',
   'verify-transcripts',
   'append',
+  'snapshot-cleanup',
 ]);
 const MAX_PRIVATE_INDEX_BYTES = 24 * 1024 * 1024;
 const WRITER_SHA256 = '0b3b4cbb14db144457684bf7683d53bbbc38529d4b92c9c6590ab089eff0c132';

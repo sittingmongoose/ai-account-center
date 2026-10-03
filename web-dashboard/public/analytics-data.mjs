@@ -1,5 +1,6 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { mainWindow } from './analytics-quota.mjs';
+import { lazyFormat } from './time-format.mjs';
 
 export { mainWindow };
 
@@ -18,7 +19,7 @@ const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2
 const compactFormat = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 });
 const moneyFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const compactMoneyFormat = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 2 });
-const dateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const dateFormat = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const number = value => numberFormat.format(value);
 const axisNumber = value => Math.abs(value) >= 10_000 ? compactFormat.format(value) : number(value);
 const percentage = value => finite(value) && value >= 0 ? value : null;

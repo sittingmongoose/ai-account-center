@@ -552,6 +552,8 @@ test('Antigravity: one account shows no Activate slot, and the policy waits for 
     r.actions.map((a) => a.act || a.kind),
     ['empty', 'signin-again', 'remove']
   );
+  // an existing account signs in again; only the first sign-in says "Sign in"
+  assert.equal(r.actions[1].label, 'Sign in again');
   assert.equal(provider(vm, 'antigravity').ag, true);
   assert.equal(vm.ag.live, false);
   assert.equal(vm.ag.known, true);
@@ -678,7 +680,7 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
     }),
     reg('opencode-go:usage', 'opencode-go', {
       credential: { kind: 'discover' },
-      actions: { replaceKey: false, signInAgain: false },
+      actions: { replaceKey: false, signInAgain: false, recheck: true },
     }),
     reg('plan-opencode-go-console-1', 'opencode-go', {
       actions: { signInAgain: true, remove: true },
@@ -710,27 +712,33 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       ['remove', true],
     ]
   );
-  // a key another app saved cannot be replaced from here, and says why
+  // a key the provider's own app holds shows no key action at all: Re-check with Remove
   const found = row(vm, 'opencode-go:usage');
-  assert.equal(found.actions[0].enabled, false);
-  assert.match(found.actions[0].tip, /another app saved/);
+  assert.equal(found.src, 'Signed in through the app');
+  assert.deepEqual(
+    found.actions.map((a) => [a.act, a.label, a.enabled]),
+    [
+      ['recheck', 'Re-check', true],
+      ['remove', 'Remove', true],
+    ]
+  );
   // the console wallet signs in through the browser extension; its Remove deletes the stored source
   const wallet = row(vm, 'plan-opencode-go-console-1');
   assert.deepEqual(
-    wallet.actions.map((a) => [a.act, a.enabled, a.coming]),
+    wallet.actions.map((a) => [a.act, a.label, a.enabled, a.coming]),
     [
-      ['signin', true, false],
-      ['remove', true, false],
+      ['signin', 'Sign in again', true, false],
+      ['remove', 'Remove', true, false],
     ]
   );
   assert.equal(wallet.src, 'Console session in a browser');
   // Qwen is a browser session, never an API key (CONTRACT-registry-lifecycle 7)
   assert.equal(provider(vm, 'qwen').kindLabel, 'Console session by browser extension');
   assert.deepEqual(
-    row(vm, 'qwen:usage').actions.map((a) => [a.act, a.enabled]),
+    row(vm, 'qwen:usage').actions.map((a) => [a.act, a.label, a.enabled]),
     [
-      ['signin', true],
-      ['remove', true],
+      ['signin', 'Sign in again', true],
+      ['remove', 'Remove', true],
     ]
   );
   assert.deepEqual(
@@ -1237,7 +1245,7 @@ test('connection facts and the sign-in block say only what the browser and serve
   const none = accountsViewModel(data([account()]), { now });
   assert.equal(none.signin.othersText, 'Not reported');
   assert.equal(none.signin.passwordCan, false);
-  assert.equal(none.signin.session, 'lasts 24 hours');
+  assert.equal(none.signin.session, 'lasts 1 day');
 });
 
 test('the trusted local network line: this computer, trusted, not trusted, and Turn on only where it is allowed', () => {
@@ -1731,4 +1739,131 @@ test('each account row draws its own Show on dashboard and Show in tray, indepen
     [row(unread, 'codex:both').dashEnabled, row(unread, 'codex:both').trayAcctEnabled],
     [false, false]
   );
+});
+
+test('the session lifetime reads in days and offers the five choices', () => {
+  const signin = { session: { username: 'owner', sessionTimeoutHours: 720, sessionLifetimeDays: 30 }, busy: '' };
+  const vm = accountsViewModel(data([account()]), { now, transport: 'http', sessionHours: 720, signin });
+  assert.equal(vm.signin.session, 'lasts 30 days');
+  assert.equal(vm.signin.sessionSub, '');
+  assert.deepEqual(vm.signin.lifetime, {
+    value: '30',
+    enabled: true,
+    busy: false,
+    tip: 'How long a signed-in browser stays signed in without use. Browsers already signed in keep their own session.',
+  });
+  const withExpiry = accountsViewModel(data([account()]), {
+    now,
+    transport: 'http',
+    sessionHours: 8760,
+    signin: { session: { ...signin.session, sessionTimeoutHours: 8760, sessionLifetimeDays: 365, expiresAt: at(60) }, busy: '' },
+  });
+  assert.equal(withExpiry.signin.session, 'ends in 1h 0m');
+  assert.equal(withExpiry.signin.sessionSub, 'sessions last 1 year');
+  assert.equal(withExpiry.signin.lifetime.value, '365');
+  // without a session answer the control waits
+  const unknown = accountsViewModel(data([account()]), { now, transport: 'http', signin: { session: null, busy: '' } });
+  assert.equal(unknown.signin.lifetime.enabled, false);
+  assert.equal(unknown.signin.connection, 'Plain HTTP to this dashboard');
+});
+
+test('a Kimi key from the app config shows no key action, only Re-check', () => {
+  const accounts = [
+    account({ id: 'kimi-code:acct:aa01bb02', provider: 'kimi-code', email: null, label: 'Kimi', capabilities: {} }),
+  ];
+  const r = registry([
+    reg('kimi-code:acct:aa01bb02', 'kimi-code', {
+      credential: { kind: 'config-home', homeId: 'aa01bb02' },
+      actions: { replaceKey: false, signInAgain: false, recheck: true, remove: true },
+    }),
+  ]);
+  const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
+  const kimi = row(vm, 'kimi-code:acct:aa01bb02');
+  assert.equal(kimi.src, 'Signed in through the app');
+  assert.deepEqual(
+    kimi.actions.map((a) => [a.act, a.label, a.enabled]),
+    [
+      ['recheck', 'Re-check', true],
+      ['remove', 'Remove', true],
+    ]
+  );
+  // no disabled Replace key anywhere on the row
+  assert.ok(!kimi.actions.some((a) => a.act === 'replace-key'));
+  // the footer still says "Sign in" for the first sign-in (Qwen has no account here)
+  const qwenFoot = provider(vm, 'qwen').foot;
+  assert.equal(qwenFoot[0].label, 'Sign in');
+});
+
+test('the time zone control shows the saved zone and waits without preferences', () => {
+  const vm = accountsViewModel(data([account()]), { now, prefs: { data: { timeZone: 'Asia/Tokyo' }, busy: '' } });
+  assert.equal(vm.timezone.value, 'Asia/Tokyo');
+  assert.equal(vm.timezone.enabled, true);
+  assert.equal(vm.timezone.busy, false);
+  assert.ok(vm.timezone.options.includes('Asia/Tokyo'));
+  const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '' } });
+  assert.equal(waiting.timezone.value, 'America/New_York');
+  assert.equal(waiting.timezone.enabled, false);
+  const saving = accountsViewModel(data([account()]), { now, prefs: { data: { timeZone: 'UTC' }, busy: 'timezone' } });
+  assert.equal(saving.timezone.busy, true);
+  assert.equal(saving.timezone.enabled, false);
+});
+
+test('the log sources control lists saved extras with labels and waits without preferences', () => {
+  const prefs = {
+    data: {
+      timeZone: 'UTC',
+      snapshotCleanup: { auto: true },
+      usageLogSources: [
+        { id: 'a', tool: 'omp', host: 'mac', path: '/Users/u/extra' },
+        { id: 'b', tool: 'jsonl', host: 'ubuntu', path: '/var/log/h', fieldMapping: { timestamp: 'ts', model: 'm' } },
+      ],
+    },
+    busy: '',
+  };
+  const vm = accountsViewModel(data([account()]), { now, prefs });
+  assert.equal(vm.logSources.sources.length, 2);
+  assert.deepEqual(vm.logSources.sources[0], { id: 'a', tool: 'omp', toolLabel: 'OMP', host: 'mac', path: '/Users/u/extra', mapping: '' });
+  assert.equal(vm.logSources.sources[1].toolLabel, 'Generic JSONL');
+  assert.equal(vm.logSources.sources[1].mapping, 'timestamp: ts, model: m');
+  assert.equal(vm.logSources.enabled, true);
+  assert.equal(vm.logSources.busy, false);
+  assert.equal(vm.logSources.error, '');
+  assert.deepEqual(vm.logSources.hosts.omp, ['ubuntu', 'mac', 'windows']);
+  assert.deepEqual(vm.logSources.hosts.jsonl, ['ubuntu']);
+  const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '' } });
+  assert.deepEqual(waiting.logSources.sources, []);
+  assert.equal(waiting.logSources.enabled, false);
+  const saving = accountsViewModel(data([account()]), { now, prefs: { data: { usageLogSources: [] }, busy: 'logsources' } });
+  assert.equal(saving.logSources.busy, true);
+  assert.equal(saving.logSources.enabled, false);
+  const failed = accountsViewModel(data([account()]), { now, prefs: { data: { usageLogSources: [] }, busy: '', logSourcesError: 'Nope.' } });
+  assert.equal(failed.logSources.error, 'Nope.');
+});
+
+test('the default-profile remove flow asks for the account email', () => {
+  const v = flowView('claude', { type: 'remove-email', step: 'type', accountId: 'claude:home', name: 'home@example.com', token: 't', effects: ['Default profile.'] });
+  assert.equal(v.open, true);
+  assert.equal(v.title, 'Remove home@example.com?');
+  assert.match(v.body, /Type the account email to confirm/);
+  assert.equal(v.inputKind, 'email');
+  assert.equal(v.inputLabel, 'Account email');
+  assert.equal(v.actions[0].label, 'Remove');
+});
+
+test('the snapshot cleanup block shows the toggle, the button and the last note', () => {
+  const vm = accountsViewModel(data([account()]), { now, prefs: { data: { snapshotCleanup: { auto: true } }, busy: '', cleanupBusy: false, cleanupNote: 'Deleted 2 older snapshots.' } });
+  assert.deepEqual(vm.cleanup, {
+    auto: true,
+    enabled: true,
+    busy: false,
+    note: 'Deleted 2 older snapshots.',
+    tip: 'After each history copy, the newest 3 snapshot folders per profile stay and older ones the dashboard created are deleted.',
+  });
+  const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '', cleanupBusy: false, cleanupNote: '' } });
+  assert.equal(waiting.cleanup.enabled, false);
+  assert.equal(waiting.cleanup.auto, true);
+  const running = accountsViewModel(data([account()]), { now, prefs: { data: { snapshotCleanup: { auto: false } }, busy: '', cleanupBusy: true, cleanupNote: '' } });
+  assert.equal(running.cleanup.auto, false);
+  assert.equal(running.cleanup.busy, true);
+  assert.equal(running.cleanup.enabled, false);
 });

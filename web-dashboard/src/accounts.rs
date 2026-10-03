@@ -1,7 +1,7 @@
 //! Accounts & Settings view model (version 2, public/accounts-view.mjs `accountsViewModel`): the provider
 //! sections with their account rows, fixed action slots, the line under a row (remove, restore, refusals), the
 //! inline flows (add, sign in again, keys, guided sign-ins) and the Claude trash; the Antigravity policy box;
-//! the settings column (Dashboard sign-in with the trusted local network, password change and paired trays,
+//! the settings column (Sign-in & connection with the trusted local network, password change and paired trays,
 //! refresh interval, auto-switch policies, Update apps results, Connection, About).
 //! Everything lands in the `AcData` global (ui/pages/accounts/ac-data.slint).
 //!
@@ -9,9 +9,9 @@
 //! the selected-row highlight and cross-fades the Activate slot instead of re-mounting the list.
 use crate::sync::{Nested, sync_rows};
 use crate::{
-    AcAction, AcAgPolicy, AcData, AcDevice, AcFlow, AcLine, AcNetwork, AcPolicy, AcProvider, AcRow,
-    AcSignin, AcTrashRow, AcUpdHost, AcUpdItem, Dashboard, FactView, RunView, SegItem,
-    StrengthView,
+    AcAction, AcAgPolicy, AcData, AcDevice, AcFlow, AcLine, AcLogSource, AcNetwork, AcPolicy,
+    AcProvider, AcRow, AcSignin, AcTrashRow, AcUpdHost, AcUpdItem, Dashboard, FactView, RunView,
+    SegItem, StrengthView,
 };
 use serde_json::Value;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -100,6 +100,7 @@ pub struct AccountsModels {
     runs: Nested<RunView>,
     segs: Nested<SegItem>,
     policies: Rc<VecModel<AcPolicy>>,
+    log_sources: Rc<VecModel<AcLogSource>>,
     hosts: Rc<VecModel<AcUpdHost>>,
     host_items: Nested<AcUpdItem>,
     update_head: Rc<VecModel<RunView>>,
@@ -112,6 +113,7 @@ pub fn bind(ui: &Dashboard, m: &AccountsModels) {
     ac.set_col_a(ModelRc::from(m.col_a.clone()));
     ac.set_col_b(ModelRc::from(m.col_b.clone()));
     ac.set_policies(ModelRc::from(m.policies.clone()));
+    ac.set_log_sources(ModelRc::from(m.log_sources.clone()));
     ac.set_update_hosts(ModelRc::from(m.hosts.clone()));
     ac.set_update_head(ModelRc::from(m.update_head.clone()));
     ac.set_pairing_note(ModelRc::from(m.pairing_note.clone()));
@@ -399,6 +401,37 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     let refresh = g(&v, "refresh");
     ac.set_refresh_seconds(i(refresh, "seconds", 60).clamp(30, 3600));
     ac.set_refresh_known(b(refresh, "known"));
+    let timezone = g(&v, "timezone");
+    ac.set_timezone_value(s(timezone, "value"));
+    ac.set_timezone_enabled(b(timezone, "enabled"));
+    ac.set_timezone_busy(b(timezone, "busy"));
+    ac.set_timezone_tip(s(timezone, "tip"));
+    let cleanup = g(&v, "cleanup");
+    ac.set_cleanup_auto(b(cleanup, "auto"));
+    ac.set_cleanup_enabled(b(cleanup, "enabled"));
+    ac.set_cleanup_busy(b(cleanup, "busy"));
+    ac.set_cleanup_note(s(cleanup, "note"));
+    ac.set_cleanup_tip(s(cleanup, "tip"));
+    let log_sources = g(&v, "logSources");
+    sync_rows(
+        &m.log_sources,
+        arr(&log_sources, "sources")
+            .iter()
+            .map(|entry| AcLogSource {
+                id: s(entry, "id"),
+                tool: s(entry, "tool"),
+                tool_label: s(entry, "toolLabel"),
+                host: s(entry, "host"),
+                path: s(entry, "path"),
+                mapping: s(entry, "mapping"),
+            })
+            .collect(),
+        |entry: &AcLogSource| entry.id.clone(),
+    );
+    ac.set_log_sources_enabled(b(log_sources, "enabled"));
+    ac.set_log_sources_busy(b(log_sources, "busy"));
+    ac.set_log_sources_error(s(log_sources, "error"));
+    ac.set_log_sources_tip(s(log_sources, "tip"));
 
     let update = g(&v, "update");
     ac.set_update_shown(b(update, "shown"));
@@ -451,6 +484,10 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
         others_enabled: b(si, "othersEnabled"),
         others_busy: b(si, "othersBusy"),
         others_tip: s(si, "othersTip"),
+        lifetime_value: s(g(si, "lifetime"), "value"),
+        lifetime_enabled: b(g(si, "lifetime"), "enabled"),
+        lifetime_busy: b(g(si, "lifetime"), "busy"),
+        lifetime_tip: s(g(si, "lifetime"), "tip"),
         password_when: s(si, "passwordWhen"),
         password_can: b(si, "passwordCan"),
         password_note: s(si, "passwordNote"),

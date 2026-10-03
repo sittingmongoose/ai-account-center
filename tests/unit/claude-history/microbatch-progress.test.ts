@@ -30,7 +30,9 @@ let directory: string, priorDir: string | undefined;
 let scenario: Scenario = GMAIL;
 let count = 3,
   opened = 0,
-  appends = 0;
+  appends = 0,
+  cleanups = 0;
+let cleanupFailure = false;
 let failure:
   | 'none'
   | 'lost'
@@ -164,7 +166,8 @@ beforeEach(() => {
   process.env.CCS_DIR = directory;
   scenario = GMAIL;
   count = 3;
-  opened = appends = 0;
+  opened = appends = cleanups = 0;
+  cleanupFailure = false;
   failure = 'none';
   targetRecords = [];
   historyCopies = [];
@@ -196,7 +199,18 @@ beforeEach(() => {
         if (failure === 'policy-removed-early') rewritePolicy((entry) => delete entry.historySync);
         result = { verified: true };
       } else if (request.mode === 'protected-check') result = { unchanged: true };
-      else if (request.mode === 'append') {
+      else if (request.mode === 'snapshot-cleanup') {
+        if (cleanupFailure) throw Error('ssh lost');
+        cleanups++;
+        expect(Object.keys(request).sort()).toEqual([
+          'expectedEmail',
+          'mode',
+          'platform',
+          'policy',
+          'profileId',
+        ]);
+        result = { kept: ['a', 'b', 'c'], deleted: ['old'], skipped: [] };
+      } else if (request.mode === 'append') {
         appends++;
         expect(platform).toBe(scenario.target);
         // Progress counts stay in this process; the fixed helper's strict request
@@ -436,7 +450,7 @@ test('a policy change between batches stops cleanly: no hold, the confirmed coun
   expect(final).toMatchObject({ state: 'opened', confirmedCount: 1, totalCount: 3, message: null });
   expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
   expect(markerNames()).toHaveLength(1);
-  expect(logEvents).toEqual(['claude.history.copy_stopped']);
+  expect(logEvents).toEqual(['claude.history.snapshots_retained', 'claude.history.copy_stopped']);
 });
 
 test('a policy change between batches returns a clean refusal with its own reason', async () => {
@@ -513,7 +527,10 @@ test('the per-Open time budget opens Claude part-way and the next Open copies th
   expect(appends).toBe(3);
   expect(first.final).toMatchObject({ state: 'opened', confirmedCount: 3, totalCount: 5 });
   expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
-  expect(logEvents).toEqual(['claude.history.copy_budget_reached']);
+  expect(logEvents).toEqual([
+    'claude.history.snapshots_retained',
+    'claude.history.copy_budget_reached',
+  ]);
   // Later click (past the 1 s repeat-click window): only the missing records are planned.
   failure = 'none';
   setSystemTime(new Date(Date.now() + 5_000));
@@ -524,4 +541,32 @@ test('the per-Open time budget opens Claude part-way and the next Open copies th
   expect(second.final).toMatchObject({ state: 'opened', confirmedCount: 2, totalCount: 2 });
   expect(markerNames()).toHaveLength(2);
   expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
+});
+
+test('retention runs once after each copy that created records, unless Settings turned it off', async () => {
+  const { writeDashboardPreferences, defaultDashboardPreferences } = await import(
+    '../../../src/web-server/services/dashboard-preferences'
+  );
+  const profile = (await listClaudeDesktopProfiles())[0];
+  const result = await synchronizeClaudeHistoryBeforeOpen(profile, 'mac');
+  expect(result).toMatchObject({ status: 'synchronized', createdCount: 3 });
+  expect(cleanups).toBe(1);
+  expect(logEvents).toContain('claude.history.snapshots_retained');
+  writeDashboardPreferences(
+    { ...defaultDashboardPreferences(), snapshotCleanup: { auto: false } },
+    directory
+  );
+  failure = 'none';
+  const second = await synchronizeClaudeHistoryBeforeOpen(profile, 'mac');
+  expect(second.createdCount).toBe(0);
+  expect(cleanups).toBe(1);
+});
+
+test('a failed retention never fails the copy', async () => {
+  cleanupFailure = true;
+  const profile = (await listClaudeDesktopProfiles())[0];
+  const result = await synchronizeClaudeHistoryBeforeOpen(profile, 'mac');
+  expect(result).toMatchObject({ status: 'synchronized', createdCount: 3 });
+  expect(cleanups).toBe(0);
+  expect(logEvents).toContain('claude.history.snapshots_retain_failed');
 });

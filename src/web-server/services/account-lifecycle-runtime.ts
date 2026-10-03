@@ -29,7 +29,8 @@ import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './sig
  * `CCS_CLAUDE_HOST_LIFECYCLE=on` in the server's environment turns them on for
  * that process only: the supervised dry run, or a sandbox whose ssh aliases
  * reach fake hosts. Nothing else turns them on; any other value leaves them off.
- * A computer's default Claude profile is refused (`account_protected`) either way.
+ * A computer's default Claude profile removes only after its account email is typed (or stays
+ * `account_protected` when it has no email to type).
  *
  * Muse Code Sign in again is built fully but unverified (the Mac `muse login`
  * output was never observed live). It stays off by default; `CCS_MUSE_SIGNIN=on`
