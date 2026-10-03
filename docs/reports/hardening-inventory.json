@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1097,
+    "totalOccurrences": 1104,
     "filesAffected": 109,
-    "hotpathOccurrences": 492,
+    "hotpathOccurrences": 499,
     "hotpathFilesAffected": 62,
     "topHotpathFiles": [
       {
@@ -22,6 +22,21 @@
           "renameSync",
           "statSync",
           "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/services/account-analytics-activity.ts",
+        "count": 28,
+        "calls": [
+          "chmodSync",
+          "existsSync",
+          "mkdirSync",
+          "readFileSync",
+          "realpathSync",
+          "renameSync",
+          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -56,16 +71,6 @@
           "renameSync",
           "statSync",
           "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 21,
-        "calls": [
-          "existsSync",
-          "realpathSync",
-          "statSync"
         ],
         "markers": []
       },
@@ -260,6 +265,21 @@
         "markers": []
       },
       {
+        "file": "src/web-server/services/account-analytics-activity.ts",
+        "count": 28,
+        "calls": [
+          "chmodSync",
+          "existsSync",
+          "mkdirSync",
+          "readFileSync",
+          "realpathSync",
+          "renameSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/antigravity/auto-switch/store.ts",
         "count": 25,
         "calls": [
@@ -326,24 +346,6 @@
           "rmSync",
           "statSync",
           "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/codex-auth/codex-activation-runtime.ts",
-        "count": 21,
-        "calls": [
-          "closeSync",
-          "fstatSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "readlinkSync",
-          "readSync",
-          "statSync",
-          "unlinkSync"
         ],
         "markers": []
       }
@@ -753,7 +755,7 @@
       "topOver400": [
         {
           "file": "src/web-server/model-pricing.ts",
-          "loc": 1217
+          "loc": 1322
         },
         {
           "file": "src/antigravity/registry.ts",
@@ -762,6 +764,10 @@
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
           "loc": 1052
+        },
+        {
+          "file": "src/web-server/services/account-analytics-activity.ts",
+          "loc": 1017
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
@@ -780,10 +786,6 @@
           "loc": 871
         },
         {
-          "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 822
-        },
-        {
           "file": "src/web-server/usage/aggregator.ts",
           "loc": 782
         },
@@ -797,7 +799,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 679
+          "loc": 682
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
