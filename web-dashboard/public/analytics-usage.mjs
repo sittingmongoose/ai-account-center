@@ -187,6 +187,9 @@ export const RANGES = [['24h', '24H'], ['7d', '7D'], ['30d', '30D'], ['month', '
 const tokens = row => TYPES.every(t => finite(row?.[t.f]) && row[t.f] >= 0);
 const TINY = 1e-9;
 export const NOT_LOGGED = 'Not logged';
+export const FREE = 'Free';
+/** A listed all-zero rate is a known price: the model is free, never unknown. */
+export const isFreeRate = r => !!r && r.source !== 'fallback' && ['in', 'out', 'cw', 'cr'].every(k => r[k] === 0);
 /**
  * The part of a row's estimate that is not logged: tokens with no logged cost and no listed rate, which the
  * server prices only at its unknown-model fallback (fallbackCostUsd). A response from before that field counts
@@ -330,9 +333,11 @@ export function activityData(payload, now = Date.now()) {
   });
   // a session several providers served counts under each of them, and once in this total
   const sessionTotal = Number.isInteger(act.sessions?.total) && act.sessions.total >= 0 ? act.sessions.total : null;
+  const sessionSample = Array.isArray(act.sessions?.sample) ? act.sessions.sample.filter(s => s && typeof s === 'object') : [];
+  const sessionsTruncated = act.sessions?.truncated === true;
   // usage from a provider other than Claude and Codex (it shares the charts' neutral third series)
   const others = hours.some(r => !ownSeries(r.p)) || models.some(m => !ownSeries(m.provider));
-  return { available, status: text(act.status), message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, sessionTotal, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom };
+  return { available, status: text(act.status), refreshing: act.refreshing === true, message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom };
 }
 
 /** The page range in local time: [a2, b) clipped to the logs that were read; step is the bucket size. */
@@ -622,8 +627,8 @@ const byTokens = (a, b) => b.total - a.total || (b.logged || 0) - (a.logged || 0
 export const cbmSortOf = state => state?.cbmSort === 'tokens' ? 'tokens' : 'cost';
 const modelsShown = (A, state) => pageModels(A, state).filter(active).sort(cbmSortOf(state) === 'tokens' ? byTokens : byCost);
 const hiddenModels = (A, state) => pageModels(A, state).filter(m => !active(m));
-/** The cost of a model row: logged (or listed) cost; "Not logged" when none of it is, never $0.00. */
-const modelCost = m => m.none ? (m.unk ? NOT_LOGGED : 'Unavailable') : money(m.logged);
+/** The cost of a model row: logged (or listed) cost; "Free" at a listed zero rate, "Not logged" when none of it is, never $0.00. */
+const modelCost = m => m.none ? (m.unk ? NOT_LOGGED : 'Unavailable') : isFreeRate(m.rate) && !(m.logged > TINY) ? FREE : money(m.logged);
 /**
  * One colour per model in its family (its provider's hue, or the neutral family of models that are no one
  * provider's alone): full tone for the largest, lighter steps after it. The neutral family can hold many models,
@@ -655,6 +660,7 @@ function ioStatus(r) {
 const ioTxt = v => v >= 10 ? nf0.format(v) : nf2v.format(v);
 const RATE_SOURCE = { builtin: 'CCS pricing table', 'models-dev': 'models.dev rates, as CCS resolves them', fallback: 'CCS fallback rate for models it does not list, an estimate with a fallback rate' };
 function rateText(m) {
+  if (m.rate && isFreeRate(m.rate)) return 'Free: this model has no per-token charge at its listed rate, so its cost is $0. It is a known price, never unknown.';
   if (m.rate) {
     const base = `${money(m.rate.in)} in, ${money(m.rate.out)} out, ${money(m.rate.cw)} cache write, ${money(m.rate.cr)} cache read per million tokens; ${RATE_SOURCE[m.rate.source] || 'CCS rate'}.`;
     return `${base}${m.mode === 'rates' ? ' The four parts add up to the logged estimate.' : ' These rates do not reconcile with the logged estimate, so the split shows token shares.'}`;
@@ -675,7 +681,8 @@ function modelRows(A, state, windowText) {
     const ioCtx = m.tok.out > 0 ? (m.tok.in + m.tok.cr + m.tok.cw) / m.tok.out : null;
     const maxType = Math.max(...TYPES.map(t => m.cost[t.k]), 0) || 1;
     const partial = (m.unk || m.na) && !m.none;
-    const typeCost = k => m.none ? m.unk ? NOT_LOGGED : 'Unavailable' : money(m.cost[k]);
+    const free = !m.none && isFreeRate(m.rate) && !(m.logged > TINY);
+    const typeCost = k => m.none ? m.unk ? NOT_LOGGED : 'Unavailable' : free ? FREE : money(m.cost[k]);
     // who served the usage, and which logs hold it ("Qwen token plan · OMP logs")
     const tools = m.tools.size ? ` · ${toolNames(m.tools)} logs` : '';
     const from = `${andList(m.providers.map(p => A.label(p)))}${tools}`;
@@ -727,6 +734,9 @@ function donutView(A, state, shades) {
   });
   const partial = cost && list.some(m => m.unk || m.na);
   const allNone = cost && !drawn.length && list.some(m => m.unk);
+  // every model drawn has no cost because each is free at a listed zero rate: the donut has no arcs, but the
+  // legend below still lists every model, so this is a free range, never an empty one
+  const allFree = cost && !drawn.length && !allNone && list.length > 0 && list.every(m => !m.unk && !m.na);
   // The legend: one row per arc. A group row opens into its models, so no model is only inside a group: "N
   // smaller models" (the arc of the models under 1%) and, by cost, the models that have no cost to draw (not
   // logged, or $0.00), which have no arc. A child row opens the model's detail; `arc` is the arc it lights.
@@ -750,24 +760,25 @@ function donutView(A, state, shades) {
   }
   return {
     mode: cost ? 'cost' : 'tokens', segs: rows, lut, legend,
-    centre: cost ? allNone ? NOT_LOGGED : money(total) : tokC(total),
-    centreLabel: cost ? `estimated cost, ${partial ? 'partial' : rows.length > 1 ? 'all models' : '1 model'}` : `tokens, ${rows.length > 1 ? 'all models' : '1 model'}`,
-    unit: cost ? '' : ' tokens', empty: !rows.length && !allNone,
+    centre: cost ? allNone ? NOT_LOGGED : allFree ? FREE : money(total) : tokC(total),
+    centreLabel: cost ? allFree ? 'estimated cost, free models' : `estimated cost, ${partial ? 'partial' : rows.length > 1 ? 'all models' : '1 model'}` : `tokens, ${rows.length > 1 ? 'all models' : '1 model'}`,
+    unit: cost ? '' : ' tokens', empty: !rows.length && !allNone && !allFree,
     emptyText: allNone ? 'No model in these logs has a logged cost.' : 'No model activity in the logs.',
   };
 }
 
 // ---------------------------------------------------------------- session stats
 /**
- * Session stats over the providers in the filter, one row per provider with sessions. A session that several
- * providers served counts under each of them, so under All the count is the server's distinct total. An average
- * cost needs every session's cost, so it is not logged while any of it is not. Usage read from the Mac and Windows
- * comes without a session list, so it adds tokens but no sessions, and the note says so.
+ * Session stats over the providers in the filter, one row per provider with sessions. The stats are the columns'
+ * sums and means, so they always line up with their columns; a session that several providers served counts under
+ * each of them, in the rows and in the Sessions number alike. An average cost needs every session's cost, so it is
+ * not logged while any of it is not. Usage read from the Mac and Windows comes without a session list, so it adds
+ * tokens but no sessions, and the note says so. Recent sessions lists the sample most recent first, without paths.
  */
-function sessionsView(A, state, payload) {
+function sessionsView(A, state, payload, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
   const sum = k => all.length && all.every(r => finite(r[k])) ? all.reduce((s, r) => s + r[k], 0) : null;
-  const sessions = allPicked(state) && finite(A.sessionTotal) ? A.sessionTotal : sum('sessions');
+  const sessions = sum('sessions');
   const events = sum('events'), cost = sum('cost');
   const unk = all.some(r => r.unk);
   const avg = !unk && finite(sessions) && sessions > 0 && finite(cost) ? cost / sessions : null;
@@ -775,8 +786,28 @@ function sessionsView(A, state, payload) {
   const remote = new Set((Array.isArray(payload?.activity?.sources) ? payload.activity.sources : [])
     .filter(r => (r?.host === 'mac' || r?.host === 'windows') && (r.state === 'ok' || r.state === 'cached')).map(r => r.tool));
   const fromRemote = all.some(r => A.tools(r.p).some(t => remote.has(t)));
+  // the sample covers the CLIs in the filter (each row brings its CLI's tools); without one, show every session
+  const tools = new Set(all.flatMap(r => A.tools(r.p)));
+  const sample = A.sessionSample.filter(s => Number.isFinite(s.last) && (tools.size === 0 || tools.has(text(s.tool))));
+  const recent = sample.slice(0, 10).map(s => {
+    const names = (Array.isArray(s.models) ? s.models : []).map(m => text(m && m.model)).filter(Boolean);
+    return {
+      tool: text(s.tool),
+      models: (names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2} more` : '')) || '—',
+      tokens: tokC(s.tokens),
+      cost: s.unk && !(s.cost > TINY) ? NOT_LOGGED : money(s.cost),
+      when: relTxt(s.last, now),
+      tip: `${names.join(', ') || 'no models logged'} · ${intText(s.events)} usage events · last activity ${clockTxt(s.last)}`,
+    };
+  });
+  const recentFoot = sample.length > recent.length
+    ? A.sessionsTruncated && finite(A.sessionTotal) && A.sessionTotal > sample.length
+      ? `Most recent ${recent.length} of ${nf0.format(A.sessionTotal)} sessions in this range`
+      : `Most recent ${recent.length} of ${sample.length} sessions in this range`
+    : '';
   return {
     note: fromRemote ? 'Sessions come from the Ubuntu logs; usage read from the Mac and Windows adds tokens but no sessions.' : '',
+    recent, recentFoot,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },
       { key: 'avg', label: 'Average estimated cost per session', num: avg ?? 0, has: finite(avg), fmt: 'money', text: unk && finite(sessions) && sessions > 0 ? NOT_LOGGED : money(avg) },
@@ -1084,12 +1115,13 @@ export function usageView(payload, state, opts = {}) {
     notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '',
   ].filter(Boolean).join(' ');
   const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
-  const sessions = sessionsView(A, state, payload);
+  const sessions = sessionsView(A, state, payload, now);
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
     head: {
       scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
       read: relTxt(A.win1, now),
+      refreshing: A.refreshing,
       readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' The log scan is refreshing; earlier records are shown until it completes.' : ''}`,
       date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
     },
@@ -1110,7 +1142,7 @@ export function usageView(payload, state, opts = {}) {
     trend: trendView(A, R, state, opts.sizes?.trend),
     cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
-    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), stats: sessions.stats, rows: sessions.rows },
+    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, stats: sessions.stats, rows: sessions.rows, recent: sessions.recent },
     tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },
     cache: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, ...cacheView(A, rows, K, C, costOk && A.available) },
     included: includedView(payload, now),

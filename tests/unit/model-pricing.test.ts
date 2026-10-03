@@ -668,12 +668,107 @@ describe('model-pricing', () => {
         expect(resolved.source).toBe('builtin');
         expect(resolved.pricing).toEqual(getModelPricing(base));
       }
-      expect(getModelPricingWithSource('claude-opus-5-high', { provider: 'anthropic' }).pricing).toEqual(
-        getModelPricing('claude-opus-5')
-      );
+      expect(
+        getModelPricingWithSource('claude-opus-5-high', { provider: 'anthropic' }).pricing
+      ).toEqual(getModelPricing('claude-opus-5'));
       // Only Claude ids lose the suffix: Gemini's "-high" is a separate long-context price.
       expect(getModelPricing('gemini-3-pro-high').inputPerMillion).toBe(4);
       expect(getModelPricingWithSource('claude-aac-unlisted-9-high').source).toBe('fallback');
+    });
+
+    // Rates read 2026-10-03: Alibaba Model Studio (help.aliyun.com/en/model-studio/model-pricing,
+    // International list, CNY at 6.70/USD), Kimi (platform.kimi.ai/docs/pricing/chat), Google
+    // (ai.google.dev/gemini-api/docs/pricing) and Z.ai (docs.z.ai/guides/overview/pricing).
+    it.each([
+      ['qwen3.8-max', 2.24, 6.71, 2.8, 0.22],
+      ['qwen3.8-flash', 0.16, 0.51, 0.2, 0.016],
+      ['qwen3.7-plus', 0.45, 1.79, 0.56, 0.045],
+      ['kimi-k3', 3.0, 15.0, 3.0, 0.3],
+      ['k3', 3.0, 15.0, 3.0, 0.3],
+      ['gemini-3.8-flash', 0.75, 3.75, 0.0, 0.075],
+      ['glm-4.7', 0.6, 2.2, 0.0, 0.11],
+    ])('prices %s at its official list rates', (model, input, output, write, read) => {
+      for (const provider of [
+        undefined,
+        'alibaba-token-plan',
+        'kimi-code',
+        'google-antigravity',
+        'zai',
+      ]) {
+        const resolved = getModelPricingWithSource(model, { provider });
+        expect(resolved.source).toBe('builtin');
+        expect(resolved.pricing).toMatchObject({
+          inputPerMillion: input,
+          outputPerMillion: output,
+          cacheCreationPerMillion: write,
+          cacheReadPerMillion: read,
+        });
+        expect(hasCustomPricing(model, { provider })).toBe(true);
+      }
+    });
+
+    it('prices the Qwen token-plan models at Model Studio list, never the plan $0', () => {
+      // The models.dev mirror records the alibaba-token-plan subscription route at $0; the CCS
+      // policy aliases price the same ids at the API list rates instead, with or without a route.
+      setCachedModelsDevRegistry({
+        'alibaba-token-plan': {
+          id: 'alibaba-token-plan',
+          name: 'Alibaba Token Plan',
+          models: {
+            'qwen3.8-max': { id: 'qwen3.8-max', cost: { input: 0, output: 0 } },
+            'qwen3.8-flash': { id: 'qwen3.8-flash', cost: { input: 0, output: 0 } },
+            'qwen3.7-plus': { id: 'qwen3.7-plus', cost: { input: 0, output: 0 } },
+          },
+        },
+      } as unknown as Parameters<typeof setCachedModelsDevRegistry>[0]);
+      try {
+        for (const model of ['qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-plus']) {
+          const routed = getModelPricingWithSource(model, { provider: 'alibaba-token-plan' });
+          expect(routed.source).toBe('builtin');
+          expect(routed.pricing.inputPerMillion).toBeGreaterThan(0);
+          expect(routed.pricing).toEqual(getModelPricing(model));
+        }
+      } finally {
+        clearModelsDevRegistryCache();
+      }
+    });
+
+    it.each([['qwen3.8-27b'], ['qwen3.8-flash-next-gsq-q2_0'], ['union-alpha'], ['stealth']])(
+      'lists %s at $0 (free, never unknown)',
+      (model) => {
+        for (const provider of [undefined, 'vllm', 'flashnext', 'openrouter']) {
+          const resolved = getModelPricingWithSource(model, { provider });
+          expect(resolved.source).toBe('builtin');
+          expect(resolved.pricing).toMatchObject({
+            inputPerMillion: 0,
+            outputPerMillion: 0,
+            cacheCreationPerMillion: 0,
+            cacheReadPerMillion: 0,
+          });
+        }
+        const usage: TokenUsage = {
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+          cacheCreationTokens: 1_000_000,
+          cacheReadTokens: 1_000_000,
+        };
+        expect(calculateCost(usage, model)).toBe(0);
+      }
+    );
+
+    it('prices Muse Spark contributor routes at the recorded contributor rates', () => {
+      // No vendor-published Meta price page exists (checked 2026-10-03); both contributor ids
+      // mirror the contributor rates models.dev records, so every route prices the same.
+      for (const model of ['muse-spark-1.3-contributor', 'muse-spark-1.2-contributor']) {
+        for (const provider of [undefined, 'muse-code', 'opencode-go']) {
+          const resolved = getModelPricingWithSource(model, { provider });
+          expect(resolved.pricing).toMatchObject({
+            inputPerMillion: 0.1,
+            outputPerMillion: 0.2,
+            cacheReadPerMillion: 0.002,
+          });
+        }
+      }
     });
 
     it('keeps subscription-backed provider pricing distinct from paid API pricing', () => {

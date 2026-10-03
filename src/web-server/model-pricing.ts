@@ -607,6 +607,17 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
     cacheCreationPerMillion: 0.0,
     cacheReadPerMillion: 0.0,
   },
+  // Gemini 3.8 Flash, Standard paid tier ($0.75/$3.75, context caching $0.075;
+  // no cache-creation rate: Google bills cache storage hourly instead).
+  // Source: https://ai.google.dev/gemini-api/docs/pricing (Gemini 3.8 Flash),
+  // read 2026-10-03. Promotional through 2026-12-31; $1.50/$7.50/$0.15 from
+  // 2027-01-01. Re-read this entry then.
+  'gemini-3.8-flash': {
+    inputPerMillion: 0.75,
+    outputPerMillion: 3.75,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.075,
+  },
 
   // ---------------------------------------------------------------------------
   // GLM Models (Zhipu AI / Z.AI) - Source: Official Z.AI pricing
@@ -638,11 +649,13 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
     cacheCreationPerMillion: 0.0,
     cacheReadPerMillion: 0.2,
   },
+  // GLM-4.7 ($0.6/$2.2, cached input $0.11); cached-input storage is free.
+  // Source: https://docs.z.ai/guides/overview/pricing (Text Models table), read 2026-10-03.
   'glm-4.7': {
-    inputPerMillion: 0.4,
-    outputPerMillion: 1.5,
+    inputPerMillion: 0.6,
+    outputPerMillion: 2.2,
     cacheCreationPerMillion: 0.0,
-    cacheReadPerMillion: 0.2,
+    cacheReadPerMillion: 0.11,
   },
   'glm-4.6': {
     inputPerMillion: 0.35,
@@ -673,6 +686,15 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
   // Kimi Models (Moonshot AI) - Source: Official Kimi Platform pricing
   // inputPerMillion = cache miss price, cacheReadPerMillion = cache hit price
   // ---------------------------------------------------------------------------
+  // Kimi K3 ($3/$15, 5-minute cache write $3, cached input $0.30). The 5-minute TTL
+  // is the API default. OMP logs it as 'k3' (see the alias below).
+  // Source: https://platform.kimi.ai/docs/pricing/chat (K3 Series Models), read 2026-10-03.
+  'kimi-k3': {
+    inputPerMillion: 3.0,
+    outputPerMillion: 15.0,
+    cacheCreationPerMillion: 3.0,
+    cacheReadPerMillion: 0.3,
+  },
   'kimi-k2.5': {
     inputPerMillion: 0.6,
     outputPerMillion: 3.0,
@@ -868,6 +890,32 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
     cacheCreationPerMillion: 0.3,
     cacheReadPerMillion: 0.06,
   },
+  // Qwen 3.8/3.7 at Alibaba Model Studio's International list prices, converted
+  // from CNY at 6.70 CNY/USD (2026-10-03). Cache write is 125% of input and
+  // cache read 10%, per the page's context-cache note. The models.dev mirror
+  // lists the alibaba-token-plan route at $0 (a subscription, not an API
+  // price), so these also carry policy aliases below to price at list.
+  // Source: https://help.aliyun.com/en/model-studio/model-pricing, read 2026-10-03.
+  // qwen3.8-max: CNY 14.988/44.965. qwen3.8-flash: CNY 1.094/3.427.
+  // qwen3.7-plus: list CNY 2.998/11.991 (a limited-time 20% discount is not applied).
+  'qwen3.8-max': {
+    inputPerMillion: 2.24,
+    outputPerMillion: 6.71,
+    cacheCreationPerMillion: 2.8,
+    cacheReadPerMillion: 0.22,
+  },
+  'qwen3.8-flash': {
+    inputPerMillion: 0.16,
+    outputPerMillion: 0.51,
+    cacheCreationPerMillion: 0.2,
+    cacheReadPerMillion: 0.016,
+  },
+  'qwen3.7-plus': {
+    inputPerMillion: 0.45,
+    outputPerMillion: 1.79,
+    cacheCreationPerMillion: 0.56,
+    cacheReadPerMillion: 0.045,
+  },
 
   // ---------------------------------------------------------------------------
   // DeepSeek Models - Source: better-ccusage
@@ -887,6 +935,55 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
   'deepseek-coder': {
     inputPerMillion: 0.14,
     outputPerMillion: 0.28,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.0,
+  },
+
+  // ---------------------------------------------------------------------------
+  // Meta Muse Spark (contributor tier) - no vendor-published API price page
+  // exists (checked 2026-10-03); these mirror the contributor rates models.dev
+  // records for the opencode-go route ($0.10/$0.20, cache read $0.002), so the
+  // muse-code route prices the same instead of falling back. Re-check against
+  // a Meta price page when one exists.
+  // ---------------------------------------------------------------------------
+  'muse-spark-1.3-contributor': {
+    inputPerMillion: 0.1,
+    outputPerMillion: 0.2,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.002,
+  },
+  'muse-spark-1.2-contributor': {
+    inputPerMillion: 0.1,
+    outputPerMillion: 0.2,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.002,
+  },
+
+  // ---------------------------------------------------------------------------
+  // Free models ($0, shown as "Free", never unknown): local Qwen runs and the
+  // free stealth/union-alpha route. A listed all-zero rate is a known price.
+  // ---------------------------------------------------------------------------
+  'qwen3.8-27b': {
+    inputPerMillion: 0.0,
+    outputPerMillion: 0.0,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.0,
+  },
+  'qwen3.8-flash-next-gsq-q2_0': {
+    inputPerMillion: 0.0,
+    outputPerMillion: 0.0,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.0,
+  },
+  'union-alpha': {
+    inputPerMillion: 0.0,
+    outputPerMillion: 0.0,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.0,
+  },
+  stealth: {
+    inputPerMillion: 0.0,
+    outputPerMillion: 0.0,
     cacheCreationPerMillion: 0.0,
     cacheReadPerMillion: 0.0,
   },
@@ -936,6 +1033,14 @@ const MODEL_PRICING_ALIASES: Record<string, string> = {
   'gemini-3-1-flash-preview': 'gemini-2.5-flash',
   'gemini-3-1-pro-preview-customtools': 'gemini-3-pro-preview',
   'gemini-3-1-flash-preview-customtools': 'gemini-2.5-flash',
+  // OMP's short id for Kimi K3.
+  k3: 'kimi-k3',
+  // CCS policy: these price at the table's Model Studio list rates even when a
+  // provider route is known, beating the token-plan $0 the models.dev mirror
+  // records for the subscription routes.
+  'qwen3.8-max': 'qwen3.8-max',
+  'qwen3.8-flash': 'qwen3.8-flash',
+  'qwen3.7-plus': 'qwen3.7-plus',
 };
 
 // Default pricing for unknown models

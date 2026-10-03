@@ -1,5 +1,5 @@
 // Model rates for the Analytics per-type cost split, mirrored read-only from src/web-server/model-pricing.ts
-// (PRICING_REGISTRY, MODEL_PRICING_ALIASES and UNKNOWN_MODEL_PRICING at ccb2dcb0; Opus 5.5, Sonnet 5.5, GLM-5.3 and the Claude effort suffix added 2026-10-03).
+// (PRICING_REGISTRY, MODEL_PRICING_ALIASES and UNKNOWN_MODEL_PRICING at ccb2dcb0; Opus 5.5, Sonnet 5.5, GLM-5.3 and the Claude effort suffix added 2026-10-03; Qwen 3.8/3.7, Kimi K3, Gemini 3.8 Flash, Muse Spark, the free models and the GLM-4.7 fix added 2026-10-03).
 // tests/model-rates.test.mjs re-reads that file and fails when a rate here drifts from it.
 //
 // The backend logs one estimatedCostUsd per model; it never reports the cost of each token type. The page
@@ -63,6 +63,7 @@ export const STATIC_RATES = {
   'gpt-4.5-preview': [75, 150, 0, 37.5],
   'gpt-3.5-turbo': [1.5, 2, 0, 0],
   'gpt-3.5-turbo-0125': [0.5, 1.5, 0, 0],
+  o1: [15, 60, 0, 7.5],
   'o1-preview': [15, 60, 0, 7.5],
   'o1-mini': [3, 12, 0, 1.5],
   'o3-mini': [1.1, 4.4, 0, 0.55],
@@ -83,15 +84,17 @@ export const STATIC_RATES = {
   'gemini-3-pro-preview': [2, 12, 0, 0],
   'gemini-3-pro': [2, 12, 0, 0],
   'gemini-3-pro-high': [4, 18, 0, 0],
+  'gemini-3.8-flash': [0.75, 3.75, 0, 0.075],
   'glm-5.3': [1.4, 4.4, 0, 0.26],
   'glm-5.3-flash': [0.15, 0.5, 0, 0.03],
   'glm-5.2': [1.4, 4.4, 0, 0.26],
   'glm-5': [1, 3.2, 0, 0.2],
-  'glm-4.7': [0.4, 1.5, 0, 0.2],
+  'glm-4.7': [0.6, 2.2, 0, 0.11],
   'glm-4.6': [0.35, 1.5, 0, 0.175],
   'glm-4.6-cc-max': [0.35, 1.5, 0, 0.175],
   'glm-4.5': [0.35, 1.55, 0, 0.175],
   'glm-4.5-air': [0.13, 0.85, 0, 0.025],
+  'kimi-k3': [3, 15, 3, 0.3],
   'kimi-k2.5': [0.6, 3, 0, 0.1],
   'kimi-for-coding': [0.6, 2.5, 0, 0.15],
   'kimi-k2-0905-preview': [0.6, 2.5, 0, 0.15],
@@ -122,9 +125,18 @@ export const STATIC_RATES = {
   'qwen3.5-flash': [0.1, 0.4, 0.1, 0.02],
   'qwen3-coder-plus': [1, 5, 1, 0.2],
   'qwen3-coder-flash': [0.3, 1.5, 0.3, 0.06],
+  'qwen3.8-max': [2.24, 6.71, 2.8, 0.22],
+  'qwen3.8-flash': [0.16, 0.51, 0.2, 0.016],
+  'qwen3.7-plus': [0.45, 1.79, 0.56, 0.045],
   'deepseek-chat': [0.27, 1.1, 0, 0.07],
   'deepseek-reasoner': [0.55, 2.19, 0, 0.14],
   'deepseek-coder': [0.14, 0.28, 0, 0],
+  'muse-spark-1.3-contributor': [0.1, 0.2, 0, 0.002],
+  'muse-spark-1.2-contributor': [0.1, 0.2, 0, 0.002],
+  'qwen3.8-27b': [0, 0, 0, 0],
+  'qwen3.8-flash-next-gsq-q2_0': [0, 0, 0, 0],
+  'union-alpha': [0, 0, 0, 0],
+  stealth: [0, 0, 0, 0],
   'mistral-large-latest': [2, 6, 0, 0],
   'mistral-medium-latest': [2.7, 8.1, 0, 0],
   'mistral-small-latest': [0.2, 0.6, 0, 0],
@@ -146,6 +158,10 @@ export const ALIASES = {
   'gemini-3-1-flash-preview': 'gemini-2.5-flash',
   'gemini-3-1-pro-preview-customtools': 'gemini-3-pro-preview',
   'gemini-3-1-flash-preview-customtools': 'gemini-2.5-flash',
+  k3: 'kimi-k3',
+  'qwen3.8-max': 'qwen3.8-max',
+  'qwen3.8-flash': 'qwen3.8-flash',
+  'qwen3.7-plus': 'qwen3.7-plus',
 };
 
 /** UNKNOWN_MODEL_PRICING: the rate CCS uses for a model it does not list. */

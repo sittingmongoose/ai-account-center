@@ -141,6 +141,11 @@ export interface AccountAnalyticsActivityDeps {
   elapsedMs?: () => number;
   refreshIntervalSeconds?: () => number;
   pricing?: AccountAnalyticsPricingLookup;
+  /**
+   * Persist the published snapshot under the scope's cache dir and serve it after a restart.
+   * Default false (tests and ad-hoc readers never touch disk); the live singleton enables it.
+   */
+  persistSnapshot?: boolean;
 }
 
 /** The public activity plus internal coverage facts the analytics service strips before sending. */
@@ -152,6 +157,100 @@ const MAX_DIRECTORIES = 24;
 const MAX_ROWS = 100_000;
 const MAX_WORKER_TIME_MS = 20_000;
 const MAX_COLLECTION_TIME_MS = 60_000;
+
+/**
+ * The on-disk snapshot: the last published aggregate rows, served instantly after a restart while
+ * the first collection runs. Hourly and session rows with project paths stripped (enforced on
+ * load); session rows keep their opaque session ids for counting (published only as hashed sample
+ * keys), never paths or content. Best-effort: a missing or invalid file behaves like a first run.
+ */
+const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_FILE = 'analytics-activity-snapshot-v1.json';
+const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+const MAX_SNAPSHOT_SESSIONS = 10_000;
+
+interface PersistedActivitySnapshot {
+  version: typeof SNAPSHOT_VERSION;
+  fetchedAt: number;
+  partial: boolean;
+  sources: SourceData[];
+  sourceStates: AccountAnalyticsSource[];
+  remote: RemoteAnswer | null;
+}
+
+function snapshotFile(scope: string): string | null {
+  // Test and ad-hoc scopes are not directories; only persist under an existing absolute scope.
+  if (!path.isAbsolute(scope)) return null;
+  try {
+    if (!fs.statSync(scope).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return path.join(scope, 'cache', 'account-activity-v1', SNAPSHOT_FILE);
+}
+
+function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const snap = value as Record<string, unknown>;
+  if (snap.version !== SNAPSHOT_VERSION) return false;
+  if (typeof snap.fetchedAt !== 'number' || !Number.isFinite(snap.fetchedAt)) return false;
+  if (typeof snap.partial !== 'boolean') return false;
+  if (!Array.isArray(snap.sources) || snap.sources.length > MAX_DIRECTORIES + 1) return false;
+  if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
+  for (const source of snap.sources as Array<Record<string, unknown>>) {
+    if (!source || typeof source !== 'object') return false;
+    if (!['claude', 'codex', 'omp', 'muse', 'zcode'].includes(source.provider as string))
+      return false;
+    if (typeof source.fetchedAt !== 'string') return false;
+    if (!Array.isArray(source.data)) return false;
+    for (const result of source.data as Array<Record<string, unknown>>) {
+      if (!result || typeof result !== 'object') return false;
+      if (!Array.isArray(result.hourly) || result.hourly.length > 744) return false;
+      if (!Array.isArray(result.session) || result.session.length > MAX_SNAPSHOT_SESSIONS)
+        return false;
+      // Persisted rows never carry project paths (stripped before publish, enforced again here).
+      for (const row of [...(result.hourly as unknown[]), ...(result.session as unknown[])]) {
+        const candidate = (row ?? {}) as Record<string, unknown>;
+        if ('projectPath' in candidate && candidate.projectPath !== '') return false;
+      }
+    }
+  }
+  return true;
+}
+
+function loadPersistedSnapshot(scope: string): PersistedActivitySnapshot | null {
+  try {
+    const file = snapshotFile(scope);
+    if (!file || fs.statSync(file).size > MAX_SNAPSHOT_BYTES) return null;
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    return validSnapshot(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedSnapshot(scope: string, state: ActivityState): void {
+  try {
+    const file = snapshotFile(scope);
+    if (!file) return;
+    const body = JSON.stringify({
+      version: SNAPSHOT_VERSION,
+      fetchedAt: state.fetchedAt,
+      partial: state.partial,
+      sources: state.sources,
+      sourceStates: state.sourceStates,
+      remote: state.remote,
+    } satisfies PersistedActivitySnapshot);
+    if (Buffer.byteLength(body, 'utf8') > MAX_SNAPSHOT_BYTES) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, body, { mode: 0o600 });
+    fs.renameSync(temporary, file);
+    fs.chmodSync(file, 0o600);
+  } catch {
+    /* Snapshot writes are best-effort; the rows are still served. */
+  }
+}
 
 /** Unlike legacy merged caches, each worker keeps the native tool dimension. */
 export function loadAccountAnalyticsWorker(
@@ -490,6 +589,21 @@ export class AccountAnalyticsActivityService {
       });
     }
     if (generation !== state.generation) return;
+    // Phase 1: publish the fresh local rows now, merged with the previous remote answer, so a
+    // slow or timing-out remote scan (Windows) never holds fresh local data hostage. The remote
+    // merge below publishes a second time when it answers.
+    this.publish(state, {
+      scope: (this.deps.scope ?? getCcsDir)(),
+      collected,
+      requests,
+      succeeded,
+      attempted,
+      remoteStates: state.remote ? state.remote.states : null,
+      remotePending: true,
+      localEvents,
+      presence,
+      failed,
+    });
     const remaining = deadline - Date.now();
     let remote: Awaited<typeof remotePromise> = null;
     if (remaining > 0) {
@@ -528,25 +642,81 @@ export class AccountAnalyticsActivityService {
         if (remoteAnswer) remoteStates = remoteAnswer.states;
       }
     }
-    if (remoteAnswer) {
-      for (const entry of remoteAnswer.results) {
-        const existing = collected.get(entry.tool) ?? [];
+    if (generation !== state.generation) return;
+    // Phase 2: merge the remote answer (fresh, carried, or cached) and publish again.
+    this.publish(state, {
+      scope: (this.deps.scope ?? getCcsDir)(),
+      collected,
+      requests,
+      succeeded,
+      attempted,
+      remoteStates,
+      remoteAnswer,
+      remotePending: false,
+      localEvents,
+      presence,
+      failed,
+      cutoff,
+    });
+  }
+
+  /**
+   * Publish one snapshot from local rows plus a remote answer, without mutating either input, then
+   * persist it for the next restart. `remotePending` keeps previous remote states untouched while
+   * the current remote scan is still running (they are not timed out yet).
+   */
+  private publish(
+    state: ActivityState,
+    args: {
+      scope: string;
+      collected: Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>;
+      requests: AccountAnalyticsActivityRequest[];
+      succeeded: Set<AccountAnalyticsActivityProvider>;
+      attempted: Set<AccountAnalyticsActivityProvider>;
+      remoteStates: AnalyticsRemoteSourceState[] | null;
+      remoteAnswer?: RemoteAnswer | null;
+      remotePending: boolean;
+      localEvents: Map<AccountAnalyticsActivityProvider, number>;
+      presence: Record<AccountAnalyticsActivityProvider, boolean> | null;
+      failed: boolean;
+      cutoff?: number;
+    }
+  ): void {
+    const {
+      scope,
+      collected,
+      requests,
+      succeeded,
+      attempted,
+      remoteStates,
+      remoteAnswer,
+      remotePending,
+      localEvents,
+      presence,
+      failed,
+    } = args;
+    const cutoff = args.cutoff ?? (this.deps.now ?? Date.now)() - 31 * 86_400_000;
+    const merged = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
+    for (const [provider, data] of collected) merged.set(provider, [...data]);
+    const answer = remoteAnswer === undefined ? state.remote : remoteAnswer;
+    if (answer) {
+      for (const entry of answer.results) {
+        const existing = merged.get(entry.tool) ?? [];
         const data = entry.data;
         const hourly = data.hourly
           .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
           .slice(0, 744);
         if (hourly.length || data.eventCount === 0) {
           existing.push({ ...data, daily: [], monthly: [], hourly, session: [] });
-          collected.set(entry.tool, existing);
+          merged.set(entry.tool, existing);
         }
       }
     }
-    if (generation !== state.generation) return;
     const now = (this.deps.now ?? Date.now)();
     const fetchedAt = new Date(now).toISOString();
     const updated: SourceData[] = [];
     for (const provider of ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'] as const) {
-      const data = collected.get(provider);
+      const data = merged.get(provider);
       if (data) updated.push({ provider, data, fetchedAt });
       else {
         const previous = state.sources.find((source) => source.provider === provider);
@@ -562,11 +732,13 @@ export class AccountAnalyticsActivityService {
       remoteStates,
       localEvents,
       fetchedAt,
-      presence
+      presence,
+      remotePending
     );
     state.pricing = this.snapshotPricing();
     state.partial = failed || requests.length >= MAX_DIRECTORIES + 1;
     state.fetchedAt = now;
+    if (this.deps.persistSnapshot === true) savePersistedSnapshot(scope, state);
   }
 
   private buildSourceStates(
@@ -576,7 +748,8 @@ export class AccountAnalyticsActivityService {
     remote: AnalyticsRemoteSourceState[] | null,
     localEvents: Map<AccountAnalyticsActivityProvider, number>,
     fetchedAt: string,
-    presence: Record<AccountAnalyticsActivityProvider, boolean> | null
+    presence: Record<AccountAnalyticsActivityProvider, boolean> | null,
+    remotePending = false
   ): AccountAnalyticsSource[] {
     const entries: AccountAnalyticsSource[] = [];
     const previous = new Map(
@@ -620,6 +793,11 @@ export class AccountAnalyticsActivityService {
     }
     if (remote) {
       for (const entry of remote) entries.push({ ...entry });
+    } else if (remotePending) {
+      // The remote scan is still running behind this publish: previous remote states stand
+      // untouched (they are not timed out yet), and hosts with no previous answer stay absent.
+      for (const entry of previous.values())
+        if (entry.host === 'mac' || entry.host === 'windows') entries.push({ ...entry });
     } else {
       // The remote scans never answered; the previous remote aggregates are
       // still in the totals, and are marked.
@@ -704,6 +882,16 @@ export class AccountAnalyticsActivityService {
         pricing: this.snapshotPricing(),
         projectionMs: 0,
       };
+      // A restarted server serves the last persisted snapshot instantly while its first
+      // collection runs, instead of answering 'loading' with no data.
+      const persisted = this.deps.persistSnapshot === true ? loadPersistedSnapshot(scope) : null;
+      if (persisted && persisted.sources.length > 0) {
+        state.sources = persisted.sources;
+        state.sourceStates = persisted.sourceStates;
+        state.remote = persisted.remote;
+        state.partial = persisted.partial;
+        state.fetchedAt = persisted.fetchedAt;
+      }
       this.states.set(scope, state);
       while (this.states.size > 8) {
         const oldest = this.states.keys().next().value;
@@ -726,7 +914,7 @@ export class AccountAnalyticsActivityService {
           to,
           'unavailable',
           'Local activity is unavailable for this selection.',
-          { tz, sources: state.sourceStates }
+          { tz, sources: state.sourceStates, refreshing: state.pending !== null }
         ),
         // Already-read history still says which providers have activity, so
         // the provider list stays stable while a quota-only filter is chosen.
@@ -747,7 +935,9 @@ export class AccountAnalyticsActivityService {
     const elapsed = this.deps.elapsedMs ?? (() => performance.now());
     const wait = Math.max(0, budget - state.projectionMs);
     let timer: ReturnType<typeof setTimeout> | undefined;
-    if (state.pending) {
+    // A cached snapshot is served instantly while the refresh runs behind it; only a first run
+    // with nothing to serve waits for the collection (bounded by the response budget).
+    if (state.pending && state.sources.length === 0) {
       try {
         await Promise.race([
           state.pending,
@@ -797,7 +987,12 @@ export class AccountAnalyticsActivityService {
               ? 'The available records are shown while the bounded history scan continues; some sources may be unavailable. Cost is an API-equivalent estimate, not a subscription charge.' +
                 scanProgress
               : `CLI activity from Ubuntu, Mac and Windows (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
-      { tz, pricing: state.pricing, sources: state.sourceStates }
+      {
+        tz,
+        pricing: state.pricing,
+        sources: state.sourceStates,
+        refreshing: state.pending !== null,
+      }
     );
     const coverage = accountAnalyticsActivityCoverage(state.sources, from, to);
     // Keep the dearest recent projection (halving older ones), capped at the
@@ -817,6 +1012,6 @@ export function getAccountAnalyticsActivity(
   to: number,
   options: { tz?: string } = {}
 ): Promise<AccountAnalyticsActivityResult> {
-  service ??= new AccountAnalyticsActivityService();
+  service ??= new AccountAnalyticsActivityService({ persistSnapshot: true });
   return service.get(query, from, to, options);
 }

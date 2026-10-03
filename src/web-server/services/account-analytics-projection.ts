@@ -105,6 +105,8 @@ export interface AccountAnalyticsProjectionOptions {
   pricing?: AccountAnalyticsPricingLookup;
   /** Per-tool, per-host collection states; empty when unknown. */
   sources?: AccountAnalyticsActivity['sources'];
+  /** A collection is running behind this answer; the numbers are the last snapshot. */
+  refreshing?: boolean;
 }
 
 function finite(value: unknown): number {
@@ -338,6 +340,7 @@ export function projectAccountAnalyticsActivity(
   const tz = options.tz ?? 'UTC';
   const base: AccountAnalyticsActivity = {
     status,
+    refreshing: options.refreshing ?? false,
     scope: 'multi-host-cli',
     timezone: tz,
     accountAttribution: 'unavailable',

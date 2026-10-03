@@ -213,13 +213,23 @@ describe('compiled Node usage workers', () => {
         fs.appendFileSync(${JSON.stringify(codexPath)}, JSON.stringify(${JSON.stringify(appendedCodex)}) + '\\n');
         const cached = await service.get(query, from, now);
         const refreshed = await service.get({ ...query, refresh: true }, from, now);
+        let settled = await service.get(query, from, now);
+        for (let attempt = 0; attempt < 200 && settled.refreshing === true; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          settled = await service.get(query, from, now);
+        }
         const afterward = await service.get(query, from, now);
-        console.log('RESULT ' + JSON.stringify({ before, cached, refreshed, afterward }));
+        console.log('RESULT ' + JSON.stringify({ before, cached, refreshed, settled, afterward }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `)) as {
       before: { totals: { inputTokens: number } };
       cached: { totals: { inputTokens: number } };
       refreshed: {
+        status: string;
+        refreshing: boolean;
+        totals: Record<string, number>;
+      };
+      settled: {
         status: string;
         providers: Array<{ provider: string; totals: Record<string, number> }>;
         totals: Record<string, number>;
@@ -228,19 +238,23 @@ describe('compiled Node usage workers', () => {
     };
     expect(result.before.totals.inputTokens).toBe(180);
     expect(result.cached.totals).toEqual(result.before.totals);
-    expect(result.refreshed.status).toBe('ok');
-    expect(result.refreshed.providers.map((row) => [row.provider, row.totals.inputTokens])).toEqual(
+    // The manual refresh answers instantly from the last snapshot while the rescan runs behind it.
+    expect(result.refreshed.status).toBe('cached');
+    expect(result.refreshed.refreshing).toBe(true);
+    expect(result.refreshed.totals).toEqual(result.before.totals);
+    expect(result.settled.status).toBe('ok');
+    expect(result.settled.providers.map((row) => [row.provider, row.totals.inputTokens])).toEqual(
       [
         ['claude', 150],
         ['codex', 150],
       ]
     );
-    expect(result.refreshed.totals).toMatchObject({
+    expect(result.settled.totals).toMatchObject({
       inputTokens: 300,
       outputTokens: 70,
       cacheReadTokens: 60,
     });
-    expect(result.afterward.totals).toEqual(result.refreshed.totals);
+    expect(result.afterward.totals).toEqual(result.settled.totals);
   });
 
   it('returns identical native Codex summaries without transferring raw events', async () => {

@@ -11,8 +11,8 @@ use crate::{
     AnalyticsHeadView, AxAgendaRow, AxBar, AxBarRow, AxBucket, AxCache, AxCalendar, AxCardText,
     AxDaily, AxData, AxDay, AxDonut, AxDonutLeg, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat,
     AxHeatCell, AxIncluded, AxKpi, AxLabel, AxLegendItem, AxModelRow, AxModelType, AxPickItem,
-    AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine, AxSessRow,
-    AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
+    AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine, AxSessRecent,
+    AxSessRow, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
     AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
 };
 use serde_json::Value;
@@ -405,6 +405,8 @@ pub struct AnalyticsModels {
     bars: Rc<VecModel<AxBar>>,
     groups: Rc<VecModel<AxQuotaGroup>>,
     group_rows: Nested<AxQuotaRow>,
+    agenda_a: Rc<VecModel<AxAgendaRow>>,
+    agenda_b: Rc<VecModel<AxAgendaRow>>,
     trend_gen: i32,
     trend_key: String,
 }
@@ -421,6 +423,8 @@ impl Default for AnalyticsModels {
             bars: Rc::new(VecModel::default()),
             groups: Rc::new(VecModel::default()),
             group_rows: Nested::default(),
+            agenda_a: Rc::new(VecModel::default()),
+            agenda_b: Rc::new(VecModel::default()),
             trend_gen: 0,
             trend_key: String::new(),
         }
@@ -437,11 +441,14 @@ pub fn bind(ui: &Dashboard, m: &AnalyticsModels) {
     ax.set_heat_cells(ModelRc::from(m.heat.clone()));
     ax.set_daily_bars(ModelRc::from(m.bars.clone()));
     ax.set_quota_groups(ModelRc::from(m.groups.clone()));
+    ax.set_agenda_a(ModelRc::from(m.agenda_a.clone()));
+    ax.set_agenda_b(ModelRc::from(m.agenda_b.clone()));
 }
 
 fn head(v: &Value, previous: AnalyticsHeadView) -> AnalyticsHeadView {
     AnalyticsHeadView {
         loading: previous.loading,
+        refreshing: b(v, "refreshing"),
         error: previous.error,
         scope: s(v, "scope"),
         read: s(v, "read"),
@@ -639,6 +646,14 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         events: s(r, "events"),
         events_tip: s(r, "eventsTip"),
     }));
+    ax.set_sess_recent(list(sessions, "recent", |r| AxSessRecent {
+        tool: s(r, "tool"),
+        models: s(r, "models"),
+        tokens: s(r, "tokens"),
+        cost: s(r, "cost"),
+        when: s(r, "when"),
+        tip: s(r, "tip"),
+    }));
     let tokens = g(usage, "tokens");
     ax.set_tokens_sub(s(tokens, "sub"));
     sync_rows(
@@ -780,11 +795,17 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
     sync_rows(&m.groups, groups, |gr: &AxQuotaGroup| gr.provider.clone());
     m.group_rows.retain(&live);
 
-    // resets and expiries
+    // resets and expiries: in place, so the agenda redraws only when its rows change
     let agenda = g(&v, "agenda");
     ax.set_agenda_empty(b(agenda, "empty"));
-    ax.set_agenda_a(list(agenda, "a", agenda_row));
-    ax.set_agenda_b(list(agenda, "b", agenda_row));
+    sync_by_index(
+        &m.agenda_a,
+        arr(agenda, "a").iter().map(agenda_row).collect(),
+    );
+    sync_by_index(
+        &m.agenda_b,
+        arr(agenda, "b").iter().map(agenda_row).collect(),
+    );
     ax.set_ready(true);
     Ok(())
 }

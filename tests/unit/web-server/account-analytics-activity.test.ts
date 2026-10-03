@@ -86,6 +86,21 @@ function sources() {
 }
 
 describe('native local analytics activity', () => {
+  // A refresh answers instantly from the last snapshot and runs behind it; poll until the answer
+  // is settled (refreshing is false) to assert what the refresh collected.
+  async function settled(
+    service: AccountAnalyticsActivityService,
+    query: AccountAnalyticsQuery = QUERY,
+    from: number = FROM,
+    to: number = NOW
+  ) {
+    for (let attempt = 0; attempt < 500; attempt++) {
+      const answer = await service.get(query, from, to);
+      if (answer.refreshing !== true) return answer;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error('background collection did not settle');
+  }
   it('publishes real bounded progress, then warm completion, while keeping shared logs unattributed', async () => {
     let now = NOW;
     let complete = false;
@@ -120,7 +135,7 @@ describe('native local analytics activity', () => {
     expect(partial.accountAttribution).toBe('unavailable');
     complete = true;
     now += 60000;
-    const warm = await service.get(QUERY, FROM, NOW);
+    const warm = await settled(service);
     expect(warm.status).toBe('ok');
     expect(warm.totals).toEqual(partial.totals);
     expect(warm.message).not.toContain('remaining files');
@@ -428,7 +443,11 @@ describe('native local analytics activity', () => {
       20
     );
     expect(calls).toBe(2);
-    const refreshed = await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    const refreshing = await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    expect(refreshing.status).toBe('cached');
+    expect(refreshing.refreshing).toBe(true);
+    expect(refreshing.totals?.inputTokens).toBe(20);
+    const refreshed = await settled(service);
     expect(refreshed.status).toBe('ok');
     expect(refreshed.totals?.inputTokens).toBe(50);
     expect(refreshed.providers.map((row) => row.provider)).toEqual(['claude', 'codex']);
@@ -464,28 +483,31 @@ describe('native local analytics activity', () => {
     expect((await service.get(QUERY, FROM, now)).totals?.inputTokens).toBe(10);
     expect(calls).toBe(1);
     now++;
-    expect((await service.get(QUERY, FROM, now)).totals?.inputTokens).toBe(20);
+    expect((await service.get(QUERY, FROM, now)).totals?.inputTokens).toBe(10);
+    expect((await settled(service, QUERY, FROM, now)).totals?.inputTokens).toBe(20);
     expect(calls).toBe(2);
     input = 30;
     now += 30_000;
     expect((await service.get(QUERY, FROM, now)).totals?.inputTokens).toBe(20);
     expect(calls).toBe(2);
     refreshIntervalSeconds = 30;
-    expect((await service.get(QUERY, FROM, now)).totals?.inputTokens).toBe(30);
+    expect((await service.get(QUERY, FROM, now)).totals?.inputTokens).toBe(20);
+    expect((await settled(service, QUERY, FROM, now)).totals?.inputTokens).toBe(30);
     expect(calls).toBe(3);
   });
 
-  it('spends the response budget end to end, keeping recent projection time out of the wait', async () => {
+  it('serves the cached snapshot instantly while a refresh runs, spending the budget only with nothing to serve', async () => {
     let calls = 0;
     let elapsed = 0;
+    const requests = () => [
+      {
+        provider: 'codex' as const,
+        request: { kind: 'codex' as const, codexHome: '/fixture', cacheDir: '/fixture/cache' },
+      },
+    ];
     const service = new AccountAnalyticsActivityService({
       remote: async () => ({ results: [], states: [] }),
-      requests: () => [
-        {
-          provider: 'codex',
-          request: { kind: 'codex', codexHome: '/fixture', cacheDir: '/fixture/cache' },
-        },
-      ],
+      requests,
       loadWorker: async () => {
         calls++;
         if (calls === 1) return data('gpt-5.4', 10, 0);
@@ -502,11 +524,31 @@ describe('native local analytics activity', () => {
     const refreshing = await service.get({ ...QUERY, refresh: true }, FROM, NOW);
     const waited = performance.now() - started;
     expect(refreshing.status).toBe('cached');
+    expect(refreshing.refreshing).toBe(true);
     expect(refreshing.totals?.inputTokens).toBe(10);
-    // The wait is what is left after the projection: about 100 ms, never the
-    // whole budget on top of the projection.
-    expect(waited).toBeGreaterThanOrEqual(80);
+    // The cached snapshot answers at once; the hung refresh never holds it.
     expect(waited).toBeLessThan(600);
+    // With nothing to serve, a first run still waits, bounded by the budget minus recent
+    // projection time: about 50 ms here (200 ms budget, 150 ms projections), never the whole
+    // budget on top of the projection.
+    let coldElapsed = 0;
+    const cold = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
+      requests,
+      loadWorker: () => new Promise<UsageWorkerResult>(() => {}),
+      now: () => NOW,
+      scope: () => '/fixture-budget-cold',
+      responseBudgetMs: 200,
+      elapsedMs: () => (coldElapsed += 150),
+    });
+    expect((await cold.get(QUERY, FROM, NOW)).status).toBe('loading');
+    const coldStarted = performance.now();
+    const loading = await cold.get(QUERY, FROM, NOW);
+    const coldWaited = performance.now() - coldStarted;
+    expect(loading.status).toBe('loading');
+    expect(loading.totals).toBeNull();
+    expect(coldWaited).toBeGreaterThanOrEqual(40);
+    expect(coldWaited).toBeLessThan(600);
   });
 
   it('coalesces concurrent manual refreshes into one bounded scan and exposes cached data while it runs', async () => {
@@ -634,6 +676,7 @@ describe('native local analytics activity', () => {
     );
     expect(selected.status).toBe('unavailable');
     expect(selected.totals).toBeNull();
+    expect((await settled(service)).totals?.inputTokens).toBe(80);
     expect(calls).toBe(4);
     expect((await service.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(80);
     expect(calls).toBe(4);
@@ -705,6 +748,127 @@ describe('native local analytics activity', () => {
     expect(calls).toBe(0);
     expect(qwen.totals).toBeNull();
     expect(account.totals).toBeNull();
+  });
+
+  it('persists the snapshot and serves it instantly after a restart while the first scan runs', async () => {
+    const scope = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-activity-snapshot-'));
+    try {
+      const requests = () => [
+        {
+          provider: 'codex' as const,
+          request: { kind: 'codex' as const, codexHome: '/fixture', cacheDir: '/fixture/cache' },
+        },
+      ];
+      const first = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: [] }),
+        requests,
+        loadWorker: async () => data('gpt-5.4', 10, 0),
+        now: () => NOW,
+        scope: () => scope,
+        persistSnapshot: true,
+      });
+      expect((await first.get(QUERY, FROM, NOW)).status).toBe('ok');
+      const file = path.join(
+        scope,
+        'cache',
+        'account-activity-v1',
+        'analytics-activity-snapshot-v1.json'
+      );
+      expect(fs.existsSync(file)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).sources).toHaveLength(1);
+      // A restarted server (a new instance on the same scope) serves the snapshot at once, with
+      // the first scan running behind it, instead of answering 'loading' with no data.
+      const second = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: [] }),
+        requests,
+        loadWorker: async () => data('gpt-5.4', 20, 0),
+        now: () => NOW + 61_000,
+        scope: () => scope,
+        persistSnapshot: true,
+      });
+      const instant = await second.get(QUERY, FROM, NOW);
+      expect(instant.status).toBe('cached');
+      expect(instant.refreshing).toBe(true);
+      expect(instant.totals?.inputTokens).toBe(10);
+      const fresh = await settled(second);
+      expect(fresh.status).toBe('ok');
+      expect(fresh.refreshing).toBe(false);
+      expect(fresh.totals?.inputTokens).toBe(20);
+    } finally {
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a missing or invalid persisted snapshot like a first run', async () => {
+    const scope = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-activity-snapshot-'));
+    try {
+      const dir = path.join(scope, 'cache', 'account-activity-v1');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'analytics-activity-snapshot-v1.json'), 'not json{');
+      const service = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: [] }),
+        requests: () => [
+          {
+            provider: 'codex' as const,
+            request: { kind: 'codex' as const, codexHome: '/fixture', cacheDir: '/fixture/cache' },
+          },
+        ],
+        loadWorker: async () => data('gpt-5.4', 10, 0),
+        now: () => NOW,
+        scope: () => scope,
+        persistSnapshot: true,
+        responseBudgetMs: 50,
+      });
+      // The corrupt file is not served and does not fail the collection; the scan fills it in.
+      expect((await service.get(QUERY, FROM, NOW)).status).toBe('ok');
+      expect((await service.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(10);
+    } finally {
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
+  });
+
+  it('publishes fresh local rows before a slow remote scan answers, keeping carried remote states', async () => {
+    let input = 10;
+    let releaseRemote: ((value: { results: []; states: [] }) => void) | null = null;
+    let remoteCalls = 0;
+    const remoteData = data('remote-model', 70, 0);
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => {
+        remoteCalls++;
+        if (remoteCalls === 1)
+          return { results: [{ tool: 'omp' as const, data: remoteData }], states: [] };
+        return new Promise<{ results: []; states: [] }>((resolve) => {
+          releaseRemote = resolve;
+        });
+      },
+      requests: () => [
+        {
+          provider: 'codex' as const,
+          request: { kind: 'codex' as const, codexHome: '/fixture', cacheDir: '/fixture/cache' },
+        },
+      ],
+      loadWorker: async () => data('gpt-5.4', input, 0),
+      now: () => NOW,
+      scope: () => '/fixture-phased',
+    });
+    expect((await service.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(80);
+    input = 20;
+    await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    // The local phase publishes while the remote scan is still gated: fresh local rows (20)
+    // plus the carried remote rows (70), with the refresh still running behind the answer.
+    let phased = await service.get(QUERY, FROM, NOW);
+    for (let attempt = 0; attempt < 500 && phased.totals?.inputTokens !== 90; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      phased = await service.get(QUERY, FROM, NOW);
+    }
+    expect(phased.totals?.inputTokens).toBe(90);
+    expect(phased.refreshing).toBe(true);
+    expect(releaseRemote).not.toBeNull();
+    releaseRemote?.({ results: [], states: [] });
+    const done = await settled(service);
+    expect(done.refreshing).toBe(false);
+    // The answered (empty) remote scan replaces the carried rows; only fresh local rows remain.
+    expect(done.totals?.inputTokens).toBe(20);
   });
 
   it('runs at most two native parsers concurrently even across many local roots', async () => {
