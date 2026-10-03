@@ -1,12 +1,12 @@
 // Model rates for the Analytics per-type cost split, mirrored read-only from src/web-server/model-pricing.ts
-// (PRICING_REGISTRY, MODEL_PRICING_ALIASES and UNKNOWN_MODEL_PRICING at ccb2dcb0, unchanged at 8fb5e3de).
+// (PRICING_REGISTRY, MODEL_PRICING_ALIASES and UNKNOWN_MODEL_PRICING at ccb2dcb0; Opus 5.5, Sonnet 5.5, GLM-5.3 and the Claude effort suffix added 2026-10-03).
 // tests/model-rates.test.mjs re-reads that file and fails when a rate here drifts from it.
 //
 // The backend logs one estimatedCostUsd per model; it never reports the cost of each token type. The page
 // multiplies each model's token types by these rates and keeps the split only when the four parts add up to
 // the logged estimate (reconcile below). A model that does not reconcile shows token shares and says so.
 // Lookup order follows getModelPricing() for a model id without a provider prefix: the static table (exact,
-// normalised, date-stripped and aliased ids), then the models.dev rates CCS resolved for the logged models
+// normalised, date-stripped, effort-stripped and aliased ids), then the models.dev rates CCS resolved for the logged models
 // (MODELS_DEV below), then a known id that ends the model id, then the CCS fallback rate.
 
 /** USD per million tokens: [input, output, cache write, cache read]. */
@@ -34,6 +34,7 @@ export const STATIC_RATES = {
   'claude-sonnet-4-6-thinking': [3, 15, 3.75, 0.3],
   'claude-sonnet-5': [2, 10, 2.5, 0.2],
   'claude-sonnet-5-thinking': [2, 10, 2.5, 0.2],
+  'claude-sonnet-5-5': [2, 10, 2.5, 0.2],
   'claude-4-opus-20250514': [15, 75, 18.75, 1.5],
   'claude-opus-4-20250514': [15, 75, 18.75, 1.5],
   'claude-opus-4': [15, 75, 18.75, 1.5],
@@ -49,6 +50,7 @@ export const STATIC_RATES = {
   'claude-opus-4-8': [5, 25, 6.25, 0.5],
   'claude-opus-5': [5, 25, 6.25, 0.5],
   'claude-opus-5-thinking': [5, 25, 6.25, 0.5],
+  'claude-opus-5-5': [4, 20, 5, 0.2],
   'claude-fable-5': [10, 50, 12.5, 1],
   'claude-fable-5-1': [10, 50, 12.5, 0.25],
   'gpt-4o': [2.5, 10, 0, 1.25],
@@ -81,6 +83,8 @@ export const STATIC_RATES = {
   'gemini-3-pro-preview': [2, 12, 0, 0],
   'gemini-3-pro': [2, 12, 0, 0],
   'gemini-3-pro-high': [4, 18, 0, 0],
+  'glm-5.3': [1.4, 4.4, 0, 0.26],
+  'glm-5.3-flash': [0.15, 0.5, 0, 0.03],
   'glm-5.2': [1.4, 4.4, 0, 0.26],
   'glm-5': [1, 3.2, 0, 0.2],
   'glm-4.7': [0.4, 1.5, 0, 0.2],
@@ -162,12 +166,16 @@ export const MODELS_DEV = {
 const stripProvider = model => { const t = model.trim(); const i = t.indexOf('/'); return i <= 0 ? t : t.slice(i + 1); };
 const normalise = model => stripProvider(model).toLowerCase();
 const stripDate = model => model.startsWith('claude-') ? model.replace(/-\d{8}(?=-thinking(?:$|:))/g, '').replace(/-\d{8}(?=$|:)/g, '') : model;
+// a reasoning-effort suffix ("claude-opus-5-high") prices at its model's rates
+const stripEffort = model => model.startsWith('claude-') ? model.replace(/-(?:low|medium|high|xhigh|max)(?=-thinking(?:$|:)|$|:)/g, '') : model;
 const NORMALISED = Object.fromEntries(Object.entries(STATIC_RATES).map(([key, rate]) => [normalise(key), rate]));
 function candidates(model) {
   const normalised = normalise(model), base = normalised.split(':')[0];
   const list = [normalised];
   if (base !== normalised) list.push(base);
-  for (const value of [stripDate(normalised), stripDate(base)]) if (!list.includes(value)) list.push(value);
+  for (const value of [normalised, base]) {
+    for (const variant of [stripDate(value), stripEffort(stripDate(value))]) if (!list.includes(variant)) list.push(variant);
+  }
   return list;
 }
 function direct(model) {

@@ -609,10 +609,71 @@ describe('model-pricing', () => {
     });
 
     it('reports a model with no static or cached rate as fallback, never a guess with a source', () => {
-      // claude-opus-5-5 has no static entry and no models.dev cache entry here, so the Analytics page
-      // must show its cost as "not logged" and leave it out of the totals.
-      expect(getModelPricingWithSource('claude-opus-5-5').source).toBe('fallback');
-      expect(hasCustomPricing('claude-opus-5-5')).toBe(false);
+      // An id with no static entry and no models.dev cache entry: the Analytics page must show its
+      // cost as "not logged" and leave it out of the totals.
+      expect(getModelPricingWithSource('claude-aac-unlisted-9').source).toBe('fallback');
+      expect(hasCustomPricing('claude-aac-unlisted-9')).toBe(false);
+    });
+
+    // Rates read 2026-10-03 from https://platform.claude.com/docs/en/about-claude/pricing and
+    // https://docs.z.ai/guides/overview/pricing. Each was "not logged" (source 'fallback') before.
+    it.each([
+      ['claude-opus-5-5', 4.0, 20.0, 5.0, 0.2],
+      ['claude-sonnet-5-5', 2.0, 10.0, 2.5, 0.2],
+      ['glm-5.3', 1.4, 4.4, 0.0, 0.26],
+      ['glm-5.3-flash', 0.15, 0.5, 0.0, 0.03],
+    ])('prices %s at its official list rates', (model, input, output, write, read) => {
+      for (const provider of [undefined, model.startsWith('claude-') ? 'anthropic' : 'zai']) {
+        const resolved = getModelPricingWithSource(model, { provider });
+        expect(resolved.source).toBe('builtin');
+        expect(resolved.pricing).toMatchObject({
+          inputPerMillion: input,
+          outputPerMillion: output,
+          cacheCreationPerMillion: write,
+          cacheReadPerMillion: read,
+        });
+        expect(hasCustomPricing(model, { provider })).toBe(true);
+      }
+    });
+
+    it('bills Claude Opus 5.5 cache hits at 0.05x input and fast mode at $8/$40', () => {
+      // Opus 5.5 is the one Opus whose cache hits are not 0.1x input ($0.20, not $0.40).
+      const usage: TokenUsage = {
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        cacheCreationTokens: 1_000_000,
+        cacheReadTokens: 1_000_000,
+      };
+      expect(calculateCost(usage, 'claude-opus-5-5')).toBeCloseTo(4 + 20 + 5 + 0.2, 10);
+      expect(getModelPricing('claude-opus-5-5', { serviceTier: 'fast' })).toMatchObject({
+        inputPerMillion: 8.0,
+        outputPerMillion: 40.0,
+        cacheCreationPerMillion: 10.0,
+        cacheReadPerMillion: 0.4,
+      });
+    });
+
+    it('prices a Claude effort suffix at its base model, never the unknown-model fallback', () => {
+      // "claude-opus-5-high" is Claude Opus 5 at high effort; effort does not change per-token rates.
+      for (const [model, base] of [
+        ['claude-opus-5-high', 'claude-opus-5'],
+        ['claude-opus-5-xhigh', 'claude-opus-5'],
+        ['claude-opus-5-5-max', 'claude-opus-5-5'],
+        ['claude-sonnet-5-5-low', 'claude-sonnet-5-5'],
+        ['claude-opus-4-6-medium-thinking', 'claude-opus-4-6-thinking'],
+        ['claude-opus-5-thinking-high', 'claude-opus-5-thinking'],
+        ['anthropic/claude-opus-5-high', 'claude-opus-5'],
+      ]) {
+        const resolved = getModelPricingWithSource(model);
+        expect(resolved.source).toBe('builtin');
+        expect(resolved.pricing).toEqual(getModelPricing(base));
+      }
+      expect(getModelPricingWithSource('claude-opus-5-high', { provider: 'anthropic' }).pricing).toEqual(
+        getModelPricing('claude-opus-5')
+      );
+      // Only Claude ids lose the suffix: Gemini's "-high" is a separate long-context price.
+      expect(getModelPricing('gemini-3-pro-high').inputPerMillion).toBe(4);
+      expect(getModelPricingWithSource('claude-aac-unlisted-9-high').source).toBe('fallback');
     });
 
     it('keeps subscription-backed provider pricing distinct from paid API pricing', () => {

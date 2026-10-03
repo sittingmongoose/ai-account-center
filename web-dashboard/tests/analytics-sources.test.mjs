@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 // deterministic.
 process.env.TZ = 'UTC';
 const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC } = await import('../public/analytics-usage.mjs');
+const { modelRates } = await import('../public/model-rates.mjs');
 
 const now = Date.parse('2026-10-01T12:00:00Z');
 const at = h => new Date(now - h * 3_600_000).toISOString();
@@ -238,15 +239,39 @@ test('not-logged parts come from fallbackCostUsd, for every provider including C
   assert.equal(notLoggedPart({ costByType: { input: 1, output: 1, cacheWrite: 0, cacheRead: 0 } }, 5), 0);
   assert.equal(notLoggedPart({ fallbackCostUsd: 3 }, null), 0);
   // a model with no known rate (resolver source 'fallback') under Claude: "not logged", left out of the totals
-  const opus = { model: 'claude-opus-5-5', provider: 'claude', tools: ['claude'], ...tok(1e6, 1e5, 0, 0), estimatedCostUsd: 4.5, fallbackCostUsd: 4.5, costByType: null, costByTypeReconciled: false, rates: FALLBACK };
-  assert.equal(notLoggedPart(opus, 4.5), 4.5);
-  const p = payload({ totals: add(M.haiku, opus), byHour: [hour(26, 'claude', M.haiku), hour(25, 'claude', opus)], providers: [provider('claude', 'Claude', 5, 40, ['claude'], [M.haiku, opus])], models: [M.haiku, opus] });
+  const unlisted = { model: 'claude-aac-unlisted-9', provider: 'claude', tools: ['claude'], ...tok(1e6, 1e5, 0, 0), estimatedCostUsd: 4.5, fallbackCostUsd: 4.5, costByType: null, costByTypeReconciled: false, rates: FALLBACK };
+  assert.equal(notLoggedPart(unlisted, 4.5), 4.5);
+  const p = payload({ totals: add(M.haiku, unlisted), byHour: [hour(26, 'claude', M.haiku), hour(25, 'claude', unlisted)], providers: [provider('claude', 'Claude', 5, 40, ['claude'], [M.haiku, unlisted])], models: [M.haiku, unlisted] });
   const view = usageView(p, state(), { now });
   assert.ok(Math.abs(kpi(view, 'cost').num - haiku(1e6, 2e5, 1e6, 4e7)) < 1e-9);
   assert.equal(kpi(view, 'cost').sub[0].text, 'Partial');
-  assert.deepEqual(view.cbm.rows.find(r => r.name === 'claude-opus-5-5').cost, 'Not logged');
+  assert.deepEqual(view.cbm.rows.find(r => r.name === 'claude-aac-unlisted-9').cost, 'Not logged');
   // rows of a provider neither the dashboard nor the response knows are dropped
   assert.equal(activityData(payload({ byHour: [{ ...byHour[0], provider: 'cliproxy' }] }), now).hours.length, 0);
+});
+
+test('Claude Opus 5.5 and Sonnet 5.5 cost at their listed rates, no longer "not logged" (MARKS-HIDPI task 2)', () => {
+  // The server publishes the resolver's rates with each model; model-rates.mjs mirrors model-pricing.ts.
+  const listed = model => { const r = modelRates(model); assert.equal(r.source, 'builtin'); return { inputPerMillion: r.in, outputPerMillion: r.out, cacheCreationPerMillion: r.cw, cacheReadPerMillion: r.cr, source: r.source }; };
+  const row = (model, rates, t) => {
+    const cost = { input: t.inputTokens * rates.inputPerMillion / 1e6, output: t.outputTokens * rates.outputPerMillion / 1e6, cacheWrite: t.cacheCreationTokens * rates.cacheCreationPerMillion / 1e6, cacheRead: t.cacheReadTokens * rates.cacheReadPerMillion / 1e6 };
+    return { model, provider: 'claude', tools: ['claude'], ...t, estimatedCostUsd: cost.input + cost.output + cost.cacheWrite + cost.cacheRead, fallbackCostUsd: 0, costByType: cost, costByTypeReconciled: true, rates };
+  };
+  const opus = row('claude-opus-5-5', listed('claude-opus-5-5'), tok(1e6, 1e5, 2e5, 1e7));
+  const sonnet = row('claude-sonnet-5-5', listed('claude-sonnet-5-5'), tok(5e5, 5e4, 0, 2e6));
+  // $4 in, $20 out, $5 cache write, $0.20 cache read per million (platform.claude.com pricing, 2026-10-03)
+  assert.ok(Math.abs(opus.estimatedCostUsd - (4 + 2 + 1 + 2)) < 1e-9);
+  assert.ok(Math.abs(sonnet.estimatedCostUsd - (1 + 0.5 + 0 + 0.4)) < 1e-9);
+  for (const r of [opus, sonnet]) assert.equal(notLoggedPart(r, r.estimatedCostUsd), 0);
+  const p = payload({ totals: add(M.haiku, opus, sonnet), byHour: [hour(26, 'claude', M.haiku), hour(25, 'claude', opus, sonnet)], providers: [provider('claude', 'Claude', 5, 40, ['claude'], [M.haiku, opus, sonnet])], models: [M.haiku, opus, sonnet] });
+  const view = usageView(p, state(), { now });
+  assert.ok(Math.abs(kpi(view, 'cost').num - (haiku(1e6, 2e5, 1e6, 4e7) + opus.estimatedCostUsd + sonnet.estimatedCostUsd)) < 1e-9);
+  assert.notEqual(kpi(view, 'cost').sub?.[0]?.text, 'Partial');
+  for (const name of ['claude-opus-5-5', 'claude-sonnet-5-5']) {
+    const shown = view.cbm.rows.find(r => r.name === name).cost;
+    assert.notEqual(shown, 'Not logged');
+    assert.match(String(shown), /\$\d/);
+  }
 });
 
 test('each provider\'s models share its hue; models that are no provider\'s alone share one neutral family', () => {

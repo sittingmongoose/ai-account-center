@@ -30,7 +30,7 @@ test('lookup follows getModelPricing: exact, normalised, date-stripped, aliased,
   assert.equal(modelRates('anthropic/claude-sonnet-4').in, 3);
   assert.deepEqual(modelRates('qwen3-coder'), { ...modelRates('qwen3-coder-plus'), source: 'builtin' });
   assert.equal(modelRates('gpt-6-sol').source, 'models-dev');
-  assert.equal(modelRates('claude-opus-5-5').source, 'fallback');
+  assert.equal(modelRates('claude-aac-unlisted-9').source, 'fallback');
   assert.equal(modelRates('<synthetic>').source, 'fallback');
   assert.equal(modelRates('').source, 'fallback');
 });
@@ -44,4 +44,18 @@ test('a split is kept only when its four parts add up to the logged estimate; pa
   assert.equal(off.reconciled, false);
   assert.deepEqual(off.cost, good.cost);
   assert.equal(reconcile({ ...row, estimatedCostUsd: null }).reconciled, false);
+});
+
+test('Opus 5.5, Sonnet 5.5, GLM-5.3 and Claude effort suffixes resolve to listed rates, not the fallback', () => {
+  // platform.claude.com/docs/en/about-claude/pricing and docs.z.ai/guides/overview/pricing, read 2026-10-03
+  assert.deepEqual(modelRates('claude-opus-5-5'), { in: 4, out: 20, cw: 5, cr: 0.2, source: 'builtin' });
+  assert.deepEqual(modelRates('claude-sonnet-5-5'), { in: 2, out: 10, cw: 2.5, cr: 0.2, source: 'builtin' });
+  assert.deepEqual(modelRates('glm-5.3'), { in: 1.4, out: 4.4, cw: 0, cr: 0.26, source: 'builtin' });
+  assert.deepEqual(modelRates('GLM-5.3-Flash'), { in: 0.15, out: 0.5, cw: 0, cr: 0.03, source: 'builtin' });
+  assert.deepEqual(modelRates('claude-opus-5-high'), modelRates('claude-opus-5'));
+  assert.deepEqual(modelRates('claude-opus-5-5-xhigh'), modelRates('claude-opus-5-5'));
+  assert.deepEqual(modelRates('claude-opus-4-6-medium-thinking'), modelRates('claude-opus-4-6-thinking'));
+  assert.equal(modelRates('gemini-3-pro-high').in, 4, 'only Claude ids lose an effort suffix');
+  const row = { model: 'claude-opus-5-5', inputTokens: 1e6, outputTokens: 1e6, cacheCreationTokens: 1e6, cacheReadTokens: 1e6 };
+  assert.equal(reconcile({ ...row, estimatedCostUsd: 4 + 20 + 5 + 0.2 }).reconciled, true);
 });

@@ -86,7 +86,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | LOC |
 |---|---:|
-| `src/web-server/model-pricing.ts` | 1158 |
+| `src/web-server/model-pricing.ts` | 1217 |
 | `src/antigravity/registry.ts` | 1083 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1052 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |

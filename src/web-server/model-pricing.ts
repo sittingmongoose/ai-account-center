@@ -76,6 +76,14 @@ function buildRates(inputPerMillion: number, outputPerMillion: number): PricingR
 // the registry entries in sync rather than repeating the literal rates.
 const OPUS_46_47_FAST_RATES = buildRates(30.0, 150.0);
 const OPUS_48_FAST_RATES = buildRates(10.0, 50.0);
+// Opus 5.5 fast mode is $8/$40 (2x). Caching multipliers apply on top, and Opus
+// 5.5 bills cache hits at 0.05x base input, so the hit rate is written out.
+const OPUS_55_FAST_RATES: PricingRates = {
+  inputPerMillion: 8.0,
+  outputPerMillion: 40.0,
+  cacheCreationPerMillion: 8.0 * CACHE_5M_WRITE_MULTIPLIER,
+  cacheReadPerMillion: 0.4,
+};
 
 // ============================================================================
 // USER-EDITABLE PRICING TABLE
@@ -232,6 +240,14 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
     cacheCreationPerMillion: 2.5,
     cacheReadPerMillion: 0.2,
   },
+  // Claude Sonnet 5.5 ($2/$10; 5m cache write $2.50, cache hit $0.20).
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing (Model pricing table), read 2026-10-03.
+  'claude-sonnet-5-5': {
+    inputPerMillion: 2.0,
+    outputPerMillion: 10.0,
+    cacheCreationPerMillion: 2.5,
+    cacheReadPerMillion: 0.2,
+  },
   // Claude 4 Opus ($15/$75)
   'claude-4-opus-20250514': {
     inputPerMillion: 15.0,
@@ -352,6 +368,20 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
     cacheReadPerMillion: 0.5,
     serviceTiers: {
       fast: OPUS_48_FAST_RATES,
+    },
+  },
+  // Claude Opus 5.5 ($4/$20; 5m cache write $5, cache hit $0.20). Cache hits on
+  // Opus 5.5 are 0.05x base input, not the usual 0.1x, so this entry cannot use
+  // CACHE_READ_MULTIPLIER-derived rates. Fast mode is $8/$40 (OPUS_55_FAST_RATES).
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing (Model pricing,
+  // Prompt caching and Fast mode pricing tables), read 2026-10-03.
+  'claude-opus-5-5': {
+    inputPerMillion: 4.0,
+    outputPerMillion: 20.0,
+    cacheCreationPerMillion: 5.0,
+    cacheReadPerMillion: 0.2,
+    serviceTiers: {
+      fast: OPUS_55_FAST_RATES,
     },
   },
   // Claude Fable 5 ($10/$50) — most powerful tier, above Opus
@@ -581,6 +611,21 @@ const PRICING_REGISTRY: Record<string, ModelPricing> = {
   // ---------------------------------------------------------------------------
   // GLM Models (Zhipu AI / Z.AI) - Source: Official Z.AI pricing
   // ---------------------------------------------------------------------------
+  // GLM-5.3 ($1.4/$4.4, cached input $0.26) and GLM-5.3-Flash ($0.15/$0.50,
+  // cached input $0.03); cached-input storage is free, so no cache-write rate.
+  // Source: https://docs.z.ai/guides/overview/pricing (Latest Models table), read 2026-10-03.
+  'glm-5.3': {
+    inputPerMillion: 1.4,
+    outputPerMillion: 4.4,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.26,
+  },
+  'glm-5.3-flash': {
+    inputPerMillion: 0.15,
+    outputPerMillion: 0.5,
+    cacheCreationPerMillion: 0.0,
+    cacheReadPerMillion: 0.03,
+  },
   'glm-5.2': {
     inputPerMillion: 1.4,
     outputPerMillion: 4.4,
@@ -939,6 +984,19 @@ function stripDateSuffix(model: string): string {
   return model.replace(/-\d{8}(?=-thinking(?:$|:))/g, '').replace(/-\d{8}(?=$|:)/g, '');
 }
 
+/**
+ * Strip a trailing reasoning-effort suffix from a Claude model id (e.g. "claude-opus-5-high" ->
+ * "claude-opus-5"). Effort is a request setting, not a model: Anthropic prices every effort
+ * level of a model at that model's per-token rates, so the suffix must not hide the base rate.
+ */
+function stripEffortSuffix(model: string): string {
+  if (!model.startsWith('claude-')) {
+    return model;
+  }
+
+  return model.replace(/-(?:low|medium|high|xhigh|max)(?=-thinking(?:$|:)|$|:)/g, '');
+}
+
 const NORMALIZED_PRICING_REGISTRY: Record<string, ModelPricing> = Object.entries(
   PRICING_REGISTRY
 ).reduce<Record<string, ModelPricing>>((acc, [key, pricing]) => {
@@ -955,14 +1013,15 @@ function getLookupCandidates(model: string): string[] {
     candidates.push(baseModel);
   }
 
-  // Add date-stripped variants (e.g., "claude-opus-4-6-20260101" -> "claude-opus-4-6")
-  const stripped = stripDateSuffix(normalized);
-  if (stripped !== normalized && !candidates.includes(stripped)) {
-    candidates.push(stripped);
-  }
-  const baseStripped = stripDateSuffix(baseModel);
-  if (baseStripped !== baseModel && !candidates.includes(baseStripped)) {
-    candidates.push(baseStripped);
+  // Add date-stripped variants (e.g., "claude-opus-4-6-20260101" -> "claude-opus-4-6"), then
+  // effort-stripped ones (e.g., "claude-opus-5-high" -> "claude-opus-5").
+  for (const value of [normalized, baseModel]) {
+    const dateStripped = stripDateSuffix(value);
+    for (const variant of [dateStripped, stripEffortSuffix(dateStripped)]) {
+      if (!candidates.includes(variant)) {
+        candidates.push(variant);
+      }
+    }
   }
 
   return candidates;
