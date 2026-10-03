@@ -517,6 +517,7 @@ export component Dashboard inherits Window {
     in-out property <bool> refresh-interval-known: false;
     in-out property <string> username;
     in-out property <string> password;
+    in-out property <bool> remember-me: true;
     callback action(string, string);
     callback toast-dismissed(int);
 
@@ -818,7 +819,8 @@ export component Dashboard inherits Window {
             busy: root.busy;
             username <=> root.username;
             password <=> root.password;
-            submit(user, pass) => { root.action("login", user + "\n" + pass); }
+            remember-me <=> root.remember-me;
+            submit(user, pass, remember) => { root.action("login", user + "\n" + pass + "\n" + (remember ? "1" : "0")); }
             create(user, pass, confirm, code) => { root.action("setup", user + "\n" + pass + "\n" + confirm + "\n" + code); }
             typing(pass, confirm) => { root.action("setup-typing", pass + "\n" + confirm); }
             recheck => { root.action("auth-recheck", ""); }

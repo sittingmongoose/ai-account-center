@@ -113,6 +113,19 @@ export function expiredBanner(reason, hours = 24) {
     : { title: 'Your session ended', body: 'The dashboard signed this browser out, for example after it restarted. Your trays stayed connected.' };
 }
 
+/**
+ * The Slint sign-in value: "user\\npassword\\n1|0" (Remember me). Two parts remember, as before;
+ * single-line fields never hold a newline.
+ */
+export function parseLoginValue(value) {
+  const parts = String(value ?? '').split('\n');
+  return {
+    username: (parts[0] || '').trim(),
+    password: parts[1] || '',
+    remember: parts.length < 3 || parts[2] !== '0',
+  };
+}
+
 /** Tries left after a refused sign-in: the answer's `triesLeft`, else the limiter's RateLimit-Remaining header. */
 export function triesFrom(error) {
   const n = error?.payload?.triesLeft;
