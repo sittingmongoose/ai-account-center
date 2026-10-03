@@ -326,6 +326,7 @@ const STEPS = {
   'key-replace': ['Paste the key', 'Check', 'Stored'],
   guide: ['Open', 'Sign in', 'Re-check'],
   purge: ['Type DELETE', 'Deleted'],
+  'remove-email': ['Type the email', 'Removed'],
 };
 const btn = (act, value, label, fields = {}) => action({ act, value, label, enabled: true, probe: `${act}:${value}`, ...fields });
 const expiresLine = (iso, now) => validDate(iso) ? `Code expires at ${clockFmt.format(new Date(iso))}${Date.parse(iso) - now < 120_000 ? ' (soon)' : ''}` : '';
@@ -486,6 +487,17 @@ export function flowView(provider, f, ctx = {}) {
       v.actions.push(btn('flow-recheck', provider, 'Re-check', { icon: 'refresh', style: 'primary', busy: !!f.busy, enabled: !f.busy && !!f.accountId }));
       v.actions.push(close);
       if (f.found) { v.cur = 3; v.done = 'Session found'; v.body = 'Readings continue on the normal refresh interval.'; v.actions = [doneBtn]; }
+      err();
+      return v;
+    }
+    case 'remove-email': {
+      v.steps = STEPS['remove-email'];
+      const who = text(f.name) || 'this account';
+      v.title = `Remove ${who}?`;
+      const effects = (Array.isArray(f.effects) ? f.effects : []).filter(e => typeof e === 'string').join(' ');
+      v.body = `${effects || 'Its Claude data moves to the trash on Mac and Windows for 30 days.'} Type the account email to confirm.`;
+      Object.assign(v, { inputKind: 'email', inputLabel: 'Account email', inputPlaceholder: who.includes('@') ? who : 'name@example.com', inputSeed: '' });
+      v.actions = [btn('flow-submit', provider, 'Remove', { style: 'danger-solid', busy: !!f.busy, enabled: !f.busy }), cancel];
       err();
       return v;
     }

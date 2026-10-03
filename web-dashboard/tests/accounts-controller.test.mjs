@@ -750,3 +750,28 @@ test('the time zone saves the whole preferences shape and the page follows it', 
   await h.ctl.handle('time-zone', '');
   assert.equal(h.sent.length, count);
 });
+
+test('removing a default Claude profile types its account email, and a mistype stays open', async () => {
+  const h = harness({
+    data: { accounts: [{ id: 'claude:home', provider: 'claude', label: 'home', email: 'home@example.com' }] },
+    routes: {
+      'POST /api/accounts/claude%3Ahome/remove': (body) => {
+        if (!body.confirmationToken) return { confirmation: { token: 'tok-email', effects: ['Default.'], expectsTyped: 'email' } };
+        if (body.confirm !== 'home@example.com') throw refusal(400, 'invalid_body');
+        return { removed: true, trashId: 'tr_1', purgeAfter: null };
+      },
+    },
+  });
+  await h.ctl.handle('remove', 'claude:home');
+  assert.equal(h.ctl.state.flows.claude.type, 'remove-email');
+  assert.equal(h.ctl.state.flows.claude.accountId, 'claude:home');
+  assert.equal(h.ctl.state.lines['claude:home'], undefined);
+  await h.ctl.handle('flow-submit', 'claude\nwrong@example.com\n');
+  assert.equal(h.ctl.state.flows.claude.error.title, 'That email does not match this account.');
+  assert.deepEqual(last(h.sent), { method: 'POST', path: '/api/accounts/claude%3Ahome/remove', body: { confirmationToken: 'tok-email', confirm: 'wrong@example.com' } });
+  await h.ctl.handle('flow-submit', 'claude\n\n');
+  assert.equal(h.ctl.state.flows.claude.error.title, 'Type the account email first.');
+  await h.ctl.handle('flow-submit', 'claude\nhome@example.com\n');
+  assert.equal(h.ctl.state.flows.claude, undefined);
+  assert.equal(last(h.toasts).title, 'Removed home@example.com');
+});

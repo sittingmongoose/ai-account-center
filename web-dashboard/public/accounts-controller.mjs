@@ -423,6 +423,9 @@ export function createAccountsController(deps) {
     if (flow.type === 'purge' && flow.step === 'type') {
       await commitPurge(provider, input);
     }
+    if (flow.type === 'remove-email' && flow.step === 'type') {
+      await commitRemoveEmail(provider, input);
+    }
   }
   async function cancelFlow(provider) {
     const flow = state.flows[provider];
@@ -480,6 +483,13 @@ export function createAccountsController(deps) {
       const { payload } = await call(requests.removeAsk(id));
       const c = payload?.confirmation;
       if (!c?.token) throw Object.assign(new Error('no confirmation'), { status: 500 });
+      // a default Claude profile removes only after its account email is typed: the typed flow
+      if (c.expectsTyped === 'email') {
+        delete state.lines[id];
+        setFlow(providerOf(id), { type: 'remove-email', step: 'type', accountId: id, name: nameOf(id), token: c.token, effects: Array.isArray(c.effects) ? c.effects : [] });
+        changed();
+        return;
+      }
       state.lines[id] = { kind: 'confirm', token: c.token, effects: Array.isArray(c.effects) ? c.effects : [] };
     } catch (error) {
       const code = error?.payload?.code;
@@ -532,6 +542,28 @@ export function createAccountsController(deps) {
       await reload();
     } catch (error) { delete state.lines[key]; fail(error, { provider: 'claude' }); void loadRegistry(); }
     changed();
+  }
+  /** A default Claude profile: commit its removal with the typed account email. */
+  async function commitRemoveEmail(provider, typed) {
+    const flow = state.flows[provider];
+    if (!flow || flow.type !== 'remove-email' || flow.busy) return;
+    const confirm = String(typed || '').trim();
+    const put = patch => { if (state.flows[provider]?.serial === flow.serial) { state.flows[provider] = { ...state.flows[provider], ...patch }; changed(); } };
+    if (!confirm) { put({ error: { title: 'Type the account email first.', body: '' } }); return; }
+    const who = text(flow.name) || 'this account';
+    put({ busy: true, error: null });
+    try {
+      const { payload } = await call(requests.removeCommit(flow.accountId, flow.token, confirm));
+      closeFlow(provider);
+      const purge = Date.parse(payload?.purgeAfter);
+      toast('ok', `Removed ${who}`, payload?.trashId
+        ? `Its Claude data is in the trash on Mac and Windows${Number.isFinite(purge) ? ` until ${dayFmt.format(new Date(purge))}` : ''}; Restore brings it back.`
+        : 'It is no longer read here.');
+      await reload();
+    } catch (error) {
+      if (error?.payload?.code === 'invalid_body') put({ busy: false, error: { title: 'That email does not match this account.', body: 'Type it exactly as the row shows it.' } });
+      else { put({ busy: false, error: errorText(error, { provider }) }); if (error?.payload?.code === 'confirmation_stale' || error?.payload?.code === 'unknown_account') void reload(); }
+    }
   }
   /** Delete now: ask for the confirmation, then open the typed-DELETE flow under Claude. */
   async function askPurge(trashId) {

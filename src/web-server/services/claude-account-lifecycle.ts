@@ -211,13 +211,16 @@ export class ClaudeAccountLifecycle {
 
   /**
    * The first refusal a remove would hit; `checkHosts` asks each host whether the app runs. A computer's
-   * default Claude profile (a launcher marked `isDefault`) is never removed here: `account_protected`.
+   * default Claude profile (a launcher marked `isDefault`) is removed only through the typed-email
+   * confirmation in account-lifecycle-removal.ts: `account_protected` unless `allowDefault` is set by
+   * that path (which checks the typed email itself before committing).
    */
   async removeRefusal(
     profile: ClaudeProfileRecord,
-    checkHosts: boolean
+    checkHosts: boolean,
+    allowDefault = false
   ): Promise<'account_protected' | 'app_running' | 'app_state_unknown' | null> {
-    if (profile.isDefault) return 'account_protected';
+    if (profile.isDefault && !allowDefault) return 'account_protected';
     if (!checkHosts) return null;
     let unknown = false;
     for (const host of CLAUDE_HOSTS) {
@@ -236,9 +239,15 @@ export class ClaudeAccountLifecycle {
     return stateFingerprint({ source: profile.source, entry: profile.entry });
   }
 
-  async remove(profile: ClaudeProfileRecord): Promise<{ trashId: string; purgeAfter: string }> {
-    // A default profile is refused before anything else, even if a caller skipped removeRefusal.
-    if (profile.isDefault) throw new ClaudeLifecycleError('account_protected');
+  async remove(
+    profile: ClaudeProfileRecord,
+    options: { typedEmailConfirmed?: boolean } = {}
+  ): Promise<{ trashId: string; purgeAfter: string }> {
+    // A default profile is refused before anything else, even if a caller skipped removeRefusal,
+    // unless the typed-email confirmation already passed on the remove path.
+    if (profile.isDefault && options.typedEmailConfirmed !== true) {
+      throw new ClaudeLifecycleError('account_protected');
+    }
     this.assertEnabled();
     if (
       profile.incomplete ||

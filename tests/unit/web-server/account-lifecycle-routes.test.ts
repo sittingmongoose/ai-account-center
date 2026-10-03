@@ -1315,7 +1315,7 @@ describe('registry, re-check, open, label and trash', () => {
     expect([purge.status, purge.body.code]).toEqual([409, 'not_implemented']);
   });
 
-  it("refuses a computer's default Claude profile with account_protected, host steps on or off", async () => {
+  it("removes a computer's default Claude profile only after its account email is typed", async () => {
     const inventory = {
       version: 1,
       profiles: [
@@ -1337,24 +1337,59 @@ describe('registry, re-check, open, label and trash', () => {
         },
       ],
     };
-    for (const claudeEnabled of [false, true]) {
-      const f = await fixture({ claudeEnabled });
-      fs.writeFileSync(
-        path.join(ccsDir, 'claude-desktop-profiles.json'),
-        JSON.stringify(inventory)
-      );
-      const refused = await f.request('POST', '/claude:home/remove', {});
-      expect([claudeEnabled, refused.status, refused.body.code]).toEqual([
-        claudeEnabled,
-        409,
-        'account_protected',
-      ]);
-      expect(String(refused.body.error)).toContain('default Claude profile');
-      expect(f.audits).toContainEqual([
-        'accounts.remove.refused',
-        { provider: 'claude', code: 'account_protected' },
-      ]);
-    }
+    const f = await fixture({ claudeEnabled: true });
+    fs.writeFileSync(path.join(ccsDir, 'claude-desktop-profiles.json'), JSON.stringify(inventory));
+    const asked = await f.request('POST', '/claude:home/remove', {});
+    expect(asked.status).toBe(200);
+    expect(asked.body.confirmation.expectsTyped).toBe('email');
+    expect(asked.body.confirmation.effects.join(' ')).toContain('default Claude profile');
+    const token = asked.body.confirmation.token;
+    // no email, a wrong email and a bare token all refuse without consuming the token
+    expect(
+      (await f.request('POST', '/claude:home/remove', { confirmationToken: token })).status
+    ).toBe(400);
+    const mistyped = await f.request('POST', '/claude:home/remove', {
+      confirmationToken: token,
+      confirm: 'someone-else@example.com',
+    });
+    expect([mistyped.status, mistyped.body.code]).toEqual([400, 'invalid_body']);
+    // the reviewed email, case-insensitively, removes into the trash like any profile
+    const removed = await f.request('POST', '/claude:home/remove', {
+      confirmationToken: token,
+      confirm: '  HOME@example.com ',
+    });
+    expect(removed.status).toBe(200);
+    expect(removed.body.removed).toBe(true);
+    expect(removed.body.trashId).toBeTruthy();
+  });
+
+  it('keeps a default Claude profile without an email protected', async () => {
+    const f = await fixture({ claudeEnabled: true });
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'home',
+            email: null,
+            mac: {
+              launcherName: 'Claude',
+              launcherPath: '/Applications/Claude.app',
+              profilePath: '/fake/mac/Claude',
+              isDefault: true,
+              sshHost: 'jared-mac',
+            },
+          },
+        ],
+      })
+    );
+    const refused = await f.request('POST', '/claude:home/remove', {});
+    expect([refused.status, refused.body.code]).toEqual([409, 'account_protected']);
+    expect(f.audits).toContainEqual([
+      'accounts.remove.refused',
+      { provider: 'claude', code: 'account_protected' },
+    ]);
   });
 
   it('adds, removes into the trash and restores a Claude profile with fake hosts', async () => {

@@ -37,7 +37,7 @@ export const requests = Object.freeze({
   signInAgain: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/signin-again`, body: {} }),
   replaceKey: (id, key) => ({ method: 'PUT', path: `/api/accounts/${enc(id)}/key`, body: { key } }),
   removeAsk: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: {} }),
-  removeCommit: (id, confirmationToken) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: { confirmationToken } }),
+  removeCommit: (id, confirmationToken, confirm) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: typeof confirm === 'string' ? { confirmationToken, confirm } : { confirmationToken } }),
   openApp: (id, platform) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/open`, body: { platform } }),
   recheck: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/recheck`, body: {} }),
   restoreAsk: trashId => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/restore`, body: {} }),

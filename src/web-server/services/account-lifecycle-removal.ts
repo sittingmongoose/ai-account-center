@@ -26,9 +26,12 @@ import {
 /**
  * Remove and trash (CONTRACT-registry-lifecycle 6.7 and 6.8). One route, two
  * calls: `{}` returns a confirmation token with fixed effect sentences, and
- * `{confirmationToken}` performs the removal. Every refusal is checked at both
- * calls; the token is bound to the session and to the reviewed state. A
- * refusal check that cannot run refuses (500 `remove_failed`), never passes.
+ * `{confirmationToken}` performs the removal. A computer's default Claude
+ * profile instead returns `expectsTyped: "email"`, and its removal commits
+ * with `{confirmationToken, confirm: "<the account email>"}`. Every refusal is
+ * checked at both calls; the token is bound to the session and to the reviewed
+ * state. A refusal check that cannot run refuses (500 `remove_failed`), never
+ * passes.
  */
 const PLATFORM_NAMES = { ubuntu: 'Ubuntu', mac: 'Mac', windows: 'Windows' } as const;
 const STATUS: Record<string, number> = {
@@ -41,18 +44,47 @@ const STATUS: Record<string, number> = {
   unknown_trash: 404,
 };
 
+interface RemoveCommit {
+  token: string;
+  /** The typed confirmation, when the plan asks for one (a default profile's account email). */
+  confirm: string | null;
+}
+
 function confirmationToken(body: Record<string, unknown>): string | null {
+  const commit = removeCommitBody(body);
+  return commit ? commit.token : null;
+}
+
+function removeCommitBody(body: Record<string, unknown>): RemoveCommit | null {
   const names = Object.keys(body);
   if (names.length === 0) return null;
   if (
-    names.length !== 1 ||
-    names[0] !== 'confirmationToken' ||
+    (names.length !== 1 && names.length !== 2) ||
+    !names.includes('confirmationToken') ||
+    names.some((name) => name !== 'confirmationToken' && name !== 'confirm') ||
     typeof body.confirmationToken !== 'string' ||
-    !CONFIRMATION_TOKEN_PATTERN.test(body.confirmationToken)
+    !CONFIRMATION_TOKEN_PATTERN.test(body.confirmationToken) ||
+    (body.confirm !== undefined && (typeof body.confirm !== 'string' || body.confirm.length > 320))
   ) {
     throw new LifecycleHttpError(400, 'invalid_body');
   }
-  return body.confirmationToken;
+  return {
+    token: body.confirmationToken,
+    confirm: typeof body.confirm === 'string' ? body.confirm : null,
+  };
+}
+
+/** The two strings match after trimming and lowercasing, compared without an early exit. */
+function emailMatches(typed: string, expected: string): boolean {
+  const left = typed.trim().toLowerCase();
+  const right = expected.trim().toLowerCase();
+  if (!left || !right) return false;
+  const length = Math.max(left.length, right.length);
+  let difference = left.length === right.length ? 0 : 1;
+  for (let index = 0; index < length; index += 1) {
+    if (left.charCodeAt(index) !== right.charCodeAt(index)) difference = 1;
+  }
+  return difference === 0;
 }
 
 interface RemovePlan {
@@ -61,6 +93,9 @@ interface RemovePlan {
   refusal: () => Promise<string | null>;
   fingerprint: () => Promise<string>;
   commit: () => Promise<{ trashId: string | null; purgeAfter: string | null }>;
+  /** The commit additionally requires the typed account email (a default Claude profile). */
+  expectsTypedEmail?: boolean;
+  expectedEmail?: () => Promise<string | null>;
 }
 
 function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
@@ -83,17 +118,28 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
   }
   if (account.kind === 'claude') {
     const claude = env.claude();
-    // A computer's default Claude profile is refused first (and audited like every refusal), whether or
-    // not the host steps are on.
+    // A computer's default Claude profile removes only after its account email is typed (and audited
+    // like every refusal when it cannot be). Without an email there is nothing to type, so it stays
+    // protected.
     if (account.profile.isDefault) {
+      const profile = account.profile;
       return {
         kind: 'desktop-profile',
-        effects: [],
-        refusal: async () => 'account_protected',
-        fingerprint: async () => claude.removeFingerprint(account.profile),
-        commit: async () => {
-          throw new LifecycleHttpError(409, 'account_protected');
+        effects: [
+          'This is this computer\u2019s default Claude profile. Its Claude data moves to the trash on Mac and Windows for 30 days.',
+          'Its launchers are removed on Mac and Windows.',
+        ],
+        refusal: async () => {
+          if (!profile.email) return 'account_protected';
+          return (
+            (await claude.removeRefusal(profile, true, true)) ??
+            (running() ? 'signin_running' : null)
+          );
         },
+        fingerprint: async () => claude.removeFingerprint(profile),
+        commit: () => claude.remove(profile, { typedEmailConfirmed: true }),
+        expectsTypedEmail: true,
+        expectedEmail: async () => profile.email,
       };
     }
     if (!claude.enabled) throw new LifecycleHttpError(409, 'not_implemented');
@@ -314,13 +360,17 @@ export async function removeAccount(
   body: Record<string, unknown>,
   context: LifecycleContext
 ): Promise<LifecycleResult> {
-  const token = confirmationToken(body);
+  const commitBody = removeCommitBody(body);
   let account: ResolvedAccount;
   try {
     account = await resolveIn(env, id);
   } catch (error) {
     // A confirmed remove of an account that is already gone: that review is stale.
-    if (token !== null && error instanceof LifecycleHttpError && error.code === 'unknown_account') {
+    if (
+      commitBody !== null &&
+      error instanceof LifecycleHttpError &&
+      error.code === 'unknown_account'
+    ) {
       throw new LifecycleHttpError(409, 'confirmation_stale');
     }
     throw error;
@@ -347,14 +397,31 @@ export async function removeAccount(
     sessionKey: context.sessionKey,
     stateFingerprint: await plan.fingerprint(),
   };
-  if (token === null) {
+  if (commitBody === null) {
     const issued = env.confirmations().issue(binding);
     return {
       status: 200,
-      body: { confirmation: { ...issued, effects: plan.effects } },
+      body: {
+        confirmation: {
+          ...issued,
+          effects: plan.effects,
+          ...(plan.expectsTypedEmail ? { expectsTyped: 'email' } : {}),
+        },
+      },
     };
   }
-  if (!env.confirmations().consume(token, binding)) {
+  // A mistyped email is 400 and keeps the token for a retry (like the trash purge).
+  if (plan.expectsTypedEmail) {
+    const expected = plan.expectedEmail ? await plan.expectedEmail() : null;
+    if (
+      commitBody.confirm === null ||
+      expected === null ||
+      !emailMatches(commitBody.confirm, expected)
+    ) {
+      throw new LifecycleHttpError(400, 'invalid_body');
+    }
+  }
+  if (!env.confirmations().consume(commitBody.token, binding)) {
     throw new LifecycleHttpError(409, 'confirmation_stale');
   }
   await refused();

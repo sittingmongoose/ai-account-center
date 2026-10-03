@@ -1807,3 +1807,13 @@ test('the time zone control shows the saved zone and waits without preferences',
   assert.equal(saving.timezone.busy, true);
   assert.equal(saving.timezone.enabled, false);
 });
+
+test('the default-profile remove flow asks for the account email', () => {
+  const v = flowView('claude', { type: 'remove-email', step: 'type', accountId: 'claude:home', name: 'home@example.com', token: 't', effects: ['Default profile.'] });
+  assert.equal(v.open, true);
+  assert.equal(v.title, 'Remove home@example.com?');
+  assert.match(v.body, /Type the account email to confirm/);
+  assert.equal(v.inputKind, 'email');
+  assert.equal(v.inputLabel, 'Account email');
+  assert.equal(v.actions[0].label, 'Remove');
+});
