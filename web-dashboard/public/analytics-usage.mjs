@@ -1111,6 +1111,25 @@ export function providerChoices(A, R, state) {
  * split, cache, donut: tokens|cost, heat: cost|tokens, cbmSort: cost|tokens, donutOpen: the open legend groups
  * (_other, _undrawn) }. opts: { now, sizes }.
  */
+function headOf(A, R, state, now, zone) {
+  return {
+    scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
+    read: relTxt(A.win1, now),
+    refreshing: A.refreshing,
+    readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' The log scan is refreshing; earlier records are shown until it completes.' : ''}`,
+    date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
+  };
+}
+/**
+ * The analytics header alone: the 15-second "logs read …" tick needs activityData and pageRange
+ * only, not the trend, models, donut, heat and calendar blocks. Always equals usageView(...).head.
+ */
+export function usageHead(payload, state, opts = {}) {
+  const now = opts.now ?? Date.now();
+  const A = activityData(payload, now);
+  const R = pageRange(state, A, now);
+  return headOf(A, R, state, now, zoneName(now));
+}
 export function usageView(payload, state, opts = {}) {
   const now = opts.now ?? Date.now();
   const A = activityData(payload, now);
@@ -1139,13 +1158,7 @@ export function usageView(payload, state, opts = {}) {
   const sessions = sessionsView(A, state, payload, now);
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
-    head: {
-      scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
-      read: relTxt(A.win1, now),
-      refreshing: A.refreshing,
-      readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' The log scan is refreshing; earlier records are shown until it completes.' : ''}`,
-      date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
-    },
+    head: headOf(A, R, state, now, zone),
     scope: [
       { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, grouped by the provider that served it: Claude Code, Codex and Muse Code are their own provider, OMP and zcode record the route of every call, and generic JSONL logs count under the provider their model names, else Other. A route no provider claims is under Other. Tokens by provider, under the totals, says how much each served; pick one to see its usage by model.' },
       { icon: 'wallet', text: 'Cost is an estimated API equivalent at the rates CCS prices each model at, or the cost the log recorded; it is not a bill. Cost with neither shows as not logged, and totals without it say partial.' },
