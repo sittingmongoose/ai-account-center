@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1104,
-    "filesAffected": 109,
+    "totalOccurrences": 1107,
+    "filesAffected": 111,
     "hotpathOccurrences": 499,
     "hotpathFilesAffected": 62,
     "topHotpathFiles": [
@@ -603,8 +603,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 34,
-      "totalSourceFiles": 383,
-      "coverageRatio": 0.0888,
+      "totalSourceFiles": 385,
+      "coverageRatio": 0.0883,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -640,14 +640,14 @@
           "withLogger": 1
         },
         {
+          "subdomain": "antigravity",
+          "count": 32,
+          "withLogger": 0
+        },
+        {
           "subdomain": "commands",
           "count": 32,
           "withLogger": 1
-        },
-        {
-          "subdomain": "antigravity",
-          "count": 30,
-          "withLogger": 0
         },
         {
           "subdomain": "codex-auth",
@@ -750,7 +750,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 43,
+      "countOver400": 44,
       "countOver600": 18,
       "topOver400": [
         {

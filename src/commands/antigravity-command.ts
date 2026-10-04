@@ -10,11 +10,13 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  ai-account-center antigravity signin <profile>');
   writeLine('  ai-account-center antigravity status');
   writeLine('  ai-account-center antigravity recover');
+  writeLine('  ai-account-center antigravity activate <profile>');
   writeLine('');
   writeLine('Commands');
   writeLine('  signin <profile>   Add a new saved profile, or sign in again to a saved one');
   writeLine('  status             Show what account switching still needs (read-only)');
   writeLine('  recover            Finish or undo a stuck account switch (proof-driven)');
+  writeLine('  activate <profile> Switch the Ubuntu login (same guarded path as the dashboard)');
   writeLine('');
   writeLine('Notes');
   writeLine('  Runs on Ubuntu in an interactive terminal (over SSH is fine). The official');
@@ -27,6 +29,10 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  switcher uses, then completes the stuck switch, undoes it, or restores the');
   writeLine('  previous saved login when the live one matches neither. Saved profiles are');
   writeLine('  never changed. Anything unproven leaves the switch stuck.');
+  writeLine('  Activate runs the same guarded switch the dashboard runs (idle proof,');
+  writeLine('  identity proof, transaction, rollback) and only as the user that owns');
+  writeLine("  this computer's Antigravity state. Running programs are listed for");
+  writeLine('  review first; the switch needs your answer in an interactive terminal.');
 }
 
 /** Test seam: builds the runtime recover acts on. Production uses the installed one. */
@@ -115,6 +121,27 @@ export async function handleAntigravityCommand(
     writeLine('[X] Antigravity recovery could not prove the live Ubuntu login.');
     writeLine('The switch is still stuck; check the signed-in account, then run recovery again.');
     return 1;
+  }
+  if (args[0] === 'activate') {
+    if (args.length !== 2 || args[1].startsWith('-')) {
+      writeLine('[X] Usage: ai-account-center antigravity activate <profile>');
+      return 1;
+    }
+    // Loaded late so help and usage errors never construct a runtime.
+    const [{ createInstalledAntigravityRuntimeFactory }, { AntigravityAccountLifecycle }] =
+      await Promise.all([
+        import('../antigravity/production-runtime'),
+        import('../antigravity/account-lifecycle'),
+      ]);
+    const { runAntigravityTerminalActivate } = await import('../antigravity/terminal-activate');
+    const ccsDir = getCcsDir();
+    const realHome = os.homedir();
+    return runAntigravityTerminalActivate(args[1], {
+      runtime: createInstalledAntigravityRuntimeFactory({ home: realHome })(ccsDir),
+      lifecycle: new AntigravityAccountLifecycle({ ccsDir: () => ccsDir, home: () => realHome }),
+      ccsDir,
+      uid: process.getuid?.() ?? null,
+    });
   }
   if (args[0] !== 'signin') {
     writeLine(

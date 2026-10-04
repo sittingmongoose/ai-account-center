@@ -6,6 +6,7 @@ import { registerAntigravityRecoverRoute } from './antigravity-recover-route';
 import { authKind } from '../middleware/request-auth';
 import { ConfirmationBindings } from './caller-bound-confirmations';
 import { isAntigravityAutoSwitchSettingsPatch } from '../../antigravity/auto-switch/settings';
+import { isNativeVersion } from '../../antigravity/native-version';
 import { ANTIGRAVITY_AUTO_SWITCH_MESSAGES } from '../../antigravity/auto-switch/monitor';
 import type { AntigravityAutoSwitchOutcome } from '../../antigravity/auto-switch/types';
 import type {
@@ -50,6 +51,15 @@ export function publicInventory(value: AntigravityInventory): AntigravityInvento
     hostId: 'ubuntu',
     ...(typeof value.activationSupported === 'boolean'
       ? { activationSupported: value.activationSupported }
+      : {}),
+    ...(value.nativeUpdatePaused
+      ? {
+          nativeUpdatePaused: {
+            installedVersion: isNativeVersion(value.nativeUpdatePaused.installedVersion)
+              ? value.nativeUpdatePaused.installedVersion
+              : null,
+          },
+        }
       : {}),
     profiles: value.profiles.map((profile) => {
       if (

@@ -397,7 +397,7 @@ test('closed installed CLI can update without fake live identity or restarting a
   const { driver, registry } = await setup();
   driver.canProbe = false;
   const events: string[] = [];
-  let version = '1.2.14';
+  let version = '1.2.16';
   const result = await updateManagedAntigravity({
     registry,
     driver,
@@ -408,14 +408,14 @@ test('closed installed CLI can update without fake live identity or restarting a
       },
       update: async () => {
         events.push('update');
-        version = '1.2.15';
+        version = '1.2.17';
       },
       rollback: async () => false,
     },
   });
   expect(result).toMatchObject({
     status: 'updated',
-    version: '1.2.15',
+    version: '1.2.17',
     restartedProcesses: 0,
     updateAttempted: true,
   });
@@ -432,7 +432,7 @@ test('closed updater second census refuses newly opened CLI with no update attem
     registry,
     driver,
     native: {
-      version: async () => '1.2.14',
+      version: async () => '1.2.16',
       backup: async () => {},
       update: async () => {
         attempts++;
@@ -457,7 +457,7 @@ test('no-op managed update relies on static native support while stopped then fr
     registry,
     driver,
     native: {
-      version: async () => '1.2.14',
+      version: async () => '1.2.16',
       backup: async () => {},
       update: async () => {
         expect(await driver.canProveRuntimeIdentity()).toBe(false);
@@ -481,7 +481,7 @@ test('unsupported changed native pin retains backup/recovery and refuses foreign
     registry,
     driver,
     native: {
-      version: async () => '1.2.14',
+      version: async () => '1.2.16',
       backup: async () => {},
       update: async () => {},
       rollback: async () => {

@@ -194,6 +194,23 @@ describe('retained help surface', () => {
     expect(none.out.join('\n')).toContain('No Antigravity profiles');
   });
 
+  test('antigravity activate usage names the profile without starting a switch', async () => {
+    const lines: string[] = [];
+    await handleHelpRoute(['antigravity'], (line) => lines.push(line));
+    expect(lines.join('\n')).toContain('ai-account-center antigravity activate <profile>');
+    const errors: string[] = [];
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['activate'], (l) => errors.push(l))
+    ).toBe(1);
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['activate', '--yes'], (l) =>
+        errors.push(l)
+      )
+    ).toBe(1);
+    expect(errors).toHaveLength(2);
+    expect(errors.join('\n')).toContain('antigravity activate <profile>');
+  });
+
   test('bar help delegates to menu bar help without launching it', async () => {
     const showHelp = spyOn(barHelp, 'showHelp').mockImplementation(async () => {});
     try {

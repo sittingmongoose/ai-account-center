@@ -14,7 +14,7 @@ import {
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import { AntigravityAutoSwitchFileStore } from '../../../src/antigravity/auto-switch/store';
 
-const PIN = '0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029';
+const PIN = 'a759ce7c7a235d9b6c281a25ead97cbbf2e92314a3ffd224e2f9144f3fae7a86';
 let root: string;
 let ccsDir: string;
 let home: string;
@@ -40,7 +40,7 @@ function writeRelease(open: boolean): void {
     JSON.stringify({
       schemaVersion: 1,
       nativeActivationReleased: open,
-      nativeVersion: '1.2.14',
+      nativeVersion: '1.2.16',
       nativeSha256: PIN,
       nativeProofReceiptSha256: open ? 'a'.repeat(64) : null,
     })
@@ -119,7 +119,9 @@ describe('Antigravity switching readiness', () => {
     expect(read().nextStep).toContain('Save a second profile');
     await save('party');
     expect(read({ pinMatches: () => false })).toMatchObject({ nativeCli: 'changed' });
-    expect(read({ pinMatches: () => false }).nextStep).toContain('not the reviewed 1.2.14 build');
+    expect(read({ pinMatches: () => false }).nextStep).toContain(
+      'not the reviewed build; switching is paused until the runtime is reviewed'
+    );
     const closed = read();
     expect(closed).toMatchObject({
       nativeCli: 'pinned',

@@ -1,5 +1,6 @@
 import { AntigravityError } from './errors';
 import path from 'path';
+import { isNativeVersion } from './native-version';
 import { AntigravityProfileRegistry, identityKey } from './registry';
 import { AntigravitySwitchService } from './switch-service';
 import type {
@@ -57,6 +58,11 @@ export interface AntigravityRuntimeDependencies {
   now?: () => number;
   setTimer?: (callback: () => void, milliseconds: number) => unknown;
   clearTimer?: (timer: unknown) => void;
+  /**
+   * Reports the paused state when the installed CLI moved past the reviewed
+   * pin. Absent in fixtures; production passes the read-only native probe.
+   */
+  readNativeUpdatePaused?: () => Promise<{ installedVersion: string | null } | null>;
 }
 
 export interface AntigravityRuntime extends AntigravityApiDependencies {
@@ -326,10 +332,23 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
   };
   return {
     hasProfiles: () => deps.registry.listProfiles().length > 0,
-    getInventory: async () => ({
-      ...(await usage.getInventory()),
-      activationSupported: await capability(),
-    }),
+    getInventory: async () => {
+      const inventory = await usage.getInventory();
+      const paused = (await deps.readNativeUpdatePaused?.().catch(() => null)) ?? null;
+      return {
+        ...inventory,
+        activationSupported: await capability(),
+        ...(paused
+          ? {
+              nativeUpdatePaused: {
+                installedVersion: isNativeVersion(paused.installedVersion)
+                  ? paused.installedVersion
+                  : null,
+              },
+            }
+          : {}),
+      };
+    },
     getAccounts: async (options) => {
       const accounts = await usage.getAccounts(options);
       const supported = await capability();
