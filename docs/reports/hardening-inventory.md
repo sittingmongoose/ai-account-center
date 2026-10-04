@@ -89,7 +89,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1083 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1052 |
-| `src/web-server/services/account-analytics-activity.ts` | 1018 |
+| `src/web-server/services/account-analytics-activity.ts` | 1047 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
 | `src/web-server/usage/account-activity-collector.ts` | 903 |
 | `src/cliproxy/model-catalog.ts` | 895 |
@@ -97,7 +97,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/aggregator.ts` | 782 |
 | `src/web-server/usage/native-quota-collector.ts` | 768 |
 | `src/auth/profile-detector.ts` | 767 |
-| `src/web-server/services/account-analytics-projection.ts` | 682 |
+| `src/web-server/services/account-analytics-projection.ts` | 696 |
 | `src/web-server/services/account-dashboard-service.ts` | 674 |
 | `src/web-server/services/additional-account-service.ts` | 636 |
 | `src/cliproxy/services/usage-compatibility-transformer.ts` | 632 |
