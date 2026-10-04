@@ -773,19 +773,24 @@ function donutView(A, state, shades) {
 /**
  * Session stats over the providers in the filter, one row per provider with sessions. The stats are the columns'
  * sums and means, so they always line up with their columns; a session that several providers served counts under
- * each of them, in the rows and in the Sessions number alike. An average cost needs every session's cost, so it is
- * not logged while any of it is not. Usage read from the Mac and Windows comes without a session list, so it adds
- * tokens but no sessions, and the note says so. Recent sessions lists the sample most recent first, without paths.
- * The sample rows are the server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token
- * totals); anything else is dropped, never guessed.
+ * each of them, in the rows and in the Sessions number alike. The average cost comes from the rows that have
+ * costs, and says partial when some rows do not; only with no priced row at all is it not logged. Usage read
+ * from the Mac and Windows comes without a session list, so it adds tokens but no sessions, and the note says
+ * so. Recent sessions lists the sample most recent first, without paths. The sample rows are the server's
+ * AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token totals); anything else is
+ * dropped, never guessed.
  */
 function sessionsView(A, state, payload, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
   const sum = k => all.length && all.every(r => finite(r[k])) ? all.reduce((s, r) => s + r[k], 0) : null;
   const sessions = sum('sessions');
-  const events = sum('events'), cost = sum('cost');
-  const unk = all.some(r => r.unk);
-  const avg = !unk && finite(sessions) && sessions > 0 && finite(cost) ? cost / sessions : null;
+  const events = sum('events');
+  const withSessions = all.filter(r => finite(r.sessions) && r.sessions > 0);
+  const priced = withSessions.filter(r => !r.unk && finite(r.cost));
+  const pricedSessions = priced.reduce((s, r) => s + r.sessions, 0);
+  const pricedCost = priced.reduce((s, r) => s + r.cost, 0);
+  const avg = pricedSessions > 0 ? pricedCost / pricedSessions : null;
+  const avgPartial = finite(avg) && priced.length < withSessions.length;
   const evs = finite(sessions) && sessions > 0 && finite(events) ? events / sessions : null;
   const remote = new Set((Array.isArray(payload?.activity?.sources) ? payload.activity.sources : [])
     .filter(r => (r?.host === 'mac' || r?.host === 'windows') && (r.state === 'ok' || r.state === 'cached')).map(r => r.tool));
@@ -825,7 +830,7 @@ function sessionsView(A, state, payload, now) {
     recent, recentFoot,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },
-      { key: 'avg', label: 'Average estimated cost per session', num: avg ?? 0, has: finite(avg), fmt: 'money', text: unk && finite(sessions) && sessions > 0 ? NOT_LOGGED : money(avg) },
+      { key: 'avg', label: 'Average estimated cost per session' + (avgPartial ? ' · partial' : ''), num: avg ?? 0, has: finite(avg), fmt: 'money', text: !finite(avg) && finite(sessions) && sessions > 0 ? NOT_LOGGED : money(avg) },
       { key: 'evs', label: 'Usage events per session', num: evs ?? 0, has: finite(evs), fmt: 'int', text: intText(evs) },
     ],
     rows: all.filter(r => !finite(r.sessions) || r.sessions > 0).sort((a, b) => byProviderOrder(a.p, b.p)).map(r => ({
