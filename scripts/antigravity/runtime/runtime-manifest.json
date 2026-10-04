@@ -83,7 +83,7 @@
     },
     {
       "path": "release.json",
-      "sha256": "155c09b4e592005bad1603b559a0b079dfef8fd9bdf9db0dfc6d64ac83ca4abf"
+      "sha256": "a4fe5578aead926ab73b365989d01f442789fd6e3beeb1b04aecd23d859eb777"
     },
     {
       "path": "requirements.txt",

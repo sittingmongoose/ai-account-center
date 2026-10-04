@@ -211,6 +211,30 @@ describe('retained help surface', () => {
     expect(errors.join('\n')).toContain('antigravity activate <profile>');
   });
 
+  test('antigravity runtime routes help and refresh usage without touching the descriptor', async () => {
+    const lines: string[] = [];
+    await handleHelpRoute(['antigravity'], (line) => lines.push(line));
+    expect(lines.join('\n')).toContain('ai-account-center antigravity runtime refresh');
+    const help: string[] = [];
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['runtime'], (l) => help.push(l))
+    ).toBe(0);
+    expect(help.join('\n')).toContain('ai-account-center antigravity runtime refresh');
+    const errors: string[] = [];
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['runtime', 'prune'], (l) =>
+        errors.push(l)
+      )
+    ).toBe(1);
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['runtime', 'refresh', 'extra'], (l) =>
+        errors.push(l)
+      )
+    ).toBe(1);
+    expect(errors).toHaveLength(2);
+    expect(errors.join('\n')).toContain('antigravity runtime refresh');
+  });
+
   test('bar help delegates to menu bar help without launching it', async () => {
     const showHelp = spyOn(barHelp, 'showHelp').mockImplementation(async () => {});
     try {

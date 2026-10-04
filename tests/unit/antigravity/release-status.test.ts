@@ -43,6 +43,13 @@ function writeRelease(open: boolean): void {
       nativeVersion: '1.2.16',
       nativeSha256: PIN,
       nativeProofReceiptSha256: open ? 'a'.repeat(64) : null,
+      reviewedNatives: [
+        {
+          nativeVersion: '1.2.14',
+          nativeSha256: '0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029',
+        },
+        { nativeVersion: '1.2.16', nativeSha256: PIN },
+      ],
     })
   );
 }
@@ -150,6 +157,24 @@ describe('Antigravity switching readiness', () => {
     const store = new AntigravityAutoSwitchFileStore(state);
     store.write({ ...store.read(), settings: { ...store.read().settings, enabled: true } });
     expect(read({ dashboardGate: true }).automaticSwitching?.enabled).toBe(true);
+  });
+
+  it('pins any reviewed build and names the reviewed set', () => {
+    installAgy();
+    const either = (match: string) => ({
+      pinMatches: (binary: string, sha: string) => sha === match,
+    });
+    expect(read(either(PIN))).toMatchObject({
+      nativeCli: 'pinned',
+      reviewedNativeVersions: ['1.2.14', '1.2.16'],
+    });
+    expect(
+      read(either('0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029'))
+    ).toMatchObject({ nativeCli: 'pinned' });
+    expect(read(either('e'.repeat(64)))).toMatchObject({ nativeCli: 'changed' });
+    expect(formatAntigravityReleaseStatus(read(either(PIN))).join('\n')).toContain(
+      'reviewed 1.2.14 / 1.2.16 build'
+    );
   });
 
   it('only reads: an empty profiles folder gains no credential folder', () => {
