@@ -232,7 +232,26 @@ public struct MenuBarReading: Sendable, Equatable {
   /// - A reset-pending (F6) or unavailable reading is nil: the icon with no number, never 0%.
   public static func make(dashboard: AccountDashboard?, provider: String, mode: MenuBarMode,
     claudeAccountID: String? = nil) -> MenuBarReading? {
-    guard let dashboard, provider != nothingProvider else { return nil }
+    guard provider != nothingProvider,
+      let pick = pickAccount(dashboard: dashboard, provider: provider, claudeAccountID: claudeAccountID) else { return nil }
+    let account = pick.account
+    let fiveHour = account.fiveHourWindow
+    guard let window = fiveHour ?? account.weeklyWindow else { return nil }
+    guard account.pendingReset(window) == nil, let used = window.meterUsedPercent else { return nil }
+    let value = mode == .used ? used : max(0, 100 - used)
+    let text = "\(TrayFormat.number(value))%"
+    let who = shownAccountName(accounts: pick.accounts, account: account)
+    let span = window.key == fiveHour?.key ? "5-hour" : "Weekly"
+    return MenuBarReading(value: value, text: text,
+      detail: "\(providerName(provider)) · \(who) · \(span) \(mode == .used ? "used" : "remaining")")
+  }
+
+  /// The provider's accounts and the one the menu bar number comes from, following the
+  /// same selection rules as `make` (active Codex/Antigravity, picked-or-first Claude,
+  /// single-or-first otherwise). Nil when there is no dashboard or no usable account.
+  public static func pickAccount(dashboard: AccountDashboard?, provider: String,
+    claudeAccountID: String? = nil) -> (accounts: [DashboardAccount], account: DashboardAccount)? {
+    guard let dashboard else { return nil }
     let accounts = dashboard.visibleAccounts.filter { $0.provider == provider }
     let account: DashboardAccount?
     switch provider {
@@ -244,22 +263,40 @@ public struct MenuBarReading: Sendable, Equatable {
       account = accounts.first
     }
     guard let account else { return nil }
-    let fiveHour = account.fiveHourWindow
-    guard let window = fiveHour ?? account.weeklyWindow else { return nil }
-    guard account.pendingReset(window) == nil, let used = window.meterUsedPercent else { return nil }
-    let value = mode == .used ? used : max(0, 100 - used)
-    let text = "\(TrayFormat.number(value))%"
-    // The short name, unless a sibling account shortens the same way: then the full
-    // identity, the same string the Settings picker shows, so the tag names this account.
+    return (accounts, account)
+  }
+
+  /// The account name the menu bar tags use: the short (local-part) name, or the full
+  /// identity when two of the provider's accounts shorten the same way — the same
+  /// string the Settings pickers show, so the tag names this account.
+  public static func shownAccountName(accounts: [DashboardAccount], account: DashboardAccount) -> String {
     func shortName(_ identity: String) -> String {
       identity.split(separator: "@").first.map(String.init) ?? identity
     }
     let short = shortName(account.identity)
     let collides = accounts.contains { $0.id != account.id && shortName($0.identity) == short }
-    let who = collides ? account.identity : short
-    let span = window.key == fiveHour?.key ? "5-hour" : "Weekly"
-    return MenuBarReading(value: value, text: text,
-      detail: "\(providerName(provider)) · \(who) · \(span) \(mode == .used ? "used" : "remaining")")
+    return collides ? account.identity : short
+  }
+
+  /// Hover tag for the Settings > Menu bar > Show picker.
+  public static let showHelp = "Choose which provider's usage number appears in the menu bar."
+  /// Hover tag for the Settings > Menu bar > Claude account picker.
+  public static let claudeAccountHelp = "Choose which Claude account the menu bar number comes from."
+
+  /// The Value hover tag when no number is shown (Nothing picked, no window reported,
+  /// or the tray is mid-pairing and the menu bar shows the logo alone).
+  public static let valueHelpHidden = "Whether the menu bar would show Used or Remaining."
+
+  /// Hover tag for the Settings > Menu bar > Value picker. It names the account actually
+  /// shown — the same account string the Show row's Now preview uses — or stays generic
+  /// when no number is shown (Nothing picked, or no window reported).
+  public static func valueHelp(dashboard: AccountDashboard?, provider: String, mode: MenuBarMode,
+    claudeAccountID: String? = nil) -> String {
+    guard make(dashboard: dashboard, provider: provider, mode: mode, claudeAccountID: claudeAccountID) != nil,
+      let pick = pickAccount(dashboard: dashboard, provider: provider, claudeAccountID: claudeAccountID) else {
+      return valueHelpHidden
+    }
+    return "Whether the menu bar shows Used or Remaining for \(shownAccountName(accounts: pick.accounts, account: pick.account))."
   }
 }
 
