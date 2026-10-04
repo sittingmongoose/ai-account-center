@@ -246,15 +246,19 @@ def apply(home, source, *, runner=subprocess.run, readiness=service_readiness):
             'socketPath': str(home / '.ccs/antigravity-runtime/control.sock')}))
         apply_change(before['shim'], expected_shim(new_bundle))
         previous_raw = base64.b64decode(before['descriptor']['rawBase64'])
+        previous = exact_json(previous_raw)
+        previous_pin = previous.get('nativeSha256')
+        if type(previous_pin) is not str or not SHA_RE.fullmatch(previous_pin):
+            raise InstallationError('runtime-installation-invalid')
         backup_parent = state / 'descriptor-backups'
         private_directory(backup_parent)
-        backup = backup_parent / (info['oldPin'] + '.json')
+        backup = backup_parent / (previous_pin + '.json')
         if backup.exists() or backup.is_symlink():
             if backup.read_bytes() != previous_raw:
                 raise InstallationError('runtime-backup-divergent')
         else:
             write_exclusive(backup, previous_raw)
-        renewed = dict(exact_json(previous_raw))
+        renewed = dict(previous)
         renewed['bundleDirectory'] = str(new_bundle)
         renewed['nativeSha256'] = info['newPin']
         apply_change(before['descriptor'], (json.dumps(renewed) + '\n').encode())

@@ -115,7 +115,7 @@ class RuntimeRebuildTests(unittest.TestCase):
         self.assertEqual(renewed['bundleDirectory'], str(new_bundle))
         self.assertEqual(renewed['nativeSha256'], self.native_fp)
         self.assertEqual(self.unit.read_bytes(), rebuild.unit_bytes(renewed))
-        backup = self.state / 'descriptor-backups' / (OLD_PIN + '.json')
+        backup = self.state / 'descriptor-backups' / (self.native_fp + '.json')
         self.assertEqual(backup.read_bytes(), self.originals[self.descriptor])
         self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
         receipt = json.loads(self.checkpoint.read_text())
@@ -251,7 +251,7 @@ class RuntimeRebuildTests(unittest.TestCase):
             ['systemctl', '--user', 'start', rebuild.UNIT],
         ])
         self.assertEqual(json.loads((self.state / 'runtime-rebuild.json').read_text())['phase'], 'failed')
-        self.assertTrue((self.state / 'descriptor-backups' / (OLD_PIN + '.json')).is_file())
+        self.assertTrue((self.state / 'descriptor-backups' / (self.native_fp + '.json')).is_file())
 
     def test_build_failure_stops_nothing_and_recovers(self):
         def fail(argv, **kwargs):
@@ -286,8 +286,21 @@ class RuntimeRebuildTests(unittest.TestCase):
         with self.assertRaisesRegex(layout.InstallationError, '^runtime-rebuild-nothing-to-recover$'):
             rebuild.recover_rebuild(self.home)
 
+    def test_post_refresh_backup_coexists_and_rebuild_succeeds(self):
+        stale = json.loads(self.descriptor.read_text())
+        stale['nativeSha256'] = OLD_PIN
+        refresh_backup = self.state / 'descriptor-backups' / (OLD_PIN + '.json')
+        refresh_backup.parent.mkdir(parents=True, mode=0o700)
+        refresh_backup.write_bytes((json.dumps(stale) + '\n').encode())
+        refresh_backup.chmod(0o600)
+        result = rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness)
+        self.assertEqual(result['status'], 'rebuilt')
+        backup = self.state / 'descriptor-backups' / (self.native_fp + '.json')
+        self.assertEqual(backup.read_bytes(), self.originals[self.descriptor])
+        self.assertEqual(refresh_backup.read_bytes(), (json.dumps(stale) + '\n').encode())
+
     def test_divergent_backup_refuses_and_restores(self):
-        backup = self.state / 'descriptor-backups' / (OLD_PIN + '.json')
+        backup = self.state / 'descriptor-backups' / (self.native_fp + '.json')
         backup.parent.mkdir(parents=True, mode=0o700)
         backup.write_bytes(b'{"divergent": true}')
         backup.chmod(0o600)
