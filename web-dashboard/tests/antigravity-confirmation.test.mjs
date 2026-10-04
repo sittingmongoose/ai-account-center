@@ -46,8 +46,8 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function harness({ activate, confirm, success, prompt, now = NOW } = {}) {
-  const calls = { activate: [], confirm: [], prompt: [], close: [], busy: [], success: [], error: [] };
+function harness({ activate, confirm, recover, success, prompt, now = NOW } = {}) {
+  const calls = { activate: [], confirm: [], recover: [], prompt: [], close: [], busy: [], success: [], error: [] };
   let clock = now;
   const controller = createAntigravityConfirmation({
     activate: async (...args) => {
@@ -59,6 +59,12 @@ function harness({ activate, confirm, success, prompt, now = NOW } = {}) {
       calls.confirm.push(args);
       return confirm ? confirm(...args) : active();
     },
+    ...(recover === undefined ? {} : {
+      recover: async (...args) => {
+        calls.recover.push(args);
+        return recover(...args);
+      },
+    }),
     prompt: value => {
       calls.prompt.push(structuredClone(value));
       if (prompt) prompt(value);
@@ -567,4 +573,58 @@ test('typed activation failure copy still filters private tokens in an explicit 
   assert.equal(h.calls.prompt.length, 0);
   assert.equal(h.calls.confirm.length, 0);
   assert.equal(h.controller.hasPending(), false);
+});
+
+test('a stuck switch offers a guarded recovery instead of an error toast', async () => {
+  const h = harness({
+    activate: async () => { throw httpError(500, { status: 'recovery-required', profileId: PROFILE, hostId: HOST }); },
+    recover: async () => ({ status: 'completed', hostId: HOST, profileId: PROFILE, email: EMAIL }),
+  });
+  await h.controller.begin(PROFILE);
+  assert.equal(h.calls.error.length, 0);
+  assert.equal(h.controller.hasPending(), true);
+  const dialog = h.calls.prompt.at(-1);
+  assert.equal(dialog.profileId, PROFILE);
+  assert.equal(dialog.processes.length, 0);
+  assert.match(dialog.warning, /stuck/);
+  assert.match(dialog.warning, /Saved profiles are not changed/);
+  assert.equal(dialog.canConfirm, true);
+  await h.controller.confirm();
+  assert.equal(h.calls.recover.length, 1);
+  assert.deepEqual(h.calls.success, [[{ status: 'completed', hostId: HOST, profileId: PROFILE, email: EMAIL }]]);
+  assert.equal(h.calls.close.length, 1);
+  assert.equal(h.controller.hasPending(), false);
+});
+
+test('a recovery that stays stuck reports in the dialog and needs a new Activate', async () => {
+  const stuck = () => Object.assign(new Error('Request failed (500).'), {
+    status: 500, payload: { status: 'recovery-required', profileId: PROFILE, hostId: HOST },
+  });
+  const h = harness({
+    activate: async () => { throw stuck(); },
+    recover: async () => { throw stuck(); },
+  });
+  await h.controller.begin(PROFILE);
+  await h.controller.confirm();
+  assert.equal(h.calls.recover.length, 1);
+  assert.equal(h.calls.success.length, 0);
+  const dialog = h.calls.prompt.at(-1);
+  assert.match(dialog.error, /needs recovery/);
+  assert.equal(dialog.canConfirm, false);
+  await h.controller.confirm();
+  assert.equal(h.calls.recover.length, 1);
+});
+
+test('without a recovery action a stuck switch keeps the old error toast', async () => {
+  const stuck = Object.assign(new Error('Request failed (500).'), {
+    status: 500, payload: { status: 'recovery-required', profileId: PROFILE, hostId: HOST },
+  });
+  const h = harness({
+    activate: async () => { throw stuck; },
+  });
+  await h.controller.begin(PROFILE);
+  assert.equal(h.controller.hasPending(), false);
+  assert.equal(h.calls.prompt.length, 0);
+  assert.equal(h.calls.error.length, 1);
+  assert.match(h.calls.error[0][0], /needs recovery/);
 });

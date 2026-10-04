@@ -22,6 +22,22 @@ import type {
 } from './types';
 
 const IDENTITY_MAX_AGE = 5 * 60_000;
+/** The exact broker-absence sentinel the bridge and driver raise. */
+const RUNTIME_UNAVAILABLE = 'antigravity-runtime-unavailable';
+
+export type AntigravityRecoveryStatus =
+  | 'completed'
+  | 'aborted'
+  | 'restored-previous'
+  | 'recovery-required'
+  | 'no-recovery-pending';
+
+export interface AntigravityRecoveryResult {
+  status: AntigravityRecoveryStatus;
+  hostId: 'ubuntu';
+  profileId?: string;
+  email?: string;
+}
 
 interface ServiceOptions {
   registry: AntigravityProfileRegistry;
@@ -251,18 +267,18 @@ export class AntigravitySwitchService {
           });
         }
         if (currentKey === targetKey) {
-          const proof = await this.driver.proveRuntimeIdentity(target);
-          this.checkRuntimeProof(proof, target, false);
+          // No stop ever happens on this path, so the broker holds no
+          // transaction state to complete.
+          const proof = await this.proveLive(target, null, false);
           const live = await this.driver.readCurrentCredential();
           const liveIdentity = await this.verified(live);
           if (
-            proof.credentialFingerprint !== credentialFingerprint(live) ||
+            proof.fingerprint !== credentialFingerprint(live) ||
             identityKey(liveIdentity) !== targetKey
           )
             return result('invalid-profile');
           this.registry.saveCredential(previousId, 'ubuntu', live, liveIdentity, this.now());
-          this.registry.completeTransaction(previousId, proof.identity.verifiedAt);
-          if (this.driver.completeActivation) await this.driver.completeActivation(target);
+          this.registry.completeTransaction(previousId, proof.verifiedAt);
           return result('already-active', publicIdentity);
         }
         return await this.switchUnderLock(
@@ -290,6 +306,71 @@ export class AntigravitySwitchService {
     }
   }
 
+  /**
+   * Finish or undo a stuck switch. The live login is re-proved through the
+   * same live verification the switcher uses, then the transaction either
+   * completes (live is the target) or aborts (live is the previous, or the
+   * previous saved revision is restored and re-proved). Anything unproven
+   * leaves recovery-required in place. Saved profiles are never rewritten.
+   */
+  async recover(): Promise<AntigravityRecoveryResult> {
+    const result = (
+      status: AntigravityRecoveryStatus,
+      extra: Partial<AntigravityRecoveryResult> = {}
+    ): AntigravityRecoveryResult => ({ status, hostId: 'ubuntu', ...extra });
+    try {
+      return await this.registry.withLock(async () => {
+        const tx = this.registry.pendingTransaction();
+        if (!tx) return result('no-recovery-pending');
+        // Hygiene first: no owned writer may move the live login under
+        // the proof. Any failure here keeps the transaction stuck.
+        await this.driver.stopOwnedRestarts();
+        const live = await this.driver.readCurrentCredential();
+        const proven = await this.verified(live);
+        const liveKey = identityKey(proven);
+        const target = this.registry.readCredential(tx.targetId, 'ubuntu');
+        const previous = this.registry.readCredential(tx.previousId, 'ubuntu');
+        if (liveKey === identityKey(target.identity)) {
+          this.registry.completeTransaction(tx.targetId, proven.verifiedAt);
+          return result('completed', {
+            profileId: tx.targetId,
+            email: target.identity.email,
+          });
+        }
+        if (liveKey === identityKey(previous.identity)) {
+          this.registry.abortTransaction();
+          return result('aborted', {
+            profileId: tx.previousId,
+            email: previous.identity.email,
+          });
+        }
+        // Unknown live login: restore the previous saved revision only
+        // when it still verifies, then re-prove before clearing anything.
+        const previousIdentity = await this.verified(previous.credential);
+        if (identityKey(previousIdentity) !== identityKey(previous.identity))
+          return result('recovery-required');
+        const receipt = await this.driver.installCredential(
+          previous.credential,
+          credentialFingerprint(live)
+        );
+        if (receipt.installedFingerprint !== credentialFingerprint(previous.credential))
+          return result('recovery-required');
+        const restored = await this.driver.readCurrentCredential();
+        const reproven = await this.verified(restored);
+        if (identityKey(reproven) !== identityKey(previous.identity))
+          return result('recovery-required');
+        this.registry.abortTransaction();
+        return result('restored-previous', {
+          profileId: tx.previousId,
+          email: previous.identity.email,
+        });
+      });
+    } catch (error) {
+      if (error instanceof PrivateStorageError && error.code === 'busy') throw error;
+      return result('recovery-required');
+    }
+  }
+
   private checkRuntimeProof(
     proof: Awaited<ReturnType<AntigravitySwitchDriver['proveRuntimeIdentity']>>,
     expected: VerifiedIdentity,
@@ -307,6 +388,44 @@ export class AntigravitySwitchService {
       (requireSession && !proof.sessionRestored)
     )
       throw new AntigravityError('Runtime verification failed.');
+  }
+
+  /**
+   * A broker session proof needs a stopped-and-restarted session, which the
+   * idle path deliberately never creates. The live broker then raises
+   * antigravity-runtime-unavailable; only that absence falls back to the
+   * live-verified native proof (fresh Google userinfo bound to the installed
+   * bytes). A returned proof is always checked strictly and never falls back.
+   */
+  private async proveLive(
+    expected: VerifiedIdentity,
+    expectedFingerprint: string | null,
+    sessionExpected: boolean
+  ): Promise<{ verifiedAt: string; fingerprint: string }> {
+    if (!sessionExpected) {
+      try {
+        const proof = await this.driver.proveRuntimeIdentity(expected);
+        this.checkRuntimeProof(proof, expected, false);
+        return {
+          verifiedAt: proof.identity.verifiedAt,
+          fingerprint: proof.credentialFingerprint,
+        };
+      } catch (error) {
+        if (!(error instanceof AntigravityError) || error.message !== RUNTIME_UNAVAILABLE)
+          throw error;
+      }
+      const live = await this.driver.readCurrentCredential();
+      const identity = await this.verified(live);
+      if (
+        identityKey(identity) !== identityKey(expected) ||
+        (expectedFingerprint !== null && credentialFingerprint(live) !== expectedFingerprint)
+      )
+        throw new AntigravityError('Idle identity proof failed.');
+      return { verifiedAt: identity.verifiedAt, fingerprint: credentialFingerprint(live) };
+    }
+    const proof = await this.driver.proveRuntimeIdentity(expected);
+    this.checkRuntimeProof(proof, expected, true);
+    return { verifiedAt: proof.identity.verifiedAt, fingerprint: proof.credentialFingerprint };
   }
 
   private async switchUnderLock(
@@ -434,12 +553,18 @@ export class AntigravitySwitchService {
       if (identityKey(storedIdentity) !== identityKey(target))
         throw new AntigravityError('Stored identity mismatch.');
       if (stopReceipt) await this.driver.restartProcesses(stopReceipt);
-      const proof = await this.driver.proveRuntimeIdentity(target);
-      this.checkRuntimeProof(proof, target, !!stopReceipt?.stopped.length);
+      // The broker only holds transaction state to complete when it
+      // stopped and restarted a session on this path.
+      const sessionExpected = !!stopReceipt?.stopped.length;
+      const proof = await this.proveLive(
+        target,
+        credentialFingerprint(targetCredential),
+        sessionExpected
+      );
       const refreshed = await this.driver.readCurrentCredential();
       const refreshedIdentity = await this.verified(refreshed);
       if (
-        credentialFingerprint(refreshed) !== proof.credentialFingerprint ||
+        credentialFingerprint(refreshed) !== proof.fingerprint ||
         identityKey(refreshedIdentity) !== identityKey(target)
       )
         throw new AntigravityError('Runtime credential changed.');
@@ -450,9 +575,10 @@ export class AntigravitySwitchService {
         refreshedIdentity,
         this.now()
       );
-      this.registry.completeTransaction(request.profileId, proof.identity.verifiedAt);
+      this.registry.completeTransaction(request.profileId, proof.verifiedAt);
       durableCommitted = true;
-      if (this.driver.completeActivation) await this.driver.completeActivation(target);
+      if (sessionExpected && this.driver.completeActivation)
+        await this.driver.completeActivation(target);
       return result('active', { email: target.email });
     } catch {
       if (!intentRecorded) return result('invalid-profile', { reason: 'transaction-failed' });
@@ -478,17 +604,22 @@ export class AntigravitySwitchService {
         if (identityKey(rollbackIdentity) !== identityKey(previous))
           throw new AntigravityError('Rollback identity mismatch.');
         if (stopReceipt) await this.driver.restartProcesses(stopReceipt);
-        const proof = await this.driver.proveRuntimeIdentity(previous);
-        this.checkRuntimeProof(proof, previous, !!stopReceipt?.stopped.length);
+        const rollbackSessionExpected = !!stopReceipt?.stopped.length;
+        const proof = await this.proveLive(
+          previous,
+          credentialFingerprint(original),
+          rollbackSessionExpected
+        );
         const recovered = await this.driver.readCurrentCredential();
         if (
-          credentialFingerprint(recovered) !== proof.credentialFingerprint ||
+          credentialFingerprint(recovered) !== proof.fingerprint ||
           identityKey(await this.verified(recovered)) !== identityKey(previous)
         )
           throw new AntigravityError('Recovered native account changed.');
-        this.registry.completeTransaction(previousId, proof.identity.verifiedAt);
+        this.registry.completeTransaction(previousId, proof.verifiedAt);
         durableCommitted = true;
-        if (this.driver.completeActivation) await this.driver.completeActivation(previous);
+        if (rollbackSessionExpected && this.driver.completeActivation)
+          await this.driver.completeActivation(previous);
         return result('failed-rolled-back', { reason: 'transaction-failed' });
       } catch {
         try {

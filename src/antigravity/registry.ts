@@ -803,6 +803,27 @@ export class AntigravityProfileRegistry {
     return this.readState().transaction !== null;
   }
 
+  /**
+   * The stuck switch, if any: ids only, never credentials. A pending
+   * transaction seen under the caller's own lock is orphaned (its holder
+   * is gone), so recovery treats it like recovery-required.
+   */
+  pendingTransaction(): {
+    targetId: string;
+    previousId: string;
+    state: 'pending' | 'recovery-required';
+    startedAt: string;
+  } | null {
+    const transaction = this.readState().transaction;
+    if (!transaction) return null;
+    return {
+      targetId: transaction.targetId,
+      previousId: transaction.previousId,
+      state: transaction.state,
+      startedAt: transaction.startedAt,
+    };
+  }
+
   listProfiles(): ProfileDto[] {
     const state = this.readState();
     return state.profiles.map((profile) => ({

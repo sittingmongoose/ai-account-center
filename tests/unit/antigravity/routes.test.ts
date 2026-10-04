@@ -4,6 +4,8 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ANTIGRAVITY_AUTO_SWITCH_MESSAGES } from '../../../src/antigravity/auto-switch/monitor';
 import type { ActivationResult, ActivateRequest } from '../../../src/antigravity/types';
+import type { AntigravityRecoveryResult } from '../../../src/antigravity/switch-service';
+import { PrivateStorageError } from '../../../src/antigravity/registry';
 import type {
   AntigravityApiDependencies,
   AntigravityAutoSettings,
@@ -105,6 +107,10 @@ function active(): ActivationResult {
   return { status: 'active', profileId: 'party', hostId: 'ubuntu', email: EMAIL };
 }
 
+function recovery(): AntigravityRecoveryResult {
+  return { status: 'completed', hostId: 'ubuntu', profileId: 'party', email: EMAIL };
+}
+
 function busy(): ActivationResult {
   return {
     status: 'confirmation-required',
@@ -135,6 +141,7 @@ interface Calls {
   autoStatus: number;
   settings: Partial<AntigravityAutoSettings>[];
   invalidation: number;
+  recovery: number;
 }
 
 interface ResponseFixture {
@@ -171,6 +178,7 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
       autoStatus: 0,
       settings: [],
       invalidation: 0,
+      recovery: 0,
     };
     deps = {
       getInventory: async () => {
@@ -184,6 +192,10 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
       activate: async (request) => {
         calls.activation.push(request);
         return active();
+      },
+      recover: async () => {
+        calls.recovery++;
+        return recovery();
       },
       getAutoSwitchStatus: () => {
         calls.autoStatus++;
@@ -259,6 +271,7 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
       autoStatus: 0,
       settings: [],
       invalidation: 0,
+      recovery: 0,
     });
   }
 
@@ -510,6 +523,46 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
     expect(response.body).toEqual(active());
     expect(calls.activation).toEqual([{ profileId: 'party', hostId: 'ubuntu', mode: 'manual' }]);
     expect(calls.invalidation).toBe(1);
+  });
+
+  test('recover finishes a stuck switch, publishes only public fields and refreshes usage', async () => {
+    const response = await request('/recover', { method: 'POST', body: { hostId: 'ubuntu' } });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      status: 'completed',
+      hostId: 'ubuntu',
+      profileId: 'party',
+      email: EMAIL,
+    });
+    expect(calls.recovery).toBe(1);
+    expect(calls.invalidation).toBe(1);
+  });
+
+  test('recover reports a still-stuck switch without clearing usage', async () => {
+    deps.recover = async () => {
+      calls.recovery++;
+      return { status: 'recovery-required', hostId: 'ubuntu' };
+    };
+    const response = await request('/recover', { method: 'POST', body: { hostId: 'ubuntu' } });
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({ status: 'recovery-required', hostId: 'ubuntu' });
+    expect(calls.invalidation).toBe(0);
+  });
+
+  test('recover refuses a switch that is still running instead of interfering', async () => {
+    deps.recover = async () => {
+      throw new PrivateStorageError('busy');
+    };
+    const response = await request('/recover', { method: 'POST', body: { hostId: 'ubuntu' } });
+    expect(response.status).toBe(409);
+    expect(calls.invalidation).toBe(0);
+  });
+
+  test('recover accepts only an Ubuntu host body', async () => {
+    for (const body of [{}, { hostId: 'macos' }, { hostId: 'ubuntu', extra: true }, []]) {
+      expect((await request('/recover', { method: 'POST', body })).status).toBe(400);
+    }
+    expectNoEngineCalls();
   });
 
   test('confirm requires a token even when an ordinary activation does not', async () => {

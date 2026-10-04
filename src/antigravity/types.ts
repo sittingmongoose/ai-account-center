@@ -113,8 +113,10 @@ export interface AntigravitySwitchDriver {
   readStoredIdentity(): Promise<VerifiedIdentity>;
   restartProcesses(receipt: StopReceipt): Promise<void>;
   /**
-   * Start an owned, non-inference runtime probe when no programs were running.
-   * The proof must come from that runtime, not merely a native file/keyring read.
+   * Prove the expected identity from a live or restarted broker session.
+   * Without any session the broker reports antigravity-runtime-unavailable;
+   * the switcher then proves the idle login from a fresh live verification
+   * bound to the installed bytes instead of failing the switch.
    */
   proveRuntimeIdentity(expected: VerifiedIdentity): Promise<RuntimeProof>;
   /** Never overwrite an unrelated/foreign credential replacement during rollback. */
