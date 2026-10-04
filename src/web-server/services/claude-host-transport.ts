@@ -38,6 +38,10 @@ export interface ClaudeHostTransport {
     host: ClaudeHost,
     input: { launcher: ClaudeHostLauncher }
   ): Promise<'running' | 'stopped'>;
+  sessionState(
+    host: ClaudeHost,
+    input: { launcher: ClaudeHostLauncher }
+  ): Promise<'signed-in' | 'signed-out'>;
   trash(
     host: ClaudeHost,
     input: ClaudeHostStep & { trashName: string }
@@ -131,7 +135,7 @@ const WINDOWS_COMMON = [
 ];
 
 export function windowsHostScript(
-  op: 'create' | 'undo' | 'state' | 'trash' | 'restore' | 'purge',
+  op: 'create' | 'undo' | 'state' | 'session' | 'trash' | 'restore' | 'purge',
   values: { profileId?: string; trashName?: string; launcher?: ClaudeHostLauncher }
 ): string {
   const lines = [...WINDOWS_COMMON];
@@ -176,6 +180,20 @@ export function windowsHostScript(
         "$needle = '--user-data-dir=\"' + $profile + '\"'",
         '$found = @(Get-CimInstance Win32_Process -Filter "Name = \'claude.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($needle) })',
         'Done @{ running = ($found.Count -gt 0) }'
+      );
+      break;
+    case 'session':
+      // Re-check reads the plaintext sign-in marker only: the account uuid
+      // and the presence of an encrypted token cache. Tokens are never
+      // decrypted or printed; the usage collector verifies the login after.
+      lines.push(
+        "$configPath = Join-Path $profile 'config.json'",
+        'if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { Done @{ signedIn = $false } }',
+        'if ((Get-Item -LiteralPath $configPath -Force).Length -gt 1048576) { Fail 1 }',
+        '$config = $null; try { $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { Done @{ signedIn = $false } }',
+        "$uuid = $config.lastKnownAccountUuid; $cache = $config.'oauth:tokenCacheV2'",
+        "$uuidOk = ($uuid -is [string]) -and ($uuid -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')",
+        'Done @{ signedIn = [bool]($uuidOk -and ($cache -is [string]) -and ($cache.Length -gt 0)) }'
       );
       break;
     case 'trash':
@@ -273,6 +291,18 @@ export class SshClaudeHostTransport implements ClaudeHostTransport {
     );
     if (typeof value.running !== 'boolean') throw new ClaudeHostError();
     return value.running ? 'running' : 'stopped';
+  }
+
+  async sessionState(host: ClaudeHost, input: { launcher: ClaudeHostLauncher }) {
+    const launcher = checkStep(input.launcher);
+    const value = await this.step(
+      host,
+      launcher.sshHost,
+      { op: 'session', ...launcher },
+      windowsHostScript('session', { launcher })
+    );
+    if (typeof value.signedIn !== 'boolean') throw new ClaudeHostError();
+    return value.signedIn ? 'signed-in' : 'signed-out';
   }
 
   async trash(host: ClaudeHost, input: ClaudeHostStep & { trashName: string }) {

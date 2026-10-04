@@ -50,6 +50,7 @@ class FakeHosts implements ClaudeHostTransport {
   trashDirs: Record<ClaudeHost, Set<string>> = { mac: new Set(), windows: new Set() };
   fail: Partial<Record<string, ClaudeHost>> = {};
   running = new Set<string>();
+  sessions = new Set<string>();
   unknown = new Set<string>();
   crossVolume = new Set<ClaudeHost>();
   /** The Windows helper allowlist, in file order (the first id is the default). */
@@ -90,6 +91,12 @@ class FakeHosts implements ClaudeHostTransport {
     this.check('state', host);
     if (this.unknown.has(input.launcher.profilePath)) throw new Error('unreachable');
     return this.running.has(input.launcher.profilePath) ? 'running' : 'stopped';
+  }
+
+  async sessionState(host: ClaudeHost, input: { launcher: ClaudeHostLauncher }) {
+    this.check('session', host);
+    if (this.unknown.has(input.launcher.profilePath)) throw new Error('unreachable');
+    return this.sessions.has(input.launcher.profilePath) ? 'signed-in' : 'signed-out';
   }
 
   async trash(host: ClaudeHost, input: ClaudeHostStep & { trashName: string }) {
@@ -182,7 +189,7 @@ function setup(enabled = true) {
 describe('Claude Add', () => {
   it('creates launchers on both hosts and waits in the pending store', async () => {
     const { ccsDir, hosts, lifecycle } = setup();
-    const profile = await lifecycle.add({ profileId: 'work2', label: 'Work 2' });
+    const profile = await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
     expect(profile).toMatchObject({
       id: 'work2',
       label: 'Work 2',
@@ -206,7 +213,7 @@ describe('Claude Add', () => {
   it('is all or nothing: a failing second host removes the first host again', async () => {
     const { hosts, lifecycle } = setup();
     hosts.fail.create = 'windows';
-    await expect(lifecycle.add({ profileId: 'work2', label: null })).rejects.toMatchObject({
+    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
       code: 'host_unreachable',
       host: 'windows',
     });
@@ -218,7 +225,7 @@ describe('Claude Add', () => {
 
   it('lists a new id in the Windows helper allowlist, after the default', async () => {
     const { hosts, lifecycle } = setup();
-    await lifecycle.add({ profileId: 'work2', label: null });
+    await lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' });
     // The default stays first; the new id is appended, never reordered.
     expect(hosts.accounts).toEqual(['gmail', 'party', 'work2']);
   });
@@ -226,7 +233,7 @@ describe('Claude Add', () => {
   it('leaves the allowlist unchanged when the Windows step fails', async () => {
     const { hosts, lifecycle } = setup();
     hosts.fail.create = 'windows';
-    await expect(lifecycle.add({ profileId: 'work2', label: null })).rejects.toMatchObject({
+    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
       code: 'host_unreachable',
       host: 'windows',
     });
@@ -236,10 +243,10 @@ describe('Claude Add', () => {
 
   it('refuses an id in use (inventory, pending or trash, any case) and runs nothing', async () => {
     const { hosts, lifecycle } = setup();
-    await lifecycle.add({ profileId: 'work2', label: null });
+    await lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' });
     hosts.calls = [];
     for (const id of ['party', 'work2']) {
-      await expect(lifecycle.add({ profileId: id, label: null })).rejects.toMatchObject({
+      await expect(lifecycle.add({ profileId: id, label: null, email: 'work2@example.com' })).rejects.toMatchObject({
         code: 'id_in_use',
       });
     }
@@ -248,7 +255,7 @@ describe('Claude Add', () => {
 
   it('answers not_implemented while host steps are switched off', async () => {
     const { hosts, lifecycle } = setup(false);
-    await expect(lifecycle.add({ profileId: 'work2', label: null })).rejects.toMatchObject({
+    await expect(lifecycle.add({ profileId: 'work2', label: null, email: 'work2@example.com' })).rejects.toMatchObject({
       code: 'not_implemented',
     });
     const party = await lifecycle.findProfile('party');
@@ -261,7 +268,7 @@ describe('Claude Add', () => {
 
   it('moves a pending profile into the inventory once its email is confirmed', async () => {
     const { lifecycle, inventory } = setup();
-    await lifecycle.add({ profileId: 'work2', label: 'Work 2' });
+    await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
     expect(await lifecycle.confirmPending('work2', 'work2@example.com')).toBe(true);
     expect(await lifecycle.listPending()).toEqual([]);
     expect(inventory().note).toBe('kept as is');
@@ -274,12 +281,50 @@ describe('Claude Add', () => {
     expect(parsed[2].mac?.sshHost).toBe('jared-mac');
     expect(await lifecycle.confirmPending('work2', 'work2@example.com')).toBe(false);
   });
+
+  it('re-check pins the asserted email once the chosen host reports a session', async () => {
+    const { hosts, lifecycle } = setup();
+    await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
+    // No session on the Mac yet: still pending, assertion kept.
+    expect(await lifecycle.checkPendingSignIn('work2', 'mac', null)).toEqual({
+      promoted: false,
+      email: 'work2@example.com',
+    });
+    expect(hosts.calls).toEqual(['create:mac', 'create:windows', 'session:mac']);
+    // The user signs in on the Mac: the profile promotes with its email.
+    hosts.sessions.add('/fake/mac/Claude-work2');
+    expect(await lifecycle.checkPendingSignIn('work2', 'mac', null)).toEqual({
+      promoted: true,
+      email: 'work2@example.com',
+    });
+    expect(await lifecycle.listPending()).toEqual([]);
+    const parsed = await listClaudeDesktopProfiles();
+    expect(parsed.map((entry) => [entry.id, entry.email])).toContainEqual([
+      'work2',
+      'work2@example.com',
+    ]);
+    // A listed id answers found; an unknown id answers nothing.
+    expect(await lifecycle.checkPendingSignIn('work2', 'mac', null)).toEqual({
+      promoted: true,
+      email: null,
+    });
+    expect(await lifecycle.checkPendingSignIn('nobody', 'mac', null)).toBeNull();
+  });
+
+  it('re-check answers host_unreachable when the chosen host cannot be read', async () => {
+    const { hosts, lifecycle } = setup();
+    await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
+    hosts.fail = { session: 'mac' };
+    await expect(lifecycle.checkPendingSignIn('work2', 'mac', null)).rejects.toMatchObject({
+      code: 'host_unreachable',
+    });
+  });
 });
 
 describe('Pending profiles open on both hosts', () => {
   it('opens a newly added id on Mac and on Windows; an unknown id is refused', async () => {
     const { lifecycle } = setup();
-    await lifecycle.add({ profileId: 'work2', label: 'Work 2' });
+    await lifecycle.add({ profileId: 'work2', label: 'Work 2', email: 'work2@example.com' });
     const macOpen = spyOn(desktopTransport, 'openClaudeMacLauncher').mockResolvedValue(undefined);
     const windowsOpen = spyOn(desktopTransport, 'openClaudeWindowsLauncher').mockResolvedValue(
       undefined

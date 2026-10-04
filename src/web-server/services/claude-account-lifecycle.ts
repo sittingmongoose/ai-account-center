@@ -74,6 +74,12 @@ export class ClaudeLifecycleError extends Error {
   }
 }
 
+export function isClaudeEmail(value: unknown): value is string {
+  return (
+    typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  );
+}
+
 export interface ClaudeLifecycleDeps {
   ccsDir: () => string;
   transport: ClaudeHostTransport;
@@ -159,9 +165,14 @@ export class ClaudeAccountLifecycle {
     return aliases.mac && aliases.windows ? { mac: aliases.mac, windows: aliases.windows } : null;
   }
 
-  async add(input: { profileId: string; label: string | null }): Promise<PendingClaudeProfile> {
+  async add(input: {
+    profileId: string;
+    label: string | null;
+    email: string;
+  }): Promise<PendingClaudeProfile> {
     this.assertEnabled();
     if (!CLAUDE_PROFILE_ID.test(input.profileId)) throw new ClaudeLifecycleError('id_in_use');
+    if (!isClaudeEmail(input.email)) throw new ConfigError('The asserted email is not valid.');
     if (await this.idInUse(input.profileId)) throw new ClaudeLifecycleError('id_in_use');
     const aliases = await this.hostAliases();
     if (!aliases) throw new ClaudeLifecycleError('not_configured');
@@ -192,6 +203,7 @@ export class ClaudeAccountLifecycle {
       mac: created.mac as ClaudeHostLauncher,
       windows: created.windows as ClaudeHostLauncher,
       createdAt: stamp(this.now()),
+      expectedEmail: input.email,
     };
     try {
       await updatePendingProfiles(this.ccsDir(), async (profiles) => {
@@ -488,7 +500,7 @@ export class ClaudeAccountLifecycle {
 
   /** The first reading confirmed the email: move the profile into the inventory. */
   async confirmPending(id: string, email: string): Promise<boolean> {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    if (!isClaudeEmail(email)) {
       throw new ConfigError('The confirmed email is not valid.');
     }
     return updatePendingProfiles(this.ccsDir(), async (profiles) => {
@@ -508,5 +520,39 @@ export class ClaudeAccountLifecycle {
       });
       return { next: profiles.filter((candidate) => candidate.id !== id), result: true };
     });
+  }
+
+  /**
+   * Re-check a pending profile after the user signs in: read the sign-in
+   * marker on one host, and pin the asserted email when a session is there.
+   * The first usage reading verifies the pinned email against the provider.
+   * Returns null when the id names nothing, so the route can answer 404.
+   */
+  async checkPendingSignIn(
+    id: string,
+    platform: ClaudeHost,
+    email: string | null
+  ): Promise<{ promoted: boolean; email: string | null } | null> {
+    this.assertEnabled();
+    const pending = (await readPendingProfiles(this.ccsDir())).find(
+      (candidate) => candidate.id === id
+    );
+    if (!pending) {
+      const listed = (await readInventoryEntries(this.ccsDir())).some((entry) => entry.id === id);
+      return listed ? { promoted: true, email: null } : null;
+    }
+    let state: 'signed-in' | 'signed-out';
+    try {
+      state = await this.deps.transport.sessionState(platform, {
+        launcher: pending[platform],
+      });
+    } catch {
+      throw new ClaudeLifecycleError('host_unreachable', platform);
+    }
+    if (state === 'signed-out') return { promoted: false, email: pending.expectedEmail };
+    const address = email ?? pending.expectedEmail;
+    if (!isClaudeEmail(address)) return { promoted: false, email: null };
+    await this.confirmPending(id, address);
+    return { promoted: true, email: address };
   }
 }

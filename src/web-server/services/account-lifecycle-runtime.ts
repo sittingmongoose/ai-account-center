@@ -32,10 +32,10 @@ import { SignInJobRunner, type SignInJob, type SignInJobRunnerDeps } from './sig
  * A computer's default Claude profile removes only after its account email is typed (or stays
  * `account_protected` when it has no email to type).
  *
- * Muse Code Sign in again is built fully but unverified (the Mac `muse login`
- * output was never observed live). It stays off by default; `CCS_MUSE_SIGNIN=on`
- * turns it on for that process only, after the live verification step in
- * status/MUSE-LIFECYCLE.md. While off, Muse Sign in again answers 409
+ * Muse Code Sign in again runs the Mac `muse login` device-code flow over ssh
+ * with no PTY (FW2-B verified the CLI read-only: auth.meta.com device URL and
+ * code, plain pipes). It stays off by default; `CCS_MUSE_SIGNIN=on` turns it
+ * on for that process only. While off, Muse Sign in again answers 409
  * `not_implemented`.
  */
 export const CLAUDE_HOST_LIFECYCLE_ENABLED = false;

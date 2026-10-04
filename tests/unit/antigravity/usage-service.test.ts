@@ -304,15 +304,37 @@ describe('Antigravity account-specific usage cache', () => {
     }
   });
 
-  it('invalidates quota when the private saved credential revision changes', async () => {
+  it('recollects on a new login but holds the same account last sample as cached', async () => {
     const f = fixture([profile('gmail')]);
     await f.service.getAccounts();
     f.setProfiles([{ ...profile('gmail'), credentialRevision: 'new-revision' }]);
     f.handle(async () => {
       throw new Error('offline');
     });
-    expect((await f.service.getAccounts())[0].windows).toEqual([]);
+    // FW2-B: a terminal sign-in recollects (a fresh call), but the row keeps
+    // the same account's last sample, labelled cached, instead of going dark.
+    const row = (await f.service.getAccounts())[0];
     expect(f.calls.length).toBe(2);
+    expect(row.status).toBe('cached');
+    expect(row.windows.length).toBe(1);
+    expect(f.service.cachedAccounts(f.profiles())[0].status).toBe('cached');
+  });
+
+  it('drops the last sample when the saved identity itself changes', async () => {
+    const f = fixture([profile('gmail')]);
+    await f.service.getAccounts();
+    f.setProfiles([
+      { ...profile('gmail'), identityKey: 'identity-someone-else', credentialRevision: 'new-revision' },
+    ]);
+    f.handle(async () => {
+      throw new Error('offline');
+    });
+    // One account's quota is never shown for another identity: the failure
+    // surfaces honestly instead of borrowing the old sample.
+    const row = (await f.service.getAccounts())[0];
+    expect(f.calls.length).toBe(2);
+    expect(row.status).toBe('error');
+    expect(row.windows).toEqual([]);
   });
 
   it('does not publish an old in-flight credential sample after a concurrent import', async () => {

@@ -3,6 +3,7 @@
  * allowlisted verification URL and the user code are kept.
  */
 import { describe, expect, it } from 'bun:test';
+import { MUSE_DEVICE_AUTH_ORIGINS } from '../../../src/web-server/services/muse-account-lifecycle';
 import {
   MAX_SIGNIN_OUTPUT_BYTES,
   SignInOutputParser,
@@ -50,6 +51,27 @@ describe('SignInOutputParser', () => {
         userCode: 'ABCD-12345',
       });
     }
+  });
+
+  it('finds the device URL and code in the real `muse login` shape', () => {
+    // FW2-B: labels from the launcher script and the 1.4.2 binary strings,
+    // URL and code shape measured independently; the example code is invented.
+    const parser = new SignInOutputParser({
+      allowedOrigins: MUSE_DEVICE_AUTH_ORIGINS,
+      expectsUserCode: true,
+    });
+    const output = [
+      'Open this page to sign in:',
+      '  https://auth.meta.com/oauth/device/?code=WDJB-MQRT',
+      'Confirm this code matches:',
+      '  WDJB-MQRT',
+      'Waiting for approval (link expires in 15 minutes)... ',
+    ].join('\n');
+    expect(parser.push(output)).toBe('ready');
+    expect(parser.verification()).toEqual({
+      url: 'https://auth.meta.com/oauth/device/',
+      userCode: 'WDJB-MQRT',
+    });
   });
 
   it('drops the query string of a device URL and keeps it for supervised flows', () => {

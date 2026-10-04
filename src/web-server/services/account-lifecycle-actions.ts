@@ -31,7 +31,7 @@ import {
   MAX_REGISTRY_ACCOUNTS,
   type RegistryAccount,
 } from './account-registry-v2';
-import { ClaudeLifecycleError } from './claude-account-lifecycle';
+import { ClaudeLifecycleError, isClaudeEmail } from './claude-account-lifecycle';
 import { CLAUDE_PROFILE_ID } from './claude-account-stores';
 import { parseSourceManifest, readSourceManifestFile } from './account-usage-manifest';
 import { addAntigravity, antigravitySignInAgain } from './account-lifecycle-antigravity';
@@ -99,15 +99,20 @@ export async function addAccount(
     return { status: 202, body: { job: jobBody(job, context) } };
   }
   if (provider === 'claude') {
-    keys(body, ['provider', 'profileId'], ['label']);
+    keys(body, ['provider', 'profileId', 'email'], ['label']);
     if (typeof body.profileId !== 'string' || !CLAUDE_PROFILE_ID.test(body.profileId)) {
+      throw invalid();
+    }
+    if (!isClaudeEmail(body.email)) {
       throw invalid();
     }
     const name = label(body.label);
     await assertCanAdd(env, provider, context);
     let profile;
     try {
-      profile = await env.claude().add({ profileId: body.profileId, label: name });
+      profile = await env
+        .claude()
+        .add({ profileId: body.profileId, label: name, email: body.email });
     } catch (error) {
       if (!(error instanceof ClaudeLifecycleError))
         throw new LifecycleHttpError(500, 'write_failed');

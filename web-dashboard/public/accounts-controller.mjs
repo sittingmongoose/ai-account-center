@@ -17,7 +17,7 @@
 //   storage                                     localStorage, for the one-time migration of "Show on dashboard"
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
-import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
+import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
 import { setDisplayTimeZone, DEFAULT_DISPLAY_TIME_ZONE } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord } from './view-model.mjs';
@@ -25,6 +25,9 @@ import { lazyFormat } from './time-format.mjs';
 import { LOG_SOURCE_HOSTS, LOG_SOURCE_TOOL_LABEL, LOG_SOURCE_PATH_HINT } from './accounts-view.mjs';
 
 export const JOB_POLL_MS = 2_000;
+/** Terminal sign-in watch: poll the inventory this often, give up after this long (the CLI itself times out at 15 min). */
+export const TERMINAL_POLL_MS = 5_000;
+export const TERMINAL_WATCH_MS = 15 * 60_000;
 export const LEGACY_HIDDEN_KEY = 'aac-hidden-providers';
 const PROVIDERS = Object.keys(PROVIDER_LABELS);
 const KEY_PROVIDERS = ['kimi-code', 'zai', 'opencode-go'];
@@ -39,7 +42,7 @@ const REFUSALS = new Set(['account_active', 'account_default', 'account_protecte
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',
-  'flow-open-app', 'flow-recheck', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
+  'flow-open-app', 'flow-recheck', 'claude-host', 'remove', 'remove-commit', 'restore', 'restore-commit', 'purge', 'others-out', 'network-off',
   'network-on', 'pw-submit', 'device-revoke', 'devices-revoke-all', 'session-lifetime', 'time-zone',
   'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
 ]));
@@ -77,6 +80,18 @@ export function logSourceProblem(tool, host, location, mapping) {
     return 'Only generic JSONL sources take a field mapping.';
   }
   return '';
+}
+
+/**
+ * The inventory's verifiedAt for one terminal flow's profile (undefined when the
+ * profile is not saved yet). Inventory ids are bare profile names; account ids
+ * carry the `antigravity:profile:` prefix.
+ */
+export function terminalVerifiedAt(inventory, accountId) {
+  const profiles = Array.isArray(inventory?.profiles) ? inventory.profiles : [];
+  const name = String(accountId || '').split(':').pop();
+  const found = profiles.find(p => p && (p.id === accountId || p.id === name));
+  return typeof found?.verifiedAt === 'string' ? found.verifiedAt : undefined;
 }
 
 export function createAccountsController(deps) {
@@ -393,15 +408,69 @@ export function createAccountsController(deps) {
   /**
    * Antigravity signs in on Ubuntu, outside the browser: its terminal command opens as a
    * persistent flow under the section, since a vanishing toast alone read as "does nothing".
-   * The toast still fires unchanged to announce it. Returns whether it handled the error.
+   * The toast still fires unchanged to announce it. The panel then watches the inventory for
+   * the completed import, so the row updates as soon as the terminal command saves.
+   * Returns whether it handled the error.
    */
   function openAntigravityTerminal(id, error) {
     if (providerOf(id) !== 'antigravity' || error?.payload?.code !== 'preflight_failed') return false;
     const command = terminalCommand(error.payload);
     if (!command) return false;
-    setFlow('antigravity', { type: 'terminal', step: 'run', accountId: id, email: nameOf(id), command });
+    setFlow('antigravity', { type: 'terminal', step: 'run', accountId: id, email: nameOf(id), command, terminalBaseline: undefined, terminalExpired: false });
     fail(error, { provider: 'antigravity', what: 'signin-again' });
+    void watchTerminal('antigravity', state.flows.antigravity.serial);
     return true;
+  }
+  /** Baseline the profile's verifiedAt, then poll until the import lands or the watch lapses. */
+  async function watchTerminal(provider, serial) {
+    stopPolling(provider);
+    const startedAt = now();
+    try {
+      const { payload } = await call(requests.agyProfiles());
+      const flow = state.flows[provider];
+      if (!flow || flow.serial !== serial || flow.type !== 'terminal') return;
+      const baseline = terminalVerifiedAt(payload, flow.accountId);
+      state.flows[provider] = { ...flow, terminalBaseline: baseline === undefined ? null : baseline };
+      changed();
+    } catch (error) {
+      // a passing failure: the first poll sets the baseline instead
+    }
+    const flow = state.flows[provider];
+    if (flow && flow.serial === serial && flow.type === 'terminal') {
+      timers[provider] = schedule(() => pollTerminal(provider, serial, startedAt), TERMINAL_POLL_MS);
+    }
+  }
+  async function pollTerminal(provider, serial, startedAt) {
+    delete timers[provider];
+    const flow = state.flows[provider];
+    if (!flow || flow.serial !== serial || flow.type !== 'terminal') return;
+    if (now() - startedAt >= TERMINAL_WATCH_MS) {
+      state.flows[provider] = { ...flow, terminalExpired: true };
+      changed();
+      return;
+    }
+    try {
+      const { payload } = await call(requests.agyProfiles());
+      const current = state.flows[provider];
+      if (!current || current.serial !== serial || current.type !== 'terminal') return;
+      const verifiedAt = terminalVerifiedAt(payload, current.accountId);
+      if (current.terminalBaseline === undefined) {
+        state.flows[provider] = { ...current, terminalBaseline: verifiedAt === undefined ? null : verifiedAt };
+        changed();
+      } else if (verifiedAt !== undefined && verifiedAt !== (current.terminalBaseline === null ? undefined : current.terminalBaseline)) {
+        const who = text(current.email);
+        toast('ok', `${label(provider)}: signed in again`, who ? `Signed in as ${who}. Its row is fresh.` : 'Its row is fresh.');
+        closeFlow(provider);
+        void reload();
+        return;
+      }
+    } catch (error) {
+      // a passing network failure: keep polling
+    }
+    const again = state.flows[provider];
+    if (again && again.serial === serial && again.type === 'terminal') {
+      timers[provider] = schedule(() => pollTerminal(provider, serial, startedAt), TERMINAL_POLL_MS);
+    }
   }
   /** Footer "Sign in" of an app or browser-session provider: add its one account first when it has none. */
   async function sessionSignIn(provider) {
@@ -448,13 +517,14 @@ export function createAccountsController(deps) {
       const id = String(input || '').trim();
       const problem = claudeIdProblem(id, takenClaude());
       if (problem) { put({ name: id, error: { title: problem, body: '' } }); return; }
-      put({ name: id, step: 'creating', busy: true, error: null });
-      try {
-        await call(requests.addClaude(id, text(extra).trim()));
-        put({ step: 'created', busy: false });
-        toast('ok', `Claude profile ${id} created`, 'Open it on Mac or Windows and sign in there.');
-        void reload();
-      } catch (error) { put({ step: 'name', busy: false, error: errorText(error, { provider: 'claude', name: id }) }); }
+      put({ name: id, step: 'email', error: null });
+      return;
+    }
+    if (flow.type === 'claude-add' && flow.step === 'email') {
+      const email = String(input || '').trim();
+      const problem = claudeEmailProblem(email);
+      if (problem) { put({ accountEmail: email, error: { title: problem, body: '' } }); return; }
+      put({ accountEmail: email, step: 'host', error: null });
       return;
     }
     if ((flow.type === 'key-add' || flow.type === 'key-replace') && flow.step === 'key') {
@@ -504,7 +574,8 @@ export function createAccountsController(deps) {
     if (inFlow && state.flows[provider]) state.flows[provider] = { ...state.flows[provider], busy: true, error: null };
     changed();
     try {
-      const { payload } = await call(requests.recheck(id));
+      const platform = provider === 'claude' ? state.flows[provider]?.host : undefined;
+      const { payload } = await call(requests.recheck(id, platform ? { platform } : undefined));
       const account = payload?.account;
       const found = account && ['ok', 'cached'].includes(account.status);
       if (inFlow && state.flows[provider]) {
@@ -525,6 +596,63 @@ export function createAccountsController(deps) {
     try { await call(requests.openApp(flow.accountId, platform)); toast('info', `Opening ${label(provider)} on ${platform === 'mac' ? 'the Mac' : 'Windows'}`, 'Sign in there, then re-check.'); }
     catch (error) { fail(error, { provider }); }
     finally { state.busyAct = ''; changed(); }
+  }
+  /** Claude Add's host choice: create the profile, then open it where the user will sign in. */
+  async function createClaude(host) {
+    const flow = state.flows.claude;
+    if (!flow || flow.type !== 'claude-add' || flow.step !== 'host' || flow.busy) return;
+    if (host !== 'mac' && host !== 'windows') return;
+    const id = String(flow.name || '').trim();
+    const email = String(flow.accountEmail || '').trim();
+    state.flows.claude = { ...flow, host, step: 'creating', busy: true, error: null };
+    changed();
+    try {
+      await call(requests.addClaude(id, undefined, email));
+    } catch (error) {
+      const current = state.flows.claude;
+      if (current && current.type === 'claude-add') {
+        state.flows.claude = { ...current, step: 'host', busy: false, error: errorText(error, { provider: 'claude', name: id }) };
+        changed();
+      }
+      return;
+    }
+    let opened = false;
+    try {
+      await call(requests.openClaude(id, host));
+      opened = true;
+    } catch (error) {
+      fail(error, { provider: 'claude' });
+    }
+    const current = state.flows.claude;
+    if (!current || current.type !== 'claude-add') return;
+    state.flows.claude = { ...current, step: 'created', busy: false, accountId: `claude:${id}`, opened, checked: false, found: false, error: null };
+    changed();
+    if (opened) toast('ok', `Claude profile ${id} created`, 'Sign in in the Claude window that just opened.');
+    void reload();
+  }
+  /** The created step's retry when the automatic open failed. */
+  async function openClaudeAgain() {
+    const flow = state.flows.claude;
+    if (!flow || flow.type !== 'claude-add' || flow.step !== 'created' || flow.busy) return;
+    const id = String(flow.name || '').trim();
+    const host = flow.host === 'windows' ? 'windows' : 'mac';
+    state.flows.claude = { ...flow, busy: true, error: null };
+    changed();
+    try {
+      await call(requests.openClaude(id, host));
+      const current = state.flows.claude;
+      if (current && current.type === 'claude-add') {
+        state.flows.claude = { ...current, busy: false, opened: true };
+        changed();
+      }
+      toast('ok', `Claude profile ${id} opened`, 'Sign in in the Claude window that just opened.');
+    } catch (error) {
+      const current = state.flows.claude;
+      if (current && current.type === 'claude-add') {
+        state.flows.claude = { ...current, busy: false, error: errorText(error, { provider: 'claude' }) };
+        changed();
+      }
+    }
   }
 
   // ------------------------------------------------------------ remove and restore (two calls, one confirmation)
@@ -873,6 +1001,8 @@ export function createAccountsController(deps) {
       case 'flow-open-url': { const url = text(state.flows[v]?.job?.verification?.url); if (/^https:\/\//.test(url)) open(url); return true; }
       case 'flow-open-app': { const [p, platform] = v.split(':'); await openApp(p, platform); return true; }
       case 'flow-recheck': { const id = state.flows[v]?.accountId; if (id) await recheck(id, true); return true; }
+      case 'claude-host': { const [, host] = v.split(':'); await createClaude(host); return true; }
+      case 'claude-open': await openClaudeAgain(); return true;
       case 'remove': await askRemove(v); return true;
       case 'refuse': { const [id, code] = v.split('\n'); if (id && code) { state.lines[id] = { kind: 'refused', code }; changed(); } return true; }
       case 'line-cancel': delete state.lines[v]; delete state.lines[`trash:${v}`]; changed(); return true;

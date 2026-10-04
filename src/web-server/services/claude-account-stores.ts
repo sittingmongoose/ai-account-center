@@ -43,6 +43,8 @@ export interface PendingClaudeProfile {
   mac: ClaudeHostLauncher;
   windows: ClaudeHostLauncher;
   createdAt: string;
+  /** The account the user said they would sign in as; verified on first reading. */
+  expectedEmail: string | null;
 }
 
 export interface ClaudeTrashHost {
@@ -112,12 +114,20 @@ function parsePending(value: unknown): PendingClaudeProfile[] | null {
     }
     const mac = parseLauncher(item.mac);
     const windows = parseLauncher(item.windows);
+    // Entries written before the email assertion carry no expectedEmail.
+    const expectedEmail =
+      item.expectedEmail === undefined || item.expectedEmail === null
+        ? null
+        : text(item.expectedEmail, 254)
+          ? (item.expectedEmail as string)
+          : undefined;
     if (
       !mac ||
       !windows ||
       (item.label !== null && !text(item.label, 96)) ||
       typeof item.createdAt !== 'string' ||
       !TIMESTAMP.test(item.createdAt) ||
+      expectedEmail === undefined ||
       profiles.some((profile) => profile.id === item.id)
     ) {
       return null;
@@ -128,6 +138,7 @@ function parsePending(value: unknown): PendingClaudeProfile[] | null {
       mac,
       windows,
       createdAt: item.createdAt,
+      expectedEmail,
     });
   }
   return profiles;

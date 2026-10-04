@@ -127,6 +127,28 @@ describe('Mac host program', () => {
     expect(await transport.appState('mac', { launcher: sibling })).toBe('stopped');
   });
 
+  it('reports the sign-in marker without decrypting or printing any token', async () => {
+    const { transport } = macHome();
+    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'jared-mac' });
+    const config = path.join(launcher.profilePath, 'config.json');
+    // Fresh profile: no session file at all.
+    expect(await transport.sessionState('mac', { launcher })).toBe('signed-out');
+    // A session: account uuid plus an encrypted token cache (never printed).
+    fs.writeFileSync(
+      config,
+      JSON.stringify({
+        lastKnownAccountUuid: '12345678-90ab-cdef-1234-567890abcdef',
+        'oauth:tokenCacheV2': 'djEwdGhpcyBpcyBub3QgYSByZWFsIHRva2Vu',
+      })
+    );
+    expect(await transport.sessionState('mac', { launcher })).toBe('signed-in');
+    // Either half missing reads as signed out, never as an error.
+    fs.writeFileSync(config, JSON.stringify({ lastKnownAccountUuid: '12345678-90ab-cdef-1234-567890abcdef' }));
+    expect(await transport.sessionState('mac', { launcher })).toBe('signed-out');
+    fs.writeFileSync(config, '{oops');
+    expect(await transport.sessionState('mac', { launcher })).toBe('signed-out');
+  });
+
   it('refuses paths outside the fixed folders before touching anything', async () => {
     const { home, transport } = macHome();
     const outside = path.join(home, 'outside');

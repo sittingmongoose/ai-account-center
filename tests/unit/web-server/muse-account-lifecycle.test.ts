@@ -1,7 +1,8 @@
 /**
  * Muse Code Sign in again (`muse login` on the Mac) through the sign-in job
- * runner, behind `CCS_MUSE_SIGNIN=on` (unverified live). No live login, no ssh
- * to a real host: the ssh transport is faked.
+ * runner, behind `CCS_MUSE_SIGNIN=on` (CLI behaviour verified read-only from
+ * --help, docs and the binary's strings; never logged in). No live login, no
+ * ssh to a real host: the ssh transport is faked.
  */
 import { describe, expect, it } from 'bun:test';
 import { SignInJobStopped } from '../../../src/web-server/services/signin-jobs';
@@ -50,7 +51,7 @@ describe('muse sign-in flow', () => {
     const command = await spec.prepare('job_0123456789abcdef');
     expect(command.file).toBe('ssh');
     expect(command.args).toEqual([
-      '-t',
+      '-T',
       '-o',
       'BatchMode=yes',
       '-o',
@@ -63,9 +64,9 @@ describe('muse sign-in flow', () => {
       'ServerAliveCountMax=1',
       '--',
       'jared-mac',
-      'muse login',
+      'PATH="$HOME/.local/bin:$PATH" muse login',
     ]);
-    expect(command.pty).toBe(true);
+    expect(command.pty).toBe(false);
     expect(command.env.TERM).toBe('dumb');
     await spec.cleanup('job_0123456789abcdef');
   });
@@ -80,7 +81,7 @@ describe('muse sign-in flow', () => {
     );
     const command = await spec.prepare('job_0123456789abcdef');
     expect(command.args.at(-1)).toBe(
-      'env XDG_CONFIG_HOME="$HOME/.ccs/muse-homes/9f2c41d0" muse login'
+      'env XDG_CONFIG_HOME="$HOME/.ccs/muse-homes/9f2c41d0" PATH="$HOME/.local/bin:$PATH" muse login'
     );
   });
 

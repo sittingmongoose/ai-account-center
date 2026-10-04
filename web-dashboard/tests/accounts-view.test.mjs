@@ -665,6 +665,11 @@ test('Antigravity: the live login gets a refuse control that says why, and the t
   assert.match(view.title, /gmail@example.test/);
   assert.match(view.body, /ai-account-center antigravity signin gmail/);
   assert.deepEqual(view.actions.map(a => a.act), ['flow-copy', 'flow-cancel']);
+  // FW2-B: the panel watches for the import, and says so while it does
+  assert.equal(view.waiting, 'Waiting for the terminal sign-in to finish');
+  const expired = flowView('antigravity', { type: 'terminal', step: 'run', provider: 'antigravity', accountId: ag1.id, email: ag1.email, command: 'ai-account-center antigravity signin gmail', terminalExpired: true });
+  assert.equal(expired.waiting, '');
+  assert.match(expired.body, /watch has lapsed/);
 });
 
 test('API-key, browser and app providers: keys show their last 4, Replace key and Remove are live, sessions sign in and re-check', () => {
@@ -1497,11 +1502,25 @@ test('flows: Claude profiles, API keys that are never echoed, and guided app or 
   const claudeName = flowView('claude', { type: 'claude-add', step: 'name', name: 'claude-2' });
   assert.deepEqual(
     [claudeName.title, claudeName.inputSeed, claudeName.actions[0].label],
-    ['Add a Claude account', 'claude-2', 'Create profile']
+    ['Add a Claude account', 'claude-2', 'Continue']
   );
-  const created = flowView('claude', { type: 'claude-add', step: 'created', name: 'party' });
-  assert.equal(created.done, 'Profile party created on Mac and Windows');
-  assert.match(created.body, /Needs sign-in/);
+  const claudeEmail = flowView('claude', { type: 'claude-add', step: 'email', name: 'party' });
+  assert.deepEqual(
+    [claudeEmail.title, claudeEmail.inputKind, claudeEmail.actions[0].label],
+    ['Which account will sign in?', 'email', 'Continue']
+  );
+  const claudeHost = flowView('claude', { type: 'claude-add', step: 'host', name: 'party' });
+  assert.deepEqual(
+    claudeHost.actions.map(a => a.label),
+    ['Sign in on Mac', 'Sign in on Windows', 'Cancel']
+  );
+  const created = flowView('claude', { type: 'claude-add', step: 'created', name: 'party', host: 'mac', accountId: 'claude:party', opened: true });
+  assert.equal(created.done, 'Profile party created');
+  assert.equal(created.body, 'Sign in in the Claude window that just opened.');
+  assert.deepEqual(created.actions.map(a => a.act), ['flow-recheck', 'flow-done']);
+  const landed = flowView('claude', { type: 'claude-add', step: 'created', name: 'party', host: 'mac', accountId: 'claude:party', opened: true, checked: true, found: true, accountEmail: 'party@example.com' });
+  assert.match(landed.body, /Signed in as party@example\.com/);
+  assert.deepEqual(landed.actions.map(a => a.act), ['flow-done']);
   const key = flowView('zai', { type: 'key-add', step: 'key' }, { trustNote: TRUSTED_NOTE });
   assert.deepEqual(
     [key.inputKind, key.inputPassword, key.labelField, key.inputSeed],
