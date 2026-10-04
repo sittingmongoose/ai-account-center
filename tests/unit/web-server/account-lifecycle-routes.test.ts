@@ -235,6 +235,7 @@ async function fixture(
     }),
     undoCreate: async () => undefined,
     appState: async () => 'stopped',
+    sessionState: async () => 'signed-out',
     trash: async () => 'moved',
     restore: async () => undefined,
     purge: async () => undefined,
@@ -1307,7 +1308,7 @@ describe('registry, re-check, open, label and trash', () => {
 
   it('keeps Claude add, remove, restore and purge off until host steps are enabled', async () => {
     const off = await fixture();
-    const add = await off.request('POST', '/add', { provider: 'claude', profileId: 'work2' });
+    const add = await off.request('POST', '/add', { provider: 'claude', profileId: 'work2', email: 'work2@example.com' });
     expect([add.status, add.body.code]).toEqual([409, 'not_implemented']);
     const restore = await off.request('POST', '/trash/tr_0123456789abcdef/restore', {});
     expect([restore.status, restore.body.code]).toEqual([409, 'not_implemented']);
@@ -1421,6 +1422,7 @@ describe('registry, re-check, open, label and trash', () => {
       provider: 'claude',
       profileId: 'work2',
       label: 'Work 2',
+      email: 'work2@example.com',
     });
     expect(added.status).toBe(201);
     expect(added.body).toMatchObject({
@@ -1456,6 +1458,59 @@ describe('registry, re-check, open, label and trash', () => {
       'accounts.remove',
       'accounts.trash.restore',
     ]);
+  });
+
+  it('re-checks a pending Claude profile against the host it was opened on', async () => {
+    const f = await fixture({ claudeEnabled: true });
+    fs.writeFileSync(
+      path.join(ccsDir, 'claude-desktop-profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [
+          {
+            id: 'party',
+            email: 'party@example.com',
+            mac: {
+              launcherName: 'p',
+              launcherPath: '/a',
+              profilePath: '/fake/mac/Claude-party',
+              sshHost: 'jared-mac',
+            },
+            windows: {
+              launcherName: 'p',
+              profilePath: 'C:\\x\\Claude-party',
+              sshHost: 'jared-windows',
+            },
+          },
+        ],
+      })
+    );
+    const added = await f.request('POST', '/add', {
+      provider: 'claude',
+      profileId: 'work2',
+      email: 'work2@example.com',
+    });
+    expect(added.status).toBe(201);
+    // The fake host reports no session: still pending, with its assertion kept.
+    const waiting = await f.request('POST', '/claude:work2/recheck', { platform: 'mac' });
+    expect(waiting.status).toBe(200);
+    expect(waiting.body.account).toMatchObject({
+      id: 'claude:work2',
+      status: 'needs_sign_in',
+      email: 'work2@example.com',
+    });
+    expect((await f.request('POST', '/claude:work2/recheck', {})).status).toBe(400);
+    expect(
+      (await f.request('POST', '/claude:work2/recheck', { platform: 'mac', email: 'nope' }))
+        .status
+    ).toBe(400);
+    expect((await f.request('POST', '/claude:nobody/recheck', { platform: 'mac' })).status).toBe(
+      404
+    );
+    // A listed id is already signed in, so it answers found.
+    const listed = await f.request('POST', '/claude:party/recheck', { platform: 'mac' });
+    expect(listed.status).toBe(200);
+    expect(listed.body.account).toMatchObject({ id: 'claude:party', status: 'ok' });
   });
 
   it('purges one trash entry now with a typed DELETE confirmation', async () => {

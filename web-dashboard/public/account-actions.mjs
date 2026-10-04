@@ -30,7 +30,8 @@ export const requests = Object.freeze({
   accountVisibility: hiddenAccountIds => ({ method: 'PUT', path: '/api/accounts/visibility', body: { hiddenAccountIds: [...hiddenAccountIds] } }),
   trayAccountVisibility: trayHiddenAccountIds => ({ method: 'PUT', path: '/api/accounts/visibility', body: { trayHiddenAccountIds: [...trayHiddenAccountIds] } }),
   addCodex: profileName => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'codex', profileName } }),
-  addClaude: (profileId, name) => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId, ...(name ? { label: name } : {}) } }),
+  addClaude: (profileId, name, email) => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId, ...(name ? { label: name } : {}), ...(email ? { email } : {}) } }),
+  openClaude: (profileId, platform) => ({ method: 'POST', path: `/api/claude/desktop-profiles/${enc(profileId)}/open`, body: { platform } }),
   addKey: (provider, key, name) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, key, ...(name ? { label: name } : {}) } }),
   addSession: provider => ({ method: 'POST', path: '/api/accounts/add', body: { provider } }),
   addSupervised: (provider, profileName) => ({ method: 'POST', path: '/api/accounts/add', body: { provider, profileName } }),
@@ -39,11 +40,12 @@ export const requests = Object.freeze({
   removeAsk: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: {} }),
   removeCommit: (id, confirmationToken, confirm) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/remove`, body: typeof confirm === 'string' ? { confirmationToken, confirm } : { confirmationToken } }),
   openApp: (id, platform) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/open`, body: { platform } }),
-  recheck: id => ({ method: 'POST', path: `/api/accounts/${enc(id)}/recheck`, body: {} }),
+  recheck: (id, body) => ({ method: 'POST', path: `/api/accounts/${enc(id)}/recheck`, body: body ?? {} }),
   restoreAsk: trashId => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/restore`, body: {} }),
   restoreCommit: (trashId, confirmationToken) => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/restore`, body: { confirmationToken } }),
   purgeAsk: trashId => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/purge`, body: {} }),
   purgeCommit: (trashId, confirmationToken, confirm) => ({ method: 'POST', path: `/api/accounts/trash/${enc(trashId)}/purge`, body: { confirmationToken, confirm } }),
+  agyProfiles: () => ({ method: 'GET', path: '/api/antigravity/profiles' }),
   job: jobId => ({ method: 'GET', path: `/api/accounts/signin-jobs/${enc(jobId)}` }),
   cancelJob: jobId => ({ method: 'POST', path: `/api/accounts/signin-jobs/${enc(jobId)}/cancel`, body: {} }),
   submitCode: (jobId, code) => ({ method: 'POST', path: `/api/accounts/signin-jobs/${enc(jobId)}/code`, body: { code } }),
@@ -77,6 +79,13 @@ export function claudeIdProblem(id, taken = []) {
   if (!value) return 'Name the profile first.';
   if (!/^[a-z][a-z0-9-]{1,31}$/.test(value)) return 'Use 2 to 32 lowercase letters, digits or -, starting with a letter.';
   if (taken.some(other => String(other).toLowerCase() === value)) return `${value} is already a Claude profile.`;
+  return '';
+}
+/** The account the new Claude profile will sign in as (the server's rule). */
+export function claudeEmailProblem(value) {
+  const email = String(value ?? '').trim();
+  if (!email) return 'Enter the account email first.';
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'That is not an account email.';
   return '';
 }
 /** An API key: 8 to 512 printable ASCII characters, no whitespace (the server's rule). The key is never echoed. */

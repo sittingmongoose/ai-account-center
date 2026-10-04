@@ -1,4 +1,5 @@
 import { LifecycleHttpError } from './account-lifecycle-accounts';
+import { ClaudeLifecycleError, isClaudeEmail } from './claude-account-lifecycle';
 import {
   resolveIn,
   signInState,
@@ -65,15 +66,7 @@ export async function relabel(
   };
 }
 
-/** POST /api/accounts/:id/recheck: one account now, at most once per 10 s. */
-export async function recheck(
-  env: LifecycleEnv,
-  id: string,
-  body: Record<string, unknown>
-): Promise<LifecycleResult> {
-  keys(body, []);
-  const account = await resolveIn(env, id);
-  if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
+function checkRecheckLimit(env: LifecycleEnv, id: string): void {
   const now = env.now();
   // One limiter per CCS scope and account.
   const key = `${env.ccsDir()}\0${id}`;
@@ -88,6 +81,19 @@ export async function recheck(
     if (oldest === undefined) break;
     lastRecheck.delete(oldest);
   }
+}
+
+/** POST /api/accounts/:id/recheck: one account now, at most once per 10 s. */
+export async function recheck(
+  env: LifecycleEnv,
+  id: string,
+  body: Record<string, unknown>
+): Promise<LifecycleResult> {
+  const account = await resolveIn(env, id);
+  if (account.kind === 'claude') return recheckClaude(env, account, body);
+  if (account.kind !== 'additional') throw new LifecycleHttpError(409, 'not_implemented');
+  keys(body, []);
+  checkRecheckLimit(env, id);
   const row = await env.refreshAdditional(id);
   if (!row) throw new LifecycleHttpError(404, 'unknown_account');
   env.replaceRow(row);
@@ -98,6 +104,54 @@ export async function recheck(
         ...row,
         switchable: false,
         lifecycle: { state: 'ready', jobId: null },
+      },
+    },
+  };
+}
+
+/**
+ * Re-check a Claude profile after the user signs in: pending ids check the
+ * sign-in marker on the platform the app was opened on, and promote on a
+ * session. Listed ids are already signed in, so they answer found.
+ */
+async function recheckClaude(
+  env: LifecycleEnv,
+  account: { id: string; profile: { id: string; label: string } },
+  body: Record<string, unknown>
+): Promise<LifecycleResult> {
+  keys(body, [], ['email', 'platform']);
+  if (body.platform !== 'mac' && body.platform !== 'windows') throw invalid();
+  const email = body.email === undefined ? null : body.email;
+  if (email !== null && !isClaudeEmail(email)) throw invalid();
+  checkRecheckLimit(env, account.id);
+  const profileId = account.profile.id;
+  let result;
+  try {
+    result = await env.claude().checkPendingSignIn(profileId, body.platform, email);
+  } catch (error) {
+    if (!(error instanceof ClaudeLifecycleError)) {
+      throw new LifecycleHttpError(500, 'write_failed');
+    }
+    const status =
+      error.code === 'host_unreachable' ? 502 : error.code === 'write_failed' ? 500 : 409;
+    throw new LifecycleHttpError(status, error.code, error.host ? { host: error.host } : {});
+  }
+  if (!result) throw new LifecycleHttpError(404, 'unknown_account');
+  if (result.promoted) env.onChanged();
+  return {
+    status: 200,
+    body: {
+      account: {
+        id: account.id,
+        provider: 'claude',
+        label: account.profile.label,
+        email: result.email,
+        status: result.promoted ? 'ok' : 'needs_sign_in',
+        switchable: false,
+        lifecycle: {
+          state: result.promoted ? 'ready' : 'pending_sign_in',
+          jobId: null,
+        },
       },
     },
   };

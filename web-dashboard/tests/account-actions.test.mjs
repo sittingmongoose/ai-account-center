@@ -13,6 +13,9 @@ test('every request goes to the route and body the CLIENT API SHEET names', () =
   assert.deepEqual(requests.addCodex('codex-4').body, { provider: 'codex', profileName: 'codex-4' });
   assert.deepEqual(requests.addClaude('party', '').body, { provider: 'claude', profileId: 'party' });
   assert.deepEqual(requests.addClaude('party', 'Party').body, { provider: 'claude', profileId: 'party', label: 'Party' });
+  assert.deepEqual(requests.addClaude('party', '', 'party@example.com').body, { provider: 'claude', profileId: 'party', email: 'party@example.com' });
+  assert.deepEqual(requests.openClaude('party', 'mac'), { method: 'POST', path: '/api/claude/desktop-profiles/party/open', body: { platform: 'mac' } });
+  assert.deepEqual(requests.agyProfiles(), { method: 'GET', path: '/api/antigravity/profiles' });
   assert.deepEqual(requests.addKey('zai', 'k-12345678', '').body, { provider: 'zai', key: 'k-12345678' });
   assert.deepEqual(requests.addKey('zai', 'k-12345678', 'Work').body, { provider: 'zai', key: 'k-12345678', label: 'Work' });
   assert.deepEqual(requests.addSession('cursor').body, { provider: 'cursor' });
@@ -22,6 +25,8 @@ test('every request goes to the route and body the CLIENT API SHEET names', () =
   assert.deepEqual(requests.removeCommit('claude:party', 't').body, { confirmationToken: 't' });
   assert.deepEqual(requests.openApp('cursor:usage', 'mac'), { method: 'POST', path: '/api/accounts/cursor%3Ausage/open', body: { platform: 'mac' } });
   assert.deepEqual(requests.recheck('qwen:usage').path, '/api/accounts/qwen%3Ausage/recheck');
+  assert.deepEqual(requests.recheck('qwen:usage').body, {});
+  assert.deepEqual(requests.recheck('claude:party', { platform: 'mac' }).body, { platform: 'mac' });
   assert.deepEqual(requests.restoreAsk('tr_1'), { method: 'POST', path: '/api/accounts/trash/tr_1/restore', body: {} });
   assert.deepEqual(requests.restoreCommit('tr_1', 't').body, { confirmationToken: 't' });
   assert.deepEqual(requests.purgeAsk('tr_1'), { method: 'POST', path: '/api/accounts/trash/tr_1/purge', body: {} });

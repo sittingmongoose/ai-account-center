@@ -1,7 +1,7 @@
 /**
  * The fixed Python program for Claude host steps on the Mac (create, undo,
- * state, trash, restore, purge). It reads `REQUEST` (an object the server
- * validated) and prints one JSON object; exit 3 means "already exists".
+ * state, session, trash, restore, purge). It reads `REQUEST` (an object the
+ * server validated) and prints one JSON object; exit 3 means "already exists".
  * Data folders must be direct children of `~/Library/Application Support`
  * named `Claude*`, launchers direct children of `~/Applications` named
  * `Claude (...).app`, and trash folders live only in `~/.ccs/trash/claude`.
@@ -101,6 +101,34 @@ if op == "state":
     needle = "--user-data-dir=" + str(profile)
     running = any(line.endswith(needle) or (needle + " ") in line for line in listing.stdout.splitlines())
     done({"running": running})
+if op == "session":
+    # Re-check reads the plaintext sign-in marker only: the account uuid and
+    # the presence of an encrypted token cache. Tokens are never decrypted or
+    # printed; the usage collector verifies the login afterwards.
+    profile = profile_dir(req.get("profilePath"))
+    config_path = profile / "config.json"
+    if config_path.is_symlink():
+        sys.exit(1)
+    if not config_path.is_file():
+        done({"signedIn": False})
+    try:
+        if config_path.stat().st_size > 1048576:
+            sys.exit(1)
+        with config_path.open("r", encoding="utf-8") as handle:
+            config = json.load(handle)
+    except OSError:
+        sys.exit(1)
+    except ValueError:
+        # Unparseable: the app cannot be using it, and signing in rewrites
+        # it, so this reads as signed out rather than failing.
+        done({"signedIn": False})
+    uuid_value = config.get("lastKnownAccountUuid") if isinstance(config, dict) else None
+    cache_value = config.get("oauth:tokenCacheV2") if isinstance(config, dict) else None
+    uuid_ok = isinstance(uuid_value, str) and re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        uuid_value,
+    ) is not None
+    done({"signedIn": bool(uuid_ok and isinstance(cache_value, str) and cache_value)})
 if op == "trash":
     pid = profile_id()
     launcher = launcher_app(req.get("launcherPath"))

@@ -464,7 +464,7 @@ describe('Antigravity explicitly injected runtime composition', () => {
     expectNoNativeActions();
   });
 
-  test('cached rows discard old windows immediately after a saved credential revision changes', async () => {
+  test('cached rows hold the last sample across a same-identity credential revision change', async () => {
     await importFixtures();
     supported = true;
     const instance = construct();
@@ -481,13 +481,17 @@ describe('Antigravity explicitly injected runtime composition', () => {
     const beforeFiles = directorySnapshot(privateCcsDirectory);
 
     const cached = instance.cachedAccounts();
-    expect(cached.find((account) => account.email === 'party@example.com')).toMatchObject({
-      status: 'unavailable',
-      windows: [],
-      fetchedAt: null,
-      sampledAt: null,
+    const party = cached.find((account) => account.email === 'party@example.com');
+    // Same identity, new revision: the row holds the last sample as cached
+    // instead of going dark while the new sign-in is read.
+    expect(party).toMatchObject({
+      status: 'cached',
+      message: 'Showing the last saved sample while the new sign-in is read.',
       capabilities: { antigravityCanActivate: false },
     });
+    expect(party?.windows).toHaveLength(1);
+    expect(party?.fetchedAt).not.toBeNull();
+    expect(party?.sampledAt).not.toBeNull();
     expect(cached.find((account) => account.email === 'gmail@example.com')?.windows).toHaveLength(
       1
     );

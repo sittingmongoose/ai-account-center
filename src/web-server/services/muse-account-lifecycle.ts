@@ -13,22 +13,23 @@ import {
  * the Mac in the account's existing config home, run through the supervised
  * sign-in job runner, with the URL and code parsed against the allowlist.
  *
- * UNVERIFIED: the Mac CLI path and its device-code output have never been
- * observed live. This lane is built fully but served only when
- * `CCS_MUSE_SIGNIN=on` (see `museSignInEnabled()`); by default the provider
- * reads `not_implemented` and Sign in again answers the same. The live step to
- * verify it is in status/MUSE-LIFECYCLE.md ("Muse live-enable step"): run
- * `muse login` on the Mac, confirm the URL origin is on
- * `MUSE_DEVICE_AUTH_ORIGINS` and the code matches the job parser, then set the
- * flag for the service.
+ * Read-only CLI research (FW2-B, 2026-10-04; never logged in): `muse login`
+ * is a device-code flow. It prints `https://auth.meta.com/oauth/device/
+ * ?code=XXXX-XXXX` with an eight-character `XXXX-XXXX` code and polls, with no
+ * TTY and no local callback; the launcher and the binary agree on the
+ * `https://auth.meta.com` OIDC device endpoints. The `providers.meta.
+ * user_email` read below matches the `auth.json` key layout on disk.
  *
  * - `discover` accounts sign in with the Mac's default config home
  *   (`~/.config/muse/auth.json`). `config-home` accounts use
  *   `~/.ccs/muse-homes/<homeId>` via `XDG_CONFIG_HOME` (no account uses it in
  *   v1; the collector does not read it yet).
- * - The job runs `ssh -t <alias> <fixed remote command>` on a PTY; the remote
- *   command is `muse login`, optionally prefixed with a fixed `env`
- *   assignment for a validated hex home id. Nothing else crosses.
+ * - The job runs `ssh -T <alias> <fixed remote command>` on plain pipes (no
+ *   PTY anywhere: the Mac sshd refuses PTY allocation, and the login needs no
+ *   TTY). The remote command prefixes the documented install dir, because a
+ *   non-interactive ssh PATH does not include it: `PATH="$HOME/.local/bin:
+ *   $PATH" muse login`, optionally with a fixed `env` assignment for a
+ *   validated hex home id. Nothing else crosses.
  * - Success is verified by reading only the login email over ssh (a fixed
  *   Python program that prints `providers.meta.user_email`); tokens never
  *   leave the Mac. A missing or unreadable login fails `write_failed`.
@@ -68,7 +69,7 @@ export interface MuseLifecycleDeps {
 }
 
 const SSH_ARGV = [
-  '-t',
+  '-T',
   '-o',
   'BatchMode=yes',
   '-o',
@@ -106,8 +107,13 @@ const EMAIL_PROGRAM =
   'sys.stdout.write(e if isinstance(e, str) and e else "")';
 
 function remoteLoginCommand(homeId: string | null): string {
-  if (homeId === null) return 'muse login';
-  return `env XDG_CONFIG_HOME="$HOME/${MUSE_HOMES_DIR}/${homeId}" muse login`;
+  // The documented install dir first: it is not on a non-interactive ssh
+  // PATH, and the rest of PATH stays as the fallback.
+  if (homeId === null) return 'PATH="$HOME/.local/bin:$PATH" muse login';
+  return (
+    `env XDG_CONFIG_HOME="$HOME/${MUSE_HOMES_DIR}/${homeId}" ` +
+    'PATH="$HOME/.local/bin:$PATH" muse login'
+  );
 }
 
 function remoteEmailCommand(homeId: string | null): string {
@@ -167,7 +173,7 @@ export class MuseAccountLifecycle {
           file: 'ssh',
           args: [...SSH_ARGV, '--', sshHost, remoteLogin],
           env,
-          pty: true,
+          pty: false,
         };
       },
       complete: async (_jobId, control: SignInCompleteControl) => {

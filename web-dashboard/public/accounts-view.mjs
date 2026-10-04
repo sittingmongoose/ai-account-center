@@ -327,7 +327,7 @@ function footActions(provider, accounts, ctx) {
 const STEPS = {
   'job-add': ['Name the profile', 'Approve the code', 'Signed in'],
   'job-again': ['Approve the code', 'Signed in'],
-  'claude-add': ['Name the profile', 'Create it', 'Sign in'],
+  'claude-add': ['Name the profile', 'Account email', 'Where to sign in', 'Sign in'],
   'key-add': ['Paste the key', 'Check', 'Stored'],
   'key-replace': ['Paste the key', 'Check', 'Stored'],
   guide: ['Open', 'Sign in', 'Re-check'],
@@ -432,20 +432,53 @@ export function flowView(provider, f, ctx = {}) {
         v.title = 'Add a Claude account';
         v.body = 'Each Claude account gets its own desktop profile on Mac and Windows, so several stay signed in side by side.';
         Object.assign(v, { inputKind: 'name', inputLabel: 'Profile name', inputPlaceholder: 'work-2', inputSeed: text(f.name) });
-        v.actions = [btn('flow-submit', provider, 'Create profile', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        v.actions = [btn('flow-submit', provider, 'Continue', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        err();
+        return v;
+      }
+      if (f.step === 'email') {
+        v.cur = 1;
+        v.title = 'Which account will sign in?';
+        v.body = 'Re-check pins this email when the sign-in lands; the first reading verifies it against the provider.';
+        Object.assign(v, { inputKind: 'email', inputLabel: 'Account email', inputPlaceholder: 'name@example.com', inputSeed: text(f.accountEmail) });
+        v.actions = [btn('flow-submit', provider, 'Continue', { style: 'primary', busy: !!f.busy, enabled: !f.busy }), cancel];
+        err();
+        return v;
+      }
+      if (f.step === 'host') {
+        v.cur = 2;
+        v.title = 'Where will you sign in?';
+        v.body = 'Claude opens there right after the profile is created.';
+        v.actions = [
+          btn('claude-host', `${provider}:mac`, 'Sign in on Mac', { style: 'primary', platform: 'apple', busy: !!f.busy, enabled: !f.busy }),
+          btn('claude-host', `${provider}:windows`, 'Sign in on Windows', { platform: 'windows', busy: !!f.busy, enabled: !f.busy }),
+          cancel,
+        ];
         err();
         return v;
       }
       if (f.step === 'creating') {
-        v.cur = 1;
+        v.cur = 2;
         v.title = `Creating ${text(f.name)}`;
         v.waiting = 'Creating the profile and its launchers on Mac and Windows';
         return v;
       }
-      v.cur = 2;
-      v.done = `Profile ${text(f.name)} created on Mac and Windows`;
-      v.body = `Open Claude (${text(f.name)}) from Applications on the Mac or the Start menu on Windows and sign in there. The row says "Needs sign-in" until its first reading confirms the account.`;
-      v.actions = [doneBtn];
+      v.cur = 3;
+      const hostLabel = f.host === 'windows' ? 'Windows' : 'the Mac';
+      v.done = `Profile ${text(f.name)} created`;
+      if (f.checked && f.found) {
+        v.body = `Signed in as ${text(f.accountEmail) || 'the account'}. Its row is live.`;
+      } else if (f.opened === false) {
+        v.body = `The profile is created, but Claude could not be opened on ${hostLabel}. Open it below and sign in there.`;
+      } else {
+        v.body = 'Sign in in the Claude window that just opened.';
+      }
+      v.actions = [
+        ...(f.opened === false ? [btn('claude-open', provider, `Open on ${f.host === 'windows' ? 'Windows' : 'Mac'} again`, { style: 'primary', busy: !!f.busy, enabled: !f.busy })] : []),
+        ...(!(f.checked && f.found) ? [btn('flow-recheck', provider, 'Re-check', { busy: ctx.busyAct === `recheck:${f.accountId}`, enabled: !f.busy && !!f.accountId })] : []),
+        doneBtn,
+      ];
+      err();
       return v;
     }
     case 'key-add': case 'key-replace': {
@@ -517,6 +550,8 @@ export function flowView(provider, f, ctx = {}) {
       v.body = command
         ? `Antigravity signs in on Ubuntu, outside the browser. Run this command there: ${command}. The dashboard picks the account up when it is done.`
         : 'The sign-in command is missing. Close this panel and choose Sign in again once more.';
+      if (command && !f.terminalExpired) v.waiting = 'Waiting for the terminal sign-in to finish';
+      if (command && f.terminalExpired) v.body += ' The 15-minute watch has lapsed; refresh the dashboard if the sign-in finished.';
       v.actions = [
         ...(command ? [btn('flow-copy', provider, 'Copy command', { icon: 'copy' })] : []),
         close,

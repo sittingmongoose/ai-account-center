@@ -24,6 +24,7 @@ export interface AntigravityUsageDependencies {
 
 interface Cache {
   revision: string;
+  identityKey: string;
   result: AntigravityDashboardAccount | null;
   lastGood: AntigravityDashboardAccount | null;
   checkedAt: number;
@@ -246,10 +247,15 @@ export class AntigravityUsageService {
     const revision = JSON.stringify([profile.identityKey, profile.credentialRevision]);
     let cache = this.caches.get(profile.id);
     if (!cache || cache.revision !== revision) {
+      // A re-login (same Google account, new credential) keeps the last good
+      // sample as the cached row while the fresh one collects. A changed
+      // identity drops it, so one account's quota is never shown for another.
+      const lastGood = cache && cache.identityKey === profile.identityKey ? cache.lastGood : null;
       cache = {
         revision,
+        identityKey: profile.identityKey,
         result: null,
-        lastGood: null,
+        lastGood,
         checkedAt: -Infinity,
         refreshedAt: -Infinity,
         retryAt: -Infinity,
@@ -309,14 +315,24 @@ export class AntigravityUsageService {
     return profiles.map((profile) => {
       const cache = this.caches.get(profile.id);
       const revision = JSON.stringify([profile.identityKey, profile.credentialRevision]);
-      if (
-        !profile.identityVerified ||
-        !profile.available ||
-        !cache?.result ||
-        cache.revision !== revision
-      )
-        return fallback(profile);
-      return { ...clone(cache.result), isActive: profile.selected };
+      if (!profile.identityVerified || !profile.available) return fallback(profile);
+      if (cache?.revision === revision && cache.result) {
+        return { ...clone(cache.result), isActive: profile.selected };
+      }
+      // Re-login gap (same Google account, new credential): the last good
+      // sample stays as the cached row instead of going dark. Anything else
+      // (no sample yet, or a changed identity) still falls back.
+      const carried =
+        cache && cache.identityKey === profile.identityKey
+          ? (cache.result ?? cache.lastGood)
+          : null;
+      if (!carried) return fallback(profile);
+      return {
+        ...clone(carried),
+        isActive: profile.selected,
+        status: 'cached',
+        message: 'Showing the last saved sample while the new sign-in is read.',
+      };
     });
   }
 }

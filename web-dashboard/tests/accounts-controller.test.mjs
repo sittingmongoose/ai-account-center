@@ -381,6 +381,27 @@ test('Antigravity Sign in shows the terminal command the server answers', async 
   assert.equal(h.ctl.state.flows.antigravity, undefined);
 });
 
+test('Antigravity terminal panel watches the inventory and picks up the saved sign-in', async () => {
+  const before = { schemaVersion: 1, hostId: 'ubuntu', profiles: [{ id: 'party', email: 'party@example.com', verifiedAt: '2026-10-02T10:00:00.000Z' }] };
+  const after = { schemaVersion: 1, hostId: 'ubuntu', profiles: [{ id: 'party', email: 'party@example.com', verifiedAt: '2026-10-04T01:45:06.000Z' }] };
+  const h = harness({ routes: {
+    'POST /api/accounts/antigravity%3Aprofile%3Aparty/signin-again': refusal(409, 'preflight_failed', { fallback: { kind: 'terminal', host: 'ubuntu', command: 'ai-account-center antigravity signin party' } }),
+    'GET /api/antigravity/profiles': [before, before, after],
+    'GET /api/accounts/registry': { accounts: [] },
+  }, data: { accounts: [{ id: 'antigravity:profile:party', provider: 'antigravity', email: 'party@example.com' }], settings: {} } });
+  await h.ctl.handle('signin-again', 'antigravity:profile:party');
+  await flush(); await flush();
+  assert.equal(h.ctl.state.flows.antigravity.terminalBaseline, '2026-10-02T10:00:00.000Z');
+  await h.tick(); // unchanged: still watching
+  assert.equal(h.ctl.state.flows.antigravity.type, 'terminal');
+  assert.equal(h.refreshes, 0);
+  await h.tick(); // verifiedAt changed: toast, close, forced refresh
+  assert.equal(h.ctl.state.flows.antigravity, undefined);
+  assert.equal(last(h.toasts).title, 'Antigravity: signed in again');
+  assert.match(last(h.toasts).body, /party@example\.com/);
+  assert.equal(h.refreshes, 1);
+});
+
 test('API keys: add with a label, replace, and every refusal; the key never stays in the state', async () => {
   const account = { id: 'zai:acct:9f2c41d0', provider: 'zai', credential: { kind: 'aac-key', last4: 'x7Qa', fingerprint: 'sha256:0123', storedOn: 'ubuntu' } };
   const h = harness({ routes: { 'POST /api/accounts/add': { status: 201, payload: { account, check: 'ok' } }, 'GET /api/accounts/registry': { accounts: [], trash: [] } } });
@@ -418,8 +439,12 @@ test('API keys: add with a label, replace, and every refusal; the key never stay
   assert.match(notOurs.ctl.state.flows.zai.error.title, /another app/);
 });
 
-test('Claude Add: the profile is created on both hosts; a host that cannot be reached changes nothing', async () => {
-  const h = harness({ routes: { 'POST /api/accounts/add': { status: 201, payload: { account: { id: 'claude:party' }, launchers: { mac: 'created', windows: 'created' } } }, 'GET /api/accounts/registry': { accounts: [], trash: [] } },
+test('Claude Add: name, email and host; the profile is created, then opened where the user signs in', async () => {
+  const h = harness({ routes: {
+    'POST /api/accounts/add': { status: 201, payload: { account: { id: 'claude:party' }, launchers: { mac: 'created', windows: 'created' } } },
+    'POST /api/claude/desktop-profiles/party/open': { opened: true, id: 'party', platform: 'mac' },
+    'GET /api/accounts/registry': { accounts: [], trash: [] },
+  },
     data: { accounts: [{ id: 'claude:home', provider: 'claude', capabilities: { claudeProfileId: 'home' } }], settings: {} } });
   await h.ctl.handle('add', 'claude');
   assert.equal(h.ctl.state.flows.claude.name, 'claude-2');
@@ -428,15 +453,75 @@ test('Claude Add: the profile is created on both hosts; a host that cannot be re
   await h.ctl.handle('flow-submit', 'claude\nhome\n');
   assert.match(h.ctl.state.flows.claude.error.title, /already a Claude profile/);
   await h.ctl.handle('flow-submit', 'claude\nparty\n');
-  assert.deepEqual(h.sent[0], { method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId: 'party' } });
-  assert.equal(h.ctl.state.flows.claude.step, 'created');
+  assert.equal(h.ctl.state.flows.claude.step, 'email');
+  await h.ctl.handle('flow-submit', 'claude\nnope\n');
+  assert.match(h.ctl.state.flows.claude.error.title, /not an account email/);
+  await h.ctl.handle('flow-submit', 'claude\nparty@example.com\n');
+  assert.equal(h.ctl.state.flows.claude.step, 'host');
+  await h.ctl.handle('claude-host', 'claude:mac');
+  assert.deepEqual(h.sent[0], { method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId: 'party', email: 'party@example.com' } });
+  assert.deepEqual(h.sent[1], { method: 'POST', path: '/api/claude/desktop-profiles/party/open', body: { platform: 'mac' } });
+  const flow = h.ctl.state.flows.claude;
+  assert.equal(flow.step, 'created');
+  assert.equal(flow.accountId, 'claude:party');
+  assert.equal(flow.opened, true);
+  assert.equal(last(h.toasts).title, 'Claude profile party created');
+  const view = flowView('claude', flow);
+  assert.equal(view.body, 'Sign in in the Claude window that just opened.');
+  assert.deepEqual(view.actions.map(a => a.act), ['flow-recheck', 'flow-done']);
   for (const [error, words] of [[refusal(502, 'host_unreachable', { host: 'windows' }), /^Windows could not be reached Nothing was changed/], [refusal(409, 'not_implemented'), /Not on this server yet/], [refusal(409, 'id_in_use'), /already used/], [refusal(409, 'not_configured'), /no launcher/]]) {
     const bad = harness({ routes: { 'POST /api/accounts/add': error } });
     await bad.ctl.handle('add', 'claude');
     await bad.ctl.handle('flow-submit', 'claude\nparty\n');
-    assert.equal(bad.ctl.state.flows.claude.step, 'name');
+    await bad.ctl.handle('flow-submit', 'claude\nparty@example.com\n');
+    await bad.ctl.handle('claude-host', 'claude:mac');
+    assert.equal(bad.ctl.state.flows.claude.step, 'host');
     assert.match(`${bad.ctl.state.flows.claude.error.title} ${bad.ctl.state.flows.claude.error.body}`, words, error.payload.code);
   }
+});
+
+test('Claude Add: a failed open still creates the profile, with a retry in the panel', async () => {
+  const h = harness({ routes: {
+    'POST /api/accounts/add': { status: 201, payload: { account: { id: 'claude:party' } } },
+    'POST /api/claude/desktop-profiles/party/open': refusal(502, 'host_unreachable', { host: 'mac' }),
+    'GET /api/accounts/registry': { accounts: [], trash: [] },
+  }, data: { accounts: [], settings: {} } });
+  await h.ctl.handle('add', 'claude');
+  await h.ctl.handle('flow-submit', 'claude\nparty\n');
+  await h.ctl.handle('flow-submit', 'claude\nparty@example.com\n');
+  await h.ctl.handle('claude-host', 'claude:mac');
+  const flow = h.ctl.state.flows.claude;
+  assert.equal(flow.step, 'created');
+  assert.equal(flow.opened, false);
+  const view = flowView('claude', flow);
+  assert.match(view.body, /could not be opened/);
+  assert.deepEqual(view.actions.map(a => a.act), ['claude-open', 'flow-recheck', 'flow-done']);
+});
+
+test('Claude Add: Re-check asks the chosen host and lands the sign-in', async () => {
+  const h = harness({ routes: {
+    'POST /api/accounts/add': { status: 201, payload: { account: { id: 'claude:party' } } },
+    'POST /api/claude/desktop-profiles/party/open': { opened: true, id: 'party', platform: 'mac' },
+    'POST /api/accounts/claude%3Aparty/recheck': [
+      { account: { id: 'claude:party', status: 'needs_sign_in' } },
+      { account: { id: 'claude:party', status: 'ok' } },
+    ],
+    'GET /api/accounts/registry': { accounts: [], trash: [] },
+  }, data: { accounts: [], settings: {} } });
+  await h.ctl.handle('add', 'claude');
+  await h.ctl.handle('flow-submit', 'claude\nparty\n');
+  await h.ctl.handle('flow-submit', 'claude\nparty@example.com\n');
+  await h.ctl.handle('claude-host', 'claude:mac');
+  await h.ctl.handle('flow-recheck', 'claude');
+  const rechecked = h.sent.find(r => r.path === '/api/accounts/claude%3Aparty/recheck');
+  assert.deepEqual(rechecked, { method: 'POST', path: '/api/accounts/claude%3Aparty/recheck', body: { platform: 'mac' } });
+  assert.match(h.ctl.state.flows.claude.error.title, /No session found yet/);
+  await h.ctl.handle('flow-recheck', 'claude');
+  const flow = h.ctl.state.flows.claude;
+  assert.equal(flow.checked && flow.found, true);
+  const view = flowView('claude', flow);
+  assert.match(view.body, /Signed in as party@example\.com/);
+  assert.deepEqual(view.actions.map(a => a.act), ['flow-done']);
 });
 
 test('Remove: the confirmation names the effects, the token is sent back once, and refusals stay under the row', async () => {
