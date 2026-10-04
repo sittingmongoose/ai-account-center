@@ -151,7 +151,32 @@ class ProductionAdoptionTests(unittest.TestCase):
         temporary.chmod(0o600)
         os.replace(temporary, target)
 
-    def test_success_puts_path_first_preserves_native_options_and_never_claims_capability(self):
+    def replace_shell_original(self, path, raw):
+        expected = self.originals[path]
+        path.write_bytes(raw)
+        path.chmod(expected['mode'])
+        os.utime(path, ns=(expected['mtimeNs'], expected['mtimeNs']))
+        expected['raw'] = raw
+
+    STOCK_LOCAL_BIN_BLOCK = (
+        b'# set PATH so it includes user\'s private bin if it exists\n'
+        b'if [ -d "$HOME/.local/bin" ] ; then\n'
+        b'    PATH="$HOME/.local/bin:$PATH"\n'
+        b'fi\n'
+    )
+    STOCK_BASHRC = (
+        b'# fixture stock Ubuntu bashrc\n'
+        b'case $- in *i*) ;; *) return;; esac\n'
+        + STOCK_LOCAL_BIN_BLOCK
+        + b'export FIXTURE_TAIL=one\n'
+    )
+    STOCK_PROFILE = (
+        b'# fixture stock Ubuntu profile\n'
+        + STOCK_LOCAL_BIN_BLOCK
+        + b'export FIXTURE_TAIL=two\n'
+    )
+
+    def test_success_puts_path_last_preserves_native_options_and_never_claims_capability(self):
         receipt = self.adopt()
         self.assertEqual(receipt['phase'], 'adopted')
         self.assertTrue(receipt['serviceStarted'])
@@ -165,8 +190,9 @@ class ProductionAdoptionTests(unittest.TestCase):
             raw = path.read_bytes()
             original = self.originals[path]['raw']
             self.assertEqual(raw, adoption.shell_path_proposal(original, self.bundle.parent.parent / 'bin'))
-            self.assertTrue(raw.startswith(b'# AI Account Center Antigravity PATH begin\nexport PATH='))
-            self.assertTrue(raw.endswith(original))
+            self.assertTrue(raw.startswith(original))
+            self.assertTrue(raw.endswith(b'# AI Account Center Antigravity PATH end\n'))
+            self.assertEqual(raw.count(b'# AI Account Center Antigravity PATH begin'), 1)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), self.originals[path]['mode'])
         original = json.loads(self.originals[self.settings]['raw'])
         patched_bytes = self.settings.read_bytes()
@@ -434,6 +460,65 @@ class ProductionAdoptionTests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), expected['raw'])
                 self.assertEqual(path.stat().st_mtime_ns, expected['mtimeNs'])
         self.assertFalse(self.unit.exists())
+
+    def test_managed_block_is_appended_after_stock_local_bin_blocks(self):
+        self.replace_shell_original(self.home / '.bashrc', self.STOCK_BASHRC)
+        self.replace_shell_original(self.home / '.profile', self.STOCK_PROFILE)
+        receipt = self.adopt()
+        self.assertEqual(receipt['phase'], 'adopted')
+        for path in (self.home / '.bashrc', self.home / '.profile'):
+            with self.subTest(path=path.name):
+                original = self.originals[path]['raw']
+                raw = path.read_bytes()
+                self.assertIn(self.STOCK_LOCAL_BIN_BLOCK, original)
+                self.assertTrue(raw.startswith(original))
+                self.assertTrue(raw.endswith(b'# AI Account Center Antigravity PATH end\n'))
+                self.assertEqual(raw.count(b'# AI Account Center Antigravity PATH begin'), 1)
+                self.assertEqual(raw.count(b'# AI Account Center Antigravity PATH end'), 1)
+                self.assertGreater(
+                    raw.index(b'# AI Account Center Antigravity PATH begin'),
+                    raw.index(b'PATH="$HOME/.local/bin:$PATH"'),
+                )
+        self.calls.clear()
+        adoption.rollback(self.home, runner=self.runner)
+        self.assert_originals_restored()
+        self.assert_rollback_material_removed()
+        self.assertEqual(self.calls, [
+            ['systemctl', '--user', 'disable', '--now', adoption.UNIT],
+            ['systemctl', '--user', 'daemon-reload'],
+        ])
+
+    def test_appended_block_after_original_without_trailing_newline_restores_exactly(self):
+        target = self.home / '.bashrc'
+        self.replace_shell_original(target, b'# fixture no trailing newline')
+        receipt = self.adopt()
+        self.assertEqual(receipt['phase'], 'adopted')
+        raw = target.read_bytes()
+        self.assertTrue(raw.startswith(b'# fixture no trailing newline\n# AI Account Center Antigravity PATH begin\n'))
+        self.assertTrue(raw.endswith(b'# AI Account Center Antigravity PATH end\n'))
+        adoption.rollback(self.home, runner=self.runner)
+        self.assert_originals_restored()
+        self.assert_rollback_material_removed()
+
+    def test_shell_path_proposal_appends_and_refuses_managed_markers(self):
+        directory = self.bundle.parent.parent / 'bin'
+        block = (
+            b'# AI Account Center Antigravity PATH begin\n'
+            b'export PATH=' + str(directory).encode() + b':"$PATH"\n'
+            b'# AI Account Center Antigravity PATH end\n'
+        )
+        self.assertEqual(adoption.shell_path_proposal(b'', directory), block)
+        self.assertEqual(adoption.shell_path_proposal(b'# prior\n', directory), b'# prior\n' + block)
+        self.assertEqual(
+            adoption.shell_path_proposal(b'# prior', directory), b'# prior\n' + block
+        )
+        for original in (
+            b'# prior\n# AI Account Center Antigravity PATH begin\n',
+            b'# prior\n# AI Account Center Antigravity PATH end\n',
+        ):
+            with self.subTest(original=original):
+                with self.assertRaisesRegex(adoption.InstallationError, '^runtime-shell-profile-conflict$'):
+                    adoption.shell_path_proposal(original, directory)
 
 
 if __name__ == '__main__':

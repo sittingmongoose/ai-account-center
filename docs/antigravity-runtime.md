@@ -57,8 +57,10 @@ python3 -I scripts/antigravity/adopt_runtime.py
 python3 -I scripts/antigravity/adopt_runtime.py --rollback
 ```
 
-Adoption proposes a launcher PATH block at the top of `.bashrc` and `.profile`,
-multiplexes the existing native status-line command and creates the user service
+Adoption appends a launcher PATH block at the end of `.bashrc` and `.profile`,
+after stock Ubuntu `~/.local/bin` PATH blocks so a new login shell resolves
+`agy` to the managed launcher. It multiplexes the existing native status-line
+command and creates the user service
 `ai-account-center-antigravity.service`. Original bytes, permissions and timestamps
 are recorded privately before publication. Recovery checks each exact owned
 publication; it preserves foreign edits. Prepared and partial recovery journals

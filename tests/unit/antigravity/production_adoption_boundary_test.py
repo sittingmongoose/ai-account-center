@@ -1,7 +1,7 @@
 """Offline adoption boundaries using disposable homes and recorded service calls.
 
 The completed original fixture remains unchanged. Its disposable setup is reused
-by composition so this suite does not rerun or inherit its fourteen test methods.
+by composition so this suite does not rerun or inherit its eighteen test methods.
 No live installation, credentials, providers, processes or sockets are used.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ CHECKPOINT_LIMIT = 4 * 1024 * 1024
 class ProductionAdoptionBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixture_source.ProductionAdoptionTests(
-            methodName='test_success_puts_path_first_preserves_native_options_and_never_claims_capability'
+            methodName='test_success_puts_path_last_preserves_native_options_and_never_claims_capability'
         )
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
@@ -91,8 +91,9 @@ class ProductionAdoptionBoundaryTests(unittest.TestCase):
             path = f.home / name
             raw = path.read_bytes()
             self.assertGreater(len(raw), ORIGINAL_FILE_LIMIT)
-            self.assertTrue(raw.startswith(b'# AI Account Center Antigravity PATH begin\n'))
-            self.assertTrue(raw.endswith(f.originals[path]['raw']))
+            self.assertTrue(raw.startswith(f.originals[path]['raw']))
+            self.assertTrue(raw.endswith(b'# AI Account Center Antigravity PATH end\n'))
+            self.assertEqual(raw.count(b'# AI Account Center Antigravity PATH begin'), 1)
             self.assertEqual(len(f.originals[path]['raw']), ORIGINAL_FILE_LIMIT)
         self.assertEqual(json.loads(f.checkpoint.read_bytes())['phase'], 'adopted')
         f.calls.clear()
