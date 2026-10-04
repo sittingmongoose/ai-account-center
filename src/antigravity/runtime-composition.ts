@@ -316,6 +316,14 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
       manualActivations -= 1;
     }
   };
+  const recover = async () => {
+    manualActivations += 1;
+    try {
+      return await switcher.recover();
+    } finally {
+      manualActivations -= 1;
+    }
+  };
   return {
     hasProfiles: () => deps.registry.listProfiles().length > 0,
     getInventory: async () => ({
@@ -343,6 +351,7 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
     readSelectedProfileId: async () =>
       (await readProfiles()).find((profile) => profile.selected)?.id ?? null,
     activate,
+    recover,
     getAutoSwitchStatus: () => monitor.getStatus(),
     updateAutoSwitchSettings: (patch) => monitor.updateSettings(patch),
     invalidateUsage: () => usage.invalidate(),

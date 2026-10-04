@@ -8,6 +8,10 @@ const PROCESS_LABELS = Object.freeze({
 const WARNING = 'Another Antigravity program is running on Ubuntu. Stop the listed programs, switch accounts, and restore their reviewed sessions?';
 const EXPIRED = 'This confirmation expired. Cancel, then click Activate again.';
 const FAILED = 'The switch could not complete. Cancel, then click Activate again.';
+const RECOVERY_WARNING = 'The Ubuntu switch is stuck. Re-prove the live login, then finish or undo the switch? Saved profiles are not changed.';
+const RECOVERY_FAILED = 'Recovery could not prove the live login. The switch is still stuck.';
+const RECOVERY_OFFER_MS = 10 * 60_000;
+const RECOVERED_STATUSES = Object.freeze(['completed', 'aborted', 'restored-previous', 'no-recovery-pending']);
 const ACTIVATION_MESSAGES = Object.freeze({
   busy: 'Antigravity is busy on Ubuntu. Nothing was switched; activate again once its programs are idle.',
   deferred: 'Antigravity activation is deferred on Ubuntu. Refresh its native status before trying again.',
@@ -47,9 +51,19 @@ function failureMessage(failure, fallback, privateToken) {
 }
 
 /** Tokens stay inside this controller; only a separate affirmative request consumes one. */
-export function createAntigravityConfirmation({ activate, confirm: approve, prompt, close, busy, success, error, now = Date.now }) {
+export function createAntigravityConfirmation({ activate, confirm: approve, recover, prompt, close, busy, success, error, now = Date.now }) {
   let pending = null;
   let inFlight = false;
+
+  const recoveryOffer = target => {
+    const expiration = now() + RECOVERY_OFFER_MS;
+    return {
+      recovery: true, profileId: target, expiresAt: new Date(expiration).toISOString(),
+      expiration, processes: [], valid: true, error: '',
+    };
+  };
+  const isRecoveryFailure = failure =>
+    failure?.status !== 409 && record(failure?.payload) && failure.payload.status === 'recovery-required';
 
   const describe = (failure, target) => {
     const payload = failure?.payload;
@@ -75,10 +89,12 @@ export function createAntigravityConfirmation({ activate, confirm: approve, prom
     if (!pending) return;
     const expired = pending.expiration <= now();
     prompt({
-      product: PRODUCT, targetProfile: pending.email, profileId: pending.profileId,
+      product: PRODUCT, targetProfile: pending.recovery ? pending.profileId : pending.email,
+      profileId: pending.profileId,
       expiresAt: pending.expiresAt,
       processes: pending.processes.map(process => ({ ...process })),
-      warning: WARNING, canConfirm: pending.valid && !expired && !inFlight,
+      warning: pending.recovery ? RECOVERY_WARNING : WARNING,
+      canConfirm: pending.valid && !expired && !inFlight,
       inProgress: inFlight, error: pending.error || (expired ? EXPIRED : ''),
     });
   };
@@ -88,6 +104,17 @@ export function createAntigravityConfirmation({ activate, confirm: approve, prom
     const identity = result.email === undefined ? null : email(result.email);
     if ((result.email !== undefined && !identity) || (reviewedEmail && identity && identity !== reviewedEmail)) return null;
     return { status: result.status, profileId: target, hostId: HOST, ...(identity ? { email: identity } : {}) };
+  };
+  const acceptedRecovery = result => {
+    if (!record(result) || result.hostId !== HOST || !RECOVERED_STATUSES.includes(result.status)) return null;
+    const identity = result.email === undefined ? null : email(result.email);
+    if (result.email !== undefined && !identity) return null;
+    if (result.profileId !== undefined && !profileId(result.profileId)) return null;
+    return {
+      status: result.status, hostId: HOST,
+      ...(result.profileId ? { profileId: result.profileId } : {}),
+      ...(identity ? { email: identity } : {}),
+    };
   };
   const attempt = async (target, approval = null) => {
     inFlight = true;
@@ -104,6 +131,12 @@ export function createAntigravityConfirmation({ activate, confirm: approve, prom
       await success(completed);
       return true;
     } catch (failure) {
+      // A stuck switch offers a guarded recovery instead of an error toast.
+      // The consumed approval is gone either way; recovery needs no token.
+      if (typeof recover === 'function' && isRecoveryFailure(failure)) {
+        pending = recoveryOffer(target);
+        return false;
+      }
       if (approval) {
         // Never replace a consumed approval with a new offer or retry it automatically.
         if (pending) {
@@ -116,6 +149,29 @@ export function createAntigravityConfirmation({ activate, confirm: approve, prom
         if (offer) pending = offer;
         else error(failureMessage(failure, 'Unable to activate the Antigravity account.'));
       }
+      return false;
+    } finally {
+      inFlight = false;
+      busy(false);
+      if (pending) display();
+    }
+  };
+  const attemptRecover = async () => {
+    inFlight = true;
+    try {
+      busy(true);
+      if (pending) display();
+      const completed = acceptedRecovery(await recover());
+      if (!completed) throw new Error('Invalid Antigravity recovery response.');
+      pending = null;
+      close();
+      await success(completed);
+      return true;
+    } catch (failure) {
+      if (pending) {
+        pending.valid = false;
+        pending.error = failureMessage(failure, RECOVERY_FAILED);
+      } else error(failureMessage(failure, RECOVERY_FAILED));
       return false;
     } finally {
       inFlight = false;
@@ -139,6 +195,10 @@ export function createAntigravityConfirmation({ activate, confirm: approve, prom
         pending.token = null;
         display();
         return Promise.resolve(false);
+      }
+      if (pending.recovery) {
+        pending.valid = false;
+        return attemptRecover();
       }
       const approval = { token: pending.token, email: pending.email };
       pending.valid = false;

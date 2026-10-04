@@ -694,6 +694,21 @@ describe('explicit Ubuntu Antigravity production-driver composition', () => {
     expect(f.calls).not.toContain('native.install');
   });
 
+  test('stopping owned restarts releases a stuck owned stop for a later recovery install', async () => {
+    const f = fixture();
+    const driver = f.construct();
+    await driver.stopProcesses(f.plan);
+    await expect(
+      driver.installCredential(credential(2), credentialFingerprint(f.state.current))
+    ).rejects.toThrow('antigravity-runtime-unavailable');
+    await driver.stopOwnedRestarts();
+    const next = credential(2);
+    expect(await driver.installCredential(next, credentialFingerprint(f.state.current))).toBe(
+      f.installed
+    );
+    expect(f.argumentsSeen.installed).toEqual([[next, credentialFingerprint(f.state.current)]]);
+  });
+
   test('rollback, owned-stop and restoring restart remain available after release closes', async () => {
     const f = fixture();
     const driver = f.construct();

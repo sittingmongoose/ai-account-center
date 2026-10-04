@@ -259,12 +259,22 @@ const activationConfirmation = createActivationConfirmation({
 const antigravityConfirmation = createAntigravityConfirmation({
   activate: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/activate`, body),
   confirm: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/confirm`, body),
+  recover: () => mutation('/api/antigravity/recover', { hostId: 'ubuntu' }),
   prompt: confirmation => show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` })),
   close: close_activation_confirmation,
   busy: inProgress => setBusy(inProgress),
   success: async result => {
     // Selection/running proof comes from the next inventory, never an optimistic UI guess.
-    toast('ok', 'Antigravity switched on Ubuntu', `${result?.email || 'The selected login'} was activated. Checking the native identity now.`);
+    if (['completed', 'aborted', 'restored-previous', 'no-recovery-pending'].includes(result?.status)) {
+      const who = result?.email || 'The live login';
+      const what = result?.status === 'completed' ? `${who} was activated.`
+        : result?.status === 'aborted' ? `The stuck switch was undone; ${who} is still active.`
+        : result?.status === 'restored-previous' ? `${who} was restored from its saved login.`
+        : 'Nothing was stuck.';
+      toast('ok', 'Antigravity recovery finished on Ubuntu', `${what} Checking the native identity now.`);
+    } else {
+      toast('ok', 'Antigravity switched on Ubuntu', `${result?.email || 'The selected login'} was activated. Checking the native identity now.`);
+    }
     antigravityInventory = null; render();
     await refresh(true);
   },

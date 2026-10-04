@@ -156,6 +156,44 @@ describe('retained help surface', () => {
     expect(lines.join('\n')).toContain('ai-account-center antigravity status');
   });
 
+  test('antigravity recover reports each proof-driven outcome without touching the live login', async () => {
+    const lines: string[] = [];
+    await handleHelpRoute(['antigravity'], (line) => lines.push(line));
+    expect(lines.join('\n')).toContain('ai-account-center antigravity recover');
+    const errors: string[] = [];
+    expect(
+      await antigravityCommand.handleAntigravityCommand(['recover', 'extra'], (l) =>
+        errors.push(l)
+      )
+    ).toBe(1);
+    expect(errors).toHaveLength(1);
+    const run = (
+      runtime: () => { recover(): Promise<{ status: string; profileId?: string; email?: string }> } | null
+    ) => {
+      const out: string[] = [];
+      return antigravityCommand
+        .handleAntigravityCommand(['recover'], (l) => out.push(l), runtime)
+        .then((code) => ({ code, out }));
+    };
+    for (const [status, profileId, email, code, headline] of [
+      ['completed', 'party', 'party@example.com', 0, 'completed the stuck switch'],
+      ['aborted', 'gmail', 'gmail@example.com', 0, 'undid the stuck switch'],
+      ['restored-previous', 'gmail', 'gmail@example.com', 0, 'restored the previous login'],
+      ['no-recovery-pending', undefined, undefined, 0, 'No Antigravity switch needs recovery'],
+      ['recovery-required', undefined, undefined, 1, 'could not prove the live Ubuntu login'],
+    ] as const) {
+      const { code: actual, out } = await run(() => ({
+        recover: async () => ({ status, profileId, email }),
+      }));
+      expect(actual).toBe(code);
+      expect(out.join('\n')).toContain(headline);
+      if (profileId) expect(out.join('\n')).toContain(profileId);
+    }
+    const none = await run(() => null);
+    expect(none.code).toBe(1);
+    expect(none.out.join('\n')).toContain('No Antigravity profiles');
+  });
+
   test('bar help delegates to menu bar help without launching it', async () => {
     const showHelp = spyOn(barHelp, 'showHelp').mockImplementation(async () => {});
     try {

@@ -3,6 +3,7 @@ import type {
   DashboardAccountWindow,
 } from '../web-server/services/account-dashboard-types';
 import type { ActivateRequest, ActivationResult } from './types';
+import type { AntigravityRecoveryResult } from './switch-service';
 
 /** Host scope is deliberately fixed: desktop controls target the Ubuntu CLI. */
 export type AntigravityHostId = 'ubuntu';
@@ -85,6 +86,8 @@ export interface AntigravityApiDependencies {
   getAccounts(options: { refresh: boolean }): Promise<AntigravityDashboardAccount[]>;
   /** mode is supplied by the server; request bodies cannot enable automatic mode. */
   activate(request: ActivateRequest): Promise<ActivationResult>;
+  /** Finish or undo a stuck switch; proof-driven, saved profiles untouched. */
+  recover(): Promise<AntigravityRecoveryResult>;
   getAutoSwitchStatus(): unknown;
   updateAutoSwitchSettings(patch: Partial<AntigravityAutoSettings>): unknown;
   invalidateUsage?(): void;

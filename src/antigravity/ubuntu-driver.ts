@@ -186,6 +186,12 @@ export function createUbuntuAntigravityDriver(
       return proof;
     },
     rollbackCredential: (receipt, previous) => deps.nativeStore.rollback(receipt, previous),
-    stopOwnedRestarts: () => deps.bridge.stopOwnedRestarts(),
+    stopOwnedRestarts: async () => {
+      await deps.bridge.stopOwnedRestarts();
+      // Owned activity ends here: a stuck activation must not leave a
+      // stop pending that would refuse a later recovery install.
+      quiescedApproval = null;
+      ownedStopPending = false;
+    },
   };
 }

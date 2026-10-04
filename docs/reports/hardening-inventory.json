@@ -521,21 +521,21 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 627,
+      "totalThrows": 630,
       "typedThrows": 143,
       "plainThrows": 69,
-      "otherThrows": 415,
-      "adoptionRatio": 0.2281,
+      "otherThrows": 418,
+      "adoptionRatio": 0.227,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 277,
+          "count": 279,
           "typed": 81,
           "plain": 10
         },
         {
           "subdomain": "antigravity",
-          "count": 162,
+          "count": 163,
           "typed": 0,
           "plain": 0
         },
@@ -602,9 +602,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 32,
-      "totalSourceFiles": 381,
-      "coverageRatio": 0.084,
+      "filesWithCreateLogger": 34,
+      "totalSourceFiles": 383,
+      "coverageRatio": 0.0888,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -631,8 +631,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 134,
-          "withLogger": 16
+          "count": 136,
+          "withLogger": 18
         },
         {
           "subdomain": "utils",
@@ -750,8 +750,8 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 44,
-      "countOver600": 17,
+      "countOver400": 43,
+      "countOver600": 18,
       "topOver400": [
         {
           "file": "src/web-server/model-pricing.ts",
@@ -759,7 +759,7 @@
         },
         {
           "file": "src/antigravity/registry.ts",
-          "loc": 1083
+          "loc": 1104
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -806,12 +806,12 @@
           "loc": 674
         },
         {
-          "file": "src/web-server/services/additional-account-service.ts",
+          "file": "src/antigravity/switch-service.ts",
           "loc": 636
         },
         {
-          "file": "src/cliproxy/services/usage-compatibility-transformer.ts",
-          "loc": 632
+          "file": "src/web-server/services/additional-account-service.ts",
+          "loc": 636
         }
       ]
     }
