@@ -2216,6 +2216,22 @@ private func checkMenuBarSelection() throws {
     && MenuBarReading.make(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-x")?.detail
     == "Claude · jared@platyr.invalid · 5-hour used",
     "When two accounts shorten to one name, the tag must name the full identity")
+  // Settings > Menu bar hover tags: Show and Claude account describe their picker; Value
+  // names the account actually shown, the same string the Show preview uses.
+  try expect(MenuBarReading.showHelp == "Choose which provider's usage number appears in the menu bar."
+    && MenuBarReading.claudeAccountHelp == "Choose which Claude account the menu bar number comes from.",
+    "The Show and Claude account hover tags must describe their picker")
+  try expect(MenuBarReading.valueHelp(dashboard: first, provider: "codex", mode: .used)
+    == "Whether the menu bar shows Used or Remaining for codex-a.",
+    "The Value hover tag must name the Codex account actually shown")
+  try expect(MenuBarReading.valueHelp(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-y")
+    == "Whether the menu bar shows Used or Remaining for jared@party.invalid.",
+    "The Value hover tag must name the full identity when two accounts shorten alike")
+  try expect(MenuBarReading.valueHelp(dashboard: first, provider: MenuBarReading.nothingProvider, mode: .used)
+    == MenuBarReading.valueHelpHidden
+    && MenuBarReading.valueHelp(dashboard: nil, provider: "codex", mode: .used) == MenuBarReading.valueHelpHidden
+    && MenuBarReading.valueHelpHidden == "Whether the menu bar would show Used or Remaining.",
+    "With no reading shown, the Value hover tag stays generic")
   try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used)?.value == 12,
     "With no Claude account picked, the first Claude account shows")
   try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "gone")?.value == 12,

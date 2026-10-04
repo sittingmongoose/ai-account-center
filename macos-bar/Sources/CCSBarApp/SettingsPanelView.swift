@@ -69,6 +69,7 @@ struct SettingsPanelView: View {
                   Text("Nothing").tag(MenuBarReading.nothingProvider)
                 }
                 .pickerStyle(.menu).labelsHidden().fixedSize()
+                .help(MenuBarReading.showHelp)
               }
               if prefs.menuBarProvider == "claude", !claudeAccounts.isEmpty {
                 row(title: "Claude account", sub: "Claude has no active account, so pick the one to show.") {
@@ -81,6 +82,7 @@ struct SettingsPanelView: View {
                     }
                   }
                   .pickerStyle(.menu).labelsHidden().fixedSize()
+                  .help(MenuBarReading.claudeAccountHelp)
                 }
               }
               row(title: "Value", sub: "The account's 5-hour window, or its weekly window when no 5-hour window is reported.") {
@@ -90,6 +92,7 @@ struct SettingsPanelView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 .disabled(prefs.menuBarProvider == MenuBarReading.nothingProvider)
+                .help(menuBarValueHelp)
               }
             }
             card {
@@ -185,6 +188,14 @@ struct SettingsPanelView: View {
 
   private var claudeAccounts: [DashboardAccount] {
     model.dashboard?.visibleAccounts.filter { $0.provider == "claude" } ?? []
+  }
+
+  /// The Value hover tag: it names the account actually shown exactly when the Show
+  /// preview names one (a reading is shown), else the generic tag.
+  private var menuBarValueHelp: String {
+    guard model.menuBarReading(prefs) != nil else { return MenuBarReading.valueHelpHidden }
+    return MenuBarReading.valueHelp(dashboard: model.dashboard, provider: prefs.menuBarProvider,
+      mode: prefs.menuBarMode, claudeAccountID: prefs.menuBarClaudeAccountID)
   }
 
   private var menuBarPreview: String {
