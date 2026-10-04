@@ -11,12 +11,14 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  ai-account-center antigravity status');
   writeLine('  ai-account-center antigravity recover');
   writeLine('  ai-account-center antigravity activate <profile>');
+  writeLine('  ai-account-center antigravity runtime refresh');
   writeLine('');
   writeLine('Commands');
   writeLine('  signin <profile>   Add a new saved profile, or sign in again to a saved one');
   writeLine('  status             Show what account switching still needs (read-only)');
   writeLine('  recover            Finish or undo a stuck account switch (proof-driven)');
   writeLine('  activate <profile> Switch the Ubuntu login (same guarded path as the dashboard)');
+  writeLine('  runtime refresh    Re-pin the installed runtime to the reviewed CLI build');
   writeLine('');
   writeLine('Notes');
   writeLine('  Runs on Ubuntu in an interactive terminal (over SSH is fine). The official');
@@ -33,6 +35,19 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  identity proof, transaction, rollback) and only as the user that owns');
   writeLine("  this computer's Antigravity state. Running programs are listed for");
   writeLine('  review first; the switch needs your answer in an interactive terminal.');
+  writeLine('  Refresh re-verifies the installed CLI against the reviewed set and');
+  writeLine('  re-pins the install descriptor atomically, keeping the previous pin');
+  writeLine('  as a backup. An unreviewed CLI stays paused until it is reviewed.');
+}
+
+export function printAntigravityRuntimeHelp(writeLine: Writer = console.log): void {
+  writeLine('AI Account Center Antigravity runtime');
+  writeLine('');
+  writeLine('Usage');
+  writeLine('  ai-account-center antigravity runtime refresh');
+  writeLine('');
+  writeLine('Commands');
+  writeLine('  refresh   Re-pin the installed runtime to the reviewed CLI build');
 }
 
 /** Test seam: builds the runtime recover acts on. Production uses the installed one. */
@@ -140,6 +155,23 @@ export async function handleAntigravityCommand(
       runtime: createInstalledAntigravityRuntimeFactory({ home: realHome })(ccsDir),
       lifecycle: new AntigravityAccountLifecycle({ ccsDir: () => ccsDir, home: () => realHome }),
       ccsDir,
+      uid: process.getuid?.() ?? null,
+    });
+  }
+  if (args[0] === 'runtime') {
+    if (args.length === 1 || (args.length === 2 && ['help', '--help', '-h'].includes(args[1]))) {
+      printAntigravityRuntimeHelp(writeLine);
+      return 0;
+    }
+    if (args.length !== 2 || args[1] !== 'refresh') {
+      writeLine('[X] Usage: ai-account-center antigravity runtime refresh');
+      return 1;
+    }
+    // Loaded late so help and usage errors never touch the descriptor.
+    const { runAntigravityTerminalRefresh } = await import('../antigravity/terminal-refresh');
+    return runAntigravityTerminalRefresh({
+      ccsDir: getCcsDir(),
+      home: os.homedir(),
       uid: process.getuid?.() ?? null,
     });
   }

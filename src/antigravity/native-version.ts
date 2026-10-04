@@ -4,18 +4,75 @@ import { nativeBinaryProblem } from './signin-sandbox';
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
-/**
- * Reviewed native versions of the Antigravity CLI (`agy --version`), oldest
- * first. Each entry was reviewed under the product's native review procedure
- * with its release receipt; a new reviewed release appends here.
- */
-export const REVIEWED_NATIVE_VERSIONS: readonly string[] = ['1.2.16'];
-
 /** A reviewed version stamp: dotted release with an optional pre-release tail. */
 export function isNativeVersion(value: unknown): value is string {
   return (
     typeof value === 'string' && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(value) && value.length <= 128
   );
+}
+
+/** One reviewed native build: `agy --version` plus the sha256 of its bytes. */
+export interface ReviewedNative {
+  version: string;
+  sha256: string;
+}
+
+export interface NativeRelease {
+  gateOpen: boolean;
+  /** The reviewed set, oldest first; empty when the release file is unusable. */
+  reviewed: ReviewedNative[];
+}
+
+function reviewedEntry(value: unknown): ReviewedNative | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2 || !keys.includes('nativeVersion') || !keys.includes('nativeSha256'))
+    return null;
+  if (!isNativeVersion(record.nativeVersion)) return null;
+  if (typeof record.nativeSha256 !== 'string' || !SHA256.test(record.nativeSha256)) return null;
+  return { version: record.nativeVersion, sha256: record.nativeSha256 };
+}
+
+/**
+ * The packaged release's gate and reviewed set. A release without
+ * `reviewedNatives` reads as its single current pin; anything malformed reads
+ * as a closed gate with an empty set. Never throws.
+ */
+export function readNativeRelease(releaseFile: string): NativeRelease {
+  const closed: NativeRelease = { gateOpen: false, reviewed: [] };
+  try {
+    const raw = fs.readFileSync(releaseFile);
+    if (raw.length > 65536) return closed;
+    const value = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+    const gateOpen =
+      value.nativeActivationReleased === true &&
+      typeof value.nativeProofReceiptSha256 === 'string' &&
+      SHA256.test(value.nativeProofReceiptSha256);
+    const reviewed: ReviewedNative[] = [];
+    if (value.reviewedNatives === undefined) {
+      const single = reviewedEntry({
+        nativeVersion: value.nativeVersion,
+        nativeSha256: value.nativeSha256,
+      });
+      if (single) reviewed.push(single);
+    } else {
+      if (!Array.isArray(value.reviewedNatives) || value.reviewedNatives.length > 16)
+        return { gateOpen, reviewed: [] };
+      for (const entry of value.reviewedNatives) {
+        const parsed = reviewedEntry(entry);
+        if (!parsed) return { gateOpen, reviewed: [] };
+        reviewed.push(parsed);
+      }
+    }
+    const versions = new Set(reviewed.map((entry) => entry.version));
+    const hashes = new Set(reviewed.map((entry) => entry.sha256));
+    if (versions.size !== reviewed.length || hashes.size !== reviewed.length)
+      return { gateOpen, reviewed: [] };
+    return { gateOpen, reviewed };
+  } catch {
+    return closed;
+  }
 }
 
 export interface NativeUpdatePaused {
@@ -47,22 +104,8 @@ function binaryStatKey(binary: string): string | null {
   }
 }
 
-function readReleasePin(releaseFile: string): {
-  nativeSha256: string | null;
-  nativeVersion: string | null;
-} {
-  try {
-    const value = JSON.parse(fs.readFileSync(releaseFile, 'utf8')) as Record<string, unknown>;
-    return {
-      nativeSha256:
-        typeof value.nativeSha256 === 'string' && SHA256.test(value.nativeSha256)
-          ? value.nativeSha256
-          : null,
-      nativeVersion: isNativeVersion(value.nativeVersion) ? value.nativeVersion : null,
-    };
-  } catch {
-    return { nativeSha256: null, nativeVersion: null };
-  }
+export function defaultNativeReleaseFile(): string {
+  return path.resolve(__dirname, '../../scripts/antigravity/runtime/release.json');
 }
 
 /**
@@ -91,9 +134,10 @@ export async function readInstalledNativeVersion(
 }
 
 /**
- * Non-null exactly when an installed CLI no longer matches the reviewed pin:
- * switching is then paused until a new review. Re-reads the version only when
- * the binary changes; never throws and never fails closed into a 500.
+ * Non-null exactly when an installed CLI matches no reviewed build: switching
+ * is then paused until a new review. Both verdicts are cached by binary
+ * identity, so polling never re-hashes an unchanged binary; never throws and
+ * never fails closed into a 500.
  */
 export async function readNativeUpdatePaused(
   probe: NativeUpdateProbe
@@ -103,21 +147,26 @@ export async function readNativeUpdatePaused(
     const ccsDir = path.resolve(probe.ccsDir);
     const binary = path.join(home, '.local', 'bin', 'agy');
     if (nativeBinaryProblem(home, process.getuid?.() ?? null)) return null;
-    const release = readReleasePin(
-      probe.releaseFile ?? path.resolve(__dirname, '../../scripts/antigravity/runtime/release.json')
-    );
-    if (!release.nativeSha256) return null;
-    const matches = probe.pinMatches(binary, release.nativeSha256);
-    if (matches) return null;
+    const release = readNativeRelease(probe.releaseFile ?? defaultNativeReleaseFile());
+    if (!release.reviewed.length) return null;
     const statKey = binaryStatKey(binary);
+    const setKey = release.reviewed.map((entry) => `${entry.version}:${entry.sha256}`).join(',');
+    const cacheKey = statKey ? `${statKey}|${setKey}` : null;
     const cached = pausedCache.get(binary);
-    if (cached && statKey && cached.key === statKey) return cached.value;
-    const value: NativeUpdatePaused = {
-      installedVersion: await readInstalledNativeVersion(home, ccsDir, probe.readVersion),
-    };
+    if (cached && cacheKey && cached.key === cacheKey) return cached.value;
+    let matched = false;
+    for (const entry of release.reviewed) {
+      if (probe.pinMatches(binary, entry.sha256)) {
+        matched = true;
+        break;
+      }
+    }
+    const value: NativeUpdatePaused | null = matched
+      ? null
+      : { installedVersion: await readInstalledNativeVersion(home, ccsDir, probe.readVersion) };
     if (pausedCache.size >= MAX_CACHE_ENTRIES)
       pausedCache.delete(pausedCache.keys().next().value as string);
-    pausedCache.set(binary, { key: statKey ?? '', value });
+    pausedCache.set(binary, { key: cacheKey ?? '', value });
     return value;
   } catch {
     return null;

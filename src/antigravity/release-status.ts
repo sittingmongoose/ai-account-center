@@ -6,7 +6,7 @@ import {
   readInstalledAntigravityRuntime,
   verifyOwnedAntigravityNativePin,
 } from './production-runtime';
-import { REVIEWED_NATIVE_VERSIONS } from './native-version';
+import { defaultNativeReleaseFile, readNativeRelease, type ReviewedNative } from './native-version';
 import { AntigravityProfileRegistry } from './registry';
 import { nativeBinaryProblem } from './signin-sandbox';
 
@@ -20,6 +20,8 @@ import { nativeBinaryProblem } from './signin-sandbox';
  */
 export interface AntigravityReleaseStatus {
   nativeCli: 'missing' | 'pinned' | 'changed';
+  /** Reviewed `agy --version` stamps from the packaged release, oldest first. */
+  reviewedNativeVersions: string[];
   dashboardGateOpen: boolean;
   runtimeGateOpen: boolean;
   runtimeInstalled: boolean;
@@ -43,22 +45,9 @@ export interface ReleaseStatusDeps {
   pinMatches?: (binary: string, sha256: string) => boolean;
 }
 
-function readRelease(file: string): { open: boolean; nativeSha256: string | null } {
-  try {
-    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
-    return {
-      open:
-        value.nativeActivationReleased === true &&
-        typeof value.nativeProofReceiptSha256 === 'string' &&
-        /^[a-f0-9]{64}$/.test(value.nativeProofReceiptSha256),
-      nativeSha256:
-        typeof value.nativeSha256 === 'string' && /^[a-f0-9]{64}$/.test(value.nativeSha256)
-          ? value.nativeSha256
-          : null,
-    };
-  } catch {
-    return { open: false, nativeSha256: null };
-  }
+function readRelease(file: string): { open: boolean; reviewed: ReviewedNative[] } {
+  const release = readNativeRelease(file);
+  return { open: release.gateOpen, reviewed: release.reviewed };
 }
 
 function readAdoption(ccsDir: string): AntigravityReleaseStatus['adoption'] {
@@ -99,17 +88,21 @@ function nextStep(status: Omit<AntigravityReleaseStatus, 'nextStep'>): string {
 export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): AntigravityReleaseStatus {
   const ccsDir = path.resolve(deps.ccsDir);
   const home = path.resolve(deps.home);
-  const release = readRelease(
-    deps.releaseFile ?? path.resolve(__dirname, '../../scripts/antigravity/runtime/release.json')
-  );
+  const release = readRelease(deps.releaseFile ?? defaultNativeReleaseFile());
   const binary = path.join(home, '.local', 'bin', 'agy');
+  const pinMatches = deps.pinMatches ?? verifyOwnedAntigravityNativePin;
   const nativeCli: AntigravityReleaseStatus['nativeCli'] = nativeBinaryProblem(
     home,
     process.getuid?.() ?? null
   )
     ? 'missing'
-    : release.nativeSha256 &&
-        (deps.pinMatches ?? verifyOwnedAntigravityNativePin)(binary, release.nativeSha256)
+    : release.reviewed.some((entry) => {
+          try {
+            return pinMatches(binary, entry.sha256);
+          } catch {
+            return false;
+          }
+        })
       ? 'pinned'
       : 'changed';
   const installed = readInstalledAntigravityRuntime(ccsDir, home);
@@ -149,6 +142,7 @@ export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): Antigravi
   }
   const status = {
     nativeCli,
+    reviewedNativeVersions: release.reviewed.map((entry) => entry.version),
     dashboardGateOpen: deps.dashboardGate ?? ANTIGRAVITY_NATIVE_RELEASED,
     runtimeGateOpen: release.open,
     runtimeInstalled: installed !== null,
@@ -167,7 +161,7 @@ export function formatAntigravityReleaseStatus(status: AntigravityReleaseStatus)
     'Antigravity switching on Ubuntu',
     `  Native CLI:          ${
       status.nativeCli === 'pinned'
-        ? `installed, reviewed ${REVIEWED_NATIVE_VERSIONS.join(' / ')} build`
+        ? `installed, reviewed ${status.reviewedNativeVersions.join(' / ')} build`
         : status.nativeCli === 'changed'
           ? 'installed, not the reviewed build'
           : 'missing'

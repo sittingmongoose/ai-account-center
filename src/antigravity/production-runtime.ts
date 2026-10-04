@@ -270,9 +270,17 @@ export function createInstalledAntigravityRuntimeFactory(
 }
 
 /** Private composition shared by the dashboard and explicit managed updater. */
-export function createInstalledAntigravityComponents(ccsDir: string, home: string) {
+export function createInstalledAntigravityComponents(
+  ccsDir: string,
+  home: string,
+  options: {
+    /** Owned fixture injection only; production runs the real refresh below. */
+    refreshDescriptor?: typeof import('./runtime-refresh').refreshRuntimeDescriptor;
+  } = {}
+) {
   if (process.platform !== 'linux') return null;
-  const installed = readInstalledAntigravityRuntime(path.resolve(ccsDir), home);
+  const directory = path.resolve(ccsDir);
+  const installed = readInstalledAntigravityRuntime(directory, home);
   if (!installed) return null;
   const quotaWorker = createAntigravityQuotaWorker();
   const nativeStore = createUbuntuNativeCredentialStore({ home });
@@ -284,9 +292,18 @@ export function createInstalledAntigravityComponents(ccsDir: string, home: strin
     releaseGate: async () => {
       // Saved settings or a dashboard PUT cannot enable native activation.
       if (!ANTIGRAVITY_NATIVE_RELEASED) return false;
-      const current = readInstalledAntigravityRuntime(path.resolve(ccsDir), home);
-      if (!current || current.nativeSha256 !== installed.nativeSha256) return false;
-      return verifyOwnedAntigravityNativePin(current.nativeBinary, current.nativeSha256);
+      // Imported at call time: the refresh core reads descriptors from this
+      // module, so a static import would close a module cycle.
+      const refresh =
+        options.refreshDescriptor ?? (await import('./runtime-refresh')).refreshRuntimeDescriptor;
+      const result = await refresh({
+        ccsDir: directory,
+        home,
+        // The gate needs no version string, so an unreviewed binary refuses
+        // without ever spawning it.
+        readVersion: async () => null,
+      });
+      return result.status === 'current' || result.status === 'refreshed';
     },
   });
   return { installed, quotaWorker, nativeStore, bridge, driver };

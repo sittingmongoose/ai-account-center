@@ -299,11 +299,22 @@ Releases follow the same review the 1.2.16 receipt records
 (`status/AGY-RELEASE-RECEIPT-1.2.16.md`): binary identity and ownership,
 changelog, storage layout and permissions, token format and lifecycle, process
 names, status vocabulary and credential backend, all with read-only probes and
-no secrets printed. If the new build is compatible, the release commit pins its
-version and hash in `scripts/antigravity/runtime/release.json`, updates the
-in-code version checks and the manifest rows, and points
+no secrets printed. If the new build is compatible, the release commit appends
+its version and hash to the `reviewedNatives` set in
+`scripts/antigravity/runtime/release.json`, moves the current
+`nativeVersion`/`nativeSha256` pin to it, refreshes the manifest row, and points
 `nativeProofReceiptSha256` at the new receipt; then install verification,
 status and the live test run again before any activation.
+
+After deploying a re-pinned release, the install descriptor still names the
+previous pin until it is refreshed. The first switching proof refreshes it
+automatically when the installed CLI is a reviewed build (the descriptor is
+re-pinned atomically with the previous pin kept as a backup); an unreviewed
+build stays paused. `ai-account-center antigravity runtime refresh` runs the
+same refresh explicitly: it re-verifies the installed CLI against the reviewed
+set with the adoption proofs (owned descriptor, bundle gate, exact paths) and
+reports `current`, `refreshed`, or the paused state. It runs only as the user
+that owns this computer's Antigravity state.
 
 ### Rollback
 

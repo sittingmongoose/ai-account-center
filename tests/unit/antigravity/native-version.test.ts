@@ -9,6 +9,7 @@ import path from 'path';
 import {
   isNativeVersion,
   readInstalledNativeVersion,
+  readNativeRelease,
   readNativeUpdatePaused,
 } from '../../../src/antigravity/native-version';
 
@@ -156,5 +157,108 @@ describe('native version review state', () => {
         readVersion: async () => '1.2.17',
       })
     ).toBeNull();
+  });
+
+  it('stays silent when the binary matches any reviewed entry, pausing otherwise', async () => {
+    fs.writeFileSync(
+      releaseFile,
+      JSON.stringify({
+        schemaVersion: 1,
+        nativeActivationReleased: true,
+        nativeProofReceiptSha256: 'b'.repeat(64),
+        reviewedNatives: [
+          { nativeVersion: '1.2.14', nativeSha256: 'a'.repeat(64) },
+          { nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64) },
+        ],
+      })
+    );
+    let reads = 0;
+    const probe = (match: string) => ({
+      home,
+      ccsDir,
+      releaseFile,
+      pinMatches: (binary: string, sha: string) => sha === match,
+      readVersion: async () => {
+        reads++;
+        return '1.2.16';
+      },
+    });
+    expect(await readNativeUpdatePaused(probe('c'.repeat(64)))).toBeNull();
+    expect(reads).toBe(0);
+    // A fresh binary identity re-proves instead of reusing the cached verdict.
+    const binary = path.join(home, '.local', 'bin', 'agy');
+    fs.writeFileSync(binary, '#!/bin/sh\n# replaced build\nexit 0\n');
+    fs.chmodSync(binary, 0o755);
+    expect(await readNativeUpdatePaused(probe('d'.repeat(64)))).toEqual({
+      installedVersion: '1.2.16',
+    });
+    expect(reads).toBe(1);
+  });
+
+  it('caches a matched verdict without re-proving the binary', async () => {
+    let proofs = 0;
+    const probe = {
+      home,
+      ccsDir,
+      releaseFile,
+      pinMatches: () => {
+        proofs++;
+        return true;
+      },
+    };
+    expect(await readNativeUpdatePaused(probe)).toBeNull();
+    expect(await readNativeUpdatePaused(probe)).toBeNull();
+    expect(proofs).toBe(1);
+  });
+
+  it('reads the gate and the reviewed set strictly', () => {
+    const gate = { nativeActivationReleased: true, nativeProofReceiptSha256: 'b'.repeat(64) };
+    const entries = [
+      { nativeVersion: '1.2.14', nativeSha256: 'a'.repeat(64) },
+      { nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64) },
+    ];
+    fs.writeFileSync(releaseFile, JSON.stringify({ schemaVersion: 1, ...gate, reviewedNatives: entries }));
+    expect(readNativeRelease(releaseFile)).toEqual({
+      gateOpen: true,
+      reviewed: [
+        { version: '1.2.14', sha256: 'a'.repeat(64) },
+        { version: '1.2.16', sha256: 'c'.repeat(64) },
+      ],
+    });
+    fs.writeFileSync(
+      releaseFile,
+      JSON.stringify({ schemaVersion: 1, ...gate, nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64) })
+    );
+    expect(readNativeRelease(releaseFile)).toEqual({
+      gateOpen: true,
+      reviewed: [{ version: '1.2.16', sha256: 'c'.repeat(64) }],
+    });
+    for (const reviewedNatives of [
+      [],
+      [{ nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64), extra: 1 }],
+      [
+        { nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64) },
+        { nativeVersion: '1.2.16', nativeSha256: 'a'.repeat(64) },
+      ],
+      [
+        { nativeVersion: '1.2.16', nativeSha256: 'c'.repeat(64) },
+        { nativeVersion: '1.2.14', nativeSha256: 'c'.repeat(64) },
+      ],
+      [{ nativeVersion: '1.2', nativeSha256: 'c'.repeat(64) }],
+      '1.2.16',
+      Array.from({ length: 17 }, (_, index) => ({
+        nativeVersion: `1.2.${index}`,
+        nativeSha256: `${index}`.padStart(64, '0'),
+      })),
+    ]) {
+      fs.writeFileSync(releaseFile, JSON.stringify({ schemaVersion: 1, ...gate, reviewedNatives }));
+      expect(readNativeRelease(releaseFile)).toEqual({ gateOpen: true, reviewed: [] });
+    }
+    fs.writeFileSync(releaseFile, JSON.stringify({ schemaVersion: 1 }));
+    expect(readNativeRelease(releaseFile)).toEqual({ gateOpen: false, reviewed: [] });
+    expect(readNativeRelease(path.join(root, 'missing.json'))).toEqual({
+      gateOpen: false,
+      reviewed: [],
+    });
   });
 });

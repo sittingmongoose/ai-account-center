@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1107,
-    "filesAffected": 111,
+    "totalOccurrences": 1129,
+    "filesAffected": 112,
     "hotpathOccurrences": 499,
     "hotpathFilesAffected": 62,
     "topHotpathFiles": [
@@ -314,6 +314,24 @@
         "markers": []
       },
       {
+        "file": "src/antigravity/runtime-refresh.ts",
+        "count": 23,
+        "calls": [
+          "closeSync",
+          "existsSync",
+          "fstatSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readFileSync",
+          "renameSync",
+          "rmSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/web-server/usage/account-activity-collector.ts",
         "count": 23,
         "calls": [
@@ -325,25 +343,6 @@
           "readFileSync",
           "readSync",
           "renameSync",
-          "statSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/antigravity/signin-sandbox.ts",
-        "count": 21,
-        "calls": [
-          "accessSync",
-          "chmodSync",
-          "closeSync",
-          "fstatSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "rmSync",
           "statSync",
           "writeFileSync"
         ],
@@ -603,8 +602,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 34,
-      "totalSourceFiles": 385,
-      "coverageRatio": 0.0883,
+      "totalSourceFiles": 387,
+      "coverageRatio": 0.0879,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -641,7 +640,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 32,
+          "count": 34,
           "withLogger": 0
         },
         {
