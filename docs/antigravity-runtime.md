@@ -303,8 +303,15 @@ no secrets printed. If the new build is compatible, the release commit appends
 its version and hash to the `reviewedNatives` set in
 `scripts/antigravity/runtime/release.json`, moves the current
 `nativeVersion`/`nativeSha256` pin to it, refreshes the manifest row, and points
-`nativeProofReceiptSha256` at the new receipt; then install verification,
-status and the live test run again before any activation.
+`nativeProofReceiptSha256` at the new receipt; then the installed runtime is
+refreshed to the new build before any activation:
+`ai-account-center antigravity runtime refresh` re-pins the installation
+descriptor, and `python3 -I "$PKG/scripts/antigravity/rebuild_bundle.py" --apply`
+rebuilds the installed bundle when it still pins the old build (`--plan`
+previews read-only; `--recover-rebuild` removes an interrupted rebuild after
+review). The rebuild refuses unreviewed binaries, foreign files and running
+switches, keeps the previous bundle and descriptor bytes, and restores them if
+verification fails. Status and the live test run again after it.
 
 After deploying a re-pinned release, the install descriptor still names the
 previous pin until it is refreshed. The first switching proof refreshes it
@@ -322,5 +329,7 @@ that owns this computer's Antigravity state.
 the shell profiles and status line and disables the service. Reinstall the
 previous dashboard package (its gates are closed) and restart `ccs-dashboard`.
 The installed bundle and descriptor stay inert while the dashboard gate is
-closed. Saved profiles and the live login are unchanged by every step above
-except the approved activations themselves.
+closed. A bundle rebuild keeps the previous bundle and descriptor bytes in
+place, and the adoption rollback still restores the profiles, status line and
+service afterwards. Saved profiles and the live login are unchanged by every
+step above except the approved activations themselves.
