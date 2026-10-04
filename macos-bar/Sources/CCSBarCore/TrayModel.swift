@@ -210,9 +210,11 @@ public enum MenuBarMode: String, CaseIterable, Sendable { case remaining = "left
 public struct MenuBarReading: Sendable, Equatable {
   public let value: Double
   public let text: String
-  /// For the tooltip, e.g. "Codex · codex-2 · Weekly used". The account is its short
-  /// (local-part) name, or the full identity when two of the provider's accounts shorten
-  /// the same way, so the tag always names the account actually shown.
+  /// The full identity (email, else label) of the account the number comes from. The tags
+  /// always show this unshortened, so the tag names the account actually shown.
+  public let accountName: String
+  /// For the tooltip, e.g. "Codex · codex-2@example.invalid · Weekly used". The account
+  /// is the full identity, the same string as `accountName`.
   public let detail: String
   /// The provider choice that shows the icon alone, with no number.
   public static let nothingProvider = "none"
@@ -240,9 +242,9 @@ public struct MenuBarReading: Sendable, Equatable {
     guard account.pendingReset(window) == nil, let used = window.meterUsedPercent else { return nil }
     let value = mode == .used ? used : max(0, 100 - used)
     let text = "\(TrayFormat.number(value))%"
-    let who = shownAccountName(accounts: pick.accounts, account: account)
+    let who = account.identity
     let span = window.key == fiveHour?.key ? "5-hour" : "Weekly"
-    return MenuBarReading(value: value, text: text,
+    return MenuBarReading(value: value, text: text, accountName: who,
       detail: "\(providerName(provider)) · \(who) · \(span) \(mode == .used ? "used" : "remaining")")
   }
 
@@ -266,18 +268,6 @@ public struct MenuBarReading: Sendable, Equatable {
     return (accounts, account)
   }
 
-  /// The account name the menu bar tags use: the short (local-part) name, or the full
-  /// identity when two of the provider's accounts shorten the same way — the same
-  /// string the Settings pickers show, so the tag names this account.
-  public static func shownAccountName(accounts: [DashboardAccount], account: DashboardAccount) -> String {
-    func shortName(_ identity: String) -> String {
-      identity.split(separator: "@").first.map(String.init) ?? identity
-    }
-    let short = shortName(account.identity)
-    let collides = accounts.contains { $0.id != account.id && shortName($0.identity) == short }
-    return collides ? account.identity : short
-  }
-
   /// Hover tag for the Settings > Menu bar > Show picker.
   public static let showHelp = "Choose which provider's usage number appears in the menu bar."
   /// Hover tag for the Settings > Menu bar > Claude account picker.
@@ -288,15 +278,15 @@ public struct MenuBarReading: Sendable, Equatable {
   public static let valueHelpHidden = "Whether the menu bar would show Used or Remaining."
 
   /// Hover tag for the Settings > Menu bar > Value picker. It names the account actually
-  /// shown — the same account string the Show row's Now preview uses — or stays generic
-  /// when no number is shown (Nothing picked, or no window reported).
+  /// shown — the full identity from the same reading the Show row's Now preview uses,
+  /// so the two can never name different accounts — or stays generic when no number is
+  /// shown (Nothing picked, or no window reported).
   public static func valueHelp(dashboard: AccountDashboard?, provider: String, mode: MenuBarMode,
     claudeAccountID: String? = nil) -> String {
-    guard make(dashboard: dashboard, provider: provider, mode: mode, claudeAccountID: claudeAccountID) != nil,
-      let pick = pickAccount(dashboard: dashboard, provider: provider, claudeAccountID: claudeAccountID) else {
+    guard let reading = make(dashboard: dashboard, provider: provider, mode: mode, claudeAccountID: claudeAccountID) else {
       return valueHelpHidden
     }
-    return "Whether the menu bar shows Used or Remaining for \(shownAccountName(accounts: pick.accounts, account: pick.account))."
+    return "Whether the menu bar shows Used or Remaining for \(reading.accountName)."
   }
 }
 
