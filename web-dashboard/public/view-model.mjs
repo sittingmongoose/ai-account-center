@@ -430,7 +430,9 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
     id: 'antigravity', kind: 'switchable', label: 'Antigravity', longLabel: 'Google Antigravity CLI', switchable: true, canSwitch: policyShown,
     meta: `Google Antigravity CLI · ${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}`,
     metaRuns: [run('Google Antigravity CLI · '), run(rows.length, true), run(` ${rows.length === 1 ? 'account' : 'accounts'}`)],
-    foot: noFoot(),
+    foot: native.antigravityUpdatePaused
+      ? { shown: true, warn: true, runs: [run(native.antigravityUpdatePaused)], when: '' }
+      : noFoot(),
     activeId: activeRow?.id || '', activeLabel: activeRow?.email || '', empty: 'No Antigravity accounts are reported yet.',
     auto: {
       known: native.antigravityAutoKnown, shown: policyShown, enabled: native.antigravityAutoEnabled, available: native.antigravityAutoAvailable,

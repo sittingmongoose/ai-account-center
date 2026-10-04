@@ -367,6 +367,24 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
     expect(calls.inventory).toBe(1);
   });
 
+  test('inventory publishes the paused update state but scrubs a hostile version', async () => {
+    const value = inventory();
+    value.nativeUpdatePaused = {
+      installedVersion: '1.2.17',
+      privatePath: PRIVATE,
+    } as unknown as { installedVersion: string };
+    deps.getInventory = async () => value;
+    const response = await request('/profiles');
+    expect(response.status).toBe(200);
+    expect(response.body.nativeUpdatePaused).toEqual({ installedVersion: '1.2.17' });
+    const hostile = inventory();
+    hostile.nativeUpdatePaused = { installedVersion: '1.2.17; id' };
+    deps.getInventory = async () => hostile;
+    const scrubbed = await request('/profiles');
+    expect(scrubbed.status).toBe(200);
+    expect(scrubbed.body.nativeUpdatePaused).toEqual({ installedVersion: null });
+  });
+
   for (const refresh of [undefined, 'false', 'true']) {
     test(`quotas pass only explicit refresh=${refresh ?? 'default false'} to the dependency`, async () => {
       const response = await request(

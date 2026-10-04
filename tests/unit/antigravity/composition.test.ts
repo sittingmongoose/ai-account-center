@@ -226,7 +226,7 @@ describe('Antigravity explicitly injected runtime composition', () => {
     };
   }
 
-  function construct(): AntigravityRuntime {
+  function construct(extra: Partial<AntigravityRuntimeDependencies> = {}): AntigravityRuntime {
     runtime = createAntigravityRuntime({
       registry,
       driver,
@@ -242,6 +242,7 @@ describe('Antigravity explicitly injected runtime composition', () => {
         censusCalls++;
         return { ...census };
       },
+      ...extra,
     });
     return runtime;
   }
@@ -409,6 +410,37 @@ describe('Antigravity explicitly injected runtime composition', () => {
       false,
     ]);
     expect(JSON.stringify(accounts)).not.toContain(FAKE_PRIVATE);
+  });
+
+  test('a paused native update ships in the inventory while quotas stay readable', async () => {
+    await importFixtures();
+    const instance = construct({
+      readNativeUpdatePaused: async () => ({ installedVersion: '1.2.17' }),
+    });
+    const inventory = await instance.getInventory();
+    expect(inventory.nativeUpdatePaused).toEqual({ installedVersion: '1.2.17' });
+    const accounts = await instance.getAccounts({ refresh: false });
+    expect(accounts.map((account) => account.status)).toEqual(['ok', 'ok']);
+    expectNoNativeActions();
+  });
+
+  test('a failing or hostile paused probe leaves the inventory unpaused', async () => {
+    await importFixtures();
+    const failing = construct({
+      readNativeUpdatePaused: async () => {
+        throw new Error(FAKE_PRIVATE);
+      },
+    });
+    expect(await failing.getInventory()).not.toHaveProperty('nativeUpdatePaused');
+    const hostile = construct({
+      readNativeUpdatePaused: async () => ({ installedVersion: '1.2.17; id' }),
+    });
+    expect((await hostile.getInventory()).nativeUpdatePaused).toEqual({
+      installedVersion: null,
+    });
+    const absent = construct();
+    expect(await absent.getInventory()).not.toHaveProperty('nativeUpdatePaused');
+    expectNoNativeActions();
   });
 
   test('account-bound identity mismatch clears the affected previous good quota instead of reusing it', async () => {

@@ -83,3 +83,12 @@ test('actual pool labels that imitate generated suffixes still map uniquely to e
   assert.equal(new Set(v.antigravityPoolChoices.map(c => c.label)).size, v.antigravityPoolChoices.length);
   for (const choice of v.antigravityPoolChoices) assert.deepEqual(antigravitySettingsPatch(v, 'antigravity-pool', choice.label), {requestedPoolId:choice.id});
 });
+test('paused update names the installed version; hostile or missing versions stay generic', () => {
+  const f = fixture(); assert.equal(view(f).antigravityUpdatePaused, null);
+  f.inventory.nativeUpdatePaused = { installedVersion: '1.2.17' };
+  assert.equal(view(f).antigravityUpdatePaused, 'Antigravity updated to 1.2.17; switching paused until reviewed');
+  for (const installedVersion of [null, '1.2', '1.2.17; id', 'x'.repeat(129), 42]) {
+    const g = fixture(); g.inventory.nativeUpdatePaused = { installedVersion };
+    assert.equal(view(g).antigravityUpdatePaused, 'Antigravity updated; switching paused until reviewed');
+  }
+});

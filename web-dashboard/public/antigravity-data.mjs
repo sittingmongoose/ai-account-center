@@ -83,6 +83,12 @@ export function antigravityView(data, inventory, autoStatus, now = Date.now()) {
   const selected = choices.find(choice => choice.id === status?.requestedPoolId) || choices[0];
   const available = ready && known && status.activationInProgress !== true;
   const canEnable = available && shared.includes(status.requestedPoolId);
+  const pausedVersion = inventory?.nativeUpdatePaused && typeof inventory.nativeUpdatePaused.installedVersion === 'string'
+    && inventory.nativeUpdatePaused.installedVersion.length <= 128
+    && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(inventory.nativeUpdatePaused.installedVersion)
+    ? inventory.nativeUpdatePaused.installedVersion : null;
+  const updatePaused = inventory?.nativeUpdatePaused
+    ? `Antigravity updated${pausedVersion ? ` to ${pausedVersion}` : ''}; switching paused until reviewed` : null;
   const previewId = status?.requestedPoolId && allPools.some(p => p.has(status.requestedPoolId)) ? status.requestedPoolId : [...(allPools[0]?.keys() || [])].sort()[0];
   const previewLabel = rows.length && previewId ? allPools.find(p => p.has(previewId))?.get(previewId)?.[0]?.poolLabel || 'Reported quota pool' : '';
   return {
@@ -105,6 +111,7 @@ export function antigravityView(data, inventory, autoStatus, now = Date.now()) {
     antigravityPreview: previewLabel ? `${previewLabel} · 5-hour / weekly` : 'Quota samples unavailable',
     antigravityAutoMessage: status?.message || 'Ubuntu account controls unavailable until the native runtime is verified.',
     antigravityAutoSetting: known ? `${status.thresholdUsedPercent}% used · ${status.pollIntervalSeconds}s · Ubuntu` : 'Automatic switching status unavailable',
+    antigravityUpdatePaused: updatePaused,
   };
 }
 export function antigravitySettingsPatch(view, action, value) {

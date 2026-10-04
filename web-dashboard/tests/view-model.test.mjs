@@ -199,6 +199,10 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
   assert.equal(ag.canSwitch, false); assert.equal(ag.auto.shown, false);
   assert.equal(runs(ag.auto.offRuns), 'Auto-switch *off* · needs a second account');
   assert.equal(runs(ag.metaRuns), 'Google Antigravity CLI · *1* account');
+  assert.deepEqual(ag.foot, { shown: false, warn: false, runs: [], when: '' });
+  const paused = section(dashboardViewModel(data([account({ id: 'antigravity:a', provider: 'antigravity', email: 'ag@example.test', windows: [window({ key: 'gemini-weekly', label: 'Gemini Models · Weekly' })], capabilities: {} })]), { now, antigravityInventory: { nativeUpdatePaused: { installedVersion: '1.2.17' } } }), 'antigravity');
+  assert.equal(paused.foot.shown, true); assert.equal(paused.foot.warn, true);
+  assert.equal(runs(paused.foot.runs), 'Antigravity updated to 1.2.17; switching paused until reviewed');
 });
 
 test('hiding one of two accounts from the dashboard keeps switching for the other (Codex and Antigravity)', () => {

@@ -64,11 +64,21 @@ export interface AntigravityPublicProfile {
   hostId: AntigravityHostId;
 }
 
+/**
+ * Present only when the installed Antigravity CLI no longer matches the
+ * reviewed native pin: switching is paused until the new build is reviewed.
+ * Mirrors NativeUpdatePaused in native-version.ts.
+ */
+export interface AntigravityNativeUpdatePaused {
+  installedVersion: string | null;
+}
+
 export interface AntigravityInventory {
   schemaVersion: 1;
   hostId: AntigravityHostId;
   profiles: AntigravityPublicProfile[];
   activationSupported?: boolean;
+  nativeUpdatePaused?: AntigravityNativeUpdatePaused;
 }
 
 export interface AntigravityAutoSettings {

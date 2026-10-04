@@ -238,8 +238,8 @@ after each step.
 
 1. Read-only preflight. Stop if any check fails.
    - `sha256sum ~/.local/bin/agy` prints
-     `0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029` (agy
-     1.2.14, the version the runtime was reviewed against).
+     `a759ce7c7a235d9b6c281a25ead97cbbf2e92314a3ffd224e2f9144f3fae7a86` (agy
+     1.2.16, the version the runtime was reviewed against).
    - `pgrep -u "$USER" -x agy` prints nothing.
    - `python3 -I "$PKG/scripts/antigravity/install_runtime.py" --plan` prints
      `"nativeActivationReleased": false` and `"installed": false`.
@@ -282,11 +282,28 @@ after each step.
    answers 200 `{"status": "active"}`; then the same for `gmail`. A
    `confirmation-required` answer (managed idle sessions) is confirmed with
    `POST /api/antigravity/profiles/<id>/confirm` and its token. Any other
-   answer means switching stays off: roll back.
+   answer means switching stays off: roll back. The same guarded switch runs
+   locally as `ai-account-center antigravity activate <profile>` (owning user,
+   interactive terminal): it lists running programs for review first.
 8. Automatic switching, after the live test passed:
    `PUT /api/antigravity/auto-switch` with
    `{"enabled": true, "requestedPoolId": "<a pool both accounts report>"}`
    (threshold default 95% used).
+
+### When the official CLI auto-updates past the reviewed pin
+
+An official update invalidates the pin on purpose: activation answers
+`unsupported-runtime-probe`, and status and the dashboard say
+`Antigravity updated to X; switching paused until reviewed` instead of failing.
+Releases follow the same review the 1.2.16 receipt records
+(`status/AGY-RELEASE-RECEIPT-1.2.16.md`): binary identity and ownership,
+changelog, storage layout and permissions, token format and lifecycle, process
+names, status vocabulary and credential backend, all with read-only probes and
+no secrets printed. If the new build is compatible, the release commit pins its
+version and hash in `scripts/antigravity/runtime/release.json`, updates the
+in-code version checks and the manifest rows, and points
+`nativeProofReceiptSha256` at the new receipt; then install verification,
+status and the live test run again before any activation.
 
 ### Rollback
 

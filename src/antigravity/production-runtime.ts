@@ -12,6 +12,7 @@ import { createUbuntuNativeCredentialStore } from './native-credential-transport
 import { createUbuntuAntigravityDriver } from './ubuntu-driver';
 import { createUbuntuRuntimeBridge } from './ubuntu-runtime-bridge';
 import { AntigravityProfileRegistry } from './registry';
+import { readNativeUpdatePaused } from './native-version';
 import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver } from './types';
 
@@ -198,10 +199,16 @@ export function createInstalledAntigravityRuntimeFactory(
     const components = createInstalledAntigravityComponents(directory, home);
     if (components) {
       const { quotaWorker, driver, bridge } = components;
+      const pausedProbe = {
+        home,
+        ccsDir: directory,
+        pinMatches: verifyOwnedAntigravityNativePin,
+      };
       return createPersistentAntigravityRuntime(directory, {
         driver,
         collectQuota: quotaWorker.collectQuota,
         observeHost: () => bridge.readHostCensus(),
+        readNativeUpdatePaused: () => readNativeUpdatePaused(pausedProbe),
       });
     }
     // Saved-profile usage does not require a native runtime installation or release.
@@ -226,9 +233,15 @@ export function createInstalledAntigravityRuntimeFactory(
       stopOwnedRestarts: unsupported,
     };
     const now = options.now ?? Date.now;
+    const pausedProbe = {
+      home,
+      ccsDir: directory,
+      pinMatches: verifyOwnedAntigravityNativePin,
+    };
     const runtime = createPersistentAntigravityRuntime(directory, {
       driver,
       collectQuota: options.collectQuota ?? createAntigravityQuotaWorker().collectQuota,
+      readNativeUpdatePaused: () => readNativeUpdatePaused(pausedProbe),
       observeHost: async () => ({
         hostId: 'ubuntu',
         available: false,

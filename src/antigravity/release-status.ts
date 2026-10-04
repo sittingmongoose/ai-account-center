@@ -6,6 +6,7 @@ import {
   readInstalledAntigravityRuntime,
   verifyOwnedAntigravityNativePin,
 } from './production-runtime';
+import { REVIEWED_NATIVE_VERSIONS } from './native-version';
 import { AntigravityProfileRegistry } from './registry';
 import { nativeBinaryProblem } from './signin-sandbox';
 
@@ -77,7 +78,7 @@ function nextStep(status: Omit<AntigravityReleaseStatus, 'nextStep'>): string {
   if (status.profiles.length < 2)
     return 'Save a second profile: ai-account-center antigravity signin <profile>.';
   if (status.nativeCli === 'changed')
-    return 'The Antigravity CLI is not the reviewed 1.2.14 build; switching stays off until the runtime is reviewed for it.';
+    return 'The Antigravity CLI is not the reviewed build; switching is paused until the runtime is reviewed for it.';
   if (!status.runtimeGateOpen || !status.dashboardGateOpen)
     return 'Open both release gates and deploy that build (releasing steps 1 and 2).';
   if (!status.runtimeInstalled)
@@ -166,7 +167,7 @@ export function formatAntigravityReleaseStatus(status: AntigravityReleaseStatus)
     'Antigravity switching on Ubuntu',
     `  Native CLI:          ${
       status.nativeCli === 'pinned'
-        ? 'installed, reviewed 1.2.14 build'
+        ? `installed, reviewed ${REVIEWED_NATIVE_VERSIONS.join(' / ')} build`
         : status.nativeCli === 'changed'
           ? 'installed, not the reviewed build'
           : 'missing'
