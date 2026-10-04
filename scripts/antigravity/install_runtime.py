@@ -205,9 +205,14 @@ def shell_path_proposal(original, directory):
     if type(original) is not bytes or begin.encode() in original or end.encode() in original:
         raise InstallationError('runtime-shell-profile-conflict')
     block = (begin + '\nexport PATH=' + shlex.quote(str(directory)) + ':"$PATH"\n' + end + '\n').encode()
-    # Remote noninteractive Bash can return early in the existing .bashrc;
-    # put only this managed PATH block before those unchanged original bytes.
-    return block + original
+    # Stock Ubuntu profiles prepend ~/.local/bin to PATH inside the original
+    # bytes; append this managed block after those unchanged original bytes so
+    # a new login shell resolves agy to the managed launcher first.
+    if not original:
+        return block
+    if original.endswith(b'\n'):
+        return original + block
+    return original + b'\n' + block
 
 
 def main():
