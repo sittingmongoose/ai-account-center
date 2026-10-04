@@ -62,7 +62,7 @@ reading in Slint, never add or average across accounts, never turn a missing val
   `set_refresh_interval`, `set_accounts(json)` (Accounts & Settings v2), `set_accounts_strength(json)` (the
   change-password strength, per keystroke), `set_signin_strength(json)`, `probe_tick()` (?e2e only).
 - **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs,
-  and `ANALYTICS_VIEW_VERSION = 3` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
+  and `ANALYTICS_VIEW_VERSION = 4` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
   and `ACCOUNTS_VIEW_VERSION = 2` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
   a mismatch is refused, not half-rendered. Bump the pair together when its structs change shape.
 - **In-place updates**: lib.rs owns one `Rc<VecModel<T>>` per list (sections, cards, registry, toasts, Details
@@ -141,8 +141,8 @@ The Analytics page (W3) is built like the concept's `app-analytics.js`. Four pur
   is dropped, so labels never overlap; Martian Mono is 7.15 px a character at 11 px, so label boxes are exact)
   and `agendaView()` (resets at the same minute merged, expiries with what is left, spent packs dropped, two
   balanced columns of whole days). Current readings come from the dashboard response, history from analytics.
-- `public/analytics-data.mjs` `analyticsSlintModel(view, page)`: the version 3 JSON for `src/analytics.rs`
-  (`ANALYTICS_VIEW_VERSION = 3`, its own version, checked there). It keeps the earlier `head`, `kpis` and
+- `public/analytics-data.mjs` `analyticsSlintModel(view, page)`: the version 4 JSON for `src/analytics.rs`
+  (`ANALYTICS_VIEW_VERSION = 4`, its own version, checked there). It keeps the earlier `head`, `kpis` and
   `quotaGroups` and adds `state`, `usage`, `quota` and `agenda`.
 
 `src/analytics.rs` writes it into the `AxData` global (`ui/pages/analytics/ax-data.slint`), with persistent

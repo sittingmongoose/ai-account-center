@@ -911,4 +911,45 @@ describe('native local analytics activity', () => {
     await new Promise((complete) => setTimeout(complete, 0));
     expect((await service.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(4);
   });
+
+  it('rescans remotes on manual refresh and names the hosts it waits on while the scan runs', async () => {
+    let remoteCalls = 0;
+    let release = () => {};
+    const service = new AccountAnalyticsActivityService({
+      remote: async (_minDateMs, opts) => {
+        remoteCalls++;
+        opts?.onHostScan?.('mac', 'start');
+        opts?.onHostScan?.('windows', 'start');
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        opts?.onHostScan?.('mac', 'done');
+        opts?.onHostScan?.('windows', 'done');
+        return { results: [], states: [] };
+      },
+      requests: () => [],
+      now: () => NOW,
+      responseBudgetMs: 20,
+      scope: () => '/fixture-refresh-remote',
+    });
+    // The first answer arrives while the remote scan is still running: the
+    // page can say which hosts the refresh waits on.
+    const flying = await service.get(QUERY, FROM, NOW);
+    expect(flying.refreshing).toBe(true);
+    expect(flying.refreshingRemote).toEqual(['mac', 'windows']);
+    release();
+    const first = await settled(service);
+    expect(first.refreshing).toBe(false);
+    expect(first.refreshingRemote).toEqual([]);
+    expect(remoteCalls).toBe(1);
+    // A manual refresh runs the remote scan again instead of serving the cache.
+    const refreshing = await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    expect(refreshing.refreshing).toBe(true);
+    expect(refreshing.refreshingRemote).toEqual(['mac', 'windows']);
+    release();
+    const second = await settled(service);
+    expect(second.refreshing).toBe(false);
+    expect(second.refreshingRemote).toEqual([]);
+    expect(remoteCalls).toBe(2);
+  });
 });

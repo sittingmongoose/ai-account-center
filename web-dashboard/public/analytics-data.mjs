@@ -253,7 +253,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
   };
 }
 
-export const ANALYTICS_VIEW_VERSION = 3;
+export const ANALYTICS_VIEW_VERSION = 4;
 const percentOf = window => usedPercent(window);
 function relativeReset(value, now) {
   const time = timestamp(value);

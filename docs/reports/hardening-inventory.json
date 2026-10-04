@@ -767,7 +767,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1018
+          "loc": 1047
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
@@ -799,7 +799,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 682
+          "loc": 696
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",

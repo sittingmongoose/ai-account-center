@@ -718,6 +718,29 @@ describe('analytics contract: session sample', () => {
     expect(sample[0].inputTokens).toBe(1000);
   });
 
+  it('shows each session under its most-used non-synthetic model, never <synthetic>', () => {
+    const mixed = sessionRow('mixed-session', new Date(NOW - 3_600_000).toISOString(), [
+      { model: '<synthetic>', input: 0, output: 0 },
+      { model: 'model-small', input: 100, output: 10 },
+      { model: 'model-big', input: 9000, output: 500 },
+    ]);
+    const onlySynthetic = sessionRow('synthetic-only', new Date(NOW - 2_600_000).toISOString(), [
+      { model: '<synthetic>', input: 0, output: 0 },
+    ]);
+    const activity = project([
+      source('claude', result([hourRow('2026-10-02T10:00:00Z', [{ model: 'model-a', input: 1 }])], [mixed, onlySynthetic])),
+    ]);
+    const sample = activity.sessions?.sample ?? [];
+    expect(sample).toHaveLength(2);
+    // Most-used first; the synthetic attribution is dropped everywhere.
+    expect(sample.find((row) => row.inputTokens === 9100)?.models).toEqual([
+      'model-big',
+      'model-small',
+    ]);
+    expect(sample.find((row) => row.inputTokens === 0)?.models).toEqual([]);
+    expect(JSON.stringify(sample)).not.toContain('<synthetic>');
+  });
+
   it('never sends paths, project names, raw ids or versions, and keeps keys stable', () => {
     const first = project(sources());
     const second = project(sources());

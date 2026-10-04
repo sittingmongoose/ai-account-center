@@ -171,6 +171,8 @@ export interface AccountAnalyticsActivity {
    * means this answer is settled: 'cached' without refreshing is the best available, not a stale read.
    */
   refreshing?: boolean;
+  /** Remote hosts the running collection is still waiting on; absent or empty when settled. */
+  refreshingRemote?: Array<'mac' | 'windows'>;
   scope: 'multi-host-cli';
   /** The zone used for `byDay`, `byDayModel` and anomaly dates. `byHour[].hour` stays a UTC instant. */
   timezone: string;

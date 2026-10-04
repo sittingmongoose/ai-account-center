@@ -49,7 +49,9 @@ VERSION = 1
 MAX_FILES = 20000
 MAX_LINE_BYTES = 8 * 1024 * 1024
 MAX_ROWS = 50000
-MAX_REQUEST_BYTES = 1024 * 1024
+# The incremental request carries one fingerprint per known file; the Mac alone
+# holds thousands of session files, so the cap must fit tens of thousands.
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
 # Walk of one session root (the server collector's per-root ceilings).
 WALK_MAX_DIRS = 10000
 WALK_MAX_ENTRIES = 100000
@@ -558,7 +560,7 @@ def _collect_omp(collector, home, env, extra=()):
                 break
         if collector.expired() or len(paths) > MAX_FILES:
             break
-    for path in _drop_resume_copies(paths):
+    for path in _drop_resume_copies(_newest_first(paths)):
         if collector.expired():
             collector.truncated = True
             return "ok"
@@ -768,47 +770,72 @@ def _epoch_ms_from_timestamp(value):
     return int(moment.timestamp() * 1000)
 
 
+def _newest_first(paths):
+    """Order paths newest first (ties by path).
+
+    A cut scan always starves the same tail under walk order; newest-first
+    banks the most valuable progress first, and any changed file jumps to the
+    front by its fresh mtime, so the next scan continues where this one stopped.
+    """
+    stamped = []
+    for path in paths:
+        try:
+            stamped.append((os.stat(path).st_mtime_ns, path))
+        except OSError:
+            continue
+    stamped.sort(key=lambda item: (-item[0], item[1]))
+    return [path for _, path in stamped]
+
+
 def _scan_kind_files(collector, kind, dirs, accept, parse):
-    """Scan dirs for kind's files; parse(line, collector, kind, filekey, box) reads one line with a per-file box."""
+    """Scan dirs for kind's files, newest first; parse(line, collector, kind, filekey, box) reads one line with a per-file box."""
     stopped = False
+    paths = []
     for directory in dirs:
         if not os.path.isdir(directory) or os.path.islink(directory):
             continue
         for path in _iter_jsonl_files(directory, accept, collector):
-            if collector.expired():
+            paths.append(path)
+            if len(paths) > MAX_FILES:
                 collector.truncated = True
-                return True
-            filekey = collector.note_file(kind, path)
-            if filekey is None:
-                staged = _filekey(kind, path)
-                if staged in collector.pending.get(kind, {}):
-                    collector.confirm_file(kind, staged)
-                continue
-            try:
-                handle = open(path, "rb")
-            except OSError:
-                continue
-            box = {}
-            with handle:
-                while True:
-                    if collector.expired():
-                        collector.truncated = True
-                        return True
-                    chunk = handle.readline(MAX_LINE_BYTES + 2)
-                    if not chunk:
-                        break
-                    if len(chunk) > MAX_LINE_BYTES + 1:
-                        # Skip the oversized line without decoding content.
-                        while chunk and not chunk.endswith(b"\n"):
-                            chunk = handle.readline(MAX_LINE_BYTES + 2)
-                        continue
-                    try:
-                        line = chunk.decode("utf-8")
-                    except UnicodeDecodeError:
-                        continue
-                    parse(line, collector, kind, filekey, box)
-                    if collector.row_cap:
-                        return True
+                break
+        if collector.expired() or len(paths) > MAX_FILES:
+            break
+    for path in _newest_first(paths):
+        if collector.expired():
+            collector.truncated = True
+            return True
+        filekey = collector.note_file(kind, path)
+        if filekey is None:
+            staged = _filekey(kind, path)
+            if staged in collector.pending.get(kind, {}):
+                collector.confirm_file(kind, staged)
+            continue
+        try:
+            handle = open(path, "rb")
+        except OSError:
+            continue
+        box = {}
+        with handle:
+            while True:
+                if collector.expired():
+                    collector.truncated = True
+                    return True
+                chunk = handle.readline(MAX_LINE_BYTES + 2)
+                if not chunk:
+                    break
+                if len(chunk) > MAX_LINE_BYTES + 1:
+                    # Skip the oversized line without decoding content.
+                    while chunk and not chunk.endswith(b"\n"):
+                        chunk = handle.readline(MAX_LINE_BYTES + 2)
+                    continue
+                try:
+                    line = chunk.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                parse(line, collector, kind, filekey, box)
+                if collector.row_cap:
+                    return True
             collector.confirm_file(kind, filekey)
     return stopped
 
