@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate OMP, Muse and zcode usage into per-model, per-hour rows.
+"""Aggregate Claude Code, Codex, OMP, Muse and zcode usage into per-model, per-hour rows.
 
 Reads one JSON request on stdin, scans the fixed default roots resolved on
 this host plus the validated extra roots in the request, and prints
@@ -9,11 +9,12 @@ paths, session ids, prompts, tool output and every other conversation content
 stay here.
 
 Request (all fields validated, unknown fields rejected):
-  {"kinds": ["omp", "muse", "zcode"], "minDateMs": 123,
+  {"kinds": ["claude", "codex", "omp", "muse", "zcode"], "minDateMs": 123,
    "immutableSqlite": true,
-   "extraRoots": {"omp": ["/abs/sessions"], "muse": [...], "zcode": [...]},
-   "fingerprints": {"omp": {"<filekey>": {"size": 1, "mtimeMs": 2}},
-                   "muse": {...}, "zcode": {...}}}
+   "extraRoots": {"claude": ["/abs/projects"], "codex": ["/abs/.codex"],
+                  "omp": ["/abs/sessions"], "muse": [...], "zcode": [...]},
+   "fingerprints": {"claude": {"<filekey>": {"size": 1, "mtimeMs": 2}},
+                   "codex": {...}, "omp": {...}, "muse": {...}, "zcode": {...}}}
 
 Response:
   {"version": 1, "truncated": false, "discoveryTruncated": false,
@@ -34,6 +35,7 @@ but could not be read; nothing of that kind is confirmed.
 """
 
 import collections
+import datetime
 import hashlib
 import json
 import os
@@ -450,8 +452,6 @@ def _parse_omp_line(line, collector, kind, filekey):
             text = timestamp.strip()
             if text.endswith("Z"):
                 text = text[:-1] + "+00:00"
-            import datetime
-
             moment = datetime.datetime.fromisoformat(text)
             if moment.tzinfo is None:
                 moment = moment.replace(tzinfo=datetime.timezone.utc)
@@ -750,6 +750,248 @@ def _collect_muse(collector, home, env, extra=()):
     return "ok" if scanned else "not_installed"
 
 
+def _epoch_ms_from_timestamp(value):
+    """An ISO-8601 log timestamp (Claude Code, Codex) to epoch ms; None when unusable."""
+    if not isinstance(value, str):
+        return None
+    text = value.replace("\ufeff", "").strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        moment = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.timezone.utc)
+    return int(moment.timestamp() * 1000)
+
+
+def _scan_kind_files(collector, kind, dirs, accept, parse):
+    """Scan dirs for kind's files; parse(line, collector, kind, filekey, box) reads one line with a per-file box."""
+    stopped = False
+    for directory in dirs:
+        if not os.path.isdir(directory) or os.path.islink(directory):
+            continue
+        for path in _iter_jsonl_files(directory, accept, collector):
+            if collector.expired():
+                collector.truncated = True
+                return True
+            filekey = collector.note_file(kind, path)
+            if filekey is None:
+                staged = _filekey(kind, path)
+                if staged in collector.pending.get(kind, {}):
+                    collector.confirm_file(kind, staged)
+                continue
+            try:
+                handle = open(path, "rb")
+            except OSError:
+                continue
+            box = {}
+            with handle:
+                while True:
+                    if collector.expired():
+                        collector.truncated = True
+                        return True
+                    chunk = handle.readline(MAX_LINE_BYTES + 2)
+                    if not chunk:
+                        break
+                    if len(chunk) > MAX_LINE_BYTES + 1:
+                        # Skip the oversized line without decoding content.
+                        while chunk and not chunk.endswith(b"\n"):
+                            chunk = handle.readline(MAX_LINE_BYTES + 2)
+                        continue
+                    try:
+                        line = chunk.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+                    parse(line, collector, kind, filekey, box)
+                    if collector.row_cap:
+                        return True
+            collector.confirm_file(kind, filekey)
+    return stopped
+
+
+def _dedup_dirs(candidates):
+    seen = set()
+    dirs = []
+    for candidate in candidates:
+        absolute = os.path.abspath(candidate)
+        if absolute not in seen:
+            seen.add(absolute)
+            dirs.append(absolute)
+    return dirs
+
+
+def _parse_claude_line(line, collector, kind, filekey, box):
+    # The local jsonl-parser's parseUsageEntry: assistant messages with usage.
+    # Pre-filter before parsing so conversation content is never decoded.
+    if '"type"' not in line or '"assistant"' not in line or '"usage"' not in line:
+        return
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(record, dict) or record.get("type") != "assistant":
+        return
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return
+    model = _clean_model(message.get("model"))
+    if model is None:
+        return
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return
+    values = [
+        _non_negative_number(usage.get("input_tokens")),
+        _non_negative_number(usage.get("output_tokens")),
+    ]
+    if any(value is None for value in values):
+        return
+    cache_read = _non_negative_number(usage.get("cache_read_input_tokens"))
+    cache_write = _non_negative_number(usage.get("cache_creation_input_tokens"))
+    tokens = [int(values[0]), int(values[1]), int(cache_read or 0), int(cache_write or 0)]
+    epoch_ms = _epoch_ms_from_timestamp(record.get("timestamp"))
+    if epoch_ms is None or epoch_ms < collector.min_date_ms:
+        return
+    hour = _hour_label(epoch_ms, collector.now_ms)
+    if hour is None:
+        return
+    # Claude Code logs no cost; the server prices the tokens at its rates.
+    collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+
+
+def _collect_claude(collector, home, env, extra=()):
+    override = env.get("CLAUDE_CONFIG_DIR")
+    base = (
+        os.path.expanduser(override)
+        if override and os.path.isabs(os.path.expanduser(override))
+        else os.path.join(home, ".claude")
+    )
+    dirs = _dedup_dirs([os.path.join(base, "projects"), *extra])
+    if not any(os.path.isdir(d) and not os.path.islink(d) for d in dirs):
+        return "not_installed"
+    _scan_kind_files(collector, "claude", dirs, lambda name: name.endswith(".jsonl"), _parse_claude_line)
+    return "ok"
+
+
+def _codex_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    if value != value or value in (float("inf"), float("-inf")) or value <= 0:
+        return 0
+    return value
+
+
+def _codex_snapshot(value):
+    # Codex's TokenUsage copies the Responses usage fields; cached reads and
+    # cache writes are details of input_tokens (see codex-native-usage-collector).
+    if not isinstance(value, dict):
+        return None
+    cache_read = _codex_number(value.get("cached_input_tokens"))
+    cache_write = _codex_number(value.get("cache_write_input_tokens"))
+    return (
+        max(0, _codex_number(value.get("input_tokens")) - cache_read - cache_write),
+        cache_write,
+        cache_read,
+        _codex_number(value.get("output_tokens")),
+    )
+
+
+def _parse_codex_line(line, collector, kind, filekey, box):
+    # The local codex-native-usage-collector's stateful rollout parser: session
+    # metadata and turn context set the box up, token_count events carry
+    # cumulative counters that are differenced here. Cliproxy-backed sessions
+    # are skipped, as locally. Pre-filter before parsing so prompts and tool
+    # output are never decoded.
+    if '"type"' not in line:
+        return
+    if '"session_meta"' not in line and '"turn_context"' not in line and '"event_msg"' not in line:
+        return
+    if '"token_count"' not in line and '"session_meta"' not in line and '"turn_context"' not in line:
+        return
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(record, dict):
+        return
+    payload = record.get("payload")
+    if record.get("type") == "session_meta" and isinstance(payload, dict):
+        session = payload.get("id")
+        if isinstance(session, str) and session.strip():
+            box["session"] = session
+        provider = payload.get("model_provider")
+        if isinstance(provider, str) and provider.strip():
+            box["provider"] = provider
+        return
+    if record.get("type") == "turn_context" and isinstance(payload, dict):
+        model = payload.get("model")
+        if isinstance(model, str) and model.strip():
+            box["model"] = model
+        return
+    if (
+        record.get("type") != "event_msg"
+        or not isinstance(payload, dict)
+        or payload.get("type") != "token_count"
+        or not box.get("session")
+        or box.get("provider") in ("cliproxy", "ccs_runtime")
+    ):
+        return
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return
+    total = _codex_snapshot(info.get("total_token_usage"))
+    last = _codex_snapshot(info.get("last_token_usage"))
+    if total is None:
+        return
+    previous = box.get("previous")
+    if previous is not None and total == previous:
+        return
+    if previous is None:
+        delta = last if last is not None and any(v > 0 for v in last) else total
+    else:
+        delta = tuple(max(0, now - was) for now, was in zip(total, previous))
+    box["previous"] = total
+    if not any(v > 0 for v in delta):
+        return
+    timestamp = record.get("timestamp")
+    if not isinstance(timestamp, str) or not timestamp.strip():
+        return
+    epoch_ms = _epoch_ms_from_timestamp(timestamp)
+    if epoch_ms is None or epoch_ms < collector.min_date_ms:
+        return
+    hour = _hour_label(epoch_ms, collector.now_ms)
+    if hour is None:
+        return
+    model = _clean_model(box.get("model", "unknown-codex-model"))
+    if model is None:
+        return
+    tokens = [int(delta[0]), int(delta[3]), int(delta[2]), int(delta[1])]
+    collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+
+
+def _collect_codex(collector, home, env, extra=()):
+    override = env.get("CODEX_HOME")
+    default_home = (
+        os.path.expanduser(override)
+        if override and os.path.isabs(os.path.expanduser(override))
+        else os.path.join(home, ".codex")
+    )
+    # Extra codex roots are codex homes, as locally (sessions hangs under each).
+    dirs = _dedup_dirs([os.path.join(h, "sessions") for h in [default_home, *extra]])
+    if not any(os.path.isdir(d) and not os.path.islink(d) for d in dirs):
+        return "not_installed"
+
+    def _accept(name):
+        return name.startswith("rollout-") and name.endswith(".jsonl")
+
+    _scan_kind_files(collector, "codex", dirs, _accept, _parse_codex_line)
+    return "ok"
+
+
 def _zcode_fingerprint(db_path):
     """The database plus its write-ahead log, where zcode keeps new rows until a checkpoint."""
     stat = os.stat(db_path)
@@ -933,9 +1175,9 @@ def _read_request():
     if (
         not isinstance(kinds, list)
         or not kinds
-        or any(kind not in ("omp", "muse", "zcode") for kind in kinds)
+        or any(kind not in ("claude", "codex", "omp", "muse", "zcode") for kind in kinds)
     ):
-        _fail("request.kinds must list omp, muse and/or zcode")
+        _fail("request.kinds must list claude, codex, omp, muse and/or zcode")
     min_date_ms = request.get("minDateMs")
     if (
         isinstance(min_date_ms, bool)
@@ -952,7 +1194,7 @@ def _read_request():
     extra_roots = request.get("extraRoots", {})
     if (
         not isinstance(extra_roots, dict)
-        or any(kind not in ("omp", "muse", "zcode") for kind in extra_roots)
+        or any(kind not in ("claude", "codex", "omp", "muse", "zcode") for kind in extra_roots)
         or any(
             not isinstance(paths, list)
             or len(paths) > 16
@@ -999,7 +1241,11 @@ def main():
     states = {}
     for kind in kinds:
         collector.fresh.setdefault(kind, {})
-        if kind == "omp":
+        if kind == "claude":
+            states[kind] = _collect_claude(collector, home, env, extra_roots.get("claude", ()))
+        elif kind == "codex":
+            states[kind] = _collect_codex(collector, home, env, extra_roots.get("codex", ()))
+        elif kind == "omp":
             states[kind] = _collect_omp(collector, home, env, extra_roots.get("omp", ()))
         elif kind == "muse":
             states[kind] = _collect_muse(collector, home, env, extra_roots.get("muse", ()))

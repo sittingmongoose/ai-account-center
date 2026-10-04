@@ -482,4 +482,182 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.c).sort()).toEqual([0, 0.25]);
   });
+
+  it('reads claude projects like the local parser without leaking content', () => {
+    const dir = path.join(home, '.claude', 'projects', 'proj1');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'sess.jsonl'),
+      [
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            model: 'claude-haiku-4-5',
+            usage: {
+              input_tokens: 100,
+              output_tokens: 50,
+              cache_read_input_tokens: 1000,
+              cache_creation_input_tokens: 10,
+            },
+          },
+          timestamp: '2026-10-01T15:05:00Z',
+          sessionId: 's1',
+          cwd: '/secret/project',
+        }),
+        JSON.stringify({ type: 'user', message: { content: 'hidden prompt' } }),
+        JSON.stringify({
+          type: 'assistant',
+          message: { model: 'claude-haiku-4-5', usage: { input_tokens: 5 } },
+          timestamp: '2026-10-01T15:06:00Z',
+        }),
+      ].join('\n')
+    );
+    const response = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    const kinds = response.kinds as Record<string, { state: string }>;
+    expect(kinds.claude.state).toBe('ok');
+    const rows = response.rows as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      k: 'claude',
+      m: 'claude-haiku-4-5',
+      h: '2026-10-01 15:00',
+      i: 100,
+      o: 50,
+      cr: 1000,
+      cw: 10,
+      c: 0,
+      n: 1,
+    });
+    expect(rows[0].p).toBeUndefined();
+    const serialized = JSON.stringify(response);
+    expect(serialized).not.toContain(home);
+    expect(serialized).not.toContain('secret');
+    expect(serialized).not.toContain('hidden prompt');
+    // Missing projects read as not installed.
+    const missing = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
+    expect((missing.kinds as Record<string, { state: string }>).codex.state).toBe(
+      'not_installed'
+    );
+  });
+
+  it('differences codex rollout counters and skips cliproxy sessions', () => {
+    const dir = path.join(home, '.codex', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const token = (total: object, last: object) => ({
+      timestamp: '2026-10-01T15:05:00Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: { total_token_usage: total, last_token_usage: last },
+      },
+    });
+    fs.writeFileSync(
+      path.join(dir, 'rollout-2026-10-01.jsonl'),
+      [
+        JSON.stringify({
+          timestamp: '2026-10-01T15:00:00Z',
+          type: 'session_meta',
+          payload: { id: 'cx1', cwd: '/secret', cli_version: '1.0', model_provider: 'openai' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-10-01T15:01:00Z',
+          type: 'turn_context',
+          payload: { model: 'gpt-5', cwd: '/secret' },
+        }),
+        JSON.stringify(
+          token(
+            { input_tokens: 1000, cached_input_tokens: 100, output_tokens: 200 },
+            { input_tokens: 1000, cached_input_tokens: 100, output_tokens: 200 }
+          )
+        ),
+        JSON.stringify(
+          token(
+            { input_tokens: 1500, cached_input_tokens: 100, output_tokens: 260 },
+            { input_tokens: 500, output_tokens: 60 }
+          )
+        ),
+        JSON.stringify({ timestamp: '2026-10-01T15:06:00Z', type: 'response_item', payload: { text: 'hidden prompt' } }),
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(dir, 'rollout-cliproxy.jsonl'),
+      [
+        JSON.stringify({
+          timestamp: '2026-10-01T15:00:00Z',
+          type: 'session_meta',
+          payload: { id: 'cx2', model_provider: 'cliproxy' },
+        }),
+        JSON.stringify(
+          token({ input_tokens: 999, output_tokens: 999 }, { input_tokens: 999, output_tokens: 999 })
+        ),
+      ].join('\n')
+    );
+    const response = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
+    expect((response.kinds as Record<string, { state: string }>).codex.state).toBe('ok');
+    const rows = response.rows as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    // First event takes last_token_usage, the second the counter delta.
+    expect(rows[0]).toMatchObject({
+      k: 'codex',
+      m: 'gpt-5',
+      h: '2026-10-01 15:00',
+      i: 1400,
+      o: 260,
+      cr: 100,
+      cw: 0,
+      c: 0,
+      n: 2,
+    });
+    const serialized = JSON.stringify(response);
+    expect(serialized).not.toContain(home);
+    expect(serialized).not.toContain('secret');
+    expect(serialized).not.toContain('hidden prompt');
+  });
+
+  it('scans extra claude projects and codex homes alongside the defaults', () => {
+    const extraProjects = path.join(home, 'extra-claude-projects');
+    fs.mkdirSync(extraProjects, { recursive: true });
+    fs.writeFileSync(
+      path.join(extraProjects, 's.jsonl'),
+      `${JSON.stringify({
+        type: 'assistant',
+        message: { model: 'extra-claude-model', usage: { input_tokens: 7, output_tokens: 8 } },
+        timestamp: '2026-10-01T15:05:00Z',
+      })}\n`
+    );
+    const extraHome = path.join(home, 'extra-codex');
+    fs.mkdirSync(path.join(extraHome, 'sessions'), { recursive: true });
+    fs.writeFileSync(
+      path.join(extraHome, 'sessions', 'rollout-x.jsonl'),
+      [
+        JSON.stringify({ timestamp: '2026-10-01T15:00:00Z', type: 'session_meta', payload: { id: 'e1' } }),
+        JSON.stringify({ timestamp: '2026-10-01T15:01:00Z', type: 'turn_context', payload: { model: 'extra-codex-model' } }),
+        JSON.stringify({
+          timestamp: '2026-10-01T15:02:00Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: { input_tokens: 11, output_tokens: 12 },
+              last_token_usage: { input_tokens: 11, output_tokens: 12 },
+            },
+          },
+        }),
+      ].join('\n')
+    );
+    const response = runHelper({
+      kinds: ['claude', 'codex'],
+      minDateMs: MIN_DATE,
+      extraRoots: { claude: [extraProjects], codex: [extraHome] },
+    });
+    const kinds = response.kinds as Record<string, { state: string }>;
+    // The defaults are missing, but the extras still scan.
+    expect(kinds.claude.state).toBe('ok');
+    expect(kinds.codex.state).toBe('ok');
+    const rows = response.rows as Array<Record<string, unknown>>;
+    const byModel = new Map(rows.map((row) => [row.m, row]));
+    expect(byModel.get('extra-claude-model')).toMatchObject({ k: 'claude', i: 7, o: 8, n: 1 });
+    expect(byModel.get('extra-codex-model')).toMatchObject({ k: 'codex', i: 11, o: 12, n: 1 });
+    expect(JSON.stringify(response)).not.toContain(home);
+  });
 });

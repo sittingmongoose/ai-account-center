@@ -29,28 +29,30 @@ export component AxSessionsCard inherits AxCard {
         padding-bottom: 16px;
         spacing: 14px;
         vertical-stretch: 1;
+        // the stats sit in the table's own columns (an empty cell under CLI), each number right-aligned
+        // under its header at the top of the card, so it lines up with the column it summarizes
         HorizontalLayout {
-            spacing: root.pad16 ? 10px : 12px;
+            spacing: 0px;
             vertical-stretch: 0;
+            Rectangle { horizontal-stretch: 1.4; min-width: 0px; }
             for s[i] in AxData.sess-stats: VerticalLayout {
-                horizontal-stretch: 1;
+                horizontal-stretch: i == 2 ? 1.4 : 1;
+                min-width: 0px;
                 spacing: 3px;
-                HorizontalLayout {
-                    AxNum {
-                        num: s.num;
-                        has: s.has;
-                        fmt: s.fmt;
-                        text: s.text;
-                        played: root.played;
-                        delay: root.delay + i * 60ms;
-                        size: 22px;
-                        weight: 640;
-                        na-size: 15px;
-                        height: 26px;
-                    }
-                    Rectangle { horizontal-stretch: 1; }
+                AxNum {
+                    num: s.num;
+                    has: s.has;
+                    fmt: s.fmt;
+                    text: s.text;
+                    played: root.played;
+                    delay: root.delay + i * 60ms;
+                    size: 22px;
+                    weight: 640;
+                    na-size: 15px;
+                    right: true;
+                    height: 26px;
                 }
-                Text { text: s.label; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+                Text { text: s.label; font-size: 12px; color: Theme.ink-3; horizontal-alignment: right; wrap: word-wrap; }
             }
         }
         VerticalLayout {

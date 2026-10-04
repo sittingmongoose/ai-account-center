@@ -750,7 +750,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 42,
+      "countOver400": 44,
       "countOver600": 17,
       "topOver400": [
         {
@@ -767,7 +767,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1017
+          "loc": 1018
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",

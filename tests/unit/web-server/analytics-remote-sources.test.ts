@@ -175,9 +175,16 @@ describe('analytics remote sources', () => {
     const ompMac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(ompMac).toMatchObject({ state: 'ok', rowCount: 2 });
     expect(ompMac?.lastScanAt).toBe('2026-10-02T00:00:00.000Z');
-    // Muse and zcode are mac-only; windows carries omp alone.
-    expect(states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)).toEqual([
+    // Muse and zcode are mac-only; windows carries claude, codex and omp.
+    expect(
+      states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)
+    ).toEqual(['claude', 'codex', 'omp']);
+    expect(states.filter((entry) => entry.host === 'mac').map((entry) => entry.tool)).toEqual([
+      'claude',
+      'codex',
+      'muse',
       'omp',
+      'zcode',
     ]);
   });
 
@@ -193,6 +200,15 @@ describe('analytics remote sources', () => {
             { id: 'a', tool: 'omp', host: 'mac', path: '/Users/u/extra-omp' },
             { id: 'b', tool: 'omp', host: 'windows', path: 'C:\\extra\\omp' },
             { id: 'c', tool: 'omp', host: 'ubuntu', path: '/home/u/extra' },
+            { id: 'd', tool: 'claude-code', host: 'mac', path: '/Users/u/extra-projects' },
+            { id: 'e', tool: 'codex', host: 'windows', path: 'C:\\extra\\.codex' },
+            {
+              id: 'f',
+              tool: 'jsonl',
+              host: 'mac',
+              path: '/Users/u/extra-jsonl',
+              fieldMapping: { timestamp: 'ts', model: 'model' },
+            },
           ],
         },
         path.join(ccsHome, '.ccs')
@@ -205,9 +221,11 @@ describe('analytics remote sources', () => {
       await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
       expect((seen.get('mac') as { extraRoots: unknown }).extraRoots).toEqual({
         omp: ['/Users/u/extra-omp'],
+        claude: ['/Users/u/extra-projects'],
       });
       expect((seen.get('windows') as { extraRoots: unknown }).extraRoots).toEqual({
         omp: ['C:\\extra\\omp'],
+        codex: ['C:\\extra\\.codex'],
       });
     } finally {
       if (previous === undefined) delete process.env.CCS_HOME;

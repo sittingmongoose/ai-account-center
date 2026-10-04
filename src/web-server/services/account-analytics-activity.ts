@@ -20,6 +20,7 @@ import {
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   type AnalyticsRemoteSourceState,
+  type AnalyticsSourceTool,
 } from './analytics-remote-sources';
 import {
   defaultAccountAnalyticsPricing,
@@ -74,7 +75,7 @@ export type AccountAnalyticsActivityRequest = {
 };
 
 type RemoteAnswer = {
-  results: Array<{ tool: 'omp' | 'muse' | 'zcode'; data: UsageWorkerResult }>;
+  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 };
 

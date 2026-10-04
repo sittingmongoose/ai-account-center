@@ -7,7 +7,7 @@ import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 
 export type AnalyticsRemoteHost = 'mac' | 'windows';
-export type AnalyticsRemoteKind = 'omp' | 'muse' | 'zcode';
+export type AnalyticsRemoteKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
 
 export class AnalyticsRemoteTransportError extends NetworkError {
   readonly timedOut: boolean;
@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  '383f5645ae141a132a2b3483151cbec3bf6fbf18636ed69d9a5968dea987f44d';
+  '58a8939dd84388fa65f1ed27c7ad7d8179727adfccc3d2c003a2d5a2b26d59df';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -79,8 +79,10 @@ export interface AnalyticsRemoteRequest {
   deadlineMs?: number;
   /**
    * Saved extra usage-log locations for the target host, from Settings.
-   * omp/muse entries are session-root directories, zcode entries database
-   * files; all are validated absolute paths before they leave this host.
+   * claude entries are projects directories, codex entries codex homes
+   * (sessions hangs under each), omp/muse entries session-root directories,
+   * zcode entries database files; all are validated absolute paths before
+   * they leave this host.
    */
   extraRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
 }
@@ -113,7 +115,11 @@ function isValidExtraRoots(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.entries(value as Record<string, unknown>).every(
     ([kind, roots]) =>
-      (kind === 'omp' || kind === 'muse' || kind === 'zcode') &&
+      (kind === 'claude' ||
+        kind === 'codex' ||
+        kind === 'omp' ||
+        kind === 'muse' ||
+        kind === 'zcode') &&
       Array.isArray(roots) &&
       roots.length <= MAX_EXTRA_ROOTS &&
       (roots as unknown[]).every(isValidExtraRoot)
@@ -138,7 +144,11 @@ function validRow(value: unknown): value is AnalyticsRemoteRow {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   return (
-    (row.k === 'omp' || row.k === 'muse' || row.k === 'zcode') &&
+    (row.k === 'claude' ||
+      row.k === 'codex' ||
+      row.k === 'omp' ||
+      row.k === 'muse' ||
+      row.k === 'zcode') &&
     typeof row.f === 'string' &&
     SHA256_HEX.test(row.f) &&
     cleanText(row.m, 160) &&
@@ -193,7 +203,13 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
   if (!rows.every(validRow)) throw new AnalyticsRemoteTransportError();
   const parsed: AnalyticsRemoteResponse['kinds'] = {} as AnalyticsRemoteResponse['kinds'];
   for (const [kind, value] of Object.entries(kinds)) {
-    if (kind !== 'omp' && kind !== 'muse' && kind !== 'zcode')
+    if (
+      kind !== 'claude' &&
+      kind !== 'codex' &&
+      kind !== 'omp' &&
+      kind !== 'muse' &&
+      kind !== 'zcode'
+    )
       throw new AnalyticsRemoteTransportError();
     const entry = value as { state?: unknown; fingerprints?: unknown; walUnread?: unknown };
     if (
@@ -253,7 +269,14 @@ export async function runAnalyticsRemoteHelper(
   if (
     !Array.isArray(request.kinds) ||
     request.kinds.length === 0 ||
-    request.kinds.some((kind) => kind !== 'omp' && kind !== 'muse' && kind !== 'zcode') ||
+    request.kinds.some(
+      (kind) =>
+        kind !== 'claude' &&
+        kind !== 'codex' &&
+        kind !== 'omp' &&
+        kind !== 'muse' &&
+        kind !== 'zcode'
+    ) ||
     !Number.isFinite(request.minDateMs) ||
     request.minDateMs < 0 ||
     !isValidExtraRoots(request.extraRoots)

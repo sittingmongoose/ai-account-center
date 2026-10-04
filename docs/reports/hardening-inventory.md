@@ -59,7 +59,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | hotpath console.error/warn files | 17 |
 | files with createLogger | 32/381 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 42 |
+| files > 400 LOC | 44 |
 | files > 600 LOC | 17 |
 
 ### Top Hotpath console.error/warn Files
@@ -89,7 +89,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1083 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1052 |
-| `src/web-server/services/account-analytics-activity.ts` | 1017 |
+| `src/web-server/services/account-analytics-activity.ts` | 1018 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
 | `src/web-server/usage/account-activity-collector.ts` | 903 |
 | `src/cliproxy/model-catalog.ts` | 895 |

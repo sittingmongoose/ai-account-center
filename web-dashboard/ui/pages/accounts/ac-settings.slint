@@ -66,6 +66,8 @@ component SetItem inherits VerticalLayout {
             font-weight: root.aside-strong ? 640 : 400;
             color: root.aside-strong ? Theme.ink : Theme.ink-3;
             vertical-alignment: center;
+            min-width: 0px;
+            overflow: elide;
         }
     }
     @children
@@ -236,7 +238,7 @@ component PolicyRow inherits VerticalLayout {
     HorizontalLayout {
         spacing: 8px;
         VerticalLayout { alignment: center; ProviderMark { provider: root.policy.provider; size: 20px; } }
-        Text { min-width: 76px; text: root.policy.name; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+        Text { min-width: 76px; text: root.policy.name; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; overflow: elide; }
         TipArea {
             owner: "policy:" + root.policy.provider;
             tip: root.policy.tip;
@@ -336,12 +338,15 @@ component CheckLine inherits Rectangle {
     callback toggled(bool);
     min-height: 22px;
     preferred-width: row.preferred-width;
+    // the note sits under the label (never beside it): side by side they are wider than the settings
+    // column, and the column would grow past the page to fit them
     row := HorizontalLayout {
         spacing: 9px;
         alignment: start;
         opacity: root.enabled ? 1 : 0.5;
         VerticalLayout {
-            alignment: center;
+            alignment: start;
+            padding-top: root.sub == "" ? 3px : 1px;
             Rectangle {
                 width: 16px;
                 height: 16px;
@@ -353,8 +358,13 @@ component CheckLine inherits Rectangle {
                 Icon { x: 1.5px; y: 1.5px; width: 13px; height: 13px; name: "check"; tint: Theme.accent-ink; opacity: root.checked ? 1 : 0; animate opacity { duration: Motion.on ? Motion.fast : 0ms; } }
             }
         }
-        Text { text: root.text; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; }
-        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+        VerticalLayout {
+            spacing: 1px;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            Text { text: root.text; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+            if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
+        }
     }
     TouchArea {
         enabled: root.enabled;
@@ -542,19 +552,49 @@ component SigninGroup inherits SetGroup {
                 value: AcData.signin.session + (AcData.signin.session-sub != "" ? " · " + AcData.signin.session-sub : "");
             }
         }
-        HorizontalLayout {
+        // the concept's .aa-row wraps (flex-wrap): beside the providers the button sits under the status,
+        // since the three do not fit the settings column on one line
+        if Breakpoints.compact: HorizontalLayout {
             spacing: 12px;
             Text { width: 112px; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
             HorizontalLayout {
                 spacing: 10px;
                 alignment: start;
-                Text { text: AcData.signin.others-text; font-family: Type.tab; font-size: 13px; color: Theme.ink; vertical-alignment: center; }
+                horizontal-stretch: 1;
+                min-width: 0px;
+                Text { text: AcData.signin.others-text; font-family: Type.tab; font-size: 13px; color: Theme.ink; vertical-alignment: center; overflow: elide; }
                 TipArea {
                     owner: "others";
                     tip: AcData.signin.others-tip;
                     width: others-btn.preferred-width;
                     height: 28px;
                     others-btn := Button {
+                        small: true;
+                        text: AcData.signin.others-busy ? "Signing out" : "Sign out other browsers";
+                        enabled: AcData.signin.others-enabled && !root.busy;
+                        busy: AcData.signin.others-busy;
+                        probe: "others-out";
+                        clicked => { root.act("others-out", ""); }
+                    }
+                }
+            }
+        }
+        if !Breakpoints.compact: VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 12px;
+                Text { width: 112px; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+                Text { text: AcData.signin.others-text; font-family: Type.tab; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                Rectangle { width: 112px; }
+                TipArea {
+                    owner: "others";
+                    tip: AcData.signin.others-tip;
+                    width: others-btn-narrow.preferred-width;
+                    height: 28px;
+                    others-btn-narrow := Button {
                         small: true;
                         text: AcData.signin.others-busy ? "Signing out" : "Sign out other browsers";
                         enabled: AcData.signin.others-enabled && !root.busy;
@@ -575,6 +615,7 @@ component SigninGroup inherits SetGroup {
             tip: AcData.signin.lifetime-tip;
             min-height: lifetime-seg.preferred-height;
             lifetime-seg := Segmented {
+                pad: 7px;
                 items: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }, { value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
                 value: AcData.signin.lifetime-value;
                 enabled: AcData.signin.lifetime-enabled && !root.busy;
@@ -620,7 +661,7 @@ component SigninGroup inherits SetGroup {
             spacing: 8px;
             Text { text: "Password"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
             Rectangle { horizontal-stretch: 1; }
-            if AcData.signin.password-when != "": Text { text: AcData.signin.password-when; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+            if AcData.signin.password-when != "": Text { text: AcData.signin.password-when; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; min-width: 0px; overflow: elide; }
             TipArea {
                 owner: "password";
                 tip: AcData.signin.password-can ? "" : AcData.signin.password-note;
@@ -905,7 +946,7 @@ component LogSourcesGroup inherits SetGroup {
     title: "Usage log sources";
     // the tool id behind the tool label (Select shows strings only)
     property <string> tool-id: tool-sel.value == "Muse Code" ? "muse" : tool-sel.value == "zcode" ? "zcode" : tool-sel.value == "Claude Code" ? "claude-code" : tool-sel.value == "Codex" ? "codex" : tool-sel.value == "Generic JSONL" ? "jsonl" : "omp";
-    property <[string]> host-options: tool-id == "omp" ? ["ubuntu", "mac", "windows"] : tool-id == "muse" || tool-id == "zcode" ? ["ubuntu", "mac"] : ["ubuntu"];
+    property <[string]> host-options: tool-id == "omp" || tool-id == "claude-code" || tool-id == "codex" ? ["ubuntu", "mac", "windows"] : tool-id == "muse" || tool-id == "zcode" ? ["ubuntu", "mac"] : ["ubuntu"];
     // the mapping fields live under an `if`: their text is hoisted here so the
     // submitted JSON never reads an uninstantiated element
     property <string> map-ts-text;

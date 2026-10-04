@@ -13,6 +13,7 @@ component SegButton inherits Rectangle {
     in property <bool> selected;
     in property <bool> mono: false;
     in property <bool> enabled: true;
+    in property <length> pad: 13px;
     callback clicked();
     height: 28px;
     min-width: row.min-width;
@@ -22,8 +23,8 @@ component SegButton inherits Rectangle {
     transform-scale: ta.pressed ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     row := HorizontalLayout {
-        padding-left: 13px;
-        padding-right: 13px;
+        padding-left: root.pad;
+        padding-right: root.pad;
         spacing: 6px;
         alignment: center;
         if root.item.icon != "": VerticalLayout {
@@ -53,6 +54,8 @@ export component Segmented inherits Rectangle {
     in-out property <string> value;
     in property <bool> mono: false;
     in property <bool> enabled: true;
+    // tighter segments for five-item rows that must fit the settings column (the session lifetime)
+    in property <length> pad: 13px;
     callback changed-value(string);
 
     property <length> ind-x: 0px;
@@ -91,6 +94,7 @@ export component Segmented inherits Rectangle {
             item: item;
             mono: root.mono;
             enabled: root.enabled;
+            pad: root.pad;
             selected: item.value == root.value;
             init => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; } }
             changed selected => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }

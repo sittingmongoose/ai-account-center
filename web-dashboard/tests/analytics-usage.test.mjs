@@ -196,10 +196,16 @@ test("Claude Code's <synthetic> placeholder is excluded silently: never listed, 
 });
 
 test('recent sessions list the sample most recent first, without paths, with a count foot', () => {
+  // the server's AccountAnalyticsSessionRow shape: provider, lastActivity, string models, token totals
+  const row = (key, provider, lastMs, models, tok, est, fallback = 0) => ({
+    key, provider, lastActivity: new Date(lastMs).toISOString(), models, target: provider,
+    inputTokens: tok[0], outputTokens: tok[1], cacheCreationTokens: tok[2], cacheReadTokens: tok[3],
+    estimatedCostUsd: est, fallbackCostUsd: fallback,
+  });
   const sample = [
-    { key: 'a1', tool: 'codex', last: now - 5 * 60e3, tokens: 12000, events: 40, cost: 0.5, unk: false, models: [{ model: 'gpt-5', tokens: 12000, cost: 0.5, unk: false }] },
-    { key: 'b2', tool: 'claude', last: now - 2 * 3600e3, tokens: 3000, events: 9, cost: 0, unk: true, models: [{ model: 'mystery', tokens: 3000, cost: 0, unk: true }] },
-    { key: 'c3', tool: 'claude', last: now - 26 * 3600e3, tokens: 800, events: 3, cost: 0.02, unk: false, models: [{ model: 'claude-haiku-4-5', tokens: 500, cost: 0.02, unk: false }, { model: 'claude-opus-5-5', tokens: 300, cost: 0, unk: false }] },
+    row('a1', 'codex', now - 5 * 60e3, ['gpt-5'], [9000, 3000, 0, 0], 0.5),
+    row('b2', 'claude', now - 2 * 3600e3, ['mystery'], [2000, 1000, 0, 0], 0.03, 0.03),
+    row('c3', 'claude', now - 26 * 3600e3, ['claude-haiku-4-5', 'claude-opus-5-5'], [500, 300, 0, 0], 0.02),
   ];
   const p = payload({}, { sessions: { total: 5, sample, truncated: false } });
   const view = usageView(p, state(), { now });
@@ -208,14 +214,34 @@ test('recent sessions list the sample most recent first, without paths, with a c
   assert.equal(view.sessions.recent[0].cost, '$0.50');
   assert.equal(view.sessions.recent[1].cost, 'Not logged');
   assert.equal(view.sessions.recent[2].models, 'claude-haiku-4-5, claude-opus-5-5');
-  assert.match(view.sessions.recent[0].tip, /gpt-5 · 40 usage events/);
+  assert.match(view.sessions.recent[0].tip, /gpt-5 · 12,000 tokens/);
   assert.ok(!JSON.stringify(view.sessions.recent).includes('/home/'), 'no paths leak into the list');
   assert.equal(view.sessions.foot, '');
-  // a picked CLI narrows the list to its sessions
+  // rows in any other shape are dropped, never guessed
+  const bad = usageView(payload({}, { sessions: { total: 5, sample: [{ key: 'x', tool: 'codex', last: now, tokens: 5, models: [{ model: 'gpt-5' }] }], truncated: false } }), state(), { now });
+  assert.deepEqual(bad.sessions.recent, []);
+  // a picked provider narrows the list to its sessions
   const codex = usageView(p, state({ prov: 'codex' }), { now });
   assert.deepEqual(codex.sessions.recent.map(r => r.tool), ['codex']);
   // a truncated sample says how many it shows of how many
-  const many = usageView(payload({}, { sessions: { total: 1848, sample: Array.from({ length: 50 }, (_, i) => ({ ...sample[0], key: `k${i}`, last: now - i * 60e3 })), truncated: true } }), state(), { now });
+  const many = usageView(payload({}, { sessions: { total: 1848, sample: Array.from({ length: 50 }, (_, i) => ({ ...sample[0], key: `k${i}`, lastActivity: new Date(now - i * 60e3).toISOString() })), truncated: true } }), state(), { now });
   assert.equal(many.sessions.recent.length, 10);
   assert.equal(many.sessions.foot, 'Most recent 10 of 1,848 sessions in this range');
+});
+
+test('a muse-spark model served through several routes keeps Muse mark', () => {
+  const part = (model, provider, cost) => ({ model, provider, inputTokens: 1000, outputTokens: 500, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCostUsd: cost });
+  const p = payload();
+  p.activity.models.push(
+    part('muse-spark-1.3-contributor', 'muse', 0.1),
+    part('muse-spark-1.3-contributor', 'opencode-go', 0.2),
+    part('shared-model', 'muse', 0.05),
+    part('shared-model', 'opencode-go', 0.05),
+  );
+  const view = usageView(p, state(), { now });
+  assert.equal(view.cbm.rows.find(r => r.name === 'muse-spark-1.3-contributor').provider, 'muse');
+  // a model no one provider owns alone still has no mark
+  assert.equal(view.cbm.rows.find(r => r.name === 'shared-model').provider, '');
+  // every single-provider model row carries its provider's mark
+  for (const row of view.cbm.rows.filter(r => r.name !== 'shared-model')) assert.ok(row.provider, `${row.name} has a mark`);
 });

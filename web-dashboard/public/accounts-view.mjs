@@ -1068,8 +1068,8 @@ export const LOG_SOURCE_HOSTS = {
   omp: ['ubuntu', 'mac', 'windows'],
   muse: ['ubuntu', 'mac'],
   zcode: ['ubuntu', 'mac'],
-  'claude-code': ['ubuntu'],
-  codex: ['ubuntu'],
+  'claude-code': ['ubuntu', 'mac', 'windows'],
+  codex: ['ubuntu', 'mac', 'windows'],
   jsonl: ['ubuntu'],
 };
 export const LOG_SOURCE_PATH_HINT = {

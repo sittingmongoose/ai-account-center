@@ -180,15 +180,15 @@ test('a picked provider shows only the usage it served, divided by model', () =>
 test('Included usage names the tools and computers read, and how usage is grouped', () => {
   const inc = usageView(payload(), state(), { now }).included;
   assert.equal(inc.shown, true);
-  assert.equal(inc.line, 'Includes Claude Code, Codex, OMP, Muse Code and zcode on Ubuntu, Mac and Windows. Antigravity and Cursor keep no local usage log of their own; usage another tool routes through them still counts under them.');
+  assert.equal(inc.line, 'Includes Claude Code, Codex, OMP, Muse Code and zcode on Ubuntu, Mac and Windows. Antigravity and Cursor don\'t keep local usage logs; their quota readings still show on Home.');
   assert.match(inc.foot, /grouped by the provider that served it \(the route each log records; a route no provider claims is under Other\)/);
   assert.equal(inc.label, 'Included usage · 1 cached, 1 unavailable');
-  assert.deepEqual(inc.rows.map(r => r.tool), ['Claude Code', 'Codex', 'OMP', 'Muse Code', 'zcode', 'Antigravity', 'Cursor']);
+  assert.deepEqual(inc.rows.map(r => r.tool), ['Claude Code', 'Codex', 'OMP', 'Muse Code', 'zcode']);
   const cell = (tool, i) => inc.rows.find(r => r.tool === tool).cells[i];
   assert.deepEqual([cell('OMP', 1).text, cell('OMP', 1).tone], ['Cached, 2h 0m ago', 'cached']);
   assert.deepEqual([cell('zcode', 1).text, cell('zcode', 1).tone], ['Unavailable', 'unavailable']);
   assert.equal(cell('Claude Code', 1).text, 'Not read');
-  assert.equal(cell('Antigravity', 0).text, 'No usage log');
+  assert.ok(!JSON.stringify(inc.rows).includes('No usage log'), 'no per-host no-log rows');
   assert.equal(includedView(payload({ sources: [] }), now).shown, false);
 });
 
@@ -198,7 +198,7 @@ test('Included usage lists generic JSONL sources with the other tools', () => {
     { tool: 'jsonl', host: 'ubuntu', state: 'ok', lastScanAt: at(1), rowCount: 7, detail: null },
   ];
   const inc = includedView(payload({ sources }), now);
-  assert.deepEqual(inc.rows.map(r => r.tool), ['Claude Code', 'Codex', 'OMP', 'Muse Code', 'zcode', 'Generic JSONL', 'Antigravity', 'Cursor']);
+  assert.deepEqual(inc.rows.map(r => r.tool), ['Claude Code', 'Codex', 'OMP', 'Muse Code', 'zcode', 'Generic JSONL']);
   assert.match(inc.line, /Includes Claude Code, Codex, OMP, Muse Code, zcode and Generic JSONL on Ubuntu/);
   const cell = inc.rows.find(r => r.tool === 'Generic JSONL').cells[0];
   assert.deepEqual([cell.text, cell.tone], ['Read 1h 0m ago', 'ok']);

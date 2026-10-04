@@ -587,9 +587,10 @@ export function mixGeo(from, to, k) {
 /**
  * The page's model rows: every provider's rows of one model merged into one, because models are the division.
  * `provider` is the provider that served all of the model's usage here (its mark; Claude and Codex also have their
- * colour family); otherwise, or for "other", it is '' and the model has no mark. `providers` and `tools` say who
- * served it and which logs hold it. `logged` is the cost that is logged or priced at a listed rate; `unk` says some
- * cost is not logged; `na` says an estimate is missing.
+ * colour family); otherwise, or for "other", it is '' and the model has no mark. A muse-spark model is Muse's own
+ * model however it was routed, so it keeps Muse's mark whenever Muse served any of it. `providers` and `tools` say
+ * who served it and which logs hold it. `logged` is the cost that is logged or priced at a listed rate; `unk` says
+ * some cost is not logged; `na` says an estimate is missing.
  */
 export function pageModels(A, state) {
   const groups = new Map();
@@ -601,7 +602,7 @@ export function pageModels(A, state) {
   }
   return [...groups.values()].map(({ model, parts }) => {
     const providers = new Set(parts.map(m => m.provider));
-    const only = providers.size === 1 ? [...providers][0] : '';
+    const only = providers.size === 1 ? [...providers][0] : /^muse-spark([-_]|$)/i.test(model) && providers.has('muse') ? 'muse' : '';
     const tools = new Set(parts.flatMap(m => m.tools));
     const tok = Object.fromEntries(TYPES.map(t => [t.k, parts.reduce((s, m) => s + m.tok[t.k], 0)]));
     const total = tok.in + tok.out + tok.cw + tok.cr;
@@ -774,6 +775,8 @@ function donutView(A, state, shades) {
  * each of them, in the rows and in the Sessions number alike. An average cost needs every session's cost, so it is
  * not logged while any of it is not. Usage read from the Mac and Windows comes without a session list, so it adds
  * tokens but no sessions, and the note says so. Recent sessions lists the sample most recent first, without paths.
+ * The sample rows are the server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token
+ * totals); anything else is dropped, never guessed.
  */
 function sessionsView(A, state, payload, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
@@ -786,18 +789,29 @@ function sessionsView(A, state, payload, now) {
   const remote = new Set((Array.isArray(payload?.activity?.sources) ? payload.activity.sources : [])
     .filter(r => (r?.host === 'mac' || r?.host === 'windows') && (r.state === 'ok' || r.state === 'cached')).map(r => r.tool));
   const fromRemote = all.some(r => A.tools(r.p).some(t => remote.has(t)));
-  // the sample covers the CLIs in the filter (each row brings its CLI's tools); without one, show every session
-  const tools = new Set(all.flatMap(r => A.tools(r.p)));
-  const sample = A.sessionSample.filter(s => Number.isFinite(s.last) && (tools.size === 0 || tools.has(text(s.tool))));
-  const recent = sample.slice(0, 10).map(s => {
-    const names = (Array.isArray(s.models) ? s.models : []).map(m => text(m && m.model)).filter(Boolean);
+  // the sample covers the providers in the filter; without one, show every session
+  const sample = [];
+  for (const s of A.sessionSample) {
+    if (!validProvider(s?.provider) || !provOK(state, s.provider)) continue;
+    const last = Date.parse(text(s.lastActivity));
+    if (!finite(last)) continue;
+    sample.push({ s, last });
+  }
+  sample.sort((a, b) => b.last - a.last);
+  const recent = sample.slice(0, 10).map(({ s, last }) => {
+    const names = (Array.isArray(s.models) ? s.models : []).map(text).filter(Boolean);
+    const tok = TYPES.every(t => finite(s[t.f]) && s[t.f] >= 0) ? TYPES.reduce((n, t) => n + s[t.f], 0) : null;
+    const est = finite(s.estimatedCostUsd) && s.estimatedCostUsd >= 0 ? s.estimatedCostUsd : null;
+    const nl = notLoggedPart(s, est);
+    const cost = est === null ? null : Math.max(0, est - nl);
+    const unk = nl > TINY;
     return {
-      tool: text(s.tool),
+      tool: markOf(s.provider),
       models: (names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2} more` : '')) || '—',
-      tokens: tokC(s.tokens),
-      cost: s.unk && !(s.cost > TINY) ? NOT_LOGGED : money(s.cost),
-      when: relTxt(s.last, now),
-      tip: `${names.join(', ') || 'no models logged'} · ${intText(s.events)} usage events · last activity ${clockTxt(s.last)}`,
+      tokens: tokC(tok),
+      cost: unk && !(cost > TINY) ? NOT_LOGGED : money(cost),
+      when: relTxt(last, now),
+      tip: `${names.join(', ') || 'no models logged'} · ${tokX(tok)} · last activity ${clockTxt(last)}`,
     };
   });
   const recentFoot = sample.length > recent.length
@@ -983,9 +997,10 @@ const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
 /**
- * The "Included usage" disclosure: one sentence naming the tools and computers whose logs were read, the tools
- * that keep no local usage log, and a tool x computer grid of each source's state and last scan. It describes
- * where the numbers come from; it never divides them (models stay the only division).
+ * The "Included usage" disclosure: one sentence naming the tools and computers whose logs were read, a plain note
+ * for the tools that keep no local usage log, and a tool x computer grid of each source's state and last scan.
+ * Tools with no local log on any host (Antigravity, Cursor) get the note only, never a grid row of "No usage log"
+ * cells. It describes where the numbers come from; it never divides them (models stay the only division).
  * tone: ok | cached | unavailable | quiet.
  */
 export function includedView(payload, now = Date.now()) {
@@ -997,10 +1012,15 @@ export function includedView(payload, now = Date.now()) {
   const tools = SOURCE_TOOLS.filter(([t]) => list.some(r => r.tool === t));
   const included = tools.filter(([t]) => list.some(r => r.tool === t && read(r))).map(([, l]) => l);
   const hosts = SOURCE_HOSTS.filter(([h]) => list.some(r => r.host === h && read(r))).map(([, l]) => l);
-  const nolog = tools.filter(([t]) => list.filter(r => r.tool === t).every(noLocalLog)).map(([, l]) => l);
+  const nolog = tools.filter(([t]) => list.filter(r => r.tool === t).every(noLocalLog));
+  const quietPair = nolog.length === 2 && nolog.some(([t]) => t === 'antigravity') && nolog.some(([t]) => t === 'cursor');
+  const nologNames = nolog.map(([, l]) => l);
+  const nologLine = !nolog.length ? '' : quietPair
+    ? `Antigravity and Cursor don't keep local usage logs; their quota readings still show on Home.`
+    : `${andList(nologNames)} keep${nolog.length === 1 ? 's' : ''} no local usage log of ${nolog.length === 1 ? 'its' : 'their'} own; usage another tool routes through ${nolog.length === 1 ? 'it' : 'them'} still counts under ${nolog.length === 1 ? 'it' : 'them'}.`;
   const line = [
     included.length ? `Includes ${andList(included)}${hosts.length ? ` on ${andList(hosts)}` : ''}.` : 'No usage log could be read yet.',
-    nolog.length ? `${andList(nolog)} keep${nolog.length === 1 ? 's' : ''} no local usage log of ${nolog.length === 1 ? 'its' : 'their'} own; usage another tool routes through ${nolog.length === 1 ? 'it' : 'them'} still counts under ${nolog.length === 1 ? 'it' : 'them'}.` : '',
+    nologLine,
   ].filter(Boolean).join(' ');
   const when = r => Date.parse(text(r.lastScanAt));
   const events = r => Number.isInteger(r.rowCount) && r.rowCount >= 0 ? `${nf0.format(r.rowCount)} usage events kept` : '';
@@ -1013,7 +1033,8 @@ export function includedView(payload, now = Date.now()) {
     if (r.state === 'not_installed') return { text: 'Not installed', tone: 'quiet', tip: '' };
     return { text: 'Unavailable', tone: 'unavailable', tip: `${text(r.detail) ? `${text(r.detail).replace(/^./, c => c.toUpperCase())}. ` : ''}${last}` };
   };
-  const rows = tools.map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h))) }));
+  const quiet = new Set(nolog.map(([t]) => t));
+  const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h))) }));
   const cached = list.filter(r => r.state === 'cached').length, down = list.filter(r => r.state === 'unavailable' && !noLocalLog(r)).length;
   const flags = [cached ? `${cached} cached` : '', down ? `${down} unavailable` : ''].filter(Boolean).join(', ');
   return {

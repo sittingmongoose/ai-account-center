@@ -14,7 +14,7 @@ import {
 } from './analytics-remote-transport';
 import { readDashboardPreferences } from './dashboard-preferences';
 
-export type AnalyticsSourceTool = 'omp' | 'muse' | 'zcode';
+export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
 export type AnalyticsSourceState = 'ok' | 'cached' | 'unavailable' | 'not_installed';
 
 export interface AnalyticsRemoteSourceState {
@@ -41,10 +41,13 @@ export interface AnalyticsRemoteSourceDeps {
   cacheDir?: string;
 }
 
-/** Remote coverage: OMP on the Mac and Windows; Muse and zcode on the Mac only. */
+/**
+ * Remote coverage: Claude Code, Codex and OMP on the Mac and Windows; Muse
+ * and zcode on the Mac only.
+ */
 const REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
-  mac: ['omp', 'muse', 'zcode'],
-  windows: ['omp'],
+  mac: ['claude', 'codex', 'omp', 'muse', 'zcode'],
+  windows: ['claude', 'codex', 'omp'],
 };
 
 const MAX_CACHED_ROWS = 100_000;
@@ -237,8 +240,8 @@ export function loadAnalyticsRemoteCachedSources(
  */
 /**
  * Saved extra usage-log locations for one remote host, per scanned kind.
- * Only omp/muse/zcode are ever scanned remotely, so only those tools' extras
- * travel; a prefs read failure scans the built-in roots alone.
+ * Only scanned kinds' extras travel (Settings names Claude Code's tool
+ * `claude-code`); a prefs read failure scans the built-in roots alone.
  */
 export function remoteExtraRoots(
   host: AnalyticsRemoteHost,
@@ -253,12 +256,20 @@ export function remoteExtraRoots(
   }
   for (const source of sources) {
     if (source.host !== host) continue;
-    if (source.tool !== 'omp' && source.tool !== 'muse' && source.tool !== 'zcode') continue;
-    if (!kinds.includes(source.tool)) continue;
-    const paths = extra[source.tool] ?? [];
+    const kind: AnalyticsRemoteKind | null =
+      source.tool === 'claude-code'
+        ? 'claude'
+        : source.tool === 'codex' ||
+            source.tool === 'omp' ||
+            source.tool === 'muse' ||
+            source.tool === 'zcode'
+          ? source.tool
+          : null;
+    if (!kind || !kinds.includes(kind)) continue;
+    const paths = extra[kind] ?? [];
     if (paths.length >= 16 || paths.includes(source.path)) continue;
     paths.push(source.path);
-    extra[source.tool] = paths;
+    extra[kind] = paths;
   }
   return extra;
 }
