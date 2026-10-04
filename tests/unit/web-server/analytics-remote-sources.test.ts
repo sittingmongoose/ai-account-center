@@ -416,4 +416,54 @@ describe('analytics remote sources', () => {
     expect(mac?.state).toBe('cached');
     expect(mac?.detail).toContain('timed out');
   });
+
+  it('says when logs were read but hold no usage in the last 31 days', async () => {
+    const stale = response({
+      kinds: {
+        muse: { state: 'ok', fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20 } } },
+      },
+      rows: [],
+    });
+    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(stale)),
+    });
+    expect(states.find((entry) => entry.tool === 'muse' && entry.host === 'mac')).toMatchObject({
+      state: 'ok',
+      rowCount: 0,
+      detail: 'usage logs found but no usage in the last 31 days',
+    });
+  });
+
+  it('reports each host scan start and settle, on success and on failure', async () => {
+    const calls: Array<{ host: string; phase: string }> = [];
+    const onHostScan = (host: string, phase: 'start' | 'done') => {
+      calls.push({ host, phase });
+    };
+    const runHelper = async () => parseAnalyticsRemoteResponse(JSON.stringify(response()));
+    await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper, onHostScan });
+    for (const host of ['mac', 'windows']) {
+      expect(calls.filter((call) => call.host === host).map((call) => call.phase)).toEqual([
+        'start',
+        'done',
+      ]);
+    }
+    calls.length = 0;
+    const failing = async (): Promise<never> => {
+      throw new Error('timed out');
+    };
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: failing,
+      onHostScan,
+    });
+    for (const host of ['mac', 'windows']) {
+      expect(calls.filter((call) => call.host === host).map((call) => call.phase)).toEqual([
+        'start',
+        'done',
+      ]);
+    }
+  });
 });

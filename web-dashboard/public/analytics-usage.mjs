@@ -337,7 +337,8 @@ export function activityData(payload, now = Date.now()) {
   const sessionsTruncated = act.sessions?.truncated === true;
   // usage from a provider other than Claude and Codex (it shares the charts' neutral third series)
   const others = hours.some(r => !ownSeries(r.p)) || models.some(m => !ownSeries(m.provider));
-  return { available, status: text(act.status), refreshing: act.refreshing === true, message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom };
+  const refreshingRemote = Array.isArray(act.refreshingRemote) ? act.refreshingRemote.filter(h => h === 'mac' || h === 'windows') : [];
+  return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom };
 }
 
 /** The page range in local time: [a2, b) clipped to the logs that were read; step is the bucket size. */
@@ -1112,10 +1113,15 @@ export function providerChoices(A, R, state) {
  * (_other, _undrawn) }. opts: { now, sizes }.
  */
 function headOf(A, R, state, now, zone) {
+  const remote = [...new Set(Array.isArray(A.refreshingRemote) ? A.refreshingRemote : [])]
+    .filter(h => h === 'mac' || h === 'windows')
+    .sort((a, b) => (a === 'mac' ? 0 : 1) - (b === 'mac' ? 0 : 1))
+    .map(h => (h === 'mac' ? 'Mac' : 'Windows'));
   return {
     scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
     read: relTxt(A.win1, now),
     refreshing: A.refreshing,
+    refreshNote: remote.length ? `· Refreshing ${remote.join(' and ')}…` : '',
     readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' The log scan is refreshing; earlier records are shown until it completes.' : ''}`,
     date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
   };

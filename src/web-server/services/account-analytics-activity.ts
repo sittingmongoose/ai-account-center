@@ -22,6 +22,7 @@ import {
   type AnalyticsRemoteSourceState,
   type AnalyticsSourceTool,
 } from './analytics-remote-sources';
+import type { AnalyticsRemoteHost } from './analytics-remote-transport';
 import {
   defaultAccountAnalyticsPricing,
   memoiseAccountAnalyticsPricing,
@@ -63,6 +64,8 @@ interface ActivityState {
   sourceStates: AccountAnalyticsSource[];
   /** The last remote answer, carried forward while a later remote scan has not answered. */
   remote: RemoteAnswer | null;
+  /** Remote hosts the current generation's scan is still waiting on. */
+  remotePending: AnalyticsRemoteHost[];
   /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
   pricing: AccountAnalyticsPricingLookup;
   /** Recent cost of projecting this snapshot, reserved out of the response budget. */
@@ -123,7 +126,12 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
 export interface AccountAnalyticsActivityDeps {
   loadWorker?: (request: UsageWorkerRequest) => Promise<UsageWorkerResult>;
   requests?: () => AccountAnalyticsActivityRequest[] | Promise<AccountAnalyticsActivityRequest[]>;
-  remote?: (minDateMs: number) => Promise<RemoteAnswer>;
+  remote?: (
+    minDateMs: number,
+    opts?: {
+      onHostScan?: (host: AnalyticsRemoteHost, phase: 'start' | 'done') => void;
+    }
+  ) => Promise<RemoteAnswer>;
   /**
    * Saved remote aggregates, read without contacting a host, for a remote scan
    * that has not answered in time and no earlier answer in memory. Defaults
@@ -530,10 +538,24 @@ export class AccountAnalyticsActivityService {
     const deadline = Date.now() + MAX_COLLECTION_TIME_MS;
     const cutoff = (this.deps.now ?? Date.now)() - 31 * 86_400_000;
     // Remote scans run alongside the local workers; a timeout or failure only
-    // marks those sources, never the whole collection.
-    const remotePromise = (this.deps.remote ?? loadAnalyticsRemoteSources)(cutoff).catch(
-      () => null
-    );
+    // marks those sources, never the whole collection. The page names the
+    // hosts a refresh is waiting on, so a slow Windows scan reads as
+    // "Refreshing Mac and Windows…" instead of a stuck spinner.
+    const onHostScan = (host: AnalyticsRemoteHost, phase: 'start' | 'done'): void => {
+      if (generation !== state.generation) return;
+      state.remotePending =
+        phase === 'start'
+          ? state.remotePending.includes(host)
+            ? state.remotePending
+            : [...state.remotePending, host]
+          : state.remotePending.filter((pending) => pending !== host);
+    };
+    state.remotePending = [];
+    const loadRemote =
+      this.deps.remote ??
+      ((ms: number, opts?: { onHostScan?: typeof onHostScan }) =>
+        loadAnalyticsRemoteSources(ms, opts ?? {}));
+    const remotePromise = loadRemote(cutoff, { onHostScan }).catch(() => null);
     const succeeded = new Set<AccountAnalyticsActivityProvider>();
     const attempted = new Set<AccountAnalyticsActivityProvider>();
     const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
@@ -880,6 +902,7 @@ export class AccountAnalyticsActivityService {
         partial: false,
         sourceStates: [],
         remote: null,
+        remotePending: [],
         pricing: this.snapshotPricing(),
         projectionMs: 0,
       };
@@ -915,7 +938,12 @@ export class AccountAnalyticsActivityService {
           to,
           'unavailable',
           'Local activity is unavailable for this selection.',
-          { tz, sources: state.sourceStates, refreshing: state.pending !== null }
+          {
+            tz,
+            sources: state.sourceStates,
+            refreshing: state.pending !== null,
+            refreshingRemote: [...state.remotePending],
+          }
         ),
         // Already-read history still says which providers have activity, so
         // the provider list stays stable while a quota-only filter is chosen.
@@ -993,6 +1021,7 @@ export class AccountAnalyticsActivityService {
         pricing: state.pricing,
         sources: state.sourceStates,
         refreshing: state.pending !== null,
+        refreshingRemote: [...state.remotePending],
       }
     );
     const coverage = accountAnalyticsActivityCoverage(state.sources, from, to);

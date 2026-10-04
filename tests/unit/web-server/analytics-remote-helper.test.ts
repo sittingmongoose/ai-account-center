@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { execFileSync, spawn } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -659,5 +660,87 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(byModel.get('extra-claude-model')).toMatchObject({ k: 'claude', i: 7, o: 8, n: 1 });
     expect(byModel.get('extra-codex-model')).toMatchObject({ k: 'codex', i: 11, o: 12, n: 1 });
     expect(JSON.stringify(response)).not.toContain(home);
+  });
+
+  // The helper confirms files in visit order, so the fingerprint key order is the visit order.
+  function filekey(kind: string, file: string): string {
+    return createHash('sha256')
+      .update(kind, 'utf8')
+      .update(Buffer.from([0]))
+      .update(path.resolve(file), 'utf8')
+      .digest('hex');
+  }
+
+  it('visits omp session files newest first so a cut scan banks the newest progress', () => {
+    const dir = path.join(home, '.omp', 'agent', 'sessions', 'slug');
+    fs.mkdirSync(dir, { recursive: true });
+    const files = ['2026-09-01T10-00_old.jsonl', '2026-09-15T10-00_mid.jsonl', '2026-10-01T10-00_new.jsonl'];
+    for (const name of files)
+      fs.writeFileSync(path.join(dir, name), `${ompRecord()}\n`);
+    // Alphabetical order is old, mid, new; stamp the reverse so order must come from mtime.
+    const atime = new Date('2026-10-02T00:00:00Z');
+    fs.utimesSync(path.join(dir, files[0]), atime, new Date('2026-10-03T00:00:00Z'));
+    fs.utimesSync(path.join(dir, files[1]), atime, new Date('2026-10-02T00:00:00Z'));
+    fs.utimesSync(path.join(dir, files[2]), atime, new Date('2026-10-01T00:00:00Z'));
+    const response = runHelper({ kinds: ['omp'], minDateMs: MIN_DATE });
+    const prints = (response.kinds as Record<string, { fingerprints: Record<string, unknown> }>).omp
+      .fingerprints;
+    expect(Object.keys(prints)).toEqual([
+      filekey('omp', path.join(dir, files[0])),
+      filekey('omp', path.join(dir, files[1])),
+      filekey('omp', path.join(dir, files[2])),
+    ]);
+  });
+
+  it('visits claude project files newest first', () => {
+    const dir = path.join(home, '.claude', 'projects', 'proj1');
+    fs.mkdirSync(dir, { recursive: true });
+    const record = JSON.stringify({
+      type: 'assistant',
+      message: { model: 'claude-haiku-4-5', usage: { input_tokens: 3 } },
+      timestamp: '2026-10-01T15:05:00Z',
+    });
+    for (const name of ['a.jsonl', 'b.jsonl', 'c.jsonl']) fs.writeFileSync(path.join(dir, name), `${record}\n`);
+    const atime = new Date('2026-10-02T00:00:00Z');
+    fs.utimesSync(path.join(dir, 'a.jsonl'), atime, new Date('2026-10-01T00:00:00Z'));
+    fs.utimesSync(path.join(dir, 'b.jsonl'), atime, new Date('2026-10-03T00:00:00Z'));
+    fs.utimesSync(path.join(dir, 'c.jsonl'), atime, new Date('2026-10-02T00:00:00Z'));
+    const response = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    const prints = (response.kinds as Record<string, { fingerprints: Record<string, unknown> }>)
+      .claude.fingerprints;
+    expect(Object.keys(prints)).toEqual([
+      filekey('claude', path.join(dir, 'b.jsonl')),
+      filekey('claude', path.join(dir, 'c.jsonl')),
+      filekey('claude', path.join(dir, 'a.jsonl')),
+    ]);
+  });
+
+  it('accepts an incremental request holding thousands of fingerprints', () => {
+    writeFixtures();
+    // Six thousand prints are ~1.5 MB, over the old 1 MB request cap: the Mac
+    // holds thousands of session files, and every one of its scans carries them.
+    const prints: Record<string, unknown> = {};
+    for (let index = 0; index < 6000; index++)
+      prints[createHash('sha256').update(`file-${index}`).digest('hex')] = {
+        size: 100 + index,
+        mtimeMs: MIN_DATE + index,
+        head: createHash('sha256').update(`head-${index}`).digest('hex'),
+        tail: createHash('sha256').update(`tail-${index}`).digest('hex'),
+      };
+    const request = JSON.stringify({
+      kinds: ['omp', 'muse', 'zcode'],
+      minDateMs: MIN_DATE,
+      fingerprints: { omp: prints, muse: {}, zcode: {} },
+    });
+    expect(request.length).toBeGreaterThan(1024 * 1024);
+    const output = execFileSync('python3', [HELPER], {
+      input: request,
+      encoding: 'utf8',
+      timeout: 30_000,
+      maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, HOME: home, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    });
+    const response = JSON.parse(output) as Record<string, unknown>;
+    expect(response.version).toBe(1);
   });
 });

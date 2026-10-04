@@ -39,6 +39,11 @@ export interface AnalyticsRemoteSourceDeps {
   ) => Promise<AnalyticsRemoteResponse>;
   now?: () => number;
   cacheDir?: string;
+  /**
+   * Fires when a host's scan starts and when it settles (success or failure),
+   * so callers can report which remotes a refresh is waiting on.
+   */
+  onHostScan?: (host: AnalyticsRemoteHost, phase: 'start' | 'done') => void;
 }
 
 /**
@@ -311,6 +316,8 @@ export async function loadAnalyticsRemoteSources(
           return;
         }
         let response: AnalyticsRemoteResponse;
+        const onHostScan = deps.onHostScan;
+        onHostScan?.(host, 'start');
         try {
           response = await runHelper(alias, host, {
             kinds,
@@ -319,6 +326,7 @@ export async function loadAnalyticsRemoteSources(
             extraRoots: remoteExtraRoots(host, kinds),
           });
         } catch {
+          onHostScan?.(host, 'done');
           // Previous aggregates stay available; nothing remote fails the page.
           const part = cachedHostSources(host, cached, minDateMs, 'remote scan failed');
           results.push(...part.results);
@@ -399,9 +407,12 @@ export async function loadAnalyticsRemoteSources(
                 ? 'the search for custom OMP session folders hit its bounds; folders it did not reach are not read'
                 : tool === 'zcode' && response.kinds.zcode?.walUnread === true
                   ? "zcode's newest usage waits in its write-ahead log, which a read-only open here cannot read; it appears once zcode checkpoints it"
-                  : null,
+                  : rows.length === 0 && Object.keys(freshPrints[tool] ?? {}).length > 0
+                    ? 'usage logs found but no usage in the last 31 days'
+                    : null,
           });
         }
+        onHostScan?.(host, 'done');
       })()
     );
   }

@@ -107,6 +107,8 @@ export interface AccountAnalyticsProjectionOptions {
   sources?: AccountAnalyticsActivity['sources'];
   /** A collection is running behind this answer; the numbers are the last snapshot. */
   refreshing?: boolean;
+  /** Remote hosts the running collection is still waiting on; empty when settled. */
+  refreshingRemote?: Array<'mac' | 'windows'>;
 }
 
 function finite(value: unknown): number {
@@ -115,6 +117,8 @@ function finite(value: unknown): number {
 function validModelName(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value);
 }
+/** Attribution Claude Code logs attach to zero-token system records; never a display model. */
+const SYNTHETIC_MODEL_NAME = '<synthetic>';
 function totals(value: {
   inputTokens: number;
   outputTokens: number;
@@ -341,6 +345,7 @@ export function projectAccountAnalyticsActivity(
   const base: AccountAnalyticsActivity = {
     status,
     refreshing: options.refreshing ?? false,
+    refreshingRemote: options.refreshingRemote ?? [],
     scope: 'multi-host-cli',
     timezone: tz,
     accountAttribution: 'unavailable',
@@ -599,12 +604,21 @@ export function projectAccountAnalyticsActivity(
       const values = accumulator();
       addValues(values, totals(session));
       addParts(values, priced.parts);
+      // The session's real model first: breakdowns ranked by tokens, with the
+      // '<synthetic>' attribution (zero-token system records in Claude logs)
+      // never shown.
       const fromBreakdowns = priced.models
-        .map((model) => model.name)
-        .filter((name): name is string => name !== null && name.length > 0);
+        .map((model) => ({ name: model.name, tokens: tokenTotal(model.values) }))
+        .filter(
+          (entry): entry is { name: string; tokens: number } =>
+            entry.name !== null && entry.name.length > 0 && entry.name !== SYNTHETIC_MODEL_NAME
+        )
+        .sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name))
+        .map((entry) => entry.name);
       const fromUsed = Array.isArray(session.modelsUsed)
         ? session.modelsUsed.filter(
-            (name): name is string => validModelName(name) && name.length > 0
+            (name): name is string =>
+              validModelName(name) && name.length > 0 && name !== SYNTHETIC_MODEL_NAME
           )
         : [];
       return {

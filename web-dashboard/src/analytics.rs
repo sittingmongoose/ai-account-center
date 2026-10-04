@@ -21,7 +21,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 /// The analytics view-model version this build understands (public/analytics-data.mjs ANALYTICS_VIEW_VERSION).
-pub const ANALYTICS_VIEW_VERSION: u64 = 3;
+pub const ANALYTICS_VIEW_VERSION: u64 = 4;
 
 // ---------------------------------------------------------------- JSON access (camelCase keys)
 static NULL: Value = Value::Null;
@@ -453,6 +453,7 @@ fn head(v: &Value, previous: AnalyticsHeadView) -> AnalyticsHeadView {
         scope: s(v, "scope"),
         read: s(v, "read"),
         read_tip: s(v, "readTip"),
+        refresh_note: s(v, "refreshNote"),
         date: s(v, "date"),
         custom: b(v, "custom"),
     }

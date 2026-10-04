@@ -265,3 +265,15 @@ test('usageHead is the analytics header alone and always equals the full view he
   assert.match(head.readTip, /scan is refreshing/);
   assert.ok(!('kpis' in head) && !('trend' in head));
 });
+
+test('the header names the remote hosts a refresh waits on', () => {
+  const both = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['windows', 'mac'] });
+  assert.equal(usageHead(both, state(), { now }).refreshNote, '· Refreshing Mac and Windows…');
+  const one = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['windows'] });
+  assert.equal(usageHead(one, state(), { now }).refreshNote, '· Refreshing Windows…');
+  // settled or host-less answers carry no note; the page falls back to its plain line
+  assert.equal(usageHead(payload(), state(), { now }).refreshNote, '');
+  const junk = payload({}, { refreshingRemote: ['mac', 'mac', 'mars', null] });
+  assert.equal(usageHead(junk, state(), { now }).refreshNote, '· Refreshing Mac…');
+  assert.equal(usageView(both, state(), { now }).head.refreshNote, '· Refreshing Mac and Windows…');
+});
