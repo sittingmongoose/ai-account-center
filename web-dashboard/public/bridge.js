@@ -8,7 +8,7 @@ import { createActivationConfirmation } from './activation-confirmation.mjs';
 import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
 import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
 import { analyticsView, analyticsChoiceId, analyticsSlintModel } from './analytics-data.mjs';
-import { usageView, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGES, H, D } from './analytics-usage.mjs';
+import { usageView, usageHead, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGES, H, D } from './analytics-usage.mjs';
 import { quotaView, agendaView, QUOTA_PROVIDERS } from './analytics-quota.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
 import { premultiplySvgTextureUploads } from './renderer.mjs';
@@ -352,7 +352,8 @@ function renderAnalytics(mode = 'static') {
 }
 function renderAnalyticsHead() {
   if (!analyticsPayload || currentPage !== 'analytics') return;
-  try { set_analytics_head(JSON.stringify(usageView(analyticsPayload, analyticsPage, { sizes: analyticsPage.sizes }).head)); } catch {}
+  // The header alone (usageHead), not the whole usage view: this runs every 15 s between refreshes.
+  try { set_analytics_head(JSON.stringify(usageHead(analyticsPayload, analyticsPage, { now: Date.now() }))); } catch {}
 }
 /** True when the response in hand already holds the hours of the page range (no fetch is needed to draw it). */
 function analyticsCovers(payload, now = Date.now()) {
@@ -460,11 +461,13 @@ function applyRefreshInterval(seconds, confirmed = true) {
   usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(); } }, seconds * 1000);
 }
 async function loadSettings() {
-  try { const result = await request('/api/accounts/settings'); applyRefreshInterval(result?.refreshIntervalSeconds); } catch {}
-  try {
-    const prefs = await request('/api/accounts/preferences');
-    if (prefs && typeof prefs.timeZone === 'string') setDisplayTimeZone(prefs.timeZone);
-  } catch {}
+  // The two independent reads fly together; each still applies (or fails) on its own, in order.
+  const [settings, prefs] = await Promise.all([
+    request('/api/accounts/settings').catch(() => null),
+    request('/api/accounts/preferences').catch(() => null),
+  ]);
+  try { applyRefreshInterval(settings?.refreshIntervalSeconds); } catch {}
+  try { if (prefs && typeof prefs.timeZone === 'string') setDisplayTimeZone(prefs.timeZone); } catch {}
 }
 function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); renderAccounts(); }
 async function updateStatus() {
@@ -572,15 +575,17 @@ async function afterSignIn() {
   try { authCheck = await request('/api/auth/check'); } catch {}
   if (currentPage === 'accounts') await accounts.loadAll();
 }
-async function checkSession() {
+async function checkSession(early = null) {
   try {
-    await loadAuthSetup();
-    const status = await request('/api/auth/check');
+    if (early) await early.setup; else await loadAuthSetup();
+    const status = early ? await early.check : await request('/api/auth/check');
     authCheck = status && typeof status === 'object' ? status : null;
     username = typeof status?.username === 'string' ? status.username : '';
     if (status.authenticated === true || status.authRequired === false) {
       auth(true, 'default');
-      await loadSettings(); await refresh(); await updateStatus();
+      await loadSettings();
+      // The dashboard and the update status render different state; their reads overlap.
+      await Promise.all([refresh(), updateStatus()]);
       await afterSignIn();
       if (currentPage === 'analytics') await refreshAnalytics();
     } else if (status.accessMode === 'setup') showSetup();
@@ -807,6 +812,10 @@ try {
   requireWebGL();
   // Before Slint creates its first image: SVG marks must upload premultiplied (renderer.mjs).
   premultiplySvgTextureUploads();
+  // The session answers while the wasm downloads and compiles; checkSession awaits both below.
+  const earlySetup = loadAuthSetup();
+  const earlyCheck = request('/api/auth/check');
+  earlyCheck.catch(() => {});
   await init();
   startSlintDashboard(() => start_dashboard(innerWidth, innerHeight, devicePixelRatio));
   // password managers fill the hidden HTML form; its values land in the Slint fields, and its
@@ -835,7 +844,7 @@ try {
   watchMedia('(prefers-reduced-motion: reduce)', reduced => { motionReduced = reduced || headless; set_reduced_motion(motionReduced); });
   document.querySelector('#loading').hidden = true;
   auth(false, 'loading');
-  await checkSession();
+  await checkSession({ setup: earlySetup, check: earlyCheck });
   applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
   setInterval(() => { activationConfirmation.expire(); antigravityConfirmation.expire(); }, 1_000);
   setInterval(() => { if (authenticated && updateJob?.state === 'running') void updateStatus(); }, 3_000);

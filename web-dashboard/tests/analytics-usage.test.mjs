@@ -6,7 +6,7 @@ process.env.TZ = 'UTC';
 const { setDisplayTimeZone } = await import('../public/time-format.mjs');
 setDisplayTimeZone('UTC');
 const U = await import('../public/analytics-usage.mjs');
-const { usageView, apiRangeFor, activityData, trendPaths, mixGeo, dashedRect } = U;
+const { usageView, usageHead, apiRangeFor, activityData, trendPaths, mixGeo, dashedRect } = U;
 
 const now = Date.parse('2026-10-01T12:00:00Z');
 const hour = (iso, provider, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, estimatedCostUsd) =>
@@ -218,4 +218,24 @@ test('recent sessions list the sample most recent first, without paths, with a c
   const many = usageView(payload({}, { sessions: { total: 1848, sample: Array.from({ length: 50 }, (_, i) => ({ ...sample[0], key: `k${i}`, last: now - i * 60e3 })), truncated: true } }), state(), { now });
   assert.equal(many.sessions.recent.length, 10);
   assert.equal(many.sessions.foot, 'Most recent 10 of 1,848 sessions in this range');
+});
+
+test('usageHead is the analytics header alone and always equals the full view head', () => {
+  const refreshing = payload({}, { status: 'cached', refreshing: true });
+  const cases = [
+    [payload(), state()],
+    [payload(), state({ range: '24h' })],
+    [payload(), state({ range: 'custom', from: Date.parse('2026-09-28T00:00:00Z'), to: Date.parse('2026-10-01T00:00:00Z') })],
+    [payload(), state({ prov: 'codex' })],
+    [refreshing, state()],
+    [payload({ activity: { status: 'unavailable', message: 'No logs.' } }), state()],
+  ];
+  for (const [p, st] of cases) {
+    assert.deepEqual(usageHead(p, st, { now }), usageView(p, st, { now }).head);
+  }
+  // the tick reads "logs read …" and the refreshing state, never the blocks
+  const head = usageHead(refreshing, state(), { now });
+  assert.equal(head.refreshing, true);
+  assert.match(head.readTip, /scan is refreshing/);
+  assert.ok(!('kpis' in head) && !('trend' in head));
 });
