@@ -743,11 +743,116 @@ describe('native local analytics activity', () => {
       },
       now: () => NOW,
     });
-    const qwen = await service.get({ ...QUERY, provider: 'qwen' }, FROM, NOW);
+    // Tool ids are not usage providers; only routed providers and `all` select.
+    const tool = await service.get(
+      { ...QUERY, provider: 'omp' as 'qwen' },
+      FROM,
+      NOW
+    );
     const account = await service.get({ ...QUERY, account: 'codex:active' }, FROM, NOW);
     expect(calls).toBe(0);
-    expect(qwen.totals).toBeNull();
+    expect(tool.totals).toBeNull();
     expect(account.totals).toBeNull();
+  });
+
+  it('projects activity for routed providers served by other tools', async () => {
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
+      requests: () => [],
+      now: () => NOW,
+    });
+    const qwen = await service.get({ ...QUERY, provider: 'qwen' }, FROM, NOW);
+    // A routed provider with no usage in range reports unavailable with a
+    // provider-specific message, not the unsupported-selection refusal.
+    expect(qwen.status).toBe('unavailable');
+    expect(qwen.message).toContain('served by this provider');
+  });
+
+  it('merges remote sessions into the snapshot like local ones', async () => {
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({
+        results: [{ tool: 'omp' as const, data: data('some-model', 100, 0.005) }],
+        states: [],
+      }),
+      requests: () => [],
+      now: () => NOW,
+    });
+    const answer = await settled(service);
+    expect(answer.status).toBe('ok');
+    expect(answer.totals?.inputTokens).toBe(100);
+    expect(answer.sessions?.total).toBe(1);
+    expect(answer.sessions?.sample).toHaveLength(1);
+    expect(answer.sessions?.sample[0].provider).toBe('other');
+  });
+
+  it('lists every remote kind when the remote scans never answer', async () => {
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => {
+        throw new Error('no route to host');
+      },
+      remoteCached: () => null,
+      requests: () => [],
+      now: () => NOW,
+    });
+    const answer = await settled(service);
+    expect(answer.status).toBe('unavailable');
+    const remote = answer.sources.filter(
+      (entry) =>
+        entry.host !== 'ubuntu' && ['claude', 'codex', 'omp', 'muse', 'zcode'].includes(entry.tool)
+    );
+    expect(remote).toHaveLength(10);
+    for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode'] as const) {
+      for (const host of ['mac', 'windows'] as const) {
+        expect(remote).toContainEqual(
+          expect.objectContaining({ tool, host, state: 'unavailable' })
+        );
+      }
+    }
+  });
+
+  it('persists generic jsonl sources in the snapshot', async () => {
+    const scope = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-activity-snapshot-jsonl-'));
+    try {
+      const requests = () => [
+        {
+          provider: 'jsonl' as const,
+          request: {
+            kind: 'jsonl' as const,
+            roots: ['/fixture'],
+            mapping: { timestamp: 'ts' },
+          },
+        },
+      ];
+      const first = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: [] }),
+        requests,
+        loadWorker: async () => data('generic-model', 10, 0),
+        now: () => NOW,
+        scope: () => scope,
+        persistSnapshot: true,
+      });
+      expect((await first.get(QUERY, FROM, NOW)).status).toBe('ok');
+      const file = path.join(
+        scope,
+        'cache',
+        'account-activity-v1',
+        'analytics-activity-snapshot-v1.json'
+      );
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).sources).toHaveLength(1);
+      const second = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: [] }),
+        requests,
+        loadWorker: async () => data('generic-model', 20, 0),
+        now: () => NOW + 61_000,
+        scope: () => scope,
+        persistSnapshot: true,
+      });
+      const instant = await second.get(QUERY, FROM, NOW);
+      expect(instant.status).toBe('cached');
+      expect(instant.totals?.inputTokens).toBe(10);
+    } finally {
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
   });
 
   it('persists the snapshot and serves it instantly after a restart while the first scan runs', async () => {

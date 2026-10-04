@@ -49,6 +49,10 @@ VERSION = 1
 MAX_FILES = 20000
 MAX_LINE_BYTES = 8 * 1024 * 1024
 MAX_ROWS = 50000
+# Per-session-model aggregates share the response with the hourly rows; the
+# session cap is separate so a host with many sessions keeps its hours too.
+MAX_SROWS = 50000
+SESSION_MAX_LEN = 160
 # The incremental request carries one fingerprint per known file; the Mac alone
 # holds thousands of session files, so the cap must fit tens of thousands.
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -145,6 +149,37 @@ def _clean_provider(value):
     return text
 
 
+def _clean_session(value):
+    # An opaque session key only: no path separators survive, so a session
+    # key can never smuggle a path into the aggregates.
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > SESSION_MAX_LEN:
+        return None
+    if re.search(r"[\x00-\x1f\x7f/\\]", text):
+        return None
+    return text
+
+
+def _omp_session_id(path):
+    # Mirrors the server's ompSessionIdForFile: the session-named file stem,
+    # else the enclosing directory name for __advisor.jsonl and free names.
+    base = os.path.basename(path)
+    if base != "__advisor.jsonl" and _is_session_filename(base):
+        stem = base[:-len(".jsonl")] if base.endswith(".jsonl") else base
+        return _clean_session(stem)
+    parent = os.path.basename(os.path.dirname(path))
+    if parent and parent not in (".", os.path.sep):
+        return _clean_session(parent)
+    return None
+
+
+def _muse_session_id(path):
+    # Mirrors the server's museSessionIdForFile: <uuid>/session.jsonl.
+    return _clean_session(os.path.basename(os.path.dirname(path)))
+
+
 def _non_negative_number(value):
     if isinstance(value, bool):
         return None
@@ -178,6 +213,7 @@ class Collector(object):
         self.fresh = {}
         self.pending = {}
         self.rows = {}
+        self.srows = {}
         # A file, row or deadline cap stopped the scan: some files were not read.
         self.truncated = False
         # The row cap was hit: nothing more can be added.
@@ -241,6 +277,48 @@ class Collector(object):
         row["cw"] += tokens[3]
         row["c"] += cost
         row["n"] += 1
+
+    def sadd(self, kind, filekey, session, model, provider, epoch_ms, tokens, cost):
+        # One aggregate per session, model, routing provider and logged-cost
+        # split, with the session's first and last event. The session key is
+        # the log's own opaque id (a file or directory name, a record field),
+        # never a path; the server publishes only hashed sample keys of it.
+        if not session:
+            return
+        key = (kind, filekey, session, model, provider or "", cost > 0)
+        srow = self.srows.get(key)
+        if srow is None:
+            if len(self.srows) >= MAX_SROWS:
+                self.truncated = True
+                self.row_cap = True
+                return
+            srow = {
+                "k": kind,
+                "f": filekey,
+                "s": session,
+                "m": model,
+                "a": epoch_ms,
+                "z": epoch_ms,
+                "i": 0,
+                "o": 0,
+                "cr": 0,
+                "cw": 0,
+                "c": 0.0,
+                "n": 0,
+            }
+            if provider:
+                srow["p"] = provider
+            self.srows[key] = srow
+        if epoch_ms < srow["a"]:
+            srow["a"] = epoch_ms
+        if epoch_ms > srow["z"]:
+            srow["z"] = epoch_ms
+        srow["i"] += tokens[0]
+        srow["o"] += tokens[1]
+        srow["cr"] += tokens[2]
+        srow["cw"] += tokens[3]
+        srow["c"] += cost
+        srow["n"] += 1
 
 
 def _iter_jsonl_files(root, accept, collector):
@@ -409,7 +487,7 @@ def _sessions_dir_has_marker(directory):
     return False
 
 
-def _parse_omp_line(line, collector, kind, filekey):
+def _parse_omp_line(line, collector, kind, filekey, session=None):
     # Pre-filter before parsing so conversation content is never decoded.
     if '"type"' not in line or '"message"' not in line or '"usage"' not in line:
         return
@@ -472,6 +550,7 @@ def _parse_omp_line(line, collector, kind, filekey):
         return
     provider = _clean_provider(message.get("provider"))
     collector.add(kind, filekey, model, provider, hour, tokens, cost)
+    collector.sadd(kind, filekey, session, model, provider, epoch_ms, tokens, cost)
 
 
 def _session_copy_key(path):
@@ -570,6 +649,7 @@ def _collect_omp(collector, home, env, extra=()):
             if staged in collector.pending.get("omp", {}):
                 collector.confirm_file("omp", staged)
             continue
+        session = _omp_session_id(path)
         try:
             handle = open(path, "rb")
         except OSError:
@@ -592,7 +672,7 @@ def _collect_omp(collector, home, env, extra=()):
                     line = chunk.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-                _parse_omp_line(line, collector, "omp", filekey)
+                _parse_omp_line(line, collector, "omp", filekey, session)
                 if collector.row_cap:
                     return "ok"
         collector.confirm_file("omp", filekey)
@@ -623,7 +703,7 @@ def _muse_event_from_record(record):
     return None
 
 
-def _parse_muse_line(line, collector, kind, filekey):
+def _parse_muse_line(line, collector, kind, filekey, session=None):
     # model_completed only; goal_usage_attribution carries the same quantities
     # and would double every token. Pre-filter before parsing.
     if "model_completed" not in line:
@@ -685,6 +765,7 @@ def _parse_muse_line(line, collector, kind, filekey):
     if hour is None:
         return
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+    collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
 
 
 def _scan_muse_dir(collector, directory):
@@ -701,6 +782,7 @@ def _scan_muse_dir(collector, directory):
             if staged in collector.pending.get("muse", {}):
                 collector.confirm_file("muse", staged)
             continue
+        session = _muse_session_id(path)
         try:
             handle = open(path, "rb")
         except OSError:
@@ -721,7 +803,7 @@ def _scan_muse_dir(collector, directory):
                     line = chunk.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-                _parse_muse_line(line, collector, "muse", filekey)
+                _parse_muse_line(line, collector, "muse", filekey, session)
                 if collector.row_cap:
                     return True
         collector.confirm_file("muse", filekey)
@@ -888,6 +970,9 @@ def _parse_claude_line(line, collector, kind, filekey, box):
         return
     # Claude Code logs no cost; the server prices the tokens at its rates.
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+    collector.sadd(
+        kind, filekey, _clean_session(record.get("sessionId")), model, None, epoch_ms, tokens, 0.0
+    )
 
 
 def _collect_claude(collector, home, env, extra=()):
@@ -998,6 +1083,9 @@ def _parse_codex_line(line, collector, kind, filekey, box):
         return
     tokens = [int(delta[0]), int(delta[3]), int(delta[2]), int(delta[1])]
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+    collector.sadd(
+        kind, filekey, _clean_session(box.get("session")), model, None, epoch_ms, tokens, 0.0
+    )
 
 
 def _collect_codex(collector, home, env, extra=()):
@@ -1144,6 +1232,95 @@ def _scan_zcode_db(collector, db_path, immutable):
         row["cr"] += tokens[2]
         row["cw"] += tokens[3]
         row["n"] += count
+    # Sessions: the same integers grouped by the log's own session id, with
+    # first and last event. Ids and integers only, like the hourly groups.
+    # A fresh read-only open: the hourly query's connection is already closed.
+    # A database without session ids (an older schema) keeps its hourly
+    # rows; only the hourly query failing is an error.
+    sgroups = []
+    try:
+        scon = sqlite3.connect(uri, uri=True, timeout=5.0)
+    except sqlite3.Error:
+        scon = None
+    if scon is not None:
+        try:
+            scursor = scon.cursor()
+            scursor.execute(
+                "SELECT session_id, model_id, provider_id,"
+                " MIN(started_at), MAX(started_at),"
+                " SUM(input_tokens), SUM(output_tokens),"
+                " SUM(cache_read_input_tokens),"
+                " SUM(cache_creation_input_tokens), COUNT(*)"
+                " FROM model_usage WHERE started_at >= ?"
+                " GROUP BY session_id, model_id, provider_id",
+                (int(collector.min_date_ms),),
+            )
+            sgroups = scursor.fetchall()
+        except sqlite3.Error:
+            sgroups = []
+        finally:
+            try:
+                scon.close()
+            except sqlite3.Error:
+                pass
+    for group in sgroups:
+        if collector.expired():
+            collector.truncated = True
+            return "ok"
+        session = _clean_session(group[0])
+        model = _clean_model(group[1])
+        if session is None or model is None:
+            continue
+        provider = _clean_provider(group[2])
+        first = group[3]
+        last = group[4]
+        if (
+            not isinstance(first, int)
+            or not isinstance(last, int)
+            or first < collector.min_date_ms
+            or last < first
+        ):
+            continue
+        sums = [_non_negative_number(value or 0) for value in group[5:9]]
+        if any(value is None for value in sums):
+            continue
+        count = group[9]
+        if not isinstance(count, int) or count <= 0:
+            continue
+        tokens = [max(0, int(sums[0]) - int(sums[2])), int(sums[1]), int(sums[2]), int(sums[3])]
+        key = ("zcode", filekey, session, model, provider or "", False)
+        srow = collector.srows.get(key)
+        if srow is None:
+            if len(collector.srows) >= MAX_SROWS:
+                collector.truncated = True
+                collector.row_cap = True
+                return "ok"
+            srow = {
+                "k": "zcode",
+                "f": filekey,
+                "s": session,
+                "m": model,
+                "a": first,
+                "z": last,
+                "i": 0,
+                "o": 0,
+                "cr": 0,
+                "cw": 0,
+                "c": 0.0,
+                "n": 0,
+            }
+            if provider:
+                srow["p"] = provider
+            collector.srows[key] = srow
+        if first < srow["a"]:
+            srow["a"] = first
+        if last > srow["z"]:
+            srow["z"] = last
+        srow["i"] += tokens[0]
+        srow["o"] += tokens[1]
+        srow["cr"] += tokens[2]
+        srow["cw"] += tokens[3]
+        srow["n"] += count
     # Every group was added: the database is confirmed whatever other kinds hit.
     collector.confirm_file("zcode", filekey)
     return "ok"
@@ -1288,6 +1465,9 @@ def main():
         collector.rows = {
             key: row for key, row in collector.rows.items() if row["f"] in confirmed
         }
+        collector.srows = {
+            key: srow for key, srow in collector.srows.items() if srow["f"] in confirmed
+        }
     kind_entries = {}
     for kind in kinds:
         entry = {"state": states.get(kind, "ok"), "fingerprints": collector.fresh.get(kind, {})}
@@ -1301,6 +1481,10 @@ def main():
         "kinds": kind_entries,
         "rows": sorted(
             collector.rows.values(), key=lambda row: (row["h"], row["k"], row.get("p", ""), row["m"])
+        ),
+        "srows": sorted(
+            collector.srows.values(),
+            key=lambda srow: (srow["z"], srow["k"], srow["s"], srow["m"]),
         ),
     }
     sys.stdout.write(json.dumps(response))

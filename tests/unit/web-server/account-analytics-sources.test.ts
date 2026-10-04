@@ -97,6 +97,23 @@ async function remoteAnswer() {
         rowCount: 0,
         detail: 'remote scan failed',
       },
+      // Every kind is scanned on both hosts; absence is measured, never fixed.
+      {
+        tool: 'muse',
+        host: 'windows',
+        state: 'not_installed',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 0,
+        detail: 'no usage logs found on this host',
+      },
+      {
+        tool: 'zcode',
+        host: 'windows',
+        state: 'not_installed',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 0,
+        detail: 'no usage logs found on this host',
+      },
     ],
   };
 }

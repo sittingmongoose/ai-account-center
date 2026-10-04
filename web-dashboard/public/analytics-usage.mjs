@@ -774,8 +774,8 @@ function donutView(A, state, shades) {
  * Session stats over the providers in the filter, one row per provider with sessions. The stats are the columns'
  * sums and means, so they always line up with their columns; a session that several providers served counts under
  * each of them, in the rows and in the Sessions number alike. An average cost needs every session's cost, so it is
- * not logged while any of it is not. Usage read from the Mac and Windows comes without a session list, so it adds
- * tokens but no sessions, and the note says so. Recent sessions lists the sample most recent first, without paths.
+ * not logged while any of it is not. Sessions come from the Ubuntu, Mac and Windows logs alike. Recent sessions
+ * lists the sample most recent first, without paths.
  * The sample rows are the server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token
  * totals); anything else is dropped, never guessed.
  */
@@ -787,9 +787,6 @@ function sessionsView(A, state, payload, now) {
   const unk = all.some(r => r.unk);
   const avg = !unk && finite(sessions) && sessions > 0 && finite(cost) ? cost / sessions : null;
   const evs = finite(sessions) && sessions > 0 && finite(events) ? events / sessions : null;
-  const remote = new Set((Array.isArray(payload?.activity?.sources) ? payload.activity.sources : [])
-    .filter(r => (r?.host === 'mac' || r?.host === 'windows') && (r.state === 'ok' || r.state === 'cached')).map(r => r.tool));
-  const fromRemote = all.some(r => A.tools(r.p).some(t => remote.has(t)));
   // the sample covers the providers in the filter; without one, show every session
   const sample = [];
   for (const s of A.sessionSample) {
@@ -821,7 +818,7 @@ function sessionsView(A, state, payload, now) {
       : `Most recent ${recent.length} of ${sample.length} sessions in this range`
     : '';
   return {
-    note: fromRemote ? 'Sessions come from the Ubuntu logs; usage read from the Mac and Windows adds tokens but no sessions.' : '',
+    note: '',
     recent, recentFoot,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },

@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  'f4d481e048b86637f9d3682c018a1ac9a05220fd9b85f8e677d3e657ba468fc1';
+  '0b84d6b3092d0bc2e891c2005356f441d193b90e0b6381ffc602e166fe007b5f';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -54,6 +54,27 @@ export interface AnalyticsRemoteRow {
   n: number;
 }
 
+/**
+ * One per-session-model aggregate: the log's own opaque session id plus its
+ * first (`a`) and last (`z`) event in epoch milliseconds. Never a path; the
+ * activity projection publishes only hashed sample keys of `s`.
+ */
+export interface AnalyticsRemoteSessionRow {
+  k: AnalyticsRemoteKind;
+  f: string;
+  s: string;
+  m: string;
+  p?: string;
+  a: number;
+  z: number;
+  i: number;
+  o: number;
+  cr: number;
+  cw: number;
+  c: number;
+  n: number;
+}
+
 export interface AnalyticsRemoteKindResult {
   /** `error`: the data exists but could not be read; nothing of it was confirmed. */
   state: 'ok' | 'not_installed' | 'error';
@@ -70,6 +91,7 @@ export interface AnalyticsRemoteResponse {
   discoveryTruncated?: boolean;
   kinds: Record<AnalyticsRemoteKind, AnalyticsRemoteKindResult>;
   rows: AnalyticsRemoteRow[];
+  srows: AnalyticsRemoteSessionRow[];
 }
 
 export interface AnalyticsRemoteRequest {
@@ -164,6 +186,32 @@ function validRow(value: unknown): value is AnalyticsRemoteRow {
   );
 }
 
+function validSessionRow(value: unknown): value is AnalyticsRemoteSessionRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    (row.k === 'claude' ||
+      row.k === 'codex' ||
+      row.k === 'omp' ||
+      row.k === 'muse' ||
+      row.k === 'zcode') &&
+    typeof row.f === 'string' &&
+    SHA256_HEX.test(row.f) &&
+    cleanText(row.s, 160) &&
+    cleanText(row.m, 160) &&
+    (row.p === undefined || cleanText(row.p, 64)) &&
+    nonNegative(row.a) &&
+    nonNegative(row.z) &&
+    (row.z as number) >= (row.a as number) &&
+    nonNegative(row.i) &&
+    nonNegative(row.o) &&
+    nonNegative(row.cr) &&
+    nonNegative(row.cw) &&
+    nonNegative(row.c) &&
+    nonNegative(row.n)
+  );
+}
+
 function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const print = value as Record<string, unknown>;
@@ -197,10 +245,17 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
   }
   const kinds = response.kinds as Record<string, unknown> | undefined;
   const rows = response.rows as unknown;
+  const srows = response.srows as unknown;
   if (!kinds || typeof kinds !== 'object' || !Array.isArray(rows) || rows.length > MAX_ROWS) {
     throw new AnalyticsRemoteTransportError();
   }
   if (!rows.every(validRow)) throw new AnalyticsRemoteTransportError();
+  // Session aggregates travel with the hourly rows; an answer without them
+  // (an older helper in a test fixture) carries hourly usage only.
+  if (srows !== undefined && (!Array.isArray(srows) || srows.length > MAX_ROWS))
+    throw new AnalyticsRemoteTransportError();
+  if (Array.isArray(srows) && !srows.every(validSessionRow))
+    throw new AnalyticsRemoteTransportError();
   const parsed: AnalyticsRemoteResponse['kinds'] = {} as AnalyticsRemoteResponse['kinds'];
   for (const [kind, value] of Object.entries(kinds)) {
     if (
@@ -247,6 +302,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     ...(response.discoveryTruncated === true ? { discoveryTruncated: true } : {}),
     kinds: parsed,
     rows: rows as AnalyticsRemoteRow[],
+    srows: (Array.isArray(srows) ? srows : []) as AnalyticsRemoteSessionRow[],
   };
 }
 

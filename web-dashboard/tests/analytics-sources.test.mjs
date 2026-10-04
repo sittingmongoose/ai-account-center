@@ -173,7 +173,8 @@ test('a picked provider shows only the usage it served, divided by model', () =>
   assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, 12);
   assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, all.sessions.rows.reduce((n, r) => n + Number(r.sessions.replace(/,/g, '')), 0));
   assert.deepEqual(all.sessions.rows.map(r => r.label), ['Claude', 'Codex', 'Muse Code', 'Qwen Token Plan', 'Z.ai Coding Plan', 'OpenCode Go', 'Other']);
-  assert.match(all.sessions.note, /usage read from the Mac and Windows adds tokens but no sessions/);
+  // Sessions come from the Ubuntu, Mac and Windows logs alike; no note needed.
+  assert.equal(all.sessions.note, '');
   assert.equal(claude.sessions.note, '');
 });
 

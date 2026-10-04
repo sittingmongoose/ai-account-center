@@ -13,10 +13,12 @@ import {
   projectAccountAnalyticsActivity,
   type SourceData,
 } from './account-analytics-projection';
+import { USAGE_PROVIDER_ORDER } from './account-analytics-attribution';
 import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
 import {
+  analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   type AnalyticsRemoteSourceState,
@@ -85,8 +87,11 @@ type RemoteAnswer = {
 /**
  * Fixed entries for tools with no local usage log, on every host. Antigravity
  * keeps token counts only inside sqlite protobuf BLOBs mixed with conversation
- * content; Cursor usage is server-side. The page uses these to say why they
- * are missing. Muse and zcode are not installed on Windows and are skipped.
+ * content (per-conversation databases under the Gemini CLI state directory,
+ * with no integer token columns); Cursor usage is server-side (the local
+ * chat store holds blobs and metadata only, with no token-usage columns).
+ * The page uses these to say why they are missing. Every other tool is
+ * scanned on every host, so its state is measured, never fixed.
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
@@ -108,16 +113,6 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
       rowCount: 0,
       detail:
         'no local usage log: usage is server-side; the local state database has no token-usage columns',
-    });
-  }
-  for (const tool of ['muse', 'zcode'] as const) {
-    entries.push({
-      tool,
-      host: 'windows',
-      state: 'not_installed',
-      lastScanAt: null,
-      rowCount: 0,
-      detail: 'not installed on this host',
     });
   }
   return entries;
@@ -208,7 +203,7 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
   if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
   for (const source of snap.sources as Array<Record<string, unknown>>) {
     if (!source || typeof source !== 'object') return false;
-    if (!['claude', 'codex', 'omp', 'muse', 'zcode'].includes(source.provider as string))
+    if (!['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'].includes(source.provider as string))
       return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
@@ -729,8 +724,13 @@ export class AccountAnalyticsActivityService {
         const hourly = data.hourly
           .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
           .slice(0, 744);
-        if (hourly.length || data.eventCount === 0) {
-          existing.push({ ...data, daily: [], monthly: [], hourly, session: [] });
+        // Remote sessions merge like local ones: whole retained rows, paths stripped.
+        const session = data.session
+          .filter((row) => Date.parse(row.lastActivity) >= cutoff)
+          .slice(0, 10_000)
+          .map((row) => ({ ...row, projectPath: '' }));
+        if (hourly.length || session.length || data.eventCount === 0) {
+          existing.push({ ...data, daily: [], monthly: [], hourly, session });
           merged.set(entry.tool, existing);
         }
       }
@@ -823,10 +823,10 @@ export class AccountAnalyticsActivityService {
         if (entry.host === 'mac' || entry.host === 'windows') entries.push({ ...entry });
     } else {
       // The remote scans never answered; the previous remote aggregates are
-      // still in the totals, and are marked.
-      for (const tool of ['omp', 'muse', 'zcode'] as const) {
-        for (const host of ['mac', 'windows'] as const) {
-          if (tool !== 'omp' && host === 'windows') continue;
+      // still in the totals, and are marked. Every scanned kind is listed,
+      // so Claude Code and Codex remotes are never silently absent.
+      for (const host of ['mac', 'windows'] as const) {
+        for (const tool of analyticsRemoteTargets(host)) {
           const old = previous.get(`${tool}\0${host}`);
           if (old)
             entries.push(
@@ -923,9 +923,9 @@ export class AccountAnalyticsActivityService {
         this.states.delete(oldest);
       }
     }
-    // Dashboard quota-provider ids overlap the activity tools only for
-    // claude/codex/muse; omp/zcode filters can only arrive via `all`.
-    const activityFilters: readonly string[] = ['all', 'claude', 'codex', 'omp', 'muse', 'zcode'];
+    // The filter names the provider that served the usage (post-attribution),
+    // so every usage provider selects, not just the tools' own providers.
+    const activityFilters: readonly string[] = ['all', ...USAGE_PROVIDER_ORDER];
     if (
       query.refresh !== true &&
       (query.account !== 'all' || !activityFilters.includes(query.provider))

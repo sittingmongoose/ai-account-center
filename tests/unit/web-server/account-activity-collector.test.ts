@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
+import {
+  aggregateSessionAggregates,
+  collectAccountActivity,
+} from '../../../src/web-server/usage/account-activity-collector';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import { setCachedModelsDevRegistry } from '../../../src/web-server/models-dev/registry-cache';
 import { scanCodexNativeUsageEntries } from '../../../src/web-server/usage/codex-native-usage-collector';
@@ -354,5 +357,94 @@ describe('bounded native account activity checkpoints', () => {
     expect(fs.statSync(cacheFiles[0]).size).toBeLessThan(2048);
     if (process.platform !== 'win32') expect(fs.statSync(cacheFiles[0]).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(cacheFiles[0], 'utf8')).not.toContain('xxxx');
+  });
+});
+
+describe('pre-aggregated session rows', () => {
+  it('groups helper rows into sessions with priced model breakdowns', () => {
+    const a = Date.parse('2026-10-01T15:05:00Z');
+    const z = Date.parse('2026-10-01T16:35:00Z');
+    const { session } = aggregateSessionAggregates(
+      [
+        {
+          sessionId: 's1',
+          model: 'm-a',
+          target: 'omp',
+          firstMs: a,
+          lastMs: z,
+          inputTokens: 100,
+          outputTokens: 10,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          events: 2,
+        },
+        {
+          sessionId: 's1',
+          model: 'm-b',
+          provider: 'qwen',
+          target: 'omp',
+          firstMs: a,
+          lastMs: a,
+          inputTokens: 50,
+          outputTokens: 5,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          cost: 0.25,
+          events: 1,
+        },
+        {
+          sessionId: 's2',
+          model: 'm-a',
+          target: 'omp',
+          firstMs: z + 60_000,
+          lastMs: z + 60_000,
+          inputTokens: 10,
+          outputTokens: 1,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          events: 1,
+        },
+      ],
+      'omp-remote'
+    );
+    expect(session).toHaveLength(2);
+    // Most recent first; the whole retained span, not the last hour alone.
+    expect(session[0].sessionId).toBe('s2');
+    expect(session[1].sessionId).toBe('s1');
+    expect(session[1].firstActivity).toBe('2026-10-01T15:05:00.000Z');
+    expect(session[1].lastActivity).toBe('2026-10-01T16:35:00.000Z');
+    expect(session[1].target).toBe('omp');
+    expect(session[1].projectPath).toBe('');
+    expect(session[1].inputTokens).toBe(150);
+    const names = session[1].modelBreakdowns.map((item) => item.modelName).sort();
+    expect(names).toEqual(['m-a', 'm-b']);
+    // Logged cost wins for its own model; the rest prices at list rates.
+    const logged = session[1].modelBreakdowns.find((item) => item.modelName === 'm-b');
+    expect(logged?.cost).toBe(0.25);
+    // The routing provider is normalized exactly as aggregateRows does.
+    expect(logged?.provider).toBe('alibaba');
+    expect(session[1].totalCost).toBeGreaterThanOrEqual(0.25);
+  });
+
+  it('drops rows without a session key or a valid span', () => {
+    const at = Date.parse('2026-10-01T15:05:00Z');
+    const base = {
+      model: 'm-a',
+      target: 'omp',
+      inputTokens: 10,
+      outputTokens: 1,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      events: 1,
+    };
+    const { session } = aggregateSessionAggregates(
+      [
+        { ...base, sessionId: '', firstMs: at, lastMs: at },
+        { ...base, sessionId: 'backwards', firstMs: at, lastMs: at - 1 },
+        { ...base, sessionId: 'ok', firstMs: at, lastMs: at },
+      ],
+      'omp-remote'
+    );
+    expect(session.map((row) => row.sessionId)).toEqual(['ok']);
   });
 });

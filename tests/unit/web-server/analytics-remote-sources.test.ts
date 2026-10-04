@@ -59,11 +59,44 @@ function response(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function srow(overrides: Record<string, unknown> = {}) {
+  return {
+    k: 'omp',
+    f: FILE_1,
+    s: '2026-10-01T15-00_uuid',
+    m: 'deepseek-v4.1-flash',
+    a: Date.parse('2026-10-01T15:05:00Z'),
+    z: Date.parse('2026-10-01T15:35:00Z'),
+    i: 100,
+    o: 10,
+    cr: 50,
+    cw: 5,
+    c: 0.01,
+    n: 2,
+    ...overrides,
+  };
+}
+
 describe('analytics remote transport', () => {
   it('parses bounded aggregate responses', () => {
     const parsed = parseAnalyticsRemoteResponse(JSON.stringify(response()));
     expect(parsed.rows).toHaveLength(1);
+    expect(parsed.srows).toEqual([]);
     expect(parsed.kinds.muse.state).toBe('not_installed');
+  });
+
+  it('parses session aggregates and rejects malformed ones', () => {
+    const parsed = parseAnalyticsRemoteResponse(
+      JSON.stringify(response({ srows: [srow(), srow({ s: 'other' })] }))
+    );
+    expect(parsed.srows).toHaveLength(2);
+    expect(parsed.srows[0].s).toBe('2026-10-01T15-00_uuid');
+    const bad = (overrides: Record<string, unknown>) => () =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response({ srows: [srow(overrides)] })));
+    expect(bad({ s: '' })).toThrow();
+    expect(bad({ s: 'has/slash' })).not.toThrow();
+    expect(bad({ z: Date.parse('2026-10-01T15:00:00Z') })).toThrow();
+    expect(bad({ f: 'not-a-hash' })).toThrow();
   });
 
   it('rejects malformed, oversized or unknown-kind payloads', () => {
@@ -175,10 +208,10 @@ describe('analytics remote sources', () => {
     const ompMac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(ompMac).toMatchObject({ state: 'ok', rowCount: 2 });
     expect(ompMac?.lastScanAt).toBe('2026-10-02T00:00:00.000Z');
-    // Muse and zcode are mac-only; windows carries claude, codex and omp.
+    // Every kind is scanned on both hosts; absence reports not_installed.
     expect(
       states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)
-    ).toEqual(['claude', 'codex', 'omp']);
+    ).toEqual(['claude', 'codex', 'muse', 'omp', 'zcode']);
     expect(states.filter((entry) => entry.host === 'mac').map((entry) => entry.tool)).toEqual([
       'claude',
       'codex',
@@ -186,6 +219,35 @@ describe('analytics remote sources', () => {
       'omp',
       'zcode',
     ]);
+  });
+
+  it('converts session aggregates to worker sessions without doubling hourly tokens', async () => {
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      now: () => Date.parse('2026-10-02T00:00:00Z'),
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              srows: [srow(), srow({ s: '2026-10-01T16-00_uuid2', i: 50 })],
+            })
+          )
+        ),
+    });
+    const omp = results.find((entry) => entry.tool === 'omp');
+    expect(omp?.data.session).toHaveLength(2);
+    expect(omp?.data.session[0].sessionId).toBe('2026-10-01T15-00_uuid');
+    expect(omp?.data.session[0].lastActivity).toBe('2026-10-01T15:35:00.000Z');
+    expect(omp?.data.session[0].target).toBe('omp');
+    // Hourly rows carry the tokens; sessions carry the keys. The totals equal
+    // the hourly rows alone.
+    expect(omp?.data.hourly).toHaveLength(1);
+    expect(omp?.data.eventCount).toBe(2);
+    // A later scan keeps the cached sessions while their files are unchanged.
+    const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
+    const cachedOmp = cached.results.find((entry) => entry.tool === 'omp');
+    expect(cachedOmp?.data.session).toHaveLength(2);
   });
 
   it('sends the saved extra roots for each target host', async () => {
