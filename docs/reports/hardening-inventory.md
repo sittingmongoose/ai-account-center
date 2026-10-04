@@ -53,7 +53,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 22.7% (143/630) |
+| typed-error adoption (typed/total throws) | 22.8% (144/631) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
@@ -88,10 +88,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
+| `src/web-server/usage/account-activity-collector.ts` | 1090 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1052 |
 | `src/web-server/services/account-analytics-activity.ts` | 1047 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
-| `src/web-server/usage/account-activity-collector.ts` | 903 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
 | `src/web-server/usage/aggregator.ts` | 782 |

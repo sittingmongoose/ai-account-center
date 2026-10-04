@@ -520,16 +520,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 630,
-      "typedThrows": 143,
+      "totalThrows": 631,
+      "typedThrows": 144,
       "plainThrows": 69,
       "otherThrows": 418,
-      "adoptionRatio": 0.227,
+      "adoptionRatio": 0.2282,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 279,
-          "typed": 81,
+          "count": 280,
+          "typed": 82,
           "plain": 10
         },
         {
@@ -761,6 +761,10 @@
           "loc": 1104
         },
         {
+          "file": "src/web-server/usage/account-activity-collector.ts",
+          "loc": 1090
+        },
+        {
           "file": "src/codex-auth/codex-activation-runtime.ts",
           "loc": 1052
         },
@@ -771,10 +775,6 @@
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
           "loc": 960
-        },
-        {
-          "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 903
         },
         {
           "file": "src/cliproxy/model-catalog.ts",
