@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../utils/config-manager';
-import { getDefaultClaudeConfigDir } from '../../utils/claude-config-path';
+import { getClaudeProjectsDirForAnalytics } from '../../utils/claude-config-path';
 import { listAccountInstancePaths } from '../../management/instance-directory';
 import { CCSError } from '../../errors/error-types';
 import { resolveCodexConfigPaths } from './compatible-cli-config-paths';
@@ -328,7 +328,7 @@ async function isDirectory(directory: string): Promise<boolean> {
 async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
   const ccsDir = getCcsDir();
   const activity = { minDate: Date.now() - 31 * 86_400_000, cacheDir: path.join(ccsDir, 'cache') };
-  const claudeRoots = [path.join(getDefaultClaudeConfigDir(), 'projects')];
+  const claudeRoots = [getClaudeProjectsDirForAnalytics()];
   try {
     for (const instance of listAccountInstancePaths(path.join(ccsDir, 'instances')))
       claudeRoots.push(path.join(instance, 'projects'));

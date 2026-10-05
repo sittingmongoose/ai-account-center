@@ -204,18 +204,24 @@ describe('analytics remote sources', () => {
     expect(omp?.data.session.map((session) => session.sessionId)).toEqual([key]);
     expect(omp?.data.session[0].inputTokens).toBe(100);
     expect(omp?.data.hourly[0].inputTokens).toBe(100);
-    // Rows saved before keys existed carry none, so a stale cache is dropped and the host is asked again.
-    const file = path.join(cache, 'analytics-remote-v1', 'mac.json');
-    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as { version: number; rows: unknown[] };
-    expect(saved.version).toBe(3);
-    fs.writeFileSync(
-      file,
-      JSON.stringify({
-        ...saved,
-        version: 2,
-        rows: (saved.rows as Array<Record<string, unknown>>).map(({ s: _key, ...rest }) => rest),
-      })
-    );
+    // Rows saved before keys existed carry none, so a stale cache is dropped and the host is
+    // asked again. Both hosts answered this scan, so both caches must read as stale.
+    for (const host of ['mac', 'windows']) {
+      const file = path.join(cache, 'analytics-remote-v1', `${host}.json`);
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+        version: number;
+        rows: unknown[];
+      };
+      expect(saved.version).toBe(3);
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...saved,
+          version: 2,
+          rows: (saved.rows as Array<Record<string, unknown>>).map(({ s: _key, ...rest }) => rest),
+        })
+      );
+    }
     expect(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).results).toEqual([]);
   });
 
