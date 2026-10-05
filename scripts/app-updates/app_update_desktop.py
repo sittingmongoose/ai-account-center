@@ -22,6 +22,10 @@ from app_update_processes import main_contexts, request_desktop_quit, restart_de
 DESKTOP_DOWNLOAD_MAXIMUM = 2 * 1024 * 1024 * 1024
 DESKTOP_DOWNLOAD_TIMEOUT = 600
 DOWNLOAD_BLOCKED_RETRIES = 3
+# Claude's darwin packages live on the publisher's plain-CDN release feed;
+# the old claude.ai redirect answers 403 to every non-browser client.
+CLAUDE_DARWIN_FEED = "https://downloads.claude.ai/releases/darwin/universal/RELEASES.json"
+CLAUDE_DARWIN_PREFIX = "https://downloads.claude.ai/releases/darwin/"
 
 
 def download_desktop(url, destination):
@@ -42,7 +46,8 @@ def download_desktop(url, destination):
 
 MAC = {
     "codex-desktop": ("ChatGPT.app", "com.openai.codex", "2DC432GLL2", "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"),
-    "claude-desktop": ("Claude.app", "com.anthropic.claudefordesktop", "Q6L2SF6YDW", "https://claude.ai/api/desktop/darwin/universal/dmg/latest/redirect"),
+    # Claude's package URL comes from CLAUDE_DARWIN_FEED at run time.
+    "claude-desktop": ("Claude.app", "com.anthropic.claudefordesktop", "Q6L2SF6YDW", None),
 }
 WINDOWS = {
     "codex-desktop": ("OpenAI.Codex", "app/ChatGPT.exe"),
@@ -118,20 +123,76 @@ def verify_mac(app, app_id):
     return info
 
 
+def dmg_candidates(install, temporary):
+    """Mount the fixed publisher DMG; return (matching apps, device to detach)."""
+    dmg = temporary / "update.dmg"
+    download_desktop(MAC[install.app_id][3], dmg)
+    mounted = command(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-plist", dmg], timeout=60, capture=True)
+    try:
+        mounted = plistlib.loads(mounted.encode("utf-8"))
+    except Exception:
+        raise UpdateFailure("update_failed") from None
+    entities = [entry for entry in mounted.get("system-entities", []) if isinstance(entry, dict) and entry.get("mount-point")]
+    volumes = [pathlib.Path(entry["mount-point"]) for entry in entities]
+    attached = next((entry.get("dev-entry") for entry in entities), None)
+    candidates = [path for volume in volumes for path in volume.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
+    return candidates, attached
+
+
+def claude_zip_candidates(install, temporary):
+    """Claude's own release feed; None when the installed app is already current.
+
+    The old claude.ai download redirect answers 403 (Cloudflare challenge) to
+    every non-browser client, so the version check and the package come from
+    the publisher's plain-CDN release feed that redirect pointed at. Checking
+    the feed first keeps a current app from downloading hundreds of megabytes.
+    """
+    feed = temporary / "RELEASES.json"
+    download(CLAUDE_DARWIN_FEED, feed, maximum=256 * 1024, timeout=60)
+    try:
+        value = json.loads(feed.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise UpdateFailure("update_failed") from None
+    current = value.get("currentRelease") if isinstance(value, dict) else None
+    releases = value.get("releases") if isinstance(value, dict) else None
+    parsed = version_text(current)
+    if not parsed or not isinstance(releases, list):
+        raise UpdateFailure("update_failed")
+    if version_tuple(parsed) <= version_tuple(install.version):
+        return None
+    url = None
+    for entry in releases:
+        target = entry.get("updateTo") if isinstance(entry, dict) else None
+        if not isinstance(target, dict) or version_text(str(target.get("version") or "")) != parsed:
+            continue
+        candidate = target.get("url")
+        if isinstance(candidate, str) and candidate.startswith(CLAUDE_DARWIN_PREFIX):
+            url = candidate
+            break
+    if url is None:
+        raise UpdateFailure("update_failed")
+    package = temporary / "update.zip"
+    download_desktop(url, package)
+    extracted = temporary / "extracted"
+    extracted.mkdir()
+    # ditto keeps symlinks, resources and the code signature intact.
+    command(["/usr/bin/ditto", "-x", "-k", str(package), str(extracted)], timeout=600)
+    return [path for path in extracted.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
+
+
 def update_mac(install):
     before = install.version
     contexts, installed = [], False
     backup, stage = None, None
     with private_temporary() as temporary:
-        dmg = temporary / "update.dmg"
         attached = None
         try:
-            download_desktop(MAC[install.app_id][3], dmg)
-            mounted = command(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-plist", dmg], timeout=60, capture=True)
-            mounted = plistlib.loads(mounted.encode("utf-8"))
-            volumes = [pathlib.Path(entry["mount-point"]) for entry in mounted.get("system-entities", []) if "mount-point" in entry]
-            attached = next((entry.get("dev-entry") for entry in mounted.get("system-entities", []) if entry.get("mount-point")), None)
-            candidates = [path for volume in volumes for path in volume.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
+            if install.app_id == "claude-desktop":
+                candidates = claude_zip_candidates(install, temporary)
+                if candidates is None:
+                    return result(install.app_id, "mac", "current", before, before, install.manager)
+            else:
+                candidates, attached = dmg_candidates(install, temporary)
             if len(candidates) != 1:
                 raise UpdateFailure("signature_failed")
             info = verify_mac(candidates[0], install.app_id)
@@ -257,7 +318,12 @@ def update_windows(install):
                 raise UpdateFailure("signature_failed")
             if version_tuple(after) <= version_tuple(before):
                 return result(install.app_id, "windows", "current", before, before, install.manager)
-            contexts = main_contexts(install, scan("windows"))
+            try:
+                contexts = main_contexts(install, scan("windows"))
+            except UpdateFailure:
+                # Instances exist but cannot be mapped safely; ask the user
+                # to quit instead of failing the whole update (as on Mac).
+                return result(install.app_id, "windows", "action_required", before, before, install.manager, "quit_first", False)
             exited, refused = request_desktop_quit(install, contexts)
             if refused:
                 # Never force a desktop shut; the user quits it instead.

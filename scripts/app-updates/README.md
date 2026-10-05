@@ -14,12 +14,12 @@ modify or export account credentials/configuration.
 | App | Detected installation and supported update |
 | --- | --- |
 | Antigravity CLI | Active native `agy update` |
-| Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification |
+| Muse Code | Active user launcher, fixed Meta installer run with bash (`set -o pipefail`, `[[ ]]`) with `MUSE_UPGRADE_MODE=1` and no PATH modification |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix |
 | Claude Code | Active native `claude update` |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only; Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
-| Claude Desktop | Mac verified Anthropic DMG; Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
+| Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
 
 Official methods: [Antigravity installer](https://antigravity.google/cli/install.sh),
 [Meta installer](https://dev.meta.ai/install.sh),
@@ -38,8 +38,13 @@ validated against PID creation identity. Generic Node/Python/terminal processes
 are never selected. Desktop updates preserve existing absolute profile directory
 arguments. Mac uses its native application quit API and verified atomic bundle
 replacement; Windows uses an interactive task to close/reopen windows and preserve
-MSIX LocalState. Graceful close is attempted first; bounded, app-family-only forced
-stops are counted. A successful result verifies that replacement processes exist.
+MSIX LocalState. Desktop apps are **never force-stopped**: a graceful quit is
+attempted first, and an app that keeps running updates in place where the OS
+supports it (Windows in-use MSIX registration reports `staged`) or reports the
+actionable `action_required` quit state instead of failing (Mac/Ubuntu, where
+swapping files under a running app would mix old and new versions). CLI forced
+stops stay bounded, app-family-only and counted. A successful result verifies
+that replacement processes exist.
 
 Updated interactive CLIs open new idle terminal instances. Ubuntu uses a private
 `tmux -L ccs-updates-...` server; Mac uses Terminal; Windows uses Windows Terminal.
@@ -69,12 +74,15 @@ family even when only one Codex package changed.
 
 ## Deployment and setup
 
-Package every `app_update_*.py`, `app_updates.py`, and `app_update_codex.cjs` into
-`~/.ccs/app-updates` on Mac/Windows. Python must be available. On Windows register
-`install-windows-task.ps1` once as the signed-in user: its fixed `CCS App Updates`
-InteractiveToken/Limited task runs the private helper. Registration does **not**
-run an update. The helper queues that task from SSH session zero, so the user's
-interactive session must be signed in. Existing CCS Bar tasks are untouched.
+The server syncs every `app_update_*.py`, `app_updates.py`, and
+`app_update_codex.cjs` from its own build into `~/.ccs/app-updates` on
+Mac/Windows before each run, checksum-gated so up-to-date hosts only answer one
+hash query; a sync failure leaves the deployed helpers untouched. Python must be
+available. On Windows register `install-windows-task.ps1` once as the signed-in
+user: its fixed `CCS App Updates` InteractiveToken/Limited task runs the private
+helper. Registration does **not** run an update. The helper queues that task
+from SSH session zero, so the user's interactive session must be signed in.
+Existing CCS Bar tasks are untouched.
 
 Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
 `skipped`, `unknown`, or `action_required`, with bounded versions, fixed message
@@ -94,6 +102,10 @@ cleanly. MSIX deployments rejected for apps that need closing also report
 challenge page) report `check_in_app` after bounded retries. Desktop downloads
 allow 2 GiB and 10-minute timeouts; Mac and Windows desktops are never
 force-stopped (Ubuntu desktops keep the previous terminate-and-relaunch flow).
+Claude's Mac update reads the publisher's own `RELEASES.json` feed on
+downloads.claude.ai and checks its version before any package download, so a
+current app fetches nothing; its ZIP is extracted with `ditto` and passes the
+same codesign/TeamID verification as the DMG flow.
 Windows npm updates first ask the registry whether anything is newer, then run
 `node npm-cli.js` directly (never through `cmd /s /c`, which mangles spaced
 paths) after stopping mapped instances first, since Windows cannot replace a

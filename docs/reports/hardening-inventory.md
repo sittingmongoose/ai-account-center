@@ -6,9 +6,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1129 |
+| Sync fs occurrences (all) | 1130 |
 | Sync fs files affected (all) | 112 |
-| Sync fs occurrences (runtime hotpaths) | 499 |
+| Sync fs occurrences (runtime hotpaths) | 500 |
 | Sync fs files affected (runtime hotpaths) | 62 |
 | Legacy shim markers | 197 |
 | Legacy shim files affected | 74 |
@@ -25,8 +25,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/management/shared-manager/plugin-layout-internals.ts` | 18 | copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync |
 | `src/cliproxy/accounts/registry.ts` | 17 | existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync |
 | `src/management/shared-manager/shared-dir-linker.ts` | 16 | copyFileSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync |
+| `src/web-server/services/app-update-service.ts` | 16 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
-| `src/web-server/services/app-update-service.ts` | 15 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -59,7 +59,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | hotpath console.error/warn files | 17 |
 | files with createLogger | 34/387 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 44 |
+| files > 400 LOC | 45 |
 | files > 600 LOC | 18 |
 
 ### Top Hotpath console.error/warn Files

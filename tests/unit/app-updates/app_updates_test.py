@@ -424,6 +424,78 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(value['messageCode'], 'check_in_app')
             self.assertFalse(value['updateAttempted'])
 
+    def test_claude_feed_current_skips_package_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            installed = self._fake_mac_bundle(root / 'Applications', 'Claude.app', 'com.anthropic.claudefordesktop', '2.19675.0')
+            install = common.Install('claude-desktop', 'mac', installed, '2.19675.0', 'official-download', 'com.anthropic.claudefordesktop', package_root=installed)
+            feed = {'currentRelease': '2.19675.0', 'releases': [{'version': '2.19675.0', 'updateTo': {'version': '2.19675.0', 'url': desktop.CLAUDE_DARWIN_PREFIX + '2.19675.0/Claude-x.zip'}}]}
+            fetched = []
+            def download(url, destination, **kwargs):
+                fetched.append((url, kwargs))
+                pathlib.Path(destination).write_text(json.dumps(feed))
+            with mock.patch.object(desktop, 'download', side_effect=download), \
+                    mock.patch.object(desktop, 'command') as run, \
+                    mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root / 'temp')):
+                (root / 'temp').mkdir(exist_ok=True)
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'current')
+            self.assertEqual(fetched, [(desktop.CLAUDE_DARWIN_FEED, {'maximum': 256 * 1024, 'timeout': 60})])
+            run.assert_not_called()
+
+    def test_claude_feed_zip_installs_through_ditto(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            installed = self._fake_mac_bundle(root / 'Applications', 'Claude.app', 'com.anthropic.claudefordesktop', '2.0.0')
+            install = common.Install('claude-desktop', 'mac', installed, '2.0.0', 'official-download', 'com.anthropic.claudefordesktop', package_root=installed)
+            feed = {'currentRelease': '3.0.0', 'releases': [{'version': '3.0.0', 'updateTo': {'version': '3.0.0', 'url': desktop.CLAUDE_DARWIN_PREFIX + '3.0.0/Claude-y.zip'}}]}
+            fetched = []
+            def download(url, destination, **kwargs):
+                fetched.append((url, kwargs))
+                if url == desktop.CLAUDE_DARWIN_FEED:
+                    pathlib.Path(destination).write_text(json.dumps(feed))
+            def commands(argv, **kwargs):
+                if argv[0] == '/usr/bin/ditto':
+                    self._fake_mac_bundle(pathlib.Path(argv[4]), 'Claude.app', 'com.anthropic.claudefordesktop', '3.0.0')
+                return ''
+            with mock.patch.object(desktop, 'download', side_effect=download), \
+                    mock.patch.object(desktop, 'command', side_effect=commands), \
+                    mock.patch.object(desktop, 'verify_mac', side_effect=lambda app, app_id: desktop.bundle_info(app)), \
+                    mock.patch.object(desktop, 'main_contexts', return_value=[]), \
+                    mock.patch.object(desktop, 'scan', return_value=[]), \
+                    mock.patch.object(desktop, 'request_desktop_quit', return_value=([], [])), \
+                    mock.patch.object(desktop, 'restart_desktops', return_value=0), \
+                    mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root / 'temp')):
+                (root / 'temp').mkdir(exist_ok=True)
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'updated')
+            self.assertEqual(value['version'], '3.0.0')
+            self.assertEqual(fetched[0], (desktop.CLAUDE_DARWIN_FEED, {'maximum': 256 * 1024, 'timeout': 60}))
+            self.assertEqual(fetched[1], (desktop.CLAUDE_DARWIN_PREFIX + '3.0.0/Claude-y.zip', {'maximum': desktop.DESKTOP_DOWNLOAD_MAXIMUM, 'timeout': desktop.DESKTOP_DOWNLOAD_TIMEOUT}))
+            import plistlib as plist
+            with (installed / 'Contents/Info.plist').open('rb') as handle:
+                self.assertEqual(plist.load(handle)['CFBundleShortVersionString'], '3.0.0')
+            self.assertEqual([path.name for path in (root / 'Applications').iterdir()], ['Claude.app'])
+            self.assertFalse((root / '.ccs/app-updates/claude-desktop-pending-restart.json').exists())
+
+    def test_windows_uncapturable_instances_report_quit_first(self):
+        install = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.930.3748.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(desktop, 'download'), \
+                mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.4958.0', 'ProcessorArchitecture': 'x64'}), \
+                mock.patch.object(desktop, 'scan', return_value=[]), \
+                mock.patch.object(desktop, 'main_contexts', side_effect=common.UpdateFailure('restart_context')), \
+                mock.patch.object(desktop, 'request_desktop_quit') as ask, \
+                mock.patch.object(desktop, 'add_appx_package') as deploy, \
+                mock.patch.object(desktop, 'restart_desktops') as relaunch, \
+                mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(pathlib.Path(directory))):
+            value = desktop.update_windows(install)
+        ask.assert_not_called()
+        deploy.assert_not_called()
+        relaunch.assert_not_called()
+        self.assertEqual(value['status'], 'action_required')
+        self.assertEqual(value['messageCode'], 'quit_first')
+        self.assertFalse(value['updateAttempted'])
+
     def test_windows_survivors_report_quit_first_without_installing(self):
         install = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.930.3748.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
         running = processes.Process(31, 1, 1, '/fixture/ChatGPT.exe', '31', ['/fixture/ChatGPT.exe'])

@@ -7,6 +7,7 @@ import {
   AppUpdateService,
   appUpdateInvocation,
   normalizeAppUpdateResults,
+  parseDeployedChecksums,
   UPDATE_APP_LABELS,
   type UpdatePlatform,
 } from '../../../src/web-server/services/app-update-service';
@@ -256,5 +257,45 @@ describe('fixed app update service', () => {
     });
     expect(service.getStatus().job!.state).toBe('failed');
     expect(calls).toBe(0);
+  });
+  it('syncs deployed helpers before each remote run and survives a sync failure', async () => {
+    const events: string[] = [];
+    const service = new AppUpdateService({
+      persist: false,
+      sync: async (platform) => {
+        events.push(`sync:${platform}`);
+        if (platform === 'mac') throw new Error('PRIVATE_SENTINEL');
+      },
+      runHost: async (platform) => {
+        events.push(`run:${platform}`);
+        return payload();
+      },
+    });
+    service.start();
+    await finish(service);
+    expect(events).toEqual([
+      'run:ubuntu',
+      'sync:mac',
+      'run:mac',
+      'sync:windows',
+      'run:windows',
+    ]);
+    expect(service.getStatus().job!.state).toBe('completed');
+    expect(JSON.stringify(service.getStatus().job)).not.toContain('PRIVATE_SENTINEL');
+  });
+  it('parses deployed helper checksum lines from both host shells', () => {
+    const hash = 'a'.repeat(64);
+    const other = 'B'.repeat(64);
+    const parsed = parseDeployedChecksums(
+      [
+        `${hash}  /Users/x/.ccs/app-updates/app_updates.py`,
+        `${other}  app_update_common.py`,
+        'shasum: /Users/x/.ccs/app-updates/app_update_pipe.py: No such file or directory',
+        'not-a-hash  app_updates.py',
+      ].join('\n')
+    );
+    expect(parsed['app_updates.py']).toBe(hash);
+    expect(parsed['app_update_common.py']).toBe('b'.repeat(64));
+    expect(Object.keys(parsed)).toHaveLength(2);
   });
 });

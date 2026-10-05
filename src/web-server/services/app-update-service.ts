@@ -1,5 +1,5 @@
-import { execFile } from 'child_process';
-import { randomUUID } from 'crypto';
+import { execFile, spawn } from 'child_process';
+import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
@@ -100,8 +100,153 @@ function runHost(platform: UpdatePlatform): Promise<string> {
   });
 }
 
+/** The helper files every remote host must run from ~/.ccs/app-updates. */
+const HELPER_FILES = [
+  'app_updates.py',
+  'app_update_common.py',
+  'app_update_desktop.py',
+  'app_update_processes.py',
+  'app_update_terminal.py',
+  'app_update_terminal_child.py',
+  'app_update_pipe.py',
+  'app_update_probe.py',
+  'app_update_confirmed_codex.py',
+  'app_update_codex.cjs',
+] as const;
+const HELPER_QUERY_TIMEOUT_MS = 30_000;
+const HELPER_PUSH_TIMEOUT_MS = 90_000;
+const SSH_SYNC_OPTIONS = [
+  '-T',
+  '-o',
+  'BatchMode=yes',
+  '-o',
+  'ConnectTimeout=5',
+  '-o',
+  'ConnectionAttempts=1',
+];
+const MAC_EXTRACT =
+  '/bin/mkdir -p "$HOME/.ccs/app-updates" && /usr/bin/chmod 700 "$HOME/.ccs/app-updates" && /usr/bin/tar -x -f - -C "$HOME/.ccs/app-updates"';
+const WINDOWS_EXTRACT =
+  "$ErrorActionPreference='Stop'; $d=[IO.Path]::Combine($HOME,'.ccs','app-updates'); " +
+  'New-Item -ItemType Directory -Force -Path $d | Out-Null; tar.exe -x -f - -C $d; exit $LASTEXITCODE';
+
+/** Parses "<sha256>  <name-or-path>" lines; keyed by basename, hex lowercased. */
+export function parseDeployedChecksums(output: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const line of output.split('\n')) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 2 || !/^[a-fA-F0-9]{64}$/.test(parts[0])) continue;
+    const name = parts[parts.length - 1].split(/[\\/]/).pop();
+    if (name) values[name] = parts[0].toLowerCase();
+  }
+  return values;
+}
+
+function localHelperChecksums(): Record<string, string> {
+  const source = path.resolve(__dirname, '../../../scripts/app-updates');
+  const values: Record<string, string> = {};
+  for (const name of HELPER_FILES)
+    values[name] = createHash('sha256')
+      .update(fs.readFileSync(path.join(source, name)))
+      .digest('hex');
+  return values;
+}
+
+function sshText(host: string, command: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'ssh',
+      [...SSH_SYNC_OPTIONS, '--', host, command],
+      {
+        encoding: 'utf8',
+        timeout: HELPER_QUERY_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+      },
+      (error, stdout) => (error ? reject(error) : resolve(stdout))
+    );
+  });
+}
+
+const WINDOWS_HASH_QUERY = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
+  "$ErrorActionPreference='SilentlyContinue'; $d=[IO.Path]::Combine($HOME,'.ccs','app-updates'); " +
+    `foreach($n in @(${HELPER_FILES.map((name) => `'${name}'`).join(',')})){ ` +
+    '$p=[IO.Path]::Combine($d,$n); if(Test-Path -LiteralPath $p -PathType Leaf){ ' +
+    "$h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash; if($h){ Write-Output ($h.ToLowerInvariant()+'  '+$n) } } }; exit 0",
+  'utf16le'
+).toString('base64')}`;
+
+function pushHelpers(host: string, extract: string): Promise<void> {
+  // lib is ES2020, so the executor form is the available API here (as in runHost).
+  return new Promise((resolve, reject) => {
+    const archive = spawn(
+      'tar',
+      [
+        '-c',
+        '-f',
+        '-',
+        '-C',
+        path.resolve(__dirname, '../../../scripts/app-updates'),
+        ...HELPER_FILES,
+      ],
+      { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }
+    );
+    const remote = spawn('ssh', [...SSH_SYNC_OPTIONS, '--', host, extract], {
+      stdio: ['pipe', 'ignore', 'ignore'],
+      windowsHide: true,
+    });
+    const timer = setTimeout(() => {
+      archive.kill('SIGKILL');
+      remote.kill('SIGKILL');
+      reject(new Error('Helper sync timed out.'));
+    }, HELPER_PUSH_TIMEOUT_MS);
+    const fail = (error: Error): void => {
+      clearTimeout(timer);
+      reject(error);
+    };
+    archive.on('error', fail);
+    remote.on('error', fail);
+    remote.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error('Helper sync failed.'));
+    });
+    archive.stdout.pipe(remote.stdin);
+  });
+}
+
+/**
+ * Aligns a remote host's deployed helpers with this build before invoking it.
+ * Hosts keep their own copies under ~/.ccs/app-updates; a stale copy would
+ * silently run old updater logic no matter what the server ships. Checksum-
+ * gated, so an up-to-date host pays one hash query. Best effort: a sync
+ * failure leaves the deployed helpers untouched and the run proceeds.
+ */
+export async function syncRemoteHelpers(platform: UpdatePlatform): Promise<void> {
+  if (platform === 'ubuntu') return;
+  const local = localHelperChecksums();
+  const host = platform === 'mac' ? 'jared-mac' : 'jared-windows';
+  let deployed = '';
+  try {
+    deployed =
+      platform === 'mac'
+        ? await sshText(
+            host,
+            `/usr/bin/shasum -a 256 ${HELPER_FILES.map((name) => `"$HOME/.ccs/app-updates/${name}"`).join(' ')} 2>/dev/null; exit 0`
+          )
+        : await sshText(host, WINDOWS_HASH_QUERY);
+  } catch {
+    /* An unreachable host is reported by the run itself; treat it as stale. */
+  }
+  const remote = parseDeployedChecksums(deployed);
+  if (HELPER_FILES.every((name) => remote[name] === local[name])) return;
+  await pushHelpers(host, platform === 'mac' ? MAC_EXTRACT : WINDOWS_EXTRACT);
+}
+
 export interface AppUpdateDependencies {
   runHost(platform: UpdatePlatform): Promise<string>;
+  /** Aligns deployed remote helpers with this build; production wires the real sync. */
+  sync(platform: UpdatePlatform): Promise<void>;
   now(): number;
   id(): string;
   ccsDir?: string;
@@ -116,7 +261,14 @@ export class AppUpdateService {
   private lockHeld = false;
 
   constructor(overrides: Partial<AppUpdateDependencies> = {}) {
-    this.deps = { runHost, now: Date.now, id: randomUUID, persist: true, ...overrides };
+    this.deps = {
+      runHost,
+      sync: async () => {},
+      now: Date.now,
+      id: randomUUID,
+      persist: true,
+      ...overrides,
+    };
     this.directory = path.join(path.resolve(this.deps.ccsDir ?? getCcsDir()), 'app-updates');
     this.restore();
   }
@@ -188,6 +340,16 @@ export class AppUpdateService {
         }
         this.job.activePlatform = platform;
         this.save();
+        // Ubuntu runs the helpers inside this installed build; only the remote
+        // hosts carry deployed copies that can go stale. Skipping the await
+        // also keeps start() launching the first host synchronously.
+        if (platform !== 'ubuntu') {
+          try {
+            await this.deps.sync(platform);
+          } catch {
+            /* Best effort: the deployed helpers stay as they are. */
+          }
+        }
         try {
           const output = await this.deps.runHost(platform);
           this.job.results.push(...normalizeAppUpdateResults(output, platform));
@@ -370,7 +532,7 @@ export function getAppUpdateService(): AppUpdateService {
   const scope = path.resolve(getCcsDir());
   let service = services.get(scope);
   if (!service) {
-    service = new AppUpdateService({ ccsDir: scope });
+    service = new AppUpdateService({ ccsDir: scope, sync: syncRemoteHelpers });
     services.set(scope, service);
   }
   return service;
