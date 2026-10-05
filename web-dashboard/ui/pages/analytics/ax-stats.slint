@@ -2,6 +2,7 @@
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
+import { ProbeMark } from "../../components/probe.slint";
 import { AxData, AxStat, AxTokRow } from "ax-data.slint";
 import { AxColor, AxCard, AxCardHead, AxNum, AxTip, AxSwatch, AxLegendEntry } from "ax-common.slint";
 
@@ -13,13 +14,23 @@ component SessCell inherits Text {
     horizontal-alignment: right;
     vertical-alignment: center;
     horizontal-stretch: 1;
+    // absurd magnitudes elide inside the fixed column instead of shifting the grid
+    overflow: elide;
 }
 
 export component AxSessionsCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
     property <bool> pad16: Breakpoints.width < 1180px;
-    AxCardHead { title: "Session stats"; sub: AxData.sessions.sub; note: AxData.sessions.note; }
+    // ONE shared grid for the header and every row: the CLI column takes the remainder and the three
+    // numeric columns are fixed and right-aligned, identical in the header and every row, so each value
+    // sits exactly under its header whatever the labels measure. Each width fits its Martian Mono 11 px
+    // header (0.65 em a glyph plus 0.66 px letter spacing): SESSIONS needs 63, PER SESSION 86,
+    // EVENTS PER SESSION 141.
+    property <length> col-sessions: 68px;
+    property <length> col-per: 92px;
+    property <length> col-events: 146px;
+    AxCardHead { title: "Session stats"; sub: AxData.sessions.sub; note: AxData.sessions.note; probe: "sess-head"; }
     VerticalLayout {
         // a card stretched by a taller neighbour (an open donut legend) keeps its content at the top
         alignment: start;
@@ -29,8 +40,8 @@ export component AxSessionsCard inherits AxCard {
         padding-bottom: 16px;
         spacing: 14px;
         vertical-stretch: 1;
-        // the stats sit in the table's own columns (an empty cell under CLI), each number right-aligned
-        // under its header at the top of the card, so it lines up with the column it summarizes
+        // the stats spread across the card at the top under the subtitle, as the concept draws them; the
+        // table below keeps its own shared grid
         HorizontalLayout {
             spacing: 0px;
             vertical-stretch: 0;
@@ -51,6 +62,7 @@ export component AxSessionsCard inherits AxCard {
                     na-size: 15px;
                     right: true;
                     height: 26px;
+                    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-stat:" + s.key; }
                 }
                 Text { text: s.label; font-size: 12px; color: Theme.ink-3; horizontal-alignment: right; wrap: word-wrap; }
             }
@@ -58,32 +70,32 @@ export component AxSessionsCard inherits AxCard {
         VerticalLayout {
             spacing: 0px;
             vertical-stretch: 0;
-            // header and body cells share stretches with zero minimums, so the sessions and
-            // per-session numbers sit exactly under their columns whatever the labels measure
             HorizontalLayout {
                 padding-bottom: 6px;
-                Caps { text: "CLI"; horizontal-stretch: 1.4; min-width: 0px; }
-                Caps { text: "SESSIONS"; horizontal-alignment: right; horizontal-stretch: 1; min-width: 0px; }
-                Caps { text: "PER SESSION"; horizontal-alignment: right; horizontal-stretch: 1; min-width: 0px; }
-                Caps { text: "EVENTS PER SESSION"; horizontal-alignment: right; horizontal-stretch: 1.4; min-width: 0px; }
+                Caps { text: "CLI"; horizontal-stretch: 1; min-width: 0px; }
+                Caps { text: "SESSIONS"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-sessions; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:sessions"; } }
+                Caps { text: "PER SESSION"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-per; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:per"; } }
+                Caps { text: "EVENTS PER SESSION"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-events; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:events"; } }
             }
             for r in AxData.sess-rows: VerticalLayout {
                 Rectangle { height: 1px; background: Theme.rule-2; }
                 HorizontalLayout {
                     min-height: 32px;
                     HorizontalLayout {
-                        horizontal-stretch: 1.4;
+                        horizontal-stretch: 1;
                         min-width: 0px;
                         spacing: 8px;
                         VerticalLayout { alignment: center; ProviderMark { provider: r.provider; size: 16px; } }
                         Text { text: r.label; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
-                    SessCell { text: r.sessions; min-width: 0px; }
-                    SessCell { text: r.per; min-width: 0px; }
-                    SessCell { text: r.events; horizontal-stretch: 1.4; min-width: 0px; AxTip { tip: r.events-tip; } }
+                    SessCell { text: r.sessions; horizontal-stretch: 0; width: root.col-sessions; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":sessions"; } }
+                    SessCell { text: r.per; horizontal-stretch: 0; width: root.col-per; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":per"; } }
+                    SessCell { text: r.events; horizontal-stretch: 0; width: root.col-events; AxTip { tip: r.events-tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":events"; } }
                 }
             }
         }
+        // any spare height goes below the table, never above the stats
+        Rectangle { vertical-stretch: 1; min-height: 0px; }
     }
 }
 
