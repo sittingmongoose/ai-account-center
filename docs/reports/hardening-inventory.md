@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1131 |
-| Sync fs files affected (all) | 112 |
-| Sync fs occurrences (runtime hotpaths) | 501 |
-| Sync fs files affected (runtime hotpaths) | 62 |
+| Sync fs occurrences (all) | 1134 |
+| Sync fs files affected (all) | 114 |
+| Sync fs occurrences (runtime hotpaths) | 504 |
+| Sync fs files affected (runtime hotpaths) | 64 |
 | Legacy shim markers | 198 |
 | Legacy shim files affected | 75 |
 
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 22.5% (144/640) |
+| typed-error adoption (typed/total throws) | 22.4% (144/644) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 34/390 |
+| files with createLogger | 36/392 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
 | files > 400 LOC | 45 |
-| files > 600 LOC | 18 |
+| files > 600 LOC | 19 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -90,7 +90,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/antigravity/registry.ts` | 1104 |
 | `src/web-server/usage/account-activity-collector.ts` | 1102 |
 | `src/web-server/services/account-analytics-activity.ts` | 1062 |
-| `src/codex-auth/codex-activation-runtime.ts` | 1052 |
+| `src/codex-auth/codex-activation-runtime.ts` | 1057 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
@@ -99,6 +99,6 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/aggregator.ts` | 767 |
 | `src/web-server/services/account-analytics-projection.ts` | 708 |
 | `src/web-server/services/account-dashboard-service.ts` | 674 |
+| `src/web-server/services/codex-auto-switch-service.ts` | 667 |
 | `src/antigravity/switch-service.ts` | 636 |
-| `src/web-server/services/additional-account-service.ts` | 636 |
 

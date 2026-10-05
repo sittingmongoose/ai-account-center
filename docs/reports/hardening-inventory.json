@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1131,
-    "filesAffected": 112,
-    "hotpathOccurrences": 501,
-    "hotpathFilesAffected": 62,
+    "totalOccurrences": 1134,
+    "filesAffected": 114,
+    "hotpathOccurrences": 504,
+    "hotpathFilesAffected": 64,
     "topHotpathFiles": [
       {
         "file": "src/management/shared-manager/diverged-file-adopter.ts",
@@ -520,11 +520,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 640,
+      "totalThrows": 644,
       "typedThrows": 144,
-      "plainThrows": 69,
-      "otherThrows": 427,
-      "adoptionRatio": 0.225,
+      "plainThrows": 72,
+      "otherThrows": 428,
+      "adoptionRatio": 0.2236,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -540,7 +540,7 @@
         },
         {
           "subdomain": "codex-auth",
-          "count": 96,
+          "count": 97,
           "typed": 6,
           "plain": 25
         },
@@ -552,9 +552,9 @@
         },
         {
           "subdomain": "utils",
-          "count": 18,
+          "count": 21,
           "typed": 0,
-          "plain": 18
+          "plain": 21
         },
         {
           "subdomain": "auth",
@@ -601,9 +601,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 34,
-      "totalSourceFiles": 390,
-      "coverageRatio": 0.0872,
+      "filesWithCreateLogger": 36,
+      "totalSourceFiles": 392,
+      "coverageRatio": 0.0918,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -630,12 +630,12 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 138,
-          "withLogger": 18
+          "count": 139,
+          "withLogger": 20
         },
         {
           "subdomain": "utils",
-          "count": 39,
+          "count": 40,
           "withLogger": 1
         },
         {
@@ -750,7 +750,7 @@
     },
     "largeFiles": {
       "countOver400": 45,
-      "countOver600": 18,
+      "countOver600": 19,
       "topOver400": [
         {
           "file": "src/web-server/model-pricing.ts",
@@ -770,7 +770,7 @@
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1052
+          "loc": 1057
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
@@ -805,11 +805,11 @@
           "loc": 674
         },
         {
-          "file": "src/antigravity/switch-service.ts",
-          "loc": 636
+          "file": "src/web-server/services/codex-auto-switch-service.ts",
+          "loc": 667
         },
         {
-          "file": "src/web-server/services/additional-account-service.ts",
+          "file": "src/antigravity/switch-service.ts",
           "loc": 636
         }
       ]

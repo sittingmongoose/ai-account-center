@@ -360,6 +360,9 @@ struct AccountsMenuView: View {
     return VStack(alignment: .leading, spacing: 2) {
       SectionHeader(model: model, layout: layout, accounts: accounts)
         .animation(nil, value: activeID)
+      if provider == "codex" {
+        CodexAutoStatusLine(model: model)
+      }
       VStack(spacing: 0) {
         ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
           if index > 0 {

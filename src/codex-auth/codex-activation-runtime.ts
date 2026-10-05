@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFile, spawn } from 'child_process';
+import { launchApp } from '../utils/app-launcher';
 import WebSocket from 'ws';
 import {
   codexProcessFingerprint,
@@ -774,29 +775,33 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
       }
     },
     launch: async (target, desktop) => {
-      let stream: number | undefined;
+      // The app-server log keeps tokens out of the journal; pre-create it 0600
+      // so the transient service below only ever appends. GUI output goes to
+      // the journal (systemd default), same as a desktop-session start.
+      const logFile = desktop
+        ? undefined
+        : path.join(codexHome, 'app-server-control', 'app-server.log');
+      if (logFile !== undefined) {
+        const stream = fs.openSync(logFile, 'a', 0o600);
+        fs.closeSync(stream);
+      }
+      // launchApp starts the app OUTSIDE the dashboard cgroup (see
+      // src/utils/app-launcher.ts): a detached spawn would cage it -- and
+      // everything it starts -- in ccs-dashboard.service, where the next
+      // dashboard restart would kill it (KillMode=control-group).
+      // Note: argv0 is no longer preserved; the app now starts with argv0 set
+      // to its exe path, i.e. the standard absolute-path invocation form.
       try {
-        stream = fs.openSync(
-          desktop ? '/dev/null' : path.join(codexHome, 'app-server-control', 'app-server.log'),
-          'a',
-          0o600
-        );
-        const child = spawn(target.exe, target.args.slice(1), {
+        await launchApp({
+          app: desktop ? 'codex-desktop' : 'codex-app-server',
+          exe: target.exe,
+          args: target.args.slice(1),
           cwd: target.cwd,
           env: target.env,
-          detached: true,
-          argv0: target.args[0],
-          stdio: ['ignore', stream, stream],
+          ...(logFile === undefined ? {} : { logFile }),
         });
-        await new Promise<void>((resolve, reject) => {
-          child.once('spawn', () => resolve());
-          child.once('error', () =>
-            reject(new CodexActivationRuntimeError('Could not launch Codex.'))
-          );
-        });
-        child.unref();
-      } finally {
-        if (stream !== undefined) fs.closeSync(stream);
+      } catch {
+        throw new CodexActivationRuntimeError('Could not launch Codex.');
       }
     },
     prepareCli: (target) => runCliRestartHelper(target, true),

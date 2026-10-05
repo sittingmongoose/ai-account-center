@@ -561,6 +561,39 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(quit.call_count, 2)
 
     @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('gcc') and shutil.which('tmux'), 'native fixture compiler and tmux required')
+    def test_ubuntu_tmux_restart_escapes_service_cgroup(self):
+        install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), '0.160.0')
+        context = mock.Mock(cwd='/tmp', args=[], env={'HOME': '/tmp', 'PATH': '/usr/bin'})
+        alive = [mock.Mock(pid=4242, ppid=1)]
+        which = lambda name: {'tmux': '/usr/bin/tmux', 'systemd-run': '/usr/bin/systemd-run'}.get(name)
+        with mock.patch.object(terminal.shutil, 'which', side_effect=which), \
+             mock.patch.object(terminal, 'command') as run, \
+             mock.patch.object(terminal, 'family', return_value=alive), \
+             mock.patch.object(terminal, 'scan', return_value=[]):
+            sessions = terminal.restart_cli(install, [context])
+        self.assertEqual(sessions[0]['kind'], 'tmux')
+        argv = run.call_args.args[0]
+        self.assertTrue(argv[0].endswith('systemd-run'), argv)
+        self.assertIn('--user', argv)
+        self.assertIn('--collect', argv)
+        self.assertIn('--service-type=forking', argv)
+        self.assertIn('--working-directory=/tmp', argv)
+        self.assertIn('--setenv=HOME=/tmp', argv)
+        self.assertNotIn('--scope', argv)
+        unit = next(item for item in argv if item.startswith('--unit='))
+        self.assertRegex(unit, r'^--unit=aac-launch-codex-cli-[0-9a-f]{12}$')
+        separator = argv.index('--')
+        self.assertTrue(argv[separator + 1].endswith('tmux'), argv)
+        self.assertIn('new-session', argv[separator:])
+
+    def test_ubuntu_restart_without_systemd_run_fails_closed(self):
+        with mock.patch.object(terminal.shutil, 'which', return_value=None):
+            with self.assertRaises(common.UpdateFailure) as raised:
+                terminal.systemd_user_service_argv('aac-launch-x', '/tmp', {}, ['tmux'])
+            self.assertEqual(raised.exception.code, 'restart_context')
+            with self.assertRaises(common.UpdateFailure):
+                terminal.check_terminal('ubuntu', [mock.Mock()])
+
     def test_real_standin_cli_restarts_in_new_pty_without_original_prompt(self):
         source = r'''#include <stdio.h>
 #include <stdlib.h>

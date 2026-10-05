@@ -346,6 +346,30 @@ struct SectionHeader: View {
   }
 }
 
+/// Why Codex automatic switching is stuck, in plain words, above the Codex accounts.
+/// Visible only for blocked outcomes; healthy switching adds no line and changes no layout.
+/// The money case (paid credits burning) gets the warn tint; other blocks stay a quiet note.
+struct CodexAutoStatusLine: View {
+  @ObservedObject var model: AccountsViewModel
+
+  var body: some View {
+    withPalette { palette in
+      if let text = AccountFormatting.codexAutoStatusText(
+        status: model.dashboard?.codexAutoSwitch, accounts: model.dashboard?.accounts ?? [])
+      {
+        Text(verbatim: text)
+          .font(.system(size: 12))
+          .foregroundStyle(model.dashboard?.codexAutoSwitch.usingCredits == true ? palette.warnText : palette.label2)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.leading, TrayMetrics.rowLeading)
+          .padding(.trailing, TrayMetrics.rowTrailing)
+          .padding(.top, 2)
+          .accessibilityIdentifier("codex-auto-status")
+      }
+    }
+  }
+}
+
 /// Antigravity's own auto-switch (thresholdUsedPercent, % used), shown once two accounts exist.
 struct AntigravityAutoControls: View {
   @ObservedObject var model: AccountsViewModel

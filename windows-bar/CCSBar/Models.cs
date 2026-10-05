@@ -319,6 +319,10 @@ public sealed class AutoSwitchStatus
     public bool ActivationInProgress { get; set; }
     public string? LastCheckedAt { get; set; }
     public string? LastSwitchedAt { get; set; }
+    /// <summary>Profile the monitor chose but could not switch to yet. Present only for waiting_idle.</summary>
+    public string? Candidate { get; set; }
+    /// <summary>True when the blocked message warns about paid credits being spent.</summary>
+    public bool UsingCredits { get; set; }
 }
 
 public static class Formatting
@@ -567,6 +571,23 @@ public static class Formatting
         return rounded == Math.Round(rounded) ? 0 : Math.Round(rounded, 1) == rounded ? 1 : 2;
     }
     public static string PercentWith(double value, int decimals) => value.ToString("F" + decimals, CultureInfo.CurrentCulture) + "%";
+
+    private static readonly IReadOnlySet<string> BlockedAutoSwitch = new HashSet<string> { "waiting_idle", "no_quota", "no_candidate", "error" };
+
+    /// <summary>Why Codex automatic switching is stuck, in plain words — or null when the switch is
+    /// healthy, disabled or unreported and no line should show.</summary>
+    public static string? CodexAutoStatusText(AutoSwitchStatus? status, List<DashboardAccount>? accounts)
+    {
+        if (status is null || !status.Enabled) return null;
+        if (!BlockedAutoSwitch.Contains(status.Outcome)) return null;
+        if (status.Outcome == "waiting_idle" && !string.IsNullOrWhiteSpace(status.Candidate))
+        {
+            var match = accounts?.Find(account => account.Provider == "codex" && account.Capabilities.CodexProfile == status.Candidate);
+            var identity = match?.Email ?? match?.Label ?? status.Candidate;
+            return $"{status.Message} Will switch to {identity} when Codex goes idle. Activate {identity} to switch now.";
+        }
+        return status.Message;
+    }
 
     /// <summary>Notification-area tooltip (max 127 characters): the active Codex account's weekly % left.</summary>
     public static string TrayTooltip(AccountDashboard? dashboard, bool stale = false, bool configured = true, string? signInState = null)
