@@ -16,7 +16,11 @@ import {
   parseOmpUsageLine,
 } from './omp-native-usage-collector';
 import { museSessionIdForFile, parseMuseUsageLine } from './muse-native-usage-collector';
-import { queryLocalZcodeUsage, type ZcodeFingerprint } from './zcode-native-usage-collector';
+import {
+  queryLocalZcodeUsage,
+  type ZcodeFingerprint,
+  type ZcodeHelperSessionRow,
+} from './zcode-native-usage-collector';
 import { analyticsSessionKey } from './analytics-session-key';
 import type { AccountAnalyticsActivityProvider } from '../services/account-analytics-types';
 import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
@@ -320,14 +324,158 @@ function rowKey(row: CompactEntry): string {
 }
 
 /**
- * Pricing is stable for one bounded read, so resolve each native model once. `sessionTool` names the tool whose
- * raw session ids `rows` carry, so each becomes its published key here and the snapshot never holds an id; it is
- * null when the rows already carry keys, which is what the remote helper sends (it hashes on the host it reads).
+ * One pre-aggregated per-session-model row, as the analytics helper reports it: the session's
+ * published key (the helper hashed the log's own id on the host that read it), first/last event,
+ * tokens and cost.
+ */
+export interface SessionAggregateRow {
+  sessionId: string;
+  model: string;
+  provider?: string;
+  target?: string;
+  firstMs: number;
+  lastMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cost?: number;
+  events: number;
+}
+
+const MAX_SESSION_ROWS = 10_000;
+
+/**
+ * Session rows from pre-aggregated helper rows (remote hosts, local zcode).
+ * The hourly rows of the same answer already carry the tokens; these carry
+ * the session keys, so the two are aggregated separately and never doubled.
+ * `sessionId` is already the published key — derived where the log was read —
+ * so it is never hashed again here. Pricing mirrors `aggregateRows`: logged
+ * cost wins, the rest prices at list.
+ */
+export function aggregateSessionAggregates(
+  rows: SessionAggregateRow[],
+  source: string
+): Pick<UsageWorkerResult, 'session'> {
+  interface Bucket {
+    models: Map<string, ModelBreakdown>;
+    loggedCost: Map<string, number>;
+    unlogged: Map<string, { input: number; output: number; write: number; read: number }>;
+    firstMs: number;
+    lastMs: number;
+    events: number;
+    target?: string;
+  }
+  const sessions = new Map<string, Bucket>();
+  const pricing = new Map<string, ModelPricingResolution>();
+  const count = (value: unknown): number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  for (const row of rows) {
+    if (!row.sessionId || !Number.isFinite(row.firstMs) || !Number.isFinite(row.lastMs)) continue;
+    if (row.lastMs < row.firstMs) continue;
+    let bucket = sessions.get(row.sessionId);
+    if (!bucket) {
+      if (sessions.size >= MAX_SESSION_ROWS) continue;
+      bucket = {
+        models: new Map(),
+        loggedCost: new Map(),
+        unlogged: new Map(),
+        firstMs: row.firstMs,
+        lastMs: row.lastMs,
+        events: 0,
+        ...(row.target ? { target: row.target } : {}),
+      };
+      sessions.set(row.sessionId, bucket);
+    }
+    if (row.firstMs < bucket.firstMs) bucket.firstMs = row.firstMs;
+    if (row.lastMs > bucket.lastMs) bucket.lastMs = row.lastMs;
+    bucket.events += count(row.events);
+    if (row.target) bucket.target = row.target;
+    const provider = normalizeUsageProvider(row.provider ?? row.target);
+    const modelKey = `${provider ?? ''}\0${row.model}`;
+    const model = bucket.models.get(modelKey) ?? {
+      modelName: row.model,
+      ...(provider && { provider }),
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 0,
+    };
+    model.inputTokens += count(row.inputTokens);
+    model.outputTokens += count(row.outputTokens);
+    model.cacheCreationTokens += count(row.cacheCreationTokens);
+    model.cacheReadTokens += count(row.cacheReadTokens);
+    if (row.cost !== undefined && row.cost > 0) {
+      bucket.loggedCost.set(modelKey, (bucket.loggedCost.get(modelKey) ?? 0) + row.cost);
+    } else {
+      const pending = bucket.unlogged.get(modelKey) ?? { input: 0, output: 0, write: 0, read: 0 };
+      pending.input += count(row.inputTokens);
+      pending.output += count(row.outputTokens);
+      pending.write += count(row.cacheCreationTokens);
+      pending.read += count(row.cacheReadTokens);
+      bucket.unlogged.set(modelKey, pending);
+    }
+    bucket.models.set(modelKey, model);
+  }
+  const session = [...sessions]
+    .map(([sessionId, bucket]) => {
+      const modelBreakdowns = [...bucket.models.values()];
+      for (const model of modelBreakdowns) {
+        const key = `${model.provider ?? ''}\0${model.modelName}`;
+        let resolved = pricing.get(key);
+        if (!resolved) {
+          resolved = getModelPricingWithSource(model.modelName, { provider: model.provider });
+          pricing.set(key, resolved);
+        }
+        const rates = resolved.pricing;
+        const unlogged = bucket.unlogged.get(key) ?? { input: 0, output: 0, write: 0, read: 0 };
+        const listed =
+          (unlogged.input / 1_000_000) * rates.inputPerMillion +
+          (unlogged.output / 1_000_000) * rates.outputPerMillion +
+          (unlogged.write / 1_000_000) * rates.cacheCreationPerMillion +
+          (unlogged.read / 1_000_000) * rates.cacheReadPerMillion;
+        model.cost = (bucket.loggedCost.get(key) ?? 0) + listed;
+        if (resolved.source === 'fallback' && listed > 0) model.fallbackCost = listed;
+      }
+      const fallbackCost = modelBreakdowns.reduce((sum, item) => sum + (item.fallbackCost ?? 0), 0);
+      modelBreakdowns.sort((left, right) => right.cost - left.cost);
+      return {
+        sessionId,
+        projectPath: '',
+        source,
+        inputTokens: modelBreakdowns.reduce((sum, item) => sum + item.inputTokens, 0),
+        outputTokens: modelBreakdowns.reduce((sum, item) => sum + item.outputTokens, 0),
+        cacheCreationTokens: modelBreakdowns.reduce(
+          (sum, item) => sum + item.cacheCreationTokens,
+          0
+        ),
+        cacheReadTokens: modelBreakdowns.reduce((sum, item) => sum + item.cacheReadTokens, 0),
+        cost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
+        totalCost: modelBreakdowns.reduce((sum, item) => sum + item.cost, 0),
+        ...(fallbackCost > 0 && { fallbackCost }),
+        modelsUsed: getModelsUsed(modelBreakdowns),
+        modelBreakdowns,
+        firstActivity: new Date(bucket.firstMs).toISOString(),
+        lastActivity: new Date(bucket.lastMs).toISOString(),
+        versions: [],
+        target: bucket.target,
+      };
+    })
+    .sort((left, right) => right.lastActivity.localeCompare(left.lastActivity));
+  return { session };
+}
+
+/**
+ * Pricing is stable for one bounded read, so resolve each native model once. `sessionTool` names
+ * the tool whose raw session ids `rows` carry, so each becomes its published key here and neither
+ * the snapshot on disk nor the page ever holds an id. Rows that carry no session (a remote hourly
+ * row, a local zcode hour) simply add no session bucket.
  */
 export function aggregateRows(
   rows: CompactEntry[],
   source: string,
-  sessionTool: AccountAnalyticsActivityProvider | null
+  sessionTool: AccountAnalyticsActivityProvider
 ): Pick<UsageWorkerResult, 'hourly' | 'session'> {
   interface Bucket {
     models: Map<string, ModelBreakdown>;
@@ -398,9 +546,8 @@ export function aggregateRows(
   };
   for (const row of rows) {
     add(hours, `${row.entry.timestamp.slice(0, 10)} ${row.entry.timestamp.slice(11, 13)}:00`, row);
-    const sessionId = row.entry.sessionId;
-    if (sessionId)
-      add(sessions, sessionTool ? analyticsSessionKey(sessionTool, sessionId) : sessionId, row);
+    if (row.entry.sessionId)
+      add(sessions, analyticsSessionKey(sessionTool, row.entry.sessionId), row);
   }
   const values = (bucket: Bucket) => {
     const modelBreakdowns = [...bucket.models.values()];
@@ -573,18 +720,16 @@ async function readBatch(
 }
 
 interface ZcodeCache {
-  /**
-   * 3: rows carry the helper's session key, so cached rows without one are read again.
-   * 2: rows of a changed database replace its cached rows (1 could hold doubled rows).
-   */
+  /** 3: per-session aggregates ride with the hourly rows (2 held hours only). */
   version: 3;
   minDate: number;
   fingerprints: Record<string, ZcodeFingerprint>;
   rows: CompactEntry[];
+  sessions: ZcodeHelperSessionRow[];
 }
 
 function blankZcodeCache(minDate: number): ZcodeCache {
-  return { version: 3, minDate, fingerprints: {}, rows: [] };
+  return { version: 3, minDate, fingerprints: {}, rows: [], sessions: [] };
 }
 
 function zcodeCachePath(directory: string, dbPath: string): string {
@@ -602,10 +747,13 @@ function loadZcodeCache(cache: string, minDate: number): ZcodeCache {
       !value.fingerprints ||
       typeof value.fingerprints !== 'object' ||
       !Array.isArray(value.rows) ||
-      value.rows.length > MAX_TOTAL_ROWS
+      value.rows.length > MAX_TOTAL_ROWS ||
+      !Array.isArray(value.sessions) ||
+      value.sessions.length > MAX_TOTAL_ROWS
     )
       return blankZcodeCache(minDate);
     value.rows = value.rows.filter((row) => Date.parse(row.entry.timestamp) >= minDate);
+    value.sessions = value.sessions.filter((row) => typeof row.z === 'number' && row.z >= minDate);
     return value;
   } catch {
     return blankZcodeCache(minDate);
@@ -613,7 +761,11 @@ function loadZcodeCache(cache: string, minDate: number): ZcodeCache {
 }
 
 function saveZcodeCache(cache: string, value: ZcodeCache): void {
-  const body = JSON.stringify({ ...value, rows: value.rows.slice(0, MAX_TOTAL_ROWS) });
+  const body = JSON.stringify({
+    ...value,
+    rows: value.rows.slice(0, MAX_TOTAL_ROWS),
+    sessions: value.sessions.slice(0, MAX_TOTAL_ROWS),
+  });
   if (Buffer.byteLength(body) > MAX_CACHE_BYTES)
     throw new CCSError('Native checkpoint exceeds limit');
   const temporary = `${cache}.${process.pid}.tmp`;
@@ -679,7 +831,7 @@ async function collectZcodeAccountActivity(
             cacheCreationTokens: helperRow.cw,
             cacheReadTokens: helperRow.cr,
             model: helperRow.m,
-            sessionId: helperRow.s ?? '',
+            sessionId: '',
             timestamp,
             projectPath: '',
             target: 'zcode',
@@ -700,6 +852,22 @@ async function collectZcodeAccountActivity(
           } else failed++;
         }
         cached.rows = [...byKey.values()];
+        // Session aggregates replace per changed database, like hourly rows.
+        const keptSessions = cached.sessions.filter(
+          (row) =>
+            row.f in next && sameZcodePrint(prior[row.f], next[row.f]) && row.z >= options.minDate
+        );
+        const seenSessions = new Set(
+          keptSessions.map((row) => `${row.f}\0${row.s}\0${row.m}\0${row.p ?? ''}`)
+        );
+        for (const helperRow of fresh.sessions) {
+          if (helperRow.z < options.minDate) continue;
+          const key = `${helperRow.f}\0${helperRow.s}\0${helperRow.m}\0${helperRow.p ?? ''}`;
+          if (seenSessions.has(key)) continue;
+          seenSessions.add(key);
+          keptSessions.push(helperRow);
+        }
+        cached.sessions = keptSessions.slice(0, MAX_TOTAL_ROWS);
         cached.fingerprints = next;
         cached.minDate = options.minDate;
         saveZcodeCache(cache, cached);
@@ -710,7 +878,26 @@ async function collectZcodeAccountActivity(
     }
   }
   if (!cached.rows.length && failed > 0) throw new CCSError('Native log sources could not be read');
-  const { hourly, session } = aggregateRows(cached.rows, 'zcode-native', null);
+  const { hourly } = aggregateRows(cached.rows, 'zcode-native', 'zcode');
+  // Sessions aggregate from the session rows alone; the hourly rows above
+  // already carry the same tokens.
+  const { session } = aggregateSessionAggregates(
+    cached.sessions.map((row) => ({
+      sessionId: row.s,
+      model: row.m,
+      ...(row.p ? { provider: row.p } : {}),
+      target: 'zcode',
+      firstMs: row.a,
+      lastMs: row.z,
+      inputTokens: row.i,
+      outputTokens: row.o,
+      cacheCreationTokens: row.cw,
+      cacheReadTokens: row.cr,
+      ...(row.c > 0 ? { cost: row.c } : {}),
+      events: row.n,
+    })),
+    'zcode-native'
+  );
   return {
     daily: [],
     monthly: [],

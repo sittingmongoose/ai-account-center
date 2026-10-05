@@ -97,9 +97,17 @@ async function remoteAnswer() {
         rowCount: 0,
         detail: 'remote scan failed',
       },
+      // Every kind is scanned on both hosts; absence is measured, never fixed.
       {
-        // The host answers for a tool it does not have; the server no longer claims it.
         tool: 'muse',
+        host: 'windows',
+        state: 'not_installed',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 0,
+        detail: 'no usage logs found on this host',
+      },
+      {
+        tool: 'zcode',
         host: 'windows',
         state: 'not_installed',
         lastScanAt: new Date(NOW).toISOString(),
@@ -214,7 +222,8 @@ describe('analytics activity across sources', () => {
     // Windows Muse and zcode are measured by that host's own scan, not fixed here.
     expect(sources.get('muse:windows')?.state).toBe('not_installed');
     expect(sources.get('muse:windows')?.detail).toContain('no usage logs found on this host');
-    expect(sources.get('zcode:windows')).toBeUndefined();
+    expect(sources.get('zcode:windows')?.state).toBe('not_installed');
+    expect(sources.get('zcode:windows')?.detail).toContain('no usage logs found on this host');
   });
 
   it('describes the real multi-host coverage', async () => {

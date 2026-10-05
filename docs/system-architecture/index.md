@@ -50,9 +50,11 @@ is published. Ubuntu logs are parsed in bounded worker
 scans with per-file checkpoints; the Mac and Windows contribute per-model,
 per-hour aggregates through one packaged Python helper streamed over the
 existing ssh channel ([remote transport](../../src/web-server/services/analytics-remote-transport.ts)),
-never raw events. Every row also carries a hashed session key, derived on the
-host that read it, so sessions from all three hosts count in Session stats and
-Recent sessions while no session id, path or directory ever leaves that host.
+never raw events. Beside its hourly rows each answer carries per-session
+aggregates whose key is a digest derived on the host that read the log — the
+same key the server's own readers derive at ingest — so sessions from all three
+hosts count in Session stats and Recent sessions while no session id, path or
+directory ever leaves that host.
 OMP rows use the logged cost when nonzero, else list rates
 under the provider that served the call (a logged 0 is "not logged"); logged
 and unlogged events never share a compact row. Muse and zcode input exclude

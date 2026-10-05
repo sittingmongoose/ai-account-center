@@ -103,9 +103,9 @@ function writeFixtures(options: { muse?: boolean; zcode?: boolean } = {}) {
         [
           'import sqlite3,sys',
           'db=sqlite3.connect(sys.argv[1])',
-          'db.execute("CREATE TABLE model_usage (model_id TEXT, provider_id TEXT, started_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER)")',
-          `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai',${Date.parse('2026-10-01T15:20:00Z')},10000,200,0,9000,100)")`,
-          `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai',${Date.parse('2026-08-01T00:00:00Z')},777,7,0,0,0)")`,
+          'db.execute("CREATE TABLE model_usage (model_id TEXT, provider_id TEXT, started_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, session_id TEXT)")',
+          `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai',${Date.parse('2026-10-01T15:20:00Z')},10000,200,0,9000,100,'sess-9')")`,
+          `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai',${Date.parse('2026-08-01T00:00:00Z')},777,7,0,0,0,'sess-old')")`,
           'db.commit()',
         ].join(';'),
         path.join(dir, 'db.sqlite'),
@@ -152,8 +152,8 @@ function sqlite(dbPath: string, statements: string[]): void {
   );
 }
 
-function zcodeInsert(at: string, input: number, read: number): string {
-  return `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai',${Date.parse(at)},${input},10,0,${read},0)")`;
+function zcodeInsert(at: string, input: number, read: number, session = 'sess-9'): string {
+  return `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai',${Date.parse(at)},${input},10,0,${read},0,'${session}')")`;
 }
 
 function runHelper(request: Record<string, unknown>): Record<string, unknown> {
@@ -206,19 +206,41 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       cw: 100,
       n: 1,
     });
-    // Every row carries its session's published key, derived on this host: the ids never travel.
-    expect(byModel.get('deepseek-v4.1-flash')?.s).toBe(
-      analyticsSessionKey('omp', '2026-10-01T15-00_uuid')
-    );
-    expect(byModel.get('k3')?.s).toBe(analyticsSessionKey('omp', '2026-10-01T15-00_uuid2'));
-    expect(byModel.get('muse-spark-1.3-contributor')?.s).toBe(
-      analyticsSessionKey('muse', 'uuid-9')
-    );
-    // This fixture's zcode table has no session column, so its rows carry no key at all.
-    expect(byModel.get('GLM-5.3-Flash')?.s).toBeUndefined();
     const serialized = JSON.stringify(response);
     expect(serialized).not.toContain(home);
+    // Session aggregates carry each session's published key — derived here, so the log's own id
+    // never travels — with first and last event: one per session, model and logged-cost split.
+    const srows = response.srows as Array<Record<string, unknown>>;
+    expect(srows.length).toBe(4);
+    for (const srow of srows) expect(String(srow.s)).toMatch(/^[0-9a-f]{16}$/);
     expect(serialized).not.toContain('uuid');
+    expect(serialized).not.toContain('sess-9');
+    const bySession = new Map(srows.map((srow) => [srow.s, srow]));
+    expect(bySession.get(analyticsSessionKey('omp', '2026-10-01T15-00_uuid'))).toMatchObject({
+      k: 'omp',
+      m: 'deepseek-v4.1-flash',
+      p: 'chutes',
+      i: 1000,
+      o: 200,
+      cr: 3000,
+      cw: 400,
+      c: 0.25,
+      n: 1,
+    });
+    expect(bySession.get(analyticsSessionKey('omp', '2026-10-01T15-00_uuid2'))).toMatchObject({
+      k: 'omp',
+      m: 'k3',
+    });
+    expect(bySession.get(analyticsSessionKey('muse', 'uuid-9'))).toMatchObject({ k: 'muse', n: 1 });
+    expect(bySession.get(analyticsSessionKey('zcode', 'sess-9'))).toMatchObject({
+      k: 'zcode',
+      m: 'GLM-5.3-Flash',
+      p: 'zai',
+      i: 1000,
+      n: 1,
+      a: Date.parse('2026-10-01T15:20:00Z'),
+      z: Date.parse('2026-10-01T15:20:00Z'),
+    });
   });
 
   it('returns rows only for new or changed files on later scans', () => {
@@ -313,7 +335,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     const extraDb = path.join(home, 'extra', 'db.sqlite');
     fs.mkdirSync(path.dirname(extraDb), { recursive: true });
     sqlite(extraDb, [
-      'db.execute("CREATE TABLE model_usage (model_id TEXT, provider_id TEXT, started_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER)")',
+      'db.execute("CREATE TABLE model_usage (model_id TEXT, provider_id TEXT, started_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, session_id TEXT)")',
       zcodeInsert('2026-10-01T15:20:00Z', 10000, 9000),
     ]);
     const response = runHelper({
@@ -343,9 +365,14 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     ]);
     const response = runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE });
     const rows = response.rows as Array<Record<string, unknown>>;
-    // One row per session, model and hour: these are the sessions the page never saw.
-    expect(rows).toHaveLength(2);
-    expect(rows.map((row) => row.s).sort()).toEqual(
+    // The hourly query keeps its shape: one row per model, provider and hour, cache reads netted
+    // out of input ((10000-9000) + (2000-1000)).
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ k: 'zcode', m: 'GLM-5.3-Flash', i: 2000, n: 2 });
+    // Sessions ride beside the hours as their own aggregates, keyed on this host: these are the
+    // sessions the page never saw.
+    const srows = response.srows as Array<Record<string, unknown>>;
+    expect(srows.map((srow) => srow.s).sort()).toEqual(
       [analyticsSessionKey('zcode', 'zs-1'), analyticsSessionKey('zcode', 'zs-2')].sort()
     );
     expect(JSON.stringify(response)).not.toContain('zs-1');
@@ -370,8 +397,8 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     const advisor = path.join(sessionDir, '__advisor.jsonl');
     fs.writeFileSync(advisor, `${ompRecord('advisor-model', 0)}\n`);
     const response = runHelper({ kinds: ['omp'], minDateMs: MIN_DATE });
-    const rows = response.rows as Array<Record<string, unknown>>;
-    const byModel = new Map(rows.map((row) => [row.m, row]));
+    const srows = response.srows as Array<Record<string, unknown>>;
+    const byModel = new Map(srows.map((srow) => [srow.m, srow]));
     // A session file keys by its own stem; an advisor file by the session directory it sits in,
     // both exactly as the server's own reader derives them.
     expect(byModel.get('deepseek-v4.1-flash')?.s).toBe(
@@ -402,12 +429,21 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(breakdown.modelName).toBe('GLM-5.3-Flash');
     expect(breakdown.inputTokens).toBe(1000);
     expect(breakdown.cacheReadTokens).toBe(9000);
+    // The helper keys the session where it read the database, exactly as the file readers do,
+    // so the cached rows and the page hold a digest and never the log's own id.
+    expect(data.session).toHaveLength(1);
+    expect(data.session[0].sessionId).toBe(analyticsSessionKey('zcode', 'sess-9'));
+    expect(data.session[0].target).toBe('zcode');
+    expect(data.session[0].firstActivity).toBe('2026-10-01T15:20:00.000Z');
+    expect(data.session[0].lastActivity).toBe('2026-10-01T15:20:00.000Z');
     // A second scan reuses the fingerprint without re-querying rows twice.
     const again = await collectAccountActivity(
       { kind: 'zcode', dbPath },
       { minDate: MIN_DATE, cacheDir: path.join(home, 'cache') }
     );
     expect(again.eventCount).toBe(1);
+    expect(again.session).toHaveLength(1);
+    expect(again.session[0].sessionId).toBe(analyticsSessionKey('zcode', 'sess-9'));
   });
 
   it('replaces a changed local zcode database instead of adding it again', async () => {
@@ -602,7 +638,19 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       n: 1,
     });
     expect(rows[0].p).toBeUndefined();
-    expect(rows[0].s).toBe(analyticsSessionKey('claude', 's1'));
+    const srows = response.srows as Array<Record<string, unknown>>;
+    expect(srows).toHaveLength(1);
+    expect(srows[0]).toMatchObject({
+      k: 'claude',
+      // The record's own id is keyed on this host: the digest travels, the id does not.
+      s: analyticsSessionKey('claude', 's1'),
+      m: 'claude-haiku-4-5',
+      i: 100,
+      n: 1,
+      a: Date.parse('2026-10-01T15:05:00Z'),
+      z: Date.parse('2026-10-01T15:05:00Z'),
+    });
+    expect(JSON.stringify(srows)).not.toContain('"s1"');
     const serialized = JSON.stringify(response);
     expect(serialized).not.toContain(home);
     expect(serialized).not.toContain('secret');
@@ -682,11 +730,35 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       c: 0,
       n: 2,
     });
-    expect(rows[0].s).toBe(analyticsSessionKey('codex', 'cx1'));
+    const srows = response.srows as Array<Record<string, unknown>>;
+    expect(srows).toHaveLength(1);
+    expect(srows[0]).toMatchObject({
+      k: 'codex',
+      s: analyticsSessionKey('codex', 'cx1'),
+      m: 'gpt-5',
+      i: 1400,
+      n: 2,
+    });
+    expect(JSON.stringify(srows)).not.toContain('cx1');
     const serialized = JSON.stringify(response);
     expect(serialized).not.toContain(home);
     expect(serialized).not.toContain('secret');
     expect(serialized).not.toContain('hidden prompt');
+  });
+
+  it('keeps hourly rows when the zcode database has no session ids', () => {
+    writeFixtures({ zcode: false });
+    const dir = path.join(home, '.zcode', 'cli', 'db');
+    fs.mkdirSync(dir, { recursive: true });
+    sqlite(path.join(dir, 'db.sqlite'), [
+      'db.execute("CREATE TABLE model_usage (model_id TEXT, provider_id TEXT, started_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER)")',
+      `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai',${Date.parse('2026-10-01T15:20:00Z')},10000,200,0,9000,100)")`,
+    ]);
+    const response = runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE });
+    const kinds = response.kinds as Record<string, { state: string }>;
+    expect(kinds.zcode.state).toBe('ok');
+    expect((response.rows as unknown[]).length).toBe(1);
+    expect((response.srows as unknown[]).length).toBe(0);
   });
 
   it('scans extra claude projects and codex homes alongside the defaults', () => {

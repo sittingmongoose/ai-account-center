@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  '427799f75e375b7d1d3b6ba4b70f17abd6a6cfb26563312ab68e955ee88f4ecc';
+  '9d24ab648aa1fef97e5925e74c8bb972fdff80fcb077f8277701abb23946c744';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -52,8 +52,28 @@ export interface AnalyticsRemoteRow {
   cw: number;
   c: number;
   n: number;
-  /** sha256('aac-session-v1:<kind>:<session id>')[:16]; absent when the kind logs no session. */
-  s?: string;
+}
+
+/**
+ * One per-session-model aggregate: the session's published key plus its first
+ * (`a`) and last (`z`) event in epoch milliseconds. The helper derives the key
+ * on the host that read the log (`_session_key`), so no session id, path or
+ * conversation content travels; the projection publishes the key unchanged.
+ */
+export interface AnalyticsRemoteSessionRow {
+  k: AnalyticsRemoteKind;
+  f: string;
+  s: string;
+  m: string;
+  p?: string;
+  a: number;
+  z: number;
+  i: number;
+  o: number;
+  cr: number;
+  cw: number;
+  c: number;
+  n: number;
 }
 
 export interface AnalyticsRemoteKindResult {
@@ -72,6 +92,7 @@ export interface AnalyticsRemoteResponse {
   discoveryTruncated?: boolean;
   kinds: Record<AnalyticsRemoteKind, AnalyticsRemoteKindResult>;
   rows: AnalyticsRemoteRow[];
+  srows: AnalyticsRemoteSessionRow[];
 }
 
 export interface AnalyticsRemoteRequest {
@@ -164,8 +185,34 @@ function validRow(value: unknown): value is AnalyticsRemoteRow {
     nonNegative(row.cr) &&
     nonNegative(row.cw) &&
     nonNegative(row.c) &&
-    nonNegative(row.n) &&
-    (row.s === undefined || (typeof row.s === 'string' && SESSION_KEY_HEX.test(row.s)))
+    nonNegative(row.n)
+  );
+}
+
+function validSessionRow(value: unknown): value is AnalyticsRemoteSessionRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    (row.k === 'claude' ||
+      row.k === 'codex' ||
+      row.k === 'omp' ||
+      row.k === 'muse' ||
+      row.k === 'zcode') &&
+    typeof row.f === 'string' &&
+    SHA256_HEX.test(row.f) &&
+    typeof row.s === 'string' &&
+    SESSION_KEY_HEX.test(row.s) &&
+    cleanText(row.m, 160) &&
+    (row.p === undefined || cleanText(row.p, 64)) &&
+    nonNegative(row.a) &&
+    nonNegative(row.z) &&
+    (row.z as number) >= (row.a as number) &&
+    nonNegative(row.i) &&
+    nonNegative(row.o) &&
+    nonNegative(row.cr) &&
+    nonNegative(row.cw) &&
+    nonNegative(row.c) &&
+    nonNegative(row.n)
   );
 }
 
@@ -202,10 +249,17 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
   }
   const kinds = response.kinds as Record<string, unknown> | undefined;
   const rows = response.rows as unknown;
+  const srows = response.srows as unknown;
   if (!kinds || typeof kinds !== 'object' || !Array.isArray(rows) || rows.length > MAX_ROWS) {
     throw new AnalyticsRemoteTransportError();
   }
   if (!rows.every(validRow)) throw new AnalyticsRemoteTransportError();
+  // Session aggregates travel with the hourly rows; an answer without them
+  // (an older helper in a test fixture) carries hourly usage only.
+  if (srows !== undefined && (!Array.isArray(srows) || srows.length > MAX_ROWS))
+    throw new AnalyticsRemoteTransportError();
+  if (Array.isArray(srows) && !srows.every(validSessionRow))
+    throw new AnalyticsRemoteTransportError();
   const parsed: AnalyticsRemoteResponse['kinds'] = {} as AnalyticsRemoteResponse['kinds'];
   for (const [kind, value] of Object.entries(kinds)) {
     if (
@@ -252,6 +306,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     ...(response.discoveryTruncated === true ? { discoveryTruncated: true } : {}),
     kinds: parsed,
     rows: rows as AnalyticsRemoteRow[],
+    srows: (Array.isArray(srows) ? srows : []) as AnalyticsRemoteSessionRow[],
   };
 }
 

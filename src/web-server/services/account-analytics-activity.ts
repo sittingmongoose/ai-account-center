@@ -13,11 +13,12 @@ import {
   projectAccountAnalyticsActivity,
   type SourceData,
 } from './account-analytics-projection';
+import { USAGE_PROVIDER_ORDER } from './account-analytics-attribution';
 import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
 import {
-  ANALYTICS_REMOTE_TARGETS,
+  analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   type AnalyticsRemoteSourceState,
@@ -84,12 +85,13 @@ type RemoteAnswer = {
 };
 
 /**
- * Fixed entries for the two tools with no local usage log on any host:
- * Antigravity keeps token counts only inside sqlite protobuf BLOBs mixed with
- * conversation content, and Cursor's usage is server-side (its local state
- * databases are key/value stores with no token-usage columns). The page uses
- * these to say why they are missing. Every other tool's presence on a host is
- * measured by that host's own scan, never assumed here.
+ * Fixed entries for tools with no local usage log, on every host. Antigravity
+ * keeps token counts only inside sqlite protobuf BLOBs mixed with conversation
+ * content (per-conversation databases under the Gemini CLI state directory,
+ * with no integer token columns); Cursor usage is server-side (the local
+ * chat store holds blobs and metadata only, with no token-usage columns).
+ * The page uses these to say why they are missing. Every other tool is
+ * scanned on every host, so its state is measured, never fixed.
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
@@ -163,10 +165,9 @@ const MAX_COLLECTION_TIME_MS = 60_000;
 const MAX_RETAINED_SESSIONS = 10_000;
 
 /**
- * The sessions one published source keeps: inside the 31-day window, bounded,
- * and without a project path (a session's directory never reaches the page).
- * Local and remote sources keep the same shape, so Session stats covers every
- * host that reported usage.
+ * The sessions one published source keeps: inside the 31-day window, bounded, and without a
+ * project path (a session's directory never reaches the page). Local and remote sources keep the
+ * same shape, so Session stats covers every host that reported usage.
  */
 function retainedSessions(
   sessions: UsageWorkerResult['session'],
@@ -181,9 +182,10 @@ function retainedSessions(
 /**
  * The on-disk snapshot: the last published aggregate rows, served instantly after a restart while
  * the first collection runs. Hourly and session rows with project paths stripped (enforced on
- * load); a session row carries only its hashed key, never a raw id, a path or content.
+ * load); a session row carries only its published key, never a raw id, a path or content.
  * Best-effort: a missing or invalid file behaves like a first run.
- * 2: readers hash a session id at ingest, so a version 1 snapshot (raw ids) is never served.
+ * 2: readers key a session where its log was read, so a version 1 snapshot of raw ids is never
+ * served again.
  */
 const SNAPSHOT_VERSION = 2;
 const SNAPSHOT_FILE = 'analytics-activity-snapshot-v1.json';
@@ -220,8 +222,8 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
   if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
   for (const source of snap.sources as Array<Record<string, unknown>>) {
     if (!source || typeof source !== 'object') return false;
-    const provider = source.provider as string;
-    if (!['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'].includes(provider)) return false;
+    if (!['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'].includes(source.provider as string))
+      return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
     for (const result of source.data as Array<Record<string, unknown>>) {
@@ -739,16 +741,11 @@ export class AccountAnalyticsActivityService {
         const hourly = data.hourly
           .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
           .slice(0, 744);
-        if (hourly.length || data.eventCount === 0) {
-          existing.push({
-            ...data,
-            daily: [],
-            monthly: [],
-            hourly,
-            // A remote row's session key comes from the helper, hashed on that
-            // host; remote sessions count exactly like local ones.
-            session: retainedSessions(data.session, cutoff),
-          });
+        // Remote sessions merge like local ones: whole retained rows, paths stripped. A remote
+        // row's key was derived on the host that read it, so it counts exactly like a local one.
+        const session = retainedSessions(data.session, cutoff);
+        if (hourly.length || session.length || data.eventCount === 0) {
+          existing.push({ ...data, daily: [], monthly: [], hourly, session });
           merged.set(entry.tool, existing);
         }
       }
@@ -841,9 +838,10 @@ export class AccountAnalyticsActivityService {
         if (entry.host === 'mac' || entry.host === 'windows') entries.push({ ...entry });
     } else {
       // The remote scans never answered; the previous remote aggregates are
-      // still in the totals, and are marked.
+      // still in the totals, and are marked. Every scanned kind is listed,
+      // so Claude Code and Codex remotes are never silently absent.
       for (const host of ['mac', 'windows'] as const) {
-        for (const tool of ANALYTICS_REMOTE_TARGETS[host]) {
+        for (const tool of analyticsRemoteTargets(host)) {
           const old = previous.get(`${tool}\0${host}`);
           if (old)
             entries.push(
@@ -940,11 +938,13 @@ export class AccountAnalyticsActivityService {
         this.states.delete(oldest);
       }
     }
-    // Only a single-account selection has no activity: local CLI logs do not
-    // name an account. Every provider the route validates reaches the
-    // projection, which keeps the usage that provider served and says so when
-    // the range holds none of it.
-    if (query.refresh !== true && query.account !== 'all')
+    // The filter names the provider that served the usage (post-attribution),
+    // so every usage provider selects, not just the tools' own providers.
+    const activityFilters: readonly string[] = ['all', ...USAGE_PROVIDER_ORDER];
+    if (
+      query.refresh !== true &&
+      (query.account !== 'all' || !activityFilters.includes(query.provider))
+    )
       return {
         ...projectAccountAnalyticsActivity(
           [],
