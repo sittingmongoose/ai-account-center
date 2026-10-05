@@ -106,6 +106,7 @@ public static partial class Checks
         await SignInChangeChecks(report);
         await ClaudeOpenChecks(report);
         await PairingChecks(report);
+        await EnergyChecks(report);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
@@ -1113,5 +1114,93 @@ public static partial class Checks
         report.Checks["changed_process_confirmation_is_not_retried"] = staleRejected && calls == 2;
         var malformed = Proposal(); malformed.Token = null!;
         report.Checks["confirmation_target_and_shape_validated"] = !Proposal().IsValidFor("gmail") && !malformed.IsValidFor("party");
+    }
+
+    /// <summary>
+    /// N6 energy invariants (offline, loopback fixture, isolated store): a hidden background poll updates the model
+    /// and the tray tooltip but rebuilds nothing — the deferred visual pass runs exactly once when the panel opens;
+    /// a visible refresh rebuilds exactly once; 24 open/close cycles with a hidden poll each keep GDI/USER objects,
+    /// handles and managed memory bounded.
+    /// </summary>
+    private static async Task EnergyChecks(CheckReport report)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "aac-energy-check-" + Guid.NewGuid().ToString("N"));
+        var store = Path.Combine(folder, "connection.dpapi");
+        var real = Path.GetFullPath(SecureStore.StateDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var isolated = !Path.GetFullPath(folder).StartsWith(real, StringComparison.OrdinalIgnoreCase);
+        report.Checks["energy_checks_use_an_isolated_store"] = isolated;
+        if (!isolated) return;
+        MainWindow? window = null;
+        try
+        {
+            using var fixture = new PairingFixture();
+            Directory.CreateDirectory(folder);
+            SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-new" }, store);
+            window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            window.UseConnectionStoreForCheck(store);
+            // The 60 s timer tick's shape while the panel is closed: the sample lands, no visual pass runs.
+            window.ResetRenderPassesForCheck();
+            await window.Refresh(false);
+            var sampled = window.Dashboard;
+            report.Checks["hidden_poll_samples_without_a_visual_pass"] =
+                sampled is not null && window.RenderPassesForCheck == 0 && window.ContentPanel.Children.Count == 0 && !window.IsStale;
+            // Opening runs the deferred pass exactly once, and the list appears.
+            window.ShowPanel();
+            await Task.Delay(250);
+            report.Checks["open_renders_the_deferred_sample_once"] = window.RenderPassesForCheck == 1 && window.ContentPanel.Children.Count > 0;
+            // A visible refresh is one visual pass, not two.
+            window.ResetRenderPassesForCheck();
+            await window.Refresh(true);
+            report.Checks["visible_refresh_is_one_visual_pass"] = window.RenderPassesForCheck == 1;
+            // 24 open/close cycles, each with a hidden poll between (the real usage pattern): resources bounded.
+            void Collect() { GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); }
+            window.HidePopup();
+            await Task.Delay(600);
+            Collect();
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            var gdiBefore = GuiObjects(process.Handle, 0); var userBefore = GuiObjects(process.Handle, 1);
+            process.Refresh();
+            var handlesBefore = process.HandleCount; var memoryBefore = GC.GetTotalMemory(false);
+            for (var cycle = 0; cycle < 24; cycle++)
+            {
+                window.ApplyDashboardSample(sampled!);   // the hidden poll between opens (deferred)
+                window.ShowPanel();                      // the open: one deferred visual pass
+                await Task.Delay(30);
+                window.HidePopup();                      // the close
+            }
+            await Task.Delay(800); // the last open/close motions finish before the final collect
+            Collect();
+            process.Refresh();
+            var gdiAfter = GuiObjects(process.Handle, 0); var userAfter = GuiObjects(process.Handle, 1);
+            report.Measurements["cycles24_gdi_before"] = gdiBefore; report.Measurements["cycles24_gdi_after"] = gdiAfter;
+            report.Measurements["cycles24_user_before"] = userBefore; report.Measurements["cycles24_user_after"] = userAfter;
+            report.Measurements["cycles24_handles_before"] = handlesBefore; report.Measurements["cycles24_handles_after"] = process.HandleCount;
+            report.Measurements["cycles24_managed_mb_before"] = Math.Round(memoryBefore / 1048576.0, 1);
+            report.Measurements["cycles24_managed_mb_after"] = Math.Round(GC.GetTotalMemory(false) / 1048576.0, 1);
+            report.Checks["open_close_cycles_keep_gui_objects_handles_and_memory_bounded"] =
+                gdiAfter <= gdiBefore + 8 && userAfter <= userBefore + 8
+                && process.HandleCount <= handlesBefore + 64
+                && GC.GetTotalMemory(false) <= memoryBefore + 4L * 1024 * 1024;
+        }
+        catch (Exception error)
+        {
+            report.Checks["energy_checks_completed"] = false;
+            report.Notes["energy_checks"] = error.GetType().Name + ": " + error.Message;
+        }
+        finally
+        {
+            if (window is not null) { window.AllowClose = true; window.Close(); }
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetGuiResources(IntPtr process, uint flags);
+
+    /// <summary>The process's GDI (flags 0) or USER (flags 1) object count; -1 when this session cannot read it.</summary>
+    private static long GuiObjects(IntPtr process, uint flags)
+    {
+        var count = GetGuiResources(process, flags);
+        return count == 0 && System.Runtime.InteropServices.Marshal.GetLastWin32Error() != 0 ? -1 : count;
     }
 }

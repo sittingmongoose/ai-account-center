@@ -63,7 +63,12 @@ public sealed class TrayIcon : IDisposable
 
     internal static bool MenuFontIsInstrumentSans { get { EnsureFonts(); return menuFont?.FontFamily.Name == "Instrument Sans"; } }
 
-    public void SetTooltip(string text) => notify.Text = text.Length <= 127 ? text : text[..127];
+    public void SetTooltip(string text)
+    {
+        var next = text.Length <= 127 ? text : text[..127];
+        if (notify.Text == next) return; // an unchanged tooltip never reaches the notification area (N6)
+        notify.Text = next;
+    }
 
     private void BuildMenu() => Populate(menu, OpenRequested, DashboardRequested, RefreshRequested, SettingsRequested, QuitRequested);
 
@@ -76,6 +81,9 @@ public sealed class TrayIcon : IDisposable
 
     internal static void Populate(Forms.ContextMenuStrip menu, Action? open, Action? dashboard, Action? refresh, Action? settings, Action? quit)
     {
+        // A rebuild replaces every item: dispose the previous GDI+ bitmaps instead of leaving them to the finalizer,
+        // so repeated menu opens never grow GDI objects or native memory (N6).
+        foreach (Forms.ToolStripItem item in menu.Items) item.Image?.Dispose();
         menu.Items.Clear();
         EnsureFonts();
         menu.Renderer = new AtlasMenuRenderer(); menu.BackColor = ToDrawing("Card");

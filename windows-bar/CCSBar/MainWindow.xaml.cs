@@ -51,6 +51,17 @@ public partial class MainWindow : Window
     private int connectionGeneration;
     /// <summary>The windows drawn as "new reading pending" (F6), so the timer redraws only when one flips.</summary>
     private string pendingResets = "";
+    /// <summary>Set when a sample or a failure arrives while the panel is hidden: the visual pass (the list rebuild
+    /// and the status text) is deferred to the next open, so nothing re-renders while the tray is closed (N6). The
+    /// model, the tray tooltip and the timer interval still update the moment the sample lands.</summary>
+    private bool needsRender;
+    /// <summary>The failure card a hidden poll deferred while no sample had ever landed; the open flush draws it (N6).</summary>
+    private (string Title, string Message)? pendingEmpty;
+    /// <summary>Counts full list rebuilds. The energy checks prove a hidden poll rebuilds nothing and a visible
+    /// refresh rebuilds exactly once (N6).</summary>
+    private int renderPasses;
+    internal int RenderPassesForCheck => renderPasses;
+    internal void ResetRenderPassesForCheck() => renderPasses = 0;
     /// <summary>The Claude Open now running for an account, keyed by account id, as its row's calm secondary text.
     /// The entry is removed once the Open ends, so the row returns to its plan, platform and sample time.</summary>
     private readonly Dictionary<string, ClaudeOpenProgress> openProgress = new(StringComparer.Ordinal);
@@ -182,6 +193,15 @@ public partial class MainWindow : Window
         PositionPopup();
         if (!wasVisible)
         {
+            // A sample that arrived while hidden deferred its visual pass: render it now, before the open animation
+            // reads the meters, so the panel shows the latest reading immediately and the platter lands on open (N6).
+            if (needsRender)
+            {
+                needsRender = false;
+                if (dashboard is not null) RenderDashboard();
+                else if (pendingEmpty is { } empty) RenderEmpty(empty.Title, empty.Message);
+                UpdateStatus();
+            }
             Show(); PlayOpen();
             if (signInVisible && signInView is not null && !signInEntered) { signInEntered = true; signInView.PlayEntrance(true); }
             if (busy) SetRefreshing(true);
@@ -283,9 +303,11 @@ public partial class MainWindow : Window
     {
         if (busy || client is null) return;
         if (!force && DateTimeOffset.UtcNow - lastFailure < TimeSpan.FromMinutes(1)) return;
-        busy = true; SetRefreshing(true); DisableMutations();
+        busy = true; SetRefreshing(true);
         statusFlash = dashboard is null ? "Loading accounts" : "Refreshing usage";
-        UpdateStatus();
+        // A hidden poll leaves the tree alone: no mutation walk, no status text — the open flush covers both (N6).
+        if (IsVisible) { DisableMutations(); UpdateStatus(); }
+        else needsRender = true;
         var generation = connectionGeneration;
         var sampled = false;
         try
@@ -299,11 +321,18 @@ public partial class MainWindow : Window
             if (error is DeviceSignedOutException { IsDeviceCode: true } signedOut) { busy = false; SetRefreshing(false); SignedOutRemotely(signedOut); return; }
             lastFailure = DateTimeOffset.UtcNow;
             statusFlash = DisplayError(error);
-            if (dashboard is null) RenderEmpty("Usage is unavailable", "Check the dashboard connection in Settings, or try Refresh.");
+            // A failure while hidden defers its visual pass too; the stale flag still feeds the tray tooltip (N6).
+            if (!IsVisible)
+            {
+                if (dashboard is not null) staleSample = true;
+                else pendingEmpty = ("Usage is unavailable", "Check the dashboard connection in Settings, or try Refresh.");
+                needsRender = true;
+            }
+            else if (dashboard is null) RenderEmpty("Usage is unavailable", "Check the dashboard connection in Settings, or try Refresh.");
             else MarkStale();
         }
         catch (Exception) { /* The old connection's request, replaced by a verified Change while it ran. */ }
-        finally { FinishRequest(); }
+        finally { FinishRequest(render: false); }
         // A Change landed while this sample was in flight: read the new connection now.
         if (generation != connectionGeneration) { await Refresh(true); return; }
         if (sampled && client is { Paired: true })
@@ -315,22 +344,26 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Shows a sample. Used by Refresh and by the offline fixture renderer.</summary>
+    /// <summary>Shows a sample. Used by Refresh and by the offline fixture renderer. While the panel is hidden the
+    /// model, the timer interval and the tray tooltip update now, but the list rebuild and the status text are
+    /// deferred to the next open (N6: nothing re-renders while the tray is closed).</summary>
     public void ApplyDashboardSample(AccountDashboard sample)
     {
-        dashboard = sample;
+        dashboard = sample; pendingEmpty = null;
         timer.Interval = TimeSpan.FromSeconds(sample.Settings?.ValidatedInterval ?? 60);
         staleSample = false; lastFailure = DateTimeOffset.MinValue; statusFlash = null;
-        RenderDashboard();
-        UpdateStatus();
+        if (IsVisible) { RenderDashboard(); UpdateStatus(); }
+        else needsRender = true;
         SampleChanged?.Invoke();
     }
 
-    private void FinishRequest()
+    /// <summary>Ends a request: spinner off, status and tooltip refreshed. Switch and Action hand their sample to it
+    /// to render; Refresh renders in its own paths, so it passes render: false and the list is never rebuilt twice (N6).</summary>
+    private void FinishRequest(bool render = true)
     {
         busy = false; SetRefreshing(false);
-        if (dashboard is not null) RenderDashboard();
-        UpdateStatus();
+        if (render && dashboard is not null) RenderDashboard();
+        if (IsVisible) UpdateStatus();
         SampleChanged?.Invoke();
     }
 
@@ -383,6 +416,7 @@ public partial class MainWindow : Window
     private void RenderDashboard()
     {
         if (dashboard is null) return;
+        renderPasses++;
         pendingResets = PendingResets(dashboard);
         var offset = ContentScroll.VerticalOffset;
         foreach (var meter in meters.Values) Ui.Detach(meter);
@@ -419,6 +453,9 @@ public partial class MainWindow : Window
     internal void ReevaluateResets()
     {
         if (dashboard is null || PendingResets(dashboard) == pendingResets) return;
+        // While hidden, defer the flip to the next open (the rebuild recomputes pendingResets) instead of
+        // re-rendering a closed panel on the tick (N6).
+        if (!IsVisible) { needsRender = true; return; }
         RenderDashboard();
         SampleChanged?.Invoke();
     }
