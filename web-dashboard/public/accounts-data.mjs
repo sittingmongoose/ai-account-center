@@ -26,19 +26,6 @@ function compactResetLabel(value) {
 }
 const number = value => new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
 export function usageView(window = {}, percentageOnly = false, includeRemaining = true) {
-  // The server marks readings sampled before their reset with resetPassed: they are history,
-  // never the current state. Like the meter views, show the reset instead of the stale percent.
-  if (window.resetPassed === true && window.unlimited !== true
-    && (finite(window.usedPercent) || percent(window.remainingPercent))) {
-    return {
-      label: typeof window.label === 'string' ? window.label : 'Usage',
-      amount: 'New reading pending',
-      percent: 0, hasPercent: false,
-      reset: timeLabel(window.resetAt, 'Reset at'),
-      resetCompact: compactResetLabel(window.resetAt),
-      expiration: timeLabel(window.expiresAt, 'Expires'), meta: '',
-    };
-  }
   const p = finite(window.usedPercent) ? window.usedPercent : percent(window.remainingPercent) ? 100 - window.remainingPercent : null;
   const unit = typeof window.unit === 'string' && window.unit ? ` ${window.unit}` : '';
   const parts = [];

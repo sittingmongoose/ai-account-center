@@ -714,7 +714,7 @@ function policies(data, home, ag) {
     provider: 'codex', name: 'Codex', known: codexKnown, enabled: auto?.enabled === true,
     toggleEnabled: LIVE.codexPolicy && codexKnown && auto?.activationInProgress !== true,
     threshold: codexUsed, min: codexKnown ? Math.min(50, codexUsed) : 50, max: 99, stepEnabled: LIVE.codexPolicy && codexKnown,
-    wait: false, sub: codexSub,
+    wait: false, sub: codexSub, warn: auto?.usingCredits === true,
     tip: codex?.auto?.message || text(auto?.message) || '',
   }];
   rows.push({

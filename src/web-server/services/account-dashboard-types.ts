@@ -204,6 +204,8 @@ export interface CodexAutoSwitchDashboardStatus {
   lastSwitchedAt?: string;
   /** Profile the monitor chose but could not switch to yet. Present only for waiting_idle. */
   candidate?: string;
+  /** True when the blocked message warns about paid credits being spent. */
+  usingCredits?: boolean;
 }
 
 /** The running server: package version and the build's commit. No paths or hosts. */

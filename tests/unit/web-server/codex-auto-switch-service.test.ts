@@ -788,7 +788,11 @@ describe('native Codex automatic switching', () => {
       },
     });
     await h.service.runCycle();
-    expect(h.service.getStatus()).toMatchObject({ outcome: 'waiting_idle', candidate: 'beta' });
+    expect(h.service.getStatus()).toMatchObject({
+      outcome: 'waiting_idle',
+      candidate: 'beta',
+      usingCredits: true,
+    });
     expect(h.service.getStatus().message).toContain('drawing on its paid credits (42 left)');
   });
 
@@ -801,10 +805,130 @@ describe('native Codex automatic switching', () => {
       ],
     });
     await h.service.runCycle();
-    expect(h.service.getStatus()).toMatchObject({ outcome: 'no_candidate' });
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'no_candidate', usingCredits: true });
     expect(h.service.getStatus().message).toContain('No other account has plan usage left');
-    expect(h.service.getStatus().message).toContain('paid credits (7 left)');
+    expect(h.service.getStatus().message).toContain('would draw on its paid credits (7 left)');
     expect(h.activate).not.toHaveBeenCalled();
+  });
+
+  it('does not claim credits when the plan is merely past the switch point', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 97, { balanceWindows: creditsBalance(42) }),
+        row('beta', 20),
+      ],
+      activate: async () => {
+        throw new CodexActivationError('busy', 'busy');
+      },
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'waiting_idle', candidate: 'beta' });
+    expect(h.service.getStatus().message).not.toContain('paid credits');
+    expect(h.service.getStatus().usingCredits).toBeUndefined();
+  });
+
+  it('blames freshness, not exhaustion, when other accounts lack usable readings', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, { balanceWindows: creditsBalance(7) }),
+        row('beta', 100, { fetchedAt: new Date(NOW - 700_000).toISOString() }),
+      ],
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'no_candidate' });
+    expect(h.service.getStatus().message).toContain(
+      'No other account has a fresh reading with plan usage left'
+    );
+  });
+
+  it('rounds the credits balance and words unlimited extra usage', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, { balanceWindows: creditsBalance(41.8760000001) }),
+        row('beta', 20),
+      ],
+      activate: async () => {
+        throw new CodexActivationError('busy', 'busy');
+      },
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus().message).toContain('paid credits (41.88 left)');
+    const unlimited = creditsBalance(null).map((window) => ({ ...window, unlimited: true }));
+    const h2 = harness({
+      getRows: async () => [row('alpha', 100, { balanceWindows: unlimited }), row('beta', 20)],
+      activate: async () => {
+        throw new CodexActivationError('busy', 'busy');
+      },
+    });
+    await h2.service.runCycle();
+    expect(h2.service.getStatus().message).toContain('unlimited extra usage');
+    expect(h2.service.getStatus().message).not.toContain('left)');
+  });
+
+  it('logs burning conclusions at warn and records the activation error code', async () => {
+    const entries: { level: string; context: Record<string, unknown> }[] = [];
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, { balanceWindows: creditsBalance(42) }),
+        row('beta', 20),
+      ],
+      activate: async () => {
+        throw new CodexActivationError('busy', 'busy');
+      },
+      log: (level, _event, _message, context) => {
+        entries.push({ level, context });
+      },
+    });
+    await h.service.runCycle();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].level).toBe('warn');
+    expect(entries[0].context).toMatchObject({ creditsBurning: true, creditsBalance: 42 });
+    const h2 = harness({
+      activate: async () => {
+        throw new CodexActivationError('restart_failed', 'PRIVATE LAUNCH DETAIL');
+      },
+      log: (level, _event, _message, context) => {
+        entries.push({ level, context });
+      },
+    });
+    await h2.service.runCycle();
+    expect(entries[1].level).toBe('warn');
+    expect(entries[1].context).toMatchObject({ outcome: 'error', code: 'restart_failed' });
+    expect(JSON.stringify(entries)).not.toContain('PRIVATE LAUNCH DETAIL');
+  });
+
+  it('keeps the last reason visible while the next quota fetch is in flight', async () => {
+    let release!: (rows: BarSummaryRow[]) => void;
+    let calls = 0;
+    const h = harness({
+      getRows: () => {
+        calls++;
+        return new Promise<BarSummaryRow[]>((resolve) => {
+          release = resolve;
+        });
+      },
+      activate: async () => {
+        throw new CodexActivationError('busy', 'busy');
+      },
+    });
+    const rows = () => [row('alpha', 100, { balanceWindows: creditsBalance(42) }), row('beta', 20)];
+    const first = h.service.runCycle();
+    for (let i = 0; i < 100 && calls < 1; i++) await new Promise((r) => setTimeout(r, 0));
+    release(rows());
+    await first;
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'waiting_idle', candidate: 'beta' });
+    const second = h.service.runCycle();
+    for (let i = 0; i < 100 && calls < 2; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toBe(2);
+    expect(h.service.getStatus()).toMatchObject({
+      outcome: 'waiting_idle',
+      candidate: 'beta',
+      usingCredits: true,
+    });
+    expect(h.service.getStatus().message).toContain('paid credits (42 left)');
+    release(rows());
+    await second;
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'waiting_idle', candidate: 'beta' });
   });
 
   it('never claims credits without an enabled balance on the fresh row', async () => {

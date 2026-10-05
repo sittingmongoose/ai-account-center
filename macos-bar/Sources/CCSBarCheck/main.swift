@@ -826,6 +826,52 @@ private func checkProviderGrouping() throws {
     "Provider status must describe the selected sample rather than claim every account is online")
 }
 
+private func checkCodexAutoStatusText() throws {
+  let object = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  let prototype = (object["accounts"] as! [[String: Any]])[0]
+  func account(_ id: String, _ email: String, _ profile: String) -> [String: Any] {
+    var value = prototype
+    value["id"] = id
+    value["provider"] = "codex"
+    value["email"] = email
+    value["label"] = email
+    var caps = value["capabilities"] as! [String: Any]
+    caps["codexProfile"] = profile
+    value["capabilities"] = caps
+    return value
+  }
+  func status(_ outcome: String, _ message: String, enabled: Bool = true, candidate: String? = nil) -> [String: Any] {
+    var value: [String: Any] = [
+      "enabled": enabled, "thresholdPercent": 5, "pollIntervalSeconds": 60,
+      "outcome": outcome, "message": message, "activationInProgress": false,
+    ]
+    if let candidate { value["candidate"] = candidate }
+    return value
+  }
+  func text(auto: [String: Any], accounts: [[String: Any]]) throws -> String? {
+    var payload = object
+    payload["accounts"] = accounts
+    payload["codexAutoSwitch"] = auto
+    let decoded = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: payload))
+    return AccountFormatting.codexAutoStatusText(status: decoded.codexAutoSwitch, accounts: decoded.accounts)
+  }
+  let accounts = [account("codex:a", "a@example.test", "a"), account("codex:b", "b@example.test", "b")]
+  let waiting = try text(auto: status("waiting_idle", "Waiting.", candidate: "b"), accounts: accounts)
+  try expect(waiting == "Waiting. Will switch to b@example.test when Codex goes idle. Activate b@example.test to switch now.",
+    "A blocked Codex switch must name the vetted candidate account, resolved to its identity")
+  let unknown = try text(auto: status("waiting_idle", "Waiting.", candidate: "ghost"), accounts: accounts)
+  try expect(unknown == "Waiting. Will switch to ghost when Codex goes idle. Activate ghost to switch now.",
+    "An unknown candidate profile must fall back to the profile name, never vanish")
+  let plain = try text(auto: status("no_quota", "The reading is out of date."), accounts: accounts)
+  try expect(plain == "The reading is out of date.",
+    "A blocked switch without a candidate must show the plain reason")
+  let hiddenHealthy = try text(auto: status("healthy", "Healthy."), accounts: accounts)
+  let shownWaiting = try text(auto: status("waiting_idle", "Waiting.", candidate: "b"), accounts: accounts)
+  let hiddenDisabled = try text(auto: status("waiting_idle", "Waiting.", enabled: false, candidate: "b"), accounts: accounts)
+  try expect(hiddenHealthy == nil && shownWaiting != nil && hiddenDisabled == nil,
+    "The stuck-switch line must hide for healthy or disabled switching")
+}
+
 private func checkVisibleUsageWindows() throws {
   let original = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
   let prototype = (original["accounts"] as! [[String: Any]])[0]
@@ -3212,6 +3258,8 @@ do {
   print("PASS retained optional-window Cached labels and original sample timestamps")
   try checkProviderGrouping()
   print("PASS provider grouping preserves accounts, actual active quota, and all detail windows")
+  try checkCodexAutoStatusText()
+  print("PASS stuck Codex switch line names the vetted candidate and hides when healthy")
   try checkVisibleUsageWindows()
   print("PASS provider-scoped visible windows, real zero quota, reset packs, and distinct Go accounts")
   try await checkPrivateConnectionFile()

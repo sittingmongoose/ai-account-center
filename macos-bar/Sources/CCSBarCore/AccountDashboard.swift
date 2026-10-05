@@ -128,6 +128,8 @@ public struct CodexAutoSwitch: Decodable, Sendable {
   public let lastSwitchedAt: String?
   /// Profile the monitor chose but could not switch to yet. Present only for waiting_idle.
   public let candidate: String?
+  /// True when the blocked message warns about paid credits being spent.
+  public let usingCredits: Bool?
 }
 
 public struct DashboardAccount: Decodable, Identifiable, Sendable {
@@ -249,5 +251,17 @@ public enum AccountFormatting {
     let formatter = DateFormatter()
     formatter.dateFormat = "MMM d, yyyy h:mm a"
     return "Expires \(formatter.string(from: date))"
+  }
+
+  private static let blockedAutoSwitch: Set<String> = ["waiting_idle", "no_quota", "no_candidate", "error"]
+
+  /// Why Codex automatic switching is stuck, in plain words — nil unless the switch is
+  /// enabled and blocked, so healthy switching adds no line. waiting_idle names the vetted
+  /// candidate the monitor will switch to, resolved to the account identity when known.
+  public static func codexAutoStatusText(status: CodexAutoSwitch?, accounts: [DashboardAccount]) -> String? {
+    guard let status, status.enabled, blockedAutoSwitch.contains(status.outcome) else { return nil }
+    guard status.outcome == "waiting_idle", let candidate = status.candidate else { return status.message }
+    let identity = accounts.first(where: { $0.provider == "codex" && $0.capabilities.codexProfile == candidate })?.identity ?? candidate
+    return "\(status.message) Will switch to \(identity) when Codex goes idle. Activate \(identity) to switch now."
   }
 }

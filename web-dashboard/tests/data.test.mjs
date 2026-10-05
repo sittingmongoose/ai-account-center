@@ -281,14 +281,3 @@ test('cache provenance neither fabricates dates nor replaces an unknown usage va
   assert.equal(live.meta, '');
   assert.equal(usageView({ remaining: 0, unit: 'credits', enabled: false, status: 'cached' }).meta, 'Disabled · Cached');
 });
-test('a reset-passed percent reads as pending, never as live usage', () => {
-  const view = usageView({ label: '5-hour', usedPercent: 100, resetAt: '2026-10-01T10:00:00Z', resetPassed: true });
-  assert.equal(view.hasPercent, false);
-  assert.equal(view.percent, 0);
-  assert.equal(view.amount, 'New reading pending');
-  assert.match(view.reset, /^Reset at /);
-});
-test('live percents and amount windows ignore the reset-passed mark', () => {
-  assert.equal(usageView({ usedPercent: 100 }).amount, '100% used');
-  assert.match(usageView({ used: 4, limit: 10, resetPassed: true }).amount, /4 \/ 10 used/);
-});

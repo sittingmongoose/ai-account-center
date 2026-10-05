@@ -321,6 +321,8 @@ public sealed class AutoSwitchStatus
     public string? LastSwitchedAt { get; set; }
     /// <summary>Profile the monitor chose but could not switch to yet. Present only for waiting_idle.</summary>
     public string? Candidate { get; set; }
+    /// <summary>True when the blocked message warns about paid credits being spent.</summary>
+    public bool UsingCredits { get; set; }
 }
 
 public static class Formatting

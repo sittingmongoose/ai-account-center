@@ -1027,6 +1027,23 @@ test('policies: Codex blocked switch says why on the row and names the candidate
   assert.match(codex.sub, /Waiting for Codex to finish active work/);
   assert.match(codex.sub, /Will switch to two@example\.test when Codex goes idle\./);
   assert.match(codex.sub, /Press Activate on two@example\.test to switch now\./);
+  assert.equal(codex.warn, false);
+  const burning = accountsViewModel(
+    data([account(), two], {
+      codexAutoSwitch: {
+        enabled: true,
+        thresholdPercent: 5,
+        pollIntervalSeconds: 60,
+        outcome: 'waiting_idle',
+        message: 'Waiting while paid credits burn.',
+        activationInProgress: false,
+        candidate: 'two',
+        usingCredits: true,
+      },
+    }),
+    { now }
+  ).policies.find((p) => p.provider === 'codex');
+  assert.equal(burning.warn, true);
 });
 
 test('policies: Codex healthy switch adds no sub-line', () => {

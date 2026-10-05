@@ -1310,7 +1310,7 @@ public partial class MainWindow : Window
     {
         var text = Formatting.CodexAutoStatusText(dashboard?.CodexAutoSwitch, dashboard?.Accounts);
         if (text is null) return null;
-        var line = Ui.Text(text, 12, "Ink3", wrap: true);
+        var line = Ui.Text(text, 12, dashboard?.CodexAutoSwitch?.UsingCredits == true ? "WarnText" : "Ink3", wrap: true);
         line.Margin = new Thickness(36, 2, 10, 0);
         return line;
     }
