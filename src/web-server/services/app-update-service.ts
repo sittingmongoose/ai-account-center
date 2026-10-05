@@ -126,9 +126,13 @@ const SSH_SYNC_OPTIONS = [
 ];
 const MAC_EXTRACT =
   '/bin/mkdir -p "$HOME/.ccs/app-updates" && /usr/bin/chmod 700 "$HOME/.ccs/app-updates" && /usr/bin/tar -x -f - -C "$HOME/.ccs/app-updates"';
-const WINDOWS_EXTRACT =
+// The Windows sshd runs cmd.exe, so the extract script must travel as an
+// encoded powershell command; tar.exe reads the archive from the ssh stdin.
+const WINDOWS_EXTRACT = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
   "$ErrorActionPreference='Stop'; $d=[IO.Path]::Combine($HOME,'.ccs','app-updates'); " +
-  'New-Item -ItemType Directory -Force -Path $d | Out-Null; tar.exe -x -f - -C $d; exit $LASTEXITCODE';
+    'New-Item -ItemType Directory -Force -Path $d | Out-Null; tar.exe -x -f - -C $d; exit $LASTEXITCODE',
+  'utf16le'
+).toString('base64')}`;
 
 /** Parses "<sha256>  <name-or-path>" lines; keyed by basename, hex lowercased. */
 export function parseDeployedChecksums(output: string): Record<string, string> {
