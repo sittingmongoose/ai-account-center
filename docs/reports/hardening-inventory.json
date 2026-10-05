@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1134,
-    "filesAffected": 114,
+    "totalOccurrences": 1135,
+    "filesAffected": 115,
     "hotpathOccurrences": 504,
     "hotpathFilesAffected": 64,
     "topHotpathFiles": [
@@ -602,8 +602,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 36,
-      "totalSourceFiles": 392,
-      "coverageRatio": 0.0918,
+      "totalSourceFiles": 393,
+      "coverageRatio": 0.0916,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -640,7 +640,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 35,
+          "count": 36,
           "withLogger": 0
         },
         {

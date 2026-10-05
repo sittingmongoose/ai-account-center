@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "THIRD_PARTY.md",
-      "sha256": "aae01f928c663bc07ce0749ed715e15779e176de32915901aed1e00203c36605"
+      "sha256": "51f68d1f2c39a0d43e09c0686610d81976957cf19d0c443f0588f87281e3baaa"
     },
     {
       "path": "auth_platforms.py",
@@ -95,7 +95,7 @@
     },
     {
       "path": "resident_main.py",
-      "sha256": "b6282bd5068a43efd7956744d6c31d41f1987708559fa183b15a00029cb1cd07"
+      "sha256": "f26cce42b2c903dfdec229c75651f4894d6ce904f92ac8219e7d4b48e956af65"
     },
     {
       "path": "runtime_continuity.py",

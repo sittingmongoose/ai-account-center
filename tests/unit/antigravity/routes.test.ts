@@ -385,6 +385,50 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
     expect(scrubbed.body.nativeUpdatePaused).toEqual({ installedVersion: null });
   });
 
+  test('inventory publishes a runtime service problem but scrubs hostile fields', async () => {
+    const value = inventory();
+    value.runtimeServiceProblem = {
+      reason: 'missing-python-module',
+      module: 'pyte',
+      python: '3.14',
+      builtFor: '3.13',
+      exitStatus: null,
+      privatePath: PRIVATE,
+    } as unknown as NonNullable<typeof value.runtimeServiceProblem>;
+    deps.getInventory = async () => value;
+    const response = await request('/profiles');
+    expect(response.status).toBe(200);
+    expect(response.body.runtimeServiceProblem).toEqual({
+      reason: 'missing-python-module',
+      module: 'pyte',
+      python: '3.14',
+      builtFor: '3.13',
+      exitStatus: null,
+    });
+    expect(JSON.stringify(response.body)).not.toContain(PRIVATE);
+    const hostile = inventory();
+    hostile.runtimeServiceProblem = {
+      reason: 'service-failed',
+      module: 'pyte; id',
+      python: '3.14\n',
+      builtFor: null,
+      exitStatus: 999,
+    };
+    deps.getInventory = async () => hostile;
+    const scrubbed = await request('/profiles');
+    expect(scrubbed.body.runtimeServiceProblem).toEqual({
+      reason: 'service-failed',
+      module: null,
+      python: null,
+      builtFor: null,
+      exitStatus: null,
+    });
+    const unknown = inventory();
+    unknown.runtimeServiceProblem = { reason: 'not-running' } as never;
+    deps.getInventory = async () => unknown;
+    expect((await request('/profiles')).body).not.toHaveProperty('runtimeServiceProblem');
+  });
+
   for (const refresh of [undefined, 'false', 'true']) {
     test(`quotas pass only explicit refresh=${refresh ?? 'default false'} to the dependency`, async () => {
       const response = await request(

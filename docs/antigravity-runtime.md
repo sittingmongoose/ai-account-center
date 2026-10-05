@@ -21,8 +21,12 @@ versioned, private bundle under
 `~/.local/share/ai-account-center/antigravity-runtime/bundles/`.
 There are no experiment-directory dependencies in installed source.
 
-The parser requirements are `pyte==0.8.2` and `wcwidth==0.9.1`, installed into
-that bundle's virtual environment using the packaged wheel hashes. The runtime
+The parser requirements are `pyte==0.8.2` and `wcwidth==0.9.1`, installed with
+the packaged wheel hashes into the bundle's own `parser/` directory. pyte is pure
+Python and wcwidth is a CPython stable-ABI (`abi3`, 3.10+) wheel, so that
+directory does not depend on the system Python minor version and survives an
+Ubuntu release upgrade of Python. The bundle's private
+virtual environment supplies only the launcher and helper interpreter. The runtime
 requires Ubuntu, Python 3.9+, a real foreground terminal and the native executable
 version/pin supported by its reviewed release. The system interpreter also needs
 Ubuntu's [python3-dbus package](https://packages.ubuntu.com/jammy/python3-dbus)
@@ -80,6 +84,39 @@ actual opened conversation. It never manufactures a conversation from a recent
 summary or replays a prompt. Unknown flags and native version/help/update/login
 commands pass through to the official executable. An official update invalidates
 the old native pin; ordinary native controls continue to work.
+
+## When the runtime service fails
+
+`ai-account-center antigravity status` and the dashboard name the cause when the
+service is not running. A read-only check
+(`scripts/antigravity/runtime_health.py`) runs the service interpreter,
+`/usr/bin/python3 -I -B`, against the installed bundle and reports, for example,
+"Runtime service failed: missing Python module pyte (system Python is 3.14; the
+runtime bundle was built for 3.13)". It writes nothing and reads no account data.
+
+Bundles built before the `parser/` directory kept the parser in the virtual
+environment's `lib/pythonX.Y/site-packages`. A release upgrade that replaces the
+system Python leaves that path behind, and the service then cannot start. Do not
+start the service again or edit the bundle. Rebuild it from the packaged sources:
+
+```bash
+python3 -I scripts/antigravity/rebuild_bundle.py --plan
+python3 -I scripts/antigravity/rebuild_bundle.py --apply
+```
+
+The rebuild treats a bundle whose parser no longer loads as stale even when the
+native CLI is unchanged. It builds a new bundle with the version-neutral parser,
+repoints the launcher, unit and descriptor, starts the service and restores the
+previous owned bytes if the service does not answer. Only the runtime service is
+restarted: the dashboard asks the service socket on every check, so it picks up
+the rebuilt runtime without a dashboard restart. The pin-named descriptor
+backup of an earlier generation is kept; this generation's backup is stored next
+to it under a content-addressed name. If the same packaged sources would rebuild
+the same failure, `--plan` refuses with `runtime-parser-unusable`. A parser check
+that cannot run refuses with `runtime-parser-check-failed`; it is never reported as
+current. After a failed cutover, `--recover-rebuild` removes the incomplete bundle
+and `--plan`/`--apply` can be retried: the rollback restores each owned file's bytes,
+mode and timestamps through a new inode, and both accept that restored state.
 
 ## Manual and automatic control
 

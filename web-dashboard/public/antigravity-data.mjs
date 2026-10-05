@@ -15,6 +15,22 @@ export function validAntigravityAuto(status) {
     && (status.requestedPoolId === null || publicId(status.requestedPoolId))
     && outcomes.has(status.outcome) && typeof status.activationInProgress === 'boolean';
 }
+const moduleName = value => typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_.]{0,63}$/.test(value);
+const minor = value => typeof value === 'string' && /^\d{1,2}\.\d{1,3}$/.test(value);
+/** Why the Ubuntu runtime service is not running (server read-only check), in plain words; null when unknown. */
+export function antigravityServiceProblem(inventory) {
+  const problem = inventory?.runtimeServiceProblem;
+  if (!problem || typeof problem !== 'object') return null;
+  const name = moduleName(problem.module) ? problem.module : 'unknown';
+  const moved = minor(problem.python) && minor(problem.builtFor) && problem.python !== problem.builtFor
+    ? ` (Python ${problem.python}; runtime built for ${problem.builtFor})` : '';
+  const rebuild = '; switching is off until the runtime bundle is rebuilt';
+  if (problem.reason === 'missing-python-module') return `Runtime service failed: missing Python module ${name}${moved}${rebuild}`;
+  if (problem.reason === 'parser-mismatch') return `Runtime service failed: Python module ${name} is not the pinned version${moved}${rebuild}`;
+  if (problem.reason === 'parser-import-failed') return `Runtime service failed: Python module ${name} does not load${moved}${rebuild}`;
+  if (problem.reason === 'service-failed') return `Runtime service failed${range(problem.exitStatus, 1, 255) ? ` (exit status ${problem.exitStatus})` : ''}; switching is off until its cause is fixed`;
+  return null;
+}
 function boundProfiles(data, inventory) {
   if (inventory?.schemaVersion !== 1 || inventory.hostId !== 'ubuntu' || !Array.isArray(inventory.profiles) || inventory.profiles.length > 16) return [];
   const counts = new Map();
@@ -112,6 +128,7 @@ export function antigravityView(data, inventory, autoStatus, now = Date.now()) {
     antigravityAutoMessage: status?.message || 'Ubuntu account controls unavailable until the native runtime is verified.',
     antigravityAutoSetting: known ? `${status.thresholdUsedPercent}% used · ${status.pollIntervalSeconds}s · Ubuntu` : 'Automatic switching status unavailable',
     antigravityUpdatePaused: updatePaused,
+    antigravityServiceProblem: antigravityServiceProblem(inventory),
   };
 }
 export function antigravitySettingsPatch(view, action, value) {

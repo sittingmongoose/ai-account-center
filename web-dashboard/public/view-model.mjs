@@ -875,7 +875,8 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
       activateKind: 'antigravity-activate',
       activateHint: nativeRow?.canActivate
         ? `Activate ${text(account.email)} on Ubuntu; running programs are listed for review first`
-        : 'Ubuntu activation needs a verified login and runtime',
+        : native.antigravityServiceProblem ||
+          'Ubuntu activation needs a verified login and runtime',
       canMac: false,
       canWindows: false,
       amountsLine: '',
@@ -907,9 +908,16 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
       run(rows.length, true),
       run(` ${rows.length === 1 ? 'account' : 'accounts'}`),
     ],
-    foot: native.antigravityUpdatePaused
-      ? { shown: true, warn: true, runs: [run(native.antigravityUpdatePaused)], when: '' }
-      : noFoot(),
+    // A runtime service that cannot start outranks a paused update: switching is off either way.
+    foot:
+      native.antigravityServiceProblem || native.antigravityUpdatePaused
+        ? {
+            shown: true,
+            warn: true,
+            runs: [run(native.antigravityServiceProblem || native.antigravityUpdatePaused)],
+            when: '',
+          }
+        : noFoot(),
     activeId: activeRow?.id || '',
     activeLabel: activeRow?.email || '',
     empty: 'No Antigravity accounts are reported yet.',
