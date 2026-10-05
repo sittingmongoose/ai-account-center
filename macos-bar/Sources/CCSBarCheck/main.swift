@@ -2245,6 +2245,47 @@ private func checkMenuBarSelection() throws {
   try expect(MenuBarReading.valueHelp(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")
     == "Whether the menu bar shows Used or Remaining for \(claudeShown.accountName).",
     "The Value hover tag must name the picked Claude account exactly as the Show preview does")
+  // Fix 2: the real-world Codex shape — 3 profiles in registry order with short labels
+  // and full emails, the first one (gmail) active — built through the same projection
+  // the server uses (label = profile name, email = profile email, isActive = live login).
+  func realCodex(_ id: String, _ label: String, _ email: String, active: Bool) -> [String: Any] {
+    var value = account(id, "codex", email: email, windows: [
+      window("five_hour", "5h", ["usedPercent": 40]),
+      window("seven_day", "week", ["usedPercent": 10]),
+    ], active: active)
+    value["label"] = label
+    return value
+  }
+  func realShape(activeCodex: String) throws -> AccountDashboard {
+    var object = original
+    object["accounts"] = [
+      realCodex("codex:gmail", "gmail", "gmail-user@example.invalid", active: activeCodex == "codex:gmail"),
+      realCodex("codex:party", "party", "party-user@example.invalid", active: activeCodex == "codex:party"),
+      realCodex("codex:gio", "gio", "gio-user@example.invalid", active: activeCodex == "codex:gio"),
+    ]
+    return try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let live = try realShape(activeCodex: "codex:gmail")
+  guard let liveReading = MenuBarReading.make(dashboard: live, provider: "codex", mode: .used) else {
+    throw CheckFailure(description: "The real-shaped fixture must produce a menu-bar reading")
+  }
+  try expect(liveReading.accountName == "gmail-user@example.invalid"
+    && liveReading.detail == "Codex · gmail-user@example.invalid · 5-hour used",
+    "Show must display the full email of the ACTIVE Codex account, not a short label")
+  try expect(MenuBarReading.valueHelp(dashboard: live, provider: "codex", mode: .used)
+    == "Whether the menu bar shows Used or Remaining for \(liveReading.accountName).",
+    "Value must name exactly the active account Show displays (gmail, not party)")
+  for (activeID, email) in [("codex:party", "party-user@example.invalid"), ("codex:gio", "gio-user@example.invalid")] {
+    let switched = try realShape(activeCodex: activeID)
+    guard let switchedReading = MenuBarReading.make(dashboard: switched, provider: "codex", mode: .used) else {
+      throw CheckFailure(description: "The switched fixture must produce a menu-bar reading")
+    }
+    try expect(switchedReading.accountName == email
+      && switchedReading.detail.contains(email)
+      && MenuBarReading.valueHelp(dashboard: switched, provider: "codex", mode: .used)
+      == "Whether the menu bar shows Used or Remaining for \(email).",
+      "Show and Value must follow the newly active Codex account together (\(email))")
+  }
   try expect(MenuBarReading.valueHelp(dashboard: first, provider: MenuBarReading.nothingProvider, mode: .used)
     == MenuBarReading.valueHelpHidden
     && MenuBarReading.valueHelp(dashboard: nil, provider: "codex", mode: .used) == MenuBarReading.valueHelpHidden
