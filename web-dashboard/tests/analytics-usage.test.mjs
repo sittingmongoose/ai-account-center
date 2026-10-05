@@ -129,7 +129,6 @@ test('the provider filter narrows every usage block to that CLI', () => {
   const c = totals(codexRows);
   assert.equal(kpi(view, 'cost').num, c.estimatedCostUsd);
   assert.deepEqual(view.cbm.rows.map(r => r.name), ['gpt-5']);
-  assert.deepEqual(view.sessions.rows.map(r => r.provider), ['codex']);
   assert.equal(view.sessions.stats.find(s => s.key === 'sess').num, 2);
   assert.equal(view.daily.showClaude, false);
 });
@@ -150,11 +149,11 @@ test('session stats derive per-session figures and stay unavailable without coun
   const view = usageView(payload(), state(), { now });
   assert.equal(view.sessions.stats.find(s => s.key === 'sess').text, '5');
   assert.equal(view.sessions.stats.find(s => s.key === 'evs').text, '8');
+  assert.equal(view.sessions.stats.find(s => s.key === 'avg').text, U.money(totals(hours).estimatedCostUsd / 5));
   const p = payload();
   p.activity.providers[1] = { ...p.activity.providers[1], sessionCount: null };
   const missing = usageView(p, state(), { now });
   assert.equal(missing.sessions.stats.find(s => s.key === 'sess').has, false);
-  assert.equal(missing.sessions.rows.find(r => r.provider === 'codex').sessions, 'Unavailable');
 });
 
 test('the trend has round ticks, an unread tail, a crosshair lookup and morphable paths', () => {
@@ -195,7 +194,7 @@ test("Claude Code's <synthetic> placeholder is excluded silently: never listed, 
   assert.match(usageView(q, state(), { now }).cbm.foot, /gpt-5 is left out/);
 });
 
-test('recent sessions list the sample most recent first, without paths, with a count foot', () => {
+test('the session table lists the sample most recent first: five in Session stats, ten more in Recent sessions', () => {
   // the server's AccountAnalyticsSessionRow shape: provider, lastActivity, string models, token totals
   const row = (key, provider, lastMs, models, tok, est, fallback = 0) => ({
     key, provider, lastActivity: new Date(lastMs).toISOString(), models, target: provider,
@@ -215,18 +214,35 @@ test('recent sessions list the sample most recent first, without paths, with a c
   assert.equal(view.sessions.recent[1].cost, 'Not logged');
   assert.equal(view.sessions.recent[2].models, 'claude-haiku-4-5, claude-opus-5-5');
   assert.match(view.sessions.recent[0].tip, /gpt-5 · 12,000 tokens/);
-  assert.ok(!JSON.stringify(view.sessions.recent).includes('/home/'), 'no paths leak into the list');
+  assert.ok(!JSON.stringify([view.sessions.recent, view.sessions.recentMore]).includes('/home/'), 'no paths leak into the list');
   assert.equal(view.sessions.foot, '');
+  // fewer sessions than the Session stats table holds: the continuation stays empty and says where it comes from
+  assert.deepEqual(view.sessions.recentMore, []);
+  assert.equal(view.sessions.moreSub, 'Continued from Session stats');
   // rows in any other shape are dropped, never guessed
   const bad = usageView(payload({}, { sessions: { total: 5, sample: [{ key: 'x', tool: 'codex', last: now, tokens: 5, models: [{ model: 'gpt-5' }] }], truncated: false } }), state(), { now });
   assert.deepEqual(bad.sessions.recent, []);
+  assert.deepEqual(bad.sessions.recentMore, []);
   // a picked provider narrows the list to its sessions
   const codex = usageView(p, state({ prov: 'codex' }), { now });
   assert.deepEqual(codex.sessions.recent.map(r => r.tool), ['codex']);
-  // a truncated sample says how many it shows of how many
-  const many = usageView(payload({}, { sessions: { total: 1848, sample: Array.from({ length: 50 }, (_, i) => ({ ...sample[0], key: `k${i}`, lastActivity: new Date(now - i * 60e3).toISOString() })), truncated: true } }), state(), { now });
-  assert.equal(many.sessions.recent.length, 10);
-  assert.equal(many.sessions.foot, 'Most recent 10 of 1,848 sessions in this range');
+  // a full sample fills both boxes as one continued list: five here, the next ten there, a foot for the range
+  const minute = (i, extra = {}) => ({ ...sample[0], key: `k${i}`, lastActivity: new Date(now - i * 60e3).toISOString(), ...extra });
+  const many = usageView(payload({}, { sessions: { total: 1848, sample: Array.from({ length: 50 }, (_, i) => minute(i)), truncated: true } }), state(), { now });
+  assert.deepEqual([many.sessions.recent.length, many.sessions.recentMore.length], [5, 10]);
+  assert.equal(many.sessions.recent[4].when, '4m ago');
+  assert.equal(many.sessions.recentMore[0].when, '5m ago');
+  assert.equal(many.sessions.recentMore[9].when, '14m ago');
+  assert.equal(many.sessions.foot, 'Most recent 15 of 1,848 sessions in this range');
+  assert.equal(many.sessions.moreSub, 'Sessions 6 to 15, continued from Session stats');
+  // a sample that ends mid-continuation: the sub names the actual last session and no foot is needed
+  const mid = usageView(payload({}, { sessions: { total: 12, sample: Array.from({ length: 12 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
+  assert.equal(mid.sessions.recentMore.length, 7);
+  assert.equal(mid.sessions.moreSub, 'Sessions 6 to 12, continued from Session stats');
+  assert.equal(mid.sessions.foot, '');
+  // exactly the table's 15 of a 16-session sample: the foot counts against the sample
+  const edge = usageView(payload({}, { sessions: { total: 16, sample: Array.from({ length: 16 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
+  assert.equal(edge.sessions.foot, 'Most recent 15 of 16 sessions in this range');
 });
 
 test('a muse-spark model served through several routes keeps Muse mark', () => {

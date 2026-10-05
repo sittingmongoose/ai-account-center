@@ -770,14 +770,19 @@ function donutView(A, state, shades) {
 }
 
 // ---------------------------------------------------------------- session stats
+// The session table lists at most this many sessions: the first five in the Session stats box, the rest in
+// the Recent sessions box, which continues the same list.
+const SESS_TOP = 5, SESS_SHOWN = 15;
 /**
- * Session stats over the providers in the filter, one row per provider with sessions. The stats are the columns'
- * sums and means, so they always line up with their columns; a session that several providers served counts under
- * each of them, in the rows and in the Sessions number alike. An average cost needs every session's cost, so it is
- * not logged while any of it is not. Usage read from the Mac and Windows comes without a session list, so it adds
- * tokens but no sessions, and the note says so. Recent sessions lists the sample most recent first, without paths.
- * The sample rows are the server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token
- * totals); anything else is dropped, never guessed.
+ * Session stats over the providers in the filter: the summary numbers, plus one session table continued
+ * across two boxes. Session stats shows the summary and the SESS_TOP most recent sessions as a compact
+ * table; Recent sessions continues it with the next sessions up to SESS_SHOWN in total, same columns and
+ * styling, so the two boxes read as one list. The summary numbers are sums and means; a session that
+ * several providers served counts under each of them. An average cost needs every session's cost, so it is
+ * not logged while any of it is not. Usage read from the Mac and Windows comes without a session list, so
+ * it adds tokens but no sessions, and the note says so. The table lists the sample most recent first,
+ * without paths. The sample rows are the server's AccountAnalyticsSessionRow shape (provider, lastActivity,
+ * string models, token totals); anything else is dropped, never guessed.
  */
 function sessionsView(A, state, payload, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
@@ -799,7 +804,7 @@ function sessionsView(A, state, payload, now) {
     sample.push({ s, last });
   }
   sample.sort((a, b) => b.last - a.last);
-  const recent = sample.slice(0, 10).map(({ s, last }) => {
+  const listed = sample.slice(0, SESS_SHOWN).map(({ s, last }) => {
     const names = (Array.isArray(s.models) ? s.models : []).map(text).filter(Boolean);
     const tok = TYPES.every(t => finite(s[t.f]) && s[t.f] >= 0) ? TYPES.reduce((n, t) => n + s[t.f], 0) : null;
     const est = finite(s.estimatedCostUsd) && s.estimatedCostUsd >= 0 ? s.estimatedCostUsd : null;
@@ -815,26 +820,22 @@ function sessionsView(A, state, payload, now) {
       tip: `${names.join(', ') || 'no models logged'} · ${tokX(tok)} · last activity ${clockTxt(last)}`,
     };
   });
-  const recentFoot = sample.length > recent.length
+  const recentFoot = sample.length > listed.length
     ? A.sessionsTruncated && finite(A.sessionTotal) && A.sessionTotal > sample.length
-      ? `Most recent ${recent.length} of ${nf0.format(A.sessionTotal)} sessions in this range`
-      : `Most recent ${recent.length} of ${sample.length} sessions in this range`
+      ? `Most recent ${listed.length} of ${nf0.format(A.sessionTotal)} sessions in this range`
+      : `Most recent ${listed.length} of ${sample.length} sessions in this range`
     : '';
   return {
     note: fromRemote ? 'Sessions come from the Ubuntu logs; usage read from the Mac and Windows adds tokens but no sessions.' : '',
-    recent, recentFoot,
+    recent: listed.slice(0, SESS_TOP),
+    recentMore: listed.slice(SESS_TOP),
+    moreSub: listed.length > SESS_TOP ? `Sessions ${SESS_TOP + 1} to ${listed.length}, continued from Session stats` : 'Continued from Session stats',
+    recentFoot,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },
       { key: 'avg', label: 'Average estimated cost per session', num: avg ?? 0, has: finite(avg), fmt: 'money', text: unk && finite(sessions) && sessions > 0 ? NOT_LOGGED : money(avg) },
       { key: 'evs', label: 'Usage events per session', num: evs ?? 0, has: finite(evs), fmt: 'int', text: intText(evs) },
     ],
-    rows: all.filter(r => !finite(r.sessions) || r.sessions > 0).sort((a, b) => byProviderOrder(a.p, b.p)).map(r => ({
-      provider: markOf(r.p), label: r.label,
-      sessions: finite(r.sessions) ? nf0.format(r.sessions) : 'Unavailable',
-      per: finite(r.sessions) && r.sessions > 0 && r.unk ? NOT_LOGGED : finite(r.sessions) && r.sessions > 0 && finite(r.cost) ? money(r.cost / r.sessions) : 'Unavailable',
-      events: finite(r.sessions) && r.sessions > 0 && finite(r.events) ? nf0.format(Math.round(r.events / r.sessions)) : 'Unavailable',
-      eventsTip: finite(r.events) ? `${nf0.format(r.events)} usage events` : '',
-    })),
   };
 }
 
@@ -1182,7 +1183,7 @@ export function usageView(payload, state, opts = {}) {
     trend: trendView(A, R, state, opts.sizes?.trend),
     cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
-    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, stats: sessions.stats, rows: sessions.rows, recent: sessions.recent },
+    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, moreSub: sessions.moreSub, stats: sessions.stats, recent: sessions.recent, recentMore: sessions.recentMore },
     tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },
     cache: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, ...cacheView(A, rows, K, C, costOk && A.available) },
     included: includedView(payload, now),
