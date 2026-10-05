@@ -4,14 +4,16 @@ import CCSBarCore
 
 /// The Apex Soft menu-bar template glyph (16 pt, tinted by macOS) and the status item's content.
 enum MenuBarIcon {
-  @MainActor static var template: NSImage {
+  /// Built once: the status label's body runs on every model publish, and copying the asset on
+  /// each run was needless image work on every refresh tick (N4).
+  @MainActor static let template: NSImage = {
     let image = TrayAssets.image("MenuBarTemplate")?.copy() as? NSImage
       ?? NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: "AI Account Center")
       ?? NSImage()
     image.size = NSSize(width: 16, height: 16)
     image.isTemplate = true
     return image
-  }
+  }()
 }
 
 /// The glyph plus the chosen account's percentage. The number rolls to its new value with an ease-out,

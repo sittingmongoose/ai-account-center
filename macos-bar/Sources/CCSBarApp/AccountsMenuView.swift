@@ -12,6 +12,10 @@ final class PanelState: ObservableObject {
   @Published var shortcutProblem: String?
   /// Bumped to close every popover the panel shows (Escape closes Details before anything else).
   @Published var popoverDismissal = 0
+  /// False between the panel's close and its next open: `PanelRootView` then holds no content, so a
+  /// closed tray evaluates and lays out none of the panel's view tree on the refresh ticks (N4).
+  /// True by default so direct renders (previews, checks) show their content immediately.
+  @Published var contentInstalled = true
   var scrollToAbout = false
   var open = OpenContext()
   var panelWidth: CGFloat = 760
@@ -55,14 +59,21 @@ struct PanelRootView: View {
   @ObservedObject var prefs: TrayPreferences
   @ObservedObject var state: PanelState
   var body: some View {
-    AccountsMenuView(model: model, prefs: prefs, state: state)
-      .id(state.openGeneration)
-      .background { if state.staticRender { PreviewGlass() } }
-      .environment(\.trayStaticRender, state.staticRender)
-      .environment(\.trayPopoverDismissal, state.popoverDismissal)
-      .modifier(PreviewActiveControls(enabled: state.staticRender))
-      .modifier(PreviewAccessibility(reduceTransparency: state.previewReduceTransparency,
-        increaseContrast: state.previewIncreaseContrast))
+    Group {
+      // A closed panel holds no content: the tree is torn down after the close and built again on
+      // the open, which already rebuilt it through `.id(openGeneration)`, so the open looks exactly
+      // as before and a closed tray stays out of the view graph (N4).
+      if state.contentInstalled {
+        AccountsMenuView(model: model, prefs: prefs, state: state)
+          .id(state.openGeneration)
+          .background { if state.staticRender { PreviewGlass() } }
+      }
+    }
+    .environment(\.trayStaticRender, state.staticRender)
+    .environment(\.trayPopoverDismissal, state.popoverDismissal)
+    .modifier(PreviewActiveControls(enabled: state.staticRender))
+    .modifier(PreviewAccessibility(reduceTransparency: state.previewReduceTransparency,
+      increaseContrast: state.previewIncreaseContrast))
   }
 }
 
@@ -188,6 +199,9 @@ struct AccountsMenuView: View {
   }
 
   private func report() {
+    // The close teardown resets the measured heights to zero: ignore it and keep the last height for
+    // the next open, so the panel opens at its real size instead of jumping (N4).
+    guard state.contentInstalled else { return }
     let body = max(heights.list, heights.overlay, model.dashboard == nil ? 170 : 0)
     let total = (heights.header + body + heights.footer).rounded(.up)
     if abs(total - state.desiredHeight) > 0.5 { state.desiredHeight = total }

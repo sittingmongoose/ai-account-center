@@ -72,15 +72,30 @@ final class PanelController: NSObject, NSWindowDelegate {
     updateStatusLength()
   }
 
+  /// The reading and help tag the status item now shows, and the button height they were laid out
+  /// for. The model publishes several times a refresh tick; `fittingSize` forces a synchronous
+  /// SwiftUI layout and `statusItem.length` re-lays the menu bar out, so both run only when what
+  /// the status item shows actually changes (N4).
+  private var appliedStatusReading: MenuBarReading?
+  private var appliedStatusToolTip: String?
+  private var appliedStatusButtonHeight: CGFloat?
+
   private func updateStatusLength() {
     guard let label = statusHosting, let button = statusItem.button else { return }
+    let reading = model.menuBarReading(prefs)
+    // Signed out or not paired: the logo alone, and the help tag says so (section 9).
+    let signedOut = model.needsConnection && !model.signIn.repair
+    let toolTip = reading.map { "AI Account Center · \($0.detail)" }
+      ?? (signedOut ? "AI Account Center · \(model.signIn.menuBarHelp)" : "AI Account Center")
+    if appliedStatusToolTip != nil, reading == appliedStatusReading, toolTip == appliedStatusToolTip,
+      button.bounds.height == appliedStatusButtonHeight { return }
+    appliedStatusReading = reading
+    appliedStatusToolTip = toolTip
+    appliedStatusButtonHeight = button.bounds.height
     let size = label.fittingSize
     statusItem.length = ceil(size.width)
     label.frame = NSRect(x: 0, y: (button.bounds.height - size.height) / 2, width: ceil(size.width), height: size.height)
-    // Signed out or not paired: the logo alone, and the help tag says so (section 9).
-    let signedOut = model.needsConnection && !model.signIn.repair
-    button.toolTip = model.menuBarReading(prefs).map { "AI Account Center · \($0.detail)" }
-      ?? (signedOut ? "AI Account Center · \(model.signIn.menuBarHelp)" : "AI Account Center")
+    button.toolTip = toolTip
   }
 
   @objc private func statusItemClicked(_ sender: Any?) { toggle() }
@@ -90,6 +105,7 @@ final class PanelController: NSObject, NSWindowDelegate {
   // MARK: Open and close
 
   func open() {
+    state.contentInstalled = true
     let panel = self.panel ?? makePanel()
     closing = false
     closeGeneration += 1
@@ -132,6 +148,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     statusItem.button?.highlight(false)
     if state.reduceMotion {
       panel.orderOut(nil)
+      state.contentInstalled = false
     } else {
       closing = true
       let generation = closeGeneration
@@ -144,6 +161,7 @@ final class PanelController: NSObject, NSWindowDelegate {
           self.closing = false
           panel?.orderOut(nil)
           panel?.alphaValue = 1
+          self.state.contentInstalled = false
         }
       })
     }

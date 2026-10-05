@@ -119,6 +119,10 @@ final class AccountsViewModel: ObservableObject {
     timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
       Task { @MainActor in await self?.tick() }
     }
+    // A tenth of the interval of leeway lets macOS coalesce this timer with other system work
+    // instead of waking the CPU on the exact minute (N4). The cadence shifts by a few seconds at
+    // most, which nothing the person sees depends on.
+    timer?.tolerance = max(0.5, interval * 0.1)
   }
 
   /// Signed out or not paired, the menu bar shows the template logo with no percentage (section 9).
@@ -378,7 +382,7 @@ final class AccountsViewModel: ObservableObject {
     let file = session.fileURL.deletingLastPathComponent().appendingPathComponent("native-status.json")
     let value: [String: Any] = [
       "connected": connected,
-      "checkedAt": ISO8601DateFormatter().string(from: Date()),
+      "checkedAt": AccountFormatting.iso8601(Date()),
       "accountCount": dashboard?.accounts.count ?? 0,
       "providers": Array(Set(dashboard?.accounts.map(\.provider) ?? [])).sorted(),
       "codexAutomaticEnabled": dashboard?.codexAutoSwitch.enabled as Any? ?? NSNull(),
