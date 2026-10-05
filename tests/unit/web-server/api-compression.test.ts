@@ -4,13 +4,23 @@
  * session skip and the WebSocket upgrade run through the real startServer()
  * stack with a temporary CCS_HOME and a stubbed UI folder.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from 'bun:test';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
 import http from 'http';
-import type { AddressInfo } from 'net';
+import net, { type AddressInfo } from 'net';
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
@@ -403,29 +413,39 @@ describe('startServer: compression, session skip and the upgrade', () => {
 
   it('still upgrades /ws for a signed-in browser', async () => {
     const cookie = await signIn();
-    const upgraded = await new Promise<boolean>((resolve) => {
-      const request = http.request({
-        host: '127.0.0.1',
-        port,
-        path: '/ws',
-        agent: false,
-        headers: {
-          Connection: 'Upgrade',
-          Upgrade: 'websocket',
-          'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64'),
-          'Sec-WebSocket-Version': '13',
-          Origin: `http://127.0.0.1:${port}`,
-          Cookie: cookie,
-        },
+    // A raw socket, not http.request: Bun's node:http client never emits 'upgrade',
+    // so a handshake assertion has to read the 101 line itself. No timer here: a
+    // server that never answers fails on the test runner's own timeout.
+    const statusLine = await new Promise<string>((resolve) => {
+      const socket = net.connect({ host: '127.0.0.1', port }, () => {
+        socket.write(
+          [
+            'GET /ws HTTP/1.1',
+            `Host: 127.0.0.1:${port}`,
+            'Connection: Upgrade',
+            'Upgrade: websocket',
+            `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}`,
+            'Sec-WebSocket-Version: 13',
+            `Origin: http://127.0.0.1:${port}`,
+            `Cookie: ${cookie}`,
+            '',
+            '',
+          ].join('\r\n')
+        );
       });
-      request.on('upgrade', (_response, socket) => {
+      let buffer = '';
+      const finish = (value: string): void => {
         socket.destroy();
-        resolve(true);
+        resolve(value);
+      };
+      socket.on('data', (chunk) => {
+        buffer += chunk.toString('utf8');
+        const end = buffer.indexOf('\r\n\r\n');
+        if (end >= 0) finish(buffer.slice(0, end).split('\r\n')[0] ?? '');
       });
-      request.on('response', () => resolve(false));
-      request.on('error', () => resolve(false));
-      request.end();
+      socket.on('error', () => finish(`error:${buffer.slice(0, 80)}`));
+      socket.on('close', () => finish(buffer ? (buffer.split('\r\n')[0] ?? '') : 'closed'));
     });
-    expect(upgraded).toBe(true);
+    expect(statusLine).toBe('HTTP/1.1 101 Switching Protocols');
   });
 });
