@@ -63,7 +63,7 @@ async function loadBridge(server, { hostname = '192.168.50.179', pathname = '/ac
 }
 
 /**
- * The hidden HTML login form of index.html (#aac-login) as a password manager sees it: fill() sets both values
+ * The HTML login form of index.html (#aac-login) as a password manager sees it: fill() sets both values
  * and fires `input` on each field, submit() fires the form's submit event (1Password's auto-submit) and says
  * whether the bridge stopped the browser's own POST.
  */
@@ -75,9 +75,12 @@ function hiddenLoginForm() {
       fire: (type, event = {}) => { for (const fn of listeners.get(type) || []) fn(event); },
     });
   };
-  const form = element(), user = element({ value: '' }), pass = element({ value: '' }), remember = element({ checked: true });
+  const form = element({ style: { setProperty: () => {} } });
+  const user = element({ value: '', style: {} }), pass = element({ value: '', type: 'password', style: {} });
+  const remember = element({ checked: true, style: {} }), button = element({ style: {} });
   return {
-    byId: { 'aac-login': form, 'aac-login-user': user, 'aac-login-pass': pass, 'aac-login-remember': remember },
+    user, pass, remember, button,
+    byId: { 'aac-login': form, 'aac-login-user': user, 'aac-login-pass': pass, 'aac-login-remember': remember, 'aac-login-submit': button },
     fill(username, password) { user.value = username; user.fire('input'); pass.value = password; pass.fire('input'); },
     submit() { let prevented = false; form.fire('submit', { preventDefault: () => { prevented = true; } }); return prevented; },
   };
@@ -259,5 +262,55 @@ test('signing in again with a password manager after the session ended in this t
     assert.equal(b.lastAuth().signedIn, true);
     assert.equal(b.dashboards.at(-1), firstDashboard, 'the readings did not change across the restart');
     assert.equal(b.slint.ready, true, 'the dashboard reached Slint after signing in again');
+  } finally { b.restore(); }
+});
+
+test('the real login inputs follow the sign-in layer, the Slint Sign in button uses their values, and the password goes after', async () => {
+  const login = hiddenLoginForm();
+  const tries = [];
+  const { s, server } = fixtureServer({ signedIn: false, routes: {
+    'POST /api/auth/login': body => {
+      tries.push(body);
+      if (body?.password === 'too-many') return { status: 429, payload: { error: 'Too many', code: 'rate_limited', retryAfterSeconds: 900 } };
+      if (body?.username !== 'owner' || body?.password !== 'fixture-password') return { status: 401, payload: { error: 'Invalid credentials', code: 'invalid_credentials', triesLeft: 3 } };
+      s.signedIn = true;
+      return { payload: { success: true, username: 'owner' } };
+    },
+  } });
+  const b = await loadBridge(server, { pathname: '/', login });
+  const overlay = on => JSON.stringify(on ? {
+    on: true, enabled: true, revealed: false, remember: true,
+    user: { x: 176.5, y: 401.25, w: 340, h: 42 }, userText: { x: 188.5, y: 401.25, w: 316, h: 42 },
+    pass: { x: 176.5, y: 476.25, w: 340, h: 42 }, passText: { x: 188.5, y: 476.25, w: 286, h: 42 },
+    check: { x: 176.5, y: 590.75, w: 16, h: 16 }, submit: { x: 176.5, y: 627, w: 340, h: 44 },
+    fontSize: 13.5, ink: 'rgba(21,32,43,1.000)', placeholder: 'rgba(149,162,174,1.000)', selection: 'rgba(37,82,204,0.251)', accent: 'rgba(37,82,204,1.000)',
+  } : { on: false, revealed: false, remember: true });
+  try {
+    await flush();
+    assert.deepEqual([b.lastAuth().signedIn, b.lastAuth().state], [false, 'default']);
+    // the sign-in layer reports the form on screen: the inputs show over the Slint boxes
+    await b.action('login-overlay', overlay(true));
+    assert.deepEqual([login.user.style.display, login.user.style.left, login.user.style.top], ['block', '177px', '401px']);
+    assert.deepEqual([login.pass.style.display, login.button.style.display], ['block', 'block']);
+    // sign-in pauses: the password is forgotten in the HTML input as in the Slint field
+    login.user.value = 'owner'; login.pass.value = 'too-many';
+    await b.action('login', 'owner\ntoo-many\n1');
+    assert.equal(b.lastAuth().state, 'limited');
+    assert.equal(login.pass.value, '', 'the limited state clears the real password');
+    await b.action('login-limit-over', '');
+    // a manager sets the values without input events, so the Slint fields still hold old text; the Slint Sign in
+    // button sends what the real inputs hold
+    login.user.value = 'owner'; login.pass.value = 'fixture-password';
+    await b.action('login', 'stale\nold-text\n1');
+    await settle(() => b.lastAuth().signedIn === true && b.slint.ready);
+    assert.deepEqual(tries.at(-1), { username: 'owner', password: 'fixture-password', rememberMe: true });
+    assert.equal(b.lastAuth().signedIn, true);
+    assert.equal(login.pass.value, '', 'signed in: the password leaves the page');
+    assert.equal(login.user.value, 'owner', 'the username stays, as in the Slint field');
+    // the layer leaves the screen: the inputs hide
+    await b.action('login-overlay', overlay(false));
+    for (const el of [login.user, login.pass, login.remember, login.button]) assert.equal(el.style.display, 'none');
+    // a click beside the eye button while hidden is kept for when the inputs show again
+    await b.action('login-field-focus', 'pass');
   } finally { b.restore(); }
 });

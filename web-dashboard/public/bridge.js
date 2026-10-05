@@ -1,4 +1,4 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue } from './auth-view.mjs';
@@ -105,6 +105,9 @@ function auth(signedIn, state, extra = {}) {
   // sets it again. So the first pushes after any sign-in (a sign-out, or a session that ended in this tab, such
   // as a server restart) must reach Slint even when their JSON matches the last one sent, or Home never reveals.
   if (!signedIn) pushedJson.clear();
+  // The login form's HTML password goes with the Slint one: once signed in (lib.rs set_auth clears Slint's), and when
+  // sign-in pauses (signin.slint forgets the typed password in the limited state).
+  if (signedIn || state === 'limited') { try { loginBridge?.clearPassword(); } catch {} }
   set_auth(signedIn, JSON.stringify(view));
 }
 
@@ -679,12 +682,17 @@ async function signedIn(name) {
   await enterDashboard();
 }
 let loginBridge = null;
+/** The Slint sign-in value ("user\npassword\n1|0", auth-view.mjs parseLoginValue) for what the HTML form holds. */
+const loginValue = filled => `${filled.username}\n${filled.password}\n${filled.remember ? '1' : '0'}`;
 async function signIn(value) {
   if (busy) return;
-  const { username: user, password, remember } = parseLoginValue(value);
+  // While the login form's HTML inputs are on screen they hold what was typed or filled, so the Slint Sign in button
+  // signs in with them too, even when a manager set the values without input events.
+  const shown = loginBridge?.shown() === true;
+  const { username: user, password, remember } = shown ? parseLoginValue(loginValue(loginBridge.read())) : parseLoginValue(value);
   if (!user || !password) { authNonce++; auth(false, 'default', { message: 'Enter your username and password.' }); return; }
-  // the hidden form holds the same values, so managers offer to save them
-  try { loginBridge?.mirror({ username: user, password, remember }); } catch {}
+  // the HTML form holds the same values, so managers offer to save them
+  if (!shown) { try { loginBridge?.mirror({ username: user, password, remember }); } catch {} }
   auth(false, 'connecting'); setBusy(true);
   try {
     const result = await mutation('/api/auth/login', { username: user, password, rememberMe: remember });
@@ -737,6 +745,14 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'details') { detailsOpens++; renderDetails(value); return; }
     if (action === 'details-closed') { openDetailsId = ''; return; }
     if (action === 'login') { await signIn(value); return; }
+    // the sign-in layer moved, showed or hid the login form's fields: the HTML inputs follow (login-bridge.mjs)
+    if (action === 'login-overlay') {
+      const overlay = JSON.parse(value);
+      if (e2e) globalThis.__aacLoginOverlay = overlay;
+      loginBridge?.place(overlay);
+      return;
+    }
+    if (action === 'login-field-focus') { loginBridge?.focus(value); return; }
     if (action === 'setup') { await createSignIn(value); return; }
     if (action === 'setup-typing') {
       const [pass = '', confirm = ''] = String(value).split('\n');
@@ -890,13 +906,15 @@ try {
   earlyCheck.catch(() => {});
   await init();
   startSlintDashboard(() => start_dashboard(innerWidth, innerHeight, devicePixelRatio));
-  // password managers fill the hidden HTML form; its values land in the Slint fields, and its
-  // submit runs the same login as Sign in
+  // The login form's real HTML inputs lie over the Slint fields (login-bridge.mjs): what is typed or filled lands
+  // in the Slint fields too, their focus and hover reach the Slint boxes, and a submit runs the same login as Sign in.
   try {
     loginBridge = installLoginBridge({
       document,
+      canvas: document.querySelector('#canvas'),
       onFilled: filled => { if (!authenticated && !busy) set_login_fields(filled.username, filled.password, filled.remember); },
-      onSubmit: filled => { if (!authenticated && !busy) void signIn(`${filled.username}\n${filled.password}\n${filled.remember ? '1' : '0'}`); },
+      onSubmit: filled => { if (!authenticated && !busy) void signIn(loginValue(filled)); },
+      onPointer: ({ focus, hover }) => { try { set_login_pointer(focus, hover); } catch {} },
     });
   } catch {}
   set_current_page(currentPage);
