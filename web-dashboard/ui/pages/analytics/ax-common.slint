@@ -2,6 +2,7 @@
 // switch, the segmented control with marks, readout rows, tips and the first-view reveal.
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { HoverShadow } from "../../components/card.slint";
+import { ProbeMark } from "../../components/probe.slint";
 import { Icon } from "../../components/icon.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { Hover } from "../../components/hover-card.slint";
@@ -277,6 +278,8 @@ export component AxCardHead inherits HorizontalLayout {
     in property <string> sub;
     in property <string> note;
     in property <length> pad: Breakpoints.width < 1180px ? 16px : 20px;
+    // names the head for the end-to-end harness (components/probe.slint); "" reports nothing
+    in property <string> probe: "";
     padding-left: root.pad;
     padding-right: root.pad;
     padding-top: Breakpoints.width < 1180px ? 14px : 16px;
@@ -286,15 +289,15 @@ export component AxCardHead inherits HorizontalLayout {
         spacing: 3px;
         horizontal-stretch: 1;
         alignment: start;
-        Text { text: root.title; font-size: 16px; font-weight: 640; color: Theme.ink; letter-spacing: -0.16px; min-height: 21px; vertical-alignment: center; }
-        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; }
+        Text { text: root.title; font-size: 16px; font-weight: 640; color: Theme.ink; letter-spacing: -0.16px; min-height: 21px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":title"; } }
+        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
         // the wrapped note sits directly in the column so its height is measured at the column's width
         if root.note != "": VerticalLayout {
             padding-top: 3px;
             Rectangle {
                 min-height: nt.preferred-height;
                 Icon { x: 0px; y: 2px; name: "info"; width: 13px; height: 13px; tint: Theme.ink-3; }
-                nt := Text { x: 19px; y: 0px; width: parent.width - 19px; text: root.note; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+                nt := Text { x: 19px; y: 0px; width: parent.width - 19px; text: root.note; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":note"; } }
             }
         }
     }

@@ -157,6 +157,31 @@ test('session stats derive per-session figures and stay unavailable without coun
   assert.equal(missing.sessions.rows.find(r => r.provider === 'codex').sessions, 'Unavailable');
 });
 
+test('the average session cost uses priced rows and says partial when some rows lack costs', () => {
+  const p = payload();
+  // codex costs unlogged: the fallback swallows the estimate
+  const cx = p.activity.providers[1].totals;
+  p.activity.providers[1] = { ...p.activity.providers[1], totals: { ...cx, fallbackCostUsd: cx.estimatedCostUsd } };
+  const view = usageView(p, state(), { now });
+  const avg = view.sessions.stats.find(s => s.key === 'avg');
+  const cl = p.activity.providers[0];
+  assert.equal(avg.has, true);
+  assert.equal(avg.num, cl.totals.estimatedCostUsd / cl.sessionCount);
+  assert.match(avg.label, /partial/);
+  assert.equal(view.sessions.rows.find(r => r.provider === 'codex').per, 'Not logged');
+  // no priced row at all: still Not logged, with no partial claim
+  const q = payload();
+  q.activity.providers = q.activity.providers.map(pr => ({ ...pr, totals: { ...pr.totals, fallbackCostUsd: pr.totals.estimatedCostUsd } }));
+  const none = usageView(q, state(), { now }).sessions.stats.find(s => s.key === 'avg');
+  assert.equal(none.has, false);
+  assert.equal(none.text, 'Not logged');
+  assert.ok(!/partial/.test(none.label));
+  // every row priced: a plain average with no partial claim
+  const plain = usageView(payload(), state(), { now }).sessions.stats.find(s => s.key === 'avg');
+  assert.equal(plain.has, true);
+  assert.ok(!/partial/.test(plain.label));
+});
+
 test('the trend has round ticks, an unread tail, a crosshair lookup and morphable paths', () => {
   const view = usageView(payload(), state(), { now, sizes: { trend: { w: 1200, h: 380 } } });
   const t = view.trend;
