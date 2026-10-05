@@ -38,9 +38,10 @@ afterEach(() => {
  * a raw-mode login-method menu, then the authorization URL (OSC 8 or plain
  * wrapped, per FAKE_URL_MODE), then it reads the pasted code, records what it
  * received and its own pid, and writes the credential envelope.
- * FAKE_EXIT_EARLY makes it quit before writing a token (the "CLI died" path).
- * Otherwise it hangs so the driver has to stop it, like the real CLI at its
- * prompt.
+ * FAKE_URL_MODE=nomenu skips the menu entirely (a CLI that remembers the
+ * login method), and FAKE_EXIT_EARLY makes it quit before writing a token
+ * (the "CLI died" path). Otherwise it hangs so the driver has to stop it,
+ * like the real CLI at its prompt.
  */
 function fakeCli(tokenPath: string): string {
   return `
@@ -55,13 +56,14 @@ with open(os.environ["FAKE_PID"], "w") as f:
     f.write(str(os.getpid()))
 out("\\x1b[?1049h\\x1b[H\\x1b[2J")
 out(" Welcome to the Antigravity CLI. You are currently not signed in.\\r\\n\\r\\n")
-out(" Select login method:\\r\\n")
-out(" \\x1b[1m> 1. Google OAuth\\x1b[m\\r\\n")
-out("   2. Use a Google Cloud project\\r\\n\\r\\n")
-out("   up/down Navigate - enter Select\\r\\n")
-menu_key = sys.stdin.read(1)
-with open(os.environ["FAKE_RECEIPT"], "w") as f:
-    f.write("menu=" + repr(menu_key) + "\\n")
+if MODE != "nomenu":
+    out(" Select login method:\\r\\n")
+    out(" \\x1b[1m> 1. Google OAuth\\x1b[m\\r\\n")
+    out("   2. Use a Google Cloud project\\r\\n\\r\\n")
+    out("   up/down Navigate - enter Select\\r\\n")
+    menu_key = sys.stdin.read(1)
+    with open(os.environ["FAKE_RECEIPT"], "w") as f:
+        f.write("menu=" + repr(menu_key) + "\\n")
 if os.environ.get("FAKE_EXIT_EARLY"):
     time.sleep(0.2); sys.exit(0)
 if MODE == "plain":
@@ -99,7 +101,7 @@ interface Setup {
   env: Record<string, string>;
 }
 
-function setup(mode: 'osc8' | 'plain', early = false): Setup {
+function setup(mode: 'osc8' | 'plain' | 'nomenu', early = false): Setup {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-agy-driver-'));
   dirs.push(dir);
   const token = path.join(dir, 'antigravity-oauth-token');
@@ -208,6 +210,19 @@ describe('Antigravity supervised sign-in driver', () => {
     try {
       await until(() => run.url() !== null);
       expect(run.url()).toBe(FULL_URL);
+    } finally {
+      run.child.kill();
+    }
+  });
+
+  it('surfaces the URL when the CLI skips the login-method screen', async () => {
+    const s = setup('nomenu');
+    const run = startDriver(s);
+    try {
+      await until(() => run.url() !== null);
+      expect(run.url()).toBe(FULL_URL);
+      // No menu was on screen, so the driver pressed nothing and waited for no key.
+      expect(fs.existsSync(s.receipt)).toBe(false);
     } finally {
       run.child.kill();
     }

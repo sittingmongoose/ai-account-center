@@ -6,14 +6,17 @@
  * device-code CLIs'.
  *
  * What the driver does (observed against the real CLI 1.2.16 on Ubuntu, in
- * the signin-sandbox isolation; every screen below arrived within ~1 s):
+ * the signin-sandbox isolation; every screen below arrived within ~1 s, and
+ * the authorization URL 0.9 s after the job started on the 2026-10-05 run):
  *
  * - it starts the given argv (bubblewrap + the official CLI) on a PTY with
  *   echo off and a 40x160 window, and never lets raw screen bytes leave:
  *   the job's output parser sees only the one authorization URL line;
  * - on the first-run login-method screen (`Select login method`, with
  *   `> 1. Google OAuth` highlighted) it presses Enter exactly once, so the
- *   CLI reaches its Google OAuth screen without the user's own keys;
+ *   CLI reaches its Google OAuth screen without the user's own keys; a CLI
+ *   that skips that screen still works, because the link is read whenever it
+ *   appears;
  * - it extracts the authorization URL from the CLI output and prints that
  *   single line. Terminals that advertise OSC 8 (TERM=xterm-256color and
  *   friends) carry the whole URL in the hyperlink parameter; plainer
@@ -198,17 +201,19 @@ export const AGY_SIGNIN_DRIVER_PROGRAM = [
   '            data = b""',
   '        if not data:',
   '            break',
-  '        if not (entered and url_sent):',
+  '        if not url_sent:',
   '            buf = (buf + data)[-MAX_BUFFER:]',
   '            plain = strip_controls(buf)',
   '            if not entered and b"Select login method" in plain and MENU_MARK.search(plain):',
   '                os.write(master, b"\\r")',
   '                entered = True',
-  '            if entered and not url_sent:',
-  '                url = extract_url(buf)',
-  '                if url:',
-  '                    os.write(1, url + b"\\n")',
-  '                    url_sent = True',
+  '            # The link is read as soon as it appears, whether or not the menu',
+  '            # was there: a CLI that remembers the login method still gets its',
+  '            # URL surfaced instead of timing the job out.',
+  '            url = extract_url(buf)',
+  '            if url:',
+  '                os.write(1, url + b"\\n")',
+  '                url_sent = True',
   '    if source in ready:',
   '        try:',
   '            keys = os.read(source, 65536)',

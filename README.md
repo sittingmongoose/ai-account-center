@@ -75,21 +75,27 @@ or marked "coming" where the server has no flow or route yet.
 | --- | --- | --- | --- |
 | Claude | A profile on Mac and Windows, then guided sign-in in the provider app | Guided app sign-in; Open on Mac or Windows from the row | To the 30-day trash, with Restore; a computer's default Claude profile is never offered for removal |
 | Codex | Device code on Ubuntu, with the page, code and Cancel | Device code again; the identity must be unchanged | With confirmation; the active, default and last profiles cannot be removed |
-| Antigravity | Terminal command on Ubuntu (below) | Terminal command on Ubuntu | Deletes the saved login; no trash |
+| Antigravity | Supervised CLI login on the dashboard host (below) | The same supervised login for a saved, non-live profile | Deletes the saved login; no trash |
 | Cursor | Guided app sign-in (one account) | Guided app sign-in, Open on Mac | With confirmation |
 | Muse Code | Re-check is live; sign-in reads "coming" | Re-check | With confirmation |
 | Kimi Code, Z.ai, OpenCode Go | API key in a masked field; only its last 4 are shown afterwards | Replace key | Deletes the stored key |
 | Qwen | Guided browser-extension sign-in on Windows | Guided sign-in, Re-check | With confirmation |
 | OpenCode console wallet | Guided browser-extension on Mac | Guided sign-in | Not served |
 
-Antigravity add and sign-in again run in a terminal on Ubuntu:
+Antigravity add and sign-in again run the official CLI as a supervised job on
+the dashboard host, inside the same isolated sign-in home as the terminal
+command: the panel shows the Google sign-in page, you paste back the code
+Google gives you, and the account appears once the CLI is stopped and the new
+login is verified. Add is live whenever that isolation check passes on the
+dashboard host and the connection is trusted.
+
+Where the check cannot run (no `agy`, no bubblewrap, no unprivileged user
+namespace) or the connection is not trusted, both answer with the terminal
+command on Ubuntu, which the dashboard shows verbatim:
 
 ```bash
 ai-account-center antigravity signin <profile>
 ```
-
-The dashboard shows that exact command for a `preflight_failed` refusal. The
-in-browser supervised sign-in is not served.
 
 Claude add, remove and restore need the server's Claude host steps
 (`CCS_CLAUDE_HOST_LIFECYCLE=on` for that server process). The live service
@@ -481,8 +487,11 @@ issues and screenshots. See [Security](SECURITY.md) for reporting boundaries.
 - Claude add, remove and restore read "coming" while the server's Claude host
   steps are off (the live service keeps them off); the default-profile
   refusal holds either way.
-- Antigravity add and sign-in again run only through the terminal command on
-  Ubuntu; Muse Code sign-in reads "coming" (Re-check is live).
+- Antigravity add and sign-in again run the supervised CLI login on the
+  dashboard host, which needs Ubuntu there with the official `agy` CLI,
+  bubblewrap and an unprivileged user namespace, plus a trusted connection
+  for the pasted code; without them the dashboard shows the terminal command
+  instead. Muse Code sign-in reads "coming" (Re-check is live).
 
 ## Attribution
 

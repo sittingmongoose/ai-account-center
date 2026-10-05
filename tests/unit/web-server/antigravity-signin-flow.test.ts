@@ -22,6 +22,7 @@ import type {
 } from '../../../src/antigravity/types';
 import { SignInJobStopped } from '../../../src/web-server/services/signin-jobs';
 import type { SignInPreflight } from '../../../src/antigravity/signin-sandbox';
+import { claimAntigravitySignInMarker } from '../../../src/antigravity/signin-marker';
 
 let root: string;
 let ccsDir: string;
@@ -117,6 +118,21 @@ describe('antigravityJobFlow', () => {
     await expect(flow.prepare('job_0000000000000002')).rejects.toMatchObject({
       code: 'tool_missing',
     });
+  });
+
+  it('refuses to start while a terminal sign-in holds the profile marker', async () => {
+    const held = claimAntigravitySignInMarker(ccsDir, 'party');
+    expect(held).not.toBe(null);
+    const flow = antigravityJobFlow(lifecycle(), ccsDir, home, 'party', 'add', {
+      preflight: () => OK_PREFLIGHT,
+    });
+    await expect(flow.prepare('job_0000000000000006')).rejects.toMatchObject({
+      code: 'write_failed',
+    });
+    // The marker is claimed before any staging, so a refused start leaves none behind.
+    const signinDir = path.join(ccsDir, 'antigravity-signin');
+    expect(fs.readdirSync(signinDir).filter((name) => name.startsWith('.staging-'))).toEqual([]);
+    held?.release();
   });
 
   it('imports the credential, refreshes the descriptor and returns the account', async () => {
