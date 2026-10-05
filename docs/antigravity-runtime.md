@@ -178,18 +178,35 @@ The command needs `/usr/bin/bwrap`, `/usr/bin/dbus-run-session` and an
 unprivileged user namespace; its preflight checks them with one harmless
 `/bin/true` probe and never starts the CLI on failure.
 
-The dashboard serves the same flow as a terminal fallback (CONTRACT-registry-
-lifecycle 6.2 and 6.6). `providers[].signIn` for Antigravity reads
-`available: false` with `unavailableReason: 'preflight_failed'` (or
-`'tool_missing'` without the CLI). `POST /api/accounts/add` with
-`{provider: 'antigravity', profileName}` and `POST
-/api/accounts/antigravity:profile:<id>/signin-again` check their refusals and
-then answer 409 `preflight_failed` with
+The dashboard runs this same isolated sign-in as a supervised job (CONTRACT-
+registry-lifecycle 6.2 and 6.6). When the preflight passes on the dashboard
+host, `providers[].signIn` for Antigravity reads `available: true`, and
+`POST /api/accounts/add` with `{provider: 'antigravity', profileName}` (and
+`POST /api/accounts/antigravity:profile:<id>/signin-again` for a saved,
+non-live profile) answer 202 with a `supervised-cli` sign-in job, like Codex
+and Muse. A fixed Python driver (`src/antigravity/signin-driver.ts`) owns the
+CLI's PTY: it presses Enter through the first-run login-method screen (Google
+OAuth is the highlighted default), surfaces the one `https://accounts.google.com`
+authorization URL to the page (read from the CLI's OSC 8 hyperlink, or rejoined
+from its wrapped plain text), feeds the code the user pastes in the dashboard
+back to the CLI with a carriage return, and stops the CLI once the new
+credential is complete. The job's `complete` then imports and provider-verifies
+that credential (`importSignIn`, never committing after a cancel) and
+best-effort refreshes the runtime descriptor; the runner's accounts-changed
+hint shows the account. The pasted code needs a trusted transport
+(`submitJobCode` requires it), so Add over plain HTTP answers 403
+`secure_transport_required`.
+
+When the preflight cannot run on the host (no `agy`, no bubblewrap or no
+unprivileged user namespace), `providers[].signIn` reads `available: false`
+with `unavailableReason: 'preflight_failed'` (or `'tool_missing'` without the
+CLI), and both routes fall back to the terminal command: 409
+`preflight_failed` / `tool_missing`, or 403 `secure_transport_required`, each
+carrying
 `fallback: {kind: 'terminal', host: 'ubuntu', command: 'ai-account-center antigravity signin <id>'}`;
 `GET /api/accounts/signin-command?provider=antigravity&profile=<id>` returns
-`{host: 'ubuntu', command}`. An in-browser supervised sign-in is not served:
-the CLI's first-run screens (theme, login method) need the user's own keys and
-were never observed by an automated driver.
+`{host: 'ubuntu', command}`. The preflight result is cached for five minutes,
+so a host that gains or loses the sandbox reflects it without a restart.
 
 ### Remove
 

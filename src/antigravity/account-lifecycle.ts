@@ -281,6 +281,12 @@ export class AntigravityAccountLifecycle {
     profileId: string;
     mode: 'add' | 'signin-again';
     credential: NativeCredential;
+    /**
+     * Set by the supervised dashboard job: checked under the registry lock
+     * right before the credential is committed, so a sign-in the user cancelled
+     * (or that expired) while the provider check ran never saves a profile.
+     */
+    stopped?: () => boolean;
   }): Promise<AntigravitySignInResult> {
     const { profileId, mode, credential } = options;
     if (this.nameError(profileId)) throw new AntigravityLifecycleError('write_failed');
@@ -332,6 +338,9 @@ export class AntigravityAccountLifecycle {
           }
           if (live) throw new AntigravityLifecycleError('account_active');
         }
+        // The supervised job was cancelled or expired while the provider check
+        // ran: stop under the lock, before anything is committed.
+        if (options.stopped?.()) throw new AntigravityLifecycleError('write_failed');
         try {
           registry.saveCredential(profileId, 'ubuntu', credential, identity, this.now());
         } catch {

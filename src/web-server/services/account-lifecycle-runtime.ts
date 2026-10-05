@@ -1,7 +1,11 @@
 import os from 'os';
 import { getCcsDir } from '../../utils/config-manager';
 import { AntigravityAccountLifecycle } from '../../antigravity/account-lifecycle';
-import { nativeBinaryProblem, sweepSignInStaging } from '../../antigravity/signin-sandbox';
+import {
+  antigravitySignInPreflight,
+  sweepSignInStaging,
+  type SignInPreflight,
+} from '../../antigravity/signin-sandbox';
 import { sweepAntigravitySignInMarkers } from '../../antigravity/signin-marker';
 import { createLogger } from '../../services/logging';
 import { broadcastDashboardEvent, type DashboardEventClient } from '../dashboard-events';
@@ -154,26 +158,54 @@ export function getMuseLifecycle(): MuseAccountLifecycle {
 }
 
 /**
- * Antigravity sign-in runs in the user's terminal on Ubuntu
- * (`ai-account-center antigravity signin <profile>`): the official CLI's
- * first-run screens need the user's keys, so the in-browser supervised flow
- * is not served. With the CLI installed the provider reads `preflight_failed`
- * and Add and Sign in again answer with the terminal command (contract 6.2:
- * "otherwise ... preflight_failed, and the UI shows the terminal fallback").
+ * Whether the supervised Antigravity sign-in can run on this host now, for
+ * `providers[].signIn` (contract 6.2). It answers `null` (available) only when
+ * the full isolation preflight passes — the official CLI is installed and
+ * owned, bubblewrap and dbus-run-session exist, and one harmless unprivileged
+ * user-namespace probe succeeds. Otherwise it names why the flow cannot run:
+ * `tool_missing` (no CLI) or `preflight_failed` (no sandbox). When it is
+ * non-null, Add and Sign in again answer with the terminal command
+ * (`ai-account-center antigravity signin <profile>`) as the fallback.
+ *
+ * The preflight spawns bubblewrap, so its result is cached for five minutes
+ * (the same pattern as Codex's CLI detection) rather than probed on every
+ * dashboard read; a host that gains or loses the sandbox reflects it within
+ * that window without a server restart.
  */
+export const ANTIGRAVITY_FLOW_CACHE_MS = 5 * 60_000;
+let antigravityFlowCache: {
+  home: string;
+  value: DashboardSignInUnavailableReason | null;
+  at: number;
+} | null = null;
 export function antigravitySignInFlow(
-  home: string = os.homedir()
-): DashboardSignInUnavailableReason {
-  return nativeBinaryProblem(home, process.getuid?.() ?? null)
-    ? 'tool_missing'
-    : 'preflight_failed';
+  home: string = os.homedir(),
+  now: number = Date.now(),
+  preflight: (home: string) => SignInPreflight = antigravitySignInPreflight
+): DashboardSignInUnavailableReason | null {
+  if (
+    antigravityFlowCache &&
+    antigravityFlowCache.home === home &&
+    now - antigravityFlowCache.at < ANTIGRAVITY_FLOW_CACHE_MS
+  ) {
+    return antigravityFlowCache.value;
+  }
+  const result = preflight(home);
+  const value = result.ok ? null : result.reason;
+  antigravityFlowCache = { home, value, at: now };
+  return value;
+}
+
+/** Drop the cached preflight (tests, and a host whose sandbox just changed). */
+export function resetAntigravitySignInFlowCache(): void {
+  antigravityFlowCache = null;
 }
 
 export interface LifecycleFactsSources {
   codexCliAvailable: () => boolean;
   claudeEnabled: () => boolean;
-  /** Antigravity's flow reason; the default checks the installed CLI. */
-  antigravityFlow?: () => DashboardSignInUnavailableReason;
+  /** Antigravity's flow reason (null when the supervised sign-in can run). */
+  antigravityFlow?: () => DashboardSignInUnavailableReason | null;
   /** Muse Sign in again; off by default until its Mac output is verified live. */
   museEnabled?: () => boolean;
 }
@@ -188,6 +220,7 @@ export function lifecycleProviderFacts(
 ): ProviderRegistryFacts {
   const claudeEnabled = sources.claudeEnabled();
   const museEnabled = (sources.museEnabled ?? (() => getMuseLifecycle().enabled))();
+  const antigravityReason = (sources.antigravityFlow ?? antigravitySignInFlow)();
   return {
     lifecycleRoutes: true,
     secureTransport: context.secureTransport === true,
@@ -195,7 +228,7 @@ export function lifecycleProviderFacts(
       ...(sources.codexCliAvailable() ? {} : { codex: 'tool_missing' as const }),
       ...(claudeEnabled ? {} : { claude: 'not_implemented' as const }),
       ...(museEnabled ? {} : { muse: 'not_implemented' as const }),
-      antigravity: (sources.antigravityFlow ?? antigravitySignInFlow)(),
+      ...(antigravityReason ? { antigravity: antigravityReason } : {}),
     },
     remove: { claude: claudeEnabled },
     recheck: { codex: false, claude: false, antigravity: false },
