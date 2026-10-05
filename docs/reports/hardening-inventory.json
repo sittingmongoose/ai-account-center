@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1129,
+    "totalOccurrences": 1130,
     "filesAffected": 112,
-    "hotpathOccurrences": 499,
+    "hotpathOccurrences": 500,
     "hotpathFilesAffected": 62,
     "topHotpathFiles": [
       {
@@ -602,8 +602,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 34,
-      "totalSourceFiles": 387,
-      "coverageRatio": 0.0879,
+      "totalSourceFiles": 388,
+      "coverageRatio": 0.0876,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -630,7 +630,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 136,
+          "count": 137,
           "withLogger": 18
         },
         {
@@ -798,7 +798,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 696
+          "loc": 712
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
