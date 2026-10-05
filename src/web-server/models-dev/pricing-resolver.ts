@@ -89,15 +89,26 @@ function findProvider(
   return registry[normalizedProvider];
 }
 
+// The registry's model maps are parsed once per cache file and never mutated,
+// so the normalized lookup can be built once per models object.
+const normalizedModelEntries = new WeakMap<
+  NonNullable<ModelsDevProvider['models']>,
+  Map<string, ModelsDevModel>
+>();
+
 function findModel(provider: ModelsDevProvider, model: string): ModelsDevModel | undefined {
   const models = provider.models;
   if (!models) return undefined;
 
-  const normalizedEntries = new Map<string, ModelsDevModel>();
-  for (const [key, value] of Object.entries(models)) {
-    if (!isModelEntry(value)) continue;
-    normalizedEntries.set(normalizeId(key), value);
-    if (typeof value.id === 'string') normalizedEntries.set(normalizeId(value.id), value);
+  let normalizedEntries = normalizedModelEntries.get(models);
+  if (!normalizedEntries) {
+    normalizedEntries = new Map<string, ModelsDevModel>();
+    for (const [key, value] of Object.entries(models)) {
+      if (!isModelEntry(value)) continue;
+      normalizedEntries.set(normalizeId(key), value);
+      if (typeof value.id === 'string') normalizedEntries.set(normalizeId(value.id), value);
+    }
+    normalizedModelEntries.set(models, normalizedEntries);
   }
 
   for (const candidate of getModelCandidates(model)) {

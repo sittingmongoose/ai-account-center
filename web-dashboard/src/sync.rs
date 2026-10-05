@@ -4,7 +4,10 @@
 //! element being re-created at its final value.
 
 use slint::{Model, ModelRc, SharedString, VecModel};
-use std::{collections::HashMap, rc::Rc};
+use std::{
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 
 /// Make `model` equal to `rows`, matching rows by `key`. Rows whose key is unchanged and whose data is
 /// equal are left alone; changed rows are replaced in place; new rows are inserted at their position;
@@ -14,24 +17,37 @@ pub fn sync_rows<T: Clone + PartialEq + 'static>(
     rows: Vec<T>,
     key: impl Fn(&T) -> SharedString,
 ) {
+    // Where every key sat before the first edit. The candidates are always the rows after the last
+    // match, in their original order, so this one pass replaces a scan per wanted row.
+    let mut positions: HashMap<SharedString, VecDeque<usize>> = HashMap::new();
+    for at in 0..model.row_count() {
+        if let Some(current) = model.row_data(at) {
+            positions.entry(key(&current)).or_default().push_back(at);
+        }
+    }
     let mut index = 0;
+    let mut matched: isize = -1;
     for row in rows {
-        let wanted = key(&row);
-        let count = model.row_count();
-        let found = (index..count).find(|&j| {
-            model
-                .row_data(j)
-                .is_some_and(|current| key(&current) == wanted)
-        });
+        let found = match positions.get_mut(&key(&row)) {
+            Some(queue) => {
+                // Anything at or before the last match is no longer in the model.
+                while queue.front().is_some_and(|&at| at as isize <= matched) {
+                    queue.pop_front();
+                }
+                queue.pop_front()
+            }
+            None => None,
+        };
         match found {
             Some(at) => {
                 // Rows between the cursor and the match were removed or moved later.
-                for _ in index..at {
+                for _ in 0..at as isize - matched - 1 {
                     model.remove(index);
                 }
                 if model.row_data(index).as_ref() != Some(&row) {
                     model.set_row_data(index, row);
                 }
+                matched = at as isize;
             }
             None => model.insert(index, row),
         }

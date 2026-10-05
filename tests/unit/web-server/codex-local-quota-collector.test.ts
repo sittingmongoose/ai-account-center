@@ -206,3 +206,146 @@ describe('getCodexLocalQuota', () => {
     expect(quota).toBeNull();
   });
 });
+
+describe('getCodexLocalQuota walk pruning', () => {
+  const QUOTA = {
+    primary: { used_percent: 20, window_minutes: 300, resets_at: 1781033803 },
+    secondary: { used_percent: 30, window_minutes: 10080, resets_at: 1781192122 },
+    plan_type: 'pro',
+  };
+
+  function recordingReaddir(visited: string[]) {
+    return (dir: string): fs.Dirent[] => {
+      visited.push(dir);
+      return fs.readdirSync(dir, { withFileTypes: true });
+    };
+  }
+
+  it('finds the newest sessions in a YYYY/MM/DD tree without walking old partitions', async () => {
+    const { env, sessions } = freshHome('prune-nested');
+    // 40 days x 3 files; only the newest file carries quota.
+    for (let i = 0; i < 40; i++) {
+      const day = new Date(Date.UTC(2026, 4, 1 + i));
+      const y = String(day.getUTCFullYear());
+      const m = String(day.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(day.getUTCDate()).padStart(2, '0');
+      const dir = path.join(sessions, y, m, d);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const hh of ['10', '11', '12']) {
+        const newest = i === 39 && hh === '12';
+        const file = path.join(dir, `rollout-${y}-${m}-${d}T${hh}-00-00-aaaa.jsonl`);
+        fs.writeFileSync(file, tokenCountLine(newest ? QUOTA : null) + '\n');
+      }
+    }
+
+    const visited: string[] = [];
+    const quota = await getCodexLocalQuota({
+      env,
+      readdirImpl: recordingReaddir(visited),
+      now: Date.now(),
+    });
+    expect(quota?.tier).toBe('pro');
+    expect(quota?.quotaPercentage).toBe(70);
+    // root + 2026 + 06 + the 7 newest day dirs (3x7 = 21 >= 20 files); a full
+    // walk would need 44 readdirs (root + year + 2 months + 40 days).
+    expect(visited).toHaveLength(10);
+    expect(visited).not.toContain(path.join(sessions, '2026', '05'));
+    expect(visited).not.toContain(path.join(sessions, '2026', '06', '02'));
+  });
+
+  it('prunes combined YYYY-MM-DD partitions the same way', async () => {
+    const { env, sessions } = freshHome('prune-combined');
+    for (let i = 1; i <= 25; i++) {
+      const d = String(i).padStart(2, '0');
+      const dir = path.join(sessions, `2026-06-${d}`);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, `rollout-2026-06-${d}T12-00-00-bbbb.jsonl`),
+        tokenCountLine(i === 25 ? QUOTA : null) + '\n'
+      );
+    }
+
+    const visited: string[] = [];
+    const quota = await getCodexLocalQuota({
+      env,
+      readdirImpl: recordingReaddir(visited),
+      now: Date.now(),
+    });
+    expect(quota?.tier).toBe('pro');
+    // Root + the 20 newest day dirs; the oldest 5 partitions are never opened.
+    expect(visited).toHaveLength(21);
+    expect(visited).toContain(path.join(sessions, '2026-06-25'));
+    expect(visited).not.toContain(path.join(sessions, '2026-06-01'));
+  });
+
+  it('falls back to the full walk when a non-date dir shares the tree', async () => {
+    const { env, sessions } = freshHome('prune-mixed');
+    for (let i = 1; i <= 9; i++) {
+      const d = String(i).padStart(2, '0');
+      const dir = path.join(sessions, '2026', '06', d);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const hh of ['10', '11', '12']) {
+        fs.writeFileSync(
+          path.join(dir, `rollout-2026-06-${d}T${hh}-00-00-aaaa.jsonl`),
+          tokenCountLine(null) + '\n'
+        );
+      }
+    }
+    const archive = path.join(sessions, 'archive');
+    fs.mkdirSync(archive, { recursive: true });
+    fs.writeFileSync(
+      path.join(archive, 'rollout-2026-06-09T23-00-00-cccc.jsonl'),
+      tokenCountLine({ ...QUOTA, plan_type: 'plus' }) + '\n'
+    );
+
+    const visited: string[] = [];
+    const quota = await getCodexLocalQuota({
+      env,
+      readdirImpl: recordingReaddir(visited),
+      now: Date.now(),
+    });
+    expect(quota?.tier).toBe('plus');
+    // Full walk: root + 2026 + 06 + 9 day dirs + archive = 13; nothing pruned.
+    expect(visited).toHaveLength(13);
+    expect(visited).toContain(archive);
+    expect(visited).toContain(path.join(sessions, '2026', '06', '01'));
+  });
+
+  it('stops at the directory cap on a huge non-date layout, newest-first so far', async () => {
+    const { env, sessions } = freshHome('walk-cap');
+    const dirEntry = (name: string): fs.Dirent =>
+      ({ name, isDirectory: () => true, isFile: () => false }) as unknown as fs.Dirent;
+    const fileEntry = (name: string): fs.Dirent =>
+      ({ name, isDirectory: () => false, isFile: () => true }) as unknown as fs.Dirent;
+    const rootEntries = Array.from({ length: 60_000 }, (_, i) =>
+      dirEntry(`z${String(i).padStart(5, '0')}`)
+    );
+    let readdirCalls = 0;
+    const readdirImpl = (dir: string): fs.Dirent[] => {
+      readdirCalls++;
+      if (dir === sessions) return rootEntries;
+      const base = path.basename(dir);
+      return [fileEntry(`rollout-2026-01-01T00-00-00-${base}.jsonl`)];
+    };
+
+    const tailed: string[] = [];
+    const quota = await getCodexLocalQuota({
+      env,
+      existsSyncImpl: () => true,
+      readdirImpl,
+      statMtimeMsImpl: () => Date.now(),
+      tailLinesImpl: async (file) => {
+        tailed.push(file);
+        return [tokenCountLine({ ...QUOTA, plan_type: 'capped' })];
+      },
+      now: Date.now(),
+    });
+    // Cap stops after 50k dirs (root + 49_999 children) without throwing, and
+    // the newest file among those visited still supplies the quota.
+    expect(readdirCalls).toBe(50_000);
+    expect(quota?.tier).toBe('capped');
+    expect(tailed[0]).toBe(
+      path.join(sessions, 'z49998', 'rollout-2026-01-01T00-00-00-z49998.jsonl')
+    );
+  });
+});

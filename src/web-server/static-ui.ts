@@ -3,8 +3,8 @@
  *
  * - Precompressed variants: scripts/build-ui.js writes .br and .gz copies and lists
  *   them in ui-build-manifest.json. They are checked once at startup (size and
- *   SHA-256) and served by content negotiation. Nothing is compressed on the fly,
- *   and /api responses are never compressed.
+ *   SHA-256) and served by content negotiation. Nothing here is compressed on
+ *   the fly; /api JSON is encoded per request (api-compression.ts).
  * - Cache-Control by path: pkg/<buildId>/** is immutable; everything else revalidates.
  * - Page routes: /, /login, /analytics, /accounts and /accounts/<provider> answer
  *   with index.html; a few aliases redirect; anything else goes back to /.
@@ -215,6 +215,25 @@ function relativeUiPath(root: string, requestPath: string): string | null {
   const relative = decoded.replace(/^\/+/, '');
   if (relative && !isInside(root, path.resolve(root, relative))) return null;
   return relative;
+}
+
+/**
+ * Whether a request path addresses an existing file below the static root,
+ * under the same safety rules serving applies. The addresses serving refuses
+ * (.br/.gz, the build manifest) answer JSON instead, so they are not files
+ * for this purpose.
+ */
+export function isStaticUiFileRequest(root: string, requestPath: string): boolean {
+  const relative = relativeUiPath(root, requestPath);
+  if (!relative) return false;
+  const lower = relative.toLowerCase();
+  if (lower.endsWith('.br') || lower.endsWith('.gz') || UNSERVED.has(path.posix.normalize(lower)))
+    return false;
+  try {
+    return fs.statSync(path.resolve(root, relative)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function setSharedHeaders(ui: StaticUi, res: http.ServerResponse, relative: string): void {

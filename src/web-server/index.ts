@@ -37,7 +37,14 @@ import {
   type AntigravityRuntimeFactory,
 } from '../antigravity/runtime-service';
 import { getInstalledAntigravityRuntimeFactory } from '../antigravity/production-runtime';
-import { loadStaticUi, pageRouteHandler, precompressedStatic, uiStaticHeaders } from './static-ui';
+import {
+  isStaticUiFileRequest,
+  loadStaticUi,
+  pageRouteHandler,
+  precompressedStatic,
+  uiStaticHeaders,
+} from './static-ui';
+import { apiCompression } from './api-compression';
 import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
 import { attachDashboardEventServer } from './dashboard-events';
@@ -109,6 +116,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const app = express();
   // Routes answer only to their canonical spelling; set before the first app.use.
   app.set('case sensitive routing', true);
+  // The stack's name and version in every answer help no legitimate client.
+  app.disable('x-powered-by');
   // Trusted local TLS proxy (off unless dashboard_tls.trusted_proxy is set).
   configureDashboardTransport(app);
   const server = http.createServer(app);
@@ -143,16 +152,44 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       next(err);
     }
   );
-  app.use(requestLoggingMiddleware);
+
+  // The packaged UI location: needed by the static-asset skip below and by
+  // the static handlers further down.
+  const staticDir = options.staticDir || path.join(__dirname, '../ui');
+  const staticUi = loadStaticUi(staticDir);
+  setDashboardBuildCommit(staticUi.commit);
+
+  // A static-asset GET/HEAD carries no session state and its log line is
+  // noise: one stat (express.static stats again anyway) skips both. Page and
+  // /api requests keep the audit line and the session, whatever the method.
+  app.use((req, res, next) => {
+    const staticAsset =
+      (req.method === 'GET' || req.method === 'HEAD') &&
+      !isApiRequestPath(req.path) &&
+      isStaticUiFileRequest(staticUi.root, req.path);
+    res.locals.staticAssetRequest = staticAsset;
+    if (staticAsset) {
+      next();
+      return;
+    }
+    requestLoggingMiddleware(req, res, next);
+  });
 
   // Session middleware (for dashboard auth)
   const sessionMiddleware = createSessionMiddleware();
-  app.use(sessionMiddleware);
+  app.use((req, res, next) => {
+    if (res.locals.staticAssetRequest === true) {
+      next();
+      return;
+    }
+    sessionMiddleware(req, res, next);
+  });
 
   // Auth middleware (protects API routes when enabled)
   app.use(authMiddleware);
 
-  // REST API routes (modularized)
+  // REST API routes (modularized); big JSON answers are encoded on the way out.
+  app.use('/api', apiCompression());
   const { apiRoutes } = await import('./routes/index');
   app.use('/api', apiRoutes);
   // Any /api request no router answered, in any method or letter case, is a JSON 404;
@@ -166,9 +203,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     res.status(404).json({ error: 'API endpoint was not found.' });
   });
 
-  const staticDir = options.staticDir || path.join(__dirname, '../ui');
-  const staticUi = loadStaticUi(staticDir);
-  setDashboardBuildCommit(staticUi.commit);
   app.use(precompressedStatic(staticUi));
   app.use(
     express.static(staticDir, {

@@ -87,6 +87,16 @@ const TAIL_MAX_BYTES = 1024 * 1024;
 /** Chunk size for backwards tail reads. */
 const TAIL_READ_CHUNK_BYTES = 64 * 1024;
 
+/**
+ * Hard cap on directories visited by the rollout walk. Bounds pathological
+ * session trees when the date pruning does not apply; the pruned walk itself
+ * only visits a handful of directories.
+ */
+const MAX_WALK_DIRECTORIES = 50_000;
+
+/** Zero-padded ISO date partition names: YYYY, MM, DD, or combined YYYY-MM-DD. */
+const DATE_DIR_NAME = /^(\d{4}|\d{2}|\d{4}-\d{2}-\d{2})$/;
+
 interface CodexRateWindow {
   usedPercent: number;
   resetsAtSeconds: number | null;
@@ -151,25 +161,68 @@ function extractRateLimits(line: string): CodexRateLimits | null {
   return { primary, secondary, planType };
 }
 
+interface RolloutWalkState {
+  files: string[];
+  dirsVisited: number;
+}
+
+/**
+ * Depth-first rollout collection. When every subdirectory of a directory is a
+ * zero-padded date partition (and the whole chain from the root is), the names
+ * embed ISO components, so descending order of `name + sep` is descending order
+ * of every path below it, and direct rollout-* files ('r' > any digit) sort
+ * above all dated subtree paths. Collecting newest-partition-first therefore
+ * yields globally descending paths, and once MAX_SESSIONS_SCANNED files are in
+ * hand every skipped partition holds only lower-sorting (older) paths — the
+ * caller's newest-first slice is unchanged. Any non-date subdirectory drops
+ * that subtree back to the exhaustive walk (no pruning below it), and the
+ * directory cap stops pathological layouts without throwing.
+ */
+function walkRolloutDir(
+  dir: string,
+  existsImpl: (p: string) => boolean,
+  readdirImpl: (d: string) => fs.Dirent[],
+  dateChain: boolean,
+  walk: RolloutWalkState
+): void {
+  if (walk.dirsVisited >= MAX_WALK_DIRECTORIES) return;
+  if (!existsImpl(dir)) return;
+  walk.dirsVisited++;
+
+  const subdirs: string[] = [];
+  for (const entry of readdirImpl(dir)) {
+    if (entry.isDirectory()) {
+      subdirs.push(entry.name);
+      continue;
+    }
+    if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
+      walk.files.push(path.join(dir, entry.name));
+    }
+  }
+
+  const prune = dateChain && subdirs.every((name) => DATE_DIR_NAME.test(name));
+  if (prune) {
+    subdirs.sort((a, b) => {
+      const ka = a + path.sep;
+      const kb = b + path.sep;
+      return ka < kb ? 1 : ka > kb ? -1 : 0;
+    });
+  }
+  for (const name of subdirs) {
+    if (prune && walk.files.length >= MAX_SESSIONS_SCANNED) return;
+    walkRolloutDir(path.join(dir, name), existsImpl, readdirImpl, prune, walk);
+  }
+}
+
 /** Recursive rollout-*.jsonl walker, lexicographically sorted (ISO ts in name). */
 function collectRolloutFiles(
   dir: string,
   existsImpl: (p: string) => boolean,
   readdirImpl: (d: string) => fs.Dirent[]
 ): string[] {
-  if (!existsImpl(dir)) return [];
-  const files: string[] = [];
-  for (const entry of readdirImpl(dir)) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...collectRolloutFiles(entryPath, existsImpl, readdirImpl));
-      continue;
-    }
-    if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
-      files.push(entryPath);
-    }
-  }
-  return files.sort();
+  const walk: RolloutWalkState = { files: [], dirsVisited: 0 };
+  walkRolloutDir(dir, existsImpl, readdirImpl, true, walk);
+  return walk.files.sort();
 }
 
 /**

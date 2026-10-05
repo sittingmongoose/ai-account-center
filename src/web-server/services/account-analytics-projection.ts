@@ -8,7 +8,7 @@ import {
 } from './account-analytics-pricing';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import type { ModelBreakdown, SessionUsage } from '../usage/types';
-import { attributeActivitySources } from './account-analytics-attribution';
+import { attributeActivitySources, type AttributedSource } from './account-analytics-attribution';
 import { ADDITIONAL_PROVIDERS } from './account-dashboard-projection';
 import type { DashboardProvider } from './account-dashboard-types';
 import type {
@@ -297,6 +297,22 @@ function hourEpoch(hour: unknown): number {
   return Date.parse(`${hour.replace(' ', 'T')}:00Z`);
 }
 
+/**
+ * The projection and the coverage attribute the same snapshot on every request. The activity reader replaces
+ * its sources array wholesale on each publish, so the array identity is an exact key; attribution builds new
+ * groupings and never mutates the rows, and both consumers only read them. One entry: a different snapshot
+ * replaces the memo instead of accumulating.
+ */
+let attributedSnapshot: { sources: SourceData[]; attributed: AttributedSource[] } | null = null;
+
+function attributedActivitySources(sources: SourceData[]): AttributedSource[] {
+  if (attributedSnapshot && attributedSnapshot.sources === sources)
+    return attributedSnapshot.attributed;
+  const attributed = attributeActivitySources(sources);
+  attributedSnapshot = { sources, attributed };
+  return attributed;
+}
+
 /** Internal coverage of the retained snapshot, independent of the provider filter. */
 export function accountAnalyticsActivityCoverage(
   sources: SourceData[],
@@ -305,7 +321,7 @@ export function accountAnalyticsActivityCoverage(
 ): AccountAnalyticsActivityCoverage {
   let oldest = Infinity;
   const active: DashboardProvider[] = [];
-  for (const source of attributeActivitySources(sources))
+  for (const source of attributedActivitySources(sources))
     for (const result of source.data)
       for (const hour of result.hourly) {
         const epoch = hourEpoch(hour.hour);
@@ -370,7 +386,7 @@ export function projectAccountAnalyticsActivity(
         'Local CLI logs do not reliably identify a subscription account. Select all accounts to view local activity; account quota history remains available.',
     };
   // Usage is grouped by the provider that served it (the logged route), not by the tool that logged it.
-  const selected = attributeActivitySources(sources).filter(
+  const selected = attributedActivitySources(sources).filter(
     (source) => query.provider === 'all' || query.provider === source.provider
   );
   if (selected.length === 0)

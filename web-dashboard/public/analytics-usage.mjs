@@ -248,7 +248,7 @@ const dayStartMonth = now => zonedDayStart(zonedMonthStart(now));
  * priced at a listed rate (`cost`), and `unk` says some of it is not logged. `label(p)` is a provider's name
  * (the response's provider table, else the dashboard's), and `tools(p)` the tools whose logs hold its usage.
  */
-export function activityData(payload, now = Date.now()) {
+function buildActivityRows(payload) {
   const act = payload?.activity || {};
   const available = ['ok', 'cached'].includes(act.status) && tokens(act.totals);
   // a known provider: the dashboard's, one the response's provider table lists, or one its activity reports
@@ -311,8 +311,6 @@ export function activityData(payload, now = Date.now()) {
   }
   const apiFrom = Date.parse(payload?.range?.from);
   const fetched = Date.parse(act.fetchedAt);
-  const win0 = Math.min(finite(apiFrom) ? Math.ceil(apiFrom / H) * H : Infinity, hours.length ? hours[0].t : Infinity, finite(apiFrom) ? Infinity : now - 7 * D);
-  const win1 = finite(fetched) ? Math.min(fetched, now) : hours.length ? Math.min(now, hours.at(-1).t + H) : now;
   // labels: the response's provider table (the dashboard's), then the activity rows, then the built-in table
   const names = { ...PROVIDER_LABEL };
   for (const row of providerRows) if (text(row.label) && !/ logs$/.test(row.label)) names[row.provider] = row.label;
@@ -338,7 +336,28 @@ export function activityData(payload, now = Date.now()) {
   // usage from a provider other than Claude and Codex (it shares the charts' neutral third series)
   const others = hours.some(r => !ownSeries(r.p)) || models.some(m => !ownSeries(m.provider));
   const refreshingRemote = Array.isArray(act.refreshingRemote) ? act.refreshingRemote.filter(h => h === 'mac' || h === 'windows') : [];
-  return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom };
+  return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom, fetched };
+}
+
+// Only the two window ends below read the clock, so the validated rows are kept per response: the
+// 15-second header tick and every re-render of the same payload reuse them instead of revalidating
+// every hour, model and session row again.
+const activityRowsCache = new WeakMap();
+function activityRows(payload) {
+  const keyable = payload !== null && typeof payload === 'object';
+  const hit = keyable ? activityRowsCache.get(payload) : null;
+  if (hit) return hit;
+  const built = buildActivityRows(payload);
+  if (keyable) activityRowsCache.set(payload, built);
+  return built;
+}
+/** The validated rows plus the log window they cover, whose ends follow `now`. */
+export function activityData(payload, now = Date.now()) {
+  const rows = activityRows(payload);
+  const { apiFrom, fetched, hours } = rows;
+  const win0 = Math.min(finite(apiFrom) ? Math.ceil(apiFrom / H) * H : Infinity, hours.length ? hours[0].t : Infinity, finite(apiFrom) ? Infinity : now - 7 * D);
+  const win1 = finite(fetched) ? Math.min(fetched, now) : hours.length ? Math.min(now, hours.at(-1).t + H) : now;
+  return { ...rows, win0, win1 };
 }
 
 /** The page range in local time: [a2, b) clipped to the logs that were read; step is the bucket size. */
@@ -890,6 +909,17 @@ export function dashedRect(w, h, r = 4) {
   pts.push([x0, y0 + rr]); arc(x0 + rr, y0 + rr, 180);
   return dashPolyline(pts, [3, 3]);
 }
+// The dash depends only on the cell box, so only a resize of the heatmap rebuilds the ~200-point string.
+let dashRectKey = '';
+let dashRectPath = '';
+function heatDash(width, height) {
+  const key = `${width}x${height}`;
+  if (key !== dashRectKey) {
+    dashRectKey = key;
+    dashRectPath = dashedRect(width, height);
+  }
+  return dashRectPath;
+}
 function heatView(A, R, state, width, height) {
   const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ v: null, n: 0, tok: 0, cost: 0, unk: false })));
   // hours inside the read window count (zero when nothing ran); hours outside it stay empty, never zero;
@@ -916,7 +946,7 @@ function heatView(A, R, state, width, height) {
     cells: out, days: WD,
     hours: Array.from({ length: 24 }, (_, h) => h % (wide ? 3 : 6) === 0 ? hourLab(h) : ''),
     busiest: max ? valTxt(max) : 'none',
-    dash: dashedRect(Math.max(4, ((width || DEFAULT_SIZES.heat.w) - 38 - 72) / 24), height || 24),
+    dash: heatDash(Math.max(4, ((width || DEFAULT_SIZES.heat.w) - 38 - 72) / 24), height || 24),
   };
 }
 
