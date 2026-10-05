@@ -202,6 +202,38 @@ describe('Codex activation process lifecycle', () => {
     expect(fake.events).toEqual(['lock', 'prepare-cli', 'native-unlock', 'unlock']);
   });
 
+  it('lets an idle daemon, proxy and desktop-hosted servers switch without treating presence as work', async () => {
+    const proxy = processFixture(30, ['/fixture/bin/codex', 'app-server', 'proxy']);
+    const execServer = processFixture(
+      23,
+      ['/usr/lib/chatgpt/resources/codex', 'exec-server', '--remote', 'https://fixture.invalid/api'],
+      { ppid: 20, env: { HOME: '/fixture' } }
+    );
+    const fake = harness([daemon, proxy, desktop, bundled, execServer, renderer]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    expect(fake.events).toEqual(['lock', 'idle', 'SIGTERM:20', 'SIGTERM:10', 'retire-socket']);
+    // The proxy is not an auth writer: it survives the swap untouched.
+    expect(fake.current().some((entry) => entry.pid === 30)).toBe(true);
+  });
+
+  it('refuses an orphaned exec-server with a reviewable plan instead of silently killing it', async () => {
+    const orphan = processFixture(23, [
+      '/usr/lib/chatgpt/resources/codex',
+      'exec-server',
+      '--remote',
+      'https://fixture.invalid/api',
+    ]);
+    const fake = harness([daemon, orphan]);
+    const error: unknown = await createCodexActivationRuntime(home, fake.deps)
+      .stop()
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(CodexActivationRuntimeError);
+    expect((error as CodexActivationRuntimeError).code).toBe('busy');
+    expect((error as CodexActivationRuntimeError).stopPlan).toBeDefined();
+    expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+  });
+
   it('refuses actual active thread state, including waiting-for-user tasks, without stopping processes', async () => {
     const fake = harness([daemon]);
     fake.deps.assertIdle = async () => {

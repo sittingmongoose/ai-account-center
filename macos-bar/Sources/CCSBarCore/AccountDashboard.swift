@@ -126,6 +126,8 @@ public struct CodexAutoSwitch: Decodable, Sendable {
   public let activationInProgress: Bool
   public let lastCheckedAt: String?
   public let lastSwitchedAt: String?
+  /// Profile the monitor chose but could not switch to yet. Present only for waiting_idle.
+  public let candidate: String?
 }
 
 public struct DashboardAccount: Decodable, Identifiable, Sendable {

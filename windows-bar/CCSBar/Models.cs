@@ -319,6 +319,8 @@ public sealed class AutoSwitchStatus
     public bool ActivationInProgress { get; set; }
     public string? LastCheckedAt { get; set; }
     public string? LastSwitchedAt { get; set; }
+    /// <summary>Profile the monitor chose but could not switch to yet. Present only for waiting_idle.</summary>
+    public string? Candidate { get; set; }
 }
 
 public static class Formatting

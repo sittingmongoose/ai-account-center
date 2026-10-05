@@ -202,6 +202,8 @@ export interface CodexAutoSwitchDashboardStatus {
   activationInProgress: boolean;
   lastCheckedAt?: string;
   lastSwitchedAt?: string;
+  /** Profile the monitor chose but could not switch to yet. Present only for waiting_idle. */
+  candidate?: string;
 }
 
 /** The running server: package version and the build's commit. No paths or hosts. */

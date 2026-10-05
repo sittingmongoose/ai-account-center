@@ -662,4 +662,118 @@ describe('native Codex automatic switching', () => {
     expect(JSON.stringify(service.getStatus())).not.toContain('PRIVATE SECRET');
     expect(activate).not.toHaveBeenCalled();
   });
+
+  it('names the blocked candidate while waiting for idle, and logs the decision', async () => {
+    const entries: { event: string; context: Record<string, unknown> }[] = [];
+    const h = harness({
+      activate: async () => {
+        throw new CodexActivationError('busy', 'PRIVATE PROCESS DETAIL');
+      },
+      log: (_level, event, _message, context) => {
+        entries.push({ event, context });
+      },
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'waiting_idle', candidate: 'beta' });
+    expect(JSON.stringify(h.service.getStatus())).not.toContain('PRIVATE PROCESS DETAIL');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      event: 'codex.auto_switch',
+      context: { outcome: 'waiting_idle', active: 'alpha', candidate: 'beta' },
+    });
+    expect(JSON.stringify(entries)).not.toContain('PRIVATE');
+  });
+
+  it('drops the candidate once the switch completes', async () => {
+    let attempts = 0;
+    const h = harness({
+      activate: async () => {
+        if (attempts++ === 0) throw new CodexActivationError('busy', 'busy');
+      },
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus().candidate).toBe('beta');
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'switched' });
+    expect(h.service.getStatus().candidate).toBeUndefined();
+  });
+
+  it('says plainly when the usage reading is out of date', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, { fetchedAt: new Date(NOW - 700_000).toISOString() }),
+        row('beta', 20),
+      ],
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'no_quota' });
+    expect(h.service.getStatus().message).toContain('out of date');
+    expect(h.activate).not.toHaveBeenCalled();
+  });
+
+  it('says plainly when the usage window already reset', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, {
+          fetchedAt: new Date(NOW - 120_000).toISOString(),
+          quotaWindows: [
+            {
+              key: 'five_hour',
+              label: '5h',
+              usedPercent: 100,
+              remainingPercent: 0,
+              resetAt: new Date(NOW - 60_000).toISOString(),
+              windowMinutes: 300,
+            },
+          ],
+        }),
+        row('beta', 20),
+      ],
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'no_quota' });
+    expect(h.service.getStatus().message).toContain('already reset');
+    expect(h.activate).not.toHaveBeenCalled();
+  });
+
+  it('says plainly when the live login no longer matches a saved profile', async () => {
+    const h = harness({
+      getAuthSnapshot: () => ({
+        live: {
+          fingerprint: 'private-live-fingerprint',
+          email: 'stranger@example.test',
+          accountId: 'stranger',
+        },
+        profiles: {
+          alpha: 'private-alpha-fingerprint',
+          beta: 'private-beta-fingerprint',
+          gamma: 'private-gamma-fingerprint',
+        },
+      }),
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'no_quota' });
+    expect(h.service.getStatus().message).toContain('changed outside the dashboard');
+    expect(h.activate).not.toHaveBeenCalled();
+  });
+
+  it('logs outcome transitions once instead of every poll', async () => {
+    const entries: string[] = [];
+    let exhausted = false;
+    const h = harness({
+      getRows: async () =>
+        exhausted
+          ? [row('alpha', 100), row('beta', 20)]
+          : [row('alpha', 50), row('beta', 20)],
+      log: (_level, _event, _message, context) => {
+        entries.push(String(context.outcome));
+      },
+    });
+    await h.service.runCycle();
+    await h.service.runCycle();
+    expect(entries).toEqual(['healthy']);
+    exhausted = true;
+    await h.service.runCycle();
+    expect(entries).toEqual(['healthy', 'switched']);
+  });
 });

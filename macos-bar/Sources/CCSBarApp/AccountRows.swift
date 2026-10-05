@@ -339,6 +339,40 @@ struct SectionHeader: View {
   }
 }
 
+/// Why Codex automatic switching is stuck, in plain words, above the Codex accounts.
+/// Visible only for blocked outcomes; healthy switching adds no line and changes no layout.
+struct CodexAutoStatusLine: View {
+  @ObservedObject var model: AccountsViewModel
+
+  private static let blocked: Set<String> = ["waiting_idle", "no_quota", "no_candidate", "error"]
+
+  var body: some View {
+    withPalette { palette in
+      if let status = model.dashboard?.codexAutoSwitch, status.enabled,
+        Self.blocked.contains(status.outcome)
+      {
+        Text(verbatim: CodexAutoStatusLine.text(status: status, accounts: model.dashboard?.accounts ?? []))
+          .font(.system(size: 12)).foregroundStyle(palette.label2)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.leading, TrayMetrics.rowLeading)
+          .padding(.trailing, TrayMetrics.rowTrailing)
+          .padding(.top, 2)
+          .accessibilityIdentifier("codex-auto-status")
+      }
+    }
+  }
+
+  static func text(status: CodexAutoSwitch, accounts: [DashboardAccount]) -> String {
+    guard status.outcome == "waiting_idle", let candidate = status.candidate else {
+      return status.message
+    }
+    let identity =
+      accounts.first(where: { $0.provider == "codex" && $0.capabilities.codexProfile == candidate })?
+      .identity ?? candidate
+    return "\(status.message) Activate \(identity) to switch now."
+  }
+}
+
 /// Antigravity's own auto-switch (thresholdUsedPercent, % used), shown once two accounts exist.
 struct AntigravityAutoControls: View {
   @ObservedObject var model: AccountsViewModel

@@ -694,12 +694,27 @@ function policies(data, home, ag) {
   const codexKnown = !!auto && finite(auto.thresholdPercent) && auto.thresholdPercent >= 0 && auto.thresholdPercent <= 100;
   const codex = home.sections.find(section => section.id === 'codex');
   const codexUsed = codexKnown ? 100 - auto.thresholdPercent : -1;
+  // A stuck switch must say why in plain words, on the row itself, not only on hover.
+  const codexBlocked = codexKnown && auto?.enabled === true
+    && ['waiting_idle', 'no_quota', 'no_candidate', 'error'].includes(auto?.outcome);
+  const candidateAccount = auto?.outcome === 'waiting_idle' && typeof auto?.candidate === 'string'
+    ? (Array.isArray(data?.accounts) ? data.accounts : [])
+      .find(account => account?.provider === 'codex' && account?.capabilities?.codexProfile === auto.candidate)
+    : null;
+  const candidateLabel = candidateAccount
+    ? (text(candidateAccount.email) || text(candidateAccount.label) || '')
+    : text(auto?.candidate);
+  const codexSub = !codexKnown ? 'The server did not report the Codex policy.'
+    : !codexBlocked ? ''
+    : [text(auto?.message),
+      auto?.outcome === 'waiting_idle' && candidateLabel ? `Press Activate on ${candidateLabel} to switch now.` : '',
+    ].filter(Boolean).join(' ');
   const agSection = home.sections.find(section => section.id === 'antigravity');
   const rows = [{
     provider: 'codex', name: 'Codex', known: codexKnown, enabled: auto?.enabled === true,
     toggleEnabled: LIVE.codexPolicy && codexKnown && auto?.activationInProgress !== true,
     threshold: codexUsed, min: codexKnown ? Math.min(50, codexUsed) : 50, max: 99, stepEnabled: LIVE.codexPolicy && codexKnown,
-    wait: false, sub: codexKnown ? '' : 'The server did not report the Codex policy.',
+    wait: false, sub: codexSub,
     tip: codex?.auto?.message || text(auto?.message) || '',
   }];
   rows.push({
