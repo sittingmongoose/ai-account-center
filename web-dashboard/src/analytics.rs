@@ -1,4 +1,4 @@
-//! Analytics view model (version 5, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
+//! Analytics view model (version 6, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
 //! row, the usage charts (trend, cost by model, donut, sessions, token breakdown, cache efficiency,
 //! heatmap, daily cost), the custom range calendar, the quota history with its focus charts and the
 //! resets agenda. Everything lands in the `AxData` global (ui/pages/analytics/ax-data.slint).
@@ -10,10 +10,10 @@ use crate::sync::{Nested, sync_rows};
 use crate::{
     AnalyticsHeadView, AxAgendaRow, AxBar, AxBarRow, AxBucket, AxCache, AxCalendar, AxCardText,
     AxDaily, AxData, AxDay, AxDonut, AxDonutLeg, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat,
-    AxHeatCell, AxIncluded, AxKpi, AxLabel, AxLegendItem, AxModelRow, AxModelType, AxPickItem,
-    AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine, AxSessRecent,
-    AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
-    AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
+    AxHeatCell, AxIncluded, AxKpi, AxLabel, AxLegendItem, AxLoadHost, AxModelRow, AxModelType,
+    AxPickItem, AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine,
+    AxSessRecent, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow,
+    AxTrend, AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
 };
 use serde_json::Value;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -21,7 +21,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 /// The analytics view-model version this build understands (public/analytics-data.mjs ANALYTICS_VIEW_VERSION).
-pub const ANALYTICS_VIEW_VERSION: u64 = 5;
+pub const ANALYTICS_VIEW_VERSION: u64 = 6;
 
 // ---------------------------------------------------------------- JSON access (camelCase keys)
 static NULL: Value = Value::Null;
@@ -416,6 +416,7 @@ pub struct AnalyticsModels {
     scope: Rc<VecModel<AxScopeLine>>,
     included_hosts: Rc<VecModel<SharedString>>,
     included_rows: Rc<VecModel<AxSrcRow>>,
+    load_hosts: Rc<VecModel<AxLoadHost>>,
     src_cells: Nested<AxSrcCell>,
     prov_lines: Rc<VecModel<AxProvLine>>,
     prov_items: Nested<AxProvItem>,
@@ -454,6 +455,7 @@ impl Default for AnalyticsModels {
             scope: Rc::new(VecModel::default()),
             included_hosts: Rc::new(VecModel::default()),
             included_rows: Rc::new(VecModel::default()),
+            load_hosts: Rc::new(VecModel::default()),
             src_cells: Nested::default(),
             prov_lines: Rc::new(VecModel::default()),
             prov_items: Nested::default(),
@@ -492,6 +494,7 @@ pub fn bind(ui: &Dashboard, m: &AnalyticsModels) {
     ax.set_scope(ModelRc::from(m.scope.clone()));
     ax.set_included_hosts(ModelRc::from(m.included_hosts.clone()));
     ax.set_included_rows(ModelRc::from(m.included_rows.clone()));
+    ax.set_load_hosts(ModelRc::from(m.load_hosts.clone()));
     ax.set_prov_lines(ModelRc::from(m.prov_lines.clone()));
     ax.set_picker_items(ModelRc::from(m.picker_items.clone()));
     ax.set_trend_y(ModelRc::from(m.trend_y.clone()));
@@ -512,12 +515,12 @@ pub fn bind(ui: &Dashboard, m: &AnalyticsModels) {
 fn head(v: &Value, previous: AnalyticsHeadView) -> AnalyticsHeadView {
     AnalyticsHeadView {
         loading: previous.loading,
-        refreshing: b(v, "refreshing"),
+        updating: b(v, "updating"),
         error: previous.error,
         scope: s(v, "scope"),
         read: s(v, "read"),
         read_tip: s(v, "readTip"),
-        refresh_note: s(v, "refreshNote"),
+        update_note: s(v, "updateNote"),
         date: s(v, "date"),
         custom: b(v, "custom"),
     }
@@ -601,16 +604,28 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         let cells = m.src_cells.sync(
             &owner,
             rows_of(r, "cells", |c| AxSrcCell {
+                id: s(c, "id"),
                 text: s(c, "text"),
                 tone: s(c, "tone"),
                 tip: s(c, "tip"),
             }),
-            |c: &AxSrcCell| c.text.clone(),
+            // keyed by the cell's host, never by its text: a state flip ("Scanning…" to
+            // "Read 1m ago") updates the cell in place instead of re-creating it
+            |c: &AxSrcCell| c.id.clone(),
         );
         src_rows.push(AxSrcRow { tool, cells });
     }
     sync_rows(&m.included_rows, src_rows, |r: &AxSrcRow| r.tool.clone());
     m.src_cells.retain(&live_src);
+    // the held loading screen's per-host scan progress
+    let loading = g(usage, "loading");
+    sync_by_index(
+        &m.load_hosts,
+        rows_of(loading, "hosts", |h| AxLoadHost {
+            name: s(h, "name"),
+            detail: s(h, "detail"),
+        }),
+    );
     sync_rows(
         &m.kpis,
         arr(usage, "kpis").iter().map(kpi).collect(),
@@ -918,6 +933,11 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         &m.agenda_b,
         arr(agenda, "b").iter().map(agenda_row).collect(),
     );
-    ax.set_ready(true);
+    // The page arms only on an answer the view model calls useful (numbers to show, or a settled
+    // failure the header explains): a cold answer that is still converging stays behind the
+    // loading screen instead of drawing "Unavailable" cards that later pop into numbers.
+    if b(usage, "ready") {
+        ax.set_ready(true);
+    }
     Ok(())
 }

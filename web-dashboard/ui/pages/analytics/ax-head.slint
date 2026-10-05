@@ -63,7 +63,7 @@ component SrcCell inherits Text {
     text: root.c.text;
     font-family: Type.tab;
     font-size: 12px;
-    color: root.c.tone == "ok" ? Theme.ink-2 : root.c.tone == "cached" ? Theme.warn-text : root.c.tone == "unavailable" ? Theme.crit-text : Theme.ink-4;
+    color: root.c.tone == "ok" ? Theme.ink-2 : root.c.tone == "cached" ? Theme.warn-text : root.c.tone == "unavailable" ? Theme.crit-text : root.c.tone == "scanning" ? Theme.accent-text : Theme.ink-4;
     vertical-alignment: center;
     overflow: elide;
     horizontal-stretch: 1;
@@ -394,8 +394,19 @@ export component AxHeader inherits Rectangle {
                         vertical-alignment: center;
                         AxTip { tip: AxData.head.read-tip; }
                     }
-                    // the numbers on screen are the last snapshot; the log scan is running behind them
-                    if AxData.head.refreshing: Text { text: AxData.head.refresh-note == "" ? "· Refreshing…" : AxData.head.refresh-note; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+                    // One calm pill for every background update: a scan runs now, or source cells are still converging.
+                    if AxData.head.updating: upd := Rectangle {
+                        height: 22px;
+                        min-width: upd-row.preferred-width;
+                        preferred-width: upd-row.preferred-width;
+                        border-radius: 11px;
+                        background: Theme.paper-3;
+                        upd-row := HorizontalLayout {
+                            padding-left: 9px;
+                            padding-right: 9px;
+                            Text { text: AxData.head.update-note == "" ? "Updating…" : AxData.head.update-note; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+                        }
+                    }
                     info := AxInfo {
                         open: scope-pop.is-open;
                         clicked => { scope-pop.show(); }

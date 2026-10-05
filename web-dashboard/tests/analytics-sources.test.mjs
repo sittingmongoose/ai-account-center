@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 process.env.TZ = 'UTC';
 const { setDisplayTimeZone } = await import('../public/time-format.mjs');
 setDisplayTimeZone('UTC');
-const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC } = await import('../public/analytics-usage.mjs');
+const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC, hostProgress } = await import('../public/analytics-usage.mjs');
 const { modelRates } = await import('../public/model-rates.mjs');
 
 const now = Date.parse('2026-10-01T12:00:00Z');
@@ -199,8 +199,72 @@ test('Included usage names the tools and computers read, and how usage is groupe
   assert.deepEqual([cell('OMP', 1).text, cell('OMP', 1).tone], ['Cached, 2h 0m ago', 'cached']);
   assert.deepEqual([cell('zcode', 1).text, cell('zcode', 1).tone], ['Unavailable', 'unavailable']);
   assert.equal(cell('Claude Code', 1).text, 'Not read');
-  assert.ok(!JSON.stringify(inc.rows).includes('No usage log'), 'no per-host no-log rows');
+  assert.ok(!inc.rows.some(r => r.cells.some(c => c.text === 'No usage log')), 'no per-host no-log rows');
   assert.equal(includedView(payload({ sources: [] }), now).shown, false);
+});
+
+test('a tool a scan has not reached says Scanning, and the page holds until the first useful view', () => {
+  const five = host => ['claude', 'codex', 'omp', 'muse', 'zcode'].map(tool => ({ tool, host, state: 'scanning', lastScanAt: null, rowCount: 0, detail: 'the scan ran out of time before it reached this tool; the next scan continues' }));
+  const scanning = [...SOURCES.filter(r => r.host === 'ubuntu' || r.tool === 'antigravity' || r.tool === 'cursor'), ...five('mac'), ...five('windows')];
+  const inc = includedView(payload({ sources: scanning }), now);
+  const cell = inc.rows.find(r => r.tool === 'OMP').cells[1];
+  assert.deepEqual([cell.text, cell.tone, cell.id], ['Scanning…', 'scanning', 'mac']);
+  assert.match(cell.tip, /The scan ran out of time before it reached this tool; the next scan continues\./);
+  // scanning cells are flagged in the label, and never counted as failures
+  assert.equal(inc.label, 'Included usage · 10 scanning');
+  // a cold answer with no numbers yet stays behind the loading screen, with per-host progress
+  const cold = usageView(payload({ status: 'loading', totals: null, byHour: [], models: [], providers: [], refreshing: true, refreshingRemote: ['mac', 'windows'], sources: scanning }), state(), { now });
+  assert.equal(cold.ready, false);
+  assert.deepEqual(cold.loading.hosts, [
+    { name: 'Ubuntu', detail: 'read' },
+    { name: 'Mac', detail: '0 of 5 tools · scanning now' },
+    { name: 'Windows', detail: '0 of 5 tools · scanning now' },
+  ]);
+  assert.equal(cold.head.updating, true);
+  // the same cells with numbers in hand draw the page and update calmly
+  const warm = usageView(payload({ status: 'cached', refreshing: true, refreshingRemote: ['mac', 'windows'], sources: scanning }), state(), { now });
+  assert.equal(warm.ready, true);
+  assert.equal(warm.head.updateNote, 'Updating · refreshing Mac and Windows…');
+  // between scans the converging cells keep the pill, with per-host counts
+  const between = usageView(payload({ sources: scanning }), state(), { now });
+  assert.equal(between.ready, true);
+  assert.equal(between.head.updating, true);
+  assert.equal(between.head.updateNote, 'Updating · Mac 0 of 5 tools, Windows 0 of 5 tools · continues shortly');
+  // a settled failure is shown honestly, never held behind the skeleton forever
+  const dead = usageView(payload({ status: 'unavailable', totals: null, byHour: [], models: [], providers: [], sources: [] }), state(), { now });
+  assert.equal(dead.ready, true);
+  assert.equal(dead.head.updating, false);
+});
+
+test('no usage in range and not installed read as themselves, never unavailable', () => {
+  const sources = [
+    { tool: 'muse', host: 'mac', state: 'no_usage', lastScanAt: at(1), rowCount: 0, detail: 'usage logs found but no usage in the last 31 days' },
+    { tool: 'muse', host: 'windows', state: 'not_installed', lastScanAt: at(2), rowCount: 0, detail: 'no usage logs found on this host' },
+  ];
+  const inc = includedView(payload({ sources }), now);
+  const cells = inc.rows.find(r => r.tool === 'Muse Code').cells;
+  assert.deepEqual([cells[1].text, cells[1].tone], ['No usage in range', 'quiet']);
+  assert.match(cells[1].tip, /Usage logs found but no usage in the last 31 days\. Last scan/);
+  assert.deepEqual([cells[2].text, cells[2].tone], ['Not installed', 'quiet']);
+  assert.match(cells[2].tip, /No usage logs found on this host\./);
+  assert.equal(cells[0].text, 'Not read');
+  // neither state raises a failure flag, and the read line still names the scanned host
+  assert.equal(inc.label, 'Included usage');
+  assert.match(inc.line, /^Includes Muse Code on Mac\./);
+});
+
+test('hostProgress never calls a host whose every tool failed "read"', () => {
+  const failed = ['claude', 'codex', 'omp', 'muse', 'zcode'].map(tool => ({ tool, host: 'windows', state: 'unavailable', lastScanAt: null, rowCount: 0, detail: 'remote scan failed' }));
+  const mac = ['claude', 'codex', 'omp', 'muse', 'zcode'].map((tool, i) => ({ tool, host: 'mac', state: i < 2 ? 'ok' : 'scanning', lastScanAt: at(1), rowCount: i < 2 ? 5 : 0, detail: i < 2 ? null : 'the first scan is running' }));
+  const p = hostProgress(payload({ status: 'loading', refreshing: true, refreshingRemote: ['mac'], sources: [...failed, ...mac] }));
+  const by = Object.fromEntries(p.map(h => [h.key, h]));
+  assert.equal(by.windows.detail, 'unavailable');
+  assert.deepEqual([by.mac.done, by.mac.total, by.mac.detail], [2, 5, '2 of 5 tools · scanning now']);
+  // no grid rows yet while the first collection runs: honestly queued, never "read"
+  assert.deepEqual([by.ubuntu.done, by.ubuntu.detail], [0, '0 of 5 tools · scanning now']);
+  // the fixed no-local-log tools never count as failures of a host
+  const fixed = payload({ sources: [...failed.map(r => ({ ...r, detail: 'no local usage log: kept server-side' }))] });
+  assert.equal(hostProgress(fixed).find(h => h.key === 'windows').detail, 'read');
 });
 
 test('Included usage lists generic JSONL sources with the other tools', () => {

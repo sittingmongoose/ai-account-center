@@ -87,6 +87,33 @@ describe('analytics remote transport', () => {
     expect(parsed.rows).toHaveLength(1);
     expect(parsed.srows).toEqual([]);
     expect(parsed.kinds.muse.state).toBe('not_installed');
+    // A kind the deadline skipped reports pending; a cut kind reports partial.
+    const pending = parseAnalyticsRemoteResponse(
+      JSON.stringify(
+        response({
+          truncated: true,
+          kinds: {
+            omp: { state: 'ok', partial: true, fingerprints: {} },
+            muse: { state: 'pending', fingerprints: {} },
+          },
+        })
+      )
+    );
+    expect(pending.kinds.omp).toMatchObject({ state: 'ok', partial: true });
+    expect(pending.kinds.muse.state).toBe('pending');
+    expect(pending.kinds.muse.partial).toBeUndefined();
+    expect(() =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(response({ kinds: { omp: { state: 'bogus', fingerprints: {} } } }))
+      )
+    ).toThrow();
+    expect(() =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(
+          response({ kinds: { omp: { state: 'ok', partial: 'yes', fingerprints: {} } } })
+        )
+      )
+    ).toThrow();
   });
 
   it('parses session aggregates and rejects malformed ones', () => {
@@ -216,9 +243,13 @@ describe('analytics remote sources', () => {
     expect(ompMac?.lastScanAt).toBe('2026-10-02T00:00:00.000Z');
     // Both hosts are asked about every kind; a tool that is not installed there
     // answers not_installed from the host itself, never from a fixed claim here.
-    expect(
-      states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)
-    ).toEqual(['claude', 'codex', 'muse', 'omp', 'zcode']);
+    expect(states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)).toEqual([
+      'claude',
+      'codex',
+      'muse',
+      'omp',
+      'zcode',
+    ]);
     expect(states.filter((entry) => entry.host === 'mac').map((entry) => entry.tool)).toEqual([
       'claude',
       'codex',
@@ -351,7 +382,7 @@ describe('analytics remote sources', () => {
     await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
     const truncated = response({
       truncated: true,
-      kinds: { omp: { state: 'ok', fingerprints: {} } },
+      kinds: { omp: { state: 'pending', fingerprints: {} } },
       rows: [],
     });
     const { results, states } = await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -361,9 +392,12 @@ describe('analytics remote sources', () => {
     });
     const omp = results.find((entry) => entry.tool === 'omp');
     expect(omp?.data.hourly[0].inputTokens).toBe(100);
-    expect(states.find((entry) => entry.tool === 'omp' && entry.host === 'mac')?.state).toBe(
-      'cached'
-    );
+    // A tool the scan did not reach is still being scanned, never a failure,
+    // and the records from earlier scans stay in the totals.
+    const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
+    expect(mac?.state).toBe('scanning');
+    expect(mac?.rowCount).toBe(2);
+    expect(mac?.detail).toContain('stay included');
   });
 
   it('serves cached aggregates when the helper times out, without throwing', async () => {
@@ -419,10 +453,10 @@ describe('analytics remote sources', () => {
     expect(mac?.detail).toContain('custom OMP session folders');
   });
 
-  it('never calls an empty partial scan cached', async () => {
+  it('never calls an unreached tool unavailable or cached', async () => {
     const truncated = response({
       truncated: true,
-      kinds: { omp: { state: 'ok', fingerprints: {} } },
+      kinds: { omp: { state: 'pending', fingerprints: {} } },
       rows: [],
     });
     const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -431,7 +465,31 @@ describe('analytics remote sources', () => {
       runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(truncated)),
     });
     const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
-    expect(mac).toMatchObject({ state: 'unavailable', rowCount: 0 });
+    expect(mac).toMatchObject({ state: 'scanning', rowCount: 0 });
+    expect(mac?.detail).toContain('the next scan continues');
+  });
+
+  it('marks a kind its own scan cut short: cached with rows, scanning without', async () => {
+    const cut = response({
+      truncated: true,
+      kinds: {
+        omp: { state: 'ok', partial: true, fingerprints: { [FILE_1]: { size: 11, mtimeMs: 21 } } },
+        zcode: { state: 'ok', partial: true, fingerprints: {} },
+      },
+      rows: [row({ i: 40 })],
+    });
+    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(cut)),
+    });
+    const omp = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
+    expect(omp?.state).toBe('cached');
+    expect(omp?.detail).toContain('partway through this tool');
+    // The same cut with nothing read yet is still scanning, not a failure.
+    const zcode = states.find((entry) => entry.tool === 'zcode' && entry.host === 'mac');
+    expect(zcode?.state).toBe('scanning');
+    expect(zcode?.detail).toContain('the next scan continues');
   });
 
   it('keeps the rows of a kind the host could not read', async () => {
@@ -523,7 +581,7 @@ describe('analytics remote sources', () => {
       runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(stale)),
     });
     expect(states.find((entry) => entry.tool === 'muse' && entry.host === 'mac')).toMatchObject({
-      state: 'ok',
+      state: 'no_usage',
       rowCount: 0,
       detail: 'usage logs found but no usage in the last 31 days',
     });

@@ -274,15 +274,16 @@ export struct StrengthView {
     matches: bool,
 }
 
-// The Analytics header (version 4): loading and error come from set_analytics_loading, the rest from the view model.
+// The Analytics header (version 5): loading and error come from set_analytics_loading, the rest from the view model.
+// `updating` is the calm background indicator: a scan runs now, or source cells are still converging.
 export struct AnalyticsHeadView {
     loading: bool,
-    refreshing: bool,
+    updating: bool,
     error: string,
     scope: string,
     read: string,
     read-tip: string,
-    refresh-note: string,
+    update-note: string,
     date: string,
     custom: bool,
 }

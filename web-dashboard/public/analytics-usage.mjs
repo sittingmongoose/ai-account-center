@@ -1032,22 +1032,25 @@ export function calendarView(A, R, now, apiAll) {
 // ---------------------------------------------------------------- included usage (activity.sources)
 const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
 const SOURCE_HOSTS = [['ubuntu', 'Ubuntu'], ['mac', 'Mac'], ['windows', 'Windows']];
-const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed'];
+const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
+const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
 /**
  * The "Included usage" disclosure: one sentence naming the tools and computers whose logs were read, a plain note
  * for the tools that keep no local usage log, and a tool x computer grid of each source's state and last scan.
  * Tools with no local log on any host (Antigravity, Cursor) get the note only, never a grid row of "No usage log"
  * cells. It describes where the numbers come from; it never divides them (models stay the only division).
- * tone: ok | cached | unavailable | quiet.
+ * States: ok, no_usage, cached (with its age), scanning (a scan is working on the tool or has not reached it
+ * yet), not_installed, unavailable (a real failure, with its reason in the tip).
+ * tone: ok | cached | unavailable | scanning | quiet.
  */
 export function includedView(payload, now = Date.now()) {
   const seen = new Set();
   const list = (Array.isArray(payload?.activity?.sources) ? payload.activity.sources : []).filter(r => SOURCE_TOOLS.some(([t]) => t === r?.tool)
     && SOURCE_HOSTS.some(([h]) => h === r?.host) && SOURCE_STATES.includes(r?.state) && !seen.has(`${r.tool}|${r.host}`) && seen.add(`${r.tool}|${r.host}`));
   if (!list.length) return { shown: false, label: '', line: '', hosts: [], rows: [], foot: '' };
-  const read = r => r.state === 'ok' || r.state === 'cached';
+  const read = r => r.state === 'ok' || r.state === 'cached' || r.state === 'no_usage';
   const tools = SOURCE_TOOLS.filter(([t]) => list.some(r => r.tool === t));
   const included = tools.filter(([t]) => list.some(r => r.tool === t && read(r))).map(([, l]) => l);
   const hosts = SOURCE_HOSTS.filter(([h]) => list.some(r => r.host === h && read(r))).map(([, l]) => l);
@@ -1063,24 +1066,60 @@ export function includedView(payload, now = Date.now()) {
   ].filter(Boolean).join(' ');
   const when = r => Date.parse(text(r.lastScanAt));
   const events = r => Number.isInteger(r.rowCount) && r.rowCount >= 0 ? `${nf0.format(r.rowCount)} usage events kept` : '';
-  const cell = r => {
-    if (!r) return { text: 'Not read', tone: 'quiet', tip: 'This computer is not read for this tool.' };
+  const cell = (r, id) => {
+    if (!r) return { id, text: 'Not read', tone: 'quiet', tip: 'This computer is not read for this tool.' };
     const t = when(r), last = finite(t) ? `Last scan ${timeTxt(t)}.` : 'Never scanned.';
-    if (r.state === 'ok') return { text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), last].filter(Boolean).join(' · ') };
-    if (r.state === 'cached') return { text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `The latest scan did not finish; earlier records are shown. ${last}` };
-    if (noLocalLog(r)) return { text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
-    if (r.state === 'not_installed') return { text: 'Not installed', tone: 'quiet', tip: '' };
-    return { text: 'Unavailable', tone: 'unavailable', tip: `${text(r.detail) ? `${text(r.detail).replace(/^./, c => c.toUpperCase())}. ` : ''}${last}` };
+    const why = text(r.detail) ? `${capFirst(r.detail)}. ` : '';
+    if (r.state === 'scanning') return { id, text: 'Scanning…', tone: 'scanning', tip: `${why}${last}` };
+    if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), last].filter(Boolean).join(' · ') };
+    if (r.state === 'cached') return { id, text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Earlier records are shown until a scan finishes. ${last}` };
+    if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: `${why}${last}` };
+    if (noLocalLog(r)) return { id, text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
+    if (r.state === 'not_installed') return { id, text: 'Not installed', tone: 'quiet', tip: why || 'No usage logs for this tool were found on this computer.' };
+    return { id, text: 'Unavailable', tone: 'unavailable', tip: `${why}${last}` };
   };
   const quiet = new Set(nolog.map(([t]) => t));
-  const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h))) }));
+  const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h), h)) }));
+  const scanning = list.filter(r => r.state === 'scanning').length;
   const cached = list.filter(r => r.state === 'cached').length, down = list.filter(r => r.state === 'unavailable' && !noLocalLog(r)).length;
-  const flags = [cached ? `${cached} cached` : '', down ? `${down} unavailable` : ''].filter(Boolean).join(', ');
+  const flags = [scanning ? `${scanning} scanning` : '', cached ? `${cached} cached` : '', down ? `${down} unavailable` : ''].filter(Boolean).join(', ');
   return {
     shown: true, label: `Included usage${flags ? ` · ${flags}` : ''}`, line,
     hosts: SOURCE_HOSTS.map(([, l]) => l.toUpperCase()), rows,
-    foot: 'Usage from every computer is merged, grouped by the provider that served it (the route each log records; a route no provider claims is under Other) and divided by model. A source that cannot be read keeps its last scan (cached) or shows as unavailable; it is never counted as zero.',
+    foot: 'Usage from every computer is merged, grouped by the provider that served it (the route each log records; a route no provider claims is under Other) and divided by model. A tool a scan has not finished says Scanning until one does; a source that cannot be read keeps its last scan (cached) or shows as unavailable with the reason. A missing reading is never counted as zero.',
   };
+}
+
+// ---------------------------------------------------------------- loading and convergence progress
+/** The five tools every computer is scanned for; the progress counts only these. */
+const PROGRESS_TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode'];
+/**
+ * Per-host scan progress for the loading screen and the header pill, derived from the same sources
+ * grid the disclosure shows: how many of the five tools have settled (read, no usage in range, not
+ * installed, cached or failed) and how many a scan is still working on. A host with no grid row yet
+ * counts as fully scanning only while a collection is actually running, so a settled page never
+ * claims progress it does not have.
+ */
+export function hostProgress(payload) {
+  const act = payload?.activity || {};
+  const list = Array.isArray(act.sources) ? act.sources : [];
+  const pending = new Set(Array.isArray(act.refreshingRemote) ? act.refreshingRemote.filter(h => h === 'mac' || h === 'windows') : []);
+  const running = act.status === 'loading' || act.refreshing === true;
+  return SOURCE_HOSTS.map(([h, name]) => {
+    const cells = list.filter(r => r?.host === h && PROGRESS_TOOLS.includes(r?.tool));
+    const total = PROGRESS_TOOLS.length;
+    const scanning = cells.length ? cells.filter(r => r.state === 'scanning').length : running ? total : 0;
+    const done = total - scanning;
+    const live = h === 'ubuntu' ? act.refreshing === true : pending.has(h) || (running && !cells.length);
+    // A host whose every tool failed to read is not "read": the loading screen says unavailable,
+    // and the page shows the real reasons (the grid cells and their tips) as soon as it arms.
+    const failed = cells.length > 0 && cells.every(r => r.state === 'unavailable' && !noLocalLog(r));
+    const detail = scanning === 0
+      ? failed ? 'unavailable' : cells.length || !running ? 'read' : 'queued'
+      : live ? `${done} of ${total} tools · scanning now`
+        : `${done} of ${total} tools · continues shortly`;
+    return { key: h, name, done, total, scanning, detail };
+  });
 }
 
 // ---------------------------------------------------------------- tokens by provider, and the provider picker
@@ -1150,17 +1189,24 @@ export function providerChoices(A, R, state) {
  * split, cache, donut: tokens|cost, heat: cost|tokens, cbmSort: cost|tokens, donutOpen: the open legend groups
  * (_other, _undrawn) }. opts: { now, sizes }.
  */
-function headOf(A, R, state, now, zone) {
+function headOf(A, R, state, now, zone, progress) {
   const remote = [...new Set(Array.isArray(A.refreshingRemote) ? A.refreshingRemote : [])]
     .filter(h => h === 'mac' || h === 'windows')
     .sort((a, b) => (a === 'mac' ? 0 : 1) - (b === 'mac' ? 0 : 1))
     .map(h => (h === 'mac' ? 'Mac' : 'Windows'));
+  const counts = progress.filter(p => p.scanning > 0).map(p => `${p.name} ${p.done} of ${p.total} tools`).join(', ');
+  // One calm indicator for every background update: a scan running now, or cells
+  // still converging between scans. Nothing else on the page moves for it.
+  const updating = A.refreshing || counts !== '';
+  const updateNote = !updating ? ''
+    : A.refreshing ? remote.length ? `Updating · refreshing ${remote.join(' and ')}…` : 'Updating…'
+      : `Updating · ${counts} · continues shortly`;
   return {
     scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
     read: relTxt(A.win1, now),
-    refreshing: A.refreshing,
-    refreshNote: remote.length ? `· Refreshing ${remote.join(' and ')}…` : '',
-    readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' The log scan is refreshing; earlier records are shown until it completes.' : ''}`,
+    updating,
+    updateNote,
+    readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}`,
     date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
   };
 }
@@ -1172,7 +1218,7 @@ export function usageHead(payload, state, opts = {}) {
   const now = opts.now ?? Date.now();
   const A = activityData(payload, now);
   const R = pageRange(state, A, now);
-  return headOf(A, R, state, now, zoneName(now));
+  return headOf(A, R, state, now, zoneName(now), hostProgress(payload));
 }
 export function usageView(payload, state, opts = {}) {
   const now = opts.now ?? Date.now();
@@ -1200,9 +1246,17 @@ export function usageView(payload, state, opts = {}) {
   ].filter(Boolean).join(' ');
   const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
   const sessions = sessionsView(A, state, now);
+  const progress = hostProgress(payload);
+  const converging = progress.some(p => p.scanning > 0);
+  // The page stays behind the loading screen until the first useful view is ready: numbers to
+  // show, or a settled failure the header can explain. A cold answer that is still converging
+  // never draws a page of "Unavailable" cards that later pops into numbers.
+  const ready = A.available || !(A.status === 'loading' || A.refreshing || converging);
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
-    head: headOf(A, R, state, now, zone),
+    ready,
+    loading: { hosts: progress.map(p => ({ name: p.name, detail: p.detail })) },
+    head: headOf(A, R, state, now, zone, progress),
     scope: [
       { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, grouped by the provider that served it: Claude Code, Codex and Muse Code are their own provider, OMP and zcode record the route of every call, and generic JSONL logs count under the provider their model names, else Other. A route no provider claims is under Other. Tokens by provider, under the totals, says how much each served; pick one to see its usage by model.' },
       { icon: 'wallet', text: 'Cost is an estimated API equivalent at the rates CCS prices each model at, or the cost the log recorded; it is not a bill. Cost with neither shows as not logged, and totals without it say partial.' },
@@ -1211,7 +1265,7 @@ export function usageView(payload, state, opts = {}) {
         unrec.length ? `${unrec.length} model${unrec.length === 1 ? '' : 's'} do not reconcile with these rates; their split uses token shares.` : '',
         noRate ? `${noRate} model${noRate === 1 ? ' has' : 's have'} no listed rate; ${noRate === 1 ? 'its' : 'their'} split uses token shares of the logged cost.` : '',
       ].filter(Boolean).join(' ') : "Per-type costs use each model's rate as CCS prices it and match every model's logged estimate to the cent." },
-      { icon: 'clock', text: `Logs read ${timeTxt(A.win1)}. Hours are shown in local time${zone ? ` (${zone})` : ''}.${A.status === 'cached' ? ' The scan is refreshing; earlier records are shown until it completes.' : ''}` },
+      { icon: 'clock', text: `Logs read ${timeTxt(A.win1)}. Hours are shown in local time${zone ? ` (${zone})` : ''}.${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}` },
     ],
     kpis: kpis(A, R, state, rows, K, C),
     providers: providersView(A, rows, state, opts.sizes?.trend?.w),

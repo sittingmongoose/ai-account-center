@@ -1,10 +1,10 @@
 // Analytics (Daylight Atlas): rebuilt around Usage, the original CCS analytics page improved. Order: header,
 // KPI row, usage trends, then cost by model, model usage, session stats, token breakdown, cache efficiency,
 // the weekday x hour heatmap and daily cost by provider (3 columns from 1600 px, 2 below), then the compact
-// quota history and, at the very bottom, upcoming resets and expiries. Every value comes from the version 3
+// quota history and, at the very bottom, upcoming resets and expiries. Every value comes from the version 6
 // analytics view model in AxData (pages/analytics/ax-data.slint); see README-ARCHITECTURE.md.
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
-import { AxData } from "analytics/ax-data.slint";
+import { AxData, AxLoadHost } from "analytics/ax-data.slint";
 import { AxReveal, AxCard, AxCardHead } from "analytics/ax-common.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { AxHeader, AxKpiRow } from "analytics/ax-head.slint";
@@ -24,6 +24,8 @@ export component AnalyticsPage inherits Rectangle {
     in property <length> win-h: 900px;
     // sections rise in once the first response arrives (or fails: the header then says why)
     property <bool> armed: AxData.ready || AxData.head.error != "";
+    // the loading screen's per-host rows; a quiet default until the first answer pushes real progress
+    property <[AxLoadHost]> load-hosts: AxData.load-hosts.length > 0 ? AxData.load-hosts : [{ name: "Ubuntu", detail: "queued" }, { name: "Mac", detail: "queued" }, { name: "Windows", detail: "queued" }];
     property <bool> wide3: Breakpoints.width >= 1600px;
     property <length> gap: Breakpoints.width < 1180px ? 14px : 18px;
     // first-view memory for the chart grid (it is laid out again when it changes column count)
@@ -42,18 +44,25 @@ export component AnalyticsPage inherits Rectangle {
         spacing: 0px;
         AxReveal { armed: true; scroll: root.scroll; view-bottom: root.view-bottom; delay: 40ms; AxHeader { } }
         Rectangle { height: 20px; }
-        // Before the first answer lands (no persisted snapshot yet): skeleton cards with a calm shimmer, one
-        // row per computer, so the page never sits blank. Concept: the .skel sweep in styles.css.
+        // Before the first useful answer lands (held by the view model until there are numbers to
+        // show or a settled failure to explain): skeleton cards with a calm shimmer and one row per
+        // computer saying how far its scan is ("2 of 5 tools · scanning now"), so the page never
+        // sits blank or looks broken while the logs are still being read. Concept: the .skel sweep
+        // in styles.css.
         if !root.armed: VerticalLayout {
             spacing: 18px;
             AxCard {
                 hover-lift: false;
-                AxCardHead { title: "Loading usage"; sub: "Loading usage from Ubuntu, Mac and Windows…"; }
+                AxCardHead { title: "Reading usage logs"; sub: "Reading usage logs on Ubuntu, Mac and Windows. The page appears as soon as the first numbers land."; }
                 VerticalLayout {
                     padding-left: 20px; padding-right: 20px; padding-top: 6px; padding-bottom: 18px; spacing: 12px;
-                    for host in ["Ubuntu", "Mac", "Windows"] : VerticalLayout {
+                    for host in root.load-hosts: VerticalLayout {
                         spacing: 6px;
-                        Text { text: host; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: host.name; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; vertical-alignment: center; }
+                            Text { text: host.detail; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        }
                         Skeleton { active: true; height: 12px; }
                     }
                 }

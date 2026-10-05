@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  'd419e0be349cc590cd1a661b629cac2384c0c6313537eb73806b93fc16c76c15';
+  '509f8be8181acbf2be760361c81943a167ec3adfeb206d94a1e1be02a3805b7a';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -78,7 +78,10 @@ export interface AnalyticsRemoteSessionRow {
 
 export interface AnalyticsRemoteKindResult {
   /** `error`: the data exists but could not be read; nothing of it was confirmed. */
-  state: 'ok' | 'not_installed' | 'error';
+  /** `pending`: the scan ran out of time before it reached the kind; none of its files were visited. */
+  state: 'ok' | 'not_installed' | 'error' | 'pending';
+  /** A cap or the deadline cut this kind's own scan short: its numbers are incomplete. */
+  partial?: boolean;
   fingerprints: Record<string, AnalyticsRemoteFingerprint>;
   /** zcode: an immutable open cannot read rows still in the write-ahead log. */
   walUnread?: boolean;
@@ -270,13 +273,21 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       kind !== 'zcode'
     )
       throw new AnalyticsRemoteTransportError();
-    const entry = value as { state?: unknown; fingerprints?: unknown; walUnread?: unknown };
+    const entry = value as {
+      state?: unknown;
+      partial?: unknown;
+      fingerprints?: unknown;
+      walUnread?: unknown;
+    };
     if (
       entry.state !== 'ok' &&
       entry.state !== 'not_installed' &&
       entry.state !== 'error' &&
+      entry.state !== 'pending' &&
       entry.state !== undefined
     )
+      throw new AnalyticsRemoteTransportError();
+    if (entry.partial !== undefined && typeof entry.partial !== 'boolean')
       throw new AnalyticsRemoteTransportError();
     if (entry.walUnread !== undefined && typeof entry.walUnread !== 'boolean')
       throw new AnalyticsRemoteTransportError();
@@ -295,7 +306,10 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
           ? 'not_installed'
           : entry.state === 'error'
             ? 'error'
-            : 'ok',
+            : entry.state === 'pending'
+              ? 'pending'
+              : 'ok',
+      ...(entry.partial === true ? { partial: true } : {}),
       fingerprints: prints as Record<string, AnalyticsRemoteFingerprint>,
       ...(entry.walUnread === true ? { walUnread: true } : {}),
     };

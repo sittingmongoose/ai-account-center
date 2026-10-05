@@ -62,7 +62,7 @@ reading in Slint, never add or average across accounts, never turn a missing val
   `set_refresh_interval`, `set_accounts(json)` (Accounts & Settings v2), `set_accounts_strength(json)` (the
   change-password strength, per keystroke), `set_signin_strength(json)`, `probe_tick()` (?e2e only).
 - **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs,
-  and `ANALYTICS_VIEW_VERSION = 5` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
+  and `ANALYTICS_VIEW_VERSION = 6` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
   and `ACCOUNTS_VIEW_VERSION = 2` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
   a mismatch is refused, not half-rendered. Bump the pair together when its structs change shape.
 - **In-place updates**: lib.rs owns one `Rc<VecModel<T>>` per list (sections, cards, registry, toasts, Details
@@ -141,8 +141,8 @@ The Analytics page (W3) is built like the concept's `app-analytics.js`. Four pur
   is dropped, so labels never overlap; Martian Mono is 7.15 px a character at 11 px, so label boxes are exact)
   and `agendaView()` (resets at the same minute merged, expiries with what is left, spent packs dropped, two
   balanced columns of whole days). Current readings come from the dashboard response, history from analytics.
-- `public/analytics-data.mjs` `analyticsSlintModel(view, page)`: the version 5 JSON for `src/analytics.rs`
-  (`ANALYTICS_VIEW_VERSION = 5`, its own version, checked there). It keeps the earlier `head`, `kpis` and
+- `public/analytics-data.mjs` `analyticsSlintModel(view, page)`: the version 6 JSON for `src/analytics.rs`
+  (`ANALYTICS_VIEW_VERSION = 6`, its own version, checked there). It keeps the earlier `head`, `kpis` and
   `quotaGroups` and adds `state`, `usage`, `quota` and `agenda`.
 
 `src/analytics.rs` writes it into the `AxData` global (`ui/pages/analytics/ax-data.slint`), with persistent
@@ -175,7 +175,11 @@ rate); for every provider, including Claude and Codex, the page leaves it out, s
 is logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`). A model with no known
 rate is never priced at a guess. "Included usage" in the header (`includedView`,
 from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each source's state and
-last scan.
+last scan. The states are honest end to end (FW4-N10): `ok` (read, with its age), `no usage in range` (scanned,
+nothing logged in the window), `cached` (the last scan failed or was cut short; older numbers are shown, with
+their age and the reason), `scanning` (a scan is working on the tool, or ran out of time before it reached or
+finished it - a truncated cold scan never says "unavailable"), `not installed` (the host was scanned and the
+tool is absent) and `unavailable` (a real failure, with a short plain reason in the tip).
 
 Seeing every provider's usage (models stay the division of the charts): the provider picker (`providerChoices`,
 `PickerButton` in the header) lists All and every provider that served usage in the range, in the dashboard's
@@ -197,7 +201,11 @@ bridge.js interpolates the 360-sample point arrays every frame and pushes only t
 (`set_analytics_trend_paths`), while the axes cross-fade. Count-ups (`AxNum`) roll on one ease-out and land on
 the exact text from bridge.js; the donut sweeps and morphs, the gauge arc and its number share one ease-out,
 bars grow in sequence, rows of the quota history and the agenda rise in with a stagger. Nothing loops while
-idle; the recent-sessions skeleton shimmers twice on first view.
+idle; the recent-sessions skeleton shimmers twice on first view. Analytics arms only on a useful answer
+(`usage.ready`, FW4-N10): a cold, still-converging response stays behind the loading screen, which names each
+computer's scan progress ("Mac: 0 of 5 tools · scanning now", `hostProgress`); once armed, background updates
+show one calm Updating pill in the header (`head.updating`), poll answers render as morphs and the sources-grid
+cells are keyed by host, so a state flip updates in place instead of re-creating the cell.
 
 ### Accounts & Settings v2
 
