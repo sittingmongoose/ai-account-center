@@ -12,6 +12,11 @@ const LIVE_FETCH_TIMEOUT_MS = 3000;
 
 let pendingBackgroundRefresh: Promise<ModelsDevRegistry | null> | null = null;
 
+// Parsed payload of the current cache file, memoised on its stat identity
+// (path, size, mtime, inode) so repeated reads skip the multi-MB re-parse
+// until the file actually changes. Writes in this process drop the memo.
+let parsedCacheMemo: { key: string; data: ModelsDevCacheData } | null = null;
+
 export interface RegistryCacheReadOptions {
   allowStale?: boolean;
   now?: number;
@@ -70,15 +75,25 @@ function normalizeCachePayload(payload: unknown): ModelsDevCacheData | null {
   return providers ? { version: 1, fetchedAt: payload.fetchedAt, providers } : null;
 }
 
+/**
+ * The parsed registry of the current cache file. The parse is memoised on the file's
+ * stat identity, so every caller in this process shares ONE registry object: treat the
+ * result as read-only (resolvers only look up; a mutation would persist across reads
+ * until the file changes or a write drops the memo).
+ */
 export function getCachedModelsDevRegistry(
   options: RegistryCacheReadOptions = {}
 ): ModelsDevRegistry | null {
   try {
     const filePath = getCacheFilePath();
-    if (!fs.existsSync(filePath)) return null;
-
-    const cache = normalizeCachePayload(JSON.parse(fs.readFileSync(filePath, 'utf8')));
-    if (!cache) return null;
+    const stats = fs.statSync(filePath);
+    const key = `${filePath}\u0000${stats.size}\u0000${stats.mtimeMs}\u0000${stats.ino}`;
+    let cache = parsedCacheMemo && parsedCacheMemo.key === key ? parsedCacheMemo.data : null;
+    if (!cache) {
+      cache = normalizeCachePayload(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+      if (!cache) return null;
+      parsedCacheMemo = { key, data: cache };
+    }
 
     const now = options.now ?? Date.now();
     if (!options.allowStale && now - cache.fetchedAt > CACHE_TTL_MS) return null;
@@ -100,9 +115,11 @@ export function setCachedModelsDevRegistry(
   } catch {
     // Best-effort cache writes must not break analytics.
   }
+  parsedCacheMemo = null;
 }
 
 export function clearModelsDevRegistryCache(): boolean {
+  parsedCacheMemo = null;
   try {
     const filePath = getCacheFilePath();
     if (!fs.existsSync(filePath)) return false;

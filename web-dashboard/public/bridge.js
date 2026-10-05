@@ -38,7 +38,12 @@ let refreshIntervalSeconds = 60;
 let refreshSettingsKnown = false;
 let usageTimer = null;
 let analyticsPayload = null;
-let analyticsModel = null;
+// The legacy choice lists are the only consumer of the full analyticsView pass, so that pass is built
+// on demand (at most once a minute per payload) instead of on every Analytics render.
+let analyticsChoices = null;
+let analyticsChoicesPayload = null;
+let analyticsChoicesAt = 0;
+let analyticsChoicesCatalog = null;
 let analyticsGeneration = 0;
 // While the log scan runs behind the page (loading, or a cached snapshot with a refresh running),
 // the page re-reads the server every few seconds so the new numbers land on their own.
@@ -184,9 +189,18 @@ function context(extra = {}) {
   return { profiles, platform, antigravityInventory, antigravityAuto, refreshing: !!refreshing && extra.refreshing !== false, intervalSeconds: refreshIntervalSeconds, username, host, openProgress: openProgress(claudeOpen.views(), profiles), ...extra };
 }
 function antigravityModel() { return antigravityView(data, antigravityInventory, antigravityAuto); }
+// Slint keeps every model and property between pushes, so a JSON identical to the one already on
+// screen cannot change anything: the clock ticks rebuild the same header three times out of four,
+// and a poll that returns the same payload re-renders the same page.
+const pushedJson = new Map();
+function pushModel(key, json, send) {
+  if (pushedJson.get(key) === json) return;
+  pushedJson.set(key, json);
+  send(json);
+}
 function render() {
   if (!data) return;
-  set_dashboard(JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))));
+  pushModel('dashboard', JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))), set_dashboard);
   if (openDetailsId) renderDetails(openDetailsId);
   renderAccounts();
   // the quota history and the agenda read the current readings too
@@ -204,11 +218,11 @@ function renderAccounts() {
       registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin, prefs: st.prefs,
     }));
     if (e2e) globalThis.__aacLastAccounts = vm;
-    set_accounts(JSON.stringify(vm));
+    pushModel('accounts', JSON.stringify(vm), set_accounts);
   } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
 }
 function renderChrome(isRefreshing = false) {
-  if (data || isRefreshing) set_chrome(JSON.stringify(chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host })));
+  if (data || isRefreshing) pushModel('chrome', JSON.stringify(chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host })), set_chrome);
 }
 function renderDetails(id) {
   const view = data ? detailsViewModel(data, id, context({ refreshing: false })) : null;
@@ -325,11 +339,40 @@ function analyticsContext(now) {
   const antigravity = antigravityAuto?.enabled === true && agAccounts > 1 && Number.isFinite(antigravityAuto?.thresholdUsedPercent) ? antigravityAuto.thresholdUsedPercent : null;
   return { now, dashboard: data, open: analyticsPage.open, compare: analyticsPage.compare, collapsed: analyticsPage.collapsed, focusWidth: analyticsPage.sizes.focus?.w, focusHeight: analyticsPage.sizes.focus?.h, thresholds: { codex, antigravity } };
 }
+/** The choice lists behind the legacy analytics metric and account actions; Rust never reads them. */
+function choiceLists() {
+  if (!analyticsPayload) {
+    analyticsChoices = null;
+    analyticsChoicesPayload = null;
+    analyticsChoicesCatalog = null;
+    return null;
+  }
+  const catalog = data?.accounts || [];
+  const now = Date.now();
+  // The account choices merge the dashboard catalog, so a registry refresh that lands
+  // while the analytics payload stays young must not validate against stale choices.
+  if (
+    analyticsChoices &&
+    analyticsChoicesPayload === analyticsPayload &&
+    analyticsChoicesCatalog === catalog &&
+    now - analyticsChoicesAt < 60_000
+  )
+    return analyticsChoices;
+  const view = analyticsView(
+    analyticsPayload,
+    { catalog, metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval },
+    now
+  );
+  analyticsChoicesPayload = analyticsPayload;
+  analyticsChoicesCatalog = catalog;
+  analyticsChoicesAt = now;
+  analyticsChoices = view?.choices ?? null;
+  return analyticsChoices;
+}
 /** mode 'morph' animates the usage trend from the shape on screen to the new one (range, filter and toggles). */
 function renderAnalytics(mode = 'static') {
   if (!analyticsPayload) return;
   const now = Date.now();
-  analyticsModel = analyticsView(analyticsPayload, { catalog: data?.accounts || [], metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval }, now);
   const usage = usageView(analyticsPayload, analyticsPage, { now, sizes: analyticsPage.sizes });
   const ctx = analyticsContext(now);
   // quota and agenda times read at minute precision ("in 3h 25m"), so they run on a minute clock: identical
@@ -341,10 +384,11 @@ function renderAnalytics(mode = 'static') {
   const from = shownGeo;
   const morph = mode === 'morph' && !motionReduced && from && shownSize === size && from.lv[0].length === next.lv[0].length;
   cancelAnimationFrame(trendRaf);
-  const slintView = analyticsSlintModel(analyticsModel, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph ? from : next) });
+  // Only state/usage/quota/agenda reach Slint; the legacy head/KPI/quota-group block is not built.
+  const slintView = analyticsSlintModel(null, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph ? from : next) });
   // e2e only (?e2e): the last Analytics view handed to Slint, so a harness can read its words
   if (e2e) globalThis.__aacLastAnalytics = slintView;
-  set_analytics(JSON.stringify(slintView));
+  pushModel('analytics', JSON.stringify(slintView), set_analytics);
   clearTimeout(analyticsPollTimer);
   const act = analyticsPayload?.activity;
   if (currentPage === 'analytics' && (act?.status === 'loading' || act?.refreshing === true))
@@ -363,7 +407,7 @@ function renderAnalytics(mode = 'static') {
 function renderAnalyticsHead() {
   if (!analyticsPayload || currentPage !== 'analytics') return;
   // The header alone (usageHead), not the whole usage view: this runs every 15 s between refreshes.
-  try { set_analytics_head(JSON.stringify(usageHead(analyticsPayload, analyticsPage, { now: Date.now() }))); } catch {}
+  try { pushModel('analyticsHead', JSON.stringify(usageHead(analyticsPayload, analyticsPage, { now: Date.now() })), set_analytics_head); } catch {}
 }
 /** True when the response in hand already holds the hours of the page range (no fetch is needed to draw it). */
 function analyticsCovers(payload, now = Date.now()) {
@@ -389,6 +433,19 @@ async function refreshAnalytics(force = false, mode = 'static') {
     if (result?.schemaVersion !== 1 || !Array.isArray(result.accounts)) throw new Error('Unsupported analytics response.');
     analyticsPayload = result; renderAnalytics(mode); set_analytics_loading(false, '');
   } catch (error) { if (generation === analyticsGeneration) { renderAnalytics(); set_analytics_loading(false, error?.message || 'Unable to load account analytics.'); } }
+}
+/**
+ * Entering the Analytics page. A payload that still covers the page range and is younger than the refresh
+ * interval is drawn as it is: the interval timer fetches the next one, exactly as it does while the page
+ * stays open, so the round-trip only ever buys a reading the timer is about to replace.
+ */
+function enterAnalytics() {
+  const age = Date.now() - Date.parse(analyticsPayload?.updatedAt ?? '');
+  if (analyticsPayload && Number.isFinite(age) && age >= 0 && age < refreshIntervalSeconds * 1000 && analyticsCovers(analyticsPayload)) {
+    renderAnalytics();
+    return;
+  }
+  void refreshAnalytics();
 }
 async function changeAnalyticsRange() {
   const covered = analyticsPayload && analyticsCovers(analyticsPayload);
@@ -446,12 +503,12 @@ async function analyticsAction(action, value) {
     analyticsSelection.activityInterval = value; renderAnalytics(); return;
   }
   if (action === 'analytics-metric-key') {
-    analyticsSelection.metricKey = analyticsModel?.choices?.metrics?.some(row => row.id === value) ? value : '';
+    analyticsSelection.metricKey = choiceLists()?.metrics?.some(row => row.id === value) ? value : '';
     renderAnalytics(); return;
   }
   if (action === 'analytics-account-id' || action === 'analytics-account' || action === 'analytics-metric') {
     const kind = action === 'analytics-account-id' ? 'account' : action.slice('analytics-'.length);
-    const id = action === 'analytics-account-id' ? (analyticsModel?.choices?.accounts?.some(row => row.id === value) ? value : null) : analyticsChoiceId(analyticsModel, kind, value);
+    const id = action === 'analytics-account-id' ? (choiceLists()?.accounts?.some(row => row.id === value) ? value : null) : analyticsChoiceId({ choices: choiceLists() }, kind, value);
     if (id === null) return;
     if (kind === 'metric') analyticsSelection.metricKey = id; else analyticsSelection.account = id;
     renderAnalytics(); return;
@@ -507,7 +564,7 @@ function navigate(page, { replace = false } = {}) {
   set_current_page(page);
   const url = pagePath(page);
   try { globalThis.history?.[replace ? 'replaceState' : 'pushState']?.(null, '', url); } catch {}
-  if (page === 'analytics' && authenticated) void refreshAnalytics();
+  if (page === 'analytics' && authenticated) enterAnalytics();
   if (page === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
 }
 async function loadAuthSetup() {
@@ -569,7 +626,7 @@ async function signOut() {
     }
   }
   forgetSignIn(globalThis.localStorage);
-  analyticsGeneration++; analyticsPayload = null; analyticsModel = null; clearTimeout(analyticsPollTimer); data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = '';
+  analyticsGeneration++; analyticsPayload = null; analyticsChoices = null; analyticsChoicesPayload = null; analyticsChoicesCatalog = null; clearTimeout(analyticsPollTimer); data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = ''; pushedJson.clear();
   claudeOpen.reset();
   accounts.reset();
   showSignedOut('default', { notice: true, message: 'Signed out.' });
@@ -580,9 +637,10 @@ async function enterDashboard() {
   if (currentPage === 'analytics') await refreshAnalytics();
 }
 /** Once signed in: move a browser-only "Show on dashboard" choice to the server, and read the settings block. */
-async function afterSignIn() {
+async function afterSignIn({ recheck = true } = {}) {
   try { await accounts.migrateLocalHidden(); } catch {}
-  try { authCheck = await request('/api/auth/check'); } catch {}
+  // A sign-in needs the session's own answer; a page load has just read the same endpoint.
+  if (recheck) { try { authCheck = await request('/api/auth/check'); } catch {} }
   if (currentPage === 'accounts') await accounts.loadAll();
 }
 async function checkSession(early = null) {
@@ -596,7 +654,7 @@ async function checkSession(early = null) {
       await loadSettings();
       // The dashboard and the update status render different state; their reads overlap.
       await Promise.all([refresh(), updateStatus()]);
-      await afterSignIn();
+      await afterSignIn({ recheck: false });
       if (currentPage === 'analytics') await refreshAnalytics();
     } else if (status.accessMode === 'setup') showSetup();
     else if (status.signedOutReason === 'revoked') sessionEnded('revoked');
@@ -843,7 +901,7 @@ try {
   closeDetailsOnOutsideClicks(document.querySelector('#canvas'));
   addEventListener('popstate', () => {
     currentPage = pageFromLocation(); set_current_page(currentPage);
-    if (currentPage === 'analytics' && authenticated) void refreshAnalytics();
+    if (currentPage === 'analytics' && authenticated) enterAnalytics();
     if (currentPage === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
   });
   set_theme_mode(THEMES[storedTheme()]);
