@@ -19,6 +19,9 @@ enum CCSBarMain {
     if arguments.count == 3, arguments[1] == "--check-meter-geometry" {
       PreviewRenderer.checkMeterGeometry(input: arguments[2])
     }
+    if arguments.count == 3, arguments[1] == "--check-codex-auto-placement" {
+      PreviewRenderer.checkCodexAutoPlacement(input: arguments[2])
+    }
     if arguments.count == 2, arguments[1] == "--check-menu-bar-prefs" {
       PreviewRenderer.checkMenuBarPrefs()
     }

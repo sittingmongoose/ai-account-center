@@ -128,7 +128,6 @@ struct AccountsMenuView: View {
   @Namespace private var glass
   @Namespace private var platters
   @State private var heights: (header: CGFloat, list: CGFloat, overlay: CGFloat, footer: CGFloat) = (0, 0, 0, 0)
-  @State private var showAutoInfo = false
 
   /// After a sign-in hand-off the list uses the first-open entrance (every meter sweeps from 0); otherwise the
   /// panel's own open.
@@ -333,6 +332,7 @@ struct AccountsMenuView: View {
                 ActivePlatter().matchedGeometryEffect(id: "active-\(provider)", in: platters)
               }
             }
+            .alignmentProbe("row|\(account.id)")
           if let offer = model.pendingCodexSwitch, provider == "codex", offer.accountID == account.id {
             SwitchConfirmView(product: "Codex", identity: offer.identity, processes: offer.processes, warning: offer.warning,
               expiresAt: offer.confirmation.expiresAt, onCancel: model.cancelCodexSwitch,
@@ -348,6 +348,7 @@ struct AccountsMenuView: View {
         }
       }
     }
+    .alignmentProbe("section|\(provider)")
     .sectionPlatter()
     .animation(state.reduceMotion ? nil : .trayValue(duration: TrayMotion.platterDuration), value: activeID)
     .animation(.trayValue(duration: 0.3), value: model.pendingCodexSwitch?.id)
@@ -362,9 +363,8 @@ struct AccountsMenuView: View {
         if model.needsConnection {
           Text(model.signIn.footNote).font(.system(size: 12)).foregroundStyle(palette.label2)
             .contentTransition(.opacity)
-        } else if let status = model.dashboard?.codexAutoSwitch {
-          codexCluster(status, palette)
         }
+        // The Codex auto-switch moved into the Codex section header; the footer's left side stays empty.
         Spacer(minLength: 8)
         if !model.needsConnection {
           let openDashboard = { model.openDashboard() }
@@ -410,41 +410,11 @@ struct AccountsMenuView: View {
           .hoverHelp("Quit AI Account Center", id: "footer-quit")
         }
       }
+      .alignmentProbe("footer")
     }
     .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
   }
 
-  private func codexCluster(_ status: CodexAutoSwitch, _ palette: TrayPalette) -> some View {
-    HStack(spacing: 4) {
-      Toggle(isOn: Binding(get: { status.enabled }, set: { model.toggleAutomaticSwitching($0) })) {
-        Text("Codex auto-switch").font(.system(size: 13)).foregroundStyle(palette.label)
-      }
-      .toggleStyle(.switch).controlSize(.small).tint(palette.accent)
-      .disabled(model.busyAction != nil || model.isRefreshing)
-      .accessibilityIdentifier("codex-auto-switch")
-      ThresholdMenu(value: 100 - Int(status.thresholdPercent), enabled: model.busyAction == nil && !model.isRefreshing,
-        id: "codex-auto-threshold") { model.setAutomaticThreshold(usedPercent: $0) }
-      let info = { showAutoInfo = true }
-      Button(action: info) {
-        Image(systemName: "info.circle").font(.system(size: 14)).foregroundStyle(palette.label2)
-          .frame(width: 28, height: 28).contentShape(Circle())
-      }
-      .buttonStyle(.plain)
-      .hoverHelp("How Codex auto-switch works", id: "codex-auto-info", action: info)
-      .dismissedByPanel($showAutoInfo)
-      .popover(isPresented: $showAutoInfo, arrowEdge: .top) {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Codex automatic switching").font(.system(size: 13, weight: .semibold))
-          Text(status.message).font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true)
-          Text("Switches at \(TrayFormat.number(100 - status.thresholdPercent))% used (\(TrayFormat.number(status.thresholdPercent))% left), checking every \(status.pollIntervalSeconds) seconds. Switching waits until Codex is idle. Claude accounts stay manual. The notch on each Codex meter marks the threshold.")
-            .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(16).frame(width: 340)
-      }
-    }
-    .padding(.leading, 10).padding(.trailing, 3).frame(height: TrayMetrics.footerControl)
-    .glassControl()
-  }
 }
 
 /// The selected-row platter: a soft accent fill over a faint lift, a hairline accent outline and a 27-style
