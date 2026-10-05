@@ -28,9 +28,11 @@ enum HoverOcclusionCheck {
   }
 
   /// Tags that stay visible above Settings: the panel header and footer, and Settings itself.
+  /// (N5 moved codex-auto-info from the footer into the Codex section, so it hides with the list
+  /// under Settings and is no longer allowed here.)
   static func allowedOverSettings(_ id: String) -> Bool {
     id.hasPrefix("settings-") || ["header-menu", "footer-dashboard", "footer-refresh", "footer-settings",
-      "footer-quit", "codex-auto-info"].contains(id)
+      "footer-quit"].contains(id)
   }
 
   static func run(input: String) -> Never {
@@ -585,7 +587,9 @@ enum HoverOcclusionCheck {
           HoverProbe.pointer = nil
         }
         let footerIDs = ["footer-dashboard", "footer-refresh", "footer-settings"]
-        let footerControls = footerIDs + ["codex-auto-info"]
+        // codex-auto-info used to live in the footer; N5 moved it into the Codex section, so the
+        // footer-frontmost rule no longer applies to it (it hides with the list under Settings).
+        let footerControls = footerIDs
         guard let listScroll = tag("account-row-" + codex[0].id)?.view.enclosingScrollView else {
           fail("scrolled panel: the account list has no scroll view")
           return out
