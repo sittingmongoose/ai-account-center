@@ -292,7 +292,7 @@ export function quotaHistory(accounts, histories, range, now = Date.now()) {
   return groups;
 }
 /**
- * The JSON src/analytics.rs reads (version 3). `page` carries the Analytics page: the page state echoed to
+ * The JSON src/analytics.rs reads (version 6). `page` carries the Analytics page: the page state echoed to
  * the controls, the Usage blocks (analytics-usage.mjs), the quota history with the focus charts of open rows
  * and the resets agenda (analytics-quota.mjs). The head, KPI and quota-group fields of the earlier seam stay.
  */
