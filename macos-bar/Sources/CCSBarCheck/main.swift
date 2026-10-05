@@ -1457,12 +1457,12 @@ private func checkTrayPresentation() throws {
   ]
   let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
   let remaining = MenuBarReading.make(dashboard: dashboard, provider: "codex", mode: .remaining)
-  try expect(remaining?.text == "\(TrayFormat.number(59.5))%" && remaining?.detail == "Codex · codex-2 · 5-hour remaining",
+  try expect(remaining?.text == "\(TrayFormat.number(59.5))%" && remaining?.detail == "Codex · codex-2@example.invalid · 5-hour remaining",
     "The menu bar must show the active Codex account's 5-hour window as % remaining")
   try expect(MenuBarReading.make(dashboard: dashboard, provider: "codex", mode: .used)?.value == 40.5,
     "% used must show the reading itself")
   let agy = MenuBarReading.make(dashboard: dashboard, provider: "antigravity", mode: .used)
-  try expect(agy?.value == 0 && agy?.detail == "Antigravity · antigravity-1 · 5-hour used",
+  try expect(agy?.value == 0 && agy?.detail == "Antigravity · antigravity-1@example.invalid · 5-hour used",
     "Antigravity's menu-bar reading must use its 5-hour window, zero included")
   try expect(MenuBarReading.make(dashboard: dashboard, provider: "cursor", mode: .used) == nil,
     "A provider with no 5-hour or weekly window shows the icon alone")
@@ -2180,7 +2180,7 @@ private func checkMenuBarSelection() throws {
   let first = try dashboard(codexActive: "codex-a", agyActive: "agy-a")
   // Codex and Antigravity follow the active account; other providers use the single or first account.
   try expect(MenuBarReading.make(dashboard: first, provider: "codex", mode: .used)?.value == 40
-    && MenuBarReading.make(dashboard: first, provider: "codex", mode: .used)?.detail == "Codex · codex-a · 5-hour used",
+    && MenuBarReading.make(dashboard: first, provider: "codex", mode: .used)?.detail == "Codex · codex-a@example.invalid · 5-hour used",
     "Codex must show the active account's 5-hour window and name it in the tooltip")
   let flipped = try dashboard(codexActive: "codex-b", agyActive: "agy-b")
   try expect(MenuBarReading.make(dashboard: flipped, provider: "codex", mode: .used)?.value == 70
@@ -2196,7 +2196,7 @@ private func checkMenuBarSelection() throws {
   try expect(MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-a")?.value == 12
     && MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")?.value == 78
     && MenuBarReading.make(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")?.detail
-    == "Claude · claude-b · Weekly used",
+    == "Claude · claude-b@example.invalid · Weekly used",
     "Claude shows the picked account: its 5-hour window, else its weekly one")
   // Two accounts sharing one local-part: the tag must name the full identity, the same
   // string the Settings picker shows, so it names the account actually shown.
@@ -2217,16 +2217,75 @@ private func checkMenuBarSelection() throws {
     == "Claude · jared@platyr.invalid · 5-hour used",
     "When two accounts shorten to one name, the tag must name the full identity")
   // Settings > Menu bar hover tags: Show and Claude account describe their picker; Value
-  // names the account actually shown, the same string the Show preview uses.
+  // names the full identity of the account actually shown, the same string the Show preview uses.
   try expect(MenuBarReading.showHelp == "Choose which provider's usage number appears in the menu bar."
     && MenuBarReading.claudeAccountHelp == "Choose which Claude account the menu bar number comes from.",
     "The Show and Claude account hover tags must describe their picker")
   try expect(MenuBarReading.valueHelp(dashboard: first, provider: "codex", mode: .used)
-    == "Whether the menu bar shows Used or Remaining for codex-a.",
+    == "Whether the menu bar shows Used or Remaining for codex-a@example.invalid.",
     "The Value hover tag must name the Codex account actually shown")
   try expect(MenuBarReading.valueHelp(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-y")
     == "Whether the menu bar shows Used or Remaining for jared@party.invalid.",
     "The Value hover tag must name the full identity when two accounts shorten alike")
+  // T1: the Show preview names the FULL identity even when no two accounts shorten
+  // alike, and the Value hover tag names exactly that same account.
+  guard let codexShown = MenuBarReading.make(dashboard: first, provider: "codex", mode: .used) else {
+    throw CheckFailure(description: "The Codex fixture must produce a menu-bar reading")
+  }
+  try expect(codexShown.accountName == "codex-a@example.invalid"
+    && codexShown.detail == "Codex · codex-a@example.invalid · 5-hour used",
+    "The Show preview must name the full account identity, not the short local-part")
+  try expect(MenuBarReading.valueHelp(dashboard: first, provider: "codex", mode: .used)
+    == "Whether the menu bar shows Used or Remaining for \(codexShown.accountName).",
+    "The Value hover tag must name exactly the account the Show preview names")
+  guard let claudeShown = MenuBarReading.make(dashboard: first, provider: "claude", mode: .used,
+    claudeAccountID: "claude-b") else {
+    throw CheckFailure(description: "The picked Claude fixture must produce a menu-bar reading")
+  }
+  try expect(MenuBarReading.valueHelp(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")
+    == "Whether the menu bar shows Used or Remaining for \(claudeShown.accountName).",
+    "The Value hover tag must name the picked Claude account exactly as the Show preview does")
+  // Fix 2: the real-world Codex shape — 3 profiles in registry order with short labels
+  // and full emails, the first one (gmail) active — built through the same projection
+  // the server uses (label = profile name, email = profile email, isActive = live login).
+  func realCodex(_ id: String, _ label: String, _ email: String, active: Bool) -> [String: Any] {
+    var value = account(id, "codex", email: email, windows: [
+      window("five_hour", "5h", ["usedPercent": 40]),
+      window("seven_day", "week", ["usedPercent": 10]),
+    ], active: active)
+    value["label"] = label
+    return value
+  }
+  func realShape(activeCodex: String) throws -> AccountDashboard {
+    var object = original
+    object["accounts"] = [
+      realCodex("codex:gmail", "gmail", "gmail-user@example.invalid", active: activeCodex == "codex:gmail"),
+      realCodex("codex:party", "party", "party-user@example.invalid", active: activeCodex == "codex:party"),
+      realCodex("codex:gio", "gio", "gio-user@example.invalid", active: activeCodex == "codex:gio"),
+    ]
+    return try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let live = try realShape(activeCodex: "codex:gmail")
+  guard let liveReading = MenuBarReading.make(dashboard: live, provider: "codex", mode: .used) else {
+    throw CheckFailure(description: "The real-shaped fixture must produce a menu-bar reading")
+  }
+  try expect(liveReading.accountName == "gmail-user@example.invalid"
+    && liveReading.detail == "Codex · gmail-user@example.invalid · 5-hour used",
+    "Show must display the full email of the ACTIVE Codex account, not a short label")
+  try expect(MenuBarReading.valueHelp(dashboard: live, provider: "codex", mode: .used)
+    == "Whether the menu bar shows Used or Remaining for \(liveReading.accountName).",
+    "Value must name exactly the active account Show displays (gmail, not party)")
+  for (activeID, email) in [("codex:party", "party-user@example.invalid"), ("codex:gio", "gio-user@example.invalid")] {
+    let switched = try realShape(activeCodex: activeID)
+    guard let switchedReading = MenuBarReading.make(dashboard: switched, provider: "codex", mode: .used) else {
+      throw CheckFailure(description: "The switched fixture must produce a menu-bar reading")
+    }
+    try expect(switchedReading.accountName == email
+      && switchedReading.detail.contains(email)
+      && MenuBarReading.valueHelp(dashboard: switched, provider: "codex", mode: .used)
+      == "Whether the menu bar shows Used or Remaining for \(email).",
+      "Show and Value must follow the newly active Codex account together (\(email))")
+  }
   try expect(MenuBarReading.valueHelp(dashboard: first, provider: MenuBarReading.nothingProvider, mode: .used)
     == MenuBarReading.valueHelpHidden
     && MenuBarReading.valueHelp(dashboard: nil, provider: "codex", mode: .used) == MenuBarReading.valueHelpHidden

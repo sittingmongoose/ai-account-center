@@ -61,7 +61,9 @@ struct SettingsPanelView: View {
             connectionCard(palette)
             card {
               Text("Menu bar").font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label).padding(.bottom, 8)
-              row(title: "Show", sub: menuBarPreview) {
+              // The preview names the full account identity; a long one truncates with an
+              // ellipsis rather than wrapping, so the row stays one line.
+              row(title: "Show", sub: menuBarPreview, subLineLimit: 1) {
                 Picker("Menu bar provider", selection: $prefs.menuBarProvider) {
                   ForEach(menuBarProviders, id: \.self) { provider in
                     Text(MenuBarReading.providerName(provider)).tag(provider)
@@ -162,13 +164,19 @@ struct SettingsPanelView: View {
       .groupPlatter()
   }
 
-  private func row<Trailing: View>(title: String, sub: String, @ViewBuilder trailing: () -> Trailing) -> some View {
+  private func row<Trailing: View>(title: String, sub: String, subLineLimit: Int? = nil,
+    @ViewBuilder trailing: () -> Trailing) -> some View {
     let control = trailing()
     return withPalette { palette in
       HStack(alignment: .center, spacing: 12) {
         VStack(alignment: .leading, spacing: 2) {
           Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label)
-          Text(sub).font(.system(size: 12)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
+          if let subLineLimit {
+            Text(sub).font(.system(size: 12)).foregroundStyle(palette.label2)
+              .lineLimit(subLineLimit).truncationMode(.tail)
+          } else {
+            Text(sub).font(.system(size: 12)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
+          }
         }
         Spacer(minLength: 12)
         control
