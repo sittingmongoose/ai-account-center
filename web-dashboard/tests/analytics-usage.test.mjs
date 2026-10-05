@@ -251,6 +251,8 @@ test('the session table lists the sample most recent first: five in Session stat
   const bad = usageView(payload({}, { sessions: { total: 5, sample: [{ key: 'x', tool: 'codex', last: now, tokens: 5, models: [{ model: 'gpt-5' }] }], truncated: false } }), state(), { now });
   assert.deepEqual(bad.sessions.recent, []);
   assert.deepEqual(bad.sessions.recentMore, []);
+  // no sessions at all: the continuation has nothing to continue, so the sub says nothing
+  assert.equal(bad.sessions.moreSub, '');
   // a picked provider narrows the list to its sessions
   const codex = usageView(p, state({ prov: 'codex' }), { now });
   assert.deepEqual(codex.sessions.recent.map(r => r.tool), ['codex']);
@@ -268,6 +270,9 @@ test('the session table lists the sample most recent first: five in Session stat
   assert.equal(mid.sessions.recentMore.length, 7);
   assert.equal(mid.sessions.moreSub, 'Sessions 6 to 12, continued from Session stats');
   assert.equal(mid.sessions.foot, '');
+  // exactly one session in the continuation: the sub names it in the singular
+  const six = usageView(payload({}, { sessions: { total: 6, sample: Array.from({ length: 6 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
+  assert.equal(six.sessions.moreSub, 'Session 6, continued from Session stats');
   // exactly the table's 15 of a 16-session sample: the foot counts against the sample
   const edge = usageView(payload({}, { sessions: { total: 16, sample: Array.from({ length: 16 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
   assert.equal(edge.sessions.foot, 'Most recent 15 of 16 sessions in this range');

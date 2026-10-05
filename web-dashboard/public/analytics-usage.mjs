@@ -834,7 +834,10 @@ function sessionsView(A, state, payload, now) {
     note: fromRemote ? 'Sessions come from the Ubuntu logs; usage read from the Mac and Windows adds tokens but no sessions.' : '',
     recent: listed.slice(0, SESS_TOP),
     recentMore: listed.slice(SESS_TOP),
-    moreSub: listed.length > SESS_TOP ? `Sessions ${SESS_TOP + 1} to ${listed.length}, continued from Session stats` : 'Continued from Session stats',
+    moreSub: listed.length === 0 ? ''
+      : listed.length === SESS_TOP + 1 ? `Session ${SESS_TOP + 1}, continued from Session stats`
+        : listed.length > SESS_TOP ? `Sessions ${SESS_TOP + 1} to ${listed.length}, continued from Session stats`
+          : 'Continued from Session stats',
     recentFoot,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },
