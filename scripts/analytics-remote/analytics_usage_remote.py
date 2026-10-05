@@ -306,8 +306,9 @@ class Collector(object):
         srow = self.srows.get(key)
         if srow is None:
             if len(self.srows) >= MAX_SROWS:
+                # The session cap is separate from the row cap: a host with more
+                # sessions than fit still reports its hours; the scan is partial.
                 self.truncated = True
-                self.row_cap = True
                 return
             srow = {
                 "k": kind,
@@ -1307,9 +1308,10 @@ def _scan_zcode_db(collector, db_path, immutable):
         srow = collector.srows.get(key)
         if srow is None:
             if len(collector.srows) >= MAX_SROWS:
+                # Session aggregates stop here; the hourly groups above stay and
+                # the database is still confirmed below.
                 collector.truncated = True
-                collector.row_cap = True
-                return "ok"
+                break
             srow = {
                 "k": "zcode",
                 "f": filekey,
@@ -1336,7 +1338,7 @@ def _scan_zcode_db(collector, db_path, immutable):
         srow["cr"] += tokens[2]
         srow["cw"] += tokens[3]
         srow["n"] += count
-    # Every group was added: the database is confirmed whatever other kinds hit.
+    # The session groups that fit were added: the database is confirmed whatever other kinds hit.
     collector.confirm_file("zcode", filekey)
     return "ok"
 

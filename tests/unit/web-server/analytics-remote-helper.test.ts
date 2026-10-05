@@ -415,6 +415,20 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     );
   });
 
+  it('keeps the hourly rows when the session cap is hit, marking the scan partial', () => {
+    writeFixtures();
+    const capped = runPatchedHelper(
+      { kinds: ['omp', 'muse', 'zcode'], minDateMs: MIN_DATE },
+      { MAX_SROWS: 1 }
+    );
+    // Sessions stop at their own cap and say so; the hours they came from are all still read,
+    // exactly as an uncapped scan reads them.
+    expect(capped.truncated).toBe(true);
+    expect((capped.srows as unknown[]).length).toBe(1);
+    const full = runHelper({ kinds: ['omp', 'muse', 'zcode'], minDateMs: MIN_DATE });
+    expect(capped.rows).toEqual(full.rows);
+  });
+
   it('collects local zcode through the helper with one row per model and hour', async () => {
     writeFixtures();
     const dbPath = path.join(home, '.zcode', 'cli', 'db', 'db.sqlite');
