@@ -18,7 +18,8 @@ export type UpdateResultStatus =
   | 'failed'
   | 'restart_failed'
   | 'skipped'
-  | 'unknown';
+  | 'unknown'
+  | 'action_required';
 export interface AppUpdateResult {
   appId: UpdateAppId;
   appLabel: string;
@@ -74,6 +75,9 @@ export const MESSAGES = {
   skipped_cancelled: 'Skipped: cancelled',
   host_unknown: 'Unknown: this computer is not reachable.',
   readiness_unknown: 'Unknown: the readiness check could not run.',
+  staged_quit: 'The update is staged; quit the app to finish it.',
+  quit_first: 'Quit the app, then run Update apps again.',
+  check_in_app: 'The download was blocked; open the app to check for updates.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows'];
@@ -87,6 +91,7 @@ const STATUSES: UpdateResultStatus[] = [
   'restart_failed',
   'skipped',
   'unknown',
+  'action_required',
 ];
 const MANAGERS = ['native', 'npm', 'brew', 'winget', 'msix', 'apt', 'official-download'];
 export const MAX_OUTPUT = 64 * 1024;

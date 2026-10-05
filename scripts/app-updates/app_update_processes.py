@@ -423,6 +423,67 @@ def desktop_arguments(context, platform):
     return found
 
 
+def mac_quit_request(pid):
+    """Ask one Mac GUI process to quit via its running application. True when asked."""
+    try:
+        ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+        objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        lookup = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int)(("objc_msgSend", objc))
+        terminate = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(("objc_msgSend", objc))
+        instance = lookup(objc.objc_getClass(b"NSRunningApplication"), objc.sel_registerName(b"runningApplicationWithProcessIdentifier:"), pid)
+        return bool(instance) and bool(terminate(instance, objc.sel_registerName(b"terminate")))
+    except (OSError, ctypes.ArgumentError):
+        return False
+
+
+def windows_close_broadcast(pids):
+    """Post a close request to every window owned by these PIDs. Never waits, never forces."""
+    user32 = ctypes.windll.user32
+    live = set(pids)
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def close_window(hwnd, _):
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value in live:
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)
+        return True
+
+    callback = callback_type(close_window)
+    user32.EnumWindows(callback, None)
+
+
+def request_desktop_quit(install, contexts, grace=15):
+    """Ask Mac/Windows desktop instances to quit. Never signals or forces anything.
+
+    Returns (exited, refused): contexts that already left or quit on request,
+    and contexts still running (or in another session) afterwards. Callers
+    stage the verified update or report quit_first; a refusal is never a
+    failure and never escalates to a forced stop.
+    """
+    if install.platform not in ("mac", "windows"):
+        raise UpdateFailure("restart_context")
+    live = live_contexts(install.platform, contexts)
+    gone = [item for item in contexts if item not in live]
+    if install.platform == "windows":
+        session = ctypes.c_ulong()
+        ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session))
+        askable = [item for item in live if item.session == session.value]
+        if askable:
+            windows_close_broadcast({item.pid for item in askable})
+    else:
+        askable = [item for item in live if mac_quit_request(item.pid)]
+    deadline = time.monotonic() + grace
+    while live_contexts(install.platform, askable) and time.monotonic() < deadline:
+        time.sleep(.2)
+    still = live_contexts(install.platform, live)
+    return gone + [item for item in live if item not in still], still
+
+
 def terminate_desktops(install, contexts, grace=15):
     targets = family(install, scan(install.platform))
     if install.platform == "mac":

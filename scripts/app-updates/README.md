@@ -76,13 +76,26 @@ InteractiveToken/Limited task runs the private helper. Registration does **not**
 run an update. The helper queues that task from SSH session zero, so the user's
 interactive session must be signed in. Existing CCS Bar tasks are untouched.
 
-Results are `updated`, `current`, `not_installed`, `failed`, or `restart_failed`,
-with bounded versions, fixed message codes, restart counts/forced-stop counts and
-safe terminal target metadata. Raw package command output, process argv,
-environments, installer response bodies and credentials are never returned.
-Host/helper execution locks prevent overlapping work. Package operation timeout
-or a relaunch refusal is reported honestly and does not prevent other apps/hosts
-from producing their own results. Status reads never retry an interrupted job.
+Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
+`skipped`, `unknown`, or `action_required`, with bounded versions, fixed message
+codes, restart counts/forced-stop counts and safe terminal target metadata. Raw
+package command output, process argv, environments, installer response bodies and
+credentials are never returned. Host/helper execution locks prevent overlapping
+work. Package operation timeout or a relaunch refusal is reported honestly and
+does not prevent other apps/hosts from producing their own results. Status reads
+never retry an interrupted job.
+
+`action_required` is never a failure: the job completes and the row tells the
+user exactly what to do. Mac desktops whose running instances will not quit get
+their verified bundle swapped while running (safe on macOS: the old process
+keeps its mapped pages) and report `staged_quit`: quitting finishes the update.
+Windows desktops blocked by running instances, and MSIX deployments rejected
+for apps that need closing, report `quit_first`. Desktop downloads refused by a
+bot challenge (HTTP 403 or a challenge page) report `check_in_app` after bounded
+retries. Desktop downloads allow 2 GiB and 10-minute timeouts; desktops are
+never force-stopped. Windows npm updates run `node npm-cli.js` directly (never
+through `cmd /s /c`, which mangles spaced paths) after stopping mapped
+instances first, since Windows cannot replace a running npm tree.
 
 ## Fixture verification
 

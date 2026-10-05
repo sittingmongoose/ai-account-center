@@ -16,6 +16,7 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/app-updates'))
+import urllib.error
 import app_updates as updater
 import app_update_common as common
 import app_update_desktop as desktop
@@ -188,6 +189,203 @@ class UpdaterTests(unittest.TestCase):
         attempted = {call.args[0].app_id for call in update.call_args_list} | {call.args[0].app_id for call in desktop_update.call_args_list}
         self.assertNotIn('muse-code', attempted)
         self.assertEqual(len(attempted), 6)
+
+    def test_muse_installer_runs_under_bash_not_posix_sh(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            launcher = pathlib.Path(directory) / '.local/bin/muse'
+            launcher.parent.mkdir(parents=True); launcher.write_text('fixture launcher')
+            install = common.Install('muse-code', 'ubuntu', launcher, '1.4.2')
+            with mock.patch.object(updater, 'download') as fetch, mock.patch.object(updater, 'command') as run:
+                updater.perform_cli_update(install)
+            fetch.assert_called_once()
+            argv = run.call_args.args[0]
+            self.assertTrue(argv[0].endswith('bash'), argv)
+            self.assertNotEqual(argv[0], '/bin/sh')
+
+    def test_muse_installer_without_bash_is_unsupported(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            launcher = pathlib.Path(directory) / '.local/bin/muse'
+            launcher.parent.mkdir(parents=True); launcher.write_text('fixture launcher')
+            install = common.Install('muse-code', 'ubuntu', launcher, '1.4.2')
+            with mock.patch.object(updater.shutil, 'which', return_value=None), mock.patch.object(pathlib.Path, 'is_file', return_value=False):
+                with self.assertRaises(common.UpdateFailure) as raised:
+                    updater.perform_cli_update(install)
+            self.assertEqual(raised.exception.code, 'unsupported')
+
+    def test_npm_update_runs_node_directly_without_cmd_shell(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            node_dir = root / 'nodejs'; node_dir.mkdir()
+            (node_dir / 'npm.cmd').write_text('fixture')
+            (node_dir / 'node.exe').write_text('fixture')
+            cli = node_dir / 'node_modules/npm/bin/npm-cli.js'
+            cli.parent.mkdir(parents=True); cli.write_text('fixture')
+            prefix = root / 'npm'; prefix.mkdir()
+            install = common.Install('codex-cli', 'windows', prefix / 'codex.cmd', '0.153.4', 'npm', package_root=prefix / 'node_modules/@openai/codex')
+            with mock.patch.object(updater.shutil, 'which', side_effect=lambda name: str(node_dir / (name or ''))), mock.patch.object(updater, 'command') as run:
+                updater.perform_cli_update(install)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[0], str(node_dir / 'node.exe'))
+            self.assertEqual(argv[1], str(cli))
+            self.assertEqual(argv[2:6], ['install', '--global', '--prefix', str(prefix)])
+            self.assertEqual(argv[6], '@openai/codex@latest')
+            self.assertNotIn('cmd.exe', ' '.join(argv).lower())
+
+    def test_npm_windows_stops_running_cli_before_install_and_relaunches_on_failure(self):
+        install = common.Install('codex-cli', 'windows', pathlib.Path('/fixture/npm/codex.cmd'), '0.153.4', 'npm', package_root=pathlib.Path('/fixture/npm/node_modules/@openai/codex'))
+        context = processes.Process(11, 1, 1, '/fixture/node', '11', ['node', '/fixture/npm/node_modules/@openai/codex/bin/codex.js'])
+        calls = []
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([context], [context])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'terminate_cli', side_effect=lambda *args: calls.append('stop') or 0), \
+                mock.patch.object(updater, 'perform_cli_update', side_effect=lambda item: calls.append('install') or (_ for _ in ()).throw(common.UpdateFailure())), \
+                mock.patch.object(updater, 'restart_cli', side_effect=lambda *args: calls.append('relaunch') or []), \
+                mock.patch.object(updater, 'detect_cli', return_value=install):
+            value = updater.update_cli(install, time.monotonic() + 60)
+            marker = pathlib.Path(directory) / '.ccs/app-updates/codex-cli-pending-restart.json'
+            self.assertFalse(marker.exists())
+        self.assertEqual(calls[0], 'stop')
+        self.assertLess(calls.index('stop'), calls.index('install'))
+        self.assertIn('relaunch', calls)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['messageCode'], 'update_failed')
+        self.assertTrue(value['updateAttempted'])
+
+    def test_download_maps_forbidden_to_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / 'update.dmg'
+            failure = urllib.error.HTTPError('https://fixture.test/app.dmg', 403, 'Forbidden', {}, io.BytesIO())
+            with mock.patch.object(common.urllib.request, 'urlopen', side_effect=failure):
+                with self.assertRaises(common.UpdateFailure) as raised:
+                    common.download('https://fixture.test/app.dmg', target)
+            self.assertEqual(raised.exception.code, 'download_blocked')
+
+    def test_download_maps_challenge_page_to_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / 'update.dmg'
+            response = mock.MagicMock()
+            response.geturl.return_value = 'https://fixture.test/app.dmg'
+            response.headers.get.return_value = None
+            response.read.side_effect = [b'<!DOCTYPE html><html><title>Just a moment...</title>', b'']
+            response.__enter__.return_value = response
+            with mock.patch.object(common.urllib.request, 'urlopen', return_value=response):
+                with self.assertRaises(common.UpdateFailure) as raised:
+                    common.download('https://fixture.test/app.dmg', target)
+            self.assertEqual(raised.exception.code, 'download_blocked')
+            self.assertFalse(target.exists())
+
+    def test_download_honours_explicit_desktop_maximum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / 'update.msix'
+            response = mock.MagicMock()
+            response.geturl.return_value = 'https://fixture.test/app.msix'
+            response.headers.get.side_effect = lambda name: '912020731' if name == 'Content-Length' else None
+            response.read.return_value = b''
+            response.__enter__.return_value = response
+            with mock.patch.object(common.urllib.request, 'urlopen', return_value=response):
+                with self.assertRaises(common.UpdateFailure):
+                    common.download('https://fixture.test/app.msix', target)
+                common.download('https://fixture.test/app.msix', target, maximum=desktop.DESKTOP_DOWNLOAD_MAXIMUM)
+            self.assertTrue(target.exists())
+
+    def _fake_mac_bundle(self, root, name, identity, version):
+        app = root / name
+        info = app / 'Contents/Info.plist'
+        info.parent.mkdir(parents=True)
+        import plistlib
+        with info.open('wb') as handle:
+            plistlib.dump({'CFBundleIdentifier': identity, 'CFBundleShortVersionString': version}, handle)
+        return app
+
+    def test_mac_refused_quit_stages_verified_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            installed = self._fake_mac_bundle(root / 'Applications', 'ChatGPT.app', 'com.openai.codex', '26.928.31416')
+            install = common.Install('codex-desktop', 'mac', installed, '26.928.31416', 'official-download', 'com.openai.codex', package_root=installed)
+            candidate = self._fake_mac_bundle(root / 'mnt', 'ChatGPT.app', 'com.openai.codex', '26.930.41038')
+            (candidate / 'Contents' / 'staged-marker.txt').write_text('staged')
+            refused = processes.Process(21, 1, 1, str(installed / 'Contents/MacOS/ChatGPT'), '21', [str(installed / 'Contents/MacOS/ChatGPT')])
+            import plistlib as plist
+            attached = plist.dumps({'system-entities': [{'mount-point': str(root / 'mnt'), 'dev-entry': '/dev/disk9'}]}).decode('utf-8')
+            def commands(argv, **kwargs):
+                if argv[:2] == ['/usr/bin/hdiutil', 'attach']:
+                    return attached
+                return ''
+            with mock.patch.object(desktop, 'download'), mock.patch.object(desktop, 'command', side_effect=commands), \
+                    mock.patch.object(desktop, 'verify_mac', return_value={'CFBundleIdentifier': 'com.openai.codex', 'CFBundleShortVersionString': '26.930.41038'}), \
+                    mock.patch.object(desktop, 'scan', return_value=[]), \
+                    mock.patch.object(desktop, 'main_contexts', return_value=[refused]), \
+                    mock.patch.object(desktop, 'request_desktop_quit', return_value=([], [refused])), \
+                    mock.patch.object(desktop, 'restart_desktops') as relaunch, \
+                    mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root / 'stage-tmp')):
+                (root / 'stage-tmp').mkdir(exist_ok=True)
+                value = desktop.update_mac(install)
+            relaunch.assert_not_called()
+            self.assertEqual(value['status'], 'action_required')
+            self.assertEqual(value['messageCode'], 'staged_quit')
+            self.assertTrue(value['updateAttempted'])
+            self.assertEqual(value['version'], '26.930.41038')
+            self.assertTrue((installed / 'Contents' / 'staged-marker.txt').is_file())
+
+    def test_mac_blocked_download_reports_check_in_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            installed = self._fake_mac_bundle(root / 'Applications', 'Claude.app', 'com.anthropic.claudefordesktop', '2.19675.0')
+            install = common.Install('claude-desktop', 'mac', installed, '2.19675.0', 'official-download', 'com.anthropic.claudefordesktop', package_root=installed)
+            with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure('download_blocked')), \
+                    mock.patch.object(desktop.time, 'sleep'), \
+                    mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root)):
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'action_required')
+            self.assertEqual(value['messageCode'], 'check_in_app')
+            self.assertFalse(value['updateAttempted'])
+
+    def test_windows_survivors_report_quit_first_without_installing(self):
+        install = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.930.3748.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
+        running = processes.Process(31, 1, 1, '/fixture/ChatGPT.exe', '31', ['/fixture/ChatGPT.exe'])
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(desktop, 'download'), \
+                mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.4958.0', 'ProcessorArchitecture': 'x64'}), \
+                mock.patch.object(desktop, 'scan', return_value=[]), \
+                mock.patch.object(desktop, 'main_contexts', return_value=[running]), \
+                mock.patch.object(desktop, 'request_desktop_quit', return_value=([], [running])), \
+                mock.patch.object(desktop, 'add_appx_package') as deploy, \
+                mock.patch.object(desktop, 'restart_desktops') as relaunch, \
+                mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(pathlib.Path(directory))):
+            value = desktop.update_windows(install)
+        deploy.assert_not_called()
+        relaunch.assert_not_called()
+        self.assertEqual(value['status'], 'action_required')
+        self.assertEqual(value['messageCode'], 'quit_first')
+        self.assertFalse(value['updateAttempted'])
+
+    def test_windows_deploy_needing_close_reports_quit_first(self):
+        install = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.930.3748.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
+        closed = processes.Process(32, 1, 1, '/fixture/ChatGPT.exe', '32', ['/fixture/ChatGPT.exe'])
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(desktop, 'download'), \
+                mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.4958.0', 'ProcessorArchitecture': 'x64'}), \
+                mock.patch.object(desktop, 'scan', return_value=[]), \
+                mock.patch.object(desktop, 'main_contexts', return_value=[closed]), \
+                mock.patch.object(desktop, 'request_desktop_quit', return_value=([closed], [])), \
+                mock.patch.object(desktop, 'add_appx_package', side_effect=common.UpdateFailure('quit_first')), \
+                mock.patch.object(desktop, 'restart_desktops', return_value=1) as relaunch, \
+                mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(pathlib.Path(directory))):
+            value = desktop.update_windows(install)
+        relaunch.assert_called_once()
+        self.assertEqual(value['status'], 'action_required')
+        self.assertEqual(value['messageCode'], 'quit_first')
+        self.assertFalse(value['updateAttempted'])
+
+    def test_request_quit_collects_refusals_without_forcing(self):
+        first = processes.Process(41, 1, 1, '/fixture/app', '41', ['/fixture/app'])
+        second = processes.Process(42, 1, 1, '/fixture/app', '42', ['/fixture/app'])
+        install = common.Install('codex-desktop', 'mac', pathlib.Path('/fixture/ChatGPT.app'), '1.0', 'official-download')
+        with mock.patch.object(processes, 'mac_quit_request', side_effect=[True, False]) as quit, \
+                mock.patch.object(processes, 'live_contexts', side_effect=[[first, second], [], [second]]), \
+                mock.patch.object(processes.time, 'sleep'):
+            exited, refused = processes.request_desktop_quit(install, [first, second], grace=0)
+        self.assertEqual([item.pid for item in exited], [41])
+        self.assertEqual([item.pid for item in refused], [42])
+        self.assertEqual(quit.call_count, 2)
 
     @unittest.skipUnless(sys.platform.startswith('linux') and shutil.which('gcc') and shutil.which('tmux'), 'native fixture compiler and tmux required')
     def test_real_standin_cli_restarts_in_new_pty_without_original_prompt(self):
