@@ -126,7 +126,10 @@ component UpdateButton inherits Rectangle {
     property <color> fg: root.mode == "run" ? Theme.accent-text : root.mode == "done" ? Theme.good-text : Theme.ink;
 
     // Invisible measure for the rolling count's box: `total` is the widest the count ever gets, so the box
-    // (and with it the button's width) stays put from the first result to the last.
+    // (and with it the button's width) stays put from the first result to the last. Invariant: the count is
+    // `results.length` and `total` is the size of the update matrix, both set in updateViewModel
+    // (public/view-model.mjs), so the count never has more digits than total; if the matrix ever grows past
+    // 99 results this measure has to grow with it or the box would clip the leading digit.
     count-fit := Text {
         visible: false;
         text: root.data.total;
