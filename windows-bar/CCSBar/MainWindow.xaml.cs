@@ -51,6 +51,14 @@ public partial class MainWindow : Window
     private int connectionGeneration;
     /// <summary>The windows drawn as "new reading pending" (F6), so the timer redraws only when one flips.</summary>
     private string pendingResets = "";
+    /// <summary>A sample arrived while the panel was hidden (N6): the next open rebuilds once instead of every tick
+    /// rebuilding a hidden tree.</summary>
+    private bool renderDirty;
+    /// <summary>True for the real tray (loaded its connection); checks, renders and the E2E driver pass false and
+    /// always paint, even hidden, so their assertions see a tree.</summary>
+    private readonly bool liveConnection;
+    /// <summary>Checks only: SimulateHideForCheck sets it so the deferred-render path runs headless.</summary>
+    private bool hiddenSimulated;
     /// <summary>The Claude Open now running for an account, keyed by account id, as its row's calm secondary text.
     /// The entry is removed once the Open ends, so the row returns to its plan, platform and sample time.</summary>
     private readonly Dictionary<string, ClaudeOpenProgress> openProgress = new(StringComparer.Ordinal);
@@ -74,6 +82,7 @@ public partial class MainWindow : Window
     public MainWindow(Preferences? preferences = null, bool loadConnection = true)
     {
         this.preferences = preferences ?? new Preferences();
+        liveConnection = loadConnection;
         // A window that does not load the real connection (a check, a render, the E2E driver) never writes the real
         // preferences either, unless it was given a file of its own.
         if (!loadConnection && this.preferences.StorePath is null) this.preferences.Detached = true;
@@ -154,6 +163,11 @@ public partial class MainWindow : Window
     internal Border? PlatterFor(string provider) => platters.TryGetValue(provider, out var platter) ? platter : null;
     internal void SetRefreshingForCheck(bool spinning) => SetRefreshing(spinning);
     internal bool RefreshSpinning => refreshTurn.HasAnimatedProperties;
+    internal bool RenderDirtyForCheck => renderDirty;
+    /// <summary>Checks only: pretends this is a hidden live panel, so the deferred-render path runs headless.</summary>
+    internal void SimulateHideForCheck() { hiddenSimulated = true; renderDirty = false; }
+    /// <summary>Checks only: the deferred rebuild ShowPanel runs on open.</summary>
+    internal void RenderDeferredForCheck() { renderDirty = false; RenderDashboard(); UpdateStatus(); }
     internal Task OpenClaudeForCheck(DashboardAccount account, string platform) => OpenClaude(account, platform);
     internal string? StatusFlashForCheck => statusFlash;
     internal bool OpenRunningForCheck(string accountId) => OpenRunning(accountId);
@@ -182,7 +196,10 @@ public partial class MainWindow : Window
         PositionPopup();
         if (!wasVisible)
         {
-            Show(); PlayOpen();
+            Show();
+            // Samples that arrived while hidden painted nothing: rebuild once now, before the entrance reads the tree.
+            if (renderDirty) { renderDirty = false; RenderDashboard(); UpdateStatus(); }
+            PlayOpen();
             if (signInVisible && signInView is not null && !signInEntered) { signInEntered = true; signInView.PlayEntrance(true); }
             if (busy) SetRefreshing(true);
             // A sample that arrived while the panel was hidden had no layout yet: place the selected-row platter now.
@@ -321,23 +338,36 @@ public partial class MainWindow : Window
         dashboard = sample;
         timer.Interval = TimeSpan.FromSeconds(sample.Settings?.ValidatedInterval ?? 60);
         staleSample = false; lastFailure = DateTimeOffset.MinValue; statusFlash = null;
+        PaintSample();
+        SampleChanged?.Invoke();
+    }
+
+    /// <summary>True while the real tray's panel is hidden: samples update the data and the tooltip but the
+    /// visual rebuild waits for the next open (N6: nothing re-renders while closed, from the first background
+    /// tick). Check, render and E2E windows always paint, even hidden, so their assertions see a tree.</summary>
+    private bool DeferRender => !IsVisible && (liveConnection || hiddenSimulated);
+
+    /// <summary>Paints the current sample now, or marks it dirty while the panel is hidden.</summary>
+    private void PaintSample()
+    {
+        if (dashboard is not null && DeferRender) { renderDirty = true; pendingResets = PendingResets(dashboard); return; }
+        renderDirty = false;
         RenderDashboard();
         UpdateStatus();
-        SampleChanged?.Invoke();
     }
 
     private void FinishRequest()
     {
         busy = false; SetRefreshing(false);
-        if (dashboard is not null) RenderDashboard();
-        UpdateStatus();
+        if (dashboard is not null) PaintSample();
+        else UpdateStatus();
         SampleChanged?.Invoke();
     }
 
     private void MarkStale()
     {
         staleSample = true;
-        RenderDashboard();
+        PaintSample();
         SampleChanged?.Invoke();
     }
 
@@ -419,7 +449,7 @@ public partial class MainWindow : Window
     internal void ReevaluateResets()
     {
         if (dashboard is null || PendingResets(dashboard) == pendingResets) return;
-        RenderDashboard();
+        PaintSample();
         SampleChanged?.Invoke();
     }
 
