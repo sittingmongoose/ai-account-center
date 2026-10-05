@@ -302,6 +302,13 @@ final class AccountsViewModel: ObservableObject {
     }
   }
 
+  /// Offline checks only: a preview tray takes a new dashboard the way a refresh delivers one (a forced refresh
+  /// at open, the refresh timer or a Codex auto-switch). Does nothing in the app.
+  func previewReplace(_ value: AccountDashboard) {
+    guard isPreview else { return }
+    dashboard = value
+  }
+
   func refresh(force: Bool = false) async {
     guard !isPreview, !isRefreshing, busyAction == nil, !hasPendingConfirmation, let client else { return }
     let generation = connectionGeneration

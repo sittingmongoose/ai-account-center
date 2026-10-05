@@ -84,10 +84,18 @@ final class HelpPresenter {
   private weak var owner: NSView?
   private var pending: DispatchWorkItem?
   private var panel: NSPanel?
+  private var label: NSTextField?
   private var clickMonitor: Any?
   /// A click or key press closed the tag: it stays closed until the pointer leaves the view.
   private var dismissed = false
-  var text = ""
+  /// The tag's text. A tag already on screen follows a change at once (a refresh, an auto-switch or a new
+  /// Show or Value choice while it is up), so it never keeps naming an account the panel no longer shows.
+  var text = "" {
+    didSet {
+      guard text != oldValue, panel != nil else { return }
+      if canPresent { layout() } else { hide() }
+    }
+  }
   /// The gates of the layers the owner sits in.
   var gates: [HoverGate] = [] {
     didSet { for gate in gates { gate.register(self) } }
@@ -168,20 +176,16 @@ final class HelpPresenter {
 
   func show() {
     pending = nil
-    guard canPresent, let owner, let window = owner.window else { return }
+    guard canPresent, let window = owner?.window else { return }
     let label = NSTextField(wrappingLabelWithString: text)
     label.font = .systemFont(ofSize: 12)
     label.textColor = .labelColor
     label.setAccessibilityIdentifier("account-center-tooltip-text")
-    label.setAccessibilityLabel(text)
-    let width = min(340, max(110, label.intrinsicContentSize.width + 22))
-    let textHeight = label.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width - 22, height: 200)).height ?? 15
-    let height = max(28, textHeight + 14)
-    label.frame = NSRect(x: 11, y: 7, width: width - 22, height: height - 14)
-    let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+    let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: 110, height: 28))
     glass.style = .regular
     glass.cornerRadius = 10
     let content = NSView(frame: glass.bounds)
+    content.autoresizingMask = [.width, .height]
     content.addSubview(label)
     glass.contentView = content
     let help = NSPanel(contentRect: glass.bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -196,18 +200,35 @@ final class HelpPresenter {
     help.appearance = window.effectiveAppearance
     help.level = NSWindow.Level(rawValue: window.level.rawValue + 1)
     help.collectionBehavior = [.transient, .fullScreenAuxiliary]
-    let rect = window.convertToScreen(owner.convert(owner.bounds, to: nil))
-    let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? rect
-    let x = min(max(screen.minX + 4, rect.midX - width / 2), screen.maxX - width - 4)
-    let below = rect.minY - height - 6
-    help.setFrameOrigin(NSPoint(x: x, y: below >= screen.minY + 4 ? below : rect.maxY + 6))
     panel = help
+    self.label = label
+    layout()
     window.addChildWindow(help, ordered: .above)
     help.orderFrontRegardless()
     clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
       self?.dismissForClick()
       return event
     }
+  }
+
+  /// Sizes the tag's panel to its text and places it under the owner (above it near the bottom of the screen).
+  /// A tag already on screen takes new text the same way: same panel, resized and placed again.
+  private func layout() {
+    guard let help = panel, let label, let owner, let window = owner.window else { return }
+    label.stringValue = text
+    label.setAccessibilityLabel(text)
+    // Measured on a fresh label, so a tag that already has a width does not keep it for new text.
+    let measure = NSTextField(wrappingLabelWithString: text)
+    measure.font = label.font
+    let width = min(340, max(110, measure.intrinsicContentSize.width + 22))
+    let textHeight = measure.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width - 22, height: 200)).height ?? 15
+    let height = max(28, textHeight + 14)
+    label.frame = NSRect(x: 11, y: 7, width: width - 22, height: height - 14)
+    let rect = window.convertToScreen(owner.convert(owner.bounds, to: nil))
+    let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? rect
+    let x = min(max(screen.minX + 4, rect.midX - width / 2), screen.maxX - width - 4)
+    let below = rect.minY - height - 6
+    help.setFrame(NSRect(x: x, y: below >= screen.minY + 4 ? below : rect.maxY + 6, width: width, height: height), display: true)
   }
 
   /// True while this tag's glass panel is on screen.
@@ -230,6 +251,7 @@ final class HelpPresenter {
       panel.orderOut(nil)
     }
     panel = nil
+    label = nil
   }
 }
 

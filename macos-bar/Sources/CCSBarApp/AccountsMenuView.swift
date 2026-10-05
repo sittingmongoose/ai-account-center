@@ -16,6 +16,15 @@ final class PanelState: ObservableObject {
   let panelHover = HoverGate()
   let coveredHover = HoverGate()
   let settingsHover = HoverGate(suppressed: true)
+  /// The account list and the sign-in screen replace each other: the one leaving is shut from the moment the
+  /// swap starts, so a row tag cannot present over the incoming sign-in screen during the fade (or the reverse).
+  let listHover = HoverGate()
+  let signInHover = HoverGate(suppressed: true)
+
+  func setNeedsConnection(_ needs: Bool) {
+    listHover.set(needs)
+    signInHover.set(!needs)
+  }
   /// Bumped on every open, so the content is rebuilt and replays its open motion.
   @Published var openGeneration = 0
   @Published var desiredHeight: CGFloat = 0
@@ -34,6 +43,8 @@ final class PanelState: ObservableObject {
 
   func setSettings(_ open: Bool) {
     guard settingsOpen != open else { return }
+    // A Details, packs or info popover anchored in the list closes when Settings covers its anchor.
+    if open { popoverDismissal += 1 }
     if reduceMotion {
       withAnimation(.easeInOut(duration: 0.15)) { settingsOpen = open }
     } else {
@@ -158,6 +169,7 @@ struct AccountsMenuView: View {
             // 8 pt lift while the list loads in underneath.
             SignInView(model: model.signIn)
               .trayHoverLayer(state.coveredHover)
+              .trayHoverLayer(state.signInHover)
               .offset(x: state.settingsOpen ? -28 : 0)
               .opacity(state.settingsOpen ? 0 : 1)
               .allowsHitTesting(!state.settingsOpen)
@@ -172,6 +184,7 @@ struct AccountsMenuView: View {
             }
             .scrollEdgeEffectStyle(.soft, for: .bottom)
             .trayHoverLayer(state.coveredHover)
+            .trayHoverLayer(state.listHover)
             .offset(x: state.settingsOpen ? -24 : 0)
             .opacity(state.settingsOpen ? 0 : 1)
             .allowsHitTesting(!state.settingsOpen)
@@ -194,6 +207,7 @@ struct AccountsMenuView: View {
       .foregroundStyle(palette.label)
       .containerShape(RoundedRectangle(cornerRadius: TrayMetrics.panelRadius, style: .continuous))
     }
+    .onChange(of: model.needsConnection, initial: true) { _, needs in state.setNeedsConnection(needs) }
     .onPreferenceChange(HeaderHeightKey.self) { heights.header = $0; report() }
     .onPreferenceChange(ListHeightKey.self) { heights.list = $0; report() }
     .onPreferenceChange(OverlayHeightKey.self) { heights.overlay = $0; report() }

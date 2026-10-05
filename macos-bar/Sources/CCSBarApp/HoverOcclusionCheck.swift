@@ -44,7 +44,14 @@ enum HoverOcclusionCheck {
       let shapeOK = codex.count >= 3 && activeIndex >= 1 && codex.allSatisfy { $0.identity.contains("@") }
         && dashboard.visibleAccounts.contains { $0.provider == "claude" }
         && dashboard.providerGroups.contains { !["claude", "codex", "antigravity"].contains($0.id) }
-      if !shapeOK { fail("fixture shape: need 3+ Codex accounts with emails, first not active, plus Claude and another provider") }
+      if !shapeOK {
+        // Every later step indexes the Codex accounts by this shape: report and stop rather than trap.
+        let report: [String: Any] = ["fixture": URL(fileURLWithPath: input).lastPathComponent, "passed": false,
+          "failures": ["fixture shape: need 3+ Codex accounts with emails, first not active, plus Claude and another provider"],
+          "realPointerMoved": false, "eventsPostedToSystem": false, "accountActionsInvoked": false]
+        print(String(decoding: try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted]), as: UTF8.self))
+        exit(1)
+      }
 
       AlignmentProbe.live = true
       let (host, state, window) = PreviewRenderer.host(dashboard, options: PreviewRenderer.Options([]), live: true)
@@ -453,6 +460,98 @@ enum HoverOcclusionCheck {
         if reading?.accountName != claude[1].identity { fail("Claude: the reading must come from the picked account") }
         closeSettings()
       }
+      // A tag already up follows the panel: the dashboard changes under it (the forced refresh at every open, the
+      // 60 s timer, a Codex auto-switch) or a Settings choice changes, and the visible tag must say the same as its
+      // presenter, naming the account Show now displays. Nothing is reset between the change and the read.
+      let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: input))) as? [String: Any] ?? [:]
+      func variant(activeCodex id: String) throws -> AccountDashboard {
+        var copy = raw
+        copy["accounts"] = (raw["accounts"] as? [[String: Any]] ?? []).map { account -> [String: Any] in
+          var account = account
+          if account["provider"] as? String == "codex" { account["isActive"] = (account["id"] as? String) == id }
+          return account
+        }
+        return try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: copy))
+      }
+      func expectedHelp(_ id: String) -> String {
+        let reading = model.menuBarReading(prefs)
+        return id == "settings-show" ? MenuBarReading.showHelp(for: reading) : MenuBarReading.valueHelp(for: reading)
+      }
+      /// Puts the stand-in pointer on a Settings control and brings up its tag, which stays up for the caller.
+      func hold(_ id: String) -> (tag: Tag, point: NSPoint)? {
+        guard let (point, _) = locate(id) else { fail("follow: could not find the \(id) control"); return nil }
+        HoverProbe.pointer = window.convertPoint(toScreen: point)
+        refreshTracking()
+        let entered = tags().filter { tracks($0.view, point) }
+        for tag in entered { if let enter = event(.mouseEntered, point) { tag.view.mouseEntered(with: enter) } }
+        for tag in entered { tag.presenter.flushPending() }
+        guard let tag = tags().first(where: { $0.id == id && $0.presenter.isShowing }) else {
+          fail("follow: the \(id) tag did not present"); return nil
+        }
+        return (tag, point)
+      }
+      func release(_ held: (tag: Tag, point: NSPoint)) {
+        if let exit = event(.mouseExited, held.point) { held.tag.view.mouseExited(with: exit) }
+        for tag in tags() where tag.presenter.isShowing { tag.presenter.hide() }
+        HoverProbe.pointer = nil
+      }
+      var follows: [[String: Any]] = []
+      func follow(_ id: String, _ label: String, names identity: String?, change: () throws -> Void) rethrows {
+        guard let held = hold(id) else { return }
+        let before = held.tag.presenter.text
+        try change()
+        pump(0.3)
+        let expected = expectedHelp(id)
+        let texts = helpWindows().map(windowText)
+        var ok = held.tag.presenter.isShowing && held.tag.presenter.text == expected && texts == [expected]
+        if let identity { ok = ok && expected.contains(identity) && expected != before }
+        if !ok {
+          fail("follow: \(id) after \(label) should read \"\(expected)\", presenter \"\(held.tag.presenter.text)\", "
+            + "showing \(held.tag.presenter.isShowing), visible tag \(texts)")
+        }
+        follows.append(["control": id, "change": label, "before": before, "expected": expected,
+          "presenter": held.tag.presenter.text, "visible": texts, "passed": ok])
+        release(held)
+      }
+      let baseActive = codex[activeIndex]
+      let other = codex[codex.count - 1].id == baseActive.id ? codex[0] : codex[codex.count - 1]
+      prefs.menuBarProvider = "codex"
+      prefs.menuBarMode = .remaining
+      prefs.menuBarClaudeAccountID = nil
+      state.setSettings(true)
+      pump(0.9)
+      fit()
+      for id in ["settings-value", "settings-show"] {
+        model.previewReplace(dashboard)
+        pump(0.3)
+        try follow(id, "the active Codex account changed to \(other.identity)", names: other.identity) {
+          model.previewReplace(try variant(activeCodex: other.id))
+        }
+        try follow(id, "the active Codex account changed back to \(baseActive.identity)", names: baseActive.identity) {
+          model.previewReplace(try variant(activeCodex: baseActive.id))
+        }
+        follow(id, "Value switched to Used", names: nil) { prefs.menuBarMode = .used }
+        follow(id, "Value switched to Remaining", names: nil) { prefs.menuBarMode = .remaining }
+      }
+      model.previewReplace(dashboard)
+      if claude.count >= 3 {
+        prefs.menuBarProvider = "claude"
+        prefs.menuBarClaudeAccountID = claude[1].id
+        pump(0.6)
+        fit()
+        for id in ["settings-value", "settings-show"] {
+          prefs.menuBarClaudeAccountID = claude[1].id
+          pump(0.3)
+          follow(id, "the picked Claude account changed to \(claude[2].identity)", names: claude[2].identity) {
+            prefs.menuBarClaudeAccountID = claude[2].id
+          }
+        }
+      } else { fail("follow: the fixture needs 3+ Claude accounts") }
+      closeSettings()
+      prefs.menuBarProvider = "codex"
+      prefs.menuBarClaudeAccountID = nil
+      report["8-tag-follows-changes"] = follows
+
       if !helpWindows().isEmpty { fail("end: \(helpWindows().count) hover tag(s) still showing") }
 
       let passed = failures.isEmpty
