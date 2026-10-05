@@ -394,6 +394,23 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(value['status'], 'failed')
             self.assertEqual(value['messageCode'], 'timeout')
 
+    def test_dmg_plist_garbage_reports_update_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            installed = self._fake_mac_bundle(root / 'Applications', 'ChatGPT.app', 'com.openai.codex', '26.928.31416')
+            install = common.Install('codex-desktop', 'mac', installed, '26.928.31416', 'official-download', 'com.openai.codex', package_root=installed)
+            def commands(argv, **kwargs):
+                if argv[:2] == ['/usr/bin/hdiutil', 'attach']:
+                    return 'hdiutil: this is not a plist'
+                return ''
+            with mock.patch.object(desktop, 'download'), \
+                    mock.patch.object(desktop, 'command', side_effect=commands), \
+                    mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root / 'temp')):
+                (root / 'temp').mkdir(exist_ok=True)
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'failed')
+            self.assertEqual(value['messageCode'], 'update_failed')
+
     def test_desktop_retry_refused_reports_quit_first(self):
         install = common.Install('codex-desktop', 'mac', pathlib.Path('/fixture/ChatGPT.app'), '26.930.41038', 'official-download', 'com.openai.codex', package_root=pathlib.Path('/fixture/ChatGPT.app'))
         running = processes.Process(51, 1, 1, '/fixture/ChatGPT.app/Contents/MacOS/ChatGPT', '51', ['/fixture/ChatGPT.app/Contents/MacOS/ChatGPT'])

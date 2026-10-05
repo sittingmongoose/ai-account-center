@@ -442,6 +442,7 @@ def mac_quit_request(pid):
 
 def windows_close_broadcast(pids):
     """Post a close request to every window owned by these PIDs. Never waits, never forces."""
+    from ctypes import wintypes
     user32 = ctypes.windll.user32
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -457,7 +458,7 @@ def windows_close_broadcast(pids):
 
     callback = callback_type(close_window)
     user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
-    user32.EnumWindows(callback, None)
+    user32.EnumWindows(callback, wintypes.LPARAM(0))
 
 
 def request_desktop_quit(install, contexts, grace=15):
@@ -465,8 +466,8 @@ def request_desktop_quit(install, contexts, grace=15):
 
     Returns (exited, refused): contexts that already left or quit on request,
     and contexts still running (or in another session) afterwards. Callers
-    stage the verified update or report quit_first; a refusal is never a
-    failure and never escalates to a forced stop.
+    report quit_first; a refusal is never a failure and never escalates to a
+    forced stop.
     """
     if install.platform not in ("mac", "windows"):
         raise UpdateFailure("restart_context")

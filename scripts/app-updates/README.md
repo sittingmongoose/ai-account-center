@@ -38,12 +38,14 @@ validated against PID creation identity. Generic Node/Python/terminal processes
 are never selected. Desktop updates preserve existing absolute profile directory
 arguments. Mac uses its native application quit API and verified atomic bundle
 replacement; Windows uses an interactive task to close/reopen windows and preserve
-MSIX LocalState. Desktop apps are **never force-stopped**: a graceful quit is
-attempted first, and an app that keeps running updates in place where the OS
-supports it (Windows in-use MSIX registration reports `staged`) or reports the
-actionable `action_required` quit state instead of failing (Mac/Ubuntu, where
-swapping files under a running app would mix old and new versions). CLI forced
-stops stay bounded, app-family-only and counted. A successful result verifies
+MSIX LocalState. Desktop apps are **never force-stopped** on Mac and Windows:
+a graceful quit is requested first, and nothing is swapped or deployed while
+anything runs — a refusal, or instances that cannot be captured for a safe
+relaunch, reports the actionable `action_required`/`quit_first` row instead of
+failing, because swapping files under a running app would mix old and new
+versions (Ubuntu desktops keep the previous bounded terminate-and-relaunch
+flow). CLI forced stops stay bounded, app-family-only and counted.
+A successful result verifies
 that replacement processes exist.
 
 Updated interactive CLIs open new idle terminal instances. Ubuntu uses a private

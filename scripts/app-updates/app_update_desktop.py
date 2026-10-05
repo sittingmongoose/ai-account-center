@@ -65,7 +65,8 @@ def bundle_info(path):
 
 def windows_package(app_id):
     identity, executable = WINDOWS[app_id]
-    script = "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name " + ps_quote(identity) + "; if($p){@{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation}|ConvertTo-Json -Compress}"
+    # Sort-Object keeps the query a single object when two versions coexist mid-staging.
+    script = "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name " + ps_quote(identity) + " | Sort-Object {[Version]$_.Version} -Descending | Select-Object -First 1; if($p){@{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation}|ConvertTo-Json -Compress}"
     try:
         raw = powershell(script, timeout=15)
         value = json.loads(raw) if raw.strip() else None
