@@ -43,6 +43,7 @@ let analyticsPayload = null;
 let analyticsChoices = null;
 let analyticsChoicesPayload = null;
 let analyticsChoicesAt = 0;
+let analyticsChoicesCatalog = null;
 let analyticsGeneration = 0;
 // While the log scan runs behind the page (loading, or a cached snapshot with a refresh running),
 // the page re-reads the server every few seconds so the new numbers land on their own.
@@ -340,11 +341,30 @@ function analyticsContext(now) {
 }
 /** The choice lists behind the legacy analytics metric and account actions; Rust never reads them. */
 function choiceLists() {
-  if (!analyticsPayload) { analyticsChoices = null; analyticsChoicesPayload = null; return null; }
+  if (!analyticsPayload) {
+    analyticsChoices = null;
+    analyticsChoicesPayload = null;
+    analyticsChoicesCatalog = null;
+    return null;
+  }
+  const catalog = data?.accounts || [];
   const now = Date.now();
-  if (analyticsChoices && analyticsChoicesPayload === analyticsPayload && now - analyticsChoicesAt < 60_000) return analyticsChoices;
-  const view = analyticsView(analyticsPayload, { catalog: data?.accounts || [], metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval }, now);
+  // The account choices merge the dashboard catalog, so a registry refresh that lands
+  // while the analytics payload stays young must not validate against stale choices.
+  if (
+    analyticsChoices &&
+    analyticsChoicesPayload === analyticsPayload &&
+    analyticsChoicesCatalog === catalog &&
+    now - analyticsChoicesAt < 60_000
+  )
+    return analyticsChoices;
+  const view = analyticsView(
+    analyticsPayload,
+    { catalog, metricKey: analyticsSelection.metricKey, activityInterval: analyticsSelection.activityInterval },
+    now
+  );
   analyticsChoicesPayload = analyticsPayload;
+  analyticsChoicesCatalog = catalog;
   analyticsChoicesAt = now;
   analyticsChoices = view?.choices ?? null;
   return analyticsChoices;
@@ -606,7 +626,7 @@ async function signOut() {
     }
   }
   forgetSignIn(globalThis.localStorage);
-  analyticsGeneration++; analyticsPayload = null; analyticsChoices = null; analyticsChoicesPayload = null; clearTimeout(analyticsPollTimer); data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = ''; pushedJson.clear();
+  analyticsGeneration++; analyticsPayload = null; analyticsChoices = null; analyticsChoicesPayload = null; analyticsChoicesCatalog = null; clearTimeout(analyticsPollTimer); data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = ''; pushedJson.clear();
   claudeOpen.reset();
   accounts.reset();
   showSignedOut('default', { notice: true, message: 'Signed out.' });

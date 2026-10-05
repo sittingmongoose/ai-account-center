@@ -75,6 +75,12 @@ function normalizeCachePayload(payload: unknown): ModelsDevCacheData | null {
   return providers ? { version: 1, fetchedAt: payload.fetchedAt, providers } : null;
 }
 
+/**
+ * The parsed registry of the current cache file. The parse is memoised on the file's
+ * stat identity, so every caller in this process shares ONE registry object: treat the
+ * result as read-only (resolvers only look up; a mutation would persist across reads
+ * until the file changes or a write drops the memo).
+ */
 export function getCachedModelsDevRegistry(
   options: RegistryCacheReadOptions = {}
 ): ModelsDevRegistry | null {
