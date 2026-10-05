@@ -118,6 +118,11 @@ export function antigravityJobFlow(
     allowedOrigins: [ANTIGRAVITY_OAUTH_ORIGIN],
     timeoutMs: ANTIGRAVITY_SIGNIN_TIMEOUT_MS,
     prepare: async () => {
+      // The route gated on this same preflight a moment earlier, so a failure
+      // here is that TOCTOU window; a refused marker below is a terminal
+      // sign-in that claimed the profile in between. The job-code vocabulary
+      // has neither preflight_failed nor signin_running, so both end as the
+      // generic write_failed rather than a code that would overstate them.
       const preflight = (deps.preflight ?? antigravitySignInPreflight)(home);
       if (!preflight.ok) {
         throw new SignInJobError(

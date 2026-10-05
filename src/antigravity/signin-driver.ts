@@ -17,6 +17,9 @@
  *   CLI reaches its Google OAuth screen without the user's own keys; a CLI
  *   that skips that screen still works, because the link is read whenever it
  *   appears;
+ *   a CLI that highlights another entry gets no key at all, and its job ends
+ *   `unexpected_output` after the first-output timeout rather than the driver
+ *   choosing an entry for the user;
  * - it extracts the authorization URL from the CLI output and prints that
  *   single line. Terminals that advertise OSC 8 (TERM=xterm-256color and
  *   friends) carry the whole URL in the hyperlink parameter; plainer
@@ -97,7 +100,18 @@ export const AGY_SIGNIN_DRIVER_PROGRAM = [
   '            if not chunk or not re.match(b"^[" + URL_CHARS + b"]+$", chunk):',
   '                break',
   '            parts.append(chunk)',
-  '        return b"".join(parts)',
+  '        # A wrapped link is only complete once the screen has moved past it:',
+  '        # the line after its last chunk must not be link characters itself.',
+  '        after = index + len(parts)',
+  '        if after >= len(lines):',
+  '            continue',
+  '        tail = lines[after].strip()',
+  '        if tail and re.match(b"^[" + URL_CHARS + b"]+$", tail):',
+  '            continue',
+  '        url = b"".join(parts)',
+  '        # A host that merely starts with the allowed origin is not it.',
+  '        if url_origin(url) == origin.encode():',
+  '            return url',
   '    return None',
   'def token_state():',
   '    try:',

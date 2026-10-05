@@ -66,15 +66,22 @@ if MODE != "nomenu":
         f.write("menu=" + repr(menu_key) + "\\n")
 if os.environ.get("FAKE_EXIT_EARLY"):
     time.sleep(0.2); sys.exit(0)
-if MODE == "plain":
+if MODE == "plain" or MODE == "badhost":
+    text = URL.replace("accounts.google.com", "accounts.google.com.evil.test", 1) if MODE == "badhost" else URL
     out(" Open the URL below in your browser:\\r\\n")
-    for c in [URL[i:i+120] for i in range(0, len(URL), 120)]:
+    for c in [text[i:i+120] for i in range(0, len(text), 120)]:
         out(" " + c + "\\x1b[K\\r\\n")
+    if MODE == "badhost":
+        with open(os.environ["FAKE_RECEIPT"], "a") as f:
+            f.write("url=" + MODE + "\\n")
 else:
     out(" Open the URL below in your browser:\\r\\n")
     out(" \\x1b[34;4m\\x1b]8;id=xyz;" + URL + "\\x07" + URL[:50] + "\\x1b[m\\x1b]8;;\\x07\\r\\n")
 out("\\r\\n After authenticating, copy the code displayed in the browser and paste it below:\\r\\n")
 out(" authorization code...\\r\\n")
+if MODE == "badhost":
+    with open(os.environ["FAKE_RECEIPT"], "a") as f:
+        f.write("prompt=1\\n")
 code = ""
 while True:
     ch = sys.stdin.read(1)
@@ -101,7 +108,7 @@ interface Setup {
   env: Record<string, string>;
 }
 
-function setup(mode: 'osc8' | 'plain' | 'nomenu', early = false): Setup {
+function setup(mode: 'osc8' | 'plain' | 'nomenu' | 'badhost', early = false): Setup {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-agy-driver-'));
   dirs.push(dir);
   const token = path.join(dir, 'antigravity-oauth-token');
@@ -223,6 +230,22 @@ describe('Antigravity supervised sign-in driver', () => {
       expect(run.url()).toBe(FULL_URL);
       // No menu was on screen, so the driver pressed nothing and waited for no key.
       expect(fs.existsSync(s.receipt)).toBe(false);
+    } finally {
+      run.child.kill();
+    }
+  });
+
+  it('never surfaces a plain URL whose host only starts with the allowed origin', async () => {
+    const s = setup('badhost');
+    const run = startDriver(s);
+    try {
+      // The fake CLI records prompt=1 only after the lookalike left for the PTY,
+      // so once that is on disk the driver has certainly seen those bytes; no
+      // wall-clock wait can drive an OS child, and none is needed here.
+      await until(() =>
+        fs.existsSync(s.receipt) && fs.readFileSync(s.receipt, 'utf8').includes('prompt=1')
+      );
+      expect(run.url()).toBe(null);
     } finally {
       run.child.kill();
     }
