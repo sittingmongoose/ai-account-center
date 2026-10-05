@@ -2286,6 +2286,29 @@ private func checkMenuBarSelection() throws {
       == "Whether the menu bar shows Used or Remaining for \(email).",
       "Show and Value must follow the newly active Codex account together (\(email))")
   }
+  // FW4: the Show hover tag says what the picker does and names the same account Show
+  // displays and Value names (the ACTIVE Codex account, never the first or another row).
+  try expect(MenuBarReading.showHelp(dashboard: live, provider: "codex", mode: .used)
+    == "Choose which provider's usage number appears in the menu bar. Now showing gmail-user@example.invalid."
+    && MenuBarReading.showHelp(for: liveReading) == MenuBarReading.showHelp(dashboard: live, provider: "codex", mode: .used)
+    && MenuBarReading.valueHelp(for: liveReading) == MenuBarReading.valueHelp(dashboard: live, provider: "codex", mode: .used),
+    "The Show hover tag must name the active Codex account Show displays, in full")
+  for (activeID, email) in [("codex:party", "party-user@example.invalid"), ("codex:gio", "gio-user@example.invalid")] {
+    let switched = try realShape(activeCodex: activeID)
+    let show = MenuBarReading.showHelp(dashboard: switched, provider: "codex", mode: .remaining)
+    let value = MenuBarReading.valueHelp(dashboard: switched, provider: "codex", mode: .remaining)
+    try expect(show.hasSuffix("Now showing \(email).") && value.hasSuffix("for \(email).")
+      && !show.contains("gmail-user") && !value.contains("gmail-user"),
+      "The Show and Value hover tags must follow the newly active Codex account together (\(email))")
+  }
+  try expect(MenuBarReading.showHelp(dashboard: first, provider: "claude", mode: .used, claudeAccountID: "claude-b")
+    == "Choose which provider's usage number appears in the menu bar. Now showing claude-b@example.invalid.",
+    "The Show hover tag must name the picked Claude account")
+  try expect(MenuBarReading.showHelp(dashboard: first, provider: MenuBarReading.nothingProvider, mode: .used)
+    == "Choose which provider's usage number appears in the menu bar. Now showing the logo only."
+    && MenuBarReading.showHelp(for: nil) == MenuBarReading.showHelp(dashboard: nil, provider: "codex", mode: .used)
+    && MenuBarReading.valueHelp(for: nil) == MenuBarReading.valueHelpHidden,
+    "With no reading shown, the Show hover tag says the logo shows alone")
   try expect(MenuBarReading.valueHelp(dashboard: first, provider: MenuBarReading.nothingProvider, mode: .used)
     == MenuBarReading.valueHelpHidden
     && MenuBarReading.valueHelp(dashboard: nil, provider: "codex", mode: .used) == MenuBarReading.valueHelpHidden

@@ -123,6 +123,7 @@ export AAC_ASSETS_DIR="$PWD/Resources/Assets"            # unbundled runs read a
 .build/release/CCSBar --check-native-tooltips Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --check-native-packs Tests/Fixtures/tray-concept-preview.json /tmp/packs.png
 .build/release/CCSBar --check-meter-geometry Tests/Fixtures/tray-concept-preview.json
+.build/release/CCSBar --check-hover-occlusion Tests/Fixtures/hover-occlusion.json
 .build/release/CCSBar --check-menu-bar-prefs
 .build/release/CCSBar --self-test Tests/Fixtures/tray-concept-preview.json
 .build/release/CCSBar --toggle-test Tests/Fixtures/tray-concept-preview.json
@@ -140,6 +141,13 @@ python3 Scripts/migration_check.py
   the slot.
 - `--check-meter-geometry` checks every rendered meter against its own track's laid-out width: the fill is the reading
   within 0.5 pt, ticks sit at 25/50/75, and the notch sits at the switch threshold.
+- `--check-hover-occlusion` checks which hover tag actually presents under the pointer, with the real panel hosted
+  offscreen and a stand-in pointer (the real pointer never moves and no event reaches the system). With Settings open,
+  each Settings control (the X, Show, Claude account and Value) presents exactly its own tag with the expected text,
+  and no point of a grid over the panel presents a tag from the account list hidden underneath. It also walks the
+  pointer across rows and Settings controls (each stop shows its own tag, nothing stale), checks both Settings
+  transitions and the panel's close, and checks the rows still tag after Settings closes and after a reopen. The
+  fixture has three Codex accounts with full emails, the first not active.
 - `--check-menu-bar-prefs` checks the menu-bar pickers persist on this Mac, earlier stored values migrate, and fresh
   defaults keep today's behaviour. It uses a throwaway suite and leaves no preferences behind.
 - `--self-test` opens the real glass panel from a fixture (no sign-in, no network): status item and reading, the open

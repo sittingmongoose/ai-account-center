@@ -354,13 +354,15 @@ struct PanelScroll<Content: View>: View {
 @MainActor
 enum AlignmentProbe {
   static var frames: [String: CGRect] = [:]
+  /// Offline checks of the live (scrolling, animated) panel record frames too.
+  static var live = false
 }
 
 private struct AlignmentProbeModifier: ViewModifier {
   let id: String
   @Environment(\.trayStaticRender) private var staticRender
   func body(content: Content) -> some View {
-    if staticRender {
+    if staticRender || AlignmentProbe.live {
       content.background(GeometryReader { geometry in
         Color.clear
           .onAppear { AlignmentProbe.frames[id] = geometry.frame(in: .global) }

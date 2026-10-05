@@ -5,7 +5,17 @@ import CCSBarCore
 /// Shared state between the panel window and its SwiftUI content.
 @MainActor
 final class PanelState: ObservableObject {
-  @Published var settingsOpen = false
+  @Published var settingsOpen = false {
+    didSet {
+      coveredHover.set(settingsOpen)
+      settingsHover.set(!settingsOpen)
+    }
+  }
+  /// Hover-tag gates: the whole panel (shut while it closes), the content Settings covers (the account list or
+  /// the sign-in screen), and Settings itself (shut from the moment it starts to close).
+  let panelHover = HoverGate()
+  let coveredHover = HoverGate()
+  let settingsHover = HoverGate(suppressed: true)
   /// Bumped on every open, so the content is rebuilt and replays its open motion.
   @Published var openGeneration = 0
   @Published var desiredHeight: CGFloat = 0
@@ -57,6 +67,7 @@ struct PanelRootView: View {
   var body: some View {
     AccountsMenuView(model: model, prefs: prefs, state: state)
       .id(state.openGeneration)
+      .trayHoverLayer(state.panelHover)
       .background { if state.staticRender { PreviewGlass() } }
       .environment(\.trayStaticRender, state.staticRender)
       .environment(\.trayPopoverDismissal, state.popoverDismissal)
@@ -146,6 +157,7 @@ struct AccountsMenuView: View {
             // The sign-in screen replaces the list; the header and the footer stay. It leaves with a fade and an
             // 8 pt lift while the list loads in underneath.
             SignInView(model: model.signIn)
+              .trayHoverLayer(state.coveredHover)
               .offset(x: state.settingsOpen ? -28 : 0)
               .opacity(state.settingsOpen ? 0 : 1)
               .allowsHitTesting(!state.settingsOpen)
@@ -159,12 +171,14 @@ struct AccountsMenuView: View {
                 .background(GeometryReader { Color.clear.preference(key: ListHeightKey.self, value: $0.size.height) })
             }
             .scrollEdgeEffectStyle(.soft, for: .bottom)
+            .trayHoverLayer(state.coveredHover)
             .offset(x: state.settingsOpen ? -24 : 0)
             .opacity(state.settingsOpen ? 0 : 1)
             .allowsHitTesting(!state.settingsOpen)
           }
           if state.settingsOpen {
             SettingsPanelView(model: model, prefs: prefs, state: state, glass: glass)
+              .trayHoverLayer(state.settingsHover)
               .transition(state.reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
               .zIndex(1)
           }
@@ -240,7 +254,7 @@ struct AccountsMenuView: View {
     .font(.system(size: 12)).foregroundStyle(palette.label2).lineLimit(1).monospacedDigit()
     .contentTransition(.opacity)
     .animation(.easeOut(duration: 0.2), value: model.isRefreshing)
-    .help(statusHelp)
+    .trayHelp(statusHelp)
   }
 
   private var statusHelp: String {

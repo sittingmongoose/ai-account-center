@@ -329,7 +329,7 @@ struct SignInSpec {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
           Text(verbatim: model.host).font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label)
             .lineLimit(1).truncationMode(.middle)
-            .help(model.verified?.absoluteString ?? "")
+            .trayHelp(model.verified?.absoluteString ?? "")
           Spacer(minLength: 10)
           Button("Change") { model.changeAddress() }
             .buttonStyle(.link).font(.system(size: 13))
@@ -617,7 +617,7 @@ struct SignInInput: View {
           .buttonStyle(.plain)
           .disabled(disabled)
           .padding(.trailing, 4)
-          .help(revealed ? "Hide password" : "Show password")
+          .trayHelp(revealed ? "Hide password" : "Show password")
           .accessibilityLabel(revealed ? "Hide password" : "Show password")
         }
       }
