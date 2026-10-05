@@ -232,12 +232,20 @@ export class AccountAnalyticsService {
         // Never overwrite an unreadable/unknown history file. Current snapshots
         // remain visible while persistence explicitly reports unavailable.
         if (!state.available) return;
+        const previous = state.data;
         const next = appendAccountAnalyticsSnapshot(
-          state.data,
+          previous,
           accounts,
           (this.deps.now ?? Date.now)()
         );
-        const changed = JSON.stringify(next) !== JSON.stringify(state.data);
+        // appendAccountAnalyticsSnapshot carries records it did not replace over by
+        // object identity, and schemaVersion/collectedSince are fixed for a non-null
+        // history, so an equal length with all-equal references serializes exactly
+        // like the previous data. A null history always counts as changed.
+        const changed =
+          previous === null ||
+          next.records.length !== previous.records.length ||
+          next.records.some((record, index) => record !== previous.records[index]);
         state.data = next;
         if (changed) {
           try {

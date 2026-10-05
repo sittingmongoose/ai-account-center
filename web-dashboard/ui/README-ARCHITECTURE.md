@@ -62,7 +62,7 @@ reading in Slint, never add or average across accounts, never turn a missing val
   `set_refresh_interval`, `set_accounts(json)` (Accounts & Settings v2), `set_accounts_strength(json)` (the
   change-password strength, per keystroke), `set_signin_strength(json)`, `probe_tick()` (?e2e only).
 - **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs,
-  and `ANALYTICS_VIEW_VERSION = 4` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
+  and `ANALYTICS_VIEW_VERSION = 5` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
   and `ACCOUNTS_VIEW_VERSION = 2` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
   a mismatch is refused, not half-rendered. Bump the pair together when its structs change shape.
 - **In-place updates**: lib.rs owns one `Rc<VecModel<T>>` per list (sections, cards, registry, toasts, Details
@@ -141,8 +141,8 @@ The Analytics page (W3) is built like the concept's `app-analytics.js`. Four pur
   is dropped, so labels never overlap; Martian Mono is 7.15 px a character at 11 px, so label boxes are exact)
   and `agendaView()` (resets at the same minute merged, expiries with what is left, spent packs dropped, two
   balanced columns of whole days). Current readings come from the dashboard response, history from analytics.
-- `public/analytics-data.mjs` `analyticsSlintModel(view, page)`: the version 4 JSON for `src/analytics.rs`
-  (`ANALYTICS_VIEW_VERSION = 4`, its own version, checked there). It keeps the earlier `head`, `kpis` and
+- `public/analytics-data.mjs` `analyticsSlintModel(view, page)`: the version 5 JSON for `src/analytics.rs`
+  (`ANALYTICS_VIEW_VERSION = 5`, its own version, checked there). It keeps the earlier `head`, `kpis` and
   `quotaGroups` and adds `state`, `usage`, `quota` and `agenda`.
 
 `src/analytics.rs` writes it into the `AxData` global (`ui/pages/analytics/ax-data.slint`), with persistent
@@ -274,7 +274,11 @@ The real login screen. bridge.js builds `AuthView` with the words from public/au
   after its hours or ended early; `signedOutReason: "revoked"` or a 401 `session_revoked` says "Signed out from
   another browser"), a 500 from login is "Sign-in failed on the dashboard", never a wrong password,
   setup (only when `/api/auth/check` reports `accessMode: "setup"`), success (the button turns into a check, the
-  bar fills with the Apex ramp, then the layer cross-fades into the dashboard load-in);
+  bar fills with the Apex ramp, then the layer cross-fades into the dashboard load-in). The success look is held
+  (`signed-in`) until the layer is really invisible: bridge.js drops `success` when it marks the session
+  authenticated, 420 ms before the fade ends, and without the hold the bar drained from 100 back to 0 on the way
+  out (FW4-N12). The connecting sweep freezes where it ended and fades out with the bar instead of being removed
+  in one frame;
 - the first-run form (username, password with the strength meter, confirmation with "Matches", setup code) shows
   only when `GET /api/auth/setup` reports `setupCodeRequired`, the signal that comes with `POST /api/auth/setup`
   (CONTRACT-auth-devices section 4); until then the setup state shows the command that sets sign-in up on the
@@ -329,6 +333,13 @@ Load-in: the header slides down 8 px, sections rise 12 px one stagger apart (`Re
 with their colour climbing the severity ramp, numbers roll up (`Meter.played`, `delay`). Page change: the
 outgoing page fades and lifts 8 px (190 ms), the incoming page's sections rise in. Nothing loops while idle:
 spinners and skeleton shimmer read `animation-tick()` only while they are active.
+
+The header's Update apps button keeps its label rock-steady while a job runs (FW4-N12): its width changes only
+when the mode changes (idle, running, done), never on a result count - the rolling count sits in a box the width
+of `total`, the widest the count can get, with the digits right-aligned against "of" - and the one morph between
+label widths steps in whole pixels, because the header pins its group to the right and every fractional width
+re-rasterised the label at a new sub-pixel x. The status cell that places the group is whole pixels for the same
+reason.
 
 ## Fonts and icons
 

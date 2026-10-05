@@ -147,7 +147,6 @@ test('a picked provider shows only the usage it served, divided by model', () =>
   assert.deepEqual(zai.cbm.rows.map(r => r.name), ['GLM-5.3-Flash']);
   assert.match(zai.trend.sub, /Z\.ai Coding Plan$/);
   assert.deepEqual(zai.providers.items.map(i => i.key), ['zai']);
-  assert.deepEqual(zai.sessions.rows.map(r => r.label), ['Z.ai Coding Plan']);
   assert.equal(zai.sessions.stats.find(s => s.key === 'sess').num, 2);
   // the daily chart is that provider alone, in its own hue
   assert.deepEqual([zai.daily.showClaude, zai.daily.showCodex, zai.daily.showOther, zai.daily.otherLabel, zai.daily.otherHue], [false, false, true, 'Z.ai Coding Plan', 'zai']);
@@ -167,14 +166,26 @@ test('a picked provider shows only the usage it served, divided by model', () =>
   assert.equal(claude.sessions.stats.find(s => s.key === 'sess').num, 3);
   assert.match(claude.trend.sub, /Claude$/);
   assert.equal(kpi(claude, 'cost').sub.some(r => r.text === 'Partial'), false);
-  // under All the Sessions number is the SESSIONS column's sum (a session two providers served counts under
-  // each, in the rows and in the number alike), and the per-session figures divide by it
+  // under All the Sessions number sums every provider's count (a session two providers served counts under
+  // each): 12 = 3+2+2+1+2+1+1 over the seven PROVIDERS rows, so a provider dropping out would show here
   const all = usageView(payload(), state(), { now });
   assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, 12);
-  assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, all.sessions.rows.reduce((n, r) => n + Number(r.sessions.replace(/,/g, '')), 0));
-  assert.deepEqual(all.sessions.rows.map(r => r.label), ['Claude', 'Codex', 'Muse Code', 'Qwen Token Plan', 'Z.ai Coding Plan', 'OpenCode Go', 'Other']);
-  assert.match(all.sessions.note, /usage read from the Mac and Windows adds tokens but no sessions/);
+  // Mac and Windows rows carry a session key now, so no Ubuntu-only caveat is owed.
+  assert.equal(all.sessions.note, '');
   assert.equal(claude.sessions.note, '');
+});
+
+test('a generic JSONL source counts tokens but adds no sessions, and the note says so', () => {
+  const providers = PROVIDERS.map(p => p.provider === 'other' ? { ...p, tools: ['omp', 'jsonl'] } : p);
+  const view = usageView(payload({ providers }), state(), { now });
+  assert.match(view.sessions.note, /generic JSONL usage log records no session/);
+  // Its tokens are still in the totals, and its provider still counts the sessions its other tools logged:
+  // Other's one OMP session stays in the Sessions number, alone under its filter and in the sum under All.
+  assert.equal(kpi(view, 'tok').num, tokensOf(...Object.values(M)));
+  assert.equal(view.sessions.stats.find(s => s.key === 'sess').num, 12);
+  const other = usageView(payload({ providers }), state({ prov: 'other' }), { now });
+  assert.equal(other.sessions.stats.find(s => s.key === 'sess').num, 1);
+  assert.match(other.sessions.note, /generic JSONL usage log records no session/);
 });
 
 test('Included usage names the tools and computers read, and how usage is grouped', () => {
@@ -223,7 +234,6 @@ test('cost that is not logged reads "Not logged", never $0.00, and partial cost 
   assert.ok(Math.abs(avg.num - (haiku(1e6, 2e5, 1e6, 4e7) + gpt5(2e6, 1e5, 0, 1e7) + 3.2 + 2) / 8) < 1e-9);
   assert.equal(avg.text, '$2.15');
   assert.match(avg.label, /partial/);
-  assert.equal(view.sessions.rows.find(r => r.provider === 'claude').per, '$' + (haiku(1e6, 2e5, 1e6, 4e7) / 3).toFixed(2));
   // the provider summary: a not-logged provider says so in its tip, never $0.00
   assert.match(view.providers.items.find(i => i.key === 'qwen').tip, /estimated cost not logged\. From OMP logs\.$/);
   assert.match(view.providers.items.find(i => i.key === 'muse').tip, /\$0\.50 estimated cost, partial: some is not logged\. From OMP and Muse Code logs\.$/);

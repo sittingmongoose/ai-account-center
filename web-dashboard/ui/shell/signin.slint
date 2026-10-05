@@ -40,6 +40,21 @@ component Motif inherits Rectangle {
     property <length> oy: (root.height - 560px * root.k) / 2;
     property <color> apex-a: #2F6BFF;
     property <color> apex-b: #1FC6EE;
+    // The connecting sweep outlives `connecting` by its fade, and `sweep-t` freezes at the phase the sweep
+    // had reached when the request ended, so the segment fades out where it is instead of being removed in
+    // one frame (which reads as the bar snapping back to 0).
+    property <bool> sweeping: false;
+    property <duration> sweep-end: 0ms;
+    property <float> sweep-t: !Motion.on ? 0.6 : root.connecting ? mod(animation-tick() / 1100ms, 1) : mod(root.sweep-end / 1100ms, 1);
+    changed connecting => {
+        if root.connecting { root.sweeping = true; }
+        else if root.sweeping { root.sweep-end = animation-tick(); sweep-hold.running = true; }
+    }
+    sweep-hold := Timer {
+        interval: 320ms;
+        running: false;
+        triggered => { self.running = false; root.sweeping = false; }
+    }
     rings-layer := Rectangle {
         opacity: root.paused ? 0.55 : 1;
         animate opacity { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
@@ -136,16 +151,16 @@ component Motif inherits Rectangle {
             animate width { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
             background: @linear-gradient(90deg, root.apex-a 0%, root.apex-b 100%);
         }
-        // connecting: one bright segment travels along the bar (a loop only while the request runs)
+        // connecting: one bright segment travels along the bar (a loop only while the request runs), then
+        // freezes and fades out where it ended
         Rectangle {
             x: 0px;
             width: parent.width;
             clip: true;
             opacity: root.connecting ? 1 : 0;
             animate opacity { duration: Motion.on ? Motion.med : 0ms; }
-            if root.connecting: Rectangle {
-                property <float> t: Motion.on ? mod(animation-tick() / 1100ms, 1) : 0.6;
-                x: (-72 + self.t * (256 + 72)) * root.k * 1px;
+            if root.sweeping: Rectangle {
+                x: (-72 + root.sweep-t * (256 + 72)) * root.k * 1px;
                 width: 72px * root.k;
                 background: @linear-gradient(90deg, root.apex-a.with-alpha(0) 0%, root.apex-a.with-alpha(0.85) 60%, root.apex-b 100%);
             }
@@ -239,14 +254,28 @@ export component SignInLayer inherits Rectangle {
 
     property <string> state: root.auth.state;
     property <bool> success: root.state == "success";
+    // bridge.js marks the session authenticated 650 ms after the success answer, and this layer then needs
+    // 420 ms more to fade out. `success` drops at the start of that fade, so every success visual - above all
+    // the scale bar's Apex fill - animated back to empty on the way out: the bar reached 100 and then drained
+    // to 0 while the page was still on screen. `signed-in` holds the success look until the layer is really
+    // invisible, so nothing snaps back while it can be seen; the reset happens out of sight and the next
+    // sign-in (a sign-out, an ended session) starts from an empty bar. Asking for the page again clears the
+    // hold at once, so a sign-out landing inside the fade can never leave the form stuck in its success look.
+    property <bool> success-held: false;
+    property <bool> signed-in: root.success || root.success-held;
+    changed success => { if root.success { root.success-held = true; } }
+    changed visible => { if !root.visible { root.success-held = false; } }
+    changed shown => { if root.shown { root.success-held = false; } }
     property <bool> loading: root.state == "loading";
-    property <bool> connecting: root.state == "connecting" || (root.busy && !root.success);
+    // Only while the page is asked for: a busy slot taken by a dashboard action must not start the sweep on
+    // an invisible page, and `signed-in` keeps the sweep off during the success fade.
+    property <bool> connecting: root.shown && (root.state == "connecting" || (root.busy && !root.signed-in));
     property <bool> setup: root.state == "setup";
     property <bool> form: !root.setup || root.auth.setup-form;
     property <bool> limited: root.state == "limited";
     property <bool> wrong: root.state == "wrong";
     property <bool> expired: root.state == "expired";
-    property <bool> can-submit: !root.busy && !root.loading && !root.limited && !root.success && !root.connecting && root.form;
+    property <bool> can-submit: !root.busy && !root.loading && !root.limited && !root.signed-in && !root.connecting && root.form;
     property <bool> has-banner: root.expired || root.limited || (root.setup && !root.auth.setup-form);
     property <bool> short: root.height < 760px;
     property <string> confirm-text;
@@ -361,7 +390,7 @@ export component SignInLayer inherits Rectangle {
                     drop-shadow-blur: 28px;
                     drop-shadow-offset-y: 12px;
                     // leaving: the card steps back a little while the page fades into the dashboard
-                    transform-scale: root.success && !root.shown ? 0.99 : 1;
+                    transform-scale: root.signed-in && !root.shown ? 0.99 : 1;
                     animate transform-scale { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                     form := VerticalLayout {
                         padding-left: root.card-pad;
@@ -371,15 +400,15 @@ export component SignInLayer inherits Rectangle {
                         spacing: 0px;
                         // title and lede
                         Text {
-                            text: root.success ? "Signed in" : root.setup ? "Set up sign-in" : root.expired ? "Sign in again" : "Sign in";
+                            text: root.signed-in ? "Signed in" : root.setup ? "Set up sign-in" : root.expired ? "Sign in again" : "Sign in";
                             font-size: root.short ? 24px : Breakpoints.ultra ? 30px : Breakpoints.compact ? 25px : 27px;
                             font-weight: 640;
                             letter-spacing: -0.6px;
                             color: Theme.ink;
                         }
                         Rectangle { height: root.short ? 5px : 7px; }
-                        if root.success || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == "": Text {
-                            text: root.success ? "Opening your dashboard."
+                        if root.signed-in || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == "": Text {
+                            text: root.signed-in ? "Opening your dashboard."
                                 : root.loading ? "Connecting to AI Account Center…"
                                 : root.setup ? "No sign-in is set up yet. Choose the username and password for this dashboard; each tray asks for them once."
                                 : "Your accounts and subscription usage";
@@ -387,7 +416,7 @@ export component SignInLayer inherits Rectangle {
                             color: Theme.ink-3;
                             wrap: word-wrap;
                         }
-                        if !(root.success || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == ""): HorizontalLayout {
+                        if !(root.signed-in || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == ""): HorizontalLayout {
                             spacing: 0px;
                             alignment: start;
                             Text { text: "Dashboard on "; font-size: root.short ? 13px : 13.5px; color: Theme.ink-3; }
@@ -640,22 +669,22 @@ export component SignInLayer inherits Rectangle {
 
                         // submit: the label, a spinner and a check cross-fade in one button
                         submit-btn := Rectangle {
-                            property <bool> off: (root.limited || root.loading) && !root.success;
+                            property <bool> off: (root.limited || root.loading) && !root.signed-in;
                             height: root.short ? 40px : Breakpoints.ultra ? 48px : 44px;
                             border-radius: 10px;
                             clip: true;
-                            background: root.success ? Theme.calm
+                            background: root.signed-in ? Theme.calm
                                 : self.off ? Theme.paper-3
                                 : sb-ta.has-hover && root.can-submit ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
                             animate background { duration: Motion.tint(Motion.med); easing: cubic-bezier(0.65, 0, 0.35, 1); }
                             transform-scale: sb-ta.pressed && root.can-submit ? 0.97 : 1;
                             animate transform-scale { duration: 120ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-                            property <color> fg: root.success ? Theme.paper : self.off ? Theme.ink-3 : Theme.accent-ink;
+                            property <color> fg: root.signed-in ? Theme.paper : self.off ? Theme.ink-3 : Theme.accent-ink;
                             property <string> label: root.setup && !root.auth.setup-form ? "Check again" : root.setup ? "Create sign-in" : "Sign in";
                             // idle label
                             Text {
-                                y: (parent.height - self.preferred-height) / 2 + (root.connecting || root.success ? -10px : 0px);
-                                opacity: root.connecting || root.success ? 0 : 1;
+                                y: (parent.height - self.preferred-height) / 2 + (root.connecting || root.signed-in ? -10px : 0px);
+                                opacity: root.connecting || root.signed-in ? 0 : 1;
                                 animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                                 text: submit-btn.label;
                                 font-size: Breakpoints.ultra ? 15px : 14px;
@@ -695,9 +724,9 @@ export component SignInLayer inherits Rectangle {
                             }
                             // done
                             HorizontalLayout {
-                                y: (parent.height - 18px) / 2 + (root.success ? 0px : 10px);
+                                y: (parent.height - 18px) / 2 + (root.signed-in ? 0px : 10px);
                                 height: 18px;
-                                opacity: root.success ? 1 : 0;
+                                opacity: root.signed-in ? 1 : 0;
                                 animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                                 alignment: center;
                                 spacing: 9px;
@@ -741,7 +770,7 @@ export component SignInLayer inherits Rectangle {
             Motif {
                 min-height: 200px;
                 run: root.entered;
-                success: root.success;
+                success: root.signed-in;
                 connecting: root.connecting;
                 paused: root.limited;
             }

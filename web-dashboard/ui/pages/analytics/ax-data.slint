@@ -1,4 +1,4 @@
-// Analytics view model (version 3, public/analytics-data.mjs analyticsSlintModel): the structs and the
+// Analytics view model (version 5, public/analytics-data.mjs analyticsSlintModel): the structs and the
 // AxData global that src/analytics.rs fills. Every number, label and "unavailable" decision is made in
 // public/analytics-*.mjs; these components only lay out and animate what they are given. Chart geometry
 // (paths, ticks, label positions) arrives in pixels of the box the page reported through AxData.layout().
@@ -149,7 +149,7 @@ export struct AxDonut { sub: string, note: string, mode: string, centre: string,
 
 // ---- session stats, token breakdown, cache efficiency ----
 export struct AxStat { key: string, label: string, num: float, has: bool, fmt: string, text: string }
-export struct AxSessRow { provider: string, label: string, sessions: string, per: string, events: string, events-tip: string }
+// A session table row; the two boxes of the continued list share the struct (see ax-stats.slint).
 export struct AxSessRecent { tool: string, models: string, tokens: string, cost: string, when: string, tip: string }
 export struct AxTokRow { key: string, label: string, wt: float, wc: float, tok: string, tok-tip: string, tok-share: string, cost: string, cost-share: string }
 export struct AxCache {
@@ -297,8 +297,10 @@ export global AxData {
     in-out property <[int]> donut-lut;
     in-out property <AxCardText> sessions;
     in-out property <[AxStat]> sess-stats;
-    in-out property <[AxSessRow]> sess-rows;
     in-out property <[AxSessRecent]> sess-recent;
+    // the Recent sessions box: the continuation rows and their own sub ("Sessions 6 to 15, continued from…")
+    in-out property <[AxSessRecent]> sess-recent-more;
+    in-out property <string> sess-more-sub;
     in-out property <string> tokens-sub;
     in-out property <[AxTokRow]> tokens;
     in-out property <AxCache> cache;

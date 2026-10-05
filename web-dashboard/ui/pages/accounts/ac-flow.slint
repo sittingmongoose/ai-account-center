@@ -141,6 +141,13 @@ export component FlowPanel inherits Rectangle {
         root.input-text = root.flow.input-seed;
         root.label-text = "";
     }
+    // a step that asks for a different kind of input starts from its own seed:
+    // the profile name typed on the first step must not sit in the code field
+    // of the next one (the supervised Antigravity flow has both)
+    property <string> input-kind: root.flow.input-kind;
+    changed input-kind => {
+        root.input-text = root.flow.input-seed;
+    }
     // each new step cross-fades in from 10 px to the right
     property <string> sig: root.flow.key + "|" + root.flow.cur + "|" + root.flow.title + "|" + root.flow.done + "|" + root.flow.error + "|" + root.flow.waiting;
     property <bool> pre: false;

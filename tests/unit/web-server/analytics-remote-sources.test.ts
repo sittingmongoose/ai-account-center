@@ -13,6 +13,7 @@ import {
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
+import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
 import {
   defaultDashboardPreferences,
   writeDashboardPreferences,
@@ -28,6 +29,9 @@ afterEach(() => fs.rmSync(cache, { recursive: true, force: true }));
 // The helper's file keys are SHA-256 hex digests; the server refuses anything else.
 const FILE_1 = 'a1'.repeat(32);
 const DB_1 = 'd1'.repeat(32);
+// A session key is the helper's truncated digest of the log's own session id; the id never travels.
+const SESSION_1 = analyticsSessionKey('omp', '2026-10-01T15-00_uuid');
+const OTHER_SESSION = analyticsSessionKey('omp', '2026-10-01T16-00_uuid2');
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -59,11 +63,46 @@ function response(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function srow(overrides: Record<string, unknown> = {}) {
+  return {
+    k: 'omp',
+    f: FILE_1,
+    s: SESSION_1,
+    m: 'deepseek-v4.1-flash',
+    a: Date.parse('2026-10-01T15:05:00Z'),
+    z: Date.parse('2026-10-01T15:35:00Z'),
+    i: 100,
+    o: 10,
+    cr: 50,
+    cw: 5,
+    c: 0.01,
+    n: 2,
+    ...overrides,
+  };
+}
+
 describe('analytics remote transport', () => {
   it('parses bounded aggregate responses', () => {
     const parsed = parseAnalyticsRemoteResponse(JSON.stringify(response()));
     expect(parsed.rows).toHaveLength(1);
+    expect(parsed.srows).toEqual([]);
     expect(parsed.kinds.muse.state).toBe('not_installed');
+  });
+
+  it('parses session aggregates and rejects malformed ones', () => {
+    const parsed = parseAnalyticsRemoteResponse(
+      JSON.stringify(response({ srows: [srow(), srow({ s: OTHER_SESSION })] }))
+    );
+    expect(parsed.srows).toHaveLength(2);
+    expect(parsed.srows[0].s).toBe(SESSION_1);
+    const bad = (overrides: Record<string, unknown>) => () =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response({ srows: [srow(overrides)] })));
+    expect(bad({ s: '' })).toThrow();
+    // Only the host's truncated digest travels: a raw id, slashed or not, is refused.
+    expect(bad({ s: 'has/slash' })).toThrow();
+    expect(bad({ s: '2026-10-01T15-00_uuid' })).toThrow();
+    expect(bad({ z: Date.parse('2026-10-01T15:00:00Z') })).toThrow();
+    expect(bad({ f: 'not-a-hash' })).toThrow();
   });
 
   it('rejects malformed, oversized or unknown-kind payloads', () => {
@@ -175,10 +214,11 @@ describe('analytics remote sources', () => {
     const ompMac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(ompMac).toMatchObject({ state: 'ok', rowCount: 2 });
     expect(ompMac?.lastScanAt).toBe('2026-10-02T00:00:00.000Z');
-    // Muse and zcode are mac-only; windows carries claude, codex and omp.
+    // Both hosts are asked about every kind; a tool that is not installed there
+    // answers not_installed from the host itself, never from a fixed claim here.
     expect(
       states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)
-    ).toEqual(['claude', 'codex', 'omp']);
+    ).toEqual(['claude', 'codex', 'muse', 'omp', 'zcode']);
     expect(states.filter((entry) => entry.host === 'mac').map((entry) => entry.tool)).toEqual([
       'claude',
       'codex',
@@ -186,6 +226,59 @@ describe('analytics remote sources', () => {
       'omp',
       'zcode',
     ]);
+  });
+
+  it('converts session aggregates to worker sessions without doubling hourly tokens', async () => {
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      now: () => Date.parse('2026-10-02T00:00:00Z'),
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(response({ srows: [srow(), srow({ s: OTHER_SESSION, i: 50 })] }))
+        ),
+    });
+    const omp = results.find((entry) => entry.tool === 'omp');
+    expect(omp?.data.session).toHaveLength(2);
+    // The key the host derived is the session's published id; no raw id ever travels.
+    expect(omp?.data.session[0].sessionId).toBe(SESSION_1);
+    expect(omp?.data.session[0].lastActivity).toBe('2026-10-01T15:35:00.000Z');
+    expect(omp?.data.session[0].target).toBe('omp');
+    // Hourly rows carry the tokens; sessions carry the keys. The totals equal
+    // the hourly rows alone.
+    expect(omp?.data.hourly).toHaveLength(1);
+    expect(omp?.data.eventCount).toBe(2);
+    // A later scan keeps the cached sessions while their files are unchanged.
+    const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
+    const cachedOmp = cached.results.find((entry) => entry.tool === 'omp');
+    expect(cachedOmp?.data.session).toHaveLength(2);
+  });
+
+  it('re-reads a cache whose session aggregates predate the keys', async () => {
+    const runHelper = async () =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response({ srows: [srow()] })));
+    await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
+    // Both hosts answered, so both caches must read as stale: a cache saved before keys existed
+    // holds raw session ids this build must never serve again.
+    for (const host of ['mac', 'windows']) {
+      const file = path.join(cache, 'analytics-remote-v1', `${host}.json`);
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+        version: number;
+        srows: unknown[];
+      };
+      expect(saved.version).toBe(3);
+      expect(saved.srows).toHaveLength(1);
+      fs.writeFileSync(file, JSON.stringify({ ...saved, version: 2, srows: [] }));
+    }
+    expect(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).results).toEqual([]);
+  });
+
+  it('refuses a session aggregate whose key is not a truncated digest', () => {
+    expect(() =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(response({ srows: [srow({ s: 'raw-session-id' })] }))
+      )
+    ).toThrow();
   });
 
   it('sends the saved extra roots for each target host', async () => {

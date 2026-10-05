@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../utils/config-manager';
-import { getDefaultClaudeConfigDir } from '../../utils/claude-config-path';
+import { getClaudeProjectsDirForAnalytics } from '../../utils/claude-config-path';
 import { listAccountInstancePaths } from '../../management/instance-directory';
 import { CCSError } from '../../errors/error-types';
 import { resolveCodexConfigPaths } from './compatible-cli-config-paths';
@@ -13,10 +13,12 @@ import {
   projectAccountAnalyticsActivity,
   type SourceData,
 } from './account-analytics-projection';
+import { USAGE_PROVIDER_ORDER } from './account-analytics-attribution';
 import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
 import {
+  analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   type AnalyticsRemoteSourceState,
@@ -85,8 +87,11 @@ type RemoteAnswer = {
 /**
  * Fixed entries for tools with no local usage log, on every host. Antigravity
  * keeps token counts only inside sqlite protobuf BLOBs mixed with conversation
- * content; Cursor usage is server-side. The page uses these to say why they
- * are missing. Muse and zcode are not installed on Windows and are skipped.
+ * content (per-conversation databases under the Gemini CLI state directory,
+ * with no integer token columns); Cursor usage is server-side (the local
+ * chat store holds blobs and metadata only, with no token-usage columns).
+ * The page uses these to say why they are missing. Every other tool is
+ * scanned on every host, so its state is measured, never fixed.
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
@@ -108,16 +113,6 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
       rowCount: 0,
       detail:
         'no local usage log: usage is server-side; the local state database has no token-usage columns',
-    });
-  }
-  for (const tool of ['muse', 'zcode'] as const) {
-    entries.push({
-      tool,
-      host: 'windows',
-      state: 'not_installed',
-      lastScanAt: null,
-      rowCount: 0,
-      detail: 'not installed on this host',
     });
   }
   return entries;
@@ -166,14 +161,33 @@ const MAX_DIRECTORIES = 24;
 const MAX_ROWS = 100_000;
 const MAX_WORKER_TIME_MS = 20_000;
 const MAX_COLLECTION_TIME_MS = 60_000;
+/** Retained sessions per published source; more than this marks the local collection incomplete. */
+const MAX_RETAINED_SESSIONS = 10_000;
+
+/**
+ * The sessions one published source keeps: inside the 31-day window, bounded, and without a
+ * project path (a session's directory never reaches the page). Local and remote sources keep the
+ * same shape, so Session stats covers every host that reported usage.
+ */
+function retainedSessions(
+  sessions: UsageWorkerResult['session'],
+  cutoff: number
+): UsageWorkerResult['session'] {
+  return sessions
+    .filter((session) => Date.parse(session.lastActivity) >= cutoff)
+    .slice(0, MAX_RETAINED_SESSIONS)
+    .map((session) => ({ ...session, projectPath: '' }));
+}
 
 /**
  * The on-disk snapshot: the last published aggregate rows, served instantly after a restart while
  * the first collection runs. Hourly and session rows with project paths stripped (enforced on
- * load); session rows keep their opaque session ids for counting (published only as hashed sample
- * keys), never paths or content. Best-effort: a missing or invalid file behaves like a first run.
+ * load); a session row carries only its published key, never a raw id, a path or content.
+ * Best-effort: a missing or invalid file behaves like a first run.
+ * 2: readers key a session where its log was read, so a version 1 snapshot of raw ids is never
+ * served again.
  */
-const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_VERSION = 2;
 const SNAPSHOT_FILE = 'analytics-activity-snapshot-v1.json';
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 const MAX_SNAPSHOT_SESSIONS = 10_000;
@@ -208,7 +222,7 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
   if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
   for (const source of snap.sources as Array<Record<string, unknown>>) {
     if (!source || typeof source !== 'object') return false;
-    if (!['claude', 'codex', 'omp', 'muse', 'zcode'].includes(source.provider as string))
+    if (!['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'].includes(source.provider as string))
       return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
@@ -316,7 +330,7 @@ async function isDirectory(directory: string): Promise<boolean> {
 async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
   const ccsDir = getCcsDir();
   const activity = { minDate: Date.now() - 31 * 86_400_000, cacheDir: path.join(ccsDir, 'cache') };
-  const claudeRoots = [path.join(getDefaultClaudeConfigDir(), 'projects')];
+  const claudeRoots = [getClaudeProjectsDirForAnalytics()];
   try {
     for (const instance of listAccountInstancePaths(path.join(ccsDir, 'instances')))
       claudeRoots.push(path.join(instance, 'projects'));
@@ -596,15 +610,13 @@ export class AccountAnalyticsActivityService {
         const recentSessions = data.session.filter(
           (session) => Date.parse(session.lastActivity) >= cutoff
         );
-        if (recentSessions.length > 10_000) failed = true;
+        if (recentSessions.length > MAX_RETAINED_SESSIONS) failed = true;
         existing.push({
           ...data,
           daily: [],
           monthly: [],
           hourly,
-          session: recentSessions
-            .slice(0, 10_000)
-            .map((session) => ({ ...session, projectPath: '' })),
+          session: retainedSessions(recentSessions, cutoff),
         });
         collected.set(provider, existing);
         succeeded.add(provider);
@@ -729,8 +741,11 @@ export class AccountAnalyticsActivityService {
         const hourly = data.hourly
           .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
           .slice(0, 744);
-        if (hourly.length || data.eventCount === 0) {
-          existing.push({ ...data, daily: [], monthly: [], hourly, session: [] });
+        // Remote sessions merge like local ones: whole retained rows, paths stripped. A remote
+        // row's key was derived on the host that read it, so it counts exactly like a local one.
+        const session = retainedSessions(data.session, cutoff);
+        if (hourly.length || session.length || data.eventCount === 0) {
+          existing.push({ ...data, daily: [], monthly: [], hourly, session });
           merged.set(entry.tool, existing);
         }
       }
@@ -823,10 +838,10 @@ export class AccountAnalyticsActivityService {
         if (entry.host === 'mac' || entry.host === 'windows') entries.push({ ...entry });
     } else {
       // The remote scans never answered; the previous remote aggregates are
-      // still in the totals, and are marked.
-      for (const tool of ['omp', 'muse', 'zcode'] as const) {
-        for (const host of ['mac', 'windows'] as const) {
-          if (tool !== 'omp' && host === 'windows') continue;
+      // still in the totals, and are marked. Every scanned kind is listed,
+      // so Claude Code and Codex remotes are never silently absent.
+      for (const host of ['mac', 'windows'] as const) {
+        for (const tool of analyticsRemoteTargets(host)) {
           const old = previous.get(`${tool}\0${host}`);
           if (old)
             entries.push(
@@ -923,9 +938,9 @@ export class AccountAnalyticsActivityService {
         this.states.delete(oldest);
       }
     }
-    // Dashboard quota-provider ids overlap the activity tools only for
-    // claude/codex/muse; omp/zcode filters can only arrive via `all`.
-    const activityFilters: readonly string[] = ['all', 'claude', 'codex', 'omp', 'muse', 'zcode'];
+    // The filter names the provider that served the usage (post-attribution),
+    // so every usage provider selects, not just the tools' own providers.
+    const activityFilters: readonly string[] = ['all', ...USAGE_PROVIDER_ORDER];
     if (
       query.refresh !== true &&
       (query.account !== 'all' || !activityFilters.includes(query.provider))

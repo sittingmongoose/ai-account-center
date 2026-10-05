@@ -35,10 +35,10 @@ export {
     RegistryView, ChromeView, UpdateView, ToastView, FactView, DetailsView, ProcessView, ConfirmationView,
     AuthView, StrengthView, AnalyticsHeadView
 }
-// The Analytics view model (version 3): Rust fills the AxData global directly.
+// The Analytics view model (version 5): Rust fills the AxData global directly.
 export {
     AxData, AxScopeLine, AxKpi, AxYTick, AxXTick, AxLegendItem, AxBucket, AxTrendPaths, AxTrend, AxModelType,
-    AxModelRow, AxCardText, AxDonutSeg, AxDonut, AxStat, AxSessRow, AxTokRow, AxCache, AxHeatCell, AxHeat, AxBar,
+    AxModelRow, AxCardText, AxDonutSeg, AxDonut, AxStat, AxTokRow, AxCache, AxHeatCell, AxHeat, AxBar,
     AxDaily, AxDay, AxCalendar, AxTick, AxShape, AxLabel, AxDot, AxFocusLegend, AxStopRow, AxStop, AxFocus,
     AxQuotaRow, AxQuotaGroup, AxAgendaRow
 } from "pages/analytics/ax-data.slint";
@@ -73,15 +73,23 @@ component PaperGrid inherits Rectangle {
 
 // Update apps: its own header button. Idle shows the arrow and "Update apps"; while a job runs the ring
 // spins and the result count rolls ("Updating 3 of 21"); on finish it morphs to a check for 2 s. The
-// width animates between label widths instead of jumping.
+// header pins its group to the right, so every pixel of width the button gains moves the button's own left
+// edge and the label with it. Two rules keep the label rock-steady: the width changes only when the mode
+// changes (never on a count, so it never re-targets mid-job), and it steps in whole pixels, so the text is
+// never laid out at a fractional offset and re-rasterised frame after frame.
 component UpdateButton inherits Rectangle {
     in property <UpdateView> data;
     in property <bool> enabled: true;
     callback clicked();
 
     property <string> mode: root.data.running ? "run" : root.data.done ? "done" : "idle";
-    property <length> w: row.preferred-width;
-    animate w { duration: Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    // The animated value is a plain number of pixels: `animate` on a length interpolates through fractional
+    // widths, and each one moved the label to a sub-pixel x (the vibration). Rounding the animated number
+    // makes the one morph between label widths step a whole pixel at a time. Ceil, never round: the pill is
+    // then never narrower than its content, so the layout never squeezes the last word.
+    property <float> w-px: row.preferred-width / 1px;
+    animate w-px { duration: Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <length> w: ceil(root.w-px) * 1px;
     // count roll: the old count slides up and out while the new one rises in
     property <int> shown-count: root.data.count;
     property <int> prev-count: 0;
@@ -117,6 +125,18 @@ component UpdateButton inherits Rectangle {
     animate transform-scale { duration: Motion.fast; }
     property <color> fg: root.mode == "run" ? Theme.accent-text : root.mode == "done" ? Theme.good-text : Theme.ink;
 
+    // Invisible measure for the rolling count's box: `total` is the widest the count ever gets, so the box
+    // (and with it the button's width) stays put from the first result to the last. Invariant: the count is
+    // `results.length` and `total` is the size of the update matrix, both set in updateViewModel
+    // (public/view-model.mjs), so the count never has more digits than total; if the matrix ever grows past
+    // 99 results this measure has to grow with it or the box would clip the leading digit.
+    count-fit := Text {
+        visible: false;
+        text: root.data.total;
+        font-family: Type.tab;
+        font-size: Type.control;
+        font-weight: 650;
+    }
     row := HorizontalLayout {
         padding-left: 10px;
         padding-right: 13px;
@@ -184,10 +204,16 @@ component UpdateButton inherits Rectangle {
             color: root.fg;
             vertical-alignment: center;
         }
+        // The count rolls in a box that keeps ONE width for the whole job - the width of `total`, the only
+        // value the count can reach - with the digits right-aligned against "of". A box that followed the
+        // digits changed the row's preferred width on every poll (and again when the roll settled), which
+        // re-targeted the width animation above and slid the label sideways: the reported jitter.
         if root.mode == "run": Rectangle {
-            width: max(roll-new.preferred-width, roll-old.preferred-width);
+            width: count-fit.preferred-width;
             clip: true;
             roll-old := Text {
+                width: parent.width;
+                horizontal-alignment: right;
                 y: (parent.height - self.preferred-height) / 2 - root.roll-e * parent.height * 0.85;
                 visible: root.rolling;
                 opacity: 1 - root.roll-e;
@@ -198,6 +224,8 @@ component UpdateButton inherits Rectangle {
                 color: root.fg;
             }
             roll-new := Text {
+                width: parent.width;
+                horizontal-alignment: right;
                 y: (parent.height - self.preferred-height) / 2 + (1 - root.roll-e) * parent.height * 0.85;
                 opacity: root.roll-e;
                 text: root.shown-count;
@@ -298,8 +326,10 @@ component Header inherits Rectangle {
             spacing: 8px;
             status := Rectangle {
                 horizontal-stretch: 0;
-                // the concept's .status-line keeps 6 px more room before the refresh button
-                min-width: status-row.preferred-width + 6px;
+                // the concept's .status-line keeps 6 px more room before the refresh button. Whole pixels:
+                // this cell is what places every control to its right, so a fractional width here puts the
+                // Update apps label on a fractional x and re-rasterises it whenever the status text changes.
+                min-width: ceil((status-row.preferred-width + 6px) / 1px) * 1px;
                 status-row := HorizontalLayout {
                     x: 0px;
                     width: self.preferred-width;

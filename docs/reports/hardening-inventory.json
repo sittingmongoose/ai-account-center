@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1129,
+    "totalOccurrences": 1131,
     "filesAffected": 112,
-    "hotpathOccurrences": 499,
+    "hotpathOccurrences": 501,
     "hotpathFilesAffected": 62,
     "topHotpathFiles": [
       {
@@ -136,6 +136,22 @@
         "markers": []
       },
       {
+        "file": "src/web-server/services/app-update-service.ts",
+        "count": 16,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "mkdirSync",
+          "openSync",
+          "readFileSync",
+          "renameSync",
+          "statSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/web-server/services/account-refresh-settings.ts",
         "count": 15,
         "calls": [
@@ -147,22 +163,6 @@
           "readdirSync",
           "readFileSync",
           "renameSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/services/app-update-service.ts",
-        "count": 15,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
-          "renameSync",
-          "statSync",
           "unlinkSync",
           "writeFileSync"
         ],
@@ -351,8 +351,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 197,
-    "filesAffected": 74,
+    "totalMarkers": 198,
+    "filesAffected": 75,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -520,21 +520,21 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 630,
-      "typedThrows": 143,
+      "totalThrows": 640,
+      "typedThrows": 144,
       "plainThrows": 69,
-      "otherThrows": 418,
-      "adoptionRatio": 0.227,
+      "otherThrows": 427,
+      "adoptionRatio": 0.225,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 279,
-          "typed": 81,
+          "count": 288,
+          "typed": 82,
           "plain": 10
         },
         {
           "subdomain": "antigravity",
-          "count": 163,
+          "count": 164,
           "typed": 0,
           "plain": 0
         },
@@ -602,8 +602,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 34,
-      "totalSourceFiles": 387,
-      "coverageRatio": 0.0879,
+      "totalSourceFiles": 390,
+      "coverageRatio": 0.0872,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -630,7 +630,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 136,
+          "count": 138,
           "withLogger": 18
         },
         {
@@ -640,7 +640,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 34,
+          "count": 35,
           "withLogger": 0
         },
         {
@@ -749,7 +749,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 44,
+      "countOver400": 45,
       "countOver600": 18,
       "topOver400": [
         {
@@ -761,20 +761,20 @@
           "loc": 1104
         },
         {
+          "file": "src/web-server/usage/account-activity-collector.ts",
+          "loc": 1102
+        },
+        {
+          "file": "src/web-server/services/account-analytics-activity.ts",
+          "loc": 1062
+        },
+        {
           "file": "src/codex-auth/codex-activation-runtime.ts",
           "loc": 1052
         },
         {
-          "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1047
-        },
-        {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
           "loc": 960
-        },
-        {
-          "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 903
         },
         {
           "file": "src/cliproxy/model-catalog.ts",
@@ -785,10 +785,6 @@
           "loc": 871
         },
         {
-          "file": "src/web-server/usage/aggregator.ts",
-          "loc": 782
-        },
-        {
           "file": "src/web-server/usage/native-quota-collector.ts",
           "loc": 768
         },
@@ -797,8 +793,12 @@
           "loc": 767
         },
         {
+          "file": "src/web-server/usage/aggregator.ts",
+          "loc": 767
+        },
+        {
           "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 696
+          "loc": 708
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",

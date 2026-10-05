@@ -731,7 +731,7 @@ const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows']
 const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],
   failed: ['Failed', 'crit'], restart_failed: ['Updated, restart failed', 'crit'],
-  skipped: ['Skipped: cancelled', ''],
+  skipped: ['Skipped: cancelled', ''], action_required: ['Needs action', 'warn'],
 };
 // An unknown row on an unreachable host names the computer; any other unknown stays a plain word.
 const unknownWord = (row, label) => text(row.message).includes('not reachable') ? `Unknown: ${label} not reachable` : 'Unknown';
@@ -751,6 +751,7 @@ export function updateResultsView(job, now = Date.now()) {
     const when = validDate(job.finishedAt) ? job.finishedAt : job.startedAt;
     const parts = [`${results.length} ${results.length === 1 ? 'result' : 'results'}`];
     if (failed) parts.push(`${failed} failed`);
+    if (count('action_required')) parts.push(`${count('action_required')} need action`);
     if (count('skipped')) parts.push(`${count('skipped')} skipped`);
     if (count('unknown')) parts.push(`${count('unknown')} unknown`);
     if (job.cancelRequested === true) parts.push('cancelled');

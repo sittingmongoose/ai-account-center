@@ -348,10 +348,11 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     expect(countOpenFiles()).toBeLessThanOrEqual(before + 4);
   });
 
-  it('never compresses /api responses', async () => {
+  it('leaves a small /api JSON answer uncompressed', async () => {
     const response = await raw('GET', '/api/health', { 'Accept-Encoding': 'br, gzip' });
     expect(response.status).toBe(200);
     expect(response.headers['content-encoding']).toBeUndefined();
+    expect(response.headers.vary).toBeUndefined();
     expect(JSON.parse(response.body.toString())).toEqual({ status: 'ok' });
   });
 });

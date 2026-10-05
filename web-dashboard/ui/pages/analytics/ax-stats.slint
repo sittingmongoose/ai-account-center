@@ -3,33 +3,77 @@ import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
 import { ProbeMark } from "../../components/probe.slint";
-import { AxData, AxStat, AxTokRow } from "ax-data.slint";
+import { AxData, AxSessRecent } from "ax-data.slint";
 import { AxColor, AxCard, AxCardHead, AxNum, AxTip, AxSwatch, AxLegendEntry } from "ax-common.slint";
 
-// ---------------------------------------------------------------- session stats
-component SessCell inherits Text {
-    font-family: Type.tab;
-    font-size: 12.5px;
-    color: Theme.ink;
-    horizontal-alignment: right;
-    vertical-alignment: center;
-    horizontal-stretch: 1;
-    // absurd magnitudes elide inside the fixed column instead of shifting the grid
-    overflow: elide;
+// ---------------------------------------------------------------- the session table
+// One continued table across two boxes: Session stats shows the summary numbers and the five most recent
+// sessions, Recent sessions continues with the next ten. Both boxes render these same components, so the
+// columns and styling line up exactly and the list reads as one. The number columns are one shared fixed
+// grid, identical in the header and every row, so each value sits exactly under its header whatever the
+// labels measure; each width fits its Martian Mono 11 px header (0.65 em a glyph plus 0.66 px letter
+// spacing: LAST ACTIVE needs 86) and the widest value it carries at 12.5 px ("Unavailable", 89), and
+// absurd magnitudes elide inside the column instead of shifting the grid. The models column flexes and
+// elides, with the full list in the row's tip.
+global SessCols {
+    out property <length> gap: 10px;
+    out property <length> cli: 26px;
+    out property <length> tok: 92px;
+    out property <length> cost: 92px;
+    out property <length> when: 92px;
 }
 
+component SessRow inherits HorizontalLayout {
+    in property <AxSessRecent> r;
+    // "" reports nothing; the first row of each box names its cells for the e2e harness (see SessList)
+    in property <string> probe: "";
+    min-height: 31px;
+    spacing: SessCols.gap;
+    VerticalLayout { alignment: center; width: SessCols.cli; horizontal-stretch: 0; ProviderMark { provider: root.r.tool; size: 16px; } }
+    Text { text: root.r.models; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 0px; AxTip { tip: root.r.tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":models"; } }
+    Text { text: root.r.tokens; width: SessCols.tok; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":tokens"; } }
+    Text { text: root.r.cost; width: SessCols.cost; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":cost"; } }
+    Text { text: root.r.when; width: SessCols.when; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":when"; } }
+}
+
+component SessList inherits VerticalLayout {
+    in property <[AxSessRecent]> rows;
+    in property <string> empty-text;
+    // names this box's header and first-row cells for the e2e harness (components/probe.slint); "" reports
+    // nothing. Both boxes share the grid, so a harness can check one list by comparing their rectangles.
+    in property <string> probe: "";
+    spacing: 0px;
+    HorizontalLayout {
+        padding-bottom: 6px;
+        spacing: SessCols.gap;
+        Caps { text: "CLI"; width: SessCols.cli; horizontal-stretch: 0; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:cli"; } }
+        Caps { text: "MODELS"; horizontal-stretch: 1; min-width: 0px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:models"; } }
+        Caps { text: "TOKENS"; width: SessCols.tok; horizontal-stretch: 0; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:tokens"; } }
+        Caps { text: "COST"; width: SessCols.cost; horizontal-stretch: 0; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:cost"; } }
+        Caps { text: "LAST ACTIVE"; width: SessCols.when; horizontal-stretch: 0; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:when"; } }
+    }
+    for r[i] in root.rows: VerticalLayout {
+        spacing: 0px;
+        Rectangle { height: 1px; background: Theme.rule-2; }
+        SessRow { r: r; probe: root.probe == "" || i > 0 ? "" : root.probe + "-c"; }
+    }
+    if root.rows.length == 0: Text {
+        text: root.empty-text;
+        font-size: 12.5px;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+        min-height: 32px;
+        vertical-alignment: center;
+    }
+}
+
+// ---------------------------------------------------------------- session stats
+// The summary numbers, then the five most recent sessions as a compact table; the Recent sessions box
+// continues the same list. Numbers sit in three equal columns, each number above its label.
 export component AxSessionsCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
     property <bool> pad16: Breakpoints.width < 1180px;
-    // ONE shared grid for the header and every row: the CLI column takes the remainder and the three
-    // numeric columns are fixed and right-aligned, identical in the header and every row, so each value
-    // sits exactly under its header whatever the labels measure. Each width fits its Martian Mono 11 px
-    // header (0.65 em a glyph plus 0.66 px letter spacing): SESSIONS needs 63, PER SESSION 86,
-    // EVENTS PER SESSION 141.
-    property <length> col-sessions: 68px;
-    property <length> col-per: 92px;
-    property <length> col-events: 146px;
     AxCardHead { title: "Session stats"; sub: AxData.sessions.sub; note: AxData.sessions.note; probe: "sess-head"; }
     VerticalLayout {
         // a card stretched by a taller neighbour (an open donut legend) keeps its content at the top
@@ -43,11 +87,10 @@ export component AxSessionsCard inherits AxCard {
         // the stats spread across the card at the top under the subtitle, as the concept draws them; the
         // table below keeps its own shared grid
         HorizontalLayout {
-            spacing: 0px;
+            spacing: 12px;
             vertical-stretch: 0;
-            Rectangle { horizontal-stretch: 1.4; min-width: 0px; }
             for s[i] in AxData.sess-stats: VerticalLayout {
-                horizontal-stretch: i == 2 ? 1.4 : 1;
+                horizontal-stretch: 1;
                 min-width: 0px;
                 spacing: 3px;
                 AxNum {
@@ -60,88 +103,45 @@ export component AxSessionsCard inherits AxCard {
                     size: 22px;
                     weight: 640;
                     na-size: 15px;
-                    right: true;
                     height: 26px;
                     ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-stat:" + s.key; }
                 }
-                Text { text: s.label; font-size: 12px; color: Theme.ink-3; horizontal-alignment: right; wrap: word-wrap; }
+                Text { text: s.label; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
             }
         }
         VerticalLayout {
             spacing: 0px;
             vertical-stretch: 0;
-            HorizontalLayout {
-                padding-bottom: 6px;
-                Caps { text: "CLI"; horizontal-stretch: 1; min-width: 0px; }
-                Caps { text: "SESSIONS"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-sessions; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:sessions"; } }
-                Caps { text: "PER SESSION"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-per; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:per"; } }
-                Caps { text: "EVENTS PER SESSION"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-events; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:events"; } }
-            }
-            for r in AxData.sess-rows: VerticalLayout {
-                Rectangle { height: 1px; background: Theme.rule-2; }
-                HorizontalLayout {
-                    min-height: 32px;
-                    HorizontalLayout {
-                        horizontal-stretch: 1;
-                        min-width: 0px;
-                        spacing: 8px;
-                        VerticalLayout { alignment: center; ProviderMark { provider: r.provider; size: 16px; } }
-                        Text { text: r.label; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                    }
-                    SessCell { text: r.sessions; horizontal-stretch: 0; width: root.col-sessions; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":sessions"; } }
-                    SessCell { text: r.per; horizontal-stretch: 0; width: root.col-per; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":per"; } }
-                    SessCell { text: r.events; horizontal-stretch: 0; width: root.col-events; AxTip { tip: r.events-tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":events"; } }
-                }
-            }
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Text { text: "Most recent sessions"; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
+            Rectangle { height: 9px; }
+            SessList { rows: AxData.sess-recent; empty-text: "No sessions in this range."; probe: "sess"; }
         }
         // any spare height goes below the table, never above the stats
         Rectangle { vertical-stretch: 1; min-height: 0px; }
     }
 }
-
 // ---------------------------------------------------------------- recent sessions
-// Its own box: the session sample most recent first, without paths. Each row is one session: its CLI's
-// mark, its models, what it used, what it cost, and when it last ran.
+// The session table continued: the next ten sessions (6 to 15), most recent first, without paths. It
+// renders the same SessList as the Session stats box, so the two read as one continued list.
 export component AxRecentCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
     property <bool> narrow: Breakpoints.width < 1180px;
-    AxCardHead { title: "Recent sessions"; sub: AxData.sessions.note; }
+    AxCardHead { title: "Recent sessions"; sub: AxData.sess-more-sub; probe: "more-head"; }
     VerticalLayout {
+        alignment: start;
         padding-left: root.narrow ? 16px : 20px;
         padding-right: self.padding-left;
         padding-top: 2px;
-        padding-bottom: AxData.sessions.foot == "" ? 14px : 6px;
-        spacing: 0px;
+        padding-bottom: 14px;
+        spacing: 10px;
         vertical-stretch: 1;
-        if AxData.sess-recent.length == 0: Text {
-            text: "No sessions in this range.";
-            font-size: 12.5px;
-            color: Theme.ink-3;
-            wrap: word-wrap;
-            vertical-stretch: 1;
-        }
-        for r in AxData.sess-recent: VerticalLayout {
-            Rectangle { height: 1px; background: Theme.rule-2; }
-            HorizontalLayout {
-                min-height: 44px;
-                spacing: 10px;
-                VerticalLayout { alignment: center; ProviderMark { provider: r.tool; size: 18px; } }
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 2px;
-                    horizontal-stretch: 1;
-                    min-width: 0px;
-                    Text { text: r.models; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; AxTip { tip: r.tip; } }
-                    Text { text: r.when; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 2px;
-                    Text { text: r.cost; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; }
-                    Text { text: r.tokens; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; horizontal-alignment: right; }
-                }
-            }
+        SessList {
+            rows: AxData.sess-recent-more;
+            empty-text: AxData.sess-recent.length == 0 ? "No sessions in this range." : "No more sessions in this range.";
+            vertical-stretch: 0;
+            probe: "more";
         }
         if AxData.sessions.foot != "": Text { text: AxData.sessions.foot; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
     }

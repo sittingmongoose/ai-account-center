@@ -248,7 +248,7 @@ const dayStartMonth = now => zonedDayStart(zonedMonthStart(now));
  * priced at a listed rate (`cost`), and `unk` says some of it is not logged. `label(p)` is a provider's name
  * (the response's provider table, else the dashboard's), and `tools(p)` the tools whose logs hold its usage.
  */
-export function activityData(payload, now = Date.now()) {
+function buildActivityRows(payload) {
   const act = payload?.activity || {};
   const available = ['ok', 'cached'].includes(act.status) && tokens(act.totals);
   // a known provider: the dashboard's, one the response's provider table lists, or one its activity reports
@@ -311,8 +311,6 @@ export function activityData(payload, now = Date.now()) {
   }
   const apiFrom = Date.parse(payload?.range?.from);
   const fetched = Date.parse(act.fetchedAt);
-  const win0 = Math.min(finite(apiFrom) ? Math.ceil(apiFrom / H) * H : Infinity, hours.length ? hours[0].t : Infinity, finite(apiFrom) ? Infinity : now - 7 * D);
-  const win1 = finite(fetched) ? Math.min(fetched, now) : hours.length ? Math.min(now, hours.at(-1).t + H) : now;
   // labels: the response's provider table (the dashboard's), then the activity rows, then the built-in table
   const names = { ...PROVIDER_LABEL };
   for (const row of providerRows) if (text(row.label) && !/ logs$/.test(row.label)) names[row.provider] = row.label;
@@ -338,7 +336,28 @@ export function activityData(payload, now = Date.now()) {
   // usage from a provider other than Claude and Codex (it shares the charts' neutral third series)
   const others = hours.some(r => !ownSeries(r.p)) || models.some(m => !ownSeries(m.provider));
   const refreshingRemote = Array.isArray(act.refreshingRemote) ? act.refreshingRemote.filter(h => h === 'mac' || h === 'windows') : [];
-  return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, win0, win1, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom };
+  return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom, fetched };
+}
+
+// Only the two window ends below read the clock, so the validated rows are kept per response: the
+// 15-second header tick and every re-render of the same payload reuse them instead of revalidating
+// every hour, model and session row again.
+const activityRowsCache = new WeakMap();
+function activityRows(payload) {
+  const keyable = payload !== null && typeof payload === 'object';
+  const hit = keyable ? activityRowsCache.get(payload) : null;
+  if (hit) return hit;
+  const built = buildActivityRows(payload);
+  if (keyable) activityRowsCache.set(payload, built);
+  return built;
+}
+/** The validated rows plus the log window they cover, whose ends follow `now`. */
+export function activityData(payload, now = Date.now()) {
+  const rows = activityRows(payload);
+  const { apiFrom, fetched, hours } = rows;
+  const win0 = Math.min(finite(apiFrom) ? Math.ceil(apiFrom / H) * H : Infinity, hours.length ? hours[0].t : Infinity, finite(apiFrom) ? Infinity : now - 7 * D);
+  const win1 = finite(fetched) ? Math.min(fetched, now) : hours.length ? Math.min(now, hours.at(-1).t + H) : now;
+  return { ...rows, win0, win1 };
 }
 
 /** The page range in local time: [a2, b) clipped to the logs that were read; step is the bucket size. */
@@ -770,17 +789,22 @@ function donutView(A, state, shades) {
 }
 
 // ---------------------------------------------------------------- session stats
+// The session table lists at most this many sessions: the first five in the Session stats box, the rest in
+// the Recent sessions box, which continues the same list.
+const SESS_TOP = 5, SESS_SHOWN = 15;
 /**
- * Session stats over the providers in the filter, one row per provider with sessions. The stats are the columns'
- * sums and means, so they always line up with their columns; a session that several providers served counts under
- * each of them, in the rows and in the Sessions number alike. The average cost comes from the rows that have
- * costs, and says partial when some rows do not; only with no priced row at all is it not logged. Usage read
- * from the Mac and Windows comes without a session list, so it adds tokens but no sessions, and the note says
- * so. Recent sessions lists the sample most recent first, without paths. The sample rows are the server's
- * AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token totals); anything else is
- * dropped, never guessed.
+ * Session stats over the providers in the filter: the summary numbers, plus one session table continued
+ * across two boxes. Session stats shows the summary and the SESS_TOP most recent sessions as a compact
+ * table; Recent sessions continues it with the next sessions up to SESS_SHOWN in total, same columns and
+ * styling, so the two boxes read as one list. The summary numbers are sums and means; a session that
+ * several providers served counts under each of them. The average cost comes from the rows that have
+ * costs, and says partial when some rows do not; only with no priced row at all is it not logged. Every
+ * native tool names a session on every host it runs on, so sessions cover Ubuntu, Mac and Windows alike; a
+ * generic JSONL log names none, and the note says so. The table lists the sample most recent first,
+ * without paths. The sample rows are the server's AccountAnalyticsSessionRow shape (provider,
+ * lastActivity, string models, token totals); anything else is dropped, never guessed.
  */
-function sessionsView(A, state, payload, now) {
+function sessionsView(A, state, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
   const sum = k => all.length && all.every(r => finite(r[k])) ? all.reduce((s, r) => s + r[k], 0) : null;
   const sessions = sum('sessions');
@@ -792,9 +816,8 @@ function sessionsView(A, state, payload, now) {
   const avg = pricedSessions > 0 ? pricedCost / pricedSessions : null;
   const avgPartial = finite(avg) && priced.length < withSessions.length;
   const evs = finite(sessions) && sessions > 0 && finite(events) ? events / sessions : null;
-  const remote = new Set((Array.isArray(payload?.activity?.sources) ? payload.activity.sources : [])
-    .filter(r => (r?.host === 'mac' || r?.host === 'windows') && (r.state === 'ok' || r.state === 'cached')).map(r => r.tool));
-  const fromRemote = all.some(r => A.tools(r.p).some(t => remote.has(t)));
+  // A saved generic JSONL source maps no session field, so its tokens are counted while it adds no sessions.
+  const sessionless = all.some(r => A.tools(r.p).includes('jsonl'));
   // the sample covers the providers in the filter; without one, show every session
   const sample = [];
   for (const s of A.sessionSample) {
@@ -804,7 +827,7 @@ function sessionsView(A, state, payload, now) {
     sample.push({ s, last });
   }
   sample.sort((a, b) => b.last - a.last);
-  const recent = sample.slice(0, 10).map(({ s, last }) => {
+  const listed = sample.slice(0, SESS_SHOWN).map(({ s, last }) => {
     const names = (Array.isArray(s.models) ? s.models : []).map(text).filter(Boolean);
     const tok = TYPES.every(t => finite(s[t.f]) && s[t.f] >= 0) ? TYPES.reduce((n, t) => n + s[t.f], 0) : null;
     const est = finite(s.estimatedCostUsd) && s.estimatedCostUsd >= 0 ? s.estimatedCostUsd : null;
@@ -820,26 +843,25 @@ function sessionsView(A, state, payload, now) {
       tip: `${names.join(', ') || 'no models logged'} · ${tokX(tok)} · last activity ${clockTxt(last)}`,
     };
   });
-  const recentFoot = sample.length > recent.length
+  const recentFoot = sample.length > listed.length
     ? A.sessionsTruncated && finite(A.sessionTotal) && A.sessionTotal > sample.length
-      ? `Most recent ${recent.length} of ${nf0.format(A.sessionTotal)} sessions in this range`
-      : `Most recent ${recent.length} of ${sample.length} sessions in this range`
+      ? `Most recent ${listed.length} of ${nf0.format(A.sessionTotal)} sessions in this range`
+      : `Most recent ${listed.length} of ${sample.length} sessions in this range`
     : '';
   return {
-    note: fromRemote ? 'Sessions come from the Ubuntu logs; usage read from the Mac and Windows adds tokens but no sessions.' : '',
-    recent, recentFoot,
+    note: sessionless ? 'A generic JSONL usage log records no session, so its tokens are counted but it adds no sessions.' : '',
+    recent: listed.slice(0, SESS_TOP),
+    recentMore: listed.slice(SESS_TOP),
+    moreSub: listed.length === 0 ? ''
+      : listed.length === SESS_TOP + 1 ? `Session ${SESS_TOP + 1}, continued from Session stats`
+        : listed.length > SESS_TOP ? `Sessions ${SESS_TOP + 1} to ${listed.length}, continued from Session stats`
+          : 'Continued from Session stats',
+    recentFoot,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },
       { key: 'avg', label: 'Average estimated cost per session' + (avgPartial ? ' · partial' : ''), num: avg ?? 0, has: finite(avg), fmt: 'money', text: !finite(avg) && finite(sessions) && sessions > 0 ? NOT_LOGGED : money(avg) },
       { key: 'evs', label: 'Usage events per session', num: evs ?? 0, has: finite(evs), fmt: 'int', text: intText(evs) },
     ],
-    rows: all.filter(r => !finite(r.sessions) || r.sessions > 0).sort((a, b) => byProviderOrder(a.p, b.p)).map(r => ({
-      provider: markOf(r.p), label: r.label,
-      sessions: finite(r.sessions) ? nf0.format(r.sessions) : 'Unavailable',
-      per: finite(r.sessions) && r.sessions > 0 && r.unk ? NOT_LOGGED : finite(r.sessions) && r.sessions > 0 && finite(r.cost) ? money(r.cost / r.sessions) : 'Unavailable',
-      events: finite(r.sessions) && r.sessions > 0 && finite(r.events) ? nf0.format(Math.round(r.events / r.sessions)) : 'Unavailable',
-      eventsTip: finite(r.events) ? `${nf0.format(r.events)} usage events` : '',
-    })),
   };
 }
 
@@ -895,6 +917,17 @@ export function dashedRect(w, h, r = 4) {
   pts.push([x0, y0 + rr]); arc(x0 + rr, y0 + rr, 180);
   return dashPolyline(pts, [3, 3]);
 }
+// The dash depends only on the cell box, so only a resize of the heatmap rebuilds the ~200-point string.
+let dashRectKey = '';
+let dashRectPath = '';
+function heatDash(width, height) {
+  const key = `${width}x${height}`;
+  if (key !== dashRectKey) {
+    dashRectKey = key;
+    dashRectPath = dashedRect(width, height);
+  }
+  return dashRectPath;
+}
 function heatView(A, R, state, width, height) {
   const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ v: null, n: 0, tok: 0, cost: 0, unk: false })));
   // hours inside the read window count (zero when nothing ran); hours outside it stay empty, never zero;
@@ -921,7 +954,7 @@ function heatView(A, R, state, width, height) {
     cells: out, days: WD,
     hours: Array.from({ length: 24 }, (_, h) => h % (wide ? 3 : 6) === 0 ? hourLab(h) : ''),
     busiest: max ? valTxt(max) : 'none',
-    dash: dashedRect(Math.max(4, ((width || DEFAULT_SIZES.heat.w) - 38 - 72) / 24), height || 24),
+    dash: heatDash(Math.max(4, ((width || DEFAULT_SIZES.heat.w) - 38 - 72) / 24), height || 24),
   };
 }
 
@@ -1166,7 +1199,7 @@ export function usageView(payload, state, opts = {}) {
     notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '',
   ].filter(Boolean).join(' ');
   const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
-  const sessions = sessionsView(A, state, payload, now);
+  const sessions = sessionsView(A, state, now);
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
     head: headOf(A, R, state, now, zone),
@@ -1187,7 +1220,7 @@ export function usageView(payload, state, opts = {}) {
     trend: trendView(A, R, state, opts.sizes?.trend),
     cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
-    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, stats: sessions.stats, rows: sessions.rows, recent: sessions.recent },
+    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, moreSub: sessions.moreSub, stats: sessions.stats, recent: sessions.recent, recentMore: sessions.recentMore },
     tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },
     cache: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, ...cacheView(A, rows, K, C, costOk && A.available) },
     included: includedView(payload, now),

@@ -634,6 +634,46 @@ test('Antigravity: Add, Sign in and Remove are served through the terminal fallb
   // Activate stays disabled here (no canActivate from the server): the live gate is untouched
 });
 
+test('Antigravity: Add is live and the section explains the supervised login when the dashboard host can run it', () => {
+  const ag1 = account({
+    id: 'antigravity:profile:gmail',
+    provider: 'antigravity',
+    email: 'gmail@example.test',
+    capabilities: { antigravityProfileId: 'gmail' },
+  });
+  const p = providers({
+    antigravity: {
+      signIn: { available: true, unavailableReason: null },
+      capabilities: { add: true, signInAgain: true, remove: true },
+    },
+  });
+  const r = registry([
+    reg('antigravity:profile:gmail', 'antigravity', {
+      actions: { signInAgain: true, remove: true },
+    }),
+  ]);
+  const vm = accountsViewModel(data([ag1], { providers: p }), { now, registry: r });
+  const section = provider(vm, 'antigravity');
+  // T7: the section no longer reads "Needs setup", and Add is enabled
+  assert.equal(section.needs, false);
+  assert.equal(section.how, 'The dashboard host runs and supervises the CLI login.');
+  assert.deepEqual(
+    [section.foot[0].act, section.foot[0].enabled, section.foot[0].coming],
+    ['add', true, false]
+  );
+  assert.match(section.foot[0].tip, /under supervision/);
+  // the saved profile signs in again through the same supervised job (with one
+  // account there is nothing to switch, so the Activate slot stays empty)
+  assert.deepEqual(
+    row(vm, 'antigravity:profile:gmail').actions.map((a) => [a.act || a.kind, a.enabled, a.coming]),
+    [
+      ['empty', false, false],
+      ['signin-again', true, false],
+      ['remove', true, false],
+    ]
+  );
+});
+
 test('Antigravity: the live login gets a refuse control that says why, and the terminal flow shows the command', () => {
   const ag1 = account({
     id: 'antigravity:profile:gmail',
@@ -1134,6 +1174,48 @@ test('Update apps cancel and readiness states read as plain text', () => {
     ['Unknown: Windows not reachable', 'Unknown']
   );
   assert.equal(done.hosts[1].items[0].tip, 'Unknown: this computer is not reachable.');
+});
+
+test('Update apps action-required rows read as needs-action warnings, never failures', () => {
+  const result = (platform, appLabel, status, extra = {}) => ({
+    appId: appLabel.toLowerCase().replace(/ /g, '-'),
+    appLabel,
+    platform,
+    status,
+    previousVersion: null,
+    version: null,
+    message: 'Done',
+    ...extra,
+  });
+  const done = updateResultsView(
+    {
+      state: 'completed',
+      startedAt: at(-30),
+      finishedAt: at(-20),
+      activePlatform: null,
+      results: [
+        result('mac', 'Codex Desktop', 'action_required', {
+          message: 'Quit the app, then run Update apps again.',
+        }),
+        result('windows', 'Claude Desktop', 'action_required', {
+          message: 'The download was blocked; open the app to check for updates.',
+        }),
+      ],
+    },
+    now
+  );
+  assert.equal(
+    done.headRuns.map((r) => r.text).join(''),
+    'Last run 20m ago · 2 results, 2 need action'
+  );
+  assert.deepEqual(
+    done.hosts[0].items.map((i) => [i.app, i.result, i.tone]),
+    [['Codex Desktop', 'Needs action', 'warn']]
+  );
+  assert.equal(
+    done.hosts[0].items[0].tip,
+    'Quit the app, then run Update apps again.'
+  );
 });
 
 test('connection facts and the sign-in block say only what the browser and server report', () => {

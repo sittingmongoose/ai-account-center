@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import { hasPartialHourOffset, localDate } from './account-analytics-range';
 import { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
 import {
@@ -8,7 +7,8 @@ import {
 } from './account-analytics-pricing';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import type { ModelBreakdown, SessionUsage } from '../usage/types';
-import { attributeActivitySources } from './account-analytics-attribution';
+import { publishedSessionKey } from '../usage/analytics-session-key';
+import { attributeActivitySources, type AttributedSource } from './account-analytics-attribution';
 import { ADDITIONAL_PROVIDERS } from './account-dashboard-projection';
 import type { DashboardProvider } from './account-dashboard-types';
 import type {
@@ -21,12 +21,14 @@ import type {
   AccountAnalyticsUsageProvider,
 } from './account-analytics-types';
 
+/** Every tool the activity collector reads; published as `tools` on provider and model rows. */
 const TOOLS: readonly AccountAnalyticsActivityProvider[] = [
   'claude',
   'codex',
   'omp',
   'muse',
   'zcode',
+  'jsonl',
 ];
 
 /** The dashboard's provider labels; "other" is usage on a route no provider claims. */
@@ -278,13 +280,6 @@ function priceBreakdowns(
   };
 }
 
-function sessionKey(tool: AccountAnalyticsActivityProvider, sessionId: string): string {
-  return createHash('sha256')
-    .update(`aac-session-v1:${tool}:${sessionId}`)
-    .digest('hex')
-    .slice(0, 16);
-}
-
 /** Compacted rows keep each hour's last event, so first activity counts from its UTC hour. */
 function sessionSpan(session: SessionUsage): { first: number; last: number } {
   const last = Date.parse(session.lastActivity);
@@ -297,6 +292,22 @@ function hourEpoch(hour: unknown): number {
   return Date.parse(`${hour.replace(' ', 'T')}:00Z`);
 }
 
+/**
+ * The projection and the coverage attribute the same snapshot on every request. The activity reader replaces
+ * its sources array wholesale on each publish, so the array identity is an exact key; attribution builds new
+ * groupings and never mutates the rows, and both consumers only read them. One entry: a different snapshot
+ * replaces the memo instead of accumulating.
+ */
+let attributedSnapshot: { sources: SourceData[]; attributed: AttributedSource[] } | null = null;
+
+function attributedActivitySources(sources: SourceData[]): AttributedSource[] {
+  if (attributedSnapshot && attributedSnapshot.sources === sources)
+    return attributedSnapshot.attributed;
+  const attributed = attributeActivitySources(sources);
+  attributedSnapshot = { sources, attributed };
+  return attributed;
+}
+
 /** Internal coverage of the retained snapshot, independent of the provider filter. */
 export function accountAnalyticsActivityCoverage(
   sources: SourceData[],
@@ -305,7 +316,7 @@ export function accountAnalyticsActivityCoverage(
 ): AccountAnalyticsActivityCoverage {
   let oldest = Infinity;
   const active: DashboardProvider[] = [];
-  for (const source of attributeActivitySources(sources))
+  for (const source of attributedActivitySources(sources))
     for (const result of source.data)
       for (const hour of result.hourly) {
         const epoch = hourEpoch(hour.hour);
@@ -370,7 +381,7 @@ export function projectAccountAnalyticsActivity(
         'Local CLI logs do not reliably identify a subscription account. Select all accounts to view local activity; account quota history remains available.',
     };
   // Usage is grouped by the provider that served it (the logged route), not by the tool that logged it.
-  const selected = attributeActivitySources(sources).filter(
+  const selected = attributedActivitySources(sources).filter(
     (source) => query.provider === 'all' || query.provider === source.provider
   );
   if (selected.length === 0)
@@ -514,7 +525,7 @@ export function projectAccountAnalyticsActivity(
         // Active in range: its activity overlaps the range, wherever it ends.
         const { first, last: lastActivity } = sessionSpan(part);
         if (first <= to && lastActivity >= from && typeof part.sessionId === 'string') {
-          // Internal dedupe only; the published key is hashed for the sample alone.
+          // Dedupe per tool; the id is already the published key the readers hashed.
           const key = `${result.tool}\0${part.sessionId}`;
           sessions.add(key);
           distinctSessions.add(key);
@@ -599,7 +610,8 @@ export function projectAccountAnalyticsActivity(
     .slice(0, MAX_SESSION_SAMPLE)
     .map(([, candidate]) => {
       const session = candidate.session;
-      const key = sessionKey(candidate.tool, session.sessionId);
+      // Readers key a session at ingest; this publishes that key, hashing a row that still carries an id.
+      const key = publishedSessionKey(candidate.tool, session.sessionId);
       const priced = priceBreakdowns(session, pricing);
       const values = accumulator();
       addValues(values, totals(session));

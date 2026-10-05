@@ -1,4 +1,4 @@
-//! Analytics view model (version 3, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
+//! Analytics view model (version 5, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
 //! row, the usage charts (trend, cost by model, donut, sessions, token breakdown, cache efficiency,
 //! heatmap, daily cost), the custom range calendar, the quota history with its focus charts and the
 //! resets agenda. Everything lands in the `AxData` global (ui/pages/analytics/ax-data.slint).
@@ -12,7 +12,7 @@ use crate::{
     AxDaily, AxData, AxDay, AxDonut, AxDonutLeg, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat,
     AxHeatCell, AxIncluded, AxKpi, AxLabel, AxLegendItem, AxModelRow, AxModelType, AxPickItem,
     AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine, AxSessRecent,
-    AxSessRow, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
+    AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
     AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
 };
 use serde_json::Value;
@@ -21,7 +21,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 /// The analytics view-model version this build understands (public/analytics-data.mjs ANALYTICS_VIEW_VERSION).
-pub const ANALYTICS_VIEW_VERSION: u64 = 4;
+pub const ANALYTICS_VIEW_VERSION: u64 = 5;
 
 // ---------------------------------------------------------------- JSON access (camelCase keys)
 static NULL: Value = Value::Null;
@@ -51,21 +51,17 @@ fn i(v: &Value, k: &str) -> i32 {
 fn arr<'a>(v: &'a Value, k: &str) -> &'a [Value] {
     g(v, k).as_array().map(|a| a.as_slice()).unwrap_or(&[])
 }
+fn rows_of<T: Clone + 'static>(v: &Value, k: &str, each: impl Fn(&Value) -> T) -> Vec<T> {
+    arr(v, k).iter().map(each).collect()
+}
 fn list<T: Clone + 'static>(v: &Value, k: &str, each: impl Fn(&Value) -> T) -> ModelRc<T> {
-    ModelRc::new(VecModel::from(
-        arr(v, k).iter().map(each).collect::<Vec<_>>(),
-    ))
+    ModelRc::new(VecModel::from(rows_of(v, k, each)))
 }
-fn ints(v: &Value, k: &str) -> ModelRc<i32> {
-    ModelRc::new(VecModel::from(
-        arr(v, k)
-            .iter()
-            .map(|x| x.as_f64().map(|n| n as i32).unwrap_or(-1))
-            .collect::<Vec<_>>(),
-    ))
+fn ints(v: &Value, k: &str) -> Vec<i32> {
+    rows_of(v, k, |x| x.as_f64().map(|n| n as i32).unwrap_or(-1))
 }
-fn strings(v: &Value, k: &str) -> ModelRc<SharedString> {
-    list(v, k, |x| x.as_str().unwrap_or("").into())
+fn strings(v: &Value, k: &str) -> Vec<SharedString> {
+    rows_of(v, k, |x| x.as_str().unwrap_or("").into())
 }
 
 /// Make `model` equal to `rows` position by position (cells and bars have no ids; their count is stable).
@@ -247,6 +243,16 @@ fn stat(v: &Value) -> AxStat {
         text: s(v, "text"),
     }
 }
+fn sess_recent(v: &Value) -> AxSessRecent {
+    AxSessRecent {
+        tool: s(v, "tool"),
+        models: s(v, "models"),
+        tokens: s(v, "tokens"),
+        cost: s(v, "cost"),
+        when: s(v, "when"),
+        tip: s(v, "tip"),
+    }
+}
 fn cache(v: &Value) -> AxCache {
     let r = g(v, "reads");
     let w = g(v, "writes");
@@ -341,7 +347,7 @@ fn focus(v: &Value) -> AxFocus {
             }),
             dot_y: g(st, "dotY").as_f64().map(|x| x as f32).unwrap_or(-1.),
         }),
-        lut: ints(v, "lut"),
+        lut: ModelRc::new(VecModel::from(ints(v, "lut"))),
         plot_l: f(g(v, "plot"), "l"),
         plot_t: f(g(v, "plot"), "t"),
         plot_w: f(g(v, "plot"), "w"),
@@ -407,6 +413,26 @@ pub struct AnalyticsModels {
     group_rows: Nested<AxQuotaRow>,
     agenda_a: Rc<VecModel<AxAgendaRow>>,
     agenda_b: Rc<VecModel<AxAgendaRow>>,
+    scope: Rc<VecModel<AxScopeLine>>,
+    included_hosts: Rc<VecModel<SharedString>>,
+    included_rows: Rc<VecModel<AxSrcRow>>,
+    src_cells: Nested<AxSrcCell>,
+    prov_lines: Rc<VecModel<AxProvLine>>,
+    prov_items: Nested<AxProvItem>,
+    picker_items: Rc<VecModel<AxPickItem>>,
+    trend_y: Rc<VecModel<AxYTick>>,
+    trend_x: Rc<VecModel<AxXTick>>,
+    trend_legend: Rc<VecModel<AxLegendItem>>,
+    trend_buckets: Rc<VecModel<AxBucket>>,
+    trend_lut: Rc<VecModel<i32>>,
+    donut_lut: Rc<VecModel<i32>>,
+    donut_legend: Rc<VecModel<AxDonutLeg>>,
+    sess_recent: Rc<VecModel<AxSessRecent>>,
+    sess_recent_more: Rc<VecModel<AxSessRecent>>,
+    daily_y: Rc<VecModel<AxYTick>>,
+    heat_hours: Rc<VecModel<SharedString>>,
+    days: Rc<VecModel<AxDay>>,
+    quota_ticks: Rc<VecModel<AxTick>>,
     trend_gen: i32,
     trend_key: String,
 }
@@ -425,6 +451,26 @@ impl Default for AnalyticsModels {
             group_rows: Nested::default(),
             agenda_a: Rc::new(VecModel::default()),
             agenda_b: Rc::new(VecModel::default()),
+            scope: Rc::new(VecModel::default()),
+            included_hosts: Rc::new(VecModel::default()),
+            included_rows: Rc::new(VecModel::default()),
+            src_cells: Nested::default(),
+            prov_lines: Rc::new(VecModel::default()),
+            prov_items: Nested::default(),
+            picker_items: Rc::new(VecModel::default()),
+            trend_y: Rc::new(VecModel::default()),
+            trend_x: Rc::new(VecModel::default()),
+            trend_legend: Rc::new(VecModel::default()),
+            trend_buckets: Rc::new(VecModel::default()),
+            trend_lut: Rc::new(VecModel::default()),
+            donut_lut: Rc::new(VecModel::default()),
+            donut_legend: Rc::new(VecModel::default()),
+            sess_recent: Rc::new(VecModel::default()),
+            sess_recent_more: Rc::new(VecModel::default()),
+            daily_y: Rc::new(VecModel::default()),
+            heat_hours: Rc::new(VecModel::default()),
+            days: Rc::new(VecModel::default()),
+            quota_ticks: Rc::new(VecModel::default()),
             trend_gen: 0,
             trend_key: String::new(),
         }
@@ -443,6 +489,24 @@ pub fn bind(ui: &Dashboard, m: &AnalyticsModels) {
     ax.set_quota_groups(ModelRc::from(m.groups.clone()));
     ax.set_agenda_a(ModelRc::from(m.agenda_a.clone()));
     ax.set_agenda_b(ModelRc::from(m.agenda_b.clone()));
+    ax.set_scope(ModelRc::from(m.scope.clone()));
+    ax.set_included_hosts(ModelRc::from(m.included_hosts.clone()));
+    ax.set_included_rows(ModelRc::from(m.included_rows.clone()));
+    ax.set_prov_lines(ModelRc::from(m.prov_lines.clone()));
+    ax.set_picker_items(ModelRc::from(m.picker_items.clone()));
+    ax.set_trend_y(ModelRc::from(m.trend_y.clone()));
+    ax.set_trend_x(ModelRc::from(m.trend_x.clone()));
+    ax.set_trend_legend(ModelRc::from(m.trend_legend.clone()));
+    ax.set_trend_buckets(ModelRc::from(m.trend_buckets.clone()));
+    ax.set_trend_lut(ModelRc::from(m.trend_lut.clone()));
+    ax.set_donut_lut(ModelRc::from(m.donut_lut.clone()));
+    ax.set_donut_legend(ModelRc::from(m.donut_legend.clone()));
+    ax.set_sess_recent(ModelRc::from(m.sess_recent.clone()));
+    ax.set_sess_recent_more(ModelRc::from(m.sess_recent_more.clone()));
+    ax.set_daily_y(ModelRc::from(m.daily_y.clone()));
+    ax.set_heat_hours(ModelRc::from(m.heat_hours.clone()));
+    ax.set_days(ModelRc::from(m.days.clone()));
+    ax.set_quota_ticks(ModelRc::from(m.quota_ticks.clone()));
 }
 
 fn head(v: &Value, previous: AnalyticsHeadView) -> AnalyticsHeadView {
@@ -511,10 +575,13 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
     ax.set_available(b(usage, "available"));
     ax.set_status_note(s(usage, "statusNote"));
     ax.set_apport_tip(s(usage, "apportTip"));
-    ax.set_scope(list(usage, "scope", |l| AxScopeLine {
-        icon: s(l, "icon"),
-        text: s(l, "text"),
-    }));
+    sync_by_index(
+        &m.scope,
+        rows_of(usage, "scope", |l| AxScopeLine {
+            icon: s(l, "icon"),
+            text: s(l, "text"),
+        }),
+    );
     // included usage: where the numbers come from (activity.sources), never a division of them
     let inc = g(usage, "included");
     ax.set_included(AxIncluded {
@@ -523,15 +590,27 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         line: s(inc, "line"),
         foot: s(inc, "foot"),
     });
-    ax.set_included_hosts(strings(inc, "hosts"));
-    ax.set_included_rows(list(inc, "rows", |r| AxSrcRow {
-        tool: s(r, "tool"),
-        cells: list(r, "cells", |c| AxSrcCell {
-            text: s(c, "text"),
-            tone: s(c, "tone"),
-            tip: s(c, "tip"),
-        }),
-    }));
+    sync_by_index(&m.included_hosts, strings(inc, "hosts"));
+    let mut live_src = Vec::new();
+    let mut src_rows = Vec::new();
+    for (n, r) in arr(inc, "rows").iter().enumerate() {
+        let tool = s(r, "tool");
+        // the tool names are not guaranteed unique, so the position keeps the owners apart
+        let owner = format!("{n}#{tool}");
+        live_src.push(owner.clone());
+        let cells = m.src_cells.sync(
+            &owner,
+            rows_of(r, "cells", |c| AxSrcCell {
+                text: s(c, "text"),
+                tone: s(c, "tone"),
+                tip: s(c, "tip"),
+            }),
+            |c: &AxSrcCell| c.text.clone(),
+        );
+        src_rows.push(AxSrcRow { tool, cells });
+    }
+    sync_rows(&m.included_rows, src_rows, |r: &AxSrcRow| r.tool.clone());
+    m.src_cells.retain(&live_src);
     sync_rows(
         &m.kpis,
         arr(usage, "kpis").iter().map(kpi).collect(),
@@ -544,27 +623,45 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         label: s(provs, "label"),
         note: s(provs, "note"),
     });
-    ax.set_prov_lines(list(provs, "lines", |l| AxProvLine {
-        items: list(l, "items", |t| AxProvItem {
-            key: s(t, "key"),
-            label: s(t, "label"),
-            mark: s(t, "mark"),
-            value: s(t, "value"),
-            tip: s(t, "tip"),
-            quiet: b(t, "quiet"),
-        }),
-        first: b(l, "first"),
-        last: b(l, "last"),
-    }));
+    let mut live_lines = Vec::new();
+    let mut prov_lines = Vec::new();
+    for (n, l) in arr(provs, "lines").iter().enumerate() {
+        // the packed lines have no id of their own, so their position owns the items model
+        let owner = n.to_string();
+        live_lines.push(owner.clone());
+        let items = m.prov_items.sync(
+            &owner,
+            rows_of(l, "items", |t| AxProvItem {
+                key: s(t, "key"),
+                label: s(t, "label"),
+                mark: s(t, "mark"),
+                value: s(t, "value"),
+                tip: s(t, "tip"),
+                quiet: b(t, "quiet"),
+            }),
+            |t: &AxProvItem| t.key.clone(),
+        );
+        prov_lines.push(AxProvLine {
+            items,
+            first: b(l, "first"),
+            last: b(l, "last"),
+        });
+    }
+    sync_by_index(&m.prov_lines, prov_lines);
+    m.prov_items.retain(&live_lines);
     // the provider picker: All, then every provider with usage in the range
     let picker = g(usage, "picker");
-    ax.set_picker_items(list(picker, "items", |p| AxPickItem {
-        value: s(p, "value"),
-        label: s(p, "label"),
-        mark: s(p, "mark"),
-        tokens: s(p, "tokens"),
-        off: b(p, "off"),
-    }));
+    sync_rows(
+        &m.picker_items,
+        rows_of(picker, "items", |p| AxPickItem {
+            value: s(p, "value"),
+            label: s(p, "label"),
+            mark: s(p, "mark"),
+            tokens: s(p, "tokens"),
+            off: b(p, "off"),
+        }),
+        |p: &AxPickItem| p.value.clone(),
+    );
     ax.set_picker_label(s(picker, "label"));
     ax.set_picker_mark(s(picker, "mark"));
 
@@ -585,24 +682,34 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
     if let Some(paths) = t.get("paths") {
         ax.set_trend_paths(trend_paths(paths));
     }
-    ax.set_trend_y(list(t, "yTicks", |y| AxYTick {
-        y: f(y, "y"),
-        left: s(y, "left"),
-        right: s(y, "right"),
-        base: b(y, "base"),
-    }));
-    ax.set_trend_x(list(t, "xTicks", |x| AxXTick {
-        x: f(x, "x"),
-        label: s(x, "label"),
-        major: b(x, "major"),
-    }));
-    ax.set_trend_legend(list(t, "legend", |l| AxLegendItem {
-        key: s(l, "key"),
-        label: s(l, "label"),
-        note: s(l, "note"),
-    }));
-    ax.set_trend_buckets(list(t, "buckets", bucket));
-    ax.set_trend_lut(ints(t, "lut"));
+    sync_by_index(
+        &m.trend_y,
+        rows_of(t, "yTicks", |y| AxYTick {
+            y: f(y, "y"),
+            left: s(y, "left"),
+            right: s(y, "right"),
+            base: b(y, "base"),
+        }),
+    );
+    sync_by_index(
+        &m.trend_x,
+        rows_of(t, "xTicks", |x| AxXTick {
+            x: f(x, "x"),
+            label: s(x, "label"),
+            major: b(x, "major"),
+        }),
+    );
+    sync_rows(
+        &m.trend_legend,
+        rows_of(t, "legend", |l| AxLegendItem {
+            key: s(l, "key"),
+            label: s(l, "label"),
+            note: s(l, "note"),
+        }),
+        |l: &AxLegendItem| l.key.clone(),
+    );
+    sync_by_index(&m.trend_buckets, rows_of(t, "buckets", bucket));
+    sync_by_index(&m.trend_lut, ints(t, "lut"));
 
     // cost by model and the donut
     let cbm = g(usage, "cbm");
@@ -628,33 +735,28 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         arr(donut, "segs").iter().map(donut_seg).collect(),
         |r: &AxDonutSeg| r.key.clone(),
     );
-    ax.set_donut_lut(ints(donut, "lut"));
-    ax.set_donut_legend(list(donut, "legend", donut_leg));
+    sync_by_index(&m.donut_lut, ints(donut, "lut"));
+    sync_rows(
+        &m.donut_legend,
+        rows_of(donut, "legend", donut_leg),
+        |l: &AxDonutLeg| l.seg.key.clone(),
+    );
 
     // sessions, tokens, cache
     let sessions = g(usage, "sessions");
     ax.set_sessions(card_text(sessions));
+    ax.set_sess_more_sub(s(sessions, "moreSub"));
     sync_rows(
         &m.stats,
         arr(sessions, "stats").iter().map(stat).collect(),
         |r: &AxStat| r.key.clone(),
     );
-    ax.set_sess_rows(list(sessions, "rows", |r| AxSessRow {
-        provider: s(r, "provider"),
-        label: s(r, "label"),
-        sessions: s(r, "sessions"),
-        per: s(r, "per"),
-        events: s(r, "events"),
-        events_tip: s(r, "eventsTip"),
-    }));
-    ax.set_sess_recent(list(sessions, "recent", |r| AxSessRecent {
-        tool: s(r, "tool"),
-        models: s(r, "models"),
-        tokens: s(r, "tokens"),
-        cost: s(r, "cost"),
-        when: s(r, "when"),
-        tip: s(r, "tip"),
-    }));
+    // one continued table across two boxes: the five most recent sessions, then the next ten
+    sync_by_index(&m.sess_recent, rows_of(sessions, "recent", sess_recent));
+    sync_by_index(
+        &m.sess_recent_more,
+        rows_of(sessions, "recentMore", sess_recent),
+    );
     let tokens = g(usage, "tokens");
     ax.set_tokens_sub(s(tokens, "sub"));
     sync_rows(
@@ -685,7 +787,7 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         busiest: s(heat, "busiest"),
         dash: s(heat, "dash"),
     });
-    ax.set_heat_hours(strings(heat, "hours"));
+    sync_by_index(&m.heat_hours, strings(heat, "hours"));
     sync_by_index(
         &m.heat,
         arr(heat, "cells")
@@ -711,12 +813,15 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         other_label: s(daily, "otherLabel"),
         other_hue: s(daily, "otherHue"),
     });
-    ax.set_daily_y(list(daily, "yTicks", |y| AxYTick {
-        y: f(y, "y"),
-        left: s(y, "label"),
-        right: SharedString::default(),
-        base: b(y, "base"),
-    }));
+    sync_by_index(
+        &m.daily_y,
+        rows_of(daily, "yTicks", |y| AxYTick {
+            y: f(y, "y"),
+            left: s(y, "label"),
+            right: SharedString::default(),
+            base: b(y, "base"),
+        }),
+    );
     sync_by_index(
         &m.bars,
         arr(daily, "bars")
@@ -747,23 +852,29 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         last_n: i(cal, "lastN"),
         note: s(cal, "note"),
     });
-    ax.set_days(list(cal, "cells", |d| AxDay {
-        day: s(d, "day"),
-        n: i(d, "n"),
-        label: s(d, "label"),
-        month: s(d, "month"),
-        off: b(d, "off"),
-        today: b(d, "today"),
-        long: s(d, "long"),
-    }));
+    sync_by_index(
+        &m.days,
+        rows_of(cal, "cells", |d| AxDay {
+            day: s(d, "day"),
+            n: i(d, "n"),
+            label: s(d, "label"),
+            month: s(d, "month"),
+            off: b(d, "off"),
+            today: b(d, "today"),
+            long: s(d, "long"),
+        }),
+    );
 
     // quota history and the focus charts of open rows
     let quota = g(&v, "quota");
     ax.set_quota_sub(s(quota, "sub"));
-    ax.set_quota_ticks(list(quota, "ticks", |t| AxTick {
-        pos: f(t, "pos"),
-        label: s(t, "label"),
-    }));
+    sync_by_index(
+        &m.quota_ticks,
+        rows_of(quota, "ticks", |t| AxTick {
+            pos: f(t, "pos"),
+            label: s(t, "label"),
+        }),
+    );
     let focus_list = arr(quota, "focus");
     let focus_of = |id: &str| {
         focus_list
