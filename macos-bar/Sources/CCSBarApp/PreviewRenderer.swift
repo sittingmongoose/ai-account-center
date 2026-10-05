@@ -41,8 +41,9 @@ enum PreviewRenderer {
     try JSONDecoder().decode(AccountDashboard.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
   }
 
-  /// A hosting view of the real panel content, laid out at its own height.
-  private static func host(_ dashboard: AccountDashboard, options: Options) -> (NSHostingView<PanelRootView>, PanelState, NSWindow) {
+  /// A hosting view of the real panel content, laid out at its own height. `live` keeps the app's own
+  /// scroll views and motion (no static render) for the in-process hover checks.
+  static func host(_ dashboard: AccountDashboard, options: Options, live: Bool = false) -> (NSHostingView<PanelRootView>, PanelState, NSWindow) {
     NSApplication.shared.setActivationPolicy(.prohibited)
     let appearance = NSAppearance(named: options.appearance == "dark" ? .darkAqua : .aqua)
     NSApplication.shared.appearance = appearance
@@ -58,7 +59,7 @@ enum PreviewRenderer {
     }
     let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard, persist: false)
     let state = PanelState()
-    state.staticRender = true
+    state.staticRender = !live
     state.previewReduceTransparency = options.reduceTransparency
     state.previewIncreaseContrast = options.increaseContrast
     state.panelWidth = options.width

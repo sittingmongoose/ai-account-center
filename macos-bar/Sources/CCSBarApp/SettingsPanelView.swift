@@ -71,7 +71,8 @@ struct SettingsPanelView: View {
                   Text("Nothing").tag(MenuBarReading.nothingProvider)
                 }
                 .pickerStyle(.menu).labelsHidden().fixedSize()
-                .help(MenuBarReading.showHelp)
+                .alignmentProbe("settings|show")
+                .hoverHelp(menuBarShowHelp, id: "settings-show")
               }
               if prefs.menuBarProvider == "claude", !claudeAccounts.isEmpty {
                 row(title: "Claude account", sub: "Claude has no active account, so pick the one to show.") {
@@ -84,7 +85,8 @@ struct SettingsPanelView: View {
                     }
                   }
                   .pickerStyle(.menu).labelsHidden().fixedSize()
-                  .help(MenuBarReading.claudeAccountHelp)
+                  .alignmentProbe("settings|claude-account")
+                  .hoverHelp(MenuBarReading.claudeAccountHelp, id: "settings-claude-account")
                 }
               }
               row(title: "Value", sub: "The account's 5-hour window, or its weekly window when no 5-hour window is reported.") {
@@ -94,7 +96,8 @@ struct SettingsPanelView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 .disabled(prefs.menuBarProvider == MenuBarReading.nothingProvider)
-                .help(menuBarValueHelp)
+                .alignmentProbe("settings|value")
+                .hoverHelp(menuBarValueHelp, id: "settings-value")
               }
             }
             card {
@@ -151,6 +154,7 @@ struct SettingsPanelView: View {
         .glassControl(circle: true)
         .glassEffectID("settings-x", in: glass)
         .glassEffectTransition(state.reduceMotion ? .identity : .materialize)
+        .alignmentProbe("settings|close")
         .hoverHelp("Close settings (Esc)", id: "settings-close", action: close)
       }
     }
@@ -198,13 +202,13 @@ struct SettingsPanelView: View {
     model.dashboard?.visibleAccounts.filter { $0.provider == "claude" } ?? []
   }
 
-  /// The Value hover tag: it names the account actually shown exactly when the Show
-  /// preview names one (a reading is shown), else the generic tag.
-  private var menuBarValueHelp: String {
-    guard model.menuBarReading(prefs) != nil else { return MenuBarReading.valueHelpHidden }
-    return MenuBarReading.valueHelp(dashboard: model.dashboard, provider: prefs.menuBarProvider,
-      mode: prefs.menuBarMode, claudeAccountID: prefs.menuBarClaudeAccountID)
-  }
+  /// The Show hover tag: what the picker does, then the account the menu bar shows now (full identity),
+  /// from the same reading as the Show preview.
+  private var menuBarShowHelp: String { MenuBarReading.showHelp(for: model.menuBarReading(prefs)) }
+
+  /// The Value hover tag: it names exactly the account the Show preview names (a reading is shown),
+  /// else the generic tag.
+  private var menuBarValueHelp: String { MenuBarReading.valueHelp(for: model.menuBarReading(prefs)) }
 
   private var menuBarPreview: String {
     if prefs.menuBarProvider == MenuBarReading.nothingProvider { return "The Apex glyph only." }

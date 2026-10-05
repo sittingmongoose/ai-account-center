@@ -96,6 +96,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     model.pendingCodexSwitch = nil
     model.pendingAntigravitySwitch = nil
     state.settingsOpen = false
+    state.panelHover.set(false)
     model.panelOpened()
     var context = OpenContext()
     context.firstOpen = !model.hasOpenedThisSession
@@ -124,6 +125,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   func close() {
     guard let panel, panel.isVisible, !closing else { return }
+    // No hover tag shows while the panel fades out or stays closed; one already up goes now.
+    state.panelHover.set(true)
     model.lastShown = model.currentReadings
     // An unanswered switch confirmation ends with the panel, so background refresh resumes.
     model.pendingCodexSwitch = nil

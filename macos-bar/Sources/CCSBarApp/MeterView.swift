@@ -125,7 +125,7 @@ struct MeterView: View {
         if labelText != nil { foot(palette).padding(.top, 4) }
       }
       .padding(.trailing, 8)
-      .help(helpText)
+      .trayHelp(helpText)
     }
     .onAppear(perform: enter)
     .onChange(of: target) { _, next in
@@ -258,7 +258,7 @@ struct ResetLabel: View {
           HStack(spacing: 4) { clock; label.minimumScaleFactor(0.8) }
         }
         .foregroundStyle(soon ? palette.label : palette.label2)
-        .help(TrayFormat.longReset(iso))
+        .trayHelp(TrayFormat.longReset(iso))
       }
     }
   }

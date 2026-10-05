@@ -268,8 +268,22 @@ public struct MenuBarReading: Sendable, Equatable {
     return (accounts, account)
   }
 
-  /// Hover tag for the Settings > Menu bar > Show picker.
+  /// The first sentence of the Settings > Menu bar > Show hover tag: what the picker does.
   public static let showHelp = "Choose which provider's usage number appears in the menu bar."
+
+  /// The full Settings > Menu bar > Show hover tag: what the picker does, then the account whose
+  /// number the menu bar shows now, as the full identity (the same reading the Show preview and the
+  /// Value tag use), or that the logo shows alone.
+  public static func showHelp(for reading: MenuBarReading?) -> String {
+    guard let reading else { return "\(showHelp) Now showing the logo only." }
+    return "\(showHelp) Now showing \(reading.accountName)."
+  }
+
+  public static func showHelp(dashboard: AccountDashboard?, provider: String, mode: MenuBarMode,
+    claudeAccountID: String? = nil) -> String {
+    showHelp(for: make(dashboard: dashboard, provider: provider, mode: mode, claudeAccountID: claudeAccountID))
+  }
+
   /// Hover tag for the Settings > Menu bar > Claude account picker.
   public static let claudeAccountHelp = "Choose which Claude account the menu bar number comes from."
 
@@ -283,9 +297,12 @@ public struct MenuBarReading: Sendable, Equatable {
   /// shown (Nothing picked, or no window reported).
   public static func valueHelp(dashboard: AccountDashboard?, provider: String, mode: MenuBarMode,
     claudeAccountID: String? = nil) -> String {
-    guard let reading = make(dashboard: dashboard, provider: provider, mode: mode, claudeAccountID: claudeAccountID) else {
-      return valueHelpHidden
-    }
+    valueHelp(for: make(dashboard: dashboard, provider: provider, mode: mode, claudeAccountID: claudeAccountID))
+  }
+
+  /// The Value hover tag for a reading already made (the one the Show row displays).
+  public static func valueHelp(for reading: MenuBarReading?) -> String {
+    guard let reading else { return valueHelpHidden }
     return "Whether the menu bar shows Used or Remaining for \(reading.accountName)."
   }
 }
