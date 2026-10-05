@@ -12,7 +12,7 @@ let loads = 0;
  * Loads a fresh copy of bridge.js. `server(method, path, body)` answers each request with { status, payload }
  * (or a Promise of it). Returns the dispatcher, every sign-in view handed to Slint, every toast and every request.
  */
-async function loadBridge(server, { hostname = '192.168.50.179', pathname = '/accounts' } = {}) {
+async function loadBridge(server, { hostname = '192.168.50.179', pathname = '/accounts', login = null } = {}) {
   const base = new URL('../public/', import.meta.url);
   let source = await readFile(new URL('bridge.js', base), 'utf8');
   const first = source.split('\n')[0];
@@ -22,7 +22,10 @@ async function loadBridge(server, { hostname = '192.168.50.179', pathname = '/ac
     .replace(/import \{ requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard \} from '[^']+';/, 'const requireWebGL = () => {}; const WEBGL_REQUIRED_MESSAGE = "fixture"; const startSlintDashboard = fn => fn();')
     .replace(/from '(\.\/[^']+)'/g, (_match, relative) => `from '${new URL(relative, base).href}'`)
     .concat(`\n// ${key}\n`);
-  const auths = [], toasts = [], calls = [];
+  const auths = [], toasts = [], calls = [], dashboards = [], fills = [];
+  // Slint's data-ready flag as lib.rs keeps it: set_auth(false, ...) clears it and only set_dashboard sets it
+  // again, so the Home sections reveal only after a dashboard push that follows the sign-in.
+  const slint = { ready: false };
   const originals = new Map();
   const assign = (name, value) => {
     if (!originals.has(name)) originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
@@ -31,13 +34,15 @@ async function loadBridge(server, { hostname = '192.168.50.179', pathname = '/ac
   const restore = () => { for (const [name, descriptor] of originals) descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]; };
   const stored = new Map();
   assign(key, Object.fromEntries(declarations.split(', ').map(name => [name,
-    name === 'set_auth' ? (signedIn, json) => auths.push({ signedIn, ...JSON.parse(json) })
+    name === 'set_auth' ? (signedIn, json) => { if (!signedIn) slint.ready = false; auths.push({ signedIn, ...JSON.parse(json) }); }
       : name === 'push_toast' ? (kind, title, body) => toasts.push({ kind, title, body })
-        : () => {}])));
+        : name === 'set_dashboard' ? json => { slint.ready = true; dashboards.push(json); }
+          : name === 'set_login_fields' ? (username, password, remember) => fills.push({ username, password, remember })
+            : () => {}])));
   assign('window', {});
   assign('navigator', { userAgent: 'Mac fixture' });
   assign('location', { pathname, search: '', protocol: 'http:', hostname, host: `${hostname}:3000`, origin: `http://${hostname}:3000`, href: '' });
-  assign('document', { querySelector: () => ({ hidden: false, textContent: '' }) });
+  assign('document', { querySelector: () => ({ hidden: false, textContent: '' }), getElementById: id => login?.byId[id] ?? null });
   assign('innerWidth', 1920); assign('innerHeight', 1080); assign('devicePixelRatio', 1);
   assign('addEventListener', () => {}); assign('matchMedia', () => ({ matches: true }));
   assign('localStorage', { getItem: k => stored.has(k) ? stored.get(k) : null, setItem: (k, v) => stored.set(k, String(v)), removeItem: k => stored.delete(k) });
@@ -54,7 +59,35 @@ async function loadBridge(server, { hostname = '192.168.50.179', pathname = '/ac
   try {
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   } catch (error) { restore(); throw error; }
-  return { action: globalThis.window.ccsDashboardAction, auths, toasts, calls, restore, lastAuth: () => auths.at(-1) };
+  return { action: globalThis.window.ccsDashboardAction, auths, toasts, calls, dashboards, fills, slint, restore, lastAuth: () => auths.at(-1) };
+}
+
+/**
+ * The hidden HTML login form of index.html (#aac-login) as a password manager sees it: fill() sets both values
+ * and fires `input` on each field, submit() fires the form's submit event (1Password's auto-submit) and says
+ * whether the bridge stopped the browser's own POST.
+ */
+function hiddenLoginForm() {
+  const element = (props = {}) => {
+    const listeners = new Map();
+    return Object.assign(props, {
+      addEventListener: (type, fn) => listeners.set(type, [...(listeners.get(type) || []), fn]),
+      fire: (type, event = {}) => { for (const fn of listeners.get(type) || []) fn(event); },
+    });
+  };
+  const form = element(), user = element({ value: '' }), pass = element({ value: '' }), remember = element({ checked: true });
+  return {
+    byId: { 'aac-login': form, 'aac-login-user': user, 'aac-login-pass': pass, 'aac-login-remember': remember },
+    fill(username, password) { user.value = username; user.fire('input'); pass.value = password; pass.fire('input'); },
+    submit() { let prevented = false; form.fire('submit', { preventDefault: () => { prevented = true; } }); return prevented; },
+  };
+}
+
+/** Lets timers (the success hold before the dashboard) and the requests behind them run until `done()`. */
+async function settle(done, ms = 3000) {
+  const end = Date.now() + ms;
+  while (!done() && Date.now() < end) { await new Promise(resolve => setTimeout(resolve, 20)); await flush(); }
+  await flush(8);
 }
 
 /** A dashboard server with a session, local network trust and the routes the Accounts page reads. */
@@ -84,6 +117,8 @@ function fixtureServer(over = {}) {
   const server = async (method, path, body) => {
     if (method === 'GET' && path.startsWith('/api/accounts/dashboard?')) {
       if (s.revoked) return { status: 401, payload: { error: 'Signed out', code: 'session_revoked' } };
+      // a restarted server keeps no session: every signed-in route answers the plain 401
+      if (!s.signedIn) return { status: 401, payload: { error: 'Authentication required', code: 'auth_required' } };
       return { payload: { schemaVersion: 1, updatedAt: new Date().toISOString(), accounts, providers: [], settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] }, codexAutoSwitch: { enabled: false, thresholdPercent: 5 } } };
     }
     const route = routes[`${method} ${path}`];
@@ -187,5 +222,42 @@ test('a pending account-switch confirmation holds the Accounts & Settings change
     await b.action('activation-cancel', '');
     await b.action('remove', 'codex:other');
     assert.equal(removes(), 1);
+  } finally { b.restore(); }
+});
+
+test('signing in again with a password manager after the session ended in this tab draws the dashboard again', async () => {
+  // The deploy case: the server restarts (sessions live in memory), the open page's next read gets a 401 and
+  // shows "Sign in again", and 1Password fills and submits the hidden form. Every sign-in page state clears
+  // Slint's data-ready flag, so the dashboard push after the sign-in must reach Slint even when the readings
+  // are the same as the last push before the restart; a skipped push leaves Home without its sections.
+  const login = hiddenLoginForm();
+  const { s, server } = fixtureServer({ routes: {
+    'POST /api/auth/login': body => {
+      if (body?.username !== 'owner' || body?.password !== 'fixture-password') return { status: 401, payload: { error: 'Invalid credentials', code: 'invalid_credentials' } };
+      s.signedIn = true;
+      return { payload: { success: true, username: 'owner' } };
+    },
+  } });
+  const b = await loadBridge(server, { pathname: '/', login });
+  try {
+    await settle(() => b.slint.ready);
+    assert.equal(b.lastAuth().signedIn, true);
+    assert.equal(b.slint.ready, true, 'the first sign-in draws the dashboard');
+    const firstDashboard = b.dashboards.at(-1);
+    // the server restarts: the session is gone, and the next refresh ends it here
+    s.signedIn = false;
+    await b.action('refresh', '');
+    await flush();
+    assert.deepEqual([b.lastAuth().signedIn, b.lastAuth().state], [false, 'expired']);
+    assert.equal(b.slint.ready, false, 'the sign-in page cleared data-ready');
+    // 1Password: the fill lands in the Slint fields, then its auto-submit runs the sign-in
+    login.fill('owner', 'fixture-password');
+    assert.deepEqual(b.fills.at(-1), { username: 'owner', password: 'fixture-password', remember: true });
+    assert.equal(login.submit(), true, 'the bridge keeps the browser from posting the form itself');
+    await settle(() => b.lastAuth().signedIn === true && b.slint.ready);
+    assert.ok(b.calls.some(c => c.method === 'POST' && c.path === '/api/auth/login'), 'the submit signed in');
+    assert.equal(b.lastAuth().signedIn, true);
+    assert.equal(b.dashboards.at(-1), firstDashboard, 'the readings did not change across the restart');
+    assert.equal(b.slint.ready, true, 'the dashboard reached Slint after signing in again');
   } finally { b.restore(); }
 });
