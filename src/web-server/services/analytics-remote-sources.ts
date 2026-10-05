@@ -47,21 +47,24 @@ export interface AnalyticsRemoteSourceDeps {
 }
 
 /**
- * Remote coverage: Claude Code, Codex and OMP on the Mac and Windows; Muse
- * and zcode on the Mac only.
+ * Remote coverage: every kind the helper reads, on both hosts. A tool that is
+ * not installed there answers `not_installed` from the host itself, so the
+ * matrix is measured rather than assumed. The source-state grid reads this same
+ * table, so a host is never claimed unread without asking it.
  */
-const REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
+export const ANALYTICS_REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
   mac: ['claude', 'codex', 'omp', 'muse', 'zcode'],
-  windows: ['claude', 'codex', 'omp'],
+  windows: ['claude', 'codex', 'omp', 'muse', 'zcode'],
 };
 
 const MAX_CACHED_ROWS = 100_000;
 
 /**
- * 2: Muse input nets out cache reads and rows never mix logged and unlogged
- * events, so rows cached by version 1 are read again.
+ * 3: rows carry a session key, so rows cached by version 2 (which had none)
+ * are read again. 2: Muse input nets out cache reads and rows never mix logged
+ * and unlogged events, so rows cached by version 1 are read again.
  */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 interface RemoteCache {
   version: typeof CACHE_VERSION;
@@ -134,7 +137,8 @@ function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
       cacheCreationTokens: Math.floor(row.cw),
       cacheReadTokens: Math.floor(row.cr),
       model: row.m,
-      sessionId: '',
+      // The helper's hashed session key; a kind that logs none stays sessionless.
+      sessionId: row.s ?? '',
       timestamp: `${row.h.replace(' ', 'T')}:00Z`,
       projectPath: '',
       // The tool that logged the row; its routing provider prices it.
@@ -148,7 +152,8 @@ function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
 }
 
 function toWorkerResult(rows: AnalyticsRemoteRow[], kind: AnalyticsRemoteKind): UsageWorkerResult {
-  const { hourly, session } = aggregateRows(toCompact(rows), `${kind}-remote`);
+  // The helper hashed every session id on the host it read, so its keys pass through unhashed.
+  const { hourly, session } = aggregateRows(toCompact(rows), `${kind}-remote`, null);
   return {
     daily: [],
     monthly: [],
@@ -184,7 +189,7 @@ function cachedHostSources(
 } {
   const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
-  for (const tool of REMOTE_TARGETS[host]) {
+  for (const tool of ANALYTICS_REMOTE_TARGETS[host]) {
     const kept = cached.rows.filter((row) => row.k === tool && inWindow(row, minDateMs));
     if (kept.length) {
       results.push({ tool, data: toWorkerResult(kept, tool) });
@@ -299,7 +304,7 @@ export async function loadAnalyticsRemoteSources(
   for (const host of ['mac', 'windows'] as const) {
     jobs.push(
       (async (): Promise<void> => {
-        const kinds = REMOTE_TARGETS[host];
+        const kinds = ANALYTICS_REMOTE_TARGETS[host];
         const file = cacheFile(cacheDir, host);
         const cached = loadCache(file);
         const alias = hosts[host];

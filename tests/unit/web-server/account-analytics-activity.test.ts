@@ -22,7 +22,7 @@ const QUERY: AccountAnalyticsQuery = {
   provider: 'all',
   account: 'all',
 };
-function data(model: string, input: number, cost: number): UsageWorkerResult {
+function data(model: string, input: number, cost: number, route?: string): UsageWorkerResult {
   return {
     daily: [],
     monthly: [],
@@ -47,6 +47,7 @@ function data(model: string, input: number, cost: number): UsageWorkerResult {
             cacheCreationTokens: 2,
             cacheReadTokens: 3,
             cost,
+            ...(route !== undefined && { provider: route }),
           },
         ],
       },
@@ -733,21 +734,29 @@ describe('native local analytics activity', () => {
     expect(JSON.stringify(retained)).not.toContain('sentinel');
   });
 
-  it('does not start native workers for unsupported provider or exact-account filters', async () => {
+  it('starts no worker for an exact-account filter, and filters every valid provider in the projection', async () => {
     let calls = 0;
     const service = new AccountAnalyticsActivityService({
       remote: async () => ({ results: [], states: [] }),
       requests: () => {
         calls++;
-        return [];
+        return [{ provider: 'omp', request: { kind: 'omp', roots: ['/fixture/omp'] } }];
       },
+      loadWorker: async () => data('qwen3.8-max', 10, 0.002, 'alibaba-token-plan'),
       now: () => NOW,
     });
-    const qwen = await service.get({ ...QUERY, provider: 'qwen' }, FROM, NOW);
     const account = await service.get({ ...QUERY, account: 'codex:active' }, FROM, NOW);
     expect(calls).toBe(0);
-    expect(qwen.totals).toBeNull();
     expect(account.totals).toBeNull();
+    // Every provider the route validates reaches the projection, which keeps the usage it served.
+    const qwen = await service.get({ ...QUERY, provider: 'qwen' }, FROM, NOW);
+    expect(calls).toBe(1);
+    expect(qwen.providers.map((row) => row.provider)).toEqual(['qwen']);
+    expect(qwen.totals?.inputTokens).toBe(10);
+    // A provider with nothing in the range says so, instead of reading as a broken filter.
+    const empty = await service.get({ ...QUERY, provider: 'zai' }, FROM, NOW);
+    expect(empty.totals).toBeNull();
+    expect(empty.message).toContain('No CLI usage log in this range was served by this provider');
   });
 
   it('persists the snapshot and serves it instantly after a restart while the first scan runs', async () => {

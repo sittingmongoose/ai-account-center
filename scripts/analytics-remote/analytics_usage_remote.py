@@ -4,9 +4,9 @@
 Reads one JSON request on stdin, scans the fixed default roots resolved on
 this host plus the validated extra roots in the request, and prints
 per-model, per-hour aggregates plus per-file fingerprints. Only model names,
-providers, hour buckets and numeric token and cost sums leave the host;
-paths, session ids, prompts, tool output and every other conversation content
-stay here.
+providers, hour buckets, numeric token and cost sums and one hashed session key
+per row leave the host; paths, session ids, prompts, tool output and every other
+conversation content stay here.
 
 Request (all fields validated, unknown fields rejected):
   {"kinds": ["claude", "codex", "omp", "muse", "zcode"], "minDateMs": 123,
@@ -22,9 +22,14 @@ Response:
                      "fingerprints": {...}, "walUnread": true?}} ,
    "rows": [{"k": "omp", "f": "<filekey>", "m": "<model>", "p": "<provider>",
              "h": "2026-10-01 15:00", "i": 1, "o": 2, "cr": 3, "cw": 4,
-             "c": 0.01, "n": 5}]}
+             "c": 0.01, "n": 5, "s": "<session key>"}]}
 Only files whose fingerprint is new or changed contribute rows; the caller
 merges rows by filekey and drops rows whose filekey disappeared.
+
+"s" is the row's session key, sha256("aac-session-v1:<kind>:<session id>")
+truncated to 16 hex characters: the same value the server derives from its own
+local readers, so one session groups across hosts and the id itself never
+leaves this one. A kind whose records carry no session id omits the field.
 
 "truncated" means a file, row or deadline cap stopped the scan, so some files
 were not read; "discoveryTruncated" means only that the search for custom OMP
@@ -78,6 +83,24 @@ def _home():
     if not home or not os.path.isdir(home):
         _fail("home directory is unavailable")
     return home
+
+
+# The server publishes sha256("aac-session-v1:<tool>:<session id>")[:16] as a
+# session's key (account-analytics-projection.ts `sessionKey`). Deriving the same
+# value here groups one session across hosts without the id ever leaving this
+# one, so Session stats is not an Ubuntu-only surface.
+SESSION_KEY_PREFIX = "aac-session-v1:"
+SESSION_KEY_LENGTH = 16
+
+
+def _session_key(kind, session_id):
+    """The published session key of one raw session id, or None without one."""
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    digest = hashlib.sha256()
+    digest.update(("%s%s:" % (SESSION_KEY_PREFIX, kind)).encode("utf-8"))
+    digest.update(session_id.encode("utf-8"))
+    return digest.hexdigest()[:SESSION_KEY_LENGTH]
 
 
 def _filekey(kind, path):
@@ -210,10 +233,11 @@ class Collector(object):
         if pending is not None:
             self.fresh.setdefault(kind, {})[key] = pending
 
-    def add(self, kind, filekey, model, provider, hour, tokens, cost):
+    def add(self, kind, filekey, model, provider, hour, tokens, cost, session=None):
         # Logged and unlogged events never share a row, so a row's logged
-        # cost never seems to cover tokens that logged none.
-        key = (kind, filekey, model, provider or "", hour, cost > 0)
+        # cost never seems to cover tokens that logged none. Sessions never
+        # share a row either, so the server's session buckets stay exact.
+        key = (kind, filekey, model, provider or "", hour, cost > 0, session or "")
         row = self.rows.get(key)
         if row is None:
             if len(self.rows) >= MAX_ROWS:
@@ -234,6 +258,8 @@ class Collector(object):
             }
             if provider:
                 row["p"] = provider
+            if session:
+                row["s"] = session
             self.rows[key] = row
         row["i"] += tokens[0]
         row["o"] += tokens[1]
@@ -326,6 +352,26 @@ def _is_session_filename(name):
     return bool(SESSION_TS.match(name)) and "." not in name and "_" in name
 
 
+def _omp_session_id(path):
+    """The session id the server's ompSessionIdForFile derives from one path.
+
+    The file's own <ts>_<uuid> stem when it has one, else the enclosing
+    directory name (a custom --session-dir layout, or `__advisor.jsonl`),
+    truncated to 160 characters exactly as the server truncates it.
+    """
+    name = os.path.basename(path)
+    if name == "__advisor.jsonl" or not _is_session_filename(name):
+        parent = os.path.basename(os.path.dirname(path))
+        return parent[:160] if parent not in ("", ".", os.sep) else ""
+    stem = name[: -len(".jsonl")] if name.endswith(".jsonl") else name
+    return stem[:160]
+
+
+def _muse_session_id(path):
+    """The server's museSessionIdForFile: the enclosing directory name."""
+    return os.path.basename(os.path.dirname(path))[:160]
+
+
 def _scan_session_roots(base, collector):
     """Breadth-first marker scan for custom OMP session roots.
 
@@ -409,7 +455,7 @@ def _sessions_dir_has_marker(directory):
     return False
 
 
-def _parse_omp_line(line, collector, kind, filekey):
+def _parse_omp_line(line, collector, kind, filekey, session):
     # Pre-filter before parsing so conversation content is never decoded.
     if '"type"' not in line or '"message"' not in line or '"usage"' not in line:
         return
@@ -471,7 +517,7 @@ def _parse_omp_line(line, collector, kind, filekey):
     if hour is None:
         return
     provider = _clean_provider(message.get("provider"))
-    collector.add(kind, filekey, model, provider, hour, tokens, cost)
+    collector.add(kind, filekey, model, provider, hour, tokens, cost, session)
 
 
 def _session_copy_key(path):
@@ -570,6 +616,7 @@ def _collect_omp(collector, home, env, extra=()):
             if staged in collector.pending.get("omp", {}):
                 collector.confirm_file("omp", staged)
             continue
+        session = _session_key("omp", _omp_session_id(path))
         try:
             handle = open(path, "rb")
         except OSError:
@@ -592,7 +639,7 @@ def _collect_omp(collector, home, env, extra=()):
                     line = chunk.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-                _parse_omp_line(line, collector, "omp", filekey)
+                _parse_omp_line(line, collector, "omp", filekey, session)
                 if collector.row_cap:
                     return "ok"
         collector.confirm_file("omp", filekey)
@@ -623,7 +670,7 @@ def _muse_event_from_record(record):
     return None
 
 
-def _parse_muse_line(line, collector, kind, filekey):
+def _parse_muse_line(line, collector, kind, filekey, session):
     # model_completed only; goal_usage_attribution carries the same quantities
     # and would double every token. Pre-filter before parsing.
     if "model_completed" not in line:
@@ -684,7 +731,7 @@ def _parse_muse_line(line, collector, kind, filekey):
     hour = _hour_label(epoch_ms, collector.now_ms)
     if hour is None:
         return
-    collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+    collector.add(kind, filekey, model, None, hour, tokens, 0.0, session)
 
 
 def _scan_muse_dir(collector, directory):
@@ -701,6 +748,7 @@ def _scan_muse_dir(collector, directory):
             if staged in collector.pending.get("muse", {}):
                 collector.confirm_file("muse", staged)
             continue
+        session = _session_key("muse", _muse_session_id(path))
         try:
             handle = open(path, "rb")
         except OSError:
@@ -721,7 +769,7 @@ def _scan_muse_dir(collector, directory):
                     line = chunk.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-                _parse_muse_line(line, collector, "muse", filekey)
+                _parse_muse_line(line, collector, "muse", filekey, session)
                 if collector.row_cap:
                     return True
         collector.confirm_file("muse", filekey)
@@ -887,7 +935,8 @@ def _parse_claude_line(line, collector, kind, filekey, box):
     if hour is None:
         return
     # Claude Code logs no cost; the server prices the tokens at its rates.
-    collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+    session = _session_key(kind, record.get("sessionId"))
+    collector.add(kind, filekey, model, None, hour, tokens, 0.0, session)
 
 
 def _collect_claude(collector, home, env, extra=()):
@@ -997,7 +1046,8 @@ def _parse_codex_line(line, collector, kind, filekey, box):
     if model is None:
         return
     tokens = [int(delta[0]), int(delta[3]), int(delta[2]), int(delta[1])]
-    collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+    session = _session_key(kind, box.get("session"))
+    collector.add(kind, filekey, model, None, hour, tokens, 0.0, session)
 
 
 def _collect_codex(collector, home, env, extra=()):
@@ -1072,15 +1122,21 @@ def _scan_zcode_db(collector, db_path, immutable):
         return "error"
     try:
         cursor = connection.cursor()
+        # A zcode database without the session column keeps its old shape: the
+        # rows then carry no session key, exactly as before.
+        cursor.execute("PRAGMA table_info(model_usage)")
+        columns = {row[1] for row in cursor.fetchall()}
+        session_column = ", session_id" if "session_id" in columns else ""
         cursor.execute(
             "SELECT model_id, provider_id,"
             " CAST(started_at / 3600000 AS INTEGER) * 3600,"
             " SUM(input_tokens), SUM(output_tokens),"
             " SUM(cache_read_input_tokens),"
             " SUM(cache_creation_input_tokens), COUNT(*)"
-            " FROM model_usage WHERE started_at >= ?"
+            + session_column
+            + " FROM model_usage WHERE started_at >= ?"
             " GROUP BY model_id, provider_id,"
-            " CAST(started_at / 3600000 AS INTEGER)",
+            " CAST(started_at / 3600000 AS INTEGER)" + session_column,
             (int(collector.min_date_ms),),
         )
         groups = cursor.fetchall()
@@ -1117,7 +1173,8 @@ def _scan_zcode_db(collector, db_path, immutable):
         hour = _hour_label(epoch_ms, collector.now_ms)
         if hour is None:
             continue
-        key = ("zcode", filekey, model, provider or "", hour, False)
+        session = _session_key("zcode", group[8]) if len(group) > 8 else None
+        key = ("zcode", filekey, model, provider or "", hour, False, session or "")
         row = collector.rows.get(key)
         if row is None:
             if len(collector.rows) >= MAX_ROWS:
@@ -1138,6 +1195,8 @@ def _scan_zcode_db(collector, db_path, immutable):
             }
             if provider:
                 row["p"] = provider
+            if session:
+                row["s"] = session
             collector.rows[key] = row
         row["i"] += tokens[0]
         row["o"] += tokens[1]
@@ -1300,7 +1359,8 @@ def main():
         "discoveryTruncated": collector.discovery_truncated,
         "kinds": kind_entries,
         "rows": sorted(
-            collector.rows.values(), key=lambda row: (row["h"], row["k"], row.get("p", ""), row["m"])
+            collector.rows.values(),
+            key=lambda row: (row["h"], row["k"], row.get("p", ""), row["m"], row.get("s", "")),
         ),
     }
     sys.stdout.write(json.dumps(response))

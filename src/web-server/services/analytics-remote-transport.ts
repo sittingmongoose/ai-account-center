@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  'f4d481e048b86637f9d3682c018a1ac9a05220fd9b85f8e677d3e657ba468fc1';
+  '427799f75e375b7d1d3b6ba4b70f17abd6a6cfb26563312ab68e955ee88f4ecc';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -52,6 +52,8 @@ export interface AnalyticsRemoteRow {
   cw: number;
   c: number;
   n: number;
+  /** sha256('aac-session-v1:<kind>:<session id>')[:16]; absent when the kind logs no session. */
+  s?: string;
 }
 
 export interface AnalyticsRemoteKindResult {
@@ -129,6 +131,8 @@ function isValidExtraRoots(
 /** File keys and head/tail fingerprints are SHA-256 hex digests on the helper side; anything else is refused. */
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const CONTROL = /[\u0000-\u001f\u007f]/;
+/** A session key is the helper's truncated digest of a session id; the id itself never travels. */
+const SESSION_KEY_HEX = /^[0-9a-f]{16}$/;
 
 function cleanText(value: unknown, max: number): value is string {
   return (
@@ -160,7 +164,8 @@ function validRow(value: unknown): value is AnalyticsRemoteRow {
     nonNegative(row.cr) &&
     nonNegative(row.cw) &&
     nonNegative(row.c) &&
-    nonNegative(row.n)
+    nonNegative(row.n) &&
+    (row.s === undefined || (typeof row.s === 'string' && SESSION_KEY_HEX.test(row.s)))
   );
 }
 

@@ -17,6 +17,8 @@ import {
 } from './omp-native-usage-collector';
 import { museSessionIdForFile, parseMuseUsageLine } from './muse-native-usage-collector';
 import { queryLocalZcodeUsage, type ZcodeFingerprint } from './zcode-native-usage-collector';
+import { analyticsSessionKey } from './analytics-session-key';
+import type { AccountAnalyticsActivityProvider } from '../services/account-analytics-types';
 import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
 import type { ModelBreakdown } from './types';
@@ -317,10 +319,15 @@ function rowKey(row: CompactEntry): string {
   return compactKey(row.entry, row.entry.timestamp);
 }
 
-/** Pricing is stable for one bounded read, so resolve each native model once. */
+/**
+ * Pricing is stable for one bounded read, so resolve each native model once. `sessionTool` names the tool whose
+ * raw session ids `rows` carry, so each becomes its published key here and the snapshot never holds an id; it is
+ * null when the rows already carry keys, which is what the remote helper sends (it hashes on the host it reads).
+ */
 export function aggregateRows(
   rows: CompactEntry[],
-  source: string
+  source: string,
+  sessionTool: AccountAnalyticsActivityProvider | null
 ): Pick<UsageWorkerResult, 'hourly' | 'session'> {
   interface Bucket {
     models: Map<string, ModelBreakdown>;
@@ -391,7 +398,9 @@ export function aggregateRows(
   };
   for (const row of rows) {
     add(hours, `${row.entry.timestamp.slice(0, 10)} ${row.entry.timestamp.slice(11, 13)}:00`, row);
-    if (row.entry.sessionId) add(sessions, row.entry.sessionId, row);
+    const sessionId = row.entry.sessionId;
+    if (sessionId)
+      add(sessions, sessionTool ? analyticsSessionKey(sessionTool, sessionId) : sessionId, row);
   }
   const values = (bucket: Bucket) => {
     const modelBreakdowns = [...bucket.models.values()];
@@ -564,15 +573,18 @@ async function readBatch(
 }
 
 interface ZcodeCache {
-  /** 2: rows of a changed database replace its cached rows (1 could hold doubled rows). */
-  version: 2;
+  /**
+   * 3: rows carry the helper's session key, so cached rows without one are read again.
+   * 2: rows of a changed database replace its cached rows (1 could hold doubled rows).
+   */
+  version: 3;
   minDate: number;
   fingerprints: Record<string, ZcodeFingerprint>;
   rows: CompactEntry[];
 }
 
 function blankZcodeCache(minDate: number): ZcodeCache {
-  return { version: 2, minDate, fingerprints: {}, rows: [] };
+  return { version: 3, minDate, fingerprints: {}, rows: [] };
 }
 
 function zcodeCachePath(directory: string, dbPath: string): string {
@@ -584,7 +596,7 @@ function loadZcodeCache(cache: string, minDate: number): ZcodeCache {
     if (fs.statSync(cache).size > MAX_CACHE_BYTES) return blankZcodeCache(minDate);
     const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as ZcodeCache;
     if (
-      value.version !== 2 ||
+      value.version !== 3 ||
       !Number.isFinite(value.minDate) ||
       value.minDate > minDate ||
       !value.fingerprints ||
@@ -667,7 +679,7 @@ async function collectZcodeAccountActivity(
             cacheCreationTokens: helperRow.cw,
             cacheReadTokens: helperRow.cr,
             model: helperRow.m,
-            sessionId: '',
+            sessionId: helperRow.s ?? '',
             timestamp,
             projectPath: '',
             target: 'zcode',
@@ -698,7 +710,7 @@ async function collectZcodeAccountActivity(
     }
   }
   if (!cached.rows.length && failed > 0) throw new CCSError('Native log sources could not be read');
-  const { hourly, session } = aggregateRows(cached.rows, 'zcode-native');
+  const { hourly, session } = aggregateRows(cached.rows, 'zcode-native', null);
   return {
     daily: [],
     monthly: [],
@@ -882,7 +894,7 @@ export async function collectAccountActivity(
           : 'custom-parser';
   if (!rows.length && failed >= scanned.length && failed > 0)
     throw new CCSError('Native log sources could not be read');
-  const { hourly, session } = aggregateRows(rows, source);
+  const { hourly, session } = aggregateRows(rows, source, request.kind);
   return {
     daily: [],
     monthly: [],

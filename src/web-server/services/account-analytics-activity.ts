@@ -17,6 +17,7 @@ import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
 import {
+  ANALYTICS_REMOTE_TARGETS,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   type AnalyticsRemoteSourceState,
@@ -83,10 +84,12 @@ type RemoteAnswer = {
 };
 
 /**
- * Fixed entries for tools with no local usage log, on every host. Antigravity
- * keeps token counts only inside sqlite protobuf BLOBs mixed with conversation
- * content; Cursor usage is server-side. The page uses these to say why they
- * are missing. Muse and zcode are not installed on Windows and are skipped.
+ * Fixed entries for the two tools with no local usage log on any host:
+ * Antigravity keeps token counts only inside sqlite protobuf BLOBs mixed with
+ * conversation content, and Cursor's usage is server-side (its local state
+ * databases are key/value stores with no token-usage columns). The page uses
+ * these to say why they are missing. Every other tool's presence on a host is
+ * measured by that host's own scan, never assumed here.
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
@@ -108,16 +111,6 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
       rowCount: 0,
       detail:
         'no local usage log: usage is server-side; the local state database has no token-usage columns',
-    });
-  }
-  for (const tool of ['muse', 'zcode'] as const) {
-    entries.push({
-      tool,
-      host: 'windows',
-      state: 'not_installed',
-      lastScanAt: null,
-      rowCount: 0,
-      detail: 'not installed on this host',
     });
   }
   return entries;
@@ -166,14 +159,33 @@ const MAX_DIRECTORIES = 24;
 const MAX_ROWS = 100_000;
 const MAX_WORKER_TIME_MS = 20_000;
 const MAX_COLLECTION_TIME_MS = 60_000;
+/** Retained sessions per published source; more than this marks the local collection incomplete. */
+const MAX_RETAINED_SESSIONS = 10_000;
+
+/**
+ * The sessions one published source keeps: inside the 31-day window, bounded,
+ * and without a project path (a session's directory never reaches the page).
+ * Local and remote sources keep the same shape, so Session stats covers every
+ * host that reported usage.
+ */
+function retainedSessions(
+  sessions: UsageWorkerResult['session'],
+  cutoff: number
+): UsageWorkerResult['session'] {
+  return sessions
+    .filter((session) => Date.parse(session.lastActivity) >= cutoff)
+    .slice(0, MAX_RETAINED_SESSIONS)
+    .map((session) => ({ ...session, projectPath: '' }));
+}
 
 /**
  * The on-disk snapshot: the last published aggregate rows, served instantly after a restart while
  * the first collection runs. Hourly and session rows with project paths stripped (enforced on
- * load); session rows keep their opaque session ids for counting (published only as hashed sample
- * keys), never paths or content. Best-effort: a missing or invalid file behaves like a first run.
+ * load); a session row carries only its hashed key, never a raw id, a path or content.
+ * Best-effort: a missing or invalid file behaves like a first run.
+ * 2: readers hash a session id at ingest, so a version 1 snapshot (raw ids) is never served.
  */
-const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_VERSION = 2;
 const SNAPSHOT_FILE = 'analytics-activity-snapshot-v1.json';
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 const MAX_SNAPSHOT_SESSIONS = 10_000;
@@ -208,8 +220,8 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
   if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
   for (const source of snap.sources as Array<Record<string, unknown>>) {
     if (!source || typeof source !== 'object') return false;
-    if (!['claude', 'codex', 'omp', 'muse', 'zcode'].includes(source.provider as string))
-      return false;
+    const provider = source.provider as string;
+    if (!['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'].includes(provider)) return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
     for (const result of source.data as Array<Record<string, unknown>>) {
@@ -596,15 +608,13 @@ export class AccountAnalyticsActivityService {
         const recentSessions = data.session.filter(
           (session) => Date.parse(session.lastActivity) >= cutoff
         );
-        if (recentSessions.length > 10_000) failed = true;
+        if (recentSessions.length > MAX_RETAINED_SESSIONS) failed = true;
         existing.push({
           ...data,
           daily: [],
           monthly: [],
           hourly,
-          session: recentSessions
-            .slice(0, 10_000)
-            .map((session) => ({ ...session, projectPath: '' })),
+          session: retainedSessions(recentSessions, cutoff),
         });
         collected.set(provider, existing);
         succeeded.add(provider);
@@ -730,7 +740,15 @@ export class AccountAnalyticsActivityService {
           .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
           .slice(0, 744);
         if (hourly.length || data.eventCount === 0) {
-          existing.push({ ...data, daily: [], monthly: [], hourly, session: [] });
+          existing.push({
+            ...data,
+            daily: [],
+            monthly: [],
+            hourly,
+            // A remote row's session key comes from the helper, hashed on that
+            // host; remote sessions count exactly like local ones.
+            session: retainedSessions(data.session, cutoff),
+          });
           merged.set(entry.tool, existing);
         }
       }
@@ -824,9 +842,8 @@ export class AccountAnalyticsActivityService {
     } else {
       // The remote scans never answered; the previous remote aggregates are
       // still in the totals, and are marked.
-      for (const tool of ['omp', 'muse', 'zcode'] as const) {
-        for (const host of ['mac', 'windows'] as const) {
-          if (tool !== 'omp' && host === 'windows') continue;
+      for (const host of ['mac', 'windows'] as const) {
+        for (const tool of ANALYTICS_REMOTE_TARGETS[host]) {
           const old = previous.get(`${tool}\0${host}`);
           if (old)
             entries.push(
@@ -923,13 +940,11 @@ export class AccountAnalyticsActivityService {
         this.states.delete(oldest);
       }
     }
-    // Dashboard quota-provider ids overlap the activity tools only for
-    // claude/codex/muse; omp/zcode filters can only arrive via `all`.
-    const activityFilters: readonly string[] = ['all', 'claude', 'codex', 'omp', 'muse', 'zcode'];
-    if (
-      query.refresh !== true &&
-      (query.account !== 'all' || !activityFilters.includes(query.provider))
-    )
+    // Only a single-account selection has no activity: local CLI logs do not
+    // name an account. Every provider the route validates reaches the
+    // projection, which keeps the usage that provider served and says so when
+    // the range holds none of it.
+    if (query.refresh !== true && query.account !== 'all')
       return {
         ...projectAccountAnalyticsActivity(
           [],

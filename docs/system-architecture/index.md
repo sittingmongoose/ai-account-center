@@ -50,14 +50,18 @@ is published. Ubuntu logs are parsed in bounded worker
 scans with per-file checkpoints; the Mac and Windows contribute per-model,
 per-hour aggregates through one packaged Python helper streamed over the
 existing ssh channel ([remote transport](../../src/web-server/services/analytics-remote-transport.ts)),
-never raw events. OMP rows use the logged cost when nonzero, else list rates
+never raw events. Every row also carries a hashed session key, derived on the
+host that read it, so sessions from all three hosts count in Session stats and
+Recent sessions while no session id, path or directory ever leaves that host.
+OMP rows use the logged cost when nonzero, else list rates
 under the provider that served the call (a logged 0 is "not logged"); logged
 and unlogged events never share a compact row. Muse and zcode input exclude
 cache reads. A resumed OMP session copied into a second root counts once. A
 remote scan that does not answer keeps the last remote aggregates in the
 totals. `activity.sources` lists each tool and host as `ok`, `cached`,
-`unavailable` or `not_installed`, with fixed "no local usage log" entries for
-Antigravity and Cursor.
+`unavailable` or `not_installed`, each measured by that host's own scan; only
+Antigravity and Cursor are fixed "no local usage log" entries, being the two
+tools that keep no local usage log on any host.
 
 [Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts),
 [guarded activation/rollback](../../src/codex-auth/activate-codex-profile.ts) and idle-only

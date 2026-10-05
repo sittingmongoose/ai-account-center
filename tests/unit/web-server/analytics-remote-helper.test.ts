@@ -5,6 +5,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
+import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
+import { ompSessionIdForFile } from '../../../src/web-server/usage/omp-native-usage-collector';
 
 const HELPER = path.resolve(
   import.meta.dir,
@@ -204,6 +206,16 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       cw: 100,
       n: 1,
     });
+    // Every row carries its session's published key, derived on this host: the ids never travel.
+    expect(byModel.get('deepseek-v4.1-flash')?.s).toBe(
+      analyticsSessionKey('omp', '2026-10-01T15-00_uuid')
+    );
+    expect(byModel.get('k3')?.s).toBe(analyticsSessionKey('omp', '2026-10-01T15-00_uuid2'));
+    expect(byModel.get('muse-spark-1.3-contributor')?.s).toBe(
+      analyticsSessionKey('muse', 'uuid-9')
+    );
+    // This fixture's zcode table has no session column, so its rows carry no key at all.
+    expect(byModel.get('GLM-5.3-Flash')?.s).toBeUndefined();
     const serialized = JSON.stringify(response);
     expect(serialized).not.toContain(home);
     expect(serialized).not.toContain('uuid');
@@ -314,6 +326,66 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     const rows = response.rows as Array<Record<string, unknown>>;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ k: 'zcode', m: 'GLM-5.3-Flash', i: 1000, n: 1 });
+  });
+
+  it('groups zcode rows by session when its database has one, and the server counts them', async () => {
+    writeFixtures({ muse: false, zcode: false });
+    const dbPath = path.join(home, '.zcode', 'cli', 'db', 'db.sqlite');
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    sqlite(dbPath, [
+      'db.execute("CREATE TABLE model_usage (model_id TEXT, provider_id TEXT, session_id TEXT, started_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER)")',
+      `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai','zs-1',${Date.parse(
+        '2026-10-01T15:20:00Z'
+      )},10000,200,9000,100)")`,
+      `db.execute("INSERT INTO model_usage VALUES ('GLM-5.3-Flash','zai','zs-2',${Date.parse(
+        '2026-10-01T15:40:00Z'
+      )},2000,20,1000,0)")`,
+    ]);
+    const response = runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE });
+    const rows = response.rows as Array<Record<string, unknown>>;
+    // One row per session, model and hour: these are the sessions the page never saw.
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.s).sort()).toEqual(
+      [analyticsSessionKey('zcode', 'zs-1'), analyticsSessionKey('zcode', 'zs-2')].sort()
+    );
+    expect(JSON.stringify(response)).not.toContain('zs-1');
+    const data = await collectAccountActivity(
+      { kind: 'zcode', dbPath },
+      { minDate: MIN_DATE, cacheDir: path.join(home, 'cache') }
+    );
+    expect(data.session.map((session) => session.sessionId).sort()).toEqual(
+      [analyticsSessionKey('zcode', 'zs-1'), analyticsSessionKey('zcode', 'zs-2')].sort()
+    );
+    // Input nets the cache reads out per session and in the hour alike: (10000-9000) + (2000-1000).
+    expect(data.hourly).toHaveLength(1);
+    expect(data.hourly[0].inputTokens).toBe(2000);
+    expect(data.eventCount).toBe(2);
+  });
+
+  it('keys an omp session exactly as the server derives its id, advisor files included', () => {
+    writeFixtures({ muse: false, zcode: false });
+    const slug = path.join(home, '.omp', 'agent', 'sessions', 'slug');
+    const sessionDir = path.join(slug, '2026-10-01T16-00_uuid7');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const advisor = path.join(sessionDir, '__advisor.jsonl');
+    fs.writeFileSync(advisor, `${ompRecord('advisor-model', 0)}\n`);
+    const response = runHelper({ kinds: ['omp'], minDateMs: MIN_DATE });
+    const rows = response.rows as Array<Record<string, unknown>>;
+    const byModel = new Map(rows.map((row) => [row.m, row]));
+    // A session file keys by its own stem; an advisor file by the session directory it sits in,
+    // both exactly as the server's own reader derives them.
+    expect(byModel.get('deepseek-v4.1-flash')?.s).toBe(
+      analyticsSessionKey(
+        'omp',
+        ompSessionIdForFile(path.join(slug, '2026-10-01T15-00_uuid.jsonl'))
+      )
+    );
+    expect(byModel.get('advisor-model')?.s).toBe(
+      analyticsSessionKey('omp', ompSessionIdForFile(advisor))
+    );
+    expect(byModel.get('advisor-model')?.s).toBe(
+      analyticsSessionKey('omp', '2026-10-01T16-00_uuid7')
+    );
   });
 
   it('collects local zcode through the helper with one row per model and hour', async () => {
@@ -530,6 +602,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       n: 1,
     });
     expect(rows[0].p).toBeUndefined();
+    expect(rows[0].s).toBe(analyticsSessionKey('claude', 's1'));
     const serialized = JSON.stringify(response);
     expect(serialized).not.toContain(home);
     expect(serialized).not.toContain('secret');
@@ -609,6 +682,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       c: 0,
       n: 2,
     });
+    expect(rows[0].s).toBe(analyticsSessionKey('codex', 'cx1'));
     const serialized = JSON.stringify(response);
     expect(serialized).not.toContain(home);
     expect(serialized).not.toContain('secret');

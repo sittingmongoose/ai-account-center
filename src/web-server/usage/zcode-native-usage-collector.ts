@@ -39,6 +39,8 @@ export interface ZcodeHelperRow {
   cw: number;
   c: number;
   n: number;
+  /** sha256('aac-session-v1:zcode:<session id>')[:16]; absent with no session column. */
+  s?: string;
 }
 
 /** The database file plus its write-ahead log, where zcode keeps recent rows until a checkpoint. */
@@ -75,14 +77,15 @@ function isRow(value: unknown): value is ZcodeHelperRow {
     ) &&
     typeof row.c === 'number' &&
     Number.isFinite(row.c) &&
-    row.c >= 0
+    row.c >= 0 &&
+    (row.s === undefined || (typeof row.s === 'string' && /^[0-9a-f]{16}$/.test(row.s)))
   );
 }
 
 /**
  * Query the local zcode database through the packaged helper: one read-only
- * aggregate query (model names and integers only), never raw usage JSON or
- * message tables. Local opens are `mode=ro`; only remote hosts add
+ * aggregate query (model names, hashed session keys and integers only), never
+ * raw usage JSON or message tables. Local opens are `mode=ro`; only remote hosts add
  * `immutable=1`. Throws when python3 or the database is unavailable.
  */
 export function queryLocalZcodeUsage(

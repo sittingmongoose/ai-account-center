@@ -774,12 +774,13 @@ function donutView(A, state, shades) {
  * Session stats over the providers in the filter, one row per provider with sessions. The stats are the columns'
  * sums and means, so they always line up with their columns; a session that several providers served counts under
  * each of them, in the rows and in the Sessions number alike. An average cost needs every session's cost, so it is
- * not logged while any of it is not. Usage read from the Mac and Windows comes without a session list, so it adds
- * tokens but no sessions, and the note says so. Recent sessions lists the sample most recent first, without paths.
+ * not logged while any of it is not. Every native tool names a session on every host it runs on, so sessions
+ * cover Ubuntu, Mac and Windows alike; a generic JSONL log names none, and the note says so.
+ * Recent sessions lists the sample most recent first, without paths.
  * The sample rows are the server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token
  * totals); anything else is dropped, never guessed.
  */
-function sessionsView(A, state, payload, now) {
+function sessionsView(A, state, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
   const sum = k => all.length && all.every(r => finite(r[k])) ? all.reduce((s, r) => s + r[k], 0) : null;
   const sessions = sum('sessions');
@@ -787,9 +788,8 @@ function sessionsView(A, state, payload, now) {
   const unk = all.some(r => r.unk);
   const avg = !unk && finite(sessions) && sessions > 0 && finite(cost) ? cost / sessions : null;
   const evs = finite(sessions) && sessions > 0 && finite(events) ? events / sessions : null;
-  const remote = new Set((Array.isArray(payload?.activity?.sources) ? payload.activity.sources : [])
-    .filter(r => (r?.host === 'mac' || r?.host === 'windows') && (r.state === 'ok' || r.state === 'cached')).map(r => r.tool));
-  const fromRemote = all.some(r => A.tools(r.p).some(t => remote.has(t)));
+  // A saved generic JSONL source maps no session field, so its tokens are counted while it adds no sessions.
+  const sessionless = all.some(r => A.tools(r.p).includes('jsonl'));
   // the sample covers the providers in the filter; without one, show every session
   const sample = [];
   for (const s of A.sessionSample) {
@@ -821,7 +821,7 @@ function sessionsView(A, state, payload, now) {
       : `Most recent ${recent.length} of ${sample.length} sessions in this range`
     : '';
   return {
-    note: fromRemote ? 'Sessions come from the Ubuntu logs; usage read from the Mac and Windows adds tokens but no sessions.' : '',
+    note: sessionless ? 'A generic JSONL usage log records no session, so its tokens are counted but it adds no sessions.' : '',
     recent, recentFoot,
     stats: [
       { key: 'sess', label: 'Sessions', num: sessions ?? 0, has: finite(sessions), fmt: 'int', text: intText(sessions) },
@@ -1161,7 +1161,7 @@ export function usageView(payload, state, opts = {}) {
     notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '',
   ].filter(Boolean).join(' ');
   const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
-  const sessions = sessionsView(A, state, payload, now);
+  const sessions = sessionsView(A, state, now);
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
     head: headOf(A, R, state, now, zone),

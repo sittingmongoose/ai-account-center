@@ -175,10 +175,11 @@ describe('analytics remote sources', () => {
     const ompMac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(ompMac).toMatchObject({ state: 'ok', rowCount: 2 });
     expect(ompMac?.lastScanAt).toBe('2026-10-02T00:00:00.000Z');
-    // Muse and zcode are mac-only; windows carries claude, codex and omp.
+    // Both hosts are asked about every kind; a tool that is not installed there
+    // answers not_installed from the host itself, never from a fixed claim here.
     expect(
       states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)
-    ).toEqual(['claude', 'codex', 'omp']);
+    ).toEqual(['claude', 'codex', 'muse', 'omp', 'zcode']);
     expect(states.filter((entry) => entry.host === 'mac').map((entry) => entry.tool)).toEqual([
       'claude',
       'codex',
@@ -186,6 +187,42 @@ describe('analytics remote sources', () => {
       'omp',
       'zcode',
     ]);
+  });
+
+  it('turns a helper session key into a session row, and re-reads a cache that had none', async () => {
+    const key = 'ab'.repeat(8);
+    const runHelper = async () =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response({ rows: [row({ s: key })] })));
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper,
+    });
+    const omp = results.find((entry) => entry.tool === 'omp');
+    // The key the host hashed is this session's id: a raw id never travels, and the
+    // row's tokens still land in the hour buckets exactly once.
+    expect(omp?.data.session.map((session) => session.sessionId)).toEqual([key]);
+    expect(omp?.data.session[0].inputTokens).toBe(100);
+    expect(omp?.data.hourly[0].inputTokens).toBe(100);
+    // Rows saved before keys existed carry none, so a stale cache is dropped and the host is asked again.
+    const file = path.join(cache, 'analytics-remote-v1', 'mac.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as { version: number; rows: unknown[] };
+    expect(saved.version).toBe(3);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        ...saved,
+        version: 2,
+        rows: (saved.rows as Array<Record<string, unknown>>).map(({ s: _key, ...rest }) => rest),
+      })
+    );
+    expect(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).results).toEqual([]);
+  });
+
+  it('refuses a row whose session key is not a truncated digest', () => {
+    expect(() =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response({ rows: [row({ s: 'raw-session-id' })] })))
+    ).toThrow();
   });
 
   it('sends the saved extra roots for each target host', async () => {
