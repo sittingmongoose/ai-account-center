@@ -15,7 +15,8 @@ Text is the system font (SF Pro) with tabular digits, and every percent sign is 
 
 The layout and order are today's: header (Apex Soft mark, name, "9 of 9 reporting · cached · updated 3:15 PM", menu);
 Claude; Codex; Antigravity; the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go) in that order;
-and a footer that floats over the list (Codex auto-switch and threshold, Dashboard, Refresh, Settings).
+and a footer that floats over the list (Dashboard, Refresh, Settings). The Codex section header carries the
+Codex auto-switch toggle and its threshold, above its accounts, styled like Antigravity's.
 
 - **Usage is never invented.** A missing reading reads "Unavailable" (or "Not reported yet"), never 0. Values keep at
   most two decimals. Codex Chat pass windows, the Qwen subscription row and empty Z.ai reset-pack summaries stay

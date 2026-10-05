@@ -520,8 +520,12 @@ public partial class MainWindow : Window
         // Two Antigravity accounts get the auto-switch tools line, counting one hidden in the tray too: hiding it
         // never takes away the switch the user can operate.
         var multiAg = provider == "antigravity" && AllAntigravity(dashboard, accounts).Length > 1;
-        stack.Children.Add(SectionHeader(provider, accounts, columns, acts, separateCaptions: multiAg));
-        if (multiAg) stack.Children.Add(CaptionRow(columns, acts));
+        // Codex shows the same tools in its header whenever the dashboard reports them: the footer cluster
+        // showed them for every connected user, so no account-count gate is added here.
+        var multiCodex = provider == "codex" && dashboard?.CodexAutoSwitch is not null;
+        var separate = multiAg || multiCodex;
+        stack.Children.Add(SectionHeader(provider, accounts, columns, acts, separateCaptions: separate));
+        if (separate) stack.Children.Add(CaptionRow(columns, acts));
         var rowsGrid = new Grid { Margin = new Thickness(0, 0, 0, 0) };
         var rowsStack = new StackPanel();
         if (switchable)
@@ -565,13 +569,13 @@ public partial class MainWindow : Window
         if (meta is not null) { meta.Margin = new Thickness(9, 0, 0, 0); meta.VerticalAlignment = VerticalAlignment.Bottom; meta.Padding = new Thickness(0, 0, 0, 1); identity.Children.Add(meta); }
         if (separateCaptions)
         {
-            // Two Antigravity accounts: name line with its own auto-switch tools, captions on the next line.
+            // Auto-switch tools on the name line, captions on the next line: two Antigravity accounts, or Codex.
             var line = new DockPanel { Margin = new Thickness(12, 6, 10, 0), MinHeight = 22, LastChildFill = false };
             var head = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             // The mark sits centred in the grid's 22 px mark column and the name starts on the identity column (22 + 14).
             var mark2 = Ui.Mark(provider, 16); mark2.Margin = new Thickness(3, 0, 17, 0); head.Children.Add(mark2); head.Children.Add(identity);
             line.Children.Add(head);
-            var tools = AntigravityTools(accounts); DockPanel.SetDock(tools, Dock.Right); line.Children.Add(tools);
+            var tools = provider == "codex" ? CodexTools() : AntigravityTools(accounts); DockPanel.SetDock(tools, Dock.Right); line.Children.Add(tools);
             return line;
         }
         Grid.SetColumn(identity, 2); grid.Children.Add(identity);
@@ -1232,7 +1236,7 @@ public partial class MainWindow : Window
         var meta = Ui.Text(string.Join(" · ", parts), 11.5, "Ink3"); meta.Margin = new Thickness(0, 8, 0, 0); panel.Children.Add(meta);
     }
 
-    // ---------------- footer: Codex auto-switch, Dashboard, Refresh, Settings
+    // ---------------- footer: Dashboard, Refresh, Settings
 
     private void RenderFooter()
     {
@@ -1253,9 +1257,18 @@ public partial class MainWindow : Window
             AutoSwitchPanel.Content = Ui.Text("Loading accounts", 12, "Ink3");
             return;
         }
-        var status = dashboard.CodexAutoSwitch;
+        // The Codex auto-switch lives in the Codex section header now; the footer's left side stays empty.
+        AutoSwitchPanel.Content = null;
+    }
+
+    /// <summary>Codex's auto-switch in the Codex section header, above its accounts: the footer cluster moved up
+    /// and restyled exactly like Antigravity's — same toggle, threshold menu and explainer, same writes,
+    /// tooltips and disabled states, only the placement and the label changed.</summary>
+    private FrameworkElement CodexTools()
+    {
+        var status = dashboard!.CodexAutoSwitch;
         var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var toggle = new ToggleSwitch(status.Enabled, "Codex auto-switch", "Automatically switch Codex accounts when usage reaches the threshold and Codex is idle. Claude stays manual.") { Uid = "mutation:toggle" };
+        var toggle = new ToggleSwitch(status.Enabled, "Auto-switch", "Automatically switch Codex accounts when usage reaches the threshold and Codex is idle. Claude stays manual.") { Uid = "mutation:toggle" };
         toggle.SetEnabled(!status.ActivationInProgress && !busy && !staleSample);
         toggle.Toggled += async requested => await Action(async () => { if (client is not null) await client.SetAutoSwitch(requested); }, requested ? "Codex auto-switch is on." : "Codex auto-switch is off.");
         row.Children.Add(toggle);
@@ -1274,7 +1287,7 @@ public partial class MainWindow : Window
             ShowPopup(Menus.Create(info, text, PlacementMode.Top, 260));
         };
         row.Children.Add(info);
-        AutoSwitchPanel.Content = row;
+        return row;
     }
 
     private Button ThresholdDrop(int currentUsed, string name, Func<int, Task> choose)

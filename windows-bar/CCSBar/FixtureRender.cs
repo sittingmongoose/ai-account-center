@@ -64,6 +64,19 @@ public static class FixtureRender
             report.Checks[$"{name}_section_columns_and_names_aligned"] = Columns(window, measures, name);
             var codexSection = FindUid(window.ContentPanel, "section:codex");
             report.Checks[$"{name}_codex_header_has_no_active_meta"] = codexSection is not null && FindUid(codexSection, "section-meta") is null;
+            // The Codex auto-switch moved from the footer into the Codex section header: its toggle and
+            // threshold sit above the first Codex account and inside the Codex section, and the footer
+            // keeps no auto-switch control.
+            var codexTools = codexSection is null ? null : FindUid(codexSection, "mutation:toggle");
+            var codexDrop = codexSection is null ? null : FindUid(codexSection, "mutation:drop");
+            var codexFirstRow = FindUid(window.ContentPanel, "row:codex:example-1");
+            report.Checks[$"{name}_codex_auto_in_section_header"] = codexSection is not null && codexTools is ToggleSwitch && codexDrop is Button && codexFirstRow is not null
+                && Y(codexTools, window) + codexTools.ActualHeight <= Y(codexFirstRow, window) + 0.5
+                && Y(codexTools, window) >= Y(codexSection, window) - 0.5
+                && Y(codexDrop, window) + codexDrop.ActualHeight <= Y(codexFirstRow, window) + 0.5;
+            report.Checks[$"{name}_footer_has_no_auto_switch"] = window.AutoSwitchPanel.Content is null
+                && FindUid(window.AutoSwitchPanel, "mutation:toggle") is null
+                && FindUid(window.AutoSwitchPanel, "mutation:drop") is null;
 
             // Switch: codex-3 becomes active; the platter moves to it and the alignment still holds.
             var switched = Clone(fixture);
@@ -92,6 +105,10 @@ public static class FixtureRender
             report.Checks[$"{name}_antigravity_two_columns_and_names_aligned"] = Columns(window, measures, name + "_ag2");
             var agTwoSection = FindUid(window.ContentPanel, "section:antigravity");
             report.Checks[$"{name}_antigravity_header_keeps_active_meta"] = agTwoSection is not null && FindUid(agTwoSection, "section-meta") is not null;
+            var codexToggleTwo = FindUid(window.ContentPanel, "section:codex") is FrameworkElement codexTwo ? FindUid(codexTwo, "mutation:toggle") : null;
+            var agToggleTwo = agTwoSection is null ? null : FindUid(agTwoSection, "mutation:toggle");
+            report.Checks[$"{name}_codex_auto_matches_antigravity_tools"] = codexToggleTwo is ToggleSwitch codexSwitch && agToggleTwo is ToggleSwitch agSwitch
+                && Math.Abs(codexSwitch.ActualHeight - agSwitch.ActualHeight) <= 0.5;
             var compact = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Compact && meter.IsVisible).ToArray();
             var tight = compact.FirstOrDefault(meter => meter.Key == "antigravity:example-2|gemini-weekly");
             report.Notes[$"{name}_tight_reset_shown"] = tight?.ResetShown ?? "missing";
@@ -647,6 +664,8 @@ public static class FixtureRender
     }
 
     private static double X(FrameworkElement element, Window window) => element.TranslatePoint(new Point(0, 0), window).X;
+
+    private static double Y(FrameworkElement element, Window window) => element.TranslatePoint(new Point(0, 0), window).Y;
 
     /// <summary>Check-circle left = Activate left, "Active" left = "Activate" label left, within 0.5 px.</summary>
     private static bool Aligned(MainWindow window, string provider, Dictionary<string, double> measures, string tag)
