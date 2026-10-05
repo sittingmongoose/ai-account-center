@@ -1,4 +1,4 @@
-//! Analytics view model (version 3, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
+//! Analytics view model (version 5, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
 //! row, the usage charts (trend, cost by model, donut, sessions, token breakdown, cache efficiency,
 //! heatmap, daily cost), the custom range calendar, the quota history with its focus charts and the
 //! resets agenda. Everything lands in the `AxData` global (ui/pages/analytics/ax-data.slint).
@@ -12,7 +12,7 @@ use crate::{
     AxDaily, AxData, AxDay, AxDonut, AxDonutLeg, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat,
     AxHeatCell, AxIncluded, AxKpi, AxLabel, AxLegendItem, AxModelRow, AxModelType, AxPickItem,
     AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine, AxSessRecent,
-    AxSessRow, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
+    AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow, AxTrend,
     AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
 };
 use serde_json::Value;
@@ -21,7 +21,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 /// The analytics view-model version this build understands (public/analytics-data.mjs ANALYTICS_VIEW_VERSION).
-pub const ANALYTICS_VIEW_VERSION: u64 = 4;
+pub const ANALYTICS_VIEW_VERSION: u64 = 5;
 
 // ---------------------------------------------------------------- JSON access (camelCase keys)
 static NULL: Value = Value::Null;
@@ -245,6 +245,16 @@ fn stat(v: &Value) -> AxStat {
         has: b(v, "has"),
         fmt: s(v, "fmt"),
         text: s(v, "text"),
+    }
+}
+fn sess_recent(v: &Value) -> AxSessRecent {
+    AxSessRecent {
+        tool: s(v, "tool"),
+        models: s(v, "models"),
+        tokens: s(v, "tokens"),
+        cost: s(v, "cost"),
+        when: s(v, "when"),
+        tip: s(v, "tip"),
     }
 }
 fn cache(v: &Value) -> AxCache {
@@ -634,27 +644,15 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
     // sessions, tokens, cache
     let sessions = g(usage, "sessions");
     ax.set_sessions(card_text(sessions));
+    ax.set_sess_more_sub(s(sessions, "moreSub"));
     sync_rows(
         &m.stats,
         arr(sessions, "stats").iter().map(stat).collect(),
         |r: &AxStat| r.key.clone(),
     );
-    ax.set_sess_rows(list(sessions, "rows", |r| AxSessRow {
-        provider: s(r, "provider"),
-        label: s(r, "label"),
-        sessions: s(r, "sessions"),
-        per: s(r, "per"),
-        events: s(r, "events"),
-        events_tip: s(r, "eventsTip"),
-    }));
-    ax.set_sess_recent(list(sessions, "recent", |r| AxSessRecent {
-        tool: s(r, "tool"),
-        models: s(r, "models"),
-        tokens: s(r, "tokens"),
-        cost: s(r, "cost"),
-        when: s(r, "when"),
-        tip: s(r, "tip"),
-    }));
+    // one continued table across two boxes: the five most recent sessions, then the next ten
+    ax.set_sess_recent(list(sessions, "recent", sess_recent));
+    ax.set_sess_recent_more(list(sessions, "recentMore", sess_recent));
     let tokens = g(usage, "tokens");
     ax.set_tokens_sub(s(tokens, "sub"));
     sync_rows(
