@@ -174,7 +174,7 @@ public partial class MainWindow : Window
     /// <summary>Checks only: pretends this is a hidden live panel, so the deferred-render path runs headless.</summary>
     internal void SimulateHideForCheck() { hiddenSimulated = true; renderDirty = false; }
     /// <summary>Checks only: the deferred rebuild ShowPanel runs on open.</summary>
-    internal void RenderDeferredForCheck() { renderDirty = false; RenderDashboard(); UpdateStatus(); }
+    internal void RenderDeferredForCheck() => FlushDeferredRender();
     internal Task OpenClaudeForCheck(DashboardAccount account, string platform) => OpenClaude(account, platform);
     internal string? StatusFlashForCheck => statusFlash;
     internal bool OpenRunningForCheck(string accountId) => OpenRunning(accountId);
@@ -206,13 +206,7 @@ public partial class MainWindow : Window
             Show();
             // Samples that arrived while hidden painted nothing: rebuild once now, before the entrance animation
             // reads the meters, so the panel shows the latest reading and the platter lands on open (N6).
-            if (renderDirty)
-            {
-                renderDirty = false;
-                if (dashboard is not null) RenderDashboard();
-                else if (pendingEmpty is { } empty) RenderEmpty(empty.Title, empty.Message);
-                UpdateStatus();
-            }
+            if (renderDirty) FlushDeferredRender();
             PlayOpen();
             if (signInVisible && signInView is not null && !signInEntered) { signInEntered = true; signInView.PlayEntrance(true); }
             if (busy) SetRefreshing(true);
@@ -220,6 +214,16 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(new Action(() => { PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
         }
         Activate();
+    }
+
+    /// <summary>The deferred visual pass an open runs: the list (or the deferred failure card) and the status
+    /// line, exactly once. One body for the product flush and its check helper, so they cannot drift (N6).</summary>
+    private void FlushDeferredRender()
+    {
+        renderDirty = false;
+        if (dashboard is not null) RenderDashboard();
+        else if (pendingEmpty is { } empty) RenderEmpty(empty.Title, empty.Message);
+        UpdateStatus();
     }
 
     public async Task TogglePopup()
