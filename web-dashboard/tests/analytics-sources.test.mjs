@@ -170,6 +170,15 @@ test('a picked provider shows only the usage it served, divided by model', () =>
   // each): 12 = 3+2+2+1+2+1+1 over the seven PROVIDERS rows, so a provider dropping out would show here
   const all = usageView(payload(), state(), { now });
   assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, 12);
+  // ... and the per-provider rows list all seven, in dashboard order with the dashboard's labels
+  assert.deepEqual(all.sessions.rows.map(r => [r.label, r.sessions]),
+    [['Claude', '3'], ['Codex', '2'], ['Muse Code', '2'], ['Qwen Token Plan', '1'], ['Z.ai Coding Plan', '2'], ['OpenCode Go', '1'], ['Other', '1']]);
+  // Other has no mark; a routed provider's per-session cost is its logged cost over its sessions
+  assert.equal(all.sessions.rows.find(r => r.label === 'Other').provider, '');
+  assert.equal(all.sessions.rows.find(r => r.label === 'OpenCode Go').per, '$2.00');
+  assert.equal(all.sessions.rows.find(r => r.label === 'Qwen Token Plan').per, 'Not logged');
+  // a picked provider narrows the rows to itself
+  assert.deepEqual(zai.sessions.rows.map(r => [r.label, r.sessions]), [['Z.ai Coding Plan', '2']]);
   // Mac and Windows rows carry a session key now, so no Ubuntu-only caveat is owed.
   assert.equal(all.sessions.note, '');
   assert.equal(claude.sessions.note, '');
@@ -185,6 +194,7 @@ test('a generic JSONL source counts tokens but adds no sessions, and the note sa
   assert.equal(view.sessions.stats.find(s => s.key === 'sess').num, 12);
   const other = usageView(payload({ providers }), state({ prov: 'other' }), { now });
   assert.equal(other.sessions.stats.find(s => s.key === 'sess').num, 1);
+  assert.deepEqual(other.sessions.rows.map(r => [r.label, r.sessions]), [['Other', '1']]);
   assert.match(other.sessions.note, /generic JSONL usage log records no session/);
 });
 
