@@ -3,14 +3,17 @@
 
 No action occurs on import. --plan is read-only. --apply builds a new
 immutable bundle from the current packaged runtime sources when the installed
-CLI moved to another reviewed build, then atomically repoints the launcher
-shim, the user service unit and the installation descriptor at it. Anything
+CLI moved to another reviewed build, or when the installed bundle can no longer
+load its pinned parser under the system Python (a release upgrade replaced the
+interpreter it was built for), then atomically repoints the launcher shim, the
+user service unit and the installation descriptor at it. Anything
 unreviewed, foreign, mid-switch or unexpected refuses before any owned write,
 and every cutover failure restores the previous owned bytes.
 """
 from __future__ import annotations
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,9 +26,10 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_installation import InstallationError, exact_json, load_installation
-from install_runtime import private_directory, setup_plan, sha, write_exclusive
+from install_runtime import prepare_parser, private_directory, setup_plan, sha, write_exclusive
 from adopt_runtime import UNIT, publish, restore, run_user_service, same, snapshot, unit_bytes
 from runtime_control import service_readiness
+from runtime_health import BROKEN_PARSER, describe as describe_parser, probe as parser_probe
 
 VERSION_RE = re.compile(r'\d+\.\d+\.\d+(?:-[\w.-]+)?$')
 SHA_RE = re.compile(r'[a-f0-9]{64}$')
@@ -90,7 +94,7 @@ def change_for(receipt, path):
     return None
 
 
-def plan(home, source):
+def plan(home, source, *, probe=parser_probe):
     home, source = Path(home).resolve(), Path(source).resolve()
     try:
         newplan, manifest, release = setup_plan(home, source)
@@ -147,17 +151,25 @@ def plan(home, source):
     if type(recorded) is not dict or not same(unit_snapped, recorded):
         raise InstallationError('runtime-installation-foreign')
     new_bundle = Path(newplan['bundleDirectory'])
+    # Same reviewed CLI: the bundle is still stale when the service interpreter
+    # can no longer load its pinned parser (read-only probe, no bytecode writes).
+    parser = probe(old_bundle) if old_pin == binary_fp else None
+    broken = parser is not None and parser.get('ok') is not True and parser.get('reason') in BROKEN_PARSER
     if new_bundle == old_bundle:
         if old_pin != binary_fp:
             raise InstallationError('runtime-bundle-changed')
+        if broken:
+            # The same packaged sources would rebuild the same failure.
+            raise InstallationError('runtime-parser-unusable')
         return {'stale': False, 'version': version, 'oldVersion': old_version,
                 'bundleDirectory': str(old_bundle), 'nativeSha256': binary_fp}
-    if old_pin == binary_fp:
+    if old_pin == binary_fp and not broken:
         return {'stale': False, 'version': version, 'oldVersion': old_version,
                 'bundleDirectory': str(old_bundle), 'nativeSha256': binary_fp}
     if new_bundle.exists() or new_bundle.is_symlink():
         raise InstallationError('runtime-bundle-already-present')
-    return {'stale': True, 'version': version, 'oldVersion': old_version,
+    return {'stale': True, 'reason': 'parser' if broken else 'native',
+            'parser': parser if broken else None, 'version': version, 'oldVersion': old_version,
             'oldBundle': str(old_bundle), 'newBundle': str(new_bundle),
             'oldPin': old_pin, 'newPin': binary_fp, 'manifest': manifest,
             'shim': str(shim), 'unit': str(unit)}
@@ -173,23 +185,12 @@ def build_bundle(new_bundle, source, manifest, *, runner):
     shutil.copyfile(Path(source) / 'runtime-manifest.json', library / 'runtime-manifest.json')
     for name in ('managed_launcher.py', 'runtime_installation.py'):
         shutil.copyfile(Path(__file__).with_name(name), new_bundle / name)
-    environment = dict(os.environ)
-    for key in ('PYTHONPATH', 'PYTHONHOME', 'PIP_INDEX_URL', 'PIP_EXTRA_INDEX_URL', 'PIP_TRUSTED_HOST'):
-        environment.pop(key, None)
-    environment.update(PIP_CONFIG_FILE='/dev/null', PIP_DISABLE_PIP_VERSION_CHECK='1')
-    runner(['/usr/bin/python3', '-I', '-m', 'venv', str(new_bundle / 'venv')], env=environment, check=True)
-    python = new_bundle / 'venv/bin/python3'
-    runner([str(python), '-I', '-m', 'pip', 'install', '--require-hashes', '--no-deps',
-            '--only-binary=:all:', '--index-url', 'https://pypi.org/simple',
-            '-r', str(library / 'requirements.txt')], env=environment, check=True)
-    runner([str(python), '-I', '-c',
-            "import importlib.metadata as m; assert m.version('pyte')=='0.8.2'; assert m.version('wcwidth')=='0.9.1'"],
-           env=environment, check=True)
+    prepare_parser(new_bundle, library, runner)
 
 
-def apply(home, source, *, runner=subprocess.run, readiness=service_readiness):
+def apply(home, source, *, runner=subprocess.run, readiness=service_readiness, probe=parser_probe):
     home = Path(home).resolve()
-    info = plan(home, source)
+    info = plan(home, source, probe=probe)
     if not info['stale']:
         return {'status': 'current', 'version': info['version']}
     if readiness is None:
@@ -253,6 +254,12 @@ def apply(home, source, *, runner=subprocess.run, readiness=service_readiness):
         backup_parent = state / 'descriptor-backups'
         private_directory(backup_parent)
         backup = backup_parent / (previous_pin + '.json')
+        if (info.get('reason') == 'parser' and (backup.exists() or backup.is_symlink()) and
+                backup.read_bytes() != previous_raw):
+            # A same-CLI parser rebuild keeps the pin, so the pin-named backup
+            # of an earlier generation is expected; never overwrite it, keep
+            # this descriptor under a content-addressed name beside it.
+            backup = backup_parent / ('%s-%s.json' % (previous_pin, hashlib.sha256(previous_raw).hexdigest()[:16]))
         if backup.exists() or backup.is_symlink():
             if backup.read_bytes() != previous_raw:
                 raise InstallationError('runtime-backup-divergent')
@@ -337,6 +344,7 @@ HINTS = {
     'runtime-installation-foreign': 'owned files changed; review before retrying',
     'runtime-backup-divergent': 'a divergent descriptor backup exists; review before retrying',
     'runtime-service-readiness-failed': 'previous owned bytes restored; review the service',
+    'runtime-parser-unusable': 'the packaged parser does not load under this Python; review the runtime package',
 }
 
 
@@ -361,9 +369,12 @@ def main():
         else:
             info = plan(home, source)
             result = {'status': 'current' if not info['stale'] else 'stale', 'version': info['version'],
-                      'oldVersion': info.get('oldVersion')}
+                      'oldVersion': info.get('oldVersion'), 'parser': info.get('parser')}
         if result['status'] == 'current':
             print('Antigravity runtime bundle is current (reviewed %s build).' % result['version'])
+        elif result['status'] == 'stale' and result.get('parser'):
+            print('Antigravity runtime bundle cannot start: %s; --apply rebuilds it (reviewed %s build).' % (
+                describe_parser(result['parser']), result['version']))
         elif result['status'] == 'stale':
             print('Antigravity runtime bundle is stale (%s -> %s); --apply rebuilds it.' % (
                 result.get('oldVersion'), result['version']))

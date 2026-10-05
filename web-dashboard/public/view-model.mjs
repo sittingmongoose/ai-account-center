@@ -417,7 +417,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
       status: nativeRow?.status || statusWord(account), note: nativeRow?.note || text(account.message), platform: platformLabel(account.platform),
       active, activeLabel: active ? (nativeRow.runtimeVerified ? 'on Ubuntu' : 'on Ubuntu, running unverified') : '',
       setup: false, canActivate: nativeRow?.canActivate === true, activateKind: 'antigravity-activate',
-      activateHint: nativeRow?.canActivate ? `Activate ${text(account.email)} on Ubuntu; running programs are listed for review first` : 'Ubuntu activation needs a verified login and runtime',
+      activateHint: nativeRow?.canActivate ? `Activate ${text(account.email)} on Ubuntu; running programs are listed for review first` : native.antigravityServiceProblem || 'Ubuntu activation needs a verified login and runtime',
       canMac: false, canWindows: false, amountsLine: '', amountsRuns: [],
       confirm: above, confirmRuns: above ? confirmRuns(peak, status.thresholdUsedPercent, status.enabled === true) : [], cells,
     };
@@ -430,8 +430,9 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
     id: 'antigravity', kind: 'switchable', label: 'Antigravity', longLabel: 'Google Antigravity CLI', switchable: true, canSwitch: policyShown,
     meta: `Google Antigravity CLI · ${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}`,
     metaRuns: [run('Google Antigravity CLI · '), run(rows.length, true), run(` ${rows.length === 1 ? 'account' : 'accounts'}`)],
-    foot: native.antigravityUpdatePaused
-      ? { shown: true, warn: true, runs: [run(native.antigravityUpdatePaused)], when: '' }
+    // A runtime service that cannot start outranks a paused update: switching is off either way.
+    foot: native.antigravityServiceProblem || native.antigravityUpdatePaused
+      ? { shown: true, warn: true, runs: [run(native.antigravityServiceProblem || native.antigravityUpdatePaused)], when: '' }
       : noFoot(),
     activeId: activeRow?.id || '', activeLabel: activeRow?.email || '', empty: 'No Antigravity accounts are reported yet.',
     auto: {

@@ -1,9 +1,12 @@
 """Injected HTTPS opener and parser-version/path boundaries; no requests/actions."""
+import importlib
 import importlib.metadata
+import importlib.util
 import io
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock,patch
 RUNTIME=Path(__file__).resolve().parents[3]/'scripts/antigravity/runtime'
@@ -43,18 +46,48 @@ class UserinfoTransportFixtures(unittest.TestCase):
         opener.open.assert_not_called()
 
 
+def fake_parser(directory,versions=(('pyte','0.8.2'),('wcwidth','0.9.1'))):
+    """Invented importable parser packages with dist-info metadata only."""
+    for name,version in versions:
+        (directory/name).mkdir(parents=True,exist_ok=True)
+        (directory/name/'__init__.py').write_text('# invented fixture package\n')
+        info=directory/('%s-%s.dist-info'%(name,version));info.mkdir(parents=True,exist_ok=True)
+        (info/'METADATA').write_text('Metadata-Version: 2.1\nName: %s\nVersion: %s\n'%(name,version))
+
+
 class ParserEnvironmentFixtures(unittest.TestCase):
-    def test_exact_pinned_existing_packages_and_current_minor_sitepath_pass(self):
-        import pyte
-        with patch.object(resident_main,'PARSER',Path(pyte.__file__).parent.parent):
+    """Hermetic: invented packages in a version-neutral parser directory."""
+    def setUp(self):
+        temp=tempfile.TemporaryDirectory(prefix='aic-parser-');self.addCleanup(temp.cleanup)
+        self.parser=Path(temp.name)/'parser';fake_parser(self.parser)
+        self.forget();self.addCleanup(self.forget)
+        sys.path.insert(0,str(self.parser));self.addCleanup(self.unpath)
+        importlib.invalidate_caches()
+
+    def forget(self):
+        for name in ('pyte','wcwidth'):sys.modules.pop(name,None)
+
+    def unpath(self):
+        while str(self.parser) in sys.path:sys.path.remove(str(self.parser))
+
+    def test_exact_pinned_packages_in_the_version_neutral_parser_directory_pass(self):
+        self.assertEqual(resident_main.PARSER.name,'parser')
+        with patch.object(resident_main,'PARSER',self.parser):
             resident_main.verify_parser_environment()
 
     def test_wrong_package_version_or_outside_bundle_path_fails(self):
-        import pyte
-        with patch.object(resident_main,'PARSER',Path(pyte.__file__).parent.parent),\
+        with patch.object(resident_main,'PARSER',self.parser),\
              patch.object(resident_main.importlib.metadata,'version',return_value='wrong'):
             with self.assertRaises(ContinuityError):resident_main.verify_parser_environment()
         with patch.object(resident_main,'PARSER',RUNTIME):
             with self.assertRaises(ContinuityError):resident_main.verify_parser_environment()
+
+    def test_missing_parser_module_is_named_not_a_traceback(self):
+        self.unpath();self.forget();importlib.invalidate_caches()
+        if importlib.util.find_spec('pyte') is not None:
+            self.skipTest('this interpreter has a system pyte')
+        with patch.object(resident_main,'PARSER',self.parser.parent/'absent'):
+            with self.assertRaisesRegex(resident_main.ParserUnavailable,'^missing Python module pyte$'):
+                resident_main.verify_parser_environment()
 
 if __name__=='__main__':unittest.main()

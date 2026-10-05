@@ -13,6 +13,7 @@ import { createUbuntuAntigravityDriver } from './ubuntu-driver';
 import { createUbuntuRuntimeBridge } from './ubuntu-runtime-bridge';
 import { AntigravityProfileRegistry } from './registry';
 import { readNativeUpdatePaused } from './native-version';
+import { createRuntimeServiceProblemReader } from './runtime-health';
 import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver } from './types';
 
@@ -204,11 +205,13 @@ export function createInstalledAntigravityRuntimeFactory(
         ccsDir: directory,
         pinMatches: verifyOwnedAntigravityNativePin,
       };
+      const readRuntimeServiceProblem = createRuntimeServiceProblemReader(components.installed);
       return createPersistentAntigravityRuntime(directory, {
         driver,
         collectQuota: quotaWorker.collectQuota,
         observeHost: () => bridge.readHostCensus(),
         readNativeUpdatePaused: () => readNativeUpdatePaused(pausedProbe),
+        readRuntimeServiceProblem,
       });
     }
     // Saved-profile usage does not require a native runtime installation or release.

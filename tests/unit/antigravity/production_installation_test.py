@@ -66,6 +66,23 @@ class RuntimePreparationTests(unittest.TestCase):
         self.assertTrue((Path(planned['bundleDirectory']) / 'lib/runtime-manifest.json').is_file())
         self.assertEqual((self.home / '.local/bin/agy').read_bytes(), self.native)
 
+    def test_parser_goes_to_a_version_neutral_directory_checked_by_the_service_python(self):
+        planned = install.install(self.home, self.source, runner=self.runner)
+        bundle = Path(planned['bundleDirectory'])
+        argv = [call[0] for call in self.calls]
+        self.assertEqual(len(argv), 3)
+        self.assertEqual(argv[0], ['/usr/bin/python3', '-I', '-m', 'venv', str(bundle / 'venv')])
+        pip = argv[1]
+        self.assertEqual(pip[:5], [str(bundle / 'venv/bin/python3'), '-I', '-m', 'pip', 'install'])
+        self.assertEqual(pip[pip.index('--target') + 1], str(bundle / 'parser'))
+        for flag in ('--require-hashes', '--no-deps', '--only-binary=:all:'):
+            self.assertIn(flag, pip)
+        self.assertFalse(any('site-packages' in item for item in pip))
+        # The service interpreter, not the venv one, proves the parser loads.
+        self.assertEqual(argv[2], ['/usr/bin/python3', '-I', '-B', str(SOURCE / 'runtime_health.py'),
+                                   '--require-ok', str(bundle)])
+        self.assertEqual(self.calls[1][1]['env']['PIP_CONFIG_FILE'], '/dev/null')
+
     def test_preparation_recovery_refuses_foreign_bundle(self):
         def fail(*args, **kwargs): raise OSError('synthetic failure')
         with self.assertRaises(OSError): install.install(self.home, self.source, runner=fail)

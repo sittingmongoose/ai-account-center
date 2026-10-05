@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from '../public/antigravity-data.mjs';
+import { antigravityView, antigravitySettingsPatch, validAntigravityAuto, antigravityServiceProblem } from '../public/antigravity-data.mjs';
 import { allDetailWindows } from '../public/accounts-data.mjs';
 const NOW = Date.parse('2026-10-01T17:00:00Z');
 function fixture() {
@@ -91,4 +91,18 @@ test('paused update names the installed version; hostile or missing versions sta
     const g = fixture(); g.inventory.nativeUpdatePaused = { installedVersion };
     assert.equal(view(g).antigravityUpdatePaused, 'Antigravity updated; switching paused until reviewed');
   }
+});
+test('a runtime service that cannot load its parser is named plainly; hostile fields stay generic', () => {
+  const f = fixture(); assert.equal(view(f).antigravityServiceProblem, null);
+  f.inventory.runtimeServiceProblem = { reason: 'missing-python-module', module: 'pyte', python: '3.14', builtFor: '3.13', exitStatus: null };
+  assert.equal(view(f).antigravityServiceProblem, 'Runtime service failed: missing Python module pyte (Python 3.14; runtime built for 3.13); switching is off until the runtime bundle is rebuilt');
+  assert.equal(antigravityServiceProblem({ runtimeServiceProblem: { reason: 'missing-python-module', module: 'pyte', python: '3.14', builtFor: '3.14' } }),
+    'Runtime service failed: missing Python module pyte; switching is off until the runtime bundle is rebuilt');
+  assert.equal(antigravityServiceProblem({ runtimeServiceProblem: { reason: 'missing-python-module', module: 'pyte; id', python: '3.14\n', builtFor: 13 } }),
+    'Runtime service failed: missing Python module unknown; switching is off until the runtime bundle is rebuilt');
+  assert.equal(antigravityServiceProblem({ runtimeServiceProblem: { reason: 'service-failed', exitStatus: 1 } }),
+    'Runtime service failed (exit status 1); switching is off until its cause is fixed');
+  assert.equal(antigravityServiceProblem({ runtimeServiceProblem: { reason: 'service-failed', exitStatus: 'x' } }),
+    'Runtime service failed; switching is off until its cause is fixed');
+  for (const runtimeServiceProblem of [null, 'missing', [], { reason: 'not running' }]) assert.equal(antigravityServiceProblem({ runtimeServiceProblem }), null);
 });

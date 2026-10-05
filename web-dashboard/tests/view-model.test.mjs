@@ -205,6 +205,11 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
   const paused = section(dashboardViewModel(data([account({ id: 'antigravity:a', provider: 'antigravity', email: 'ag@example.test', windows: [window({ key: 'gemini-weekly', label: 'Gemini Models · Weekly' })], capabilities: {} })]), { now, antigravityInventory: { nativeUpdatePaused: { installedVersion: '1.2.17' } } }), 'antigravity');
   assert.equal(paused.foot.shown, true); assert.equal(paused.foot.warn, true);
   assert.equal(runs(paused.foot.runs), 'Antigravity updated to 1.2.17; switching paused until reviewed');
+  const failed = section(dashboardViewModel(data([account({ id: 'antigravity:a', provider: 'antigravity', email: 'ag@example.test', windows: [window({ key: 'gemini-weekly', label: 'Gemini Models · Weekly' })], capabilities: {} })]), { now, antigravityInventory: { nativeUpdatePaused: { installedVersion: '1.2.17' }, runtimeServiceProblem: { reason: 'missing-python-module', module: 'pyte', python: '3.14', builtFor: '3.13', exitStatus: null } } }), 'antigravity');
+  assert.equal(failed.foot.shown, true); assert.equal(failed.foot.warn, true);
+  assert.equal(runs(failed.foot.runs), 'Runtime service failed: missing Python module pyte (Python 3.14; runtime built for 3.13); switching is off until the runtime bundle is rebuilt');
+  assert.equal(failed.rows[0].canActivate, false);
+  assert.equal(failed.rows[0].activateHint, 'Runtime service failed: missing Python module pyte (Python 3.14; runtime built for 3.13); switching is off until the runtime bundle is rebuilt');
 });
 
 test('hiding one of two accounts from the dashboard keeps switching for the other (Codex and Antigravity)', () => {

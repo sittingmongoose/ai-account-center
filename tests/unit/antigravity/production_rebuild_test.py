@@ -1,7 +1,9 @@
 """Disposable bundle-rebuild fixtures; never touch live services or the real home.
 
 Every installation, bundle, checkpoint and readiness result below is invented.
-The runner only records argv; no systemctl, venv, pip or socket is contacted.
+The runner only records argv (a pip --target call also writes invented parser
+metadata); no systemctl, venv, pip or socket is contacted. The parser probe runs
+the real read-only runtime_health.py against these disposable bundles.
 """
 import hashlib
 import json
@@ -22,6 +24,18 @@ from install_runtime import setup_plan as install_setup_plan
 
 OLD_DIGEST = 'c' * 64
 OLD_PIN = 'd' * 64
+OTHER_MINOR = '3.%d' % (sys.version_info[1] + 1)
+
+
+def fake_parser(directory, versions=(('pyte', '0.8.2'), ('wcwidth', '0.9.1'))):
+    """Invented importable parser packages with dist-info metadata only."""
+    directory = Path(directory)
+    for name, version in versions:
+        (directory / name).mkdir(parents=True, exist_ok=True)
+        (directory / name / '__init__.py').write_text('# invented fixture package\n')
+        info = directory / ('%s-%s.dist-info' % (name, version))
+        info.mkdir(parents=True, exist_ok=True)
+        (info / 'METADATA').write_text('Metadata-Version: 2.1\nName: %s\nVersion: %s\n' % (name, version))
 
 
 class RuntimeRebuildTests(unittest.TestCase):
@@ -50,6 +64,7 @@ class RuntimeRebuildTests(unittest.TestCase):
         (self.old_bundle / 'lib').mkdir(parents=True, mode=0o700)
         (self.old_bundle / 'lib/release.json').write_text(json.dumps(
             {'nativeSha256': OLD_PIN, 'nativeVersion': '1.2.14'}))
+        fake_parser(self.old_bundle / 'parser')
         self.state.mkdir(parents=True, mode=0o700)
         self.shim = self.old_bundle.parent.parent / 'bin/agy'
         self.shim.parent.mkdir(parents=True, mode=0o700)
@@ -87,6 +102,18 @@ class RuntimeRebuildTests(unittest.TestCase):
 
     def runner(self, argv, **kwargs):
         self.calls.append((list(argv), dict(kwargs)))
+        if '--target' in argv:
+            fake_parser(argv[argv.index('--target') + 1])
+
+    def same_cli_legacy_bundle(self):
+        """The 2026-10-04 shape: same reviewed CLI, venv parser for a replaced Python."""
+        (self.old_bundle / 'lib/release.json').write_text(json.dumps(
+            {'nativeSha256': self.native_fp, 'nativeVersion': self.version}))
+        shutil.rmtree(self.old_bundle / 'parser')
+        venv = self.old_bundle / 'venv'
+        fake_parser(venv / 'lib' / ('python' + OTHER_MINOR) / 'site-packages')
+        (venv / 'pyvenv.cfg').write_text('home = /usr/bin\ninclude-system-site-packages = false\n'
+                                         'version = %s.7\n' % OTHER_MINOR)
 
     def service_calls(self):
         return [argv for argv, _ in self.calls if argv[:2] == ['systemctl', '--user']]
@@ -124,6 +151,11 @@ class RuntimeRebuildTests(unittest.TestCase):
         self.assertEqual(json.loads((self.state / 'runtime-rebuild.json').read_text())['phase'], 'rebuilt')
         self.assertEqual(self.calls[0][0][:4], ['/usr/bin/python3', '-I', '-m', 'venv'])
         self.assertIn('pip', self.calls[1][0])
+        pip = self.calls[1][0]
+        self.assertEqual(pip[pip.index('--target') + 1], str(new_bundle / 'parser'))
+        self.assertIn('--require-hashes', pip)
+        self.assertEqual(self.calls[2][0], ['/usr/bin/python3', '-I', '-B',
+                                            str(SOURCE / 'runtime_health.py'), '--require-ok', str(new_bundle)])
         self.assertEqual(len(self.calls), 6)
         self.assertEqual(self.service_calls(), [
             ['systemctl', '--user', 'stop', rebuild.UNIT],
@@ -233,6 +265,83 @@ class RuntimeRebuildTests(unittest.TestCase):
             ['systemctl', '--user', 'start', rebuild.UNIT],
         ])
         self.assertFalse(rebuild.plan(self.home, self.source)['stale'])
+
+    def test_same_cli_bundle_whose_parser_python_was_replaced_is_stale(self):
+        self.same_cli_legacy_bundle()
+        info = rebuild.plan(self.home, self.source)
+        self.assertTrue(info['stale'])
+        self.assertEqual(info['reason'], 'parser')
+        self.assertEqual(info['newPin'], self.native_fp)
+        self.assertEqual(info['oldPin'], self.native_fp)
+        self.assertEqual(info['parser']['reason'], 'missing-python-module')
+        self.assertEqual(info['parser']['module'], 'pyte')
+        self.assertEqual(info['parser']['builtFor'], OTHER_MINOR)
+        self.assertEqual(rebuild.describe_parser(info['parser']),
+                         'missing Python module pyte (system Python is %d.%d; the bundle was built for %s)'
+                         % (sys.version_info[0], sys.version_info[1], OTHER_MINOR))
+        self.assertEqual(self.calls, [])
+        self.assert_originals_intact()
+
+    def test_parser_rebuild_keeps_the_earlier_generation_backup(self):
+        self.same_cli_legacy_bundle()
+        # The pin-named backup an earlier rebuild left for this same CLI build.
+        earlier = self.state / 'descriptor-backups' / (self.native_fp + '.json')
+        earlier.parent.mkdir(parents=True, mode=0o700)
+        earlier.write_bytes(b'{"earlier": "generation"}\n')
+        earlier.chmod(0o600)
+        result = rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness)
+        self.assertEqual(result, {'status': 'rebuilt', 'version': self.version})
+        self.assertEqual(earlier.read_bytes(), b'{"earlier": "generation"}\n')
+        raw = self.originals[self.descriptor]
+        kept = earlier.with_name('%s-%s.json' % (self.native_fp, hashlib.sha256(raw).hexdigest()[:16]))
+        self.assertEqual(kept.read_bytes(), raw)
+        self.assertEqual(stat.S_IMODE(kept.stat().st_mode), 0o600)
+        renewed = json.loads(self.descriptor.read_text())
+        new_bundle = Path(renewed['bundleDirectory'])
+        self.assertNotEqual(new_bundle, self.old_bundle)
+        self.assertEqual(renewed['nativeSha256'], self.native_fp)
+        self.assertTrue((new_bundle / 'parser/pyte-0.8.2.dist-info/METADATA').is_file())
+        self.assertFalse((new_bundle / 'venv/lib').exists())
+        self.assertEqual(self.unit.read_bytes(), rebuild.unit_bytes(renewed))
+        self.assertEqual(self.shim.read_bytes(), rebuild.expected_shim(new_bundle))
+        self.assertTrue(self.old_bundle.is_dir())
+        self.assertEqual(self.service_calls(), [
+            ['systemctl', '--user', 'stop', rebuild.UNIT],
+            ['systemctl', '--user', 'daemon-reload'],
+            ['systemctl', '--user', 'start', rebuild.UNIT],
+        ])
+        self.assertFalse(rebuild.plan(self.home, self.source)['stale'])
+
+    def test_parser_break_with_unchanged_sources_refuses_and_writes_nothing(self):
+        self.same_cli_legacy_bundle()
+        target = Path(install_setup_plan(self.home, self.source)[0]['bundleDirectory'])
+        self.old_bundle.rename(target)
+        self.old_bundle = target
+        installation = json.loads(self.descriptor.read_text())
+        installation['bundleDirectory'] = str(target)
+        self.descriptor.write_text(json.dumps(installation) + '\n')
+        self.shim.write_bytes(rebuild.expected_shim(target))
+        self.unit.write_bytes(rebuild.unit_bytes(installation))
+        receipt = json.loads(self.checkpoint.read_text())
+        receipt['changes'][0]['installed'] = rebuild.snapshot(self.unit)
+        self.checkpoint.write_text(json.dumps(receipt) + '\n')
+        self.originals = {path: path.read_bytes() for path in
+                          (self.shim, self.unit, self.descriptor, self.checkpoint)}
+        with self.assertRaisesRegex(layout.InstallationError, '^runtime-parser-unusable$'):
+            rebuild.plan(self.home, self.source)
+        with self.assertRaisesRegex(layout.InstallationError, '^runtime-parser-unusable$'):
+            rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness)
+        self.assertEqual(self.calls, [])
+        self.assertFalse((self.state / 'runtime-rebuild.json').exists())
+        self.assert_originals_intact()
+
+    def test_an_unknown_probe_result_is_not_staleness(self):
+        (self.old_bundle / 'lib/release.json').write_text(json.dumps(
+            {'nativeSha256': self.native_fp, 'nativeVersion': self.version}))
+        for result in ({'ok': False, 'reason': 'probe-failed'}, {'ok': True}, None):
+            with self.subTest(result=result):
+                self.assertFalse(rebuild.plan(self.home, self.source, probe=lambda _b, r=result: r or {})['stale'])
+        self.assertEqual(self.calls, [])
 
     def test_missing_registry_proceeds(self):
         shutil.rmtree(self.profiles)

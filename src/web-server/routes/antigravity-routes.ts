@@ -7,6 +7,7 @@ import { authKind } from '../middleware/request-auth';
 import { ConfirmationBindings } from './caller-bound-confirmations';
 import { isAntigravityAutoSwitchSettingsPatch } from '../../antigravity/auto-switch/settings';
 import { isNativeVersion } from '../../antigravity/native-version';
+import { publicRuntimeServiceProblem } from '../../antigravity/runtime-health';
 import { ANTIGRAVITY_AUTO_SWITCH_MESSAGES } from '../../antigravity/auto-switch/monitor';
 import type { AntigravityAutoSwitchOutcome } from '../../antigravity/auto-switch/types';
 import type {
@@ -41,6 +42,11 @@ export function isAutoSettingsPatch(value: unknown): value is Partial<Antigravit
   return isAntigravityAutoSwitchSettingsPatch(value);
 }
 
+function runtimeServiceProblemField(value: unknown): Partial<AntigravityInventory> {
+  const problem = publicRuntimeServiceProblem(value);
+  return problem ? { runtimeServiceProblem: problem } : {};
+}
+
 /** All public returns are rebuilt so adapter-private fields cannot leak accidentally. */
 export function publicInventory(value: AntigravityInventory): AntigravityInventory {
   if (value.hostId !== 'ubuntu' || !Array.isArray(value.profiles) || value.profiles.length > 16)
@@ -61,6 +67,7 @@ export function publicInventory(value: AntigravityInventory): AntigravityInvento
           },
         }
       : {}),
+    ...runtimeServiceProblemField(value.runtimeServiceProblem),
     profiles: value.profiles.map((profile) => {
       if (
         !safeId(profile.id) ||
