@@ -24,7 +24,9 @@
  *   single line. Terminals that advertise OSC 8 (TERM=xterm-256color and
  *   friends) carry the whole URL in the hyperlink parameter; plainer
  *   terminals (TERM=dumb) get it as visually wrapped text, which the driver
- *   rejoins from its URL-character chunks. Either way the URL is complete
+ *   rejoins from its URL-character chunks once a finished line after the
+ *   last chunk shows the link has ended (a PTY read can stop anywhere,
+ *   including between two wrapped lines). Either way the URL is complete
  *   and its origin is checked against the one allowed origin before it is
  *   printed, so the parser's allowlist can never see a foreign URL;
  * - it forwards the runner's stdin (the pasted authorization code plus a
@@ -85,8 +87,11 @@ export const AGY_SIGNIN_DRIVER_PROGRAM = [
   '        if url_origin(url) == origin.encode():',
   '            return url',
   '    # Plain wrapped text: the URL chunk of the origin line, then whole',
-  '    # continuation lines that are nothing but URL characters.',
-  '    lines = strip_controls(buf).split(b"\\n")',
+  '    # continuation lines that are nothing but URL characters. Only lines a',
+  '    # newline has ended count: the text after the last newline is a line',
+  '    # still arriving (nothing yet, half a chunk, half an escape sequence),',
+  '    # so it can neither extend the link nor prove the link has ended.',
+  '    lines = strip_controls(buf).split(b"\\n")[:-1]',
   '    for index, line in enumerate(lines):',
   '        at = line.find(origin.encode())',
   '        if at < 0:',
@@ -101,12 +106,9 @@ export const AGY_SIGNIN_DRIVER_PROGRAM = [
   '                break',
   '            parts.append(chunk)',
   '        # A wrapped link is only complete once the screen has moved past it:',
-  '        # the line after its last chunk must not be link characters itself.',
-  '        after = index + len(parts)',
-  '        if after >= len(lines):',
-  '            continue',
-  '        tail = lines[after].strip()',
-  '        if tail and re.match(b"^[" + URL_CHARS + b"]+$", tail):',
+  '        # an ended line after its last chunk that is blank or not link',
+  '        # characters (the loop above stopped on it).',
+  '        if index + len(parts) >= len(lines):',
   '            continue',
   '        url = b"".join(parts)',
   '        # A host that merely starts with the allowed origin is not it.',
