@@ -7,6 +7,7 @@ import {
   loadAccountAnalyticsWorker,
   projectAccountAnalyticsActivity,
 } from '../../../src/web-server/services/account-analytics-activity';
+import type { AccountAnalyticsActivityRequest } from '../../../src/web-server/services/account-analytics-activity';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import type { AccountAnalyticsQuery } from '../../../src/web-server/services/account-analytics-types';
 import type {
@@ -1067,5 +1068,72 @@ describe('native local analytics activity', () => {
     expect(second.refreshing).toBe(false);
     expect(second.refreshingRemote).toEqual([]);
     expect(remoteCalls).toBe(2);
+  });
+
+  it('answers a cold first run with an all-scanning grid while the collection starts', async () => {
+    const remote = Promise.withResolvers<{ results: []; states: [] }>();
+    const gate = Promise.withResolvers<AccountAnalyticsActivityRequest[]>();
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => remote.promise,
+      // Held open until after the cold answer: the first response is the synthesized grid.
+      requests: async () => gate.promise,
+      now: () => NOW,
+      responseBudgetMs: 0,
+      scope: () => '/fixture-cold-grid',
+    });
+    const cold = await service.get(QUERY, FROM, NOW);
+    expect(cold.status).toBe('loading');
+    // Every scanned tool on every host says scanning from the first byte, so the
+    // loading page can show per-host progress; the fixed entries ride along.
+    const scanning = cold.sources.filter((source) => source.state === 'scanning');
+    expect(scanning).toHaveLength(15);
+    expect(scanning.every((source) => source.detail === 'the first scan is running')).toBe(true);
+    expect(cold.sources.filter((source) => source.tool === 'antigravity')).toHaveLength(3);
+    gate.resolve([]);
+    remote.resolve({ results: [], states: [] });
+    await settled(service);
+  });
+
+  it('re-collects on the converge cadence while the grid holds scanning cells, then falls back', async () => {
+    let clock = NOW;
+    let requestCalls = 0;
+    const scanningStates = (['claude', 'codex', 'omp', 'muse', 'zcode'] as const).map((tool) => ({
+      tool,
+      host: 'mac' as const,
+      state: 'scanning' as const,
+      lastScanAt: null,
+      rowCount: 0,
+      detail: 'the scan ran out of time before it reached this tool; the next scan continues',
+    }));
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [...scanningStates] }),
+      requests: () => {
+        requestCalls++;
+        return [];
+      },
+      now: () => clock,
+      refreshIntervalSeconds: () => 60,
+      responseBudgetMs: 0,
+      scope: () => '/fixture-converge-cadence',
+    });
+    await service.get(QUERY, FROM, NOW);
+    await settled(service);
+    expect(requestCalls).toBe(1);
+    // 25 s after the first publish: inside the configured 60 s interval, but the
+    // bounded converge window lowers the floor to 20 s, so a collection runs.
+    clock = NOW + 25_000;
+    await service.get(QUERY, FROM, NOW);
+    await settled(service);
+    expect(requestCalls).toBe(2);
+    // Past 10 min from the first scanning cell the floor expires: the configured
+    // interval applies again (25 s after the last publish collects nothing).
+    clock = NOW + 11 * 60_000;
+    await service.get(QUERY, FROM, NOW);
+    await settled(service);
+    expect(requestCalls).toBe(3);
+    clock = NOW + 11 * 60_000 + 25_000;
+    await service.get(QUERY, FROM, NOW);
+    await settled(service);
+    expect(requestCalls).toBe(3);
   });
 });

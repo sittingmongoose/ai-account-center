@@ -429,6 +429,21 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(capped.rows).toEqual(full.rows);
   });
 
+  it('marks kinds cut short by a persisted row cap partial, never a silent ok', () => {
+    writeFixtures();
+    const capped = runPatchedHelper(
+      { kinds: ['omp', 'muse', 'zcode'], minDateMs: MIN_DATE },
+      { MAX_ROWS: 1 }
+    );
+    // The row cap outlives the kind that hit it: every later kind stops reading
+    // early, and each of them says partial instead of claiming a complete scan.
+    expect(capped.truncated).toBe(true);
+    const kinds = capped.kinds as Record<string, { state: string; partial?: boolean }>;
+    expect(kinds.omp.partial).toBe(true);
+    expect(kinds.muse.partial).toBe(true);
+    expect(kinds.zcode.partial).toBe(true);
+  });
+
   it('collects local zcode through the helper with one row per model and hour', async () => {
     writeFixtures();
     const dbPath = path.join(home, '.zcode', 'cli', 'db', 'db.sqlite');

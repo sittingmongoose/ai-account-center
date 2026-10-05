@@ -865,13 +865,16 @@ export class AccountAnalyticsActivityService {
       const key = `${tool}\0ubuntu`;
       const old = previous.get(key);
       if (succeeded.has(tool)) {
+        const events = localEvents.get(tool) ?? 0;
         entries.push({
           tool,
           host: 'ubuntu',
-          state: 'ok',
+          // A tool whose logs were read and hold nothing in the window says so,
+          // exactly like a remote host in the same situation.
+          state: events > 0 ? 'ok' : 'no_usage',
           lastScanAt: fetchedAt,
-          rowCount: localEvents.get(tool) ?? 0,
-          detail: null,
+          rowCount: events,
+          detail: events > 0 ? null : 'no usage recorded in the last 31 days',
         });
       } else if (old && attempted.has(tool)) {
         entries.push({ ...old, state: old.rowCount > 0 ? 'cached' : 'unavailable' });

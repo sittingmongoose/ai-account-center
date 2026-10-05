@@ -451,6 +451,7 @@ async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
     if (generation !== analyticsGeneration) return;
     renderAnalytics();
     if (silent && ++pollFails < 2) return;
+    pollFails = 0;
     set_analytics_loading(false, error?.message || 'Unable to load account analytics.');
   }
 }

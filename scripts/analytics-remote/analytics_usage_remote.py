@@ -1483,7 +1483,14 @@ def main():
             states[kind] = _collect_zcode(
                 collector, home, env, immutable, extra_roots.get("zcode", ())
             )
-        if collector.truncated and not cut_before:
+        # A cap that outlives the kind that hit it (row_cap) cuts every later kind
+        # short too, and a kind that ends past the deadline never flipped the flag
+        # itself: mark partial where the data stops, not only where the flag flips.
+        if (
+            (collector.truncated and not cut_before)
+            or collector.row_cap
+            or collector.expired()
+        ):
             partials.add(kind)
         if collector.expired():
             collector.truncated = True
