@@ -36,6 +36,18 @@ SHA_RE = re.compile(r'[a-f0-9]{64}$')
 JOURNAL_LIMIT = 4 * 1024 * 1024
 
 
+def same_restored(current, expected):
+    """Equal bytes, mode, mtime and device, any inode.
+
+    A rollback rewrites each owned file through a new inode (adopt_runtime.
+    publish); its bytes, mode and timestamps come back exactly, the inode
+    cannot. snapshot() already requires a private, single-link, user-owned
+    regular file, so this still refuses any foreign content or ownership.
+    """
+    fields = ('existed', 'path', 'device', 'mode', 'mtimeNs', 'rawBase64')
+    return all(current.get(key) == expected.get(key) for key in fields)
+
+
 def expected_shim(bundle):
     python = Path(bundle) / 'venv/bin/python3'
     return ('#!/bin/sh\nexec ' + shlex.join([str(python), '-I', str(Path(bundle) / 'managed_launcher.py')]) +
@@ -148,13 +160,20 @@ def plan(home, source, *, probe=parser_probe):
     receipt = load_checkpoint(home)
     unit_change = change_for(receipt, str(unit))
     recorded = unit_change.get('installed') if unit_change is not None else None
-    if type(recorded) is not dict or not same(unit_snapped, recorded):
+    # The unit bytes already equal unit_bytes(installed). After a failed
+    # rebuild's rollback the restored unit has its recorded bytes, mode and
+    # mtime but a new inode, so the inode alone cannot mark it foreign.
+    if type(recorded) is not dict or not same_restored(unit_snapped, recorded):
         raise InstallationError('runtime-installation-foreign')
     new_bundle = Path(newplan['bundleDirectory'])
     # Same reviewed CLI: the bundle is still stale when the service interpreter
     # can no longer load its pinned parser (read-only probe, no bytecode writes).
-    parser = probe(old_bundle) if old_pin == binary_fp else None
-    broken = parser is not None and parser.get('ok') is not True and parser.get('reason') in BROKEN_PARSER
+    probed = old_pin == binary_fp
+    parser = probe(old_bundle) if probed else None
+    broken = probed and type(parser) is dict and parser.get('ok') is not True and parser.get('reason') in BROKEN_PARSER
+    if probed and not broken and (type(parser) is not dict or parser.get('ok') is not True):
+        # A probe that timed out or could not run proves nothing either way.
+        raise InstallationError('runtime-parser-check-failed')
     if new_bundle == old_bundle:
         if old_pin != binary_fp:
             raise InstallationError('runtime-bundle-changed')
@@ -291,11 +310,13 @@ def apply(home, source, *, runner=subprocess.run, readiness=service_readiness, p
         try:
             for change in reversed(journal['changes']):
                 restore(change)
+            # 'failed' is the marker that every owned change was restored;
+            # --recover-rebuild then accepts the restored (new-inode) files.
+            journal['phase'] = 'failed'
+            persist()
             if stopped or journal['changes']:
                 run_user_service(runner, 'daemon-reload')
                 run_user_service(runner, 'start', UNIT)
-            journal['phase'] = 'failed'
-            persist()
         except BaseException:
             pass
         raise
@@ -320,9 +341,11 @@ def recover_rebuild(home):
     if (new_bundle.parent != root or not SHA_RE.fullmatch(new_bundle.name) or
             new_bundle.resolve() != new_bundle):
         raise InstallationError('runtime-rebuild-journal-invalid')
+    restored = journal['phase'] == 'failed'
     for key in ('shim', 'unit', 'descriptor', 'checkpoint'):
         current = snapshot(Path(journal['before'][key]['path']), missing=True, limit=JOURNAL_LIMIT)
-        if not same(current, journal['before'][key]):
+        before = journal['before'][key]
+        if not (same(current, before) or (restored and same_restored(current, before))):
             raise InstallationError('runtime-rebuild-diverged')
     if new_bundle.exists() or new_bundle.is_symlink():
         if not new_bundle.is_dir() or new_bundle.resolve() != new_bundle:
@@ -345,6 +368,7 @@ HINTS = {
     'runtime-backup-divergent': 'a divergent descriptor backup exists; review before retrying',
     'runtime-service-readiness-failed': 'previous owned bytes restored; review the service',
     'runtime-parser-unusable': 'the packaged parser does not load under this Python; review the runtime package',
+    'runtime-parser-check-failed': 'could not check the bundle\'s Python parser; nothing was changed, re-run --plan',
 }
 
 

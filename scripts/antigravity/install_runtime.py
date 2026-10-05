@@ -78,9 +78,10 @@ def prepare_parser(bundle, library, runner):
     (/usr/bin/python3 -I -B) exactly as the resident service will load them.
     """
     bundle, library = Path(bundle), Path(library)
-    environment = dict(os.environ)
-    for key in ('PYTHONPATH', 'PYTHONHOME', 'PIP_INDEX_URL', 'PIP_EXTRA_INDEX_URL', 'PIP_TRUSTED_HOST'):
-        environment.pop(key, None)
+    # No inherited pip setting may change where wheels come from (PIP_FIND_LINKS,
+    # PIP_NO_INDEX, PIP_INDEX_URL, ...): drop every PIP_* and pin the config.
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith('PIP_') and key not in ('PYTHONPATH', 'PYTHONHOME')}
     environment.update(PIP_CONFIG_FILE='/dev/null', PIP_DISABLE_PIP_VERSION_CHECK='1')
     runner(['/usr/bin/python3', '-I', '-m', 'venv', str(bundle / 'venv')], env=environment, check=True)
     python = bundle / 'venv/bin/python3'

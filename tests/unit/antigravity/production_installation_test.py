@@ -67,7 +67,17 @@ class RuntimePreparationTests(unittest.TestCase):
         self.assertEqual((self.home / '.local/bin/agy').read_bytes(), self.native)
 
     def test_parser_goes_to_a_version_neutral_directory_checked_by_the_service_python(self):
-        planned = install.install(self.home, self.source, runner=self.runner)
+        inherited = {'PIP_FIND_LINKS': '/tmp/invented-links', 'PIP_NO_INDEX': '1',
+                     'PIP_INDEX_URL': 'https://invented.example/simple', 'PIP_EXTRA_INDEX_URL': 'x',
+                     'PIP_TRUSTED_HOST': 'invented.example', 'PIP_CONSTRAINT': '/tmp/c.txt',
+                     'PYTHONPATH': '/tmp/invented'}
+        with patch.dict(install.os.environ, inherited):
+            planned = install.install(self.home, self.source, runner=self.runner)
+        for _, kwargs in self.calls:
+            env = kwargs['env']
+            self.assertEqual([key for key in env if key.startswith('PIP_')],
+                             ['PIP_CONFIG_FILE', 'PIP_DISABLE_PIP_VERSION_CHECK'])
+            self.assertNotIn('PYTHONPATH', env)
         bundle = Path(planned['bundleDirectory'])
         argv = [call[0] for call in self.calls]
         self.assertEqual(len(argv), 3)

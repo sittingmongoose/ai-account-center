@@ -335,13 +335,99 @@ class RuntimeRebuildTests(unittest.TestCase):
         self.assertFalse((self.state / 'runtime-rebuild.json').exists())
         self.assert_originals_intact()
 
-    def test_an_unknown_probe_result_is_not_staleness(self):
+    def test_a_probe_that_could_not_run_says_so_instead_of_current(self):
         (self.old_bundle / 'lib/release.json').write_text(json.dumps(
             {'nativeSha256': self.native_fp, 'nativeVersion': self.version}))
-        for result in ({'ok': False, 'reason': 'probe-failed'}, {'ok': True}, None):
+        self.assertFalse(rebuild.plan(self.home, self.source, probe=lambda _b: {'ok': True})['stale'])
+        for result in ({'ok': False, 'reason': 'probe-failed'}, {'ok': False, 'reason': None}, {}, None, 'x'):
             with self.subTest(result=result):
-                self.assertFalse(rebuild.plan(self.home, self.source, probe=lambda _b, r=result: r or {})['stale'])
+                unknown = lambda _b, r=result: r
+                with self.assertRaisesRegex(layout.InstallationError, '^runtime-parser-check-failed$'):
+                    rebuild.plan(self.home, self.source, probe=unknown)
+                with self.assertRaisesRegex(layout.InstallationError, '^runtime-parser-check-failed$'):
+                    rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness,
+                                  probe=unknown)
         self.assertEqual(self.calls, [])
+        self.assertFalse((self.state / 'runtime-rebuild.json').exists())
+        self.assert_originals_intact()
+
+    def failed_cutover_then_recover_then_retry(self):
+        """A service that misses the readiness deadline, then the product's own retry path."""
+        self.readiness.return_value = {'serviceReady': False, 'nativeCapability': False}
+        unit_inode = self.unit.stat().st_ino
+        with self.assertRaisesRegex(layout.InstallationError, '^runtime-service-readiness-failed$'):
+            rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness)
+        self.assert_originals_intact()
+        self.assertNotEqual(self.unit.stat().st_ino, unit_inode)  # restored through a new inode
+        journal = json.loads((self.state / 'runtime-rebuild.json').read_text())
+        self.assertEqual(journal['phase'], 'failed')
+        with self.assertRaisesRegex(layout.InstallationError, '^runtime-rebuild-recovery-required$'):
+            rebuild.plan(self.home, self.source)
+        self.assertEqual(rebuild.recover_rebuild(self.home), {'status': 'recovered'})
+        self.assertFalse(Path(journal['newBundle']).exists())
+        self.assert_originals_intact()
+        info = rebuild.plan(self.home, self.source)
+        self.assertTrue(info['stale'])
+        self.calls.clear()
+        self.readiness.return_value = {'serviceReady': True, 'nativeCapability': False}
+        result = rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness)
+        self.assertEqual(result, {'status': 'rebuilt', 'version': self.version})
+        renewed = json.loads(self.descriptor.read_text())
+        self.assertEqual(renewed['bundleDirectory'], journal['newBundle'])
+        self.assertEqual(self.unit.read_bytes(), rebuild.unit_bytes(renewed))
+        self.assertEqual(self.service_calls(), [
+            ['systemctl', '--user', 'stop', rebuild.UNIT],
+            ['systemctl', '--user', 'daemon-reload'],
+            ['systemctl', '--user', 'start', rebuild.UNIT],
+        ])
+        self.assertFalse(rebuild.plan(self.home, self.source)['stale'])
+        return info
+
+    def test_failed_native_cutover_recovers_and_retries(self):
+        self.assertEqual(self.failed_cutover_then_recover_then_retry()['reason'], 'native')
+        backup = self.state / 'descriptor-backups' / (self.native_fp + '.json')
+        self.assertEqual(backup.read_bytes(), self.originals[self.descriptor])
+
+    def test_failed_parser_cutover_recovers_and_retries_over_its_own_backup(self):
+        self.same_cli_legacy_bundle()
+        earlier = self.state / 'descriptor-backups' / (self.native_fp + '.json')
+        earlier.parent.mkdir(parents=True, mode=0o700)
+        earlier.write_bytes(b'{"earlier": "generation"}\n')
+        earlier.chmod(0o600)
+        raw = self.originals[self.descriptor]
+        kept = earlier.with_name('%s-%s.json' % (self.native_fp, hashlib.sha256(raw).hexdigest()[:16]))
+        self.assertEqual(self.failed_cutover_then_recover_then_retry()['reason'], 'parser')
+        # The failed attempt wrote the content-named backup; the retry found it identical.
+        self.assertEqual(kept.read_bytes(), raw)
+        self.assertEqual(earlier.read_bytes(), b'{"earlier": "generation"}\n')
+
+    def test_identical_content_named_backup_is_accepted_on_retry(self):
+        self.same_cli_legacy_bundle()
+        earlier = self.state / 'descriptor-backups' / (self.native_fp + '.json')
+        earlier.parent.mkdir(parents=True, mode=0o700)
+        earlier.write_bytes(b'{"earlier": "generation"}\n')
+        earlier.chmod(0o600)
+        raw = self.originals[self.descriptor]
+        kept = earlier.with_name('%s-%s.json' % (self.native_fp, hashlib.sha256(raw).hexdigest()[:16]))
+        kept.write_bytes(raw)
+        kept.chmod(0o600)
+        before = kept.stat()
+        result = rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness)
+        self.assertEqual(result['status'], 'rebuilt')
+        self.assertEqual(kept.read_bytes(), raw)
+        self.assertEqual((kept.stat().st_ino, kept.stat().st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+        kept.write_bytes(b'{"divergent": true}\n')
+        self.assertEqual(rebuild.plan(self.home, self.source)['stale'], False)
+
+    def test_recover_rebuild_refuses_changed_content_after_a_failed_cutover(self):
+        self.readiness.return_value = {'serviceReady': False, 'nativeCapability': False}
+        with self.assertRaisesRegex(layout.InstallationError, '^runtime-service-readiness-failed$'):
+            rebuild.apply(self.home, self.source, runner=self.runner, readiness=self.readiness)
+        with open(self.unit, 'ab') as stream:
+            stream.write(b'# foreign')
+        with self.assertRaisesRegex(layout.InstallationError, '^runtime-rebuild-diverged$'):
+            rebuild.recover_rebuild(self.home)
+        self.assertTrue((self.state / 'runtime-rebuild.json').is_file())
 
     def test_missing_registry_proceeds(self):
         shutil.rmtree(self.profiles)

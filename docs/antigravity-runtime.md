@@ -112,7 +112,11 @@ restarted: the dashboard asks the service socket on every check, so it picks up
 the rebuilt runtime without a dashboard restart. The pin-named descriptor
 backup of an earlier generation is kept; this generation's backup is stored next
 to it under a content-addressed name. If the same packaged sources would rebuild
-the same failure, `--plan` refuses with `runtime-parser-unusable`.
+the same failure, `--plan` refuses with `runtime-parser-unusable`. A parser check
+that cannot run refuses with `runtime-parser-check-failed`; it is never reported as
+current. After a failed cutover, `--recover-rebuild` removes the incomplete bundle
+and `--plan`/`--apply` can be retried: the rollback restores each owned file's bytes,
+mode and timestamps through a new inode, and both accept that restored state.
 
 ## Manual and automatic control
 
