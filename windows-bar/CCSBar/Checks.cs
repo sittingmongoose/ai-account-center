@@ -103,6 +103,7 @@ public static partial class Checks
         await ConfirmationChecks(report);
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
         ResetPendingChecks(report);
+        HiddenRenderChecks(report);
         await SignInChangeChecks(report);
         await ClaudeOpenChecks(report);
         await PairingChecks(report);
@@ -417,6 +418,40 @@ public static partial class Checks
             report.Checks["tray_tooltip_hides_weekly_percent_after_its_reset"] = pendingTip == "AI Account Center · Codex: codex-2, weekly reset, new reading pending" && Formatting.TrayTooltip(codex) == "AI Account Center · Codex: codex-2, 90.75% weekly left";
         }
         finally { Formatting.Now = saved; }
+    }
+
+    /// <summary>
+    /// N6: samples that arrive while the live panel is hidden update the data and the tooltip but skip the
+    /// visual rebuild; the next open rebuilds once. Check windows (no live connection) paint until the simulated
+    /// hide, so the pre-hide assertions see a tree.
+    /// </summary>
+    private static void HiddenRenderChecks(CheckReport report)
+    {
+        var fixture = FixtureRender.LoadFixture(out _);
+        var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+        try
+        {
+            window.UseFixtureConnection();
+            var samples = 0;
+            window.SampleChanged += () => samples++;
+            window.ApplyDashboardSample(fixture);
+            report.Checks["hidden_render_paints_before_first_show"] =
+                !window.RenderDirtyForCheck && FixtureRender.FindUid(window.ContentPanel, "section:codex") is not null;
+            window.SimulateHideForCheck();
+            var hidden = JsonSerializer.Deserialize<AccountDashboard>(JsonSerializer.Serialize(fixture, Formatting.Json), Formatting.Json)!;
+            hidden.Accounts.RemoveAll(account => account.Provider == "codex");
+            var children = window.ContentPanel.Children.Count;
+            window.ApplyDashboardSample(hidden);
+            report.Checks["hidden_render_defers_while_hidden"] = window.RenderDirtyForCheck
+                && window.Dashboard is not null && window.Dashboard.Accounts.All(account => account.Provider != "codex")
+                && window.ContentPanel.Children.Count == children
+                && FixtureRender.FindUid(window.ContentPanel, "section:codex") is not null
+                && samples == 2;
+            window.RenderDeferredForCheck();
+            report.Checks["hidden_render_rebuilds_on_open"] = !window.RenderDirtyForCheck
+                && FixtureRender.FindUid(window.ContentPanel, "section:codex") is null;
+        }
+        finally { window.AllowClose = true; window.Close(); }
     }
 
     /// <summary>
@@ -1138,6 +1173,10 @@ public static partial class Checks
             SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-new" }, store);
             window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
             window.UseConnectionStoreForCheck(store);
+            // Engage the deferred-render path headless (the check window has no live connection, so it would
+            // otherwise always paint): SimulateHideForCheck makes DeferRender true while hidden, exactly as the
+            // real background tray. N6.
+            window.SimulateHideForCheck();
             // The 60 s timer tick's shape while the panel is closed: the sample lands, no visual pass runs.
             window.ResetRenderPassesForCheck();
             await window.Refresh(false);
