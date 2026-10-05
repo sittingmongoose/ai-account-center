@@ -716,6 +716,7 @@ const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows']
 const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],
   failed: ['Failed', 'crit'], restart_failed: ['Updated, restart failed', 'crit'],
+  staged: ['Staged: restart to finish', 'warn'], action_required: ['Quit to update', 'warn'],
   skipped: ['Skipped: cancelled', ''],
 };
 // An unknown row on an unreachable host names the computer; any other unknown stays a plain word.
@@ -736,6 +737,8 @@ export function updateResultsView(job, now = Date.now()) {
     const when = validDate(job.finishedAt) ? job.finishedAt : job.startedAt;
     const parts = [`${results.length} ${results.length === 1 ? 'result' : 'results'}`];
     if (failed) parts.push(`${failed} failed`);
+    if (count('staged')) parts.push(`${count('staged')} staged`);
+    if (count('action_required')) parts.push(`${count('action_required')} need quitting`);
     if (count('skipped')) parts.push(`${count('skipped')} skipped`);
     if (count('unknown')) parts.push(`${count('unknown')} unknown`);
     if (job.cancelRequested === true) parts.push('cancelled');
@@ -751,7 +754,9 @@ export function updateResultsView(job, now = Date.now()) {
       const versions = text(row.previousVersion) && text(row.version) && row.previousVersion !== row.version ? `${row.previousVersion} to ${row.version}` : text(row.version) ? `version ${row.version}` : '';
       return {
         key: `${id}|${text(row.appId) || index}`, app: text(row.appLabel) || text(row.appId) || 'App',
-        result: row.status === 'updated' && text(row.version) ? `Updated to ${row.version}` : word, tone, running: false,
+        result: row.status === 'updated' && text(row.version) ? `Updated to ${row.version}`
+          : row.status === 'staged' && text(row.version) ? `Staged to ${row.version}`
+          : word, tone, running: false,
         tip: [text(row.message), versions].filter(Boolean).join(' · '),
       };
     });

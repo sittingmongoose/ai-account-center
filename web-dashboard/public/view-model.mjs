@@ -577,10 +577,14 @@ export function detailsViewModel(data, id, ctx = {}) {
 /** Update apps button state from /api/app-updates/status. */
 export function updateViewModel(job, { done = false } = {}) {
   const results = Array.isArray(job?.results) ? job.results : [];
-  const failed = results.filter(row => row.status === 'failed' || row.status === 'restart_failed').length;
+  const tally = (...statuses) => results.filter(row => statuses.includes(row.status)).length;
+  const notes = [
+    tally('failed', 'restart_failed') ? `${tally('failed', 'restart_failed')} failed` : '',
+    tally('staged', 'action_required') ? `${tally('staged', 'action_required')} waiting on an app quit` : '',
+  ].filter(Boolean).join(', ');
   const running = job?.state === 'running';
   const tip = running ? `Updating apps on ${platformLabel(job.activePlatform || '') || 'the next computer'} · running apps may restart`
-    : job ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}. Details under Accounts & Settings.`
+    : job ? `Last run ${job.state}: ${results.length} results${notes ? `, ${notes}` : ''}. Details under Accounts & Settings.`
       : 'Update the Claude and Codex apps and CLIs on Mac, Windows and Ubuntu';
-  return { running, done: !running && done, count: results.length, total: 21, tip, summary: job ? `${results.length} results${failed ? ` · ${failed} failed` : ''}` : '' };
+  return { running, done: !running && done, count: results.length, total: 21, tip, summary: job ? `${results.length} results${notes ? ` · ${notes}` : ''}` : '' };
 }

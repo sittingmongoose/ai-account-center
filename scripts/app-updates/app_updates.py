@@ -10,14 +10,13 @@ import json
 import os
 import pathlib
 import shutil
-import subprocess
 import sys
 import time
 import uuid
 
 from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_version, command, download, execution_lock,
-    powershell, private_temporary, ps_quote, result, version_text, write_private_json,
+    powershell, private_temporary, result, version_text, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, family, scan, terminate_cli
@@ -91,7 +90,12 @@ def perform_cli_update(install):
             if install.platform == "windows":
                 command(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target], timeout=180, env=env)
             else:
-                command(["/bin/sh", target], timeout=180, env=env)
+                # The Meta installer is a bash script (pipefail, [[ ]]); under
+                # dash it dies before installing, so always run it with bash.
+                interpreter = shutil.which("bash")
+                if not interpreter:
+                    raise UpdateFailure("unsupported")
+                command([interpreter, target], timeout=180, env=env)
         return
     if install.manager == "npm":
         candidates = [pathlib.Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "nodejs/npm.cmd", install.path.parent / "npm.cmd"]
@@ -101,8 +105,9 @@ def perform_cli_update(install):
         npm = next((item for item in candidates if item.is_file()), None)
         if npm is None:
             raise UpdateFailure("unsupported")
-        argv = [str(npm), "install", "--global", "--prefix", str(install.path.parent), "@openai/codex@latest"]
-        command([os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "cmd.exe"), "/d", "/s", "/c", subprocess.list2cmdline(argv)], timeout=180)
+        # Launch npm.cmd through its own argv: wrapping it in cmd.exe
+        # double-escapes the quoted path and Windows never reaches npm at all.
+        command([npm, "install", "--global", "--prefix", str(install.path.parent), "@openai/codex@latest"], timeout=180)
         return
     if install.manager != "native":
         raise UpdateFailure("unsupported")

@@ -4,6 +4,7 @@ import io
 import json
 import os
 import pathlib
+import plistlib
 import pty
 import shutil
 import subprocess
@@ -237,5 +238,254 @@ int main(int argc,char **argv){
                     child.wait(timeout=3)
                 os.close(master)
 
+
+    # ------------------------------------------------------------------ wave-4 N3
+    def _mac_app(self, path, version, identity='com.openai.codex'):
+        (path / 'Contents').mkdir(parents=True)
+        with (path / 'Contents/Info.plist').open('wb') as handle:
+            plistlib.dump({'CFBundleIdentifier': identity, 'CFBundleShortVersionString': version}, handle)
+
+    def _mac_fixture(self, root, app='ChatGPT.app', identity='com.openai.codex', installed_version='1.0.0', package_version='2.0.0'):
+        volume = root / 'volume'
+        self._mac_app(volume / app, package_version, identity)
+        applications = root / 'Applications'
+        self._mac_app(applications / app, installed_version, identity)
+        stage = root / 'temp'
+        stage.mkdir()
+        install = common.Install('codex-desktop' if app == 'ChatGPT.app' else 'claude-desktop', 'mac',
+                                 applications / app, installed_version, 'official-download', identity,
+                                 package_root=applications / app)
+        mounted = plistlib.dumps({'system-entities': [{'mount-point': str(volume), 'dev-entry': '/dev/disk9'}]}).decode()
+        return install, stage, mounted
+
+    def _codesign(self, team):
+        return mock.patch('subprocess.run', return_value=subprocess.CompletedProcess(['codesign'], 0, stdout=None, stderr=('TeamIdentifier=' + team).encode()))
+
+    def test_muse_installer_runs_under_bash_not_sh(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            install = common.Install('muse-code', 'ubuntu', pathlib.Path(directory) / '.local/bin/muse', '1.4.2')
+            install.path.parent.mkdir(parents=True)
+            install.path.write_text('fixture')
+            calls = []
+            def capture(argv, **kwargs):
+                calls.append((argv, kwargs))
+            with mock.patch.object(updater, 'download'), mock.patch.object(updater.shutil, 'which', return_value='/bin/bash'), mock.patch.object(updater, 'command', side_effect=capture):
+                updater.perform_cli_update(install)
+            argv, kwargs = calls[0]
+            self.assertEqual(argv[0], '/bin/bash')
+            self.assertEqual(pathlib.Path(argv[1]).name, 'muse-install.sh')
+            self.assertEqual(kwargs['env'], {'MUSE_UPGRADE_MODE': '1', 'MUSE_NO_MODIFY_PATH': '1'})
+            with mock.patch.object(updater, 'download'), mock.patch.object(updater.shutil, 'which', return_value=None), mock.patch.object(updater, 'command') as run:
+                with self.assertRaises(common.UpdateFailure) as caught:
+                    updater.perform_cli_update(install)
+            self.assertEqual(caught.exception.code, 'unsupported')
+            run.assert_not_called()
+
+    def test_npm_update_launches_npm_directly_without_cmd_wrapper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            prefix = root / 'npm'
+            prefix.mkdir()
+            npm = root / 'nodejs' / 'npm.cmd'
+            npm.parent.mkdir()
+            npm.write_text('fixture')
+            install = common.Install('codex-cli', 'windows', prefix / 'codex.cmd', '0.153.4', 'npm', package_root=prefix / 'node_modules/@openai/codex')
+            calls = []
+            def capture(argv, **kwargs):
+                calls.append((argv, kwargs))
+            with mock.patch.dict(os.environ, {'ProgramFiles': str(root)}), mock.patch.object(updater.shutil, 'which', return_value=None), mock.patch.object(updater, 'command', side_effect=capture):
+                updater.perform_cli_update(install)
+            argv = calls[0][0]
+            self.assertEqual(argv, [npm, 'install', '--global', '--prefix', str(prefix), '@openai/codex@latest'])
+            self.assertFalse(any('cmd.exe' in str(item) for item in argv))
+
+    def test_terminate_desktops_never_force_stops(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt')
+        survivor = processes.Process(7, 1, os.getuid(), '/fixture/claude-desktop', '7')
+        with mock.patch.object(processes, 'family', return_value=[survivor]), mock.patch.object(processes, 'scan', return_value=[survivor]), mock.patch.object(processes, 'live_contexts', return_value=[survivor]), mock.patch.object(processes, 'safe_signal') as signal, mock.patch.object(processes, 'terminate_cli') as stop:
+            remaining = processes.terminate_desktops(install, [survivor], grace=0.1)
+        stop.assert_not_called()
+        self.assertEqual(remaining, [survivor])
+        signal.assert_called_with(survivor, 15)
+
+    def test_mac_refused_quit_reports_action_required_without_installing(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install, stage, mounted = self._mac_fixture(root)
+            survivor = processes.Process(5, 1, 501, str(install.path / 'Contents/MacOS/ChatGPT'), '5')
+            downloads = []
+            def download(url, destination, **kwargs):
+                downloads.append(kwargs)
+            def command(argv, **kwargs):
+                return mounted if 'attach' in argv else ''
+            with mock.patch.object(desktop, 'private_temporary', lambda: contextlib.nullcontext(stage)), mock.patch.object(desktop, 'download', side_effect=download), mock.patch.object(desktop, 'command', side_effect=command), self._codesign('2DC432GLL2'), mock.patch.object(desktop, 'main_contexts', return_value=[survivor]), mock.patch.object(desktop, 'scan', return_value=[survivor]), mock.patch.object(desktop, 'terminate_desktops', return_value=[survivor]), mock.patch.object(desktop, 'live_contexts', return_value=[survivor]), mock.patch.object(desktop, 'restart_desktops') as restart:
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'action_required')
+            self.assertEqual(value['messageCode'], 'quit_required')
+            self.assertFalse(value['updateAttempted'])
+            self.assertEqual(value['version'], '1.0.0')
+            self.assertEqual(downloads, [{'maximum': desktop.DESKTOP_MAXIMUM, 'timeout': desktop.DESKTOP_TIMEOUT}])
+            restart.assert_not_called()
+            with (install.path / 'Contents/Info.plist').open('rb') as handle:
+                info = plistlib.load(handle)
+            self.assertEqual(info['CFBundleShortVersionString'], '1.0.0')
+            self.assertEqual([item.name for item in install.path.parent.iterdir() if item.name.startswith('.CCS-update-')], [])
+
+    def test_mac_quit_allows_verified_swap_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install, stage, mounted = self._mac_fixture(root)
+            context = processes.Process(5, 1, 501, str(install.path / 'Contents/MacOS/ChatGPT'), '5')
+            def command(argv, **kwargs):
+                return mounted if 'attach' in argv else ''
+            with mock.patch.object(desktop, 'private_temporary', lambda: contextlib.nullcontext(stage)), mock.patch.object(desktop, 'download'), mock.patch.object(desktop, 'command', side_effect=command), self._codesign('2DC432GLL2'), mock.patch.object(desktop, 'main_contexts', return_value=[context]), mock.patch.object(desktop, 'scan', return_value=[context]), mock.patch.object(desktop, 'terminate_desktops', return_value=[]), mock.patch.object(desktop, 'restart_desktops', return_value=1):
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'updated')
+            self.assertEqual(value['version'], '2.0.0')
+            self.assertEqual(value['previousVersion'], '1.0.0')
+            self.assertTrue(value['updateAttempted'])
+            self.assertEqual(value['restartedProcesses'], 1)
+            self.assertEqual(value['forcedStops'], 0)
+            with (install.path / 'Contents/Info.plist').open('rb') as handle:
+                info = plistlib.load(handle)
+            self.assertEqual(info['CFBundleShortVersionString'], '2.0.0')
+            self.assertEqual([item.name for item in install.path.parent.iterdir() if item.name.startswith('.CCS-update-')], [])
+            self.assertFalse((root / '.ccs/app-updates/codex-desktop-pending-restart.json').exists())
+
+    def test_mac_uncapturable_instances_report_action_required(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install, stage, mounted = self._mac_fixture(root)
+            def command(argv, **kwargs):
+                return mounted if 'attach' in argv else ''
+            with mock.patch.object(desktop, 'private_temporary', lambda: contextlib.nullcontext(stage)), mock.patch.object(desktop, 'download'), mock.patch.object(desktop, 'command', side_effect=command), self._codesign('2DC432GLL2'), mock.patch.object(desktop, 'main_contexts', side_effect=common.UpdateFailure('restart_context')), mock.patch.object(desktop, 'scan', return_value=[]), mock.patch.object(desktop, 'terminate_desktops') as stop:
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'action_required')
+            self.assertEqual(value['messageCode'], 'quit_required')
+            stop.assert_not_called()
+
+    def test_claude_feed_current_skips_package_download(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install, stage, _ = self._mac_fixture(root, app='Claude.app', identity='com.anthropic.claudefordesktop', installed_version='2.19675.0', package_version='2.19675.0')
+            feed = {'currentRelease': '2.19675.0', 'releases': [{'version': '2.19675.0', 'updateTo': {'version': '2.19675.0', 'url': desktop.CLAUDE_DARWIN_PREFIX + '2.19675.0/Claude-x.zip'}}]}
+            fetched = []
+            def download(url, destination, **kwargs):
+                fetched.append(url)
+                pathlib.Path(destination).write_text(json.dumps(feed))
+            with mock.patch.object(desktop, 'private_temporary', lambda: contextlib.nullcontext(stage)), mock.patch.object(desktop, 'download', side_effect=download), mock.patch.object(desktop, 'command') as run:
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'current')
+            self.assertEqual(fetched, [desktop.CLAUDE_DARWIN_FEED])
+            run.assert_not_called()
+
+    def test_claude_feed_zip_installs_through_ditto(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install, stage, _ = self._mac_fixture(root, app='Claude.app', identity='com.anthropic.claudefordesktop', installed_version='2.0.0', package_version='3.0.0')
+            feed = {'currentRelease': '3.0.0', 'releases': [{'version': '3.0.0', 'updateTo': {'version': '3.0.0', 'url': desktop.CLAUDE_DARWIN_PREFIX + '3.0.0/Claude-y.zip'}}]}
+            fetched = []
+            def download(url, destination, **kwargs):
+                fetched.append((url, kwargs))
+                if url == desktop.CLAUDE_DARWIN_FEED:
+                    pathlib.Path(destination).write_text(json.dumps(feed))
+            def command(argv, **kwargs):
+                if argv[0] == '/usr/bin/ditto':
+                    self._mac_app(pathlib.Path(argv[4]) / 'Claude.app', '3.0.0', 'com.anthropic.claudefordesktop')
+                return ''
+            with mock.patch.object(desktop, 'private_temporary', lambda: contextlib.nullcontext(stage)), mock.patch.object(desktop, 'download', side_effect=download), mock.patch.object(desktop, 'command', side_effect=command), self._codesign('Q6L2SF6YDW'), mock.patch.object(desktop, 'main_contexts', return_value=[]), mock.patch.object(desktop, 'scan', return_value=[]), mock.patch.object(desktop, 'terminate_desktops', return_value=[]), mock.patch.object(desktop, 'restart_desktops', return_value=0):
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'updated')
+            self.assertEqual(value['version'], '3.0.0')
+            self.assertEqual(fetched[0], (desktop.CLAUDE_DARWIN_FEED, {'maximum': 256 * 1024, 'timeout': 60}))
+            self.assertEqual(fetched[1][1], {'maximum': desktop.DESKTOP_MAXIMUM, 'timeout': desktop.DESKTOP_TIMEOUT})
+            with (install.path / 'Contents/Info.plist').open('rb') as handle:
+                info = plistlib.load(handle)
+            self.assertEqual(info['CFBundleShortVersionString'], '3.0.0')
+
+    def _windows_fixture(self, root):
+        package_root = root / 'pkg'
+        (package_root / 'app').mkdir(parents=True)
+        exe = package_root / 'app' / 'ChatGPT.exe'
+        exe.write_text('fixture')
+        install = common.Install('codex-desktop', 'windows', exe, '1.0.0.0', 'msix', 'OpenAI.Codex', 'CN=Publisher', package_root)
+        source = root / 'package.msix'
+        with zipfile.ZipFile(source, 'w') as value:
+            value.writestr('AppxManifest.xml', '<Package><Identity Name="OpenAI.Codex" Publisher="CN=Publisher" Version="2.0.0.0" ProcessorArchitecture="x64"/></Package>')
+        stage = root / 'temp'
+        stage.mkdir()
+        return install, source, stage
+
+    def test_windows_in_use_update_stages_without_force(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install, source, stage = self._windows_fixture(root)
+            survivor = processes.Process(9, 1, 0, str(install.path), '9', session=1)
+            downloads = []
+            def download(url, destination, **kwargs):
+                downloads.append(kwargs)
+                shutil.copy(source, destination)
+            def powershell(script, **kwargs):
+                if 'Add-AppxPackage' in script:
+                    self.assertNotIn('ForceApplicationShutdown', script)
+                    return 'ok'
+                return json.dumps({'name': 'OpenAI.Codex', 'version': '2.0.0.0', 'publisher': 'CN=Publisher', 'root': str(root / 'pkg')})
+            with mock.patch.object(desktop, 'private_temporary', lambda: contextlib.nullcontext(stage)), mock.patch.object(desktop, 'download', side_effect=download), mock.patch.object(desktop, 'powershell', side_effect=powershell), mock.patch.object(desktop, 'main_contexts', return_value=[survivor]), mock.patch.object(desktop, 'scan', return_value=[survivor]), mock.patch.object(desktop, 'terminate_desktops', return_value=[survivor]), mock.patch.object(desktop, 'live_contexts', return_value=[survivor]), mock.patch.object(desktop, 'restart_desktops') as restart:
+                value = desktop.update_windows(install)
+            self.assertEqual(value['status'], 'staged')
+            self.assertEqual(value['messageCode'], 'staged')
+            self.assertEqual(value['version'], '2.0.0.0')
+            self.assertEqual(value['previousVersion'], '1.0.0.0')
+            self.assertTrue(value['updateAttempted'])
+            self.assertEqual(value['restartedProcesses'], 0)
+            self.assertEqual(value['forcedStops'], 0)
+            self.assertEqual(downloads, [{'maximum': desktop.DESKTOP_MAXIMUM, 'timeout': desktop.DESKTOP_TIMEOUT}])
+            restart.assert_not_called()
+
+    def test_windows_in_use_refusal_reports_quit_required(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install, source, stage = self._windows_fixture(root)
+            survivor = processes.Process(9, 1, 0, str(install.path), '9', session=1)
+            def download(url, destination, **kwargs):
+                shutil.copy(source, destination)
+            def powershell(script, **kwargs):
+                if 'Add-AppxPackage' in script:
+                    return 'in_use'
+                raise AssertionError('no package query expected')
+            with mock.patch.object(desktop, 'private_temporary', lambda: contextlib.nullcontext(stage)), mock.patch.object(desktop, 'download', side_effect=download), mock.patch.object(desktop, 'powershell', side_effect=powershell), mock.patch.object(desktop, 'main_contexts', return_value=[survivor]), mock.patch.object(desktop, 'scan', return_value=[survivor]), mock.patch.object(desktop, 'terminate_desktops', return_value=[survivor]), mock.patch.object(desktop, 'live_contexts', return_value=[survivor]), mock.patch.object(desktop, 'restart_desktops') as restart:
+                value = desktop.update_windows(install)
+            self.assertEqual(value['status'], 'action_required')
+            self.assertEqual(value['messageCode'], 'quit_required')
+            self.assertTrue(value['updateAttempted'])
+            self.assertEqual(value['version'], '1.0.0.0')
+            restart.assert_not_called()
+
+    def test_linux_refused_quit_never_upgrades_under_running_app(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+            survivor = processes.Process(3, 1, os.getuid(), '/fixture/claude-desktop', '3')
+            commands = []
+            def command(argv, **kwargs):
+                commands.append(argv)
+                return 'Candidate: 2.0.0\n' if 'policy' in argv else ''
+            with mock.patch.object(desktop, 'command', side_effect=command), mock.patch.object(desktop, 'main_contexts', return_value=[survivor]), mock.patch.object(desktop, 'scan', return_value=[survivor]), mock.patch.object(desktop, 'terminate_desktops', return_value=[survivor]), mock.patch.object(desktop, 'live_contexts', return_value=[survivor]), mock.patch.object(desktop, 'restart_desktops') as restart:
+                value = desktop.update_linux(install)
+            self.assertEqual(value['status'], 'action_required')
+            self.assertEqual(value['messageCode'], 'quit_required')
+            self.assertFalse(any('install' in str(item) for argv in commands for item in argv))
+            restart.assert_not_called()
+
+    def test_pending_desktop_retry_never_forces_running_app(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
+            root = pathlib.Path(directory)
+            install = common.Install('codex-desktop', 'mac', root / 'ChatGPT.app', '2.0.0', 'official-download')
+            common.write_private_json(root / '.ccs/app-updates/codex-desktop-pending-restart.json', {'version': '2.0.0'})
+            survivor = processes.Process(5, 1, 501, str(install.path), '5')
+            with mock.patch.object(desktop, 'main_contexts', return_value=[survivor]), mock.patch.object(desktop, 'scan', return_value=[survivor]), mock.patch.object(desktop, 'terminate_desktops', return_value=[survivor]), mock.patch.object(desktop, 'restart_desktops') as restart:
+                value = desktop.update_desktop(install)
+            self.assertEqual(value['status'], 'restart_failed')
+            self.assertFalse(value['updateAttempted'])
+            restart.assert_not_called()
 
 if __name__ == '__main__': unittest.main()

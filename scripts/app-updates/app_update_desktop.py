@@ -14,12 +14,20 @@ from app_update_common import (
     Install, UpdateFailure, command, download, powershell, private_temporary,
     ps_quote, result, version_text, version_tuple, write_private_json,
 )
-from app_update_processes import main_contexts, restart_desktops, scan, terminate_desktops
+from app_update_processes import family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
 
-
+# The fixed publisher desktop packages are large (the Codex Windows MSIX is
+# ~870 MiB, the ChatGPT DMG ~716 MiB); the CLI-installer caps stay small.
+DESKTOP_MAXIMUM = 2 * 1024 * 1024 * 1024
+# Bounds one desktop download inside the host's 15-minute apply budget.
+DESKTOP_TIMEOUT = 780
+CLAUDE_DARWIN_FEED = "https://downloads.claude.ai/releases/darwin/universal/RELEASES.json"
+CLAUDE_DARWIN_PREFIX = "https://downloads.claude.ai/releases/darwin/"
 MAC = {
     "codex-desktop": ("ChatGPT.app", "com.openai.codex", "2DC432GLL2", "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"),
-    "claude-desktop": ("Claude.app", "com.anthropic.claudefordesktop", "Q6L2SF6YDW", "https://claude.ai/api/desktop/darwin/universal/dmg/latest/redirect"),
+    # Claude's darwin package comes from CLAUDE_DARWIN_FEED; its old claude.ai
+    # redirect answers 403 to every non-browser client.
+    "claude-desktop": ("Claude.app", "com.anthropic.claudefordesktop", "Q6L2SF6YDW", None),
 }
 WINDOWS = {
     "codex-desktop": ("OpenAI.Codex", "app/ChatGPT.exe"),
@@ -37,7 +45,7 @@ def bundle_info(path):
 
 def windows_package(app_id):
     identity, executable = WINDOWS[app_id]
-    script = "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name " + ps_quote(identity) + "; if($p){@{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation}|ConvertTo-Json -Compress}"
+    script = "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name " + ps_quote(identity) + " | Sort-Object {[Version]$_.Version} -Descending | Select-Object -First 1; if($p){@{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation}|ConvertTo-Json -Compress}"
     try:
         raw = powershell(script, timeout=15)
         value = json.loads(raw) if raw.strip() else None
@@ -95,20 +103,85 @@ def verify_mac(app, app_id):
     return info
 
 
+def restore_closed(install, contexts):
+    """Reopen only the instances a graceful quit attempt actually closed."""
+    try:
+        closed = [item for item in contexts if item not in live_contexts(install.platform, contexts)]
+        if closed:
+            restart_desktops(install, closed)
+    except (UpdateFailure, OSError):
+        pass
+
+
+def dmg_candidates(install, temporary):
+    """Mount the fixed publisher DMG; return (matching apps, device to detach)."""
+    dmg = temporary / "update.dmg"
+    download(MAC[install.app_id][3], dmg, maximum=DESKTOP_MAXIMUM, timeout=DESKTOP_TIMEOUT)
+    mounted = command(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-plist", dmg], timeout=60, capture=True)
+    try:
+        mounted = plistlib.loads(mounted.encode("utf-8"))
+    except Exception:
+        raise UpdateFailure("update_failed") from None
+    entities = [entry for entry in mounted.get("system-entities", []) if isinstance(entry, dict) and entry.get("mount-point")]
+    volumes = [pathlib.Path(entry["mount-point"]) for entry in entities]
+    attached = next((entry.get("dev-entry") for entry in entities), None)
+    candidates = [path for volume in volumes for path in volume.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
+    return candidates, attached
+
+
+def claude_zip_candidates(install, temporary):
+    """Claude's own release feed; None when the installed app is already current.
+
+    The old claude.ai download redirect now answers 403 to every non-browser
+    client, so the version check and the package come from the publisher's
+    plain-CDN release feed that redirect pointed at. Checking the feed first
+    keeps an up-to-date app from downloading hundreds of megabytes.
+    """
+    feed = temporary / "RELEASES.json"
+    download(CLAUDE_DARWIN_FEED, feed, maximum=256 * 1024, timeout=60)
+    try:
+        value = json.loads(feed.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise UpdateFailure("update_failed") from None
+    current = value.get("currentRelease") if isinstance(value, dict) else None
+    releases = value.get("releases") if isinstance(value, dict) else None
+    parsed = version_text(current)
+    if not parsed or not isinstance(releases, list):
+        raise UpdateFailure("update_failed")
+    if version_tuple(parsed) <= version_tuple(install.version):
+        return None
+    url = None
+    for entry in releases:
+        target = entry.get("updateTo") if isinstance(entry, dict) else None
+        if not isinstance(target, dict) or version_text(str(target.get("version") or "")) != parsed:
+            continue
+        candidate = target.get("url")
+        if isinstance(candidate, str) and candidate.startswith(CLAUDE_DARWIN_PREFIX):
+            url = candidate
+            break
+    if url is None:
+        raise UpdateFailure("update_failed")
+    package = temporary / "update.zip"
+    download(url, package, maximum=DESKTOP_MAXIMUM, timeout=DESKTOP_TIMEOUT)
+    extracted = temporary / "extracted"
+    extracted.mkdir()
+    # ditto keeps symlinks, resources and the code signature intact.
+    command(["/usr/bin/ditto", "-x", "-k", str(package), str(extracted)], timeout=600)
+    return [path for path in extracted.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
+
+
 def update_mac(install):
     before = install.version
     contexts, installed = [], False
-    backup, stage = None, None
+    backup, stage, attached = None, None, None
     with private_temporary() as temporary:
-        dmg = temporary / "update.dmg"
-        download(MAC[install.app_id][3], dmg)
-        attached = None
         try:
-            mounted = command(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-plist", dmg], timeout=60, capture=True)
-            mounted = plistlib.loads(mounted.encode("utf-8"))
-            volumes = [pathlib.Path(entry["mount-point"]) for entry in mounted.get("system-entities", []) if "mount-point" in entry]
-            attached = next((entry.get("dev-entry") for entry in mounted.get("system-entities", []) if entry.get("mount-point")), None)
-            candidates = [path for volume in volumes for path in volume.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
+            if install.app_id == "claude-desktop":
+                candidates = claude_zip_candidates(install, temporary)
+                if candidates is None:
+                    return result(install.app_id, "mac", "current", before, before, install.manager)
+            else:
+                candidates, attached = dmg_candidates(install, temporary)
             if len(candidates) != 1:
                 raise UpdateFailure("signature_failed")
             info = verify_mac(candidates[0], install.app_id)
@@ -121,8 +194,19 @@ def update_mac(install):
             backup = install.path.parent / (".CCS-update-backup-" + uuid.uuid4().hex + ".app")
             shutil.copytree(candidates[0], stage, symlinks=True)
             verify_mac(stage, install.app_id)
-            contexts = main_contexts(install, scan("mac"))
-            forced = terminate_desktops(install, contexts)
+            try:
+                contexts = main_contexts(install, scan("mac"))
+            except UpdateFailure as error:
+                if error.code != "restart_context":
+                    raise
+                # Its running instances cannot be captured for a safe relaunch.
+                return result(install.app_id, "mac", "action_required", before, before, install.manager, "quit_required")
+            if terminate_desktops(install, contexts):
+                # The app refused to quit. Never force it and never swap the
+                # bundle under a running app: its later helper spawns would mix
+                # old and new files. Report the actionable quit state instead.
+                restore_closed(install, contexts)
+                return result(install.app_id, "mac", "action_required", before, before, install.manager, "quit_required")
             os.rename(install.path, backup)
             try:
                 os.rename(stage, install.path)
@@ -137,17 +221,13 @@ def update_mac(install):
             except (UpdateFailure, OSError):
                 return result(install.app_id, "mac", "restart_failed", before, after, install.manager, "restart_failed", True)
             value = result(install.app_id, "mac", "updated", before, after, install.manager, attempted=True, restarted=restarted)
-            value["forcedStops"] = forced
+            value["forcedStops"] = 0
             clear_restart(install)
             return value
         except (UpdateFailure, OSError) as error:
             if contexts and not installed:
-                # Restore only closed instances if a graceful close was refused.
-                from app_update_processes import live_contexts
-                remaining = live_contexts("mac", contexts)
-                closed = [item for item in contexts if item not in remaining]
-                try: restart_desktops(install, closed)
-                except (UpdateFailure, OSError): pass
+                # Restore only the closed instances; the update never landed.
+                restore_closed(install, contexts)
             return result(install.app_id, "mac", "failed", before, install.version, install.manager, error.code if isinstance(error, UpdateFailure) else "update_failed", installed)
         finally:
             if attached:
@@ -174,6 +254,16 @@ def msix_info(path):
         raise UpdateFailure("signature_failed") from None
 
 
+def add_appx_package(package):
+    """Register the verified package; 'ok', or 'in_use' when Windows refuses
+    because instances are running. Never requests a forced shutdown."""
+    script = ("$ErrorActionPreference='Stop'; try { Add-AppxPackage -Path " + ps_quote(package) + " } catch {"
+              " if(('{0:X8}' -f $_.Exception.HResult) -in @('80073D31','80073CFF')){ 'in_use'; exit 0 }; throw };"
+              " 'ok'")
+    value = (powershell(script, timeout=300) or "").strip().splitlines()
+    return value[-1].strip().lower() if value else "ok"
+
+
 def update_windows(install):
     before = install.version
     contexts, installed = [], False
@@ -183,7 +273,7 @@ def update_windows(install):
     with private_temporary() as temporary:
         package = temporary / "update.msix"
         try:
-            download(url, package)
+            download(url, package, maximum=DESKTOP_MAXIMUM, timeout=DESKTOP_TIMEOUT)
             info = msix_info(package)
             if info.get("Name") != install.identity or info.get("Publisher") != install.publisher or info.get("ProcessorArchitecture", "").lower() not in (architecture, "neutral"):
                 raise UpdateFailure("signature_failed")
@@ -192,12 +282,36 @@ def update_windows(install):
                 raise UpdateFailure("signature_failed")
             if version_tuple(after) <= version_tuple(before):
                 return result(install.app_id, "windows", "current", before, before, install.manager)
-            contexts = main_contexts(install, scan("windows"))
-            forced = terminate_desktops(install, contexts)
+            try:
+                contexts = main_contexts(install, scan("windows"))
+                remaining = terminate_desktops(install, contexts)
+            except UpdateFailure as error:
+                if error.code != "restart_context":
+                    raise
+                # Its instances cannot be captured for a graceful close and
+                # relaunch; the OS-level in-use update below needs no context.
+                contexts, remaining = [], family(install, scan("windows"))
             # Add-AppxPackage verifies the Microsoft Store/publisher signature
             # and upgrades the same per-user package, preserving LocalState.
-            powershell("$ErrorActionPreference='Stop'; Add-AppxPackage -Path " + ps_quote(package), timeout=180)
-            installed = True
+            state = add_appx_package(package)
+            installed = state == "ok"
+            if remaining:
+                if not installed:
+                    # Windows refused while instances run and could not defer:
+                    # nothing was installed; report the actionable quit state.
+                    restore_closed(install, contexts)
+                    return result(install.app_id, "windows", "action_required", before, before, install.manager, "quit_required", True)
+                # In-use staged update: registered now; the running instances
+                # keep the old build until they quit, then the new one starts.
+                restore_closed(install, contexts)
+                refreshed = windows_package(install.app_id)
+                value = result(install.app_id, "windows", "staged", before,
+                               refreshed.version if refreshed and refreshed.version == after else after,
+                               install.manager, "staged", True)
+                value["forcedStops"] = 0
+                return value
+            if not installed:
+                raise UpdateFailure("update_failed")
             mark_restart(install, after)
             refreshed = windows_package(install.app_id)
             if refreshed is None or refreshed.version != after:
@@ -207,15 +321,12 @@ def update_windows(install):
             except (UpdateFailure, OSError):
                 return result(install.app_id, "windows", "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
             value = result(install.app_id, "windows", "updated", before, refreshed.version, install.manager, attempted=True, restarted=restarted)
-            value["forcedStops"] = forced
+            value["forcedStops"] = 0
             clear_restart(install)
             return value
         except UpdateFailure as error:
             if contexts and not installed:
-                from app_update_processes import live_contexts
-                closed = [item for item in contexts if item not in live_contexts("windows", contexts)]
-                try: restart_desktops(install, closed)
-                except (UpdateFailure, OSError): pass
+                restore_closed(install, contexts)
             return result(install.app_id, "windows", "failed", before, before, install.manager, error.code, installed)
 
 
@@ -246,8 +357,18 @@ def update_linux(install, deadline=None):
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
             seconds = max(30, min(900, int((deadline or time.monotonic() + 900) - time.monotonic())))
             return json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "desktop", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
-        contexts = main_contexts(install, scan("ubuntu"))
-        forced = terminate_desktops(install, contexts)
+        try:
+            contexts = main_contexts(install, scan("ubuntu"))
+        except UpdateFailure as error:
+            if error.code != "restart_context":
+                raise
+            # Its running instances cannot be captured for a safe relaunch.
+            return result(install.app_id, "ubuntu", "action_required", before, before, "apt", "quit_required")
+        if terminate_desktops(install, contexts):
+            # Upgrading under a running desktop app would mix old and new files
+            # on its next helper spawn. Ask for a quit instead; never force it.
+            restore_closed(install, contexts)
+            return result(install.app_id, "ubuntu", "action_required", before, before, "apt", "quit_required")
         command(["/usr/bin/sudo", "-n", "/usr/bin/apt-get", "install", "--only-upgrade", "-y", install.identity], timeout=180,
                 env={"DEBIAN_FRONTEND": "noninteractive"})
         refreshed = detect_desktop(install.app_id, "ubuntu")
@@ -258,14 +379,11 @@ def update_linux(install, deadline=None):
         except (UpdateFailure, OSError):
             return result(install.app_id, "ubuntu", "restart_failed", before, refreshed.version, "apt", "restart_failed", True)
         value = result(install.app_id, "ubuntu", "updated", before, refreshed.version, "apt", attempted=True, restarted=restarted)
-        value["forcedStops"] = forced
+        value["forcedStops"] = 0
         return value
     except UpdateFailure as error:
         if contexts:
-            from app_update_processes import live_contexts
-            closed = [item for item in contexts if item not in live_contexts("ubuntu", contexts)]
-            try: restart_desktops(install, closed)
-            except (UpdateFailure, OSError): pass
+            restore_closed(install, contexts)
         return result(install.app_id, "ubuntu", "failed", before, before, "apt", error.code)
 
 
@@ -282,11 +400,14 @@ def update_desktop(install, deadline=None):
     if retry:
         try:
             contexts = main_contexts(install, scan(install.platform))
-            forced = terminate_desktops(install, contexts)
+            if terminate_desktops(install, contexts):
+                # Still running after a graceful quit attempt: the update is
+                # already installed; its relaunch stays pending, never forced.
+                return result(install.app_id, install.platform, "restart_failed", install.version, install.version, install.manager, "restart_failed")
             restarted = restart_desktops(install, contexts)
             clear_restart(install)
             value = result(install.app_id, install.platform, "updated", install.version, install.version, install.manager, attempted=False, restarted=restarted)
-            value["forcedStops"] = forced
+            value["forcedStops"] = 0
             return value
         except (UpdateFailure, OSError):
             return result(install.app_id, install.platform, "restart_failed", install.version, install.version, install.manager, "restart_failed")

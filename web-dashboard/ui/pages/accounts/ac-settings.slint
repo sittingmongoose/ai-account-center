@@ -306,7 +306,7 @@ component UpdLine inherits VerticalLayout {
                 text: root.item.result;
                 font-size: 12.5px;
                 font-weight: root.item.tone == "good" ? 600 : 400;
-                color: root.item.tone == "good" ? Theme.good-text : root.item.tone == "crit" ? Theme.crit-text : root.item.tone == "run" ? Theme.accent-text : Theme.ink-3;
+                color: root.item.tone == "good" ? Theme.good-text : root.item.tone == "crit" ? Theme.crit-text : root.item.tone == "warn" ? Theme.warn-text : root.item.tone == "run" ? Theme.accent-text : Theme.ink-3;
                 vertical-alignment: center;
                 horizontal-stretch: 0;
             }

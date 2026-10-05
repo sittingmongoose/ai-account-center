@@ -491,8 +491,9 @@ async function updateStatus() {
       const results = Array.isArray(updateJob.results) ? updateJob.results : [];
       const count = status => results.filter(row => row.status === status).length;
       const failed = count('failed') + count('restart_failed');
+      const stagedN = count('staged'), actionN = count('action_required');
       const skippedN = count('skipped'), unknownN = count('unknown');
-      toast(failed ? 'err' : 'ok', failed ? 'App update finished with failures' : 'Apps updated', `${count('updated')} updated, ${count('current')} already current, ${count('not_installed')} not installed${failed ? `, ${failed} failed` : ''}${skippedN ? `, ${skippedN} skipped` : ''}${unknownN ? `, ${unknownN} unknown` : ''}. Details under Accounts & Settings.`, 7000);
+      toast(failed ? 'err' : 'ok', failed ? 'App update finished with failures' : 'Apps updated', `${count('updated')} updated, ${count('current')} already current, ${count('not_installed')} not installed${stagedN ? `, ${stagedN} staged` : ''}${actionN ? `, ${actionN} need quitting` : ''}${failed ? `, ${failed} failed` : ''}${skippedN ? `, ${skippedN} skipped` : ''}${unknownN ? `, ${unknownN} unknown` : ''}. Details under Accounts & Settings.`, 7000);
       renderUpdate(true);
       clearTimeout(updateDoneTimer);
       updateDoneTimer = setTimeout(() => renderUpdate(false), 2000);

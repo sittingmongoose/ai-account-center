@@ -1031,6 +1031,51 @@ test('Update apps results are grouped by computer, never invented', () => {
   assert.equal(running.hosts[1].items[0].app, 'Waiting for its turn');
 });
 
+test('Update apps staged and quit rows read as actionable, never failed', () => {
+  const result = (platform, appLabel, status, extra = {}) => ({
+    appId: appLabel.toLowerCase().replace(/ /g, '-'),
+    appLabel,
+    platform,
+    status,
+    previousVersion: null,
+    version: null,
+    message: 'Done',
+    ...extra,
+  });
+  const view = updateResultsView(
+    {
+      state: 'completed',
+      startedAt: at(-30),
+      finishedAt: at(-20),
+      activePlatform: null,
+      results: [
+        result('windows', 'Codex Desktop', 'staged', {
+          previousVersion: '1.0.0',
+          version: '2.0.0',
+          message: 'The new version is installed; it takes effect when the app quits and reopens.',
+        }),
+        result('mac', 'Codex Desktop', 'action_required', {
+          message: 'Quit the app to finish its update, then run Update all again.',
+        }),
+      ],
+    },
+    now
+  );
+  assert.equal(
+    view.headRuns.map((r) => r.text).join(''),
+    'Last run 20m ago · 2 results, 1 staged, 1 need quitting'
+  );
+  assert.deepEqual(
+    view.hosts[0].items.map((i) => [i.app, i.result, i.tone]),
+    [['Codex Desktop', 'Quit to update', 'warn']]
+  );
+  assert.deepEqual(
+    view.hosts[1].items.map((i) => [i.app, i.result, i.tone]),
+    [['Codex Desktop', 'Staged to 2.0.0', 'warn']]
+  );
+  assert.match(view.hosts[1].items[0].tip, /1\.0\.0 to 2\.0\.0/);
+});
+
 test('Update apps cancel and readiness states read as plain text', () => {
   const result = (platform, appLabel, status, extra = {}) => ({
     appId: appLabel.toLowerCase().replace(/ /g, '-'),

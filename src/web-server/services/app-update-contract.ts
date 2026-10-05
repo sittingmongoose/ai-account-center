@@ -17,6 +17,8 @@ export type UpdateResultStatus =
   | 'not_installed'
   | 'failed'
   | 'restart_failed'
+  | 'staged'
+  | 'action_required'
   | 'skipped'
   | 'unknown';
 export interface AppUpdateResult {
@@ -66,6 +68,8 @@ export const MESSAGES = {
   update_failed: 'The app update failed; check its supported installer.',
   version_unknown: 'The installed version could not be verified after the update.',
   restart_failed: 'The update finished, but an original instance could not restart.',
+  staged: 'The new version is installed; it takes effect when the app quits and reopens.',
+  quit_required: 'Quit the app to finish its update, then run Update all again.',
   host_unavailable: 'This computer could not complete the update request.',
   helper_invalid: 'The update helper returned an unsupported result.',
   busy: 'Another app update is already running on this computer.',
@@ -85,6 +89,8 @@ const STATUSES: UpdateResultStatus[] = [
   'not_installed',
   'failed',
   'restart_failed',
+  'staged',
+  'action_required',
   'skipped',
   'unknown',
 ];
@@ -224,8 +230,10 @@ export function normalizeAppUpdateResults(
       )
         targets.push({ kind: 'tmux', server: target.server, session: target.session });
     }
+    // A staged row claims an installed package, so like 'updated' it must
+    // carry a real bounded version and a whitelisted manager.
     if (
-      row.status === 'updated' &&
+      (row.status === 'updated' || row.status === 'staged') &&
       (!safeVersion(row.version) ||
         typeof row.manager !== 'string' ||
         !MANAGERS.includes(row.manager))

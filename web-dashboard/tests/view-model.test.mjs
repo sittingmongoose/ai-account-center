@@ -159,6 +159,9 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
   assert.equal(parseIntervalLabel('soon'), null);
   assert.deepEqual(updateViewModel({ state: 'running', activePlatform: 'mac', results: [{ status: 'updated' }, { status: 'current' }] }), { running: true, done: false, count: 2, total: 21, tip: 'Updating apps on Mac · running apps may restart', summary: '2 results' });
   assert.equal(updateViewModel({ state: 'completed', results: [{ status: 'failed' }] }, { done: true }).done, true);
+  const staged = updateViewModel({ state: 'completed', results: [{ status: 'staged' }, { status: 'action_required' }, { status: 'updated' }] });
+  assert.equal(staged.summary, '3 results · 2 waiting on an app quit');
+  assert.equal(staged.tip, 'Last run completed: 3 results, 2 waiting on an app quit. Details under Accounts & Settings.');
   assert.equal(updateViewModel(null).count, 0);
 });
 

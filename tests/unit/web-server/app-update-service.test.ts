@@ -7,6 +7,7 @@ import {
   AppUpdateService,
   appUpdateInvocation,
   normalizeAppUpdateResults,
+  parseDeployedChecksums,
   UPDATE_APP_LABELS,
   type UpdatePlatform,
 } from '../../../src/web-server/services/app-update-service';
@@ -222,5 +223,85 @@ describe('fixed app update service', () => {
     });
     expect(service.getStatus().job!.state).toBe('failed');
     expect(calls).toBe(0);
+  });
+  it('keeps a job completed when updates only staged or need a quit', async () => {
+    const rows = JSON.parse(payload()).results;
+    rows[0] = {
+      ...rows[0],
+      status: 'staged',
+      messageCode: 'staged',
+      version: '2.0.0',
+      manager: 'msix',
+      updateAttempted: true,
+    };
+    rows[1] = {
+      ...rows[1],
+      status: 'action_required',
+      messageCode: 'quit_required',
+      updateAttempted: false,
+    };
+    const service = new AppUpdateService({
+      persist: false,
+      runHost: async () => JSON.stringify({ results: rows }),
+    });
+    service.start();
+    await finish(service);
+    const job = service.getStatus().job!;
+    expect(job.state).toBe('completed');
+    expect(job.results.filter((row) => row.status === 'staged')).toHaveLength(3);
+    expect(job.results.filter((row) => row.status === 'action_required')).toHaveLength(3);
+    expect(job.results.find((row) => row.status === 'staged')!.message).toBe(
+      'The new version is installed; it takes effect when the app quits and reopens.'
+    );
+    expect(job.results.find((row) => row.status === 'action_required')!.message).toBe(
+      'Quit the app to finish its update, then run Update all again.'
+    );
+  });
+  it('rejects a staged row that cannot prove its installed version', () => {
+    const rows = JSON.parse(payload()).results;
+    rows[0] = { ...rows[0], status: 'staged', messageCode: 'staged', version: null };
+    const value = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'windows');
+    expect(value[0].status).toBe('failed');
+    expect(value[0].message).toBe('The update helper returned an unsupported result.');
+  });
+  it('syncs deployed helpers before each remote run and survives a sync failure', async () => {
+    const events: string[] = [];
+    const service = new AppUpdateService({
+      persist: false,
+      sync: async (platform) => {
+        events.push(`sync:${platform}`);
+        if (platform === 'mac') throw new Error('PRIVATE_SENTINEL');
+      },
+      runHost: async (platform) => {
+        events.push(`run:${platform}`);
+        return payload();
+      },
+    });
+    service.start();
+    await finish(service);
+    expect(events).toEqual([
+      'run:ubuntu',
+      'sync:mac',
+      'run:mac',
+      'sync:windows',
+      'run:windows',
+    ]);
+    expect(service.getStatus().job!.state).toBe('completed');
+    expect(JSON.stringify(service.getStatus().job)).not.toContain('PRIVATE_SENTINEL');
+  });
+  it('parses deployed helper checksum lines from both host shells', () => {
+    const hash = 'a'.repeat(64);
+    const other = 'B'.repeat(64);
+    const parsed = parseDeployedChecksums(
+      [
+        `${hash}  /Users/x/.ccs/app-updates/app_updates.py`,
+        `${other}  app_update_common.py`,
+        'shasum: /Users/x/.ccs/app-updates/app_update_pipe.py: No such file or directory',
+        'not-a-hash  app_updates.py',
+      ].join('\n')
+    );
+    expect(parsed['app_updates.py']).toBe(hash);
+    expect(parsed['app_update_common.py']).toBe('b'.repeat(64));
+    expect(Object.keys(parsed)).toHaveLength(2);
   });
 });

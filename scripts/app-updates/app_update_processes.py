@@ -424,6 +424,12 @@ def desktop_arguments(context, platform):
 
 
 def terminate_desktops(install, contexts, grace=15):
+    """Ask the captured desktop instances to quit and wait, gracefully only.
+
+    A running desktop app is never force-stopped: whatever is still alive after
+    the bounded wait is returned so the caller can stage the update or report an
+    actionable quit request. A refused quit is an outcome, not an error.
+    """
     targets = family(install, scan(install.platform))
     if install.platform == "mac":
         ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
@@ -436,15 +442,17 @@ def terminate_desktops(install, contexts, grace=15):
         terminate = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(("objc_msgSend", objc))
         for item in live_contexts(install.platform, contexts):
             instance = lookup(objc.objc_getClass(b"NSRunningApplication"), objc.sel_registerName(b"runningApplicationWithProcessIdentifier:"), item.pid)
-            if not instance or not terminate(instance, objc.sel_registerName(b"terminate")):
-                raise UpdateFailure("restart_context")
+            if instance:
+                # A refusal leaves the item in the returned live set; the caller
+                # stages the update instead of touching the running app.
+                terminate(instance, objc.sel_registerName(b"terminate"))
     elif install.platform == "windows":
         session = ctypes.c_ulong()
         ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session))
-        if any(item.session != session.value for item in contexts):
-            raise UpdateFailure("restart_context")
         user32 = ctypes.windll.user32
-        live = {item.pid for item in live_contexts(install.platform, contexts)}
+        # Cross-session instances cannot receive this session's WM_CLOSE; they
+        # stay in the returned live set for the staged-update path.
+        live = {item.pid for item in live_contexts(install.platform, contexts) if item.session == session.value}
         callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
         def close_window(hwnd, _):
             pid = ctypes.c_ulong()
@@ -460,9 +468,7 @@ def terminate_desktops(install, contexts, grace=15):
     deadline = time.monotonic() + grace
     while live_contexts(install.platform, targets) and time.monotonic() < deadline:
         time.sleep(.2)
-    # Quit first, then stop only the captured app family if its close operation
-    # hides the window or leaves app-owned helpers running. Never its terminal.
-    return terminate_cli(install, targets, grace=2)
+    return live_contexts(install.platform, targets)
 
 
 def restart_desktops(install, contexts):
