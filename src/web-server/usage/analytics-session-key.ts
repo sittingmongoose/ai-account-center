@@ -26,6 +26,9 @@ export function analyticsSessionKey(
  * The key a session row is published under. The activity readers hash at ingest, so a row normally arrives already
  * keyed and passes through unchanged; anything else (a legacy retained row, a hand-built one) is hashed here, so no
  * raw session id can reach the page whichever reader produced the row.
+ * Keyed-ness is recognised by shape alone, so a raw id that happens to be exactly 16 hex characters is treated as
+ * already keyed and published as-is; that cannot come from a reader (the transport and the zcode helper validator
+ * refuse any session key that is not a digest), only from a hand-built row, and dedupe stays per tool.
  */
 export function publishedSessionKey(
   tool: AccountAnalyticsActivityProvider,
