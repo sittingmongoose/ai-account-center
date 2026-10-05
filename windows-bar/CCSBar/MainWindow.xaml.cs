@@ -1308,16 +1308,8 @@ public partial class MainWindow : Window
     /// Null unless the switch is enabled and blocked, so healthy switching adds no line.</summary>
     private FrameworkElement? CodexAutoStatus()
     {
-        var status = dashboard?.CodexAutoSwitch;
-        if (status is null || !status.Enabled) return null;
-        if (status.Outcome is not ("waiting_idle" or "no_quota" or "no_candidate" or "error")) return null;
-        var text = status.Message;
-        if (status.Outcome == "waiting_idle" && !string.IsNullOrWhiteSpace(status.Candidate))
-        {
-            var match = dashboard?.Accounts.Find(account => account.Provider == "codex" && account.Capabilities.CodexProfile == status.Candidate);
-            var identity = match?.Email ?? match?.Label ?? status.Candidate;
-            text = $"{text} Activate {identity} to switch now.";
-        }
+        var text = Formatting.CodexAutoStatusText(dashboard?.CodexAutoSwitch, dashboard?.Accounts);
+        if (text is null) return null;
         var line = Ui.Text(text, 12, "Ink3", wrap: true);
         line.Margin = new Thickness(36, 2, 10, 0);
         return line;

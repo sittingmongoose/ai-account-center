@@ -962,6 +962,40 @@ test('policies: Codex in % used from the server, live controls', () => {
   assert.equal(unknown.threshold, -1);
 });
 
+test('policies: Codex blocked switch says why on the row and names the candidate', () => {
+  const two = account({
+    id: 'codex:two',
+    label: 'two',
+    email: 'two@example.test',
+    capabilities: { codexProfile: 'two', claudeProfileId: null, claudePlatforms: [] },
+  });
+  const vm = accountsViewModel(
+    data([account(), two], {
+      codexAutoSwitch: {
+        enabled: true,
+        thresholdPercent: 5,
+        pollIntervalSeconds: 60,
+        outcome: 'waiting_idle',
+        message: 'Waiting for Codex to finish active work before switching accounts.',
+        activationInProgress: false,
+        candidate: 'two',
+      },
+    }),
+    { now }
+  );
+  const codex = vm.policies.find((p) => p.provider === 'codex');
+  assert.match(codex.sub, /Waiting for Codex to finish active work/);
+  assert.match(codex.sub, /Press Activate on two@example\.test to switch now\./);
+});
+
+test('policies: Codex healthy switch adds no sub-line', () => {
+  const vm = accountsViewModel(data([account()]), { now });
+  assert.equal(
+    vm.policies.find((p) => p.provider === 'codex').sub,
+    ''
+  );
+});
+
 test('Update apps results are grouped by computer, never invented', () => {
   assert.equal(updateResultsView(null, now).shown, false);
   assert.deepEqual(

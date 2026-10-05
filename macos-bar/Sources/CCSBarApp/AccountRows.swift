@@ -358,6 +358,7 @@ struct CodexAutoStatusLine: View {
           .padding(.trailing, TrayMetrics.rowTrailing)
           .padding(.top, 2)
           .accessibilityIdentifier("codex-auto-status")
+          .alignmentProbe("codex-auto|status")
       }
     }
   }

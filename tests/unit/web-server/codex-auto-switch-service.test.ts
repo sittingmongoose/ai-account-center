@@ -762,9 +762,7 @@ describe('native Codex automatic switching', () => {
     let exhausted = false;
     const h = harness({
       getRows: async () =>
-        exhausted
-          ? [row('alpha', 100), row('beta', 20)]
-          : [row('alpha', 50), row('beta', 20)],
+        exhausted ? [row('alpha', 100), row('beta', 20)] : [row('alpha', 50), row('beta', 20)],
       log: (_level, _event, _message, context) => {
         entries.push(String(context.outcome));
       },

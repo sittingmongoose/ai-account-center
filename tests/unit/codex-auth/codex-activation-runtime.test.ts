@@ -206,7 +206,12 @@ describe('Codex activation process lifecycle', () => {
     const proxy = processFixture(30, ['/fixture/bin/codex', 'app-server', 'proxy']);
     const execServer = processFixture(
       23,
-      ['/usr/lib/chatgpt/resources/codex', 'exec-server', '--remote', 'https://fixture.invalid/api'],
+      [
+        '/usr/lib/chatgpt/resources/codex',
+        'exec-server',
+        '--remote',
+        'https://fixture.invalid/api',
+      ],
       { ppid: 20, env: { HOME: '/fixture' } }
     );
     const fake = harness([daemon, proxy, desktop, bundled, execServer, renderer]);

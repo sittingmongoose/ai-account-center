@@ -232,12 +232,7 @@ function writeConfigFile(ccsDir: string, config: AutoSwitchConfig): void {
 }
 
 /** Why a quota row cannot decide a switch. Drives the plain-words message, never shown raw. */
-type RemainingRejection =
-  | 'missing'
-  | 'not_network'
-  | 'stale'
-  | 'reset_passed'
-  | 'no_windows';
+type RemainingRejection = 'missing' | 'not_network' | 'stale' | 'reset_passed' | 'no_windows';
 
 type RemainingAssessment = { remaining: number } | { reason: RemainingRejection };
 

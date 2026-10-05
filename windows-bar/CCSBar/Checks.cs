@@ -103,6 +103,7 @@ public static partial class Checks
         await ConfirmationChecks(report);
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
         ResetPendingChecks(report);
+        CodexAutoStatusChecks(report);
         await SignInChangeChecks(report);
         await ClaudeOpenChecks(report);
         await PairingChecks(report);
@@ -416,6 +417,22 @@ public static partial class Checks
             report.Checks["tray_tooltip_hides_weekly_percent_after_its_reset"] = pendingTip == "AI Account Center · Codex: codex-2, weekly reset, new reading pending" && Formatting.TrayTooltip(codex) == "AI Account Center · Codex: codex-2, 90.75% weekly left";
         }
         finally { Formatting.Now = saved; }
+    }
+
+    private static void CodexAutoStatusChecks(CheckReport report)
+    {
+        var waiting = new AutoSwitchStatus { Enabled = true, Outcome = "waiting_idle", Message = "Waiting for Codex to finish active work before switching accounts.", Candidate = "beta" };
+        var codexAccounts = new List<DashboardAccount>
+        {
+            new() { Id = "codex:a", Provider = "codex", Email = "a@example.test", Capabilities = new AccountCapabilities { CodexProfile = "alpha" } },
+            new() { Id = "codex:b", Provider = "codex", Email = "b@example.test", Capabilities = new AccountCapabilities { CodexProfile = "beta" } },
+        };
+        report.Checks["codex_auto_status_names_candidate"] = Formatting.CodexAutoStatusText(waiting, codexAccounts) == "Waiting for Codex to finish active work before switching accounts. Activate b@example.test to switch now.";
+        report.Checks["codex_auto_status_falls_back_to_profile"] = Formatting.CodexAutoStatusText(waiting, new List<DashboardAccount>()) == "Waiting for Codex to finish active work before switching accounts. Activate beta to switch now.";
+        report.Checks["codex_auto_status_shows_plain_reason"] = Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = true, Outcome = "no_quota", Message = "The reading is out of date." }, codexAccounts) == "The reading is out of date.";
+        report.Checks["codex_auto_status_hidden_when_healthy"] = Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = true, Outcome = "healthy", Message = "m" }, codexAccounts) is null
+            && Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = false, Outcome = "waiting_idle", Message = "m", Candidate = "beta" }, codexAccounts) is null
+            && Formatting.CodexAutoStatusText(null, codexAccounts) is null;
     }
 
     /// <summary>
