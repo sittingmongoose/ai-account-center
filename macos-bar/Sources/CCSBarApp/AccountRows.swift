@@ -370,7 +370,7 @@ struct CodexAutoStatusLine: View {
     let identity =
       accounts.first(where: { $0.provider == "codex" && $0.capabilities.codexProfile == candidate })?
       .identity ?? candidate
-    return "\(status.message) Activate \(identity) to switch now."
+    return "\(status.message) Will switch to \(identity) when Codex goes idle. Activate \(identity) to switch now."
   }
 }
 

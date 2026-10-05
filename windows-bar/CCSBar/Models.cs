@@ -581,7 +581,8 @@ public static class Formatting
         if (status.Outcome == "waiting_idle" && !string.IsNullOrWhiteSpace(status.Candidate))
         {
             var match = accounts?.Find(account => account.Provider == "codex" && account.Capabilities.CodexProfile == status.Candidate);
-            return $"{status.Message} Activate {match?.Email ?? match?.Label ?? status.Candidate} to switch now.";
+            var identity = match?.Email ?? match?.Label ?? status.Candidate;
+            return $"{status.Message} Will switch to {identity} when Codex goes idle. Activate {identity} to switch now.";
         }
         return status.Message;
     }

@@ -427,8 +427,8 @@ public static partial class Checks
             new() { Id = "codex:a", Provider = "codex", Email = "a@example.test", Capabilities = new AccountCapabilities { CodexProfile = "alpha" } },
             new() { Id = "codex:b", Provider = "codex", Email = "b@example.test", Capabilities = new AccountCapabilities { CodexProfile = "beta" } },
         };
-        report.Checks["codex_auto_status_names_candidate"] = Formatting.CodexAutoStatusText(waiting, codexAccounts) == "Waiting for Codex to finish active work before switching accounts. Activate b@example.test to switch now.";
-        report.Checks["codex_auto_status_falls_back_to_profile"] = Formatting.CodexAutoStatusText(waiting, new List<DashboardAccount>()) == "Waiting for Codex to finish active work before switching accounts. Activate beta to switch now.";
+        report.Checks["codex_auto_status_names_candidate"] = Formatting.CodexAutoStatusText(waiting, codexAccounts) == "Waiting for Codex to finish active work before switching accounts. Will switch to b@example.test when Codex goes idle. Activate b@example.test to switch now.";
+        report.Checks["codex_auto_status_falls_back_to_profile"] = Formatting.CodexAutoStatusText(waiting, new List<DashboardAccount>()) == "Waiting for Codex to finish active work before switching accounts. Will switch to beta when Codex goes idle. Activate beta to switch now.";
         report.Checks["codex_auto_status_shows_plain_reason"] = Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = true, Outcome = "no_quota", Message = "The reading is out of date." }, codexAccounts) == "The reading is out of date.";
         report.Checks["codex_auto_status_hidden_when_healthy"] = Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = true, Outcome = "healthy", Message = "m" }, codexAccounts) is null
             && Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = false, Outcome = "waiting_idle", Message = "m", Candidate = "beta" }, codexAccounts) is null

@@ -707,7 +707,7 @@ function policies(data, home, ag) {
   const codexSub = !codexKnown ? 'The server did not report the Codex policy.'
     : !codexBlocked ? ''
     : [text(auto?.message),
-      auto?.outcome === 'waiting_idle' && candidateLabel ? `Press Activate on ${candidateLabel} to switch now.` : '',
+      auto?.outcome === 'waiting_idle' && candidateLabel ? `Will switch to ${candidateLabel} when Codex goes idle. Press Activate on ${candidateLabel} to switch now.` : '',
     ].filter(Boolean).join(' ');
   const agSection = home.sections.find(section => section.id === 'antigravity');
   const rows = [{

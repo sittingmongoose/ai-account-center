@@ -1025,6 +1025,7 @@ test('policies: Codex blocked switch says why on the row and names the candidate
   );
   const codex = vm.policies.find((p) => p.provider === 'codex');
   assert.match(codex.sub, /Waiting for Codex to finish active work/);
+  assert.match(codex.sub, /Will switch to two@example\.test when Codex goes idle\./);
   assert.match(codex.sub, /Press Activate on two@example\.test to switch now\./);
 });
 
