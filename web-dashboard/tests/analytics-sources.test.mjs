@@ -214,7 +214,12 @@ test('cost that is not logged reads "Not logged", never $0.00, and partial cost 
   assert.ok(Math.abs(cost.num - known) < 1e-9);
   assert.equal(cost.sub[0].text, 'Partial');
   assert.match(view.trend.legend.find(l => l.key === 'cost').note, /partial/);
-  assert.equal(view.sessions.stats.find(s => s.key === 'avg').text, 'Not logged');
+  // the average session cost comes from the priced rows and says partial (claude, codex, zai and
+  // opencode-go have costs; muse, qwen and other do not)
+  const avg = view.sessions.stats.find(s => s.key === 'avg');
+  assert.ok(Math.abs(avg.num - (haiku(1e6, 2e5, 1e6, 4e7) + gpt5(2e6, 1e5, 0, 1e7) + 3.2 + 2) / 8) < 1e-9);
+  assert.equal(avg.text, '$2.15');
+  assert.match(avg.label, /partial/);
   // the provider summary: a not-logged provider says so in its tip, never $0.00
   assert.match(view.providers.items.find(i => i.key === 'qwen').tip, /estimated cost not logged\. From OMP logs\.$/);
   assert.match(view.providers.items.find(i => i.key === 'muse').tip, /\$0\.50 estimated cost, partial: some is not logged\. From OMP and Muse Code logs\.$/);
