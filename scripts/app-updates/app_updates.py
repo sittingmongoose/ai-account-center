@@ -10,7 +10,6 @@ import json
 import os
 import pathlib
 import shutil
-import subprocess
 import sys
 import time
 import uuid
@@ -78,31 +77,86 @@ def detect(platform):
     return {app_id: detect_desktop(app_id, platform) if app_id.endswith("-desktop") else detect_cli(app_id, platform) for app_id in APP_LABELS}
 
 
-def perform_cli_update(install):
+def resolve_muse_shell(platform):
+    """The Meta installer is bash-only ([[ ]], arrays); /bin/sh is dash on
+    Ubuntu and fails immediately. Resolve bash first so a host without one
+    reports unsupported without downloading anything."""
+    if platform == "windows":
+        return None
+    shell = shutil.which("bash")
+    if shell is None and pathlib.Path("/bin/bash").is_file():
+        shell = "/bin/bash"
+    if shell is None:
+        raise UpdateFailure("unsupported")
+    return shell
+
+
+def resolve_npm(prefix):
+    """Locate node.exe plus its npm-cli.js so npm runs without any shell.
+
+    cmd.exe /d /s /c mangles a quoted executable containing spaces, so the
+    previous '"C:\\Program Files\\nodejs\\npm.cmd" install ...' line died with
+    "not recognized" before npm ever started. Returns (node, cli) or None.
+    """
+    roots = []
+    located = shutil.which("npm.cmd")
+    if located:
+        roots.append(pathlib.Path(located).parent)
+    roots.append(pathlib.Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "nodejs")
+    roots.append(prefix)
+    for root in roots:
+        node, cli = root / "node.exe", root / "node_modules/npm/bin/npm-cli.js"
+        if node.is_file() and cli.is_file():
+            return node, cli
+    located_node = shutil.which("node.exe") or shutil.which("node")
+    if located_node:
+        root = pathlib.Path(located_node).parent
+        cli = root / "node_modules/npm/bin/npm-cli.js"
+        if cli.is_file():
+            return pathlib.Path(located_node), cli
+    return None
+
+
+def _clamp(seconds, deadline):
+    if deadline is None:
+        return seconds
+    return max(30, min(seconds, int(deadline - time.monotonic())))
+
+
+def npm_view_latest(install):
+    """Read-only registry check for the npm path. None when unknowable."""
+    resolved = resolve_npm(install.path.parent)
+    if resolved is None:
+        return None
+    node, cli = resolved
+    try:
+        return command([str(node), str(cli), "view", "@openai/codex", "version"], timeout=60, capture=True).strip() or None
+    except UpdateFailure:
+        return None
+
+
+def perform_cli_update(install, deadline=None):
     path = install.path
     if install.app_id == "muse-code":
         expected = pathlib.Path.home() / ".local/bin/muse"
         if install.platform != "windows" and path.resolve() != expected.resolve():
             raise UpdateFailure("unsupported")
+        shell = resolve_muse_shell(install.platform)
         with private_temporary() as temporary:
             target = temporary / ("muse-install.ps1" if install.platform == "windows" else "muse-install.sh")
             download("https://dev.meta.ai/install.ps1" if install.platform == "windows" else "https://dev.meta.ai/install.sh", target, maximum=512 * 1024, timeout=60)
             env = {"MUSE_UPGRADE_MODE": "1", "MUSE_NO_MODIFY_PATH": "1"}
             if install.platform == "windows":
-                command(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target], timeout=180, env=env)
+                command(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target], timeout=_clamp(180, deadline), env=env)
             else:
-                command(["/bin/sh", target], timeout=180, env=env)
+                command([shell, target], timeout=_clamp(600, deadline), env=env)
         return
     if install.manager == "npm":
-        candidates = [pathlib.Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "nodejs/npm.cmd", install.path.parent / "npm.cmd"]
-        located = shutil.which("npm.cmd")
-        if located:
-            candidates.insert(0, pathlib.Path(located))
-        npm = next((item for item in candidates if item.is_file()), None)
-        if npm is None:
+        resolved = resolve_npm(install.path.parent)
+        if resolved is None:
             raise UpdateFailure("unsupported")
-        argv = [str(npm), "install", "--global", "--prefix", str(install.path.parent), "@openai/codex@latest"]
-        command([os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "cmd.exe"), "/d", "/s", "/c", subprocess.list2cmdline(argv)], timeout=180)
+        node, cli = resolved
+        command([str(node), str(cli), "install", "--global", "--prefix", str(install.path.parent), "@openai/codex@latest"], timeout=_clamp(300, deadline))
         return
     if install.manager != "native":
         raise UpdateFailure("unsupported")
@@ -113,6 +167,8 @@ def update_cli(install, deadline):
     before = install.version
     attempted = False
     changed = False
+    pre_stopped = False
+    pre_forced = 0
     pending = pathlib.Path.home() / ".ccs/app-updates" / (install.app_id + "-pending-restart.json")
     try:
         if not before:
@@ -155,22 +211,61 @@ def update_cli(install, deadline):
             return payload
         contexts, targets = cli_contexts(install, processes)
         check_terminal(install.platform, contexts)
+        if install.manager == "npm" and install.platform == "windows":
+            if contexts and npm_view_latest(install) == before:
+                # Already current: never stop running sessions for a no-op.
+                # Anything mapped is running, so no stale marker can matter.
+                pending.unlink(missing_ok=True)
+                return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=False)
+            if contexts:
+                # Windows cannot replace a running npm tree (locked files fail
+                # the install), so mapped instances stop before npm runs. The
+                # pending marker lets a later explicit click retry the restart
+                # if this one leaves processes down.
+                write_private_json(pending, {"version": before})
+                try:
+                    pre_forced = terminate_cli(install, targets)
+                except UpdateFailure:
+                    try:
+                        restart_cli(install, contexts)
+                        pending.unlink(missing_ok=True)
+                    except (UpdateFailure, OSError):
+                        pass
+                    return result(install.app_id, install.platform, "failed", before, before, install.manager, "restart_context", False)
+                pre_stopped = True
         attempted = True
-        perform_cli_update(install)
+        perform_cli_update(install, deadline)
         refreshed = detect_cli(install.app_id, install.platform)
         if refreshed is None or not refreshed.version:
             raise UpdateFailure("version_unknown")
-        needs_restart = False
+        marker_version = None
         try:
-            marker = json.loads(pending.read_text(encoding="utf-8"))
-            needs_restart = marker.get("version") == refreshed.version
+            marker_version = json.loads(pending.read_text(encoding="utf-8")).get("version")
         except (OSError, ValueError):
             pass
+        needs_restart = marker_version == refreshed.version and marker_version != before
         if refreshed.version == before and not needs_restart:
+            if pre_stopped:
+                # Stopped for the install; relaunch the same version. The
+                # marker must go: there is nothing newer to retry towards.
+                pending.unlink(missing_ok=True)
+                try:
+                    sessions = restart_cli(refreshed, contexts)
+                except (UpdateFailure, OSError):
+                    write_private_json(pending, {"version": refreshed.version})
+                    return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
+                value = result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True, restarted=len(contexts))
+                value.update(restartTargets=sessions, forcedStops=pre_forced)
+                return value
+            if marker_version == before:
+                # Stale pre-stop bookkeeping from an earlier run. Dropping it
+                # keeps a later run from reporting "updated" for a version
+                # that never changed.
+                pending.unlink(missing_ok=True)
             return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True)
         changed = True
         write_private_json(pending, {"version": refreshed.version})
-        forced = terminate_cli(install, targets) if targets else 0
+        forced = (terminate_cli(install, targets) if targets else 0) + pre_forced
         try:
             sessions = restart_cli(refreshed, contexts)
         except (UpdateFailure, OSError):
@@ -182,11 +277,29 @@ def update_cli(install, deadline):
     except UpdateFailure as error:
         if changed:
             return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", attempted)
-        return result(install.app_id, install.platform, "failed", before, before, install.manager, error.code, attempted)
+        if pre_stopped:
+            relaunch_after_failed_install(install, contexts, pending)
+        code = "update_failed" if error.code == "download_blocked" else error.code
+        return result(install.app_id, install.platform, "failed", before, before, install.manager, code, attempted)
     except Exception:
         if changed:
             return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", attempted)
+        if pre_stopped:
+            relaunch_after_failed_install(install, contexts, pending)
         return result(install.app_id, install.platform, "failed", before, before, install.manager, "update_failed", attempted)
+
+
+def relaunch_after_failed_install(install, contexts, pending):
+    """Relaunch the old version after a post-stop install failure, best effort.
+
+    The pending marker stays when the relaunch fails, so a later explicit
+    click retries the restart through the normal pending path.
+    """
+    try:
+        restart_cli(install, contexts)
+        pending.unlink(missing_ok=True)
+    except (UpdateFailure, OSError):
+        pass
 
 
 def check_readiness(install):

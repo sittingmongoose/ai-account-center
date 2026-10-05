@@ -160,6 +160,8 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
   assert.deepEqual(updateViewModel({ state: 'running', activePlatform: 'mac', results: [{ status: 'updated' }, { status: 'current' }] }), { running: true, done: false, count: 2, total: 21, tip: 'Updating apps on Mac · running apps may restart', summary: '2 results' });
   assert.equal(updateViewModel({ state: 'completed', results: [{ status: 'failed' }] }, { done: true }).done, true);
   assert.equal(updateViewModel(null).count, 0);
+  assert.deepEqual(updateViewModel({ state: 'completed', results: [{ status: 'updated' }, { status: 'action_required' }, { status: 'action_required' }] }).summary, '3 results · 2 need action');
+  assert.match(updateViewModel({ state: 'completed', results: [{ status: 'action_required' }] }).tip, /1 need action/);
 });
 
 test('Home headers, footer and the inline confirmation read the data truthfully (W2)', () => {

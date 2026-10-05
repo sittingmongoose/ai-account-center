@@ -76,13 +76,28 @@ InteractiveToken/Limited task runs the private helper. Registration does **not**
 run an update. The helper queues that task from SSH session zero, so the user's
 interactive session must be signed in. Existing CCS Bar tasks are untouched.
 
-Results are `updated`, `current`, `not_installed`, `failed`, or `restart_failed`,
-with bounded versions, fixed message codes, restart counts/forced-stop counts and
-safe terminal target metadata. Raw package command output, process argv,
-environments, installer response bodies and credentials are never returned.
-Host/helper execution locks prevent overlapping work. Package operation timeout
-or a relaunch refusal is reported honestly and does not prevent other apps/hosts
-from producing their own results. Status reads never retry an interrupted job.
+Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
+`skipped`, `unknown`, or `action_required`, with bounded versions, fixed message
+codes, restart counts/forced-stop counts and safe terminal target metadata. Raw
+package command output, process argv, environments, installer response bodies and
+credentials are never returned. Host/helper execution locks prevent overlapping
+work. Package operation timeout or a relaunch refusal is reported honestly and
+does not prevent other apps/hosts from producing their own results. Status reads
+never retry an interrupted job.
+
+`action_required` is never a failure: the job completes and the row tells the
+user exactly what to do. Mac and Windows desktops whose running instances will
+not quit (or cannot be mapped) report `quit_first`: nothing is swapped or
+deployed while anything runs, and the next click after the user quits updates
+cleanly. MSIX deployments rejected for apps that need closing also report
+`quit_first`. Desktop downloads refused by a bot challenge (HTTP 403 or a
+challenge page) report `check_in_app` after bounded retries. Desktop downloads
+allow 2 GiB and 10-minute timeouts; Mac and Windows desktops are never
+force-stopped (Ubuntu desktops keep the previous terminate-and-relaunch flow).
+Windows npm updates first ask the registry whether anything is newer, then run
+`node npm-cli.js` directly (never through `cmd /s /c`, which mangles spaced
+paths) after stopping mapped instances first, since Windows cannot replace a
+running npm tree.
 
 ## Fixture verification
 

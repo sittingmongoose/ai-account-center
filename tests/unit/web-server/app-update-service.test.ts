@@ -147,6 +147,40 @@ describe('fixed app update service', () => {
     expect(value[1].status).toBe('failed');
     expect(JSON.stringify(value)).not.toContain('SECRET_TOKEN');
   });
+  it('accepts action-required rows and completes the job without failures', async () => {
+    const rows = JSON.parse(payload()).results;
+    rows[0] = { ...rows[0], status: 'action_required', messageCode: 'quit_first' };
+    rows[1] = {
+      ...rows[1],
+      status: 'action_required',
+      messageCode: 'quit_first',
+      updateAttempted: false,
+      previousVersion: null,
+      version: null,
+    };
+    rows[2] = { ...rows[2], status: 'action_required', messageCode: 'check_in_app' };
+    const normalized = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'mac');
+    expect(normalized[0].status).toBe('action_required');
+    expect(normalized[0].message).toBe('Quit the app, then run Update apps again.');
+    expect(normalized[1].message).toBe('Quit the app, then run Update apps again.');
+    expect(normalized[2].message).toBe(
+      'The download was blocked; open the app to check for updates.'
+    );
+    const service = new AppUpdateService({
+      persist: false,
+      runHost: async () => JSON.stringify({ results: rows }),
+    });
+    service.start();
+    await finish(service);
+    expect(service.getStatus().job!.state).toBe('completed');
+  });
+  it('rejects action-required rows with unknown message codes', () => {
+    const rows = JSON.parse(payload()).results;
+    rows[0] = { ...rows[0], status: 'action_required', messageCode: 'bogus' };
+    const value = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'ubuntu');
+    expect(value[0].status).toBe('failed');
+    expect(JSON.stringify(value)).not.toContain('bogus');
+  });
   it('uses an owner-only cross-process lock and restores safe completed status', async () => {
     const root = directory();
     let release!: (value: string) => void;

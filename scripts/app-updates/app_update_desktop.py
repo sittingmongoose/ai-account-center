@@ -14,7 +14,30 @@ from app_update_common import (
     Install, UpdateFailure, command, download, powershell, private_temporary,
     ps_quote, result, version_text, version_tuple, write_private_json,
 )
-from app_update_processes import main_contexts, restart_desktops, scan, terminate_desktops
+from app_update_processes import main_contexts, request_desktop_quit, restart_desktops, scan, terminate_desktops
+
+
+# Desktop packages are hundreds of megabytes (the Codex MSIX is over 900 MB)
+# and its host links need minutes, not seconds. Still bounded, still verified.
+DESKTOP_DOWNLOAD_MAXIMUM = 2 * 1024 * 1024 * 1024
+DESKTOP_DOWNLOAD_TIMEOUT = 600
+DOWNLOAD_BLOCKED_RETRIES = 3
+
+
+def download_desktop(url, destination):
+    """Fetch a desktop package, tolerating flaky bot-challenge refusals.
+
+    Raises UpdateFailure('download_blocked') when every attempt is refused so
+    callers report check_in_app; any other failure propagates unchanged.
+    """
+    for attempt in range(DOWNLOAD_BLOCKED_RETRIES):
+        try:
+            download(url, destination, maximum=DESKTOP_DOWNLOAD_MAXIMUM, timeout=DESKTOP_DOWNLOAD_TIMEOUT)
+            return
+        except UpdateFailure as error:
+            if error.code != "download_blocked" or attempt + 1 == DOWNLOAD_BLOCKED_RETRIES:
+                raise
+            time.sleep(2)
 
 
 MAC = {
@@ -101,9 +124,9 @@ def update_mac(install):
     backup, stage = None, None
     with private_temporary() as temporary:
         dmg = temporary / "update.dmg"
-        download(MAC[install.app_id][3], dmg)
         attached = None
         try:
+            download_desktop(MAC[install.app_id][3], dmg)
             mounted = command(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-plist", dmg], timeout=60, capture=True)
             mounted = plistlib.loads(mounted.encode("utf-8"))
             volumes = [pathlib.Path(entry["mount-point"]) for entry in mounted.get("system-entities", []) if "mount-point" in entry]
@@ -121,8 +144,22 @@ def update_mac(install):
             backup = install.path.parent / (".CCS-update-backup-" + uuid.uuid4().hex + ".app")
             shutil.copytree(candidates[0], stage, symlinks=True)
             verify_mac(stage, install.app_id)
-            contexts = main_contexts(install, scan("mac"))
-            forced = terminate_desktops(install, contexts)
+            try:
+                contexts = main_contexts(install, scan("mac"))
+            except UpdateFailure:
+                # Instances exist but cannot be mapped safely; ask the user
+                # to quit instead of touching anything running.
+                return result(install.app_id, "mac", "action_required", before, before, install.manager, "quit_first", False)
+            exited, refused = request_desktop_quit(install, contexts)
+            if refused:
+                # Never force a desktop shut and never swap under a running
+                # app; the user quits it and the next click updates cleanly.
+                if exited:
+                    try:
+                        restart_desktops(install, exited)
+                    except (UpdateFailure, OSError):
+                        pass
+                return result(install.app_id, "mac", "action_required", before, before, install.manager, "quit_first", False)
             os.rename(install.path, backup)
             try:
                 os.rename(stage, install.path)
@@ -131,16 +168,26 @@ def update_mac(install):
                 os.rename(backup, install.path)
                 raise UpdateFailure()
             install.version = after
+            try:
+                verify_mac(install.path, install.app_id)
+            except UpdateFailure:
+                os.rename(install.path, stage)
+                os.rename(backup, install.path)
+                install.version = before
+                installed = False
+                raise
             mark_restart(install, after)
             try:
                 restarted = restart_desktops(install, contexts)
             except (UpdateFailure, OSError):
                 return result(install.app_id, "mac", "restart_failed", before, after, install.manager, "restart_failed", True)
             value = result(install.app_id, "mac", "updated", before, after, install.manager, attempted=True, restarted=restarted)
-            value["forcedStops"] = forced
+            value["forcedStops"] = 0
             clear_restart(install)
             return value
         except (UpdateFailure, OSError) as error:
+            if isinstance(error, UpdateFailure) and error.code == "download_blocked":
+                return result(install.app_id, "mac", "action_required", before, before, install.manager, "check_in_app", False)
             if contexts and not installed:
                 # Restore only closed instances if a graceful close was refused.
                 from app_update_processes import live_contexts
@@ -174,6 +221,24 @@ def msix_info(path):
         raise UpdateFailure("signature_failed") from None
 
 
+def add_appx_package(package):
+    """Install the verified MSIX, classifying needs-closing rejections.
+
+    The wrapper always exits 0 and reports on stdout, which stays private and
+    is never emitted: a rejection for running apps maps to quit_first, while
+    any other deployment failure stays update_failed.
+    """
+    script = ("$ErrorActionPreference='Stop'; try { Add-AppxPackage -Path " + ps_quote(package)
+              + "; Write-Output 'CCS_ADDAPPX_OK' } catch { Write-Output ('CCS_ADDAPPX_FAILED: ' + $_.Exception.ToString()) }")
+    text = powershell(script, timeout=600)
+    if "CCS_ADDAPPX_OK" in text.split():
+        return
+    lowered = text.lower()
+    if "ccs_addappx_failed" in lowered and ("0x80073d02" in lowered or "need to be closed" in lowered):
+        raise UpdateFailure("quit_first")
+    raise UpdateFailure()
+
+
 def update_windows(install):
     before = install.version
     contexts, installed = [], False
@@ -183,7 +248,7 @@ def update_windows(install):
     with private_temporary() as temporary:
         package = temporary / "update.msix"
         try:
-            download(url, package)
+            download_desktop(url, package)
             info = msix_info(package)
             if info.get("Name") != install.identity or info.get("Publisher") != install.publisher or info.get("ProcessorArchitecture", "").lower() not in (architecture, "neutral"):
                 raise UpdateFailure("signature_failed")
@@ -193,10 +258,29 @@ def update_windows(install):
             if version_tuple(after) <= version_tuple(before):
                 return result(install.app_id, "windows", "current", before, before, install.manager)
             contexts = main_contexts(install, scan("windows"))
-            forced = terminate_desktops(install, contexts)
-            # Add-AppxPackage verifies the Microsoft Store/publisher signature
-            # and upgrades the same per-user package, preserving LocalState.
-            powershell("$ErrorActionPreference='Stop'; Add-AppxPackage -Path " + ps_quote(package), timeout=180)
+            exited, refused = request_desktop_quit(install, contexts)
+            if refused:
+                # Never force a desktop shut; the user quits it instead.
+                if exited:
+                    try:
+                        restart_desktops(install, exited)
+                    except (UpdateFailure, OSError):
+                        pass
+                return result(install.app_id, "windows", "action_required", before, before, install.manager, "quit_first", False)
+            try:
+                # Add-AppxPackage verifies the Microsoft Store/publisher
+                # signature and upgrades the same per-user package, preserving
+                # LocalState.
+                add_appx_package(package)
+            except UpdateFailure as deploy:
+                if deploy.code == "quit_first":
+                    if exited:
+                        try:
+                            restart_desktops(install, exited)
+                        except (UpdateFailure, OSError):
+                            pass
+                    return result(install.app_id, "windows", "action_required", before, before, install.manager, "quit_first", False)
+                raise
             installed = True
             mark_restart(install, after)
             refreshed = windows_package(install.app_id)
@@ -207,10 +291,12 @@ def update_windows(install):
             except (UpdateFailure, OSError):
                 return result(install.app_id, "windows", "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
             value = result(install.app_id, "windows", "updated", before, refreshed.version, install.manager, attempted=True, restarted=restarted)
-            value["forcedStops"] = forced
+            value["forcedStops"] = 0
             clear_restart(install)
             return value
         except UpdateFailure as error:
+            if error.code == "download_blocked":
+                return result(install.app_id, "windows", "action_required", before, before, install.manager, "check_in_app", False)
             if contexts and not installed:
                 from app_update_processes import live_contexts
                 closed = [item for item in contexts if item not in live_contexts("windows", contexts)]
@@ -282,11 +368,24 @@ def update_desktop(install, deadline=None):
     if retry:
         try:
             contexts = main_contexts(install, scan(install.platform))
-            forced = terminate_desktops(install, contexts)
+        except UpdateFailure:
+            # Installed bits are already the new version; instances that
+            # cannot be mapped finish by quitting. The marker stays so a
+            # later click completes the relaunch once the app is down.
+            return result(install.app_id, install.platform, "action_required", install.version, install.version, install.manager, "quit_first", False)
+        try:
+            exited, refused = request_desktop_quit(install, contexts)
+            if refused:
+                if exited:
+                    try:
+                        restart_desktops(install, exited)
+                    except (UpdateFailure, OSError):
+                        pass
+                return result(install.app_id, install.platform, "action_required", install.version, install.version, install.manager, "quit_first", False)
             restarted = restart_desktops(install, contexts)
             clear_restart(install)
             value = result(install.app_id, install.platform, "updated", install.version, install.version, install.manager, attempted=False, restarted=restarted)
-            value["forcedStops"] = forced
+            value["forcedStops"] = 0
             return value
         except (UpdateFailure, OSError):
             return result(install.app_id, install.platform, "restart_failed", install.version, install.version, install.manager, "restart_failed")
