@@ -25,6 +25,7 @@ const slowTests = [
   'tests/unit/web-server/muse-failure-contract-interop.test.ts',
   'tests/unit/web-server/claude-host-transport.test.ts',
   'tests/unit/web-server/signin-process.test.ts',
+  'tests/unit/antigravity/signin-driver.test.ts',
   'tests/unit/web-server/dashboard-auth-runtime.test.ts',
   'tests/unit/web-server/analytics-remote-helper.test.ts',
 ];

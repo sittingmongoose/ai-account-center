@@ -77,7 +77,8 @@ export async function addAccount(
 ): Promise<LifecycleResult> {
   const provider = body.provider;
   if (!isDashboardProviderId(provider)) throw invalid();
-  // Antigravity signs in from a terminal: no credential or code crosses HTTP.
+  // Antigravity runs its own supervised sign-in job (or terminal fallback) and
+  // does its own secure-transport check, so it is handled before the generic path.
   if (provider === 'antigravity' && env.antigravity) {
     return addAntigravity(env, env.antigravity(), body, context);
   }

@@ -207,7 +207,7 @@ interface Fixture {
 async function fixture(
   options: {
     claudeEnabled?: boolean;
-    antigravityFlow?: 'preflight_failed' | 'tool_missing';
+    antigravityFlow?: 'preflight_failed' | 'tool_missing' | null;
     museEnabled?: boolean;
   } = {}
 ): Promise<Fixture> {
@@ -246,7 +246,8 @@ async function fixture(
     lifecycleProviderFacts(context, {
       codexCliAvailable: () => true,
       claudeEnabled: () => claudeEnabled,
-      antigravityFlow: () => options.antigravityFlow ?? 'preflight_failed',
+      antigravityFlow: () =>
+        options.antigravityFlow === undefined ? 'preflight_failed' : options.antigravityFlow,
       museEnabled: () => museEnabled,
     });
   const antigravity = new AntigravityAccountLifecycle({
@@ -270,6 +271,24 @@ async function fixture(
         now: () => now,
       }),
     antigravity: () => antigravity,
+    // Hermetic supervised-flow builder: no bubblewrap, no staging on the host.
+    antigravityJobFlow: (profileName, mode) => ({
+      provider: 'antigravity',
+      kind: 'supervised-cli',
+      mode,
+      accountId: mode === 'signin-again' ? `antigravity:profile:${profileName}` : null,
+      profileName,
+      platform: 'ubuntu',
+      allowedOrigins: ['https://accounts.google.com'],
+      timeoutMs: 60_000,
+      prepare: async () => ({ file: '/bin/true', args: [], env: {}, pty: false }),
+      complete: async () => ({
+        accountId: `antigravity:profile:${profileName}`,
+        email: `${profileName}@example.test`,
+        plan: 'free',
+      }),
+      cleanup: async () => undefined,
+    }),
     muse: () => new MuseAccountLifecycle({ enabled: museEnabled }),
     confirmations: (() => {
       const store = new AccountConfirmationStore(() => now);
@@ -1749,6 +1768,55 @@ describe('Antigravity profiles', () => {
     ]);
     const unknown = await f.request('POST', '/antigravity:profile:nobody/signin-again', {});
     expect([unknown.status, unknown.body.code]).toEqual([404, 'unknown_account']);
+  });
+
+  it('starts a supervised Antigravity job for Add and Sign in again when the flow is available', async () => {
+    const f = await fixture({ antigravityFlow: null });
+    const add = await f.request('POST', '/add', { provider: 'antigravity', profileName: 'party' });
+    expect(add.status).toBe(202);
+    expect(add.body.job).toMatchObject({
+      provider: 'antigravity',
+      kind: 'supervised-cli',
+      mode: 'add',
+      state: 'starting',
+    });
+    // One Antigravity sign-in at a time.
+    const second = await f.request('POST', '/add', { provider: 'antigravity', profileName: 'work' });
+    expect([second.status, second.body.code]).toEqual([409, 'job_running']);
+
+    // On plain HTTP the pasted code cannot cross: 403 with the terminal fallback.
+    const insecure = await f.request(
+      'POST',
+      '/add',
+      { provider: 'antigravity', profileName: 'solo' },
+      PLAIN
+    );
+    expect(insecure.status).toBe(403);
+    expect(insecure.body).toMatchObject({
+      code: 'secure_transport_required',
+      fallback: {
+        kind: 'terminal',
+        host: 'ubuntu',
+        command: 'ai-account-center antigravity signin solo',
+      },
+    });
+
+    // Sign in again: the live login is refused, another saved profile starts a job.
+    const g = await fixture({ antigravityFlow: null });
+    await agyProfile('gmail');
+    await agyProfile('party');
+    agyLive('party');
+    const live = await g.request('POST', '/antigravity:profile:party/signin-again', {});
+    expect([live.status, live.body.code]).toEqual([409, 'account_active']);
+    const again = await g.request('POST', '/antigravity:profile:gmail/signin-again', {});
+    expect(again.status).toBe(202);
+    expect(again.body.job).toMatchObject({
+      provider: 'antigravity',
+      kind: 'supervised-cli',
+      mode: 'signin-again',
+      accountId: 'antigravity:profile:gmail',
+      state: 'starting',
+    });
   });
 
   it('refuses Sign in again and Remove while a terminal sign-in for the profile runs', async () => {

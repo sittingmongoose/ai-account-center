@@ -35,7 +35,7 @@ import { runClaudeHostOverSsh } from './claude-host-transport';
 import type { CodexAccountLifecycle } from './codex-account-lifecycle';
 import type { MuseAccountLifecycle } from './muse-account-lifecycle';
 import { providerSignInState, type ProviderRegistryFacts } from './dashboard-provider-registry';
-import type { SignInJobRunner } from './signin-jobs';
+import type { SignInFlowSpec, SignInJobRunner } from './signin-jobs';
 
 /**
  * Everything the lifecycle actions touch, injectable for tests: stores, the
@@ -49,6 +49,11 @@ export interface LifecycleEnv {
   claude: () => ClaudeAccountLifecycle;
   /** Antigravity saved profiles; without it Antigravity actions answer not_implemented. */
   antigravity?: () => AntigravityAccountLifecycle;
+  /**
+   * Builds the supervised Antigravity sign-in job (the driver flow). Injectable
+   * so route tests need no bubblewrap; the default is the real driver flow.
+   */
+  antigravityJobFlow?: (profileName: string, mode: 'add' | 'signin-again') => SignInFlowSpec;
   /** Muse Sign in again; without it (or while its flag is off) it answers not_implemented. */
   muse?: () => MuseAccountLifecycle;
   confirmations: () => AccountConfirmationStore;

@@ -1,0 +1,237 @@
+/**
+ * The supervised PTY driver for one Antigravity sign-in (CONTRACT-registry-
+ * lifecycle 6.6, in-browser flow). A fixed Python program, spawned by the
+ * sign-in job runner with plain pipes; it owns the pseudo-terminal the
+ * official CLI runs on, the same way signin-process.ts's relay owns the
+ * device-code CLIs'.
+ *
+ * What the driver does (observed against the real CLI 1.2.16 on Ubuntu, in
+ * the signin-sandbox isolation; every screen below arrived within ~1 s):
+ *
+ * - it starts the given argv (bubblewrap + the official CLI) on a PTY with
+ *   echo off and a 40x160 window, and never lets raw screen bytes leave:
+ *   the job's output parser sees only the one authorization URL line;
+ * - on the first-run login-method screen (`Select login method`, with
+ *   `> 1. Google OAuth` highlighted) it presses Enter exactly once, so the
+ *   CLI reaches its Google OAuth screen without the user's own keys;
+ * - it extracts the authorization URL from the CLI output and prints that
+ *   single line. Terminals that advertise OSC 8 (TERM=xterm-256color and
+ *   friends) carry the whole URL in the hyperlink parameter; plainer
+ *   terminals (TERM=dumb) get it as visually wrapped text, which the driver
+ *   rejoins from its URL-character chunks. Either way the URL is complete
+ *   and its origin is checked against the one allowed origin before it is
+ *   printed, so the parser's allowlist can never see a foreign URL;
+ * - it forwards the runner's stdin (the pasted authorization code plus a
+ *   newline) to the CLI, translating `\n` to `\r`: the CLI's input line
+ *   submits on carriage return only;
+ * - it polls the new credential file in the isolated home (the same
+ *   completeness and safety judgement as signin-sandbox's
+ *   maskedCredentialState) and, once it is complete twice in a row, stops
+ *   the CLI before any task can be typed into it and exits 0;
+ * - terminal queries the CLI sends (DA2, DECRQM, kitty) are deliberately
+ *   left unanswered: the CLI was observed to fall back and continue without
+ *   them, and answering would mean emulating a terminal this flow does not
+ *   need.
+ *
+ * Exit codes: 0 the credential is complete (the runner then imports and
+ * verifies it); 3 the CLI died without a complete credential; 2 a driver
+ * misuse that the argv guard below makes unreachable in production.
+ * Signals (the runner's cancel, timeout and shutdown) stop the CLI's whole
+ * process group: SIGTERM, then SIGKILL one second later, like the relay.
+ */
+export const AGY_DRIVER_PYTHON = '/usr/bin/python3';
+
+/** Fixed driver program; its argv after `-c <program>` is documented below. */
+export const AGY_SIGNIN_DRIVER_PROGRAM = [
+  'import errno, fcntl, json, os, pty, re, select, signal, stat, struct, sys, termios, time',
+  '# argv: <token path> <allowed origin> -- <child argv...>',
+  'if len(sys.argv) < 5 or sys.argv[3] != "--":',
+  '    sys.exit(2)',
+  'token_path = sys.argv[1]',
+  'origin = sys.argv[2]',
+  'child_argv = sys.argv[4:]',
+  'POLL_S = 0.25',
+  'STOP_GRACE_S = 2.0',
+  'KILL_GRACE_S = 1.0',
+  'MAX_TOKEN_BYTES = 16384',
+  'MAX_BUFFER = 524288',
+  'URL_CHARS = b"A-Za-z0-9%&=+:/.?_~-"',
+  'OSC8 = re.compile(b"\\x1b\\\\]8;[^;\\x07\\x1b]*;(https?://[^\\x07\\x1b]*)(?:\\x07|\\x1b\\\\\\\\)")',
+  'STRIP = [re.compile(b"\\x1b\\\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\\\\\)?"),',
+  '         re.compile(b"\\x1b\\\\[[0-?]*[ -/]*[@-~]"),',
+  '         re.compile(b"\\x1b[@-Z\\\\-_]"),',
+  '         re.compile(b"[\\x00-\\x08\\x0b-\\x1f\\x7f]")]',
+  'MENU_MARK = re.compile(b">\\\\s*1\\\\.\\\\s*Google\\\\s+OAuth")',
+  'def strip_controls(data):',
+  '    for pattern in STRIP:',
+  '        data = pattern.sub(b"", data)',
+  '    return data',
+  'def url_origin(url):',
+  '    try:',
+  '        scheme, netloc = url.split(b"://", 1)[0], url.split(b"://", 1)[1].split(b"/", 1)[0]',
+  '    except IndexError:',
+  '        return b""',
+  '    return scheme + b"://" + netloc',
+  'def extract_url(buf):',
+  '    match = OSC8.search(buf)',
+  '    if match:',
+  '        url = match.group(1)',
+  '        if url_origin(url) == origin.encode():',
+  '            return url',
+  '    # Plain wrapped text: the URL chunk of the origin line, then whole',
+  '    # continuation lines that are nothing but URL characters.',
+  '    lines = strip_controls(buf).split(b"\\n")',
+  '    for index, line in enumerate(lines):',
+  '        at = line.find(origin.encode())',
+  '        if at < 0:',
+  '            continue',
+  '        head = re.match(b"[" + URL_CHARS + b"]*", line[at:])',
+  '        if not head or not head.group(0):',
+  '            continue',
+  '        parts = [head.group(0)]',
+  '        for follow in lines[index + 1:]:',
+  '            chunk = follow.strip()',
+  '            if not chunk or not re.match(b"^[" + URL_CHARS + b"]+$", chunk):',
+  '                break',
+  '            parts.append(chunk)',
+  '        return b"".join(parts)',
+  '    return None',
+  'def token_state():',
+  '    try:',
+  '        before = os.lstat(token_path)',
+  '    except OSError:',
+  '        return "absent"',
+  '    if not stat.S_ISREG(before.st_mode):',
+  '        return "partial"',
+  '    try:',
+  '        fd = os.open(token_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))',
+  '    except OSError:',
+  '        return "partial"',
+  '    try:',
+  '        opened = os.fstat(fd)',
+  '        if (opened.st_dev != before.st_dev or opened.st_ino != before.st_ino',
+  '                or opened.st_size == 0 or opened.st_size > MAX_TOKEN_BYTES):',
+  '            return "partial"',
+  '        raw = b""',
+  '        while len(raw) < opened.st_size:',
+  '            piece = os.read(fd, opened.st_size - len(raw))',
+  '            if not piece:',
+  '                break',
+  '            raw += piece',
+  '        value = json.loads(raw.decode("utf-8"))',
+  '        token = value.get("token") if isinstance(value, dict) else None',
+  '        if not (isinstance(value, dict) and value.get("auth_method") == "consumer"',
+  '                and isinstance(token, dict)',
+  '                and isinstance(token.get("access_token"), str) and token["access_token"]',
+  '                and isinstance(token.get("refresh_token"), str) and token["refresh_token"]):',
+  '            return "partial"',
+  '        if (opened.st_nlink != 1 or (opened.st_mode & 0o777) != 0o600',
+  '                or opened.st_uid != os.getuid()):',
+  '            return "unsafe"',
+  '        return "complete"',
+  '    except Exception:',
+  '        return "partial"',
+  '    finally:',
+  '        os.close(fd)',
+  'pid, master = pty.fork()',
+  'if pid == 0:',
+  '    try:',
+  '        attrs = termios.tcgetattr(0)',
+  '        attrs[3] &= ~termios.ECHO',
+  '        termios.tcsetattr(0, termios.TCSANOW, attrs)',
+  '    except Exception:',
+  '        pass',
+  '    try:',
+  '        os.execvp(child_argv[0], child_argv)',
+  '    except Exception:',
+  '        os._exit(127)',
+  'try:',
+  "    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 160, 0, 0))",
+  'except Exception:',
+  '    pass',
+  'def force(signum, frame):',
+  '    try:',
+  '        os.killpg(pid, signal.SIGKILL)',
+  '    except Exception:',
+  '        pass',
+  'stopping = []',
+  'def stop(signum, frame):',
+  '    try:',
+  '        os.killpg(pid, signal.SIGTERM)',
+  '    except Exception:',
+  '        pass',
+  '    if not stopping:',
+  '        stopping.append(True)',
+  '        signal.signal(signal.SIGALRM, force)',
+  '        signal.setitimer(signal.ITIMER_REAL, KILL_GRACE_S)',
+  'for name in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):',
+  '    signal.signal(name, stop)',
+  'def stop_child():',
+  '    try:',
+  '        os.killpg(pid, signal.SIGTERM)',
+  '    except Exception:',
+  '        return',
+  '    until = time.monotonic() + STOP_GRACE_S',
+  '    while time.monotonic() < until:',
+  '        done, _ = os.waitpid(pid, os.WNOHANG)',
+  '        if done:',
+  '            return',
+  '        time.sleep(0.05)',
+  '    try:',
+  '        os.killpg(pid, signal.SIGKILL)',
+  '    except Exception:',
+  '        pass',
+  'source = sys.stdin.fileno()',
+  'watch = [master, source]',
+  'buf = b""',
+  'entered = False',
+  'url_sent = False',
+  'stable = 0',
+  'while True:',
+  '    ready, _, _ = select.select(watch, [], [], POLL_S)',
+  '    if master in ready:',
+  '        try:',
+  '            data = os.read(master, 65536)',
+  '        except OSError as error:',
+  '            if error.errno != errno.EIO:',
+  '                raise',
+  '            data = b""',
+  '        if not data:',
+  '            break',
+  '        if not (entered and url_sent):',
+  '            buf = (buf + data)[-MAX_BUFFER:]',
+  '            plain = strip_controls(buf)',
+  '            if not entered and b"Select login method" in plain and MENU_MARK.search(plain):',
+  '                os.write(master, b"\\r")',
+  '                entered = True',
+  '            if entered and not url_sent:',
+  '                url = extract_url(buf)',
+  '                if url:',
+  '                    os.write(1, url + b"\\n")',
+  '                    url_sent = True',
+  '    if source in ready:',
+  '        try:',
+  '            keys = os.read(source, 65536)',
+  '        except OSError:',
+  '            keys = b""',
+  '        if keys:',
+  '            try:',
+  '                os.write(master, keys.replace(b"\\n", b"\\r"))',
+  '            except OSError:',
+  '                pass',
+  '        else:',
+  '            watch.remove(source)',
+  '    state = token_state()',
+  '    if state in ("complete", "unsafe"):',
+  '        stable += 1',
+  '        if stable >= 2:',
+  '            stop_child()',
+  '            break',
+  '    else:',
+  '        stable = 0',
+  'try:',
+  '    os.waitpid(pid, 0)',
+  'except ChildProcessError:',
+  '    pass',
+  'sys.exit(0 if token_state() in ("complete", "unsafe") else 3)',
+].join('\n');
