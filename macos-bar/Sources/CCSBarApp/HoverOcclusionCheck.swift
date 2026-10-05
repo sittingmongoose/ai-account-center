@@ -22,6 +22,8 @@ enum HoverOcclusionCheck {
     var shown: [(id: String, text: String)] = []
     var windowTexts: [String] = []
     var entered: [String] = []
+    /// Rows whose highlight is on while the pointer rests there.
+    var highlighted: [String] = []
     var leftover = 0
   }
 
@@ -116,17 +118,24 @@ enum HoverOcclusionCheck {
       /// AppKit keeps tracking areas current only for windows on a screen; this offscreen window gets the same
       /// `updateTrackingAreas` call AppKit makes when a view's geometry or visibility changes.
       func refreshTracking() { for tag in tags() { tag.view.updateTrackingAreas() } }
-      func present(at point: NSPoint) -> Presentation {
+      func highlightedRows(_ all: [Tag]) -> [String] {
+        all.compactMap { tag in (tag.view as? DetailsRowButton)?.hovering == true ? tag.id : nil }
+      }
+      /// `everyone`: every tag view hears the enter, as if each tracking rect spanned the whole panel (FW4-HOVER
+      /// measured a content-sized host's visible rects that far; the real pointer could not settle which holds).
+      func present(at point: NSPoint, everyone: Bool = false) -> Presentation {
         var result = Presentation()
         HoverProbe.pointer = window.convertPoint(toScreen: point)
         refreshTracking()
         let all = tags()
-        let entered = all.filter { tracks($0.view, point) }
+        let entered = everyone ? all.filter { $0.view.window === window && !$0.view.isHiddenOrHasHiddenAncestor }
+          : all.filter { tracks($0.view, point) }
         result.entered = entered.map(\.id)
         for tag in entered { if let enter = event(.mouseEntered, point) { tag.view.mouseEntered(with: enter) } }
         for tag in entered { tag.presenter.flushPending() }
         result.shown = all.filter { $0.presenter.isShowing }.map { ($0.id, $0.presenter.text) }
         result.windowTexts = helpWindows().map(windowText)
+        result.highlighted = highlightedRows(all)
         for tag in entered { if let exit = event(.mouseExited, point) { tag.view.mouseExited(with: exit) } }
         for tag in all where tag.presenter.isShowing { tag.presenter.hide() }
         result.leftover = helpWindows().count
@@ -137,7 +146,8 @@ enum HoverOcclusionCheck {
       /// rects starts to hold the pointer, mouse-moved while it holds it (for `.mouseMoved` areas) and mouse-exited
       /// when it stops. Each stop dwells long enough for a tag to show (the delayed show runs at once). Nothing is
       /// reset between stops, so a tag left up from an earlier stop counts against the later one.
-      func walk(_ phase: String, _ path: [(label: String, point: NSPoint, expect: (id: String, text: String)?)]) -> [[String: Any]] {
+      func walk(_ phase: String, _ path: [(label: String, point: NSPoint, expect: (id: String, text: String)?)],
+        everyone: Bool = false) -> [[String: Any]] {
         var inside = Set<ObjectIdentifier>()
         var steps: [[String: Any]] = []
         func move(to point: NSPoint) -> [Tag] {
@@ -149,9 +159,9 @@ enum HoverOcclusionCheck {
             let key = ObjectIdentifier(tag.view)
             let local = tag.view.convert(point, from: nil)
             let areas = tag.view.trackingAreas
-            let holds = tag.view.window === window && !tag.view.isHiddenOrHasHiddenAncestor && areas.contains { area in
+            let holds = tag.view.window === window && !tag.view.isHiddenOrHasHiddenAncestor && (everyone || areas.contains { area in
               (area.options.contains(.inVisibleRect) ? tag.view.visibleRect : area.rect).contains(local)
-            }
+            })
             if holds && !inside.contains(key) {
               inside.insert(key)
               entering.append(tag)
@@ -188,7 +198,8 @@ enum HoverOcclusionCheck {
             ok = false
             fail("\(phase): walking to \(stop.label) expected no tag, presented \(shown.map(\.0))")
           }
-          steps.append(["at": stop.label, "presented": shown.map { ["id": $0.0, "text": $0.1] }, "passed": ok])
+          steps.append(["at": stop.label, "presented": shown.map { ["id": $0.0, "text": $0.1] }, "highlighted": highlightedRows(all),
+            "passed": ok])
         }
         // Leave the panel: every tag goes away.
         _ = move(to: NSPoint(x: -40, y: -40))
@@ -513,6 +524,355 @@ enum HoverOcclusionCheck {
           "presenter": held.tag.presenter.text, "visible": texts, "passed": ok])
         release(held)
       }
+      // MARK: 9. A panel shorter than its list (Jared's list is longer than his panel), scrolled
+      // Rows scroll under the floating footer and up under the header. Over a footer button only that button's tag
+      // presents and no row under it highlights; the gear over Settings' Value the same; no row scrolled out of
+      // view presents; content scrolling under a still pointer, and a layer opening under one, re-check it.
+      func scrolledPanel() -> [String: Any] {
+        var out: [String: Any] = [:]
+        prefs.menuBarProvider = "codex"
+        prefs.menuBarMode = .remaining
+        prefs.menuBarClaudeAccountID = nil
+        if state.settingsOpen { closeSettings() }
+        let panelHeight: CGFloat = 240
+        state.maxHeight = panelHeight
+        window.setContentSize(NSSize(width: state.panelWidth, height: panelHeight))
+        host.frame = NSRect(x: 0, y: 0, width: state.panelWidth, height: panelHeight)
+        host.layoutSubtreeIfNeeded()
+        pump(0.4)
+        out["panelHeight"] = Double(panelHeight)
+        out["contentHeight"] = Double(state.desiredHeight)
+
+        func tag(_ id: String) -> Tag? { tags().first { $0.id == id } }
+        /// What a person sees of a tag view, in window coordinates: its frame cut to every scroll viewport around it.
+        func seen(_ view: NSView) -> NSRect {
+          var rect = frameInWindow(view)
+          var current = view.superview
+          while let next = current {
+            if next is NSClipView { rect = rect.intersection(frameInWindow(next)) }
+            current = next.superview
+          }
+          return rect
+        }
+        func scrollTo(_ scroll: NSScrollView, _ offset: CGFloat) {
+          let clip = scroll.contentView
+          var bounds = clip.bounds
+          bounds.origin.y = offset
+          clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+          scroll.reflectScrolledClipView(clip)
+          host.layoutSubtreeIfNeeded()
+          pump(0.15)
+        }
+        func midY(_ id: String) -> CGFloat? { tag(id).map { frameInWindow($0.view).midY } }
+        /// Scrolls so the tag view `id` has its centre at window height `y`; false when the content cannot scroll that far.
+        func bring(_ id: String, to y: CGFloat) -> Bool {
+          guard let start = tag(id), let scroll = start.view.enclosingScrollView else { return false }
+          let origin = scroll.contentView.bounds.origin.y
+          let delta = y - frameInWindow(start.view).midY
+          scrollTo(scroll, origin + delta)
+          if let now = midY(id), abs(now - y) > 1 { scrollTo(scroll, origin - delta) }
+          return midY(id).map { abs($0 - y) <= 1 } ?? false
+        }
+        func columns(_ a: NSRect, _ b: NSRect) -> (lo: CGFloat, hi: CGFloat)? {
+          let lo = max(a.minX, b.minX) + 2, hi = min(a.maxX, b.maxX) - 2
+          return hi > lo ? (lo, hi) : nil
+        }
+        func cleanUp() {
+          for tag in tags() {
+            if let exit = event(.mouseExited, outside) { tag.view.mouseExited(with: exit) }
+            if tag.presenter.isShowing { tag.presenter.hide() }
+          }
+          HoverProbe.pointer = nil
+        }
+        let footerIDs = ["footer-dashboard", "footer-refresh", "footer-settings"]
+        let footerControls = footerIDs + ["codex-auto-info"]
+        guard let listScroll = tag("account-row-" + codex[0].id)?.view.enclosingScrollView else {
+          fail("scrolled panel: the account list has no scroll view")
+          return out
+        }
+        out["listViewport"] = NSStringFromRect(frameInWindow(listScroll.contentView))
+
+        // A footer button over a nested control that scrolled under it: only the footer's tag, no row highlight.
+        func overFooter(_ phase: String, targets: [String], everyone: Bool) -> [[String: Any]] {
+          var results: [[String: Any]] = []
+          for targetID in targets {
+            for footerID in footerIDs {
+              guard let footer = tag(footerID), let target = tag(targetID) else { fail("\(phase): no \(targetID) or \(footerID) tag"); continue }
+              let f = frameInWindow(footer.view)
+              guard let span = columns(f, frameInWindow(target.view)) else { continue }
+              guard bring(targetID, to: f.midY), let moved = tag(targetID) else {
+                fail("\(phase): could not scroll \(targetID) under \(footerID)")
+                continue
+              }
+              let point = NSPoint(x: (span.lo + span.hi) / 2, y: f.midY)
+              guard seen(moved.view).contains(point), seen(footer.view).contains(point) else {
+                fail("\(phase): \(targetID) is not under \(footerID) at \(point)")
+                continue
+              }
+              let p = present(at: point, everyone: everyone)
+              let text = footer.presenter.text
+              let ok = p.shown.count == 1 && p.shown[0].id == footerID && p.shown[0].text == text && p.windowTexts == [text]
+                && p.highlighted.isEmpty && p.leftover == 0
+              if !ok {
+                fail("\(phase): \(footerID) over \(targetID) expected only \"\(text)\" and no row highlight, presented "
+                  + "\(describe(p)), highlighted \(p.highlighted)")
+              }
+              results.append(["footer": footerID, "under": targetID, "x": Double(point.x), "y": Double(point.y),
+                "presented": p.shown.map(\.id), "highlighted": p.highlighted, "passed": ok])
+            }
+          }
+          if results.isEmpty { fail("\(phase): no footer button reached \(targets)") }
+          return results
+        }
+        // A nested control half under a footer button, walked: its own tag above the footer, only the footer's below.
+        func halfUnder(_ phase: String, targetID: String, footerID: String, rowID: String?, everyone: Bool) -> [[String: Any]] {
+          guard let footer = tag(footerID), let target = tag(targetID) else { fail("\(phase): no \(targetID) or \(footerID) tag"); return [] }
+          let f = frameInWindow(footer.view)
+          guard let span = columns(f, frameInWindow(target.view)), bring(targetID, to: f.maxY), let moved = tag(targetID) else {
+            fail("\(phase): could not put \(targetID) half under \(footerID)")
+            return []
+          }
+          let x = (span.lo + span.hi) / 2
+          let reach = min(6, frameInWindow(moved.view).height / 2 - 2)
+          let above = NSPoint(x: x, y: f.maxY + reach), under = NSPoint(x: x, y: f.maxY - reach)
+          let mine = (id: targetID, text: moved.presenter.text), front = (id: footerID, text: footer.presenter.text)
+          var path: [(label: String, point: NSPoint, expect: (id: String, text: String)?)] = [
+            ("outside the panel", outside, nil), ("\(targetID) above the footer", above, mine),
+            ("\(footerID) over \(targetID)", under, front), ("\(targetID) above the footer again", above, mine)]
+          var lit: [[String]] = [[], rowID.map { [$0] } ?? [], [], rowID.map { [$0] } ?? []]
+          if let rowID, let row = tag(rowID) {
+            let r = frameInWindow(row.view)
+            path.append(("\(rowID) above the footer", NSPoint(x: r.minX + r.width * 0.03, y: min(r.maxY - 3, f.maxY + 12)),
+              (rowID, row.presenter.text)))
+            lit.append([rowID])
+          }
+          path.append(("\(footerID) over \(targetID) again", under, front))
+          lit.append([])
+          let steps = walk(phase, path, everyone: everyone)
+          for (index, step) in steps.enumerated() where index < lit.count {
+            let highlighted = step["highlighted"] as? [String] ?? []
+            if highlighted != lit[index] { fail("\(phase): at \(step["at"] ?? "") the row highlight was \(highlighted), expected \(lit[index])") }
+          }
+          return steps
+        }
+        // Content scrolled up under the header: nothing scrolled out of view presents or highlights there.
+        func headerBand(_ phase: String, scroll: NSScrollView, allowed: Set<String>, everyone: Bool) -> [String: Any] {
+          let viewport = frameInWindow(scroll.contentView)
+          let height = scroll.documentView?.frame.height ?? 0
+          scrollTo(scroll, (height - viewport.height) * 0.6)
+          let top = host.bounds.height
+          let underHeader = tags().filter { $0.view.enclosingScrollView === scroll }
+            .filter { let f = frameInWindow($0.view); return f.maxY > viewport.maxY + 2 && f.minY < top - 2 }
+          if underHeader.isEmpty { fail("\(phase): no tag view scrolled up under the header") }
+          var points = 0, bad = 0
+          var examples: [String] = []
+          var y = viewport.maxY + 2
+          while y < top - 1 {
+            var x: CGFloat = 4
+            while x < host.bounds.width {
+              let p = present(at: NSPoint(x: x, y: y), everyone: everyone)
+              points += 1
+              if p.shown.contains(where: { !allowed.contains($0.id) }) || p.shown.count > 1 || !p.highlighted.isEmpty {
+                bad += 1
+                if examples.count < 8 { examples.append("(\(Int(x)),\(Int(y))) \(describe(p)) highlighted \(p.highlighted)") }
+              }
+              x += 16
+            }
+            y += 6
+          }
+          if bad > 0 { fail("\(phase): \(bad) of \(points) header points presented a tag or highlight from content scrolled out of view: \(examples.prefix(3))") }
+          return ["tagViewsUnderHeader": underHeader.count, "points": points, "bad": bad, "examples": examples]
+        }
+        // A grid over the scrolled panel at several scroll positions: one tag at most, always the frontmost under the pointer.
+        func grid(_ phase: String, scroll: NSScrollView, allowed: (String) -> Bool, everyone: Bool) -> [String: Any] {
+          let viewport = frameInWindow(scroll.contentView)
+          let height = scroll.documentView?.frame.height ?? 0
+          var points = 0, doubles = 0, unseen = 0, footerMiss = 0, headerLeak = 0, badHighlight = 0, leaks = 0
+          var examples: [String] = []
+          func note(_ text: String) { if examples.count < 12 { examples.append(text) } }
+          for fraction in [0.25, 0.5, 0.75] {
+            scrollTo(scroll, (height - viewport.height) * fraction)
+            let all = tags()
+            var byID: [String: NSView] = [:]
+            for tag in all { byID[tag.id] = tag.view }
+            let footers = all.filter { footerControls.contains($0.id) }.map { ($0.id, frameInWindow($0.view)) }
+            var y: CGFloat = 12
+            while y < host.bounds.height {
+              var x: CGFloat = 12
+              while x < host.bounds.width {
+                let point = NSPoint(x: x, y: y)
+                let p = present(at: point, everyone: everyone)
+                points += 1
+                let at = "(\(Int(x)),\(Int(y))) at \(Int(fraction * 100))%"
+                if p.shown.count > 1 || p.windowTexts.count > 1 { doubles += 1; note("two tags \(at): \(describe(p))") }
+                for shown in p.shown {
+                  if let view = byID[shown.id], !seen(view).contains(point) { unseen += 1; note("unseen \(shown.id) \(at)") }
+                  if !allowed(shown.id) { leaks += 1; note("covered layer \(shown.id) \(at)") }
+                }
+                if let footer = footers.first(where: { $0.1.contains(point) }) {
+                  if p.shown.map(\.id) != [footer.0] || !p.highlighted.isEmpty {
+                    footerMiss += 1
+                    note("over \(footer.0) \(at): \(describe(p)) highlighted \(p.highlighted)")
+                  }
+                }
+                if y > viewport.maxY, p.shown.contains(where: { $0.id != "header-menu" }) || !p.highlighted.isEmpty {
+                  headerLeak += 1
+                  note("header \(at): \(describe(p)) highlighted \(p.highlighted)")
+                }
+                if p.highlighted.count > 1 || p.highlighted.contains(where: { byID[$0].map { !seen($0).contains(point) } ?? true }) {
+                  badHighlight += 1
+                  note("highlight \(at): \(p.highlighted)")
+                }
+                x += 24
+              }
+              y += 24
+            }
+          }
+          let failed = doubles + unseen + footerMiss + headerLeak + badHighlight + leaks
+          if failed > 0 {
+            fail("\(phase): \(failed) problems over \(points) points (two tags \(doubles), tag from an unseen view \(unseen), "
+              + "footer not frontmost \(footerMiss), header leak \(headerLeak), wrong highlight \(badHighlight), covered layer \(leaks)): "
+              + "\(examples.prefix(4))")
+          }
+          return ["points": points, "twoTags": doubles, "unseen": unseen, "footerNotFrontmost": footerMiss, "headerLeak": headerLeak,
+            "wrongHighlight": badHighlight, "coveredLayer": leaks, "examples": examples]
+        }
+
+        let activates = codex.filter { !$0.isActive }.map { "activate-" + $0.id }.filter { tag($0) != nil }
+        let opens = Array(tags().filter { $0.id.hasPrefix("claude-mac-") || $0.id.hasPrefix("claude-windows-") }.suffix(2)).map(\.id)
+        if activates.isEmpty || opens.isEmpty { fail("scrolled panel: need Activate and Claude Open buttons, found \(activates) \(opens)") }
+        let walkTarget = activates.first ?? ""
+        let walkRow = "account-row-" + String(walkTarget.dropFirst("activate-".count))
+        for (name, everyone) in [("tracking", false), ("every-tag", true)] {
+          var section: [String: Any] = [:]
+          let phase = "scrolled list (\(name))"
+          section["footerOverActivate"] = overFooter(phase, targets: activates, everyone: everyone)
+          section["footerOverClaudeOpen"] = overFooter(phase, targets: opens, everyone: everyone)
+          section["walkActivateHalfUnderRefresh"] = halfUnder(phase, targetID: walkTarget, footerID: "footer-refresh", rowID: walkRow, everyone: everyone)
+          section["headerBand"] = headerBand(phase, scroll: listScroll, allowed: ["header-menu"], everyone: everyone)
+          // A list control scrolled up behind the header menu: the menu's own tag (the clipped geometry, not raw bounds).
+          if let menu = tag("header-menu"), let behind = tags().first(where: { tag in
+            tag.view.enclosingScrollView === listScroll && !tag.isRow && columns(frameInWindow(tag.view), frameInWindow(menu.view)) != nil
+          }) {
+            let m = frameInWindow(menu.view)
+            if bring(behind.id, to: m.midY), let span = columns(frameInWindow(behind.view), m) {
+              let p = present(at: NSPoint(x: (span.lo + span.hi) / 2, y: m.midY), everyone: everyone)
+              let ok = p.shown.map(\.id) == ["header-menu"] && p.highlighted.isEmpty
+              if !ok { fail("\(phase): header menu over \(behind.id) scrolled behind it presented \(describe(p))") }
+              section["headerMenuOverScrolledControl"] = ["behind": behind.id, "presented": p.shown.map(\.id), "passed": ok]
+            } else { fail("\(phase): could not scroll \(behind.id) behind the header menu") }
+          }
+          section["grid"] = grid(phase, scroll: listScroll, allowed: { _ in true }, everyone: everyone)
+          out["list-\(name)"] = section
+        }
+
+        // Content scrolling under a still pointer (AppKit sends no mouse event): the row that left no longer tags or
+        // highlights, and the row now under the pointer does.
+        do {
+          let viewport = frameInWindow(listScroll.contentView)
+          let footerTop = footerIDs.compactMap { tag($0).map { frameInWindow($0.view).maxY } }.max() ?? 60
+          scrollTo(listScroll, 0)
+          let point = NSPoint(x: 12 + (state.panelWidth - 24) * 0.03, y: (viewport.maxY + footerTop) / 2)
+          func rowAt() -> Tag? { tags().first { $0.isRow && seen($0.view).contains(point) } }
+          var result: [String: Any] = [:]
+          var start = rowAt()
+          var tries = 0
+          while start == nil && tries < 6 {
+            scrollTo(listScroll, listScroll.contentView.bounds.origin.y + 20)
+            start = rowAt()
+            tries += 1
+          }
+          if let start {
+            HoverProbe.pointer = window.convertPoint(toScreen: point)
+            refreshTracking()
+            let entered = tags().filter { tracks($0.view, point) }
+            for tag in entered { if let enter = event(.mouseEntered, point) { tag.view.mouseEntered(with: enter) } }
+            for tag in entered { tag.presenter.flushPending() }
+            let upBefore = start.presenter.isShowing && highlightedRows(tags()) == [start.id]
+            if !upBefore { fail("scroll under a still pointer: \(start.id) did not tag and highlight first") }
+            scrollTo(listScroll, listScroll.contentView.bounds.origin.y + 90)
+            for tag in tags() { tag.presenter.flushPending() }
+            let all = tags()
+            let shown = all.filter { $0.presenter.isShowing }.map(\.id)
+            let lit = highlightedRows(all)
+            let now = rowAt()
+            let expected = now.map { [$0.id] } ?? []
+            let ok = upBefore && !shown.contains(start.id) && !lit.contains(start.id) && shown == expected && lit == expected
+            if !ok {
+              fail("scroll under a still pointer: \(start.id) scrolled away; presented \(shown), highlighted \(lit), expected \(expected)")
+            }
+            result = ["rowBefore": start.id, "rowAfter": now?.id ?? "none", "presentedAfter": shown, "highlightedAfter": lit, "passed": ok]
+            cleanUp()
+          } else { fail("scroll under a still pointer: no row under \(point)") }
+          out["scrollUnderStillPointer"] = result
+        }
+
+        // Settings open in the short panel, scrolled: the gear over Value presents only the gear's tag.
+        state.setSettings(true)
+        pump(0.9)
+        if let settingsScroll = tag("settings-value")?.view.enclosingScrollView {
+          for (name, everyone) in [("tracking", false), ("every-tag", true)] {
+            var section: [String: Any] = [:]
+            let phase = "scrolled Settings (\(name))"
+            section["footerOverPickers"] = overFooter(phase, targets: ["settings-value", "settings-show"], everyone: everyone)
+            section["walkValueHalfUnderGear"] = halfUnder(phase, targetID: "settings-value", footerID: "footer-settings", rowID: nil, everyone: everyone)
+            section["headerBand"] = headerBand(phase, scroll: settingsScroll, allowed: ["header-menu"], everyone: everyone)
+            section["grid"] = grid(phase, scroll: settingsScroll, allowed: allowedOverSettings, everyone: everyone)
+            out["settings-\(name)"] = section
+          }
+        } else { fail("scrolled Settings: no scroll view around the Value picker") }
+
+        // A layer opening under a still pointer (Settings closing, the panel opening): the row under the pointer tags
+        // and highlights after the delay, with no mouse move.
+        do {
+          let viewport = frameInWindow(listScroll.contentView)
+          let footerTop = footerIDs.compactMap { tag($0).map { frameInWindow($0.view).maxY } }.max() ?? 60
+          let point = NSPoint(x: 12 + (state.panelWidth - 24) * 0.03, y: (viewport.maxY + footerTop) / 2)
+          var row = tags().first { $0.isRow && seen($0.view).contains(point) }
+          var tries = 0
+          while row == nil && tries < 6 {
+            scrollTo(listScroll, listScroll.contentView.bounds.origin.y + 20)
+            row = tags().first { $0.isRow && seen($0.view).contains(point) }
+            tries += 1
+          }
+          var result: [String: Any] = [:]
+          if row != nil {
+            let covered = present(at: point)
+            if covered.shown.contains(where: { !allowedOverSettings($0.id) }) { fail("reopen under a still pointer: Settings open presented \(describe(covered))") }
+            func settle(_ label: String, rebuilds: Bool, _ change: () -> Void) {
+              let viewsBefore = Set(tags().map { ObjectIdentifier($0.view) })
+              HoverProbe.pointer = window.convertPoint(toScreen: point)
+              change()
+              pump(0.9)
+              for tag in tags() { tag.presenter.flushPending() }
+              let all = tags()
+              // The row under the resting pointer now (a rebuilt panel starts at the top of the list).
+              let under = all.first { $0.isRow && seen($0.view).contains(point) }?.id ?? "none"
+              let shown = all.filter { $0.presenter.isShowing }.map(\.id)
+              let lit = highlightedRows(all)
+              // A rebuilt panel has new tag views only, so the old views' gate cannot be what tags it.
+              let rebuilt = !all.contains { viewsBefore.contains(ObjectIdentifier($0.view)) }
+              let ok = under != "none" && shown == [under] && lit == [under] && rebuilt == rebuilds
+              if !ok { fail("\(label): the pointer rests on \(under); presented \(shown), highlighted \(lit), content rebuilt \(rebuilt)") }
+              result[label] = ["row": under, "presented": shown, "highlighted": lit, "contentRebuilt": rebuilt, "passed": ok]
+              cleanUp()
+            }
+            settle("Settings closed under a still pointer", rebuilds: false) { state.setSettings(false) }
+            // As PanelController.close and open do: the panel gate shuts, then opens, and the content is rebuilt.
+            settle("panel opened under a still pointer", rebuilds: true) {
+              state.panelHover.set(true)
+              pump(0.05)
+              state.settingsOpen = false
+              state.panelHover.set(false)
+              state.openGeneration += 1
+            }
+          } else { fail("reopen under a still pointer: no row under \(point)") }
+          out["reopenUnderStillPointer"] = result
+        }
+        if state.settingsOpen { closeSettings() }
+        return out
+      }
+
       let baseActive = codex[activeIndex]
       let other = codex[codex.count - 1].id == baseActive.id ? codex[0] : codex[codex.count - 1]
       prefs.menuBarProvider = "codex"
@@ -551,6 +911,7 @@ enum HoverOcclusionCheck {
       prefs.menuBarProvider = "codex"
       prefs.menuBarClaudeAccountID = nil
       report["8-tag-follows-changes"] = follows
+      report["9-scrolled-panel"] = scrolledPanel()
 
       if !helpWindows().isEmpty { fail("end: \(helpWindows().count) hover tag(s) still showing") }
 

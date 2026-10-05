@@ -146,8 +146,11 @@ python3 Scripts/migration_check.py
   each Settings control (the X, Show, Claude account and Value) presents exactly its own tag with the expected text,
   and no point of a grid over the panel presents a tag from the account list hidden underneath. It also walks the
   pointer across rows and Settings controls (each stop shows its own tag, nothing stale), checks both Settings
-  transitions and the panel's close, and checks the rows still tag after Settings closes and after a reopen. The
-  fixture has three Codex accounts with full emails, the first not active.
+  transitions and the panel's close, and checks the rows still tag after Settings closes and after a reopen. A
+  height-limited, scrolled panel follows: a footer button over an Activate or Open button (and the gear over Settings'
+  Value) presents only the footer's tag with no row highlight, nothing scrolled up under the header presents, a row
+  that scrolls away from under a still pointer drops its tag, and a row under a still pointer tags once Settings
+  closes or the panel opens. The fixture has three Codex accounts with full emails, the first not active.
 - `--check-menu-bar-prefs` checks the menu-bar pickers persist on this Mac, earlier stored values migrate, and fresh
   defaults keep today's behaviour. It uses a throwaway suite and leaves no preferences behind.
 - `--self-test` opens the real glass panel from a fixture (no sign-in, no network): status item and reading, the open

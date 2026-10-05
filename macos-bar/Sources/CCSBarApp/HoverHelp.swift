@@ -73,16 +73,114 @@ extension View {
 @MainActor
 protocol HoverTagOwner: AnyObject {
   func hoverSuppressed()
+  /// Its layer opened again under a still pointer, or its content scrolled under it: re-check the pointer.
+  func hoverResumed()
+}
+
+/// Where the panel's hover targets are, as a person sees them. The tag views (and the markers of nested
+/// controls without a tag) register here, so the frontmost one under the pointer can be found without walking
+/// the whole window on every mouse move.
+@MainActor
+enum HoverStack {
+  private static let members = NSHashTable<NSView>.weakObjects()
+
+  static func register(_ view: NSView) { members.add(view) }
+
+  /// The part of `view`'s bounds a person can see, in its own coordinates. A hosted view's `visibleRect` reaches
+  /// past its own bounds, and the account list is not lazy, so a row scrolled out of view keeps bounds that lie
+  /// under the header: cut the bounds to every ancestor that clips (the scroll viewport) and to the window.
+  static func visibleBounds(_ view: NSView) -> NSRect {
+    var rect = view.bounds
+    var ancestor = view.superview
+    while let current = ancestor, !rect.isEmpty {
+      if current.clipsToBounds || current is NSClipView || current.superview == nil {
+        rect = rect.intersection(view.convert(current.bounds, from: current))
+      }
+      ancestor = current.superview
+    }
+    return rect
+  }
+
+  /// True when the seen part of `view` holds this window point.
+  static func holds(_ view: NSView, _ windowPoint: NSPoint) -> Bool {
+    let point = view.convert(windowPoint, from: nil)
+    return view.bounds.contains(point) && visibleBounds(view).contains(point)
+  }
+
+  /// No hidden view and no faded-out layer (SwiftUI's opacity reaches hosted views as their alpha) between
+  /// `view` and the window.
+  static func drawn(_ view: NSView) -> Bool {
+    var current: NSView? = view
+    while let next = current {
+      if next.isHidden || next.alphaValue < 0.05 || (next.layer?.opacity ?? 1) < 0.05 { return false }
+      current = next.superview
+    }
+    return true
+  }
+
+  /// True when `front` draws over `back`: the later sibling under their nearest common ancestor.
+  static func isInFront(_ front: NSView, of back: NSView) -> Bool {
+    func chain(_ view: NSView) -> [NSView] {
+      var views: [NSView] = []
+      var current: NSView? = view
+      while let next = current { views.append(next); current = next.superview }
+      return views.reversed()
+    }
+    let a = chain(front), b = chain(back)
+    guard let root = a.first, root === b.first else { return false }
+    var depth = 0
+    while depth < a.count, depth < b.count, a[depth] === b[depth] { depth += 1 }
+    if depth == a.count { return false }  // `front` is `back` or holds it: `back` draws over it
+    if depth == b.count { return true }  // `back` holds `front`
+    let siblings = a[depth - 1].subviews
+    let frontIndex = siblings.firstIndex { $0 === a[depth] } ?? 0
+    let backIndex = siblings.firstIndex { $0 === b[depth] } ?? 0
+    return frontIndex > backIndex
+  }
+
+  /// A live control drawn in front of `view` holds the point: a footer button over a row (or its Activate or
+  /// Open button) that scrolled under the footer, or the gear over Settings' Value. Only the frontmost tag
+  /// presents, and a row under such a control does not highlight. Rows never cover: a row's full-width target is
+  /// an overlay drawn over its own nested controls, which yield the other way (`nestedControl`).
+  static func covered(_ view: NSView, at windowPoint: NSPoint) -> Bool {
+    guard let window = view.window else { return false }
+    return members.allObjects.contains { other in
+      guard other !== view, other.window === window, !(other is DetailsRowButton), holds(other, windowPoint) else { return false }
+      if let help = other as? HoverHelpView, help.presenter.suppressed { return false }
+      return drawn(other) && isInFront(other, of: view)
+    }
+  }
+
+  /// A nested control of a live layer (a tag view other than a row, or a marked control without a tag) holds the point.
+  static func nestedControl(at windowPoint: NSPoint, in window: NSWindow, except view: NSView) -> Bool {
+    members.allObjects.contains { other in
+      guard other !== view, other.window === window, !(other is DetailsRowButton) else { return false }
+      if let help = other as? HoverHelpView, help.presenter.suppressed { return false }
+      return !other.isHiddenOrHasHiddenAncestor && holds(other, windowPoint)
+    }
+  }
+
+  /// Watches the scroll view around `view`, so a tag follows content that scrolls under a still pointer (AppKit
+  /// sends no mouse event then: the `.inVisibleRect` tracking rect is the viewport, and it does not move).
+  static func observeScroll(_ view: NSView, _ observed: inout NSClipView?, _ selector: Selector) {
+    let clip = view.window == nil ? nil : view.enclosingScrollView?.contentView
+    guard clip !== observed else { return }
+    if let observed { NotificationCenter.default.removeObserver(view, name: NSView.boundsDidChangeNotification, object: observed) }
+    observed = clip
+    if let clip { NotificationCenter.default.addObserver(view, selector: selector, name: NSView.boundsDidChangeNotification, object: clip) }
+  }
 }
 
 /// Help tags that work inside the tray panel even while the app is inactive, where the system tooltip
 /// timer does not reliably run for hosted SwiftUI controls. Each tag is a small regular-glass panel
 /// (radius 10) under the control. A tag presents only when its layer is open, its view is actually
-/// visible, no other window of this app covers the pointer, and the pointer is inside the view.
+/// visible, no other window of this app covers the pointer, and the pointer is on the seen part of the
+/// view with no other control drawn over it there.
 @MainActor
 final class HelpPresenter {
   private weak var owner: NSView?
   private var pending: DispatchWorkItem?
+  private var resume: DispatchWorkItem?
   private var panel: NSPanel?
   private var label: NSTextField?
   private var clickMonitor: Any?
@@ -107,9 +205,27 @@ final class HelpPresenter {
   var suppressed: Bool { gates.contains { $0.suppressed } }
 
   func gateChanged() {
-    guard suppressed else { return }
-    hide()
-    (owner as? HoverTagOwner)?.hoverSuppressed()
+    if suppressed {
+      resume?.cancel()
+      resume = nil
+      hide()
+      (owner as? HoverTagOwner)?.hoverSuppressed()
+    } else {
+      resumeSoon()
+    }
+  }
+
+  /// The layer opened (Settings closed) or the control appeared (the panel's content is rebuilt on every open)
+  /// while the pointer may be resting on it: once the motion has settled (Settings takes 0.34 s), check again,
+  /// so its tag starts the usual delay without waiting for a mouse move.
+  func resumeSoon() {
+    resume?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      self?.resume = nil
+      (self?.owner as? HoverTagOwner)?.hoverResumed()
+    }
+    resume = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
   }
 
   func schedule() {
@@ -122,22 +238,22 @@ final class HelpPresenter {
   /// Waiting out the hover delay, or showing.
   var isActive: Bool { pending != nil || panel != nil }
 
+  /// The pointer is on the part of the owner a person can see (cut to the scroll viewport).
   func pointerInside() -> Bool {
     guard let owner, let window = owner.window else { return false }
-    let point = owner.convert(window.convertPoint(fromScreen: HoverProbe.location), from: nil)
-    return owner.bounds.contains(point)
+    return HoverStack.holds(owner, window.convertPoint(fromScreen: HoverProbe.location))
   }
 
-  /// The owner is drawn: no hidden view and no faded-out layer (SwiftUI's opacity reaches the hosted
-  /// views as their alpha) between it and the window.
+  /// The pointer is on the owner, and no live control drawn in front of it (a footer button, the gear) holds it.
+  var pointerOnOwner: Bool {
+    guard pointerInside(), let owner, let window = owner.window else { return false }
+    return !HoverStack.covered(owner, at: window.convertPoint(fromScreen: HoverProbe.location))
+  }
+
+  /// The owner is drawn: no hidden view and no faded-out layer between it and the window.
   private var ownerVisible: Bool {
     guard let owner, let window = owner.window, window.isVisible, window.alphaValue > 0.05 else { return false }
-    var view: NSView? = owner
-    while let current = view {
-      if current.isHidden || current.alphaValue < 0.05 || (current.layer?.opacity ?? 1) < 0.05 { return false }
-      view = current.superview
-    }
-    return true
+    return HoverStack.drawn(owner)
   }
 
   /// Another window of this app (a Details or packs popover, an open menu) is frontmost under the pointer.
@@ -151,14 +267,14 @@ final class HelpPresenter {
 
   /// Every condition a tag needs to present right now, cheapest first.
   var canPresent: Bool {
-    guard let owner, let window = owner.window, !text.isEmpty, !suppressed, pointerInside(), ownerVisible else { return false }
+    guard let owner, let window = owner.window, !text.isEmpty, !suppressed, pointerOnOwner, ownerVisible else { return false }
     return !coveredByAnotherWindow(window)
   }
 
   /// Called on every enter and move: a tag starts its delay when the pointer is over its view and may
-  /// present, and goes away as soon as the pointer is not.
+  /// present, and goes away as soon as the pointer is not (or a control in front of the view now holds it).
   func follow(blocked: Bool = false) {
-    guard !blocked, !suppressed, pointerInside() else { pointerLeft(); return }
+    guard !blocked, !suppressed, pointerOnOwner else { pointerLeft(); return }
     if !isActive && !dismissed && canPresent { schedule() }
   }
 
@@ -279,8 +395,21 @@ final class HoverHelpView: NSView, HoverTagOwner {
   lazy var presenter = HelpPresenter(owner: self)
   var action: (() -> Void)?
   private var area: NSTrackingArea?
+  private weak var scrollClip: NSClipView?
 
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    HoverStack.register(self)
+    HoverStack.observeScroll(self, &scrollClip, #selector(contentScrolled))
+    if window != nil { presenter.resumeSoon() }
+  }
+  override func viewDidMoveToSuperview() {
+    super.viewDidMoveToSuperview()
+    HoverStack.observeScroll(self, &scrollClip, #selector(contentScrolled))
+  }
+  @objc private func contentScrolled(_ note: Notification) { presenter.follow() }
 
   // A hosted view's visible rect can reach past its bounds, so the tracking area may span far more than the
   // control: every enter and move re-checks where the pointer is, and the tag follows it.
@@ -299,6 +428,7 @@ final class HoverHelpView: NSView, HoverTagOwner {
     super.viewWillMove(toWindow: newWindow)
   }
   func hoverSuppressed() {}
+  func hoverResumed() { presenter.follow() }
   /// Used only by the offline interaction check: the same action the control performs.
   func performAction() { action?() }
 }
@@ -352,9 +482,23 @@ final class DetailsRowButton: NSButton, HoverTagOwner {
   lazy var presenter = HelpPresenter(owner: self)
   var onHover: (Bool) -> Void = { _ in }
   private var area: NSTrackingArea?
-  private var hovering = false
+  /// The row highlight is on (read by the offline hover check).
+  private(set) var hovering = false
+  private weak var scrollClip: NSClipView?
 
   override func draw(_ dirtyRect: NSRect) {}
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    HoverStack.register(self)
+    HoverStack.observeScroll(self, &scrollClip, #selector(contentScrolled))
+    if window != nil { presenter.resumeSoon() }
+  }
+  override func viewDidMoveToSuperview() {
+    super.viewDidMoveToSuperview()
+    HoverStack.observeScroll(self, &scrollClip, #selector(contentScrolled))
+  }
+  @objc private func contentScrolled(_ note: Notification) { follow() }
 
   override func updateTrackingAreas() {
     if let area { removeTrackingArea(area) }
@@ -368,9 +512,10 @@ final class DetailsRowButton: NSButton, HoverTagOwner {
     hovering = value
     onHover(value)
   }
-  /// The row highlight and its tag follow the pointer; a covered row neither highlights nor tags.
+  /// The row highlight and its tag follow the pointer; a row in a covered layer, or under a control drawn in
+  /// front of it (a footer button), neither highlights nor tags.
   private func follow() {
-    let inside = !presenter.suppressed && presenter.pointerInside()
+    let inside = !presenter.suppressed && presenter.pointerOnOwner
     setHovering(inside)
     presenter.follow(blocked: !inside || overNestedControl)
   }
@@ -386,23 +531,17 @@ final class DetailsRowButton: NSButton, HoverTagOwner {
     presenter.hide()
     setHovering(false)
   }
+  func hoverResumed() { follow() }
 
   private var overNestedControl: Bool {
     guard let window else { return false }
     return nestedControl(at: window.convertPoint(fromScreen: HoverProbe.location))
   }
 
-  /// True when a nested control of a live layer sits under this window point.
+  /// True when a nested control of a live layer sits under this window point (on its seen part).
   func nestedControl(at windowPoint: NSPoint) -> Bool {
-    guard let root = window?.contentView else { return false }
-    func visit(_ view: NSView) -> Bool {
-      if view === self || view is DetailsRowButton { return false }
-      if let help = view as? HoverHelpView, help.presenter.suppressed { return false }
-      if !view.isHiddenOrHasHiddenAncestor && (view is HoverHelpView || view is RowActionExclusionView),
-        view.bounds.contains(view.convert(windowPoint, from: nil)) { return true }
-      return view.subviews.contains(where: visit)
-    }
-    return visit(root)
+    guard let window else { return false }
+    return HoverStack.nestedControl(at: windowPoint, in: window, except: self)
   }
 
   override func hitTest(_ point: NSPoint) -> NSView? {
@@ -423,4 +562,8 @@ struct RowActionExclusion: NSViewRepresentable {
 
 final class RowActionExclusionView: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    HoverStack.register(self)
+  }
 }
