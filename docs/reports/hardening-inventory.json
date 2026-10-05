@@ -601,9 +601,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 34,
+      "filesWithCreateLogger": 35,
       "totalSourceFiles": 390,
-      "coverageRatio": 0.0872,
+      "coverageRatio": 0.0897,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -631,7 +631,7 @@
         {
           "subdomain": "web-server",
           "count": 138,
-          "withLogger": 18
+          "withLogger": 19
         },
         {
           "subdomain": "utils",
@@ -750,7 +750,7 @@
     },
     "largeFiles": {
       "countOver400": 45,
-      "countOver600": 18,
+      "countOver600": 19,
       "topOver400": [
         {
           "file": "src/web-server/model-pricing.ts",
