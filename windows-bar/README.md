@@ -21,8 +21,8 @@ The panel is 760 logical pixels wide (850 tall), clamped to the monitor's work a
   "Not reported / as active".
 - **Other providers** (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go, and any provider the server adds later,
   with a neutral mark): one card per provider with up to three labelled meters; Qwen's packs button lists every pack.
-- **Footer:** the Codex auto-switch toggle, its `at 95%` threshold menu and an info popover; Dashboard; Refresh;
-  Settings.
+- **Footer:** Dashboard; Refresh; Settings. The Codex auto-switch toggle, its `at 95%` threshold menu and an
+  info popover sit in the Codex section header, above its accounts, styled like Antigravity's.
 
 Click any row to expand its details (every window, balance, expiry and the account's actions); nested buttons keep
 their own action. Hover tints a row, brightens its tracks and shows a chevron.
@@ -175,7 +175,8 @@ Activate switches the shared VM's saved Codex account (`/api/codex/profiles/{pro
 native confirmation lists them; only "Stop, switch, restart" sends the server's short-lived token (Antigravity:
 `/confirm`). Cancel changes nothing, and an expired or changed confirmation needs a fresh Activate. Antigravity's own
 auto-switch (`/api/antigravity/auto-switch`, `thresholdUsedPercent` as % used) appears in its section header once two
-Antigravity accounts are signed in; Codex keeps its footer control (`thresholdPercent`, % remaining, shown as % used).
+Antigravity accounts are signed in; Codex's auto-switch (`thresholdPercent`, % remaining, shown as % used) sits in
+its section header, above its accounts.
 Failed refreshes keep the last sample, label it stale and disable account controls until a fresh read.
 
 ## Build and install

@@ -73,12 +73,30 @@ export interface AntigravityNativeUpdatePaused {
   installedVersion: string | null;
 }
 
+/**
+ * Present only when the installed runtime service is not running and a
+ * read-only check found why (runtime-health.ts): a parser module the service
+ * cannot load, or a failed user unit. Starting the service again would fail.
+ */
+export interface AntigravityRuntimeServiceProblem {
+  reason: 'missing-python-module' | 'parser-mismatch' | 'parser-import-failed' | 'service-failed';
+  /** The Python module named by the failure, such as `pyte`. */
+  module: string | null;
+  /** The system Python minor version that runs the service, such as `3.14`. */
+  python: string | null;
+  /** The Python minor version the runtime bundle was built with. */
+  builtFor: string | null;
+  /** The failed unit's main exit status, when known. */
+  exitStatus: number | null;
+}
+
 export interface AntigravityInventory {
   schemaVersion: 1;
   hostId: AntigravityHostId;
   profiles: AntigravityPublicProfile[];
   activationSupported?: boolean;
   nativeUpdatePaused?: AntigravityNativeUpdatePaused;
+  runtimeServiceProblem?: AntigravityRuntimeServiceProblem;
 }
 
 export interface AntigravityAutoSettings {

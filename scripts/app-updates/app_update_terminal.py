@@ -40,10 +40,44 @@ def restart_environment(context):
     return values
 
 
+def sanitize_unit_fragment(value):
+    cleaned = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
+    return cleaned or "app"
+
+
+def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple"):
+    """Wrap argv so it starts in a transient user service OUTSIDE our cgroup.
+
+    Why: the dashboard runs as a systemd user unit with KillMode=control-group.
+    A plain spawn keeps the child (here: the restarted tmux server, and with it
+    the user's CLI session) in the unit's cgroup, so the next dashboard
+    restart or deploy would kill it. A transient user service re-parents the
+    process to app.slice instead. Transient *scopes* are deliberately NOT used:
+    this host's systemd aborts `--scope` units, so scope launches silently do
+    nothing. When systemd-run is missing there is no safe launch: fail closed
+    rather than cage the session in the service cgroup.
+    """
+    runner = shutil.which("systemd-run")
+    if runner is None:
+        raise UpdateFailure("restart_context")
+    wrapped = [runner, "--user", "--unit=" + unit, "--collect"]
+    if service_type != "simple":
+        wrapped.append("--service-type=" + service_type)
+    if cwd:
+        wrapped.append("--working-directory=" + str(cwd))
+    for key, value in (env or {}).items():
+        if value is None:
+            continue
+        wrapped.append("--setenv=%s=%s" % (key, value))
+    wrapped.append("--")
+    wrapped.extend(argv)
+    return wrapped
+
+
 def check_terminal(platform, contexts):
     if not contexts:
         return
-    if platform == "ubuntu" and not shutil.which("tmux"):
+    if platform == "ubuntu" and (not shutil.which("tmux") or not shutil.which("systemd-run")):
         raise UpdateFailure("restart_context")
     if platform == "windows":
         import ctypes
@@ -127,9 +161,14 @@ def restart_cli(install, contexts):
         if install.platform == "ubuntu":
             server = "ccs-updates-" + uuid.uuid4().hex[:12]
             session = "ccs-updated-" + install.app_id + "-" + str(index + 1)
-            command([shutil.which("tmux"), "-L", server, "new-session", "-d", "-s", session,
-                     "-c", context.cwd, shlex.join([str(install.path), *args])], timeout=15,
-                    env=restart_environment(context), preserve_env=True)
+            unit = "aac-launch-%s-%s" % (sanitize_unit_fragment(install.app_id), uuid.uuid4().hex[:12])
+            tmux_argv = [shutil.which("tmux"), "-L", server, "new-session", "-d", "-s", session,
+                         "-c", context.cwd, shlex.join([str(install.path), *args])]
+            # service_type=forking: tmux daemonizes (client exits, server stays), so a
+            # Type=simple unit would go inactive and lose track of the server.
+            argv = systemd_user_service_argv(unit, context.cwd, restart_environment(context),
+                                            tmux_argv, service_type="forking")
+            command(argv, timeout=15)
             sessions.append({"kind": "tmux", "server": server, "session": session})
         else:
             _broker_terminal(install, context, args)

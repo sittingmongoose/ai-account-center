@@ -789,20 +789,22 @@ function donutView(A, state, shades) {
 }
 
 // ---------------------------------------------------------------- session stats
-// The session table lists at most this many sessions: the first five in the Session stats box, the rest in
-// the Recent sessions box, which continues the same list.
-const SESS_TOP = 5, SESS_SHOWN = 15;
+// The session table lists at most this many sessions: the first five at the bottom of the Session stats
+// box, the rest in the Recent sessions box, which continues the same list.
+const SESS_TOP = 5, SESS_SHOWN = 25;
 /**
- * Session stats over the providers in the filter: the summary numbers, plus one session table continued
- * across two boxes. Session stats shows the summary and the SESS_TOP most recent sessions as a compact
- * table; Recent sessions continues it with the next sessions up to SESS_SHOWN in total, same columns and
- * styling, so the two boxes read as one list. The summary numbers are sums and means; a session that
- * several providers served counts under each of them. The average cost comes from the rows that have
- * costs, and says partial when some rows do not; only with no priced row at all is it not logged. Every
- * native tool names a session on every host it runs on, so sessions cover Ubuntu, Mac and Windows alike; a
- * generic JSONL log names none, and the note says so. The table lists the sample most recent first,
- * without paths. The sample rows are the server's AccountAnalyticsSessionRow shape (provider,
- * lastActivity, string models, token totals); anything else is dropped, never guessed.
+ * Session stats over the providers in the filter: the summary numbers, one row per provider with
+ * sessions, plus one session table continued across two boxes. The stats are the columns' sums and
+ * means, so they always line up with their columns; a session that several providers served counts under
+ * each of them, in the rows and in the Sessions number alike. Session stats shows the summary, the
+ * provider rows, and the SESS_TOP most recent sessions as a compact table at the bottom; Recent sessions
+ * continues the table with the next sessions up to SESS_SHOWN in total, same columns and styling, so the
+ * two boxes read as one list. The average cost comes from the rows that have costs, and says partial when
+ * some rows do not; only with no priced row at all is it not logged. Every native tool names a session on
+ * every host it runs on, so sessions cover Ubuntu, Mac and Windows alike; a generic JSONL log names none,
+ * and the note says so. The table lists the sample most recent first, without paths. The sample rows are
+ * the server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token totals);
+ * anything else is dropped, never guessed.
  */
 function sessionsView(A, state, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
@@ -862,6 +864,13 @@ function sessionsView(A, state, now) {
       { key: 'avg', label: 'Average estimated cost per session' + (avgPartial ? ' · partial' : ''), num: avg ?? 0, has: finite(avg), fmt: 'money', text: !finite(avg) && finite(sessions) && sessions > 0 ? NOT_LOGGED : money(avg) },
       { key: 'evs', label: 'Usage events per session', num: evs ?? 0, has: finite(evs), fmt: 'int', text: intText(evs) },
     ],
+    rows: all.filter(r => !finite(r.sessions) || r.sessions > 0).sort((a, b) => byProviderOrder(a.p, b.p)).map(r => ({
+      provider: markOf(r.p), label: r.label,
+      sessions: finite(r.sessions) ? nf0.format(r.sessions) : 'Unavailable',
+      per: finite(r.sessions) && r.sessions > 0 && r.unk ? NOT_LOGGED : finite(r.sessions) && r.sessions > 0 && finite(r.cost) ? money(r.cost / r.sessions) : 'Unavailable',
+      events: finite(r.sessions) && r.sessions > 0 && finite(r.events) ? nf0.format(Math.round(r.events / r.sessions)) : 'Unavailable',
+      eventsTip: finite(r.events) ? `${nf0.format(r.events)} usage events` : '',
+    })),
   };
 }
 
@@ -1274,7 +1283,7 @@ export function usageView(payload, state, opts = {}) {
     trend: trendView(A, R, state, opts.sizes?.trend),
     cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
-    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, moreSub: sessions.moreSub, stats: sessions.stats, recent: sessions.recent, recentMore: sessions.recentMore },
+    sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, moreSub: sessions.moreSub, stats: sessions.stats, rows: sessions.rows, recent: sessions.recent, recentMore: sessions.recentMore },
     tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },
     cache: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, ...cacheView(A, rows, K, C, costOk && A.available) },
     included: includedView(payload, now),

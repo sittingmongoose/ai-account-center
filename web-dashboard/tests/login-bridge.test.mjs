@@ -84,3 +84,25 @@ test("Chrome's autofill heuristics checklist: in a form, named, and rendered", (
   const orphan = stubInput('x', { autocomplete: 'username', form: null });
   assert.equal(autofillChecks(orphan, styleOf).inForm, false);
 });
+
+test('form.submit() from a manager runs the same sign-in instead of the browser posting the form', () => {
+  // As a browser does it: submit() posts the form with no submit event, requestSubmit() fires the event first
+  // and posts only when no listener prevented it.
+  const { document, form, user, pass } = stubDocument();
+  const listeners = [];
+  let posted = 0;
+  form.addEventListener = (event, fn) => { if (event === 'submit') listeners.push(fn); };
+  form.submit = () => { posted++; };
+  form.requestSubmit = () => {
+    let prevented = false;
+    for (const fn of listeners) fn({ preventDefault: () => { prevented = true; } });
+    if (!prevented) posted++;
+  };
+  const submitted = [];
+  installLoginBridge({ document, onSubmit: (v) => submitted.push(v) });
+  user.value = 'owner';
+  pass.value = 's3cret-password';
+  form.submit();
+  assert.equal(posted, 0, 'the browser never posts the hidden form');
+  assert.deepEqual(submitted, [{ username: 'owner', password: 's3cret-password', remember: true }]);
+});

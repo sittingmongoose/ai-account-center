@@ -4,9 +4,10 @@
  Title="AI Account Center" Width="760" Height="850" MinHeight="320"
  WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True" UseLayoutRounding="True"
  Background="Transparent" ShowInTaskbar="False" Topmost="True">
- <!-- Daylight Atlas Windows panel (trays/ concept, Windows view): today's layout and order. Header; Claude, Codex,
-      Antigravity; the other providers; footer (auto-switch, Dashboard, Refresh, Settings). Settings slides over the
-      list inside the panel; the gear toggles it, the X and Escape close it. -->
+ <!-- Daylight Atlas Windows panel (trays/ concept, Windows view): today's layout and order. Header; Claude, Codex
+      (with its auto-switch tools in the section header), Antigravity; the other providers; footer (Dashboard,
+      Refresh, Settings). Settings slides over the list inside the panel; the gear toggles it, the X and
+      Escape close it. -->
  <Border x:Name="Root" CornerRadius="9" BorderThickness="1" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Rule}">
   <Border.RenderTransform><TranslateTransform x:Name="RootShift" /></Border.RenderTransform>
   <Grid>

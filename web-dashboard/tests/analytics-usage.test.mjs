@@ -222,7 +222,7 @@ test("Claude Code's <synthetic> placeholder is excluded silently: never listed, 
   assert.match(usageView(q, state(), { now }).cbm.foot, /gpt-5 is left out/);
 });
 
-test('the session table lists the sample most recent first: five in Session stats, ten more in Recent sessions', () => {
+test('the session table lists the sample most recent first: five in Session stats, twenty more in Recent sessions', () => {
   // the server's AccountAnalyticsSessionRow shape: provider, lastActivity, string models, token totals
   const row = (key, provider, lastMs, models, tok, est, fallback = 0) => ({
     key, provider, lastActivity: new Date(lastMs).toISOString(), models, target: provider,
@@ -256,15 +256,15 @@ test('the session table lists the sample most recent first: five in Session stat
   // a picked provider narrows the list to its sessions
   const codex = usageView(p, state({ prov: 'codex' }), { now });
   assert.deepEqual(codex.sessions.recent.map(r => r.tool), ['codex']);
-  // a full sample fills both boxes as one continued list: five here, the next ten there, a foot for the range
+  // a full sample fills both boxes as one continued list: five here, the next twenty there, a foot for the range
   const minute = (i, extra = {}) => ({ ...sample[0], key: `k${i}`, lastActivity: new Date(now - i * 60e3).toISOString(), ...extra });
   const many = usageView(payload({}, { sessions: { total: 1848, sample: Array.from({ length: 50 }, (_, i) => minute(i)), truncated: true } }), state(), { now });
-  assert.deepEqual([many.sessions.recent.length, many.sessions.recentMore.length], [5, 10]);
+  assert.deepEqual([many.sessions.recent.length, many.sessions.recentMore.length], [5, 20]);
   assert.equal(many.sessions.recent[4].when, '4m ago');
   assert.equal(many.sessions.recentMore[0].when, '5m ago');
-  assert.equal(many.sessions.recentMore[9].when, '14m ago');
-  assert.equal(many.sessions.foot, 'Most recent 15 of 1,848 sessions in this range');
-  assert.equal(many.sessions.moreSub, 'Sessions 6 to 15, continued from Session stats');
+  assert.equal(many.sessions.recentMore[19].when, '24m ago');
+  assert.equal(many.sessions.foot, 'Most recent 25 of 1,848 sessions in this range');
+  assert.equal(many.sessions.moreSub, 'Sessions 6 to 25, continued from Session stats');
   // a sample that ends mid-continuation: the sub names the actual last session and no foot is needed
   const mid = usageView(payload({}, { sessions: { total: 12, sample: Array.from({ length: 12 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
   assert.equal(mid.sessions.recentMore.length, 7);
@@ -273,9 +273,36 @@ test('the session table lists the sample most recent first: five in Session stat
   // exactly one session in the continuation: the sub names it in the singular
   const six = usageView(payload({}, { sessions: { total: 6, sample: Array.from({ length: 6 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
   assert.equal(six.sessions.moreSub, 'Session 6, continued from Session stats');
-  // exactly the table's 15 of a 16-session sample: the foot counts against the sample
-  const edge = usageView(payload({}, { sessions: { total: 16, sample: Array.from({ length: 16 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
-  assert.equal(edge.sessions.foot, 'Most recent 15 of 16 sessions in this range');
+  // exactly the table's 25 of a 26-session sample: the foot counts against the sample
+  const edge = usageView(payload({}, { sessions: { total: 26, sample: Array.from({ length: 26 }, (_, i) => minute(i)), truncated: false } }), state(), { now });
+  assert.equal(edge.sessions.foot, 'Most recent 25 of 26 sessions in this range');
+});
+
+test('Session stats lists one row per provider with sessions, in dashboard order', () => {
+  const view = usageView(payload(), state(), { now });
+  // labels are the dashboard's (a response label ending in " logs" never wins); sessions and per-session
+  // events are exact, the per-session cost is the provider's logged cost over its sessions
+  assert.deepEqual(view.sessions.rows.map(r => [r.provider, r.label, r.sessions, r.events]),
+    [['claude', 'Claude', '3', '10'], ['codex', 'Codex', '2', '5']]);
+  assert.equal(view.sessions.rows[0].per, U.money((haiku(1e6, 2e5, 1e6, 4e7) + haiku(5e5, 1e5, 0, 1e7)) / 3));
+  assert.equal(view.sessions.rows[1].per, U.money(gpt5(2e6, 1e5, 0, 1e7) / 2));
+  assert.equal(view.sessions.rows[0].eventsTip, '30 usage events');
+  // a picked provider narrows the rows to itself
+  const codex = usageView(payload(), state({ prov: 'codex' }), { now });
+  assert.deepEqual(codex.sessions.rows.map(r => r.label), ['Codex']);
+  // a provider whose cost is all unlogged reads Not logged per session, never $0.00
+  const q = payload();
+  q.activity.providers.push({ provider: 'qwen', label: 'Qwen token plan', totals: { ...totals(codexRows), estimatedCostUsd: 5, fallbackCostUsd: 5 }, usageEvents: 6, sessionCount: 1, tools: ['omp'] });
+  const unk = usageView(q, state(), { now });
+  assert.deepEqual(unk.sessions.rows.map(r => [r.label, r.sessions]), [['Claude', '3'], ['Codex', '2'], ['Qwen token plan', '1']]);
+  assert.equal(unk.sessions.rows[2].per, 'Not logged');
+  // a provider with no session count reads Unavailable; one with none at all is left out
+  const r = payload();
+  r.activity.providers.push({ provider: 'zai', label: 'Z.ai coding plan', totals: totals(codexRows), usageEvents: 4, sessionCount: null, tools: ['zcode'] });
+  r.activity.providers.push({ provider: 'other', label: 'Other', totals: totals(codexRows), usageEvents: 0, sessionCount: 0, tools: ['omp'] });
+  const mixed = usageView(r, state(), { now });
+  assert.deepEqual(mixed.sessions.rows.map(x => [x.label, x.sessions, x.per, x.events]).slice(2),
+    [['Z.ai coding plan', 'Unavailable', 'Unavailable', 'Unavailable']]);
 });
 
 test('a muse-spark model served through several routes keeps Muse mark', () => {

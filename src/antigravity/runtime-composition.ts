@@ -13,9 +13,11 @@ import { AntigravityUsageService } from './usage-service';
 import type {
   AntigravityApiDependencies,
   AntigravityDashboardAccount,
+  AntigravityRuntimeServiceProblem,
   AntigravityUsageProfile,
   AntigravityUsageSample,
 } from './usage-contract';
+import { publicRuntimeServiceProblem } from './runtime-health';
 import { DEFAULT_ANTIGRAVITY_AUTO_SWITCH_SETTINGS } from './auto-switch/settings';
 import {
   AntigravityAutoSwitchService,
@@ -63,6 +65,11 @@ export interface AntigravityRuntimeDependencies {
    * pin. Absent in fixtures; production passes the read-only native probe.
    */
   readNativeUpdatePaused?: () => Promise<{ installedVersion: string | null } | null>;
+  /**
+   * Why the installed runtime service is not running, when a read-only check
+   * found a cause. Absent in fixtures; production passes runtime-health.ts.
+   */
+  readRuntimeServiceProblem?: () => Promise<AntigravityRuntimeServiceProblem | null>;
 }
 
 export interface AntigravityRuntime extends AntigravityApiDependencies {
@@ -335,9 +342,13 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
     getInventory: async () => {
       const inventory = await usage.getInventory();
       const paused = (await deps.readNativeUpdatePaused?.().catch(() => null)) ?? null;
+      const serviceProblem = publicRuntimeServiceProblem(
+        await deps.readRuntimeServiceProblem?.().catch(() => null)
+      );
       return {
         ...inventory,
         activationSupported: await capability(),
+        ...(serviceProblem ? { runtimeServiceProblem: serviceProblem } : {}),
         ...(paused
           ? {
               nativeUpdatePaused: {

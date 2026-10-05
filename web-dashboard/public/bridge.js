@@ -103,6 +103,10 @@ function auth(signedIn, state, extra = {}) {
   };
   // the e2e harness reads the words it handed Slint next to the pixels it sees (?e2e only)
   if (e2e) globalThis.__aacLastAuth = { signedIn, ...view };
+  // Every sign-in page state clears Slint's data-ready flag (set_auth in src/lib.rs), and only a dashboard push
+  // sets it again. So the first pushes after any sign-in (a sign-out, or a session that ended in this tab, such
+  // as a server restart) must reach Slint even when their JSON matches the last one sent, or Home never reveals.
+  if (!signedIn) pushedJson.clear();
   set_auth(signedIn, JSON.stringify(view));
 }
 

@@ -41,8 +41,9 @@ enum PreviewRenderer {
     try JSONDecoder().decode(AccountDashboard.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
   }
 
-  /// A hosting view of the real panel content, laid out at its own height.
-  private static func host(_ dashboard: AccountDashboard, options: Options) -> (NSHostingView<PanelRootView>, PanelState, NSWindow) {
+  /// A hosting view of the real panel content, laid out at its own height. `live` keeps the app's own
+  /// scroll views and motion (no static render) for the in-process hover checks.
+  static func host(_ dashboard: AccountDashboard, options: Options, live: Bool = false) -> (NSHostingView<PanelRootView>, PanelState, NSWindow) {
     NSApplication.shared.setActivationPolicy(.prohibited)
     let appearance = NSAppearance(named: options.appearance == "dark" ? .darkAqua : .aqua)
     NSApplication.shared.appearance = appearance
@@ -58,7 +59,7 @@ enum PreviewRenderer {
     }
     let prefs = TrayPreferences(defaults: UserDefaults(suiteName: "party.sittingmongoose.aac.preview") ?? .standard, persist: false)
     let state = PanelState()
-    state.staticRender = true
+    state.staticRender = !live
     state.previewReduceTransparency = options.reduceTransparency
     state.previewIncreaseContrast = options.increaseContrast
     state.panelWidth = options.width
@@ -577,5 +578,71 @@ enum PreviewRenderer {
       print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
       exit(passed ? 0 : 1)
     } catch { fputs("Menu-bar preference inspection failed.\n", stderr); exit(1) }
+  }
+
+  /// The Codex auto-switch placement: the toggle and its threshold sit in the Codex section header,
+  /// above the first Codex account and inside the Codex section, at Antigravity's pill height — and
+  /// no auto-switch control is left in the footer. The fixture needs Codex accounts and a
+  /// codexAutoSwitch status; with two Antigravity accounts it also checks the pill-height parity.
+  static func checkCodexAutoPlacement(input: String) -> Never {
+    do {
+      let dashboard = try loadFixture(input)
+      let hosted = host(dashboard, options: Options([]))
+      defer { hosted.2.orderOut(nil) }
+      var failures: [String] = []
+      func check(_ ok: Bool, _ message: String) { if !ok { failures.append(message) } }
+      func rect(_ frame: CGRect) -> [String: Double] {
+        ["x": Double(frame.minX), "y": Double(frame.minY), "width": Double(frame.width), "height": Double(frame.height)]
+      }
+      let frames = AlignmentProbe.frames
+      let codexIDs = dashboard.visibleAccounts.filter { $0.provider == "codex" }.map(\.id)
+      check(!codexIDs.isEmpty, "the fixture needs at least one visible Codex account")
+      check(dashboard.codexAutoSwitch != nil, "the fixture needs a codexAutoSwitch status")
+      guard let toggle = frames["codex-auto|toggle"], let threshold = frames["codex-auto|threshold"],
+        let pill = frames["codex-auto|header"]
+      else {
+        failures.append("the Codex auto-switch header controls did not render")
+        let passed = false
+        let result: [String: Any] = ["passed": passed, "failures": failures,
+          "hiddenAppOwnedInspection": true, "desktopCaptureOrAutomation": false, "accountActionsInvoked": false]
+        print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
+        exit(1)
+      }
+      let rows = codexIDs.compactMap { frames["row|\($0)"] }
+      check(rows.count == codexIDs.count, "every Codex row must render (\(rows.count) of \(codexIDs.count) did)")
+      if let firstTop = rows.map(\.minY).min() {
+        check(toggle.maxY <= firstTop + 0.5, "the toggle must sit above the first Codex account")
+        check(threshold.maxY <= firstTop + 0.5, "the threshold must sit above the first Codex account")
+      }
+      if let section = frames["section|codex"] {
+        check(toggle.minY >= section.minY - 0.5, "the toggle must sit inside the Codex section")
+        check(threshold.minY >= section.minY - 0.5, "the threshold must sit inside the Codex section")
+      } else {
+        failures.append("the Codex section did not render")
+      }
+      if let footer = frames["footer"] {
+        check(!toggle.intersects(footer), "no Codex auto-switch control may stay in the footer")
+        check(!threshold.intersects(footer), "no Codex threshold control may stay in the footer")
+        check(!pill.intersects(footer), "no Codex auto-switch pill may stay in the footer")
+      } else {
+        failures.append("the footer did not render")
+      }
+      check(abs(pill.height - 30) <= 0.5, "the Codex pill must match Antigravity's 30 pt header height")
+      var parity: [String: Any] = ["compared": false]
+      if let agPill = frames["antigravity-auto|header"] {
+        let gap = abs(pill.height - agPill.height)
+        check(gap <= 0.5, "the Codex and Antigravity pills must share one height")
+        parity = ["compared": true, "codexHeight": Double(pill.height), "antigravityHeight": Double(agPill.height)]
+      }
+      let passed = failures.isEmpty
+      let result: [String: Any] = [
+        "passed": passed, "failures": failures,
+        "toggle": rect(toggle), "threshold": rect(threshold),
+        "pillHeight": Double(pill.height), "codexRows": rows.count, "pillParity": parity,
+        "hiddenAppOwnedInspection": true, "desktopCaptureOrAutomation": false, "accountActionsInvoked": false,
+      ]
+      print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
+      exit(passed ? 0 : 1)
+    } catch { fputs("Codex auto-switch placement inspection failed.\n", stderr); exit(1) }
   }
 }

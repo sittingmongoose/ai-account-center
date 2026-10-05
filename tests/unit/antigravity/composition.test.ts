@@ -443,6 +443,57 @@ describe('Antigravity explicitly injected runtime composition', () => {
     expectNoNativeActions();
   });
 
+  test('a runtime service that cannot start ships in the inventory, scrubbed, while quotas stay readable', async () => {
+    await importFixtures();
+    driver.canProveRuntimeIdentity = async () => false;
+    const instance = construct({
+      readRuntimeServiceProblem: async () => ({
+        reason: 'missing-python-module',
+        module: 'pyte',
+        python: '3.14',
+        builtFor: '3.13',
+        exitStatus: null,
+      }),
+    });
+    const inventory = await instance.getInventory();
+    expect(inventory.activationSupported).toBe(false);
+    expect(inventory.runtimeServiceProblem).toEqual({
+      reason: 'missing-python-module',
+      module: 'pyte',
+      python: '3.14',
+      builtFor: '3.13',
+      exitStatus: null,
+    });
+    const accounts = await instance.getAccounts({ refresh: false });
+    expect(accounts.map((account) => account.status)).toEqual(['ok', 'ok']);
+    const hostile = construct({
+      readRuntimeServiceProblem: async () =>
+        ({
+          reason: 'missing-python-module',
+          module: `pyte ${FAKE_PRIVATE}`,
+          python: '3.14',
+          builtFor: '3.13',
+          exitStatus: null,
+          privatePath: FAKE_PRIVATE,
+        }) as never,
+    });
+    const scrubbed = await hostile.getInventory();
+    expect(scrubbed.runtimeServiceProblem?.module).toBeNull();
+    expect(JSON.stringify(scrubbed)).not.toContain(FAKE_PRIVATE);
+    const failing = construct({
+      readRuntimeServiceProblem: async () => {
+        throw new Error(FAKE_PRIVATE);
+      },
+    });
+    expect(await failing.getInventory()).not.toHaveProperty('runtimeServiceProblem');
+    const unknownReason = construct({
+      readRuntimeServiceProblem: async () => ({ reason: 'not-running' }) as never,
+    });
+    expect(await unknownReason.getInventory()).not.toHaveProperty('runtimeServiceProblem');
+    expect(await construct().getInventory()).not.toHaveProperty('runtimeServiceProblem');
+    expectNoNativeActions();
+  });
+
   test('account-bound identity mismatch clears the affected previous good quota instead of reusing it', async () => {
     await importFixtures();
     const instance = construct();

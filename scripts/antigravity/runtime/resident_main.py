@@ -12,16 +12,23 @@ from pathlib import Path
 import sys
 LIBRARY=Path(__file__).resolve().parent
 sys.path.insert(0,str(LIBRARY))
-# System interpreter provides dbus; parser packages remain bundle/version pinned.
-PARSER=LIBRARY.parent/'venv/lib'/('python%d.%d'%sys.version_info[:2])/'site-packages'
+# System interpreter provides dbus. The pinned parser wheels (pure Python and
+# CPython stable-ABI) live in a version-neutral bundle directory, not
+# venv/lib/pythonX.Y, so a system Python upgrade cannot orphan them.
+PARSER=LIBRARY.parent/'parser'
 if PARSER.is_dir():sys.path.insert(0,str(PARSER))
-from ubuntu_runtime_factory import create_ubuntu_resident_broker
 from runtime_continuity import ContinuityError
-from native_status_composition import create_native_status_factory
+
+
+class ParserUnavailable(Exception):
+    """A pinned parser module does not import; the message names it."""
 
 
 def verify_parser_environment():
-    import pyte,wcwidth
+    try:
+        import pyte,wcwidth
+    except ImportError as error:
+        raise ParserUnavailable('missing Python module %s'%(error.name or 'pyte')) from None
     if (not PARSER.is_dir() or
             importlib.metadata.version('pyte')!='0.8.2' or
             importlib.metadata.version('wcwidth')!='0.9.1' or
@@ -38,6 +45,10 @@ def main():
     parser.add_argument('--allowed-child', action='append', default=[])
     args = parser.parse_args()
     verify_parser_environment()
+    # Imported after the parser check, so a missing module is named plainly
+    # (runtime_health.py reports the same cause) instead of a traceback.
+    from ubuntu_runtime_factory import create_ubuntu_resident_broker
+    from native_status_composition import create_native_status_factory
     release=json.loads((LIBRARY/'release.json').read_bytes())
     home=Path.home()
     status_factory=create_native_status_factory(release=release,binary=args.binary,home=home,
@@ -57,5 +68,7 @@ def main():
 
 if __name__ == '__main__':
     try:main()
+    except ParserUnavailable as error:
+        raise SystemExit('Managed Antigravity runtime failed: %s (runtime-parser-missing).'%error) from None
     except (OSError, ContinuityError, ValueError):
         raise SystemExit('Managed Antigravity runtime is unavailable.') from None

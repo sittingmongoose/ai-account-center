@@ -1,4 +1,4 @@
-//! Analytics view model (version 6, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
+//! Analytics view model (version 7, public/analytics-data.mjs `analyticsSlintModel`): the header, the KPI
 //! row, the usage charts (trend, cost by model, donut, sessions, token breakdown, cache efficiency,
 //! heatmap, daily cost), the custom range calendar, the quota history with its focus charts and the
 //! resets agenda. Everything lands in the `AxData` global (ui/pages/analytics/ax-data.slint).
@@ -12,8 +12,8 @@ use crate::{
     AxDaily, AxData, AxDay, AxDonut, AxDonutLeg, AxDonutSeg, AxDot, AxFocus, AxFocusLegend, AxHeat,
     AxHeatCell, AxIncluded, AxKpi, AxLabel, AxLegendItem, AxLoadHost, AxModelRow, AxModelType,
     AxPickItem, AxProvItem, AxProvLine, AxProvSummary, AxQuotaGroup, AxQuotaRow, AxScopeLine,
-    AxSessRecent, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick, AxTokRow,
-    AxTrend, AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
+    AxSessRecent, AxSessRow, AxShape, AxSrcCell, AxSrcRow, AxStat, AxStop, AxStopRow, AxTick,
+    AxTokRow, AxTrend, AxTrendPaths, AxXTick, AxYTick, Dashboard, RunView,
 };
 use serde_json::Value;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -21,7 +21,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 /// The analytics view-model version this build understands (public/analytics-data.mjs ANALYTICS_VIEW_VERSION).
-pub const ANALYTICS_VIEW_VERSION: u64 = 6;
+pub const ANALYTICS_VIEW_VERSION: u64 = 7;
 
 // ---------------------------------------------------------------- JSON access (camelCase keys)
 static NULL: Value = Value::Null;
@@ -253,6 +253,16 @@ fn sess_recent(v: &Value) -> AxSessRecent {
         tip: s(v, "tip"),
     }
 }
+fn sess_row(v: &Value) -> AxSessRow {
+    AxSessRow {
+        provider: s(v, "provider"),
+        label: s(v, "label"),
+        sessions: s(v, "sessions"),
+        per: s(v, "per"),
+        events: s(v, "events"),
+        events_tip: s(v, "eventsTip"),
+    }
+}
 fn cache(v: &Value) -> AxCache {
     let r = g(v, "reads");
     let w = g(v, "writes");
@@ -428,6 +438,7 @@ pub struct AnalyticsModels {
     trend_lut: Rc<VecModel<i32>>,
     donut_lut: Rc<VecModel<i32>>,
     donut_legend: Rc<VecModel<AxDonutLeg>>,
+    sess_rows: Rc<VecModel<AxSessRow>>,
     sess_recent: Rc<VecModel<AxSessRecent>>,
     sess_recent_more: Rc<VecModel<AxSessRecent>>,
     daily_y: Rc<VecModel<AxYTick>>,
@@ -467,6 +478,7 @@ impl Default for AnalyticsModels {
             trend_lut: Rc::new(VecModel::default()),
             donut_lut: Rc::new(VecModel::default()),
             donut_legend: Rc::new(VecModel::default()),
+            sess_rows: Rc::new(VecModel::default()),
             sess_recent: Rc::new(VecModel::default()),
             sess_recent_more: Rc::new(VecModel::default()),
             daily_y: Rc::new(VecModel::default()),
@@ -504,6 +516,7 @@ pub fn bind(ui: &Dashboard, m: &AnalyticsModels) {
     ax.set_trend_lut(ModelRc::from(m.trend_lut.clone()));
     ax.set_donut_lut(ModelRc::from(m.donut_lut.clone()));
     ax.set_donut_legend(ModelRc::from(m.donut_legend.clone()));
+    ax.set_sess_rows(ModelRc::from(m.sess_rows.clone()));
     ax.set_sess_recent(ModelRc::from(m.sess_recent.clone()));
     ax.set_sess_recent_more(ModelRc::from(m.sess_recent_more.clone()));
     ax.set_daily_y(ModelRc::from(m.daily_y.clone()));
@@ -766,7 +779,13 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         arr(sessions, "stats").iter().map(stat).collect(),
         |r: &AxStat| r.key.clone(),
     );
-    // one continued table across two boxes: the five most recent sessions, then the next ten
+    // the per-provider rows, keyed by provider, then one continued table across two boxes: the five
+    // most recent sessions, then the next twenty
+    sync_rows(
+        &m.sess_rows,
+        rows_of(sessions, "rows", sess_row),
+        |r: &AxSessRow| r.provider.clone(),
+    );
     sync_by_index(&m.sess_recent, rows_of(sessions, "recent", sess_recent));
     sync_by_index(
         &m.sess_recent_more,

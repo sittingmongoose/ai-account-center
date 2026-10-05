@@ -10,6 +10,9 @@ enum CCSBarMain {
     if arguments.count == 3, arguments[1] == "--check-native-tooltips" {
       PreviewRenderer.checkNativeTooltips(input: arguments[2])
     }
+    if arguments.count == 3, arguments[1] == "--check-hover-occlusion" {
+      HoverOcclusionCheck.run(input: arguments[2])
+    }
     if arguments.count >= 4, arguments[1] == "--render-preview" {
       PreviewRenderer.render(input: arguments[2], output: arguments[3], options: Array(arguments.dropFirst(4)))
     }
@@ -18,6 +21,9 @@ enum CCSBarMain {
     }
     if arguments.count == 3, arguments[1] == "--check-meter-geometry" {
       PreviewRenderer.checkMeterGeometry(input: arguments[2])
+    }
+    if arguments.count == 3, arguments[1] == "--check-codex-auto-placement" {
+      PreviewRenderer.checkCodexAutoPlacement(input: arguments[2])
     }
     if arguments.count == 2, arguments[1] == "--check-menu-bar-prefs" {
       PreviewRenderer.checkMenuBarPrefs()
