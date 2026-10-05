@@ -117,6 +117,26 @@ function harness(overrides: CodexAutoSwitchDeps = {}) {
   };
 }
 
+function creditsBalance(balance: number | null): BarSummaryRow['balanceWindows'] {
+  return [
+    {
+      key: 'credits_balance',
+      label: 'Extra usage credits',
+      usedPercent: null,
+      remainingPercent: null,
+      resetAt: null,
+      windowMinutes: null,
+      kind: 'balance',
+      used: null,
+      limit: null,
+      remaining: balance,
+      unit: 'credits',
+      expiresAt: null,
+      enabled: true,
+    },
+  ];
+}
+
 function authSnapshot(): CodexAutoSwitchAuthSnapshot {
   return {
     live: {
@@ -755,6 +775,72 @@ describe('native Codex automatic switching', () => {
     expect(h.service.getStatus()).toMatchObject({ outcome: 'no_quota' });
     expect(h.service.getStatus().message).toContain('changed outside the dashboard');
     expect(h.activate).not.toHaveBeenCalled();
+  });
+
+  it('warns that waiting work is drawing on paid credits, with the balance', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, { balanceWindows: creditsBalance(42) }),
+        row('beta', 20),
+      ],
+      activate: async () => {
+        throw new CodexActivationError('busy', 'busy');
+      },
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'waiting_idle', candidate: 'beta' });
+    expect(h.service.getStatus().message).toContain('drawing on its paid credits (42 left)');
+  });
+
+  it('says plainly when every plan is used up and the active account spends credits', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, { balanceWindows: creditsBalance(7) }),
+        row('beta', 100),
+        row('gamma', 100),
+      ],
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'no_candidate' });
+    expect(h.service.getStatus().message).toContain('No other account has plan usage left');
+    expect(h.service.getStatus().message).toContain('paid credits (7 left)');
+    expect(h.activate).not.toHaveBeenCalled();
+  });
+
+  it('never claims credits without an enabled balance on the fresh row', async () => {
+    const off = creditsBalance(42).map((window) => ({ ...window, enabled: false }));
+    const h = harness({
+      getRows: async () => [row('alpha', 100, { balanceWindows: off }), row('beta', 20)],
+      activate: async () => {
+        throw new CodexActivationError('busy', 'busy');
+      },
+    });
+    await h.service.runCycle();
+    expect(h.service.getStatus()).toMatchObject({ outcome: 'waiting_idle' });
+    expect(h.service.getStatus().message).not.toContain('paid credits');
+  });
+
+  it('treats a fresh real 100% network reading as exhausted, never as pending', async () => {
+    const h = harness({
+      getRows: async () => [
+        row('alpha', 100, {
+          quotaWindows: [
+            {
+              key: 'five_hour',
+              label: '5h',
+              usedPercent: 100,
+              remainingPercent: 0,
+              resetAt: new Date(NOW + 3_600_000).toISOString(),
+              windowMinutes: 300,
+            },
+          ],
+        }),
+        row('beta', 20),
+      ],
+    });
+    await h.service.runCycle();
+    expect(h.activate).toHaveBeenCalledWith('beta');
+    expect(h.service.getStatus().outcome).toBe('switched');
   });
 
   it('logs outcome transitions once instead of every poll', async () => {

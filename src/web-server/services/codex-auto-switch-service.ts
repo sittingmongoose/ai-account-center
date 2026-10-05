@@ -284,6 +284,24 @@ function remainingOrNull(assessment: RemainingAssessment): number | null {
   return 'remaining' in assessment ? assessment.remaining : null;
 }
 
+/**
+ * Paid credits the active account is drawing on. Claimed only when the same
+ * fresh network row that proved plan exhaustion carries an enabled credits
+ * balance; unknown or empty means no claim.
+ */
+function creditsInUse(row: BarSummaryRow | undefined): { balance: number | null } | null {
+  const credits = row?.balanceWindows?.find((window) => window.key === 'credits_balance');
+  if (!credits || credits.enabled !== true) return null;
+  if (credits.unlimited === true) return { balance: null };
+  const balance = credits.remaining ?? null;
+  if (balance !== null && (!Number.isFinite(balance) || balance <= 0)) return null;
+  return { balance };
+}
+
+function creditsSuffix(credits: { balance: number | null }): string {
+  return credits.balance === null ? '' : ` (${String(credits.balance)} left)`;
+}
+
 /** One monitor per CCS scope. Activation always uses the existing busy-aware transaction. */
 export class CodexAutoSwitchService {
   readonly ccsDir: string;
@@ -303,6 +321,7 @@ export class CodexAutoSwitchService {
   /** This cycle's vetted decision, so a busy activation can report what it blocked. */
   private lastActive?: string;
   private lastCandidate?: string;
+  private lastCredits?: { balance: number | null } | null;
 
   constructor(private readonly deps: CodexAutoSwitchDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
@@ -436,6 +455,7 @@ export class CodexAutoSwitchService {
     this.blockedDetail = undefined;
     this.lastActive = undefined;
     this.lastCandidate = undefined;
+    this.lastCredits = undefined;
     try {
       const config = this.readConfig();
       if (this.stopped || !config.enabled) {
@@ -504,9 +524,23 @@ export class CodexAutoSwitchService {
         )
         .sort((a, b) => b.remaining - a.remaining || (a.profile.name < b.profile.name ? -1 : 1));
       const candidate = candidates[0];
+      const burning = creditsInUse(byProfile.get(active));
       if (!candidate) {
         this.outcome = 'no_candidate';
-        this.logConclusion({ active, remaining: assessed.remaining, cause: 'no_healthy_other' });
+        // Credits are the last reserve: every plan is used up, so the active
+        // account rightly stays and spends its own credits. Say so plainly.
+        if (burning) {
+          this.blockedDetail = `No other account has plan usage left. The active account is using its paid credits${creditsSuffix(burning)}.`;
+          this.logConclusion({
+            active,
+            remaining: assessed.remaining,
+            cause: 'no_healthy_other',
+            creditsBurning: true,
+            creditsBalance: burning.balance,
+          });
+        } else {
+          this.logConclusion({ active, remaining: assessed.remaining, cause: 'no_healthy_other' });
+        }
         return;
       }
       const current = await this.summary();
@@ -551,6 +585,7 @@ export class CodexAutoSwitchService {
       }
       this.lastActive = active;
       this.lastCandidate = target.name;
+      this.lastCredits = burning;
       this.activationInProgress = true;
       this.outcome = 'switching';
       try {
@@ -565,9 +600,15 @@ export class CodexAutoSwitchService {
       if (error instanceof CodexActivationError && error.code === 'busy') {
         this.outcome = 'waiting_idle';
         this.blockedCandidate = this.lastCandidate;
+        if (this.lastCredits) {
+          this.blockedDetail = `${messages.waiting_idle} The active account has used up its plan usage, so this work is drawing on its paid credits${creditsSuffix(this.lastCredits)}.`;
+        }
         this.logConclusion({
           ...(this.lastActive ? { active: this.lastActive } : {}),
           ...(this.lastCandidate ? { candidate: this.lastCandidate } : {}),
+          ...(this.lastCredits
+            ? { creditsBurning: true, creditsBalance: this.lastCredits.balance }
+            : {}),
           cause: 'activation_busy',
         });
       } else {
