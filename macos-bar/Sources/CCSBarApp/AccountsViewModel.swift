@@ -31,15 +31,56 @@ struct PendingAntigravitySwitch: Identifiable {
 
 @MainActor
 final class AccountsViewModel: ObservableObject {
-  @Published private(set) var dashboard: AccountDashboard?
-  @Published private(set) var isRefreshing = false
+  /// The menu-bar label's own state, synced on every delivery (see `syncMenuBar`).
+  let menuBar = MenuBarState()
+  /// False while the real panel is closed: refreshes then store their results silently and update only
+  /// the menu-bar label, instead of re-laying the whole invisible panel on every publish. True everywhere
+  /// else (checks, previews, an open panel), which behave exactly as before.
+  var panelOpen = true
+  private func publish() {
+    if panelOpen { objectWillChange.send() }
+  }
+  private var _dashboard: AccountDashboard?
+  private(set) var dashboard: AccountDashboard? {
+    get { _dashboard }
+    set { publish(); _dashboard = newValue }
+  }
+  private var _isRefreshing = false
+  private(set) var isRefreshing: Bool {
+    get { _isRefreshing }
+    set { publish(); _isRefreshing = newValue }
+  }
   @Published private(set) var busyAction: String?
-  @Published private(set) var message: String?
-  @Published private(set) var connection: BarConnection?
-  @Published private(set) var connected = false
-  @Published private(set) var lastSyncedAt: Date?
-  @Published var pendingCodexSwitch: PendingCodexSwitch?
-  @Published var pendingAntigravitySwitch: PendingAntigravitySwitch?
+  private var _message: String?
+  private(set) var message: String? {
+    get { _message }
+    set { publish(); _message = newValue }
+  }
+  private var _connection: BarConnection?
+  private(set) var connection: BarConnection? {
+    get { _connection }
+    set { publish(); _connection = newValue }
+  }
+  private var _connected = false
+  private(set) var connected: Bool {
+    get { _connected }
+    set { publish(); _connected = newValue }
+  }
+  private var _lastSyncedAt: Date?
+  private(set) var lastSyncedAt: Date? {
+    get { _lastSyncedAt }
+    set { publish(); _lastSyncedAt = newValue }
+  }
+  private var _pendingCodexSwitch: PendingCodexSwitch?
+  var pendingCodexSwitch: PendingCodexSwitch? {
+    get { _pendingCodexSwitch }
+    set { publish(); _pendingCodexSwitch = newValue }
+  }
+  private var _pendingAntigravitySwitch: PendingAntigravitySwitch?
+  var pendingAntigravitySwitch: PendingAntigravitySwitch? {
+    get { _pendingAntigravitySwitch }
+    set { publish(); _pendingAntigravitySwitch = newValue }
+  }
   /// Meter readings as they were when the panel last closed: a later open animates only what changed.
   var lastShown: [String: Double] = [:]
   /// The first open of a session sweeps every meter from zero.
@@ -55,7 +96,11 @@ final class AccountsViewModel: ObservableObject {
   @Published private(set) var connectionCheck: AuthCheck?
   @Published private(set) var checkingConnectionInfo = false
   /// A short status line after pairing ("Paired · signed in with a device key"), shown in the header for a moment.
-  @Published private(set) var statusFlash: String?
+  private var _statusFlash: String?
+  private(set) var statusFlash: String? {
+    get { _statusFlash }
+    set { publish(); _statusFlash = newValue }
+  }
   /// After a hand-off the list loads in with the first-open stagger and every meter sweeps from 0.
   @Published private(set) var listEntrance: OpenContext?
   @Published private(set) var listGeneration = 0
@@ -93,6 +138,7 @@ final class AccountsViewModel: ObservableObject {
       connected = true
       lastSyncedAt = AccountFormatting.date(preview.updatedAt)
       watchSignIn()
+      syncMenuBar()
       return
     }
     isPreview = false
@@ -105,10 +151,24 @@ final class AccountsViewModel: ObservableObject {
   private func watchSignIn() {
     signIn.owner = self
     signInWatch = [
-      signIn.$active.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() },
-      signIn.$state.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() },
-      signIn.$repair.removeDuplicates().sink { [weak self] _ in self?.objectWillChange.send() },
+      signIn.$active.removeDuplicates().sink { [weak self] _ in self?.signInChanged() },
+      signIn.$state.removeDuplicates().sink { [weak self] _ in self?.signInChanged() },
+      signIn.$repair.removeDuplicates().sink { [weak self] _ in self?.signInChanged() },
     ]
+  }
+
+  /// A sign-in transition: the panel follows it when open, and the menu-bar label always does (a 401
+  /// during a background refresh takes the number down to the logo alone at once).
+  private func signInChanged() {
+    syncMenuBar()
+    publish()
+  }
+
+  /// The menu-bar label's copy of what it shows. Every delivery path calls this: refresh, a reset flip,
+  /// disconnect, pairing hand-offs (through `signInChanged`), and the preview inits below.
+  func syncMenuBar() {
+    menuBar.snapshot = MenuBarSnapshot(dashboard: _dashboard, signInActive: signIn.active,
+      signInRepair: signIn.repair, signInHelp: signIn.menuBarHelp)
   }
 
   var deviceName: String { session.deviceName }
@@ -247,6 +307,7 @@ final class AccountsViewModel: ObservableObject {
       pendingAntigravitySwitch = nil
       message = nil
       recordStatus(connected: false)
+      syncMenuBar()
       signIn.showDisconnected(at: Date(), told: told, address: address)
     }
   }
@@ -306,6 +367,14 @@ final class AccountsViewModel: ObservableObject {
     }
   }
 
+  /// Offline checks only: a preview tray takes a new dashboard the way a refresh delivers one (a forced refresh
+  /// at open, the refresh timer or a Codex auto-switch). Does nothing in the app.
+  func previewReplace(_ value: AccountDashboard) {
+    guard isPreview else { return }
+    dashboard = value
+    syncMenuBar()
+  }
+
   func refresh(force: Bool = false) async {
     guard !isPreview, !isRefreshing, busyAction == nil, !hasPendingConfirmation, let client else { return }
     let generation = connectionGeneration
@@ -337,6 +406,8 @@ final class AccountsViewModel: ObservableObject {
       } else { replaced = true }
     }
     isRefreshing = false
+    // The menu-bar label always follows a delivery, even while the panel's own publishes stay silent.
+    syncMenuBar()
     if let signedOut { handleSignedOut(signedOut); return }
     // A new connection landed while this sample was in flight: read it now.
     if replaced { await refresh(); return }
@@ -374,7 +445,9 @@ final class AccountsViewModel: ObservableObject {
     let now = dashboard.pendingResetKeys()
     guard now != pendingResets else { return }
     pendingResets = now
-    objectWillChange.send()
+    // A flip can take the menu-bar number down to the logo alone, so the label follows it too.
+    syncMenuBar()
+    publish()
   }
 
   private func recordStatus(connected: Bool) {

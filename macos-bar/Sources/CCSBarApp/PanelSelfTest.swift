@@ -37,6 +37,20 @@ enum PanelSelfTest {
       record("open shortcut registered (Option-Command-A)", controller.hotKey?.isRegistered == true,
         ["problem": controller.state.shortcutProblem ?? ""])
 
+      // N4: while the panel is closed, a dashboard delivery updates the menu bar without republishing
+      // the panel model, so the invisible panel is never re-laid on a background refresh.
+      record("the panel starts closed for publishing", controller.model.panelOpen == false)
+      do {
+        var gatedSends = 0
+        let gateKeep = controller.model.objectWillChange.sink { _ in gatedSends += 1 }
+        controller.model.previewReplace(dashboard)
+        pump(0.3)
+        record("a closed delivery syncs the menu bar silently",
+          gatedSends == 0 && controller.model.menuBar.snapshot.dashboard?.updatedAt == dashboard.updatedAt,
+          ["modelSends": gatedSends])
+        _ = gateKeep
+      }
+
       controller.open()
       pump(1.0)
       let panel = controller.panel
@@ -78,6 +92,15 @@ enum PanelSelfTest {
       controller.toggle()
       pump(0.8)
       record("and open again", panel?.isVisible == true)
+      do {
+        var openSends = 0
+        let gateKeep = controller.model.objectWillChange.sink { _ in openSends += 1 }
+        controller.model.previewReplace(dashboard)
+        pump(0.3)
+        record("an open delivery republishes the panel model",
+          controller.model.panelOpen && openSends >= 1, ["modelSends": openSends])
+        _ = gateKeep
+      }
       // Appearance Light / Dark / Auto applies to the panel; the menu-bar item keeps the menu bar's own look.
       let menuBarBefore = controller.statusItem.button?.effectiveAppearance.name.rawValue ?? ""
       var appearances: [String: String] = [:]

@@ -46,9 +46,11 @@ final class PanelController: NSObject, NSWindowDelegate {
       self?.panel?.makeFirstResponder(nil)
       if open { self?.panel?.makeKey() }
     }.store(in: &cancellables)
-    model.objectWillChange.merge(with: prefs.objectWillChange).sink { [weak self] _ in
+    model.objectWillChange.merge(with: prefs.objectWillChange).merge(with: model.menuBar.objectWillChange).sink { [weak self] _ in
       DispatchQueue.main.async { self?.updateStatusLength() }
     }.store(in: &cancellables)
+    // The panel starts closed: refreshes store silently and only the menu-bar label follows them.
+    model.panelOpen = false
   }
 
   /// True while the close fade runs: a reopen during the fade cancels it, and the fade's completion then
@@ -65,7 +67,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     button.sendAction(on: [.leftMouseDown, .rightMouseDown])
     button.setAccessibilityLabel("AI Account Center")
     button.imagePosition = .noImage
-    let label = PassthroughHostingView(rootView: StatusItemLabel(model: model, prefs: prefs))
+    let label = PassthroughHostingView(rootView: StatusItemLabel(menuBar: model.menuBar, prefs: prefs))
     label.translatesAutoresizingMaskIntoConstraints = true
     button.addSubview(label)
     statusHosting = label
@@ -73,20 +75,20 @@ final class PanelController: NSObject, NSWindowDelegate {
   }
 
   /// The reading and help tag the status item now shows, and the button height they were laid out
-  /// for. The model publishes several times a refresh tick; `fittingSize` forces a synchronous
-  /// SwiftUI layout and `statusItem.length` re-lays the menu bar out, so both run only when what
-  /// the status item shows actually changes (N4).
+  /// for. The menu-bar state syncs on every delivery; `fittingSize` forces a synchronous SwiftUI
+  /// layout and `statusItem.length` re-lays the menu bar out, so both run only when what the
+  /// status item shows actually changes (N4).
   private var appliedStatusReading: MenuBarReading?
   private var appliedStatusToolTip: String?
   private var appliedStatusButtonHeight: CGFloat?
 
   private func updateStatusLength() {
     guard let label = statusHosting, let button = statusItem.button else { return }
-    let reading = model.menuBarReading(prefs)
+    let menuBar = model.menuBar
+    let reading = menuBar.reading(prefs)
     // Signed out or not paired: the logo alone, and the help tag says so (section 9).
-    let signedOut = model.needsConnection && !model.signIn.repair
     let toolTip = reading.map { "AI Account Center · \($0.detail)" }
-      ?? (signedOut ? "AI Account Center · \(model.signIn.menuBarHelp)" : "AI Account Center")
+      ?? (menuBar.signedOut ? "AI Account Center · \(menuBar.snapshot.signInHelp)" : "AI Account Center")
     if appliedStatusToolTip != nil, reading == appliedStatusReading, toolTip == appliedStatusToolTip,
       button.bounds.height == appliedStatusButtonHeight { return }
     appliedStatusReading = reading
@@ -105,6 +107,9 @@ final class PanelController: NSObject, NSWindowDelegate {
   // MARK: Open and close
 
   func open() {
+    // First: the panel's publishes flow again, so it renders the silently stored refreshes (the sets
+    // below already send, which is what re-renders it).
+    model.panelOpen = true
     state.contentInstalled = true
     let panel = self.panel ?? makePanel()
     closing = false
@@ -140,6 +145,8 @@ final class PanelController: NSObject, NSWindowDelegate {
 
   func close() {
     guard let panel, panel.isVisible, !closing else { return }
+    // First: later refreshes store silently again (the confirmation clears below go quietly with them).
+    model.panelOpen = false
     model.lastShown = model.currentReadings
     // An unanswered switch confirmation ends with the panel, so background refresh resumes.
     model.pendingCodexSwitch = nil
