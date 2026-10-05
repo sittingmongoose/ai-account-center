@@ -7,6 +7,7 @@ import {
   parseJsonlMappedUsageLine,
 } from '../../../src/web-server/usage/account-activity-collector';
 import type { JsonlFieldMapping } from '../../../src/web-server/usage/worker-client';
+import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
 const MIN_DATE = NOW - 31 * 86_400_000;
@@ -110,7 +111,15 @@ describe('omp and muse account activity', () => {
     expect(models.get('k3')?.cost).toBeCloseTo(1.5, 9);
     // A logged 0 is not free: the qwen row prices through the resolver.
     expect(models.get('qwen3.8-max')?.cost ?? 0).toBeGreaterThan(0);
-    expect(data.session.length).toBeGreaterThan(0);
+    // One session per id across roots: the advisor file joins the session it belongs to, and
+    // every id leaves the reader as its key, never raw.
+    expect(data.session.map((session) => session.sessionId).sort()).toEqual(
+      [
+        analyticsSessionKey('omp', '2026-10-01T15-00_uuid'),
+        analyticsSessionKey('omp', '2026-10-01T15-30_uuid2'),
+      ].sort()
+    );
+    expect(JSON.stringify(data.session)).not.toContain('uuid');
   });
 
   it('resumes omp files from checkpoints without duplicating events', async () => {
@@ -142,7 +151,10 @@ describe('omp and muse account activity', () => {
     // Muse input includes the cache reads: (500 - 400) uncached per event.
     expect(data.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(200);
     expect(data.hourly.reduce((sum, hour) => sum + hour.cacheReadTokens, 0)).toBe(800);
-    expect(data.session.map((session) => session.sessionId).sort()).toEqual(['sub-1', 'uuid-1']);
+    expect(data.session.map((session) => session.sessionId).sort()).toEqual(
+      [analyticsSessionKey('muse', 'sub-1'), analyticsSessionKey('muse', 'uuid-1')].sort()
+    );
+    expect(JSON.stringify(data.session)).not.toContain('uuid-1');
   });
 
   it('prices unlogged rows at fallback rates when no table knows the model', async () => {

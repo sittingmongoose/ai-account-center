@@ -18,7 +18,7 @@ import {
 } from './disk-cache';
 import { ok, info, fail } from '../../utils/ui';
 
-import { getClaudeConfigDir, getDefaultClaudeConfigDir } from '../../utils/claude-config-path';
+import { getClaudeProjectsDirForAnalytics } from '../../utils/claude-config-path';
 import {
   loadCachedCliproxyData,
   startCliproxySync,
@@ -47,21 +47,6 @@ import { listAccountInstancePaths } from '../../management/instance-directory';
 /** Path to CCS instances directory */
 function getCcsInstancesDir() {
   return path.join(getCcsDir(), 'instances');
-}
-
-function isPathWithinDir(childPath: string, parentPath: string): boolean {
-  const relative = path.relative(parentPath, childPath);
-  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
-}
-
-function getDefaultProjectsDirForAnalytics(): string {
-  const activeClaudeConfigDir = getClaudeConfigDir();
-  const instancesDir = getCcsInstancesDir();
-  const claudeConfigDir = isPathWithinDir(activeClaudeConfigDir, instancesDir)
-    ? getDefaultClaudeConfigDir()
-    : activeClaudeConfigDir;
-
-  return path.join(claudeConfigDir, 'projects');
 }
 
 /**
@@ -415,7 +400,7 @@ async function refreshFromSource(): Promise<{
   const defaultData = annotateUsageProfile(
     await loadUsageInWorker({
       kind: 'claude',
-      projectsDir: getDefaultProjectsDirForAnalytics(),
+      projectsDir: getClaudeProjectsDirForAnalytics(),
     }),
     'default'
   );

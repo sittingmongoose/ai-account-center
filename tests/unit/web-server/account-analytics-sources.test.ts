@@ -97,6 +97,23 @@ async function remoteAnswer() {
         rowCount: 0,
         detail: 'remote scan failed',
       },
+      // Every kind is scanned on both hosts; absence is measured, never fixed.
+      {
+        tool: 'muse',
+        host: 'windows',
+        state: 'not_installed',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 0,
+        detail: 'no usage logs found on this host',
+      },
+      {
+        tool: 'zcode',
+        host: 'windows',
+        state: 'not_installed',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 0,
+        detail: 'no usage logs found on this host',
+      },
     ],
   };
 }
@@ -202,7 +219,11 @@ describe('analytics activity across sources', () => {
     expect(antigravity?.state).toBe('unavailable');
     expect(antigravity?.detail).toContain('no local usage log');
     expect(sources.get('cursor:windows')?.detail).toContain('no local usage log');
+    // Windows Muse and zcode are measured by that host's own scan, not fixed here.
     expect(sources.get('muse:windows')?.state).toBe('not_installed');
+    expect(sources.get('muse:windows')?.detail).toContain('no usage logs found on this host');
+    expect(sources.get('zcode:windows')?.state).toBe('not_installed');
+    expect(sources.get('zcode:windows')?.detail).toContain('no usage logs found on this host');
   });
 
   it('describes the real multi-host coverage', async () => {
@@ -265,5 +286,24 @@ describe('analytics activity across sources', () => {
     expect(result.sources.find((row) => row.tool === 'omp' && row.host === 'mac')?.state).toBe(
       'cached'
     );
+  });
+
+  it('marks every remote tool and host when no remote scan answers at all', async () => {
+    const activity = service({
+      remote: async () => {
+        throw new Error('timed out');
+      },
+    });
+    const result = await activity.get(QUERY, FROM, TO, { tz: 'UTC' });
+    const cells = new Map(result.sources.map((row) => [`${row.tool}:${row.host}`, row]));
+    // Claude and Codex cells stay in the grid too: their carried aggregates are in the totals,
+    // so a timed-out scan must never read as "not read" for them.
+    for (const host of ['mac', 'windows'])
+      for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode'])
+        expect(cells.get(`${tool}:${host}`), `${tool}:${host}`).toMatchObject({
+          state: 'unavailable',
+          rowCount: 0,
+          detail: 'remote scan timed out',
+        });
   });
 });

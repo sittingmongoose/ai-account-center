@@ -170,8 +170,22 @@ test('a picked provider shows only the usage it served, divided by model', () =>
   // each): 12 = 3+2+2+1+2+1+1 over the seven PROVIDERS rows, so a provider dropping out would show here
   const all = usageView(payload(), state(), { now });
   assert.equal(all.sessions.stats.find(s => s.key === 'sess').num, 12);
-  assert.match(all.sessions.note, /usage read from the Mac and Windows adds tokens but no sessions/);
+  // Mac and Windows rows carry a session key now, so no Ubuntu-only caveat is owed.
+  assert.equal(all.sessions.note, '');
   assert.equal(claude.sessions.note, '');
+});
+
+test('a generic JSONL source counts tokens but adds no sessions, and the note says so', () => {
+  const providers = PROVIDERS.map(p => p.provider === 'other' ? { ...p, tools: ['omp', 'jsonl'] } : p);
+  const view = usageView(payload({ providers }), state(), { now });
+  assert.match(view.sessions.note, /generic JSONL usage log records no session/);
+  // Its tokens are still in the totals, and its provider still counts the sessions its other tools logged:
+  // Other's one OMP session stays in the Sessions number, alone under its filter and in the sum under All.
+  assert.equal(kpi(view, 'tok').num, tokensOf(...Object.values(M)));
+  assert.equal(view.sessions.stats.find(s => s.key === 'sess').num, 12);
+  const other = usageView(payload({ providers }), state({ prov: 'other' }), { now });
+  assert.equal(other.sessions.stats.find(s => s.key === 'sess').num, 1);
+  assert.match(other.sessions.note, /generic JSONL usage log records no session/);
 });
 
 test('Included usage names the tools and computers read, and how usage is grouped', () => {

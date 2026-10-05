@@ -354,6 +354,7 @@ describe('usage attribution: aggregation by route', () => {
     });
     const routed = aggregateRows(
       [entry('qwen3.8-max', 'alibaba-token-plan', 'omp'), entry('k3', 'kimi-code', 'omp')],
+      'omp',
       'omp'
     );
     expect(routed.hourly[0].modelBreakdowns.map((row) => [row.provider, row.requestCount])).toEqual(
@@ -363,7 +364,7 @@ describe('usage attribution: aggregation by route', () => {
       ])
     );
     // Claude Code and Codex rows keep their exact shape
-    const claude = aggregateRows([entry('claude-opus-5-5', undefined, 'claude')], 'claude');
+    const claude = aggregateRows([entry('claude-opus-5-5', undefined, 'claude')], 'claude', 'claude');
     expect('requestCount' in claude.hourly[0].modelBreakdowns[0]).toBe(false);
   });
 });

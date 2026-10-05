@@ -779,13 +779,13 @@ const SESS_TOP = 5, SESS_SHOWN = 15;
  * table; Recent sessions continues it with the next sessions up to SESS_SHOWN in total, same columns and
  * styling, so the two boxes read as one list. The summary numbers are sums and means; a session that
  * several providers served counts under each of them. The average cost comes from the rows that have
- * costs, and says partial when some rows do not; only with no priced row at all is it not logged. Usage
- * read from the Mac and Windows comes without a session list, so it adds tokens but no sessions, and the
- * note says so. The table lists the sample most recent first, without paths. The sample rows are the
- * server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token totals);
- * anything else is dropped, never guessed.
+ * costs, and says partial when some rows do not; only with no priced row at all is it not logged. Every
+ * native tool names a session on every host it runs on, so sessions cover Ubuntu, Mac and Windows alike; a
+ * generic JSONL log names none, and the note says so. The table lists the sample most recent first,
+ * without paths. The sample rows are the server's AccountAnalyticsSessionRow shape (provider,
+ * lastActivity, string models, token totals); anything else is dropped, never guessed.
  */
-function sessionsView(A, state, payload, now) {
+function sessionsView(A, state, now) {
   const all = A.sessions.filter(s => provOK(state, s.p));
   const sum = k => all.length && all.every(r => finite(r[k])) ? all.reduce((s, r) => s + r[k], 0) : null;
   const sessions = sum('sessions');
@@ -797,9 +797,8 @@ function sessionsView(A, state, payload, now) {
   const avg = pricedSessions > 0 ? pricedCost / pricedSessions : null;
   const avgPartial = finite(avg) && priced.length < withSessions.length;
   const evs = finite(sessions) && sessions > 0 && finite(events) ? events / sessions : null;
-  const remote = new Set((Array.isArray(payload?.activity?.sources) ? payload.activity.sources : [])
-    .filter(r => (r?.host === 'mac' || r?.host === 'windows') && (r.state === 'ok' || r.state === 'cached')).map(r => r.tool));
-  const fromRemote = all.some(r => A.tools(r.p).some(t => remote.has(t)));
+  // A saved generic JSONL source maps no session field, so its tokens are counted while it adds no sessions.
+  const sessionless = all.some(r => A.tools(r.p).includes('jsonl'));
   // the sample covers the providers in the filter; without one, show every session
   const sample = [];
   for (const s of A.sessionSample) {
@@ -831,7 +830,7 @@ function sessionsView(A, state, payload, now) {
       : `Most recent ${listed.length} of ${sample.length} sessions in this range`
     : '';
   return {
-    note: fromRemote ? 'Sessions come from the Ubuntu logs; usage read from the Mac and Windows adds tokens but no sessions.' : '',
+    note: sessionless ? 'A generic JSONL usage log records no session, so its tokens are counted but it adds no sessions.' : '',
     recent: listed.slice(0, SESS_TOP),
     recentMore: listed.slice(SESS_TOP),
     moreSub: listed.length === 0 ? ''
@@ -1170,7 +1169,7 @@ export function usageView(payload, state, opts = {}) {
     notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '',
   ].filter(Boolean).join(' ');
   const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
-  const sessions = sessionsView(A, state, payload, now);
+  const sessions = sessionsView(A, state, now);
   return {
     available: A.available, statusNote, cached: A.status === 'cached',
     head: headOf(A, R, state, now, zone),

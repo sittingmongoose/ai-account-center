@@ -41,6 +41,27 @@ export interface ZcodeHelperRow {
   n: number;
 }
 
+/**
+ * One per-session-model aggregate: the session's published key — the helper's
+ * sha256('aac-session-v1:zcode:<session id>')[:16], derived where the database was read — plus
+ * first/last event. A database without the session column contributes none.
+ */
+export interface ZcodeHelperSessionRow {
+  k: 'zcode';
+  f: string;
+  s: string;
+  m: string;
+  p?: string;
+  a: number;
+  z: number;
+  i: number;
+  o: number;
+  cr: number;
+  cw: number;
+  c: number;
+  n: number;
+}
+
 /** The database file plus its write-ahead log, where zcode keeps recent rows until a checkpoint. */
 export interface ZcodeFingerprint {
   size: number;
@@ -54,6 +75,7 @@ export interface ZcodeHelperResult {
   state: 'ok' | 'not_installed' | 'error';
   fingerprints: Record<string, ZcodeFingerprint>;
   rows: ZcodeHelperRow[];
+  sessions: ZcodeHelperSessionRow[];
   truncated: boolean;
 }
 
@@ -79,10 +101,38 @@ function isRow(value: unknown): value is ZcodeHelperRow {
   );
 }
 
+function isSessionRow(value: unknown): value is ZcodeHelperSessionRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    row.k === 'zcode' &&
+    typeof row.f === 'string' &&
+    typeof row.s === 'string' &&
+    /^[0-9a-f]{16}$/.test(row.s) &&
+    typeof row.m === 'string' &&
+    (row.p === undefined || typeof row.p === 'string') &&
+    typeof row.a === 'number' &&
+    Number.isFinite(row.a) &&
+    row.a >= 0 &&
+    typeof row.z === 'number' &&
+    Number.isFinite(row.z) &&
+    (row.z as number) >= (row.a as number) &&
+    ['i', 'o', 'cr', 'cw', 'n'].every(
+      (field) =>
+        typeof row[field] === 'number' &&
+        Number.isFinite(row[field] as number) &&
+        (row[field] as number) >= 0
+    ) &&
+    typeof row.c === 'number' &&
+    Number.isFinite(row.c) &&
+    row.c >= 0
+  );
+}
+
 /**
  * Query the local zcode database through the packaged helper: one read-only
- * aggregate query (model names and integers only), never raw usage JSON or
- * message tables. Local opens are `mode=ro`; only remote hosts add
+ * aggregate query (model names, hashed session keys and integers only), never
+ * raw usage JSON or message tables. Local opens are `mode=ro`; only remote hosts add
  * `immutable=1`. Throws when python3 or the database is unavailable.
  */
 export function queryLocalZcodeUsage(
@@ -120,6 +170,7 @@ export function queryLocalZcodeUsage(
   const response = JSON.parse(output) as {
     kinds?: { zcode?: { state?: string; fingerprints?: Record<string, unknown> } };
     rows?: unknown[];
+    srows?: unknown[];
     truncated?: boolean;
   };
   const kind = response?.kinds?.zcode;
@@ -127,6 +178,9 @@ export function queryLocalZcodeUsage(
     throw new CCSError('Analytics helper returned an invalid result.');
   const rows = Array.isArray(response.rows) ? response.rows : [];
   if (rows.length > 100_000 || !rows.every(isRow))
+    throw new CCSError('Analytics helper result is invalid.');
+  const sessions = Array.isArray(response.srows) ? response.srows : [];
+  if (sessions.length > 100_000 || !sessions.every(isSessionRow))
     throw new CCSError('Analytics helper result is invalid.');
   const prints: Record<string, ZcodeFingerprint> = {};
   const count = (value: unknown): value is number =>
@@ -142,5 +196,11 @@ export function queryLocalZcodeUsage(
           : {}),
       };
   }
-  return { state: kind.state, fingerprints: prints, rows, truncated: response.truncated === true };
+  return {
+    state: kind.state,
+    fingerprints: prints,
+    rows,
+    sessions,
+    truncated: response.truncated === true,
+  };
 }

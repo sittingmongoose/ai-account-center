@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 112 |
 | Sync fs occurrences (runtime hotpaths) | 499 |
 | Sync fs files affected (runtime hotpaths) | 62 |
-| Legacy shim markers | 197 |
-| Legacy shim files affected | 74 |
+| Legacy shim markers | 198 |
+| Legacy shim files affected | 75 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -53,11 +53,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 22.7% (143/630) |
+| typed-error adoption (typed/total throws) | 22.8% (144/631) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 34/387 |
+| files with createLogger | 34/388 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
 | files > 400 LOC | 44 |
 | files > 600 LOC | 18 |
@@ -88,16 +88,16 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
+| `src/web-server/usage/account-activity-collector.ts` | 1102 |
+| `src/web-server/services/account-analytics-activity.ts` | 1062 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1052 |
-| `src/web-server/services/account-analytics-activity.ts` | 1047 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 960 |
-| `src/web-server/usage/account-activity-collector.ts` | 903 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
-| `src/web-server/usage/aggregator.ts` | 782 |
 | `src/web-server/usage/native-quota-collector.ts` | 768 |
 | `src/auth/profile-detector.ts` | 767 |
-| `src/web-server/services/account-analytics-projection.ts` | 696 |
+| `src/web-server/usage/aggregator.ts` | 767 |
+| `src/web-server/services/account-analytics-projection.ts` | 692 |
 | `src/web-server/services/account-dashboard-service.ts` | 674 |
 | `src/antigravity/switch-service.ts` | 636 |
 | `src/web-server/services/additional-account-service.ts` | 636 |

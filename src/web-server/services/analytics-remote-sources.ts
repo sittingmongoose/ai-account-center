@@ -1,7 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
-import { aggregateRows, type CompactEntry } from '../usage/account-activity-collector';
+import {
+  aggregateRows,
+  aggregateSessionAggregates,
+  type CompactEntry,
+  type SessionAggregateRow,
+} from '../usage/account-activity-collector';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import {
   runAnalyticsRemoteHelper,
@@ -11,6 +16,7 @@ import {
   type AnalyticsRemoteKind,
   type AnalyticsRemoteResponse,
   type AnalyticsRemoteRow,
+  type AnalyticsRemoteSessionRow,
 } from './analytics-remote-transport';
 import { readDashboardPreferences } from './dashboard-preferences';
 
@@ -47,26 +53,33 @@ export interface AnalyticsRemoteSourceDeps {
 }
 
 /**
- * Remote coverage: Claude Code, Codex and OMP on the Mac and Windows; Muse
- * and zcode on the Mac only.
+ * Remote coverage: Claude Code, Codex, OMP, Muse and zcode on the Mac and
+ * Windows. Muse and zcode report `not_installed` on Windows until they are;
+ * the states are measured by the scan, never assumed.
  */
 const REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
   mac: ['claude', 'codex', 'omp', 'muse', 'zcode'],
-  windows: ['claude', 'codex', 'omp'],
+  windows: ['claude', 'codex', 'omp', 'muse', 'zcode'],
 };
+
+/** The kinds scanned on one remote host, for states when no scan answered. */
+export function analyticsRemoteTargets(host: AnalyticsRemoteHost): AnalyticsRemoteKind[] {
+  return [...REMOTE_TARGETS[host]];
+}
 
 const MAX_CACHED_ROWS = 100_000;
 
 /**
- * 2: Muse input nets out cache reads and rows never mix logged and unlogged
- * events, so rows cached by version 1 are read again.
+ * 3: per-session aggregates ride with the hourly rows, so remote sessions
+ * count like local ones; rows cached by version 2 are read again.
  */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 interface RemoteCache {
   version: typeof CACHE_VERSION;
   fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>;
   rows: AnalyticsRemoteRow[];
+  srows: AnalyticsRemoteSessionRow[];
   lastScanAt: string | null;
 }
 
@@ -75,7 +88,7 @@ function cacheFile(cacheDir: string, host: AnalyticsRemoteHost): string {
 }
 
 function blankCache(): RemoteCache {
-  return { version: CACHE_VERSION, fingerprints: {}, rows: [], lastScanAt: null };
+  return { version: CACHE_VERSION, fingerprints: {}, rows: [], srows: [], lastScanAt: null };
 }
 
 function loadCache(file: string): RemoteCache {
@@ -88,6 +101,8 @@ function loadCache(file: string): RemoteCache {
       typeof value.fingerprints !== 'object' ||
       !Array.isArray(value.rows) ||
       value.rows.length > MAX_CACHED_ROWS ||
+      !Array.isArray(value.srows) ||
+      value.srows.length > MAX_CACHED_ROWS ||
       (value.lastScanAt !== null && typeof value.lastScanAt !== 'string')
     )
       return blankCache();
@@ -99,7 +114,11 @@ function loadCache(file: string): RemoteCache {
 
 function saveCache(file: string, value: RemoteCache): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const body = JSON.stringify({ ...value, rows: value.rows.slice(0, MAX_CACHED_ROWS) });
+  const body = JSON.stringify({
+    ...value,
+    rows: value.rows.slice(0, MAX_CACHED_ROWS),
+    srows: value.srows.slice(0, MAX_CACHED_ROWS),
+  });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, body, { mode: 0o600 });
   fs.renameSync(temporary, file);
@@ -134,6 +153,7 @@ function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
       cacheCreationTokens: Math.floor(row.cw),
       cacheReadTokens: Math.floor(row.cr),
       model: row.m,
+      // Remote sessions ride in `srows`, already keyed on the host that read them.
       sessionId: '',
       timestamp: `${row.h.replace(' ', 'T')}:00Z`,
       projectPath: '',
@@ -147,8 +167,33 @@ function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
   }));
 }
 
-function toWorkerResult(rows: AnalyticsRemoteRow[], kind: AnalyticsRemoteKind): UsageWorkerResult {
-  const { hourly, session } = aggregateRows(toCompact(rows), `${kind}-remote`);
+/** The helper hashed each session id on the host it read, so these keys pass through unchanged. */
+function toSessionAggregates(srows: AnalyticsRemoteSessionRow[]): SessionAggregateRow[] {
+  return srows.map((row) => ({
+    sessionId: row.s,
+    model: row.m,
+    ...(row.p ? { provider: row.p } : {}),
+    target: row.k,
+    firstMs: Math.floor(row.a),
+    lastMs: Math.floor(row.z),
+    inputTokens: Math.floor(row.i),
+    outputTokens: Math.floor(row.o),
+    cacheCreationTokens: Math.floor(row.cw),
+    cacheReadTokens: Math.floor(row.cr),
+    ...(row.c > 0 ? { cost: row.c } : {}),
+    events: Math.floor(row.n),
+  }));
+}
+
+function toWorkerResult(
+  rows: AnalyticsRemoteRow[],
+  srows: AnalyticsRemoteSessionRow[],
+  kind: AnalyticsRemoteKind
+): UsageWorkerResult {
+  const { hourly } = aggregateRows(toCompact(rows), `${kind}-remote`, kind);
+  // Sessions aggregate from the session rows alone: the hourly rows already
+  // carry the same tokens, so the two must never be aggregated together.
+  const { session } = aggregateSessionAggregates(toSessionAggregates(srows), `${kind}-remote`);
   return {
     daily: [],
     monthly: [],
@@ -172,6 +217,11 @@ function inWindow(row: AnalyticsRemoteRow, minDateMs: number): boolean {
   return Number.isFinite(epoch) && epoch >= minDateMs;
 }
 
+/** A session row stays while its last event is in the retained window. */
+function sessionInWindow(row: AnalyticsRemoteSessionRow, minDateMs: number): boolean {
+  return Number.isFinite(row.z) && row.z >= minDateMs;
+}
+
 /** Previously read aggregates of one host, marked `cached`, or `unavailable` when none. */
 function cachedHostSources(
   host: AnalyticsRemoteHost,
@@ -186,8 +236,11 @@ function cachedHostSources(
   const states: AnalyticsRemoteSourceState[] = [];
   for (const tool of REMOTE_TARGETS[host]) {
     const kept = cached.rows.filter((row) => row.k === tool && inWindow(row, minDateMs));
-    if (kept.length) {
-      results.push({ tool, data: toWorkerResult(kept, tool) });
+    const keptSessions = cached.srows.filter(
+      (row) => row.k === tool && sessionInWindow(row, minDateMs)
+    );
+    if (kept.length || keptSessions.length) {
+      results.push({ tool, data: toWorkerResult(kept, keptSessions, tool) });
       states.push({
         tool,
         host,
@@ -353,6 +406,18 @@ export async function loadAnalyticsRemoteSources(
           (row) => kinds.includes(row.k) && !errored.has(row.k) && inWindow(row, minDateMs)
         );
         const merged = [...kept, ...fresh].slice(0, MAX_CACHED_ROWS);
+        // Session aggregates merge under the same file fingerprints as the
+        // hourly rows: a re-read file replaces both, an unvisited one keeps both.
+        const keptSessions = cached.srows.filter((row) => {
+          if (!kinds.includes(row.k) || !sessionInWindow(row, minDateMs)) return false;
+          const print = freshPrints[row.k]?.[row.f];
+          if (print === undefined) return keepsUnvisited(row.k);
+          return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
+        });
+        const freshSessions = (response.srows ?? []).filter(
+          (row) => kinds.includes(row.k) && !errored.has(row.k) && sessionInWindow(row, minDateMs)
+        );
+        const mergedSessions = [...keptSessions, ...freshSessions].slice(0, MAX_CACHED_ROWS);
         const scannedAt = new Date(now()).toISOString();
         const prints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {
           ...freshPrints,
@@ -370,6 +435,7 @@ export async function loadAnalyticsRemoteSources(
             version: CACHE_VERSION,
             fingerprints: prints,
             rows: merged,
+            srows: mergedSessions,
             lastScanAt: scannedAt,
           });
         } catch {
@@ -377,6 +443,7 @@ export async function loadAnalyticsRemoteSources(
         }
         for (const tool of kinds) {
           const rows = merged.filter((row) => row.k === tool);
+          const srows = mergedSessions.filter((row) => row.k === tool);
           const kindState = response.kinds[tool]?.state ?? 'ok';
           if (kindState === 'not_installed') {
             states.push({
@@ -389,7 +456,8 @@ export async function loadAnalyticsRemoteSources(
             });
             continue;
           }
-          if (rows.length) results.push({ tool, data: toWorkerResult(rows, tool) });
+          if (rows.length || srows.length)
+            results.push({ tool, data: toWorkerResult(rows, srows, tool) });
           const partial = response.truncated || errored.has(tool);
           const reason = errored.has(tool) ? 'remote read failed' : 'remote scan hit its bounds';
           states.push({
