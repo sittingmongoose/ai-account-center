@@ -85,7 +85,9 @@ page as file:// or configure a cross-origin API URL.
   The active account is the selected row, marked Active.
 - Update apps is its own header button. It starts the allowlisted asynchronous
   update job only after the user presses it, shows progress in place and the
-  result as a toast; it is never run while the dashboard starts.
+  result as a toast; it is never run while the dashboard starts. The button
+  keeps one width for the whole job (the rolling count sits in a box the width
+  of its total), so its label never jitters while apps update.
 - Usage refreshes at the server-confirmed interval configured in Accounts &
   Settings (30–3600 seconds, initially 60 seconds). Refresh requests fresh usage
   before reloading. Failed refreshes keep the received samples and report the
