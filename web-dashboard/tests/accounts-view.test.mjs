@@ -1142,6 +1142,48 @@ test('Update apps cancel and readiness states read as plain text', () => {
   assert.equal(done.hosts[1].items[0].tip, 'Unknown: this computer is not reachable.');
 });
 
+test('Update apps action-required rows read as needs-action warnings, never failures', () => {
+  const result = (platform, appLabel, status, extra = {}) => ({
+    appId: appLabel.toLowerCase().replace(/ /g, '-'),
+    appLabel,
+    platform,
+    status,
+    previousVersion: null,
+    version: null,
+    message: 'Done',
+    ...extra,
+  });
+  const done = updateResultsView(
+    {
+      state: 'completed',
+      startedAt: at(-30),
+      finishedAt: at(-20),
+      activePlatform: null,
+      results: [
+        result('mac', 'Codex Desktop', 'action_required', {
+          message: 'Quit the app, then run Update apps again.',
+        }),
+        result('windows', 'Claude Desktop', 'action_required', {
+          message: 'The download was blocked; open the app to check for updates.',
+        }),
+      ],
+    },
+    now
+  );
+  assert.equal(
+    done.headRuns.map((r) => r.text).join(''),
+    'Last run 20m ago · 2 results, 2 need action'
+  );
+  assert.deepEqual(
+    done.hosts[0].items.map((i) => [i.app, i.result, i.tone]),
+    [['Codex Desktop', 'Needs action', 'warn']]
+  );
+  assert.equal(
+    done.hosts[0].items[0].tip,
+    'Quit the app, then run Update apps again.'
+  );
+});
+
 test('connection facts and the sign-in block say only what the browser and server report', () => {
   assert.equal(transportOf('https:', 'aac.example.test'), 'https');
   assert.equal(transportOf('http:', 'localhost'), 'loopback');

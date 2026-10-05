@@ -9,6 +9,7 @@ import re
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 APP_LABELS = {
@@ -103,28 +104,59 @@ def result(app_id, platform, status, before=None, after=None, manager=None, code
     }
 
 
+def _challenge_page(head):
+    lead = head[:4096].lstrip()[:64].lower()
+    return lead.startswith(b"<!doctype html") or lead.startswith(b"<html")
+
+
 def download(url, destination, maximum=800 * 1024 * 1024, timeout=180):
-    """Only callers' fixed official URLs reach here; final app signatures are verified."""
+    """Only callers' fixed official URLs reach here; final app signatures are verified.
+
+    A bot-challenge refusal (HTTP 403 or an HTML challenge page served with a
+    200) maps to download_blocked so callers can report an actionable state
+    instead of a generic failure. Nothing is written for a blocked download.
+    """
     deadline = time.monotonic() + timeout
     request = urllib.request.Request(url, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=15) as response, pathlib.Path(destination).open("wb") as target:
+        try:
+            opened = urllib.request.urlopen(request, timeout=15)
+        except urllib.error.HTTPError as denied:
+            if denied.code == 403:
+                raise UpdateFailure("download_blocked") from None
+            raise
+        with opened as response:
             if not response.geturl().startswith("https://"):
                 raise UpdateFailure()
             length = response.headers.get("Content-Length")
             if length and int(length) > maximum:
                 raise UpdateFailure()
+            if (response.headers.get("Content-Type") or "").split(";")[0].strip().lower() == "text/html":
+                raise UpdateFailure("download_blocked")
             total = 0
-            while True:
-                if time.monotonic() >= deadline:
-                    raise UpdateFailure("timeout")
-                data = response.read(256 * 1024)
-                if not data:
-                    break
-                total += len(data)
-                if total > maximum:
-                    raise UpdateFailure()
-                target.write(data)
+            target = None
+            try:
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise UpdateFailure("timeout")
+                    data = response.read(256 * 1024)
+                    if not data:
+                        break
+                    if target is None:
+                        if _challenge_page(data):
+                            raise UpdateFailure("download_blocked")
+                        target = pathlib.Path(destination).open("wb")
+                    total += len(data)
+                    if total > maximum:
+                        raise UpdateFailure()
+                    target.write(data)
+            finally:
+                if target is not None:
+                    target.close()
+                elif total == 0:
+                    pathlib.Path(destination).unlink(missing_ok=True)
+            if target is None:
+                pathlib.Path(destination).touch()
     except UpdateFailure:
         raise
     except Exception:
