@@ -443,6 +443,8 @@ def mac_quit_request(pid):
 def windows_close_broadcast(pids):
     """Post a close request to every window owned by these PIDs. Never waits, never forces."""
     user32 = ctypes.windll.user32
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     live = set(pids)
     callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -454,6 +456,7 @@ def windows_close_broadcast(pids):
         return True
 
     callback = callback_type(close_window)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
     user32.EnumWindows(callback, None)
 
 

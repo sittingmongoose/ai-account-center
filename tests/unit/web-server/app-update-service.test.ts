@@ -149,7 +149,7 @@ describe('fixed app update service', () => {
   });
   it('accepts action-required rows and completes the job without failures', async () => {
     const rows = JSON.parse(payload()).results;
-    rows[0] = { ...rows[0], status: 'action_required', messageCode: 'staged_quit' };
+    rows[0] = { ...rows[0], status: 'action_required', messageCode: 'quit_first' };
     rows[1] = {
       ...rows[1],
       status: 'action_required',
@@ -161,7 +161,7 @@ describe('fixed app update service', () => {
     rows[2] = { ...rows[2], status: 'action_required', messageCode: 'check_in_app' };
     const normalized = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'mac');
     expect(normalized[0].status).toBe('action_required');
-    expect(normalized[0].message).toBe('The update is staged; quit the app to finish it.');
+    expect(normalized[0].message).toBe('Quit the app, then run Update apps again.');
     expect(normalized[1].message).toBe('Quit the app, then run Update apps again.');
     expect(normalized[2].message).toBe(
       'The download was blocked; open the app to check for updates.'

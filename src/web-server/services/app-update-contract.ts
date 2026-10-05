@@ -75,7 +75,6 @@ export const MESSAGES = {
   skipped_cancelled: 'Skipped: cancelled',
   host_unknown: 'Unknown: this computer is not reachable.',
   readiness_unknown: 'Unknown: the readiness check could not run.',
-  staged_quit: 'The update is staged; quit the app to finish it.',
   quit_first: 'Quit the app, then run Update apps again.',
   check_in_app: 'The download was blocked; open the app to check for updates.',
 } as const;

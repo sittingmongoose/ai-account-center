@@ -86,16 +86,18 @@ does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
-user exactly what to do. Mac desktops whose running instances will not quit get
-their verified bundle swapped while running (safe on macOS: the old process
-keeps its mapped pages) and report `staged_quit`: quitting finishes the update.
-Windows desktops blocked by running instances, and MSIX deployments rejected
-for apps that need closing, report `quit_first`. Desktop downloads refused by a
-bot challenge (HTTP 403 or a challenge page) report `check_in_app` after bounded
-retries. Desktop downloads allow 2 GiB and 10-minute timeouts; desktops are
-never force-stopped. Windows npm updates run `node npm-cli.js` directly (never
-through `cmd /s /c`, which mangles spaced paths) after stopping mapped
-instances first, since Windows cannot replace a running npm tree.
+user exactly what to do. Mac and Windows desktops whose running instances will
+not quit (or cannot be mapped) report `quit_first`: nothing is swapped or
+deployed while anything runs, and the next click after the user quits updates
+cleanly. MSIX deployments rejected for apps that need closing also report
+`quit_first`. Desktop downloads refused by a bot challenge (HTTP 403 or a
+challenge page) report `check_in_app` after bounded retries. Desktop downloads
+allow 2 GiB and 10-minute timeouts; Mac and Windows desktops are never
+force-stopped (Ubuntu desktops keep the previous terminate-and-relaunch flow).
+Windows npm updates first ask the registry whether anything is newer, then run
+`node npm-cli.js` directly (never through `cmd /s /c`, which mangles spaced
+paths) after stopping mapped instances first, since Windows cannot replace a
+running npm tree.
 
 ## Fixture verification
 

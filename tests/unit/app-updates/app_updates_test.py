@@ -123,15 +123,18 @@ class UpdaterTests(unittest.TestCase):
         stop.assert_not_called()
         self.assertEqual(value['status'], 'current')
 
-    def test_pending_restart_is_retried_even_when_package_is_current(self):
+    def test_stale_same_version_marker_reports_current_without_restart(self):
+        # A marker matching the installed version is stale pre-stop
+        # bookkeeping, never a retry request: reporting "updated" for it
+        # would claim an update that never happened.
         install = common.Install('antigravity-cli', 'ubuntu', pathlib.Path('/fixture/agy'), '2.0.0')
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'perform_cli_update'), mock.patch.object(updater, 'detect_cli', return_value=install), mock.patch.object(updater, 'restart_cli', return_value=[]) as restart:
             marker = pathlib.Path(directory) / '.ccs/app-updates/antigravity-cli-pending-restart.json'
             common.write_private_json(marker, {'version': '2.0.0'})
             value = updater.update_cli(install, time.monotonic() + 60)
             self.assertFalse(marker.exists())
-        self.assertEqual(value['status'], 'updated')
-        restart.assert_called_once()
+        self.assertEqual(value['status'], 'current')
+        restart.assert_not_called()
 
     def test_untrusted_apt_origin_never_stops_or_installs(self):
         install = common.Install('codex-desktop', 'ubuntu', pathlib.Path('/usr/lib/chatgpt/ChatGPT'), '1.0.0', 'apt', 'chatgpt')
@@ -237,8 +240,9 @@ class UpdaterTests(unittest.TestCase):
         calls = []
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
                 mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([context], [context])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'npm_view_latest', return_value=None), \
                 mock.patch.object(updater, 'terminate_cli', side_effect=lambda *args: calls.append('stop') or 0), \
-                mock.patch.object(updater, 'perform_cli_update', side_effect=lambda item: calls.append('install') or (_ for _ in ()).throw(common.UpdateFailure())), \
+                mock.patch.object(updater, 'perform_cli_update', side_effect=lambda item, deadline=None: calls.append('install') or (_ for _ in ()).throw(common.UpdateFailure())), \
                 mock.patch.object(updater, 'restart_cli', side_effect=lambda *args: calls.append('relaunch') or []), \
                 mock.patch.object(updater, 'detect_cli', return_value=install):
             value = updater.update_cli(install, time.monotonic() + 60)
@@ -251,11 +255,62 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(value['messageCode'], 'update_failed')
         self.assertTrue(value['updateAttempted'])
 
+    def test_npm_current_version_skips_install_without_stopping(self):
+        install = common.Install('codex-cli', 'windows', pathlib.Path('/fixture/npm/codex.cmd'), '0.160.0', 'npm', package_root=pathlib.Path('/fixture/npm/node_modules/@openai/codex'))
+        context = processes.Process(12, 1, 1, '/fixture/node', '12', ['node', '/fixture/npm/node_modules/@openai/codex/bin/codex.js'])
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([context], [context])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'npm_view_latest', return_value='0.160.0'), \
+                mock.patch.object(updater, 'terminate_cli') as stop, mock.patch.object(updater, 'perform_cli_update') as install_step:
+            value = updater.update_cli(install, time.monotonic() + 60)
+        stop.assert_not_called(); install_step.assert_not_called()
+        self.assertEqual(value['status'], 'current')
+        self.assertFalse(value['updateAttempted'])
+
+    def test_npm_unknown_registry_version_proceeds_to_install(self):
+        install = common.Install('codex-cli', 'windows', pathlib.Path('/fixture/npm/codex.cmd'), '0.153.4', 'npm', package_root=pathlib.Path('/fixture/npm/node_modules/@openai/codex'))
+        context = processes.Process(13, 1, 1, '/fixture/node', '13', ['node', '/fixture/npm/node_modules/@openai/codex/bin/codex.js'])
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([context], [context])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'npm_view_latest', return_value=None), \
+                mock.patch.object(updater, 'terminate_cli', return_value=0) as stop, \
+                mock.patch.object(updater, 'perform_cli_update') as install_step, \
+                mock.patch.object(updater, 'restart_cli', return_value=[]), \
+                mock.patch.object(updater, 'detect_cli', return_value=common.Install('codex-cli', 'windows', pathlib.Path('/fixture/npm/codex.cmd'), '0.160.0', 'npm')):
+            value = updater.update_cli(install, time.monotonic() + 60)
+        self.assertEqual(stop.call_count, 2)
+        install_step.assert_called_once()
+        self.assertEqual(value['status'], 'updated')
+
+    def test_cli_blocked_download_reports_update_failed(self):
+        install = common.Install('muse-code', 'ubuntu', pathlib.Path('/fixture/muse'), '1.4.2')
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'perform_cli_update', side_effect=common.UpdateFailure('download_blocked')):
+            value = updater.update_cli(install, time.monotonic() + 60)
+        self.assertEqual(value['status'], 'failed')
+        self.assertEqual(value['messageCode'], 'update_failed')
+
+    def test_install_timeouts_clamp_to_the_platform_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            node_dir = root / 'nodejs'; node_dir.mkdir()
+            (node_dir / 'node.exe').write_text('fixture')
+            cli = node_dir / 'node_modules/npm/bin/npm-cli.js'
+            cli.parent.mkdir(parents=True); cli.write_text('fixture')
+            install = common.Install('codex-cli', 'windows', root / 'npm/codex.cmd', '0.153.4', 'npm', package_root=root / 'npm/node_modules/@openai/codex')
+            with mock.patch.object(updater.shutil, 'which', side_effect=lambda name: str(node_dir / (name or ''))), mock.patch.object(updater, 'command') as run:
+                updater.perform_cli_update(install, time.monotonic() + 40000)
+                self.assertEqual(run.call_args.kwargs['timeout'], 300)
+                updater.perform_cli_update(install, time.monotonic() + 40)
+                self.assertLessEqual(run.call_args.kwargs['timeout'], 40)
+                self.assertGreaterEqual(run.call_args.kwargs['timeout'], 30)
+
     def test_download_maps_forbidden_to_blocked(self):
         with tempfile.TemporaryDirectory() as directory:
             target = pathlib.Path(directory) / 'update.dmg'
-            failure = urllib.error.HTTPError('https://fixture.test/app.dmg', 403, 'Forbidden', {}, io.BytesIO())
-            with mock.patch.object(common.urllib.request, 'urlopen', side_effect=failure):
+            with contextlib.closing(urllib.error.HTTPError('https://fixture.test/app.dmg', 403, 'Forbidden', {}, io.BytesIO())) as failure, \
+                    mock.patch.object(common.urllib.request, 'urlopen', side_effect=failure):
                 with self.assertRaises(common.UpdateFailure) as raised:
                     common.download('https://fixture.test/app.dmg', target)
             self.assertEqual(raised.exception.code, 'download_blocked')
@@ -297,7 +352,7 @@ class UpdaterTests(unittest.TestCase):
             plistlib.dump({'CFBundleIdentifier': identity, 'CFBundleShortVersionString': version}, handle)
         return app
 
-    def test_mac_refused_quit_stages_verified_bundle(self):
+    def test_mac_refused_quit_reports_quit_first_without_swapping(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             installed = self._fake_mac_bundle(root / 'Applications', 'ChatGPT.app', 'com.openai.codex', '26.928.31416')
@@ -322,10 +377,39 @@ class UpdaterTests(unittest.TestCase):
                 value = desktop.update_mac(install)
             relaunch.assert_not_called()
             self.assertEqual(value['status'], 'action_required')
-            self.assertEqual(value['messageCode'], 'staged_quit')
-            self.assertTrue(value['updateAttempted'])
-            self.assertEqual(value['version'], '26.930.41038')
-            self.assertTrue((installed / 'Contents' / 'staged-marker.txt').is_file())
+            self.assertEqual(value['messageCode'], 'quit_first')
+            self.assertFalse(value['updateAttempted'])
+            self.assertEqual(value['version'], '26.928.31416')
+            self.assertFalse((installed / 'Contents' / 'staged-marker.txt').exists())
+            self.assertEqual([path.name for path in (root / 'Applications').iterdir()], ['ChatGPT.app'])
+
+    def test_mac_download_timeout_keeps_its_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            installed = self._fake_mac_bundle(root / 'Applications', 'Claude.app', 'com.anthropic.claudefordesktop', '2.19675.0')
+            install = common.Install('claude-desktop', 'mac', installed, '2.19675.0', 'official-download', 'com.anthropic.claudefordesktop', package_root=installed)
+            with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure('timeout')), \
+                    mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root)):
+                value = desktop.update_mac(install)
+            self.assertEqual(value['status'], 'failed')
+            self.assertEqual(value['messageCode'], 'timeout')
+
+    def test_desktop_retry_refused_reports_quit_first(self):
+        install = common.Install('codex-desktop', 'mac', pathlib.Path('/fixture/ChatGPT.app'), '26.930.41038', 'official-download', 'com.openai.codex', package_root=pathlib.Path('/fixture/ChatGPT.app'))
+        running = processes.Process(51, 1, 1, '/fixture/ChatGPT.app/Contents/MacOS/ChatGPT', '51', ['/fixture/ChatGPT.app/Contents/MacOS/ChatGPT'])
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(desktop, 'scan', return_value=[]), \
+                mock.patch.object(desktop, 'main_contexts', return_value=[running]), \
+                mock.patch.object(desktop, 'request_desktop_quit', return_value=([], [running])), \
+                mock.patch.object(desktop, 'restart_desktops') as relaunch:
+            marker = pathlib.Path(directory) / '.ccs/app-updates/codex-desktop-pending-restart.json'
+            common.write_private_json(marker, {'version': '26.930.41038'})
+            value = desktop.update_desktop(install)
+            self.assertTrue(marker.exists())
+        relaunch.assert_not_called()
+        self.assertEqual(value['status'], 'action_required')
+        self.assertEqual(value['messageCode'], 'quit_first')
+        self.assertFalse(value['updateAttempted'])
 
     def test_mac_blocked_download_reports_check_in_app(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -414,7 +498,7 @@ int main(int argc,char **argv){
                 while (not log.exists() or len(log.read_text().splitlines()) < 2) and time.monotonic()<deadline: time.sleep(.05)
                 install = common.Install('antigravity-cli', 'ubuntu', binary, '1.0.0')
                 replacement = common.Install('antigravity-cli', 'ubuntu', binary, '2.0.0')
-                with mock.patch.object(pathlib.Path, 'home', return_value=root), mock.patch.object(updater, 'perform_cli_update', side_effect=lambda item: os.replace(stage, binary)), mock.patch.object(updater, 'detect_cli', return_value=replacement):
+                with mock.patch.object(pathlib.Path, 'home', return_value=root), mock.patch.object(updater, 'perform_cli_update', side_effect=lambda item, deadline=None: os.replace(stage, binary)), mock.patch.object(updater, 'detect_cli', return_value=replacement):
                     value = updater.update_cli(install, time.monotonic()+60)
                 self.assertEqual(value['status'], 'updated', value)
                 self.assertEqual(value['restartedProcesses'], 1)

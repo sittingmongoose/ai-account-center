@@ -1121,10 +1121,10 @@ test('Update apps action-required rows read as needs-action warnings, never fail
       activePlatform: null,
       results: [
         result('mac', 'Codex Desktop', 'action_required', {
-          message: 'The update is staged; quit the app to finish it.',
+          message: 'Quit the app, then run Update apps again.',
         }),
         result('windows', 'Claude Desktop', 'action_required', {
-          message: 'Quit the app, then run Update apps again.',
+          message: 'The download was blocked; open the app to check for updates.',
         }),
       ],
     },
@@ -1140,7 +1140,7 @@ test('Update apps action-required rows read as needs-action warnings, never fail
   );
   assert.equal(
     done.hosts[0].items[0].tip,
-    'The update is staged; quit the app to finish it.'
+    'Quit the app, then run Update apps again.'
   );
 });
 
