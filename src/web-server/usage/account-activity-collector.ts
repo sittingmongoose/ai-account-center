@@ -1151,12 +1151,13 @@ export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stat
  * Shape of a fanned-out scan, all inside this file plus one spawner:
  * discovery (walk, stat, mtime pre-filter, exact-dedup, newest-first sort)
  * runs once in the parent, exactly as the inline scan does. The parent loads
- * every checkpoint, splits the unread bytes into contiguous balanced chunks,
- * and hands each chunk to a nested partition reader with the shared
- * checkpoint directory: exactly one reader per file, per-file checkpoints,
- * the same readBatch, the same rows. The parent merges the per-file outcomes
- * back in global newest-first order, so row order, the row cap and every
- * tally match the inline scan exactly.
+ * every checkpoint, splits the files with unread bytes into contiguous
+ * balanced chunks, and hands each chunk to a nested partition reader with the
+ * shared checkpoint directory: exactly one reader per file, per-file
+ * checkpoints, the same readBatch, the same rows. The parent merges the
+ * per-file outcomes back in global newest-first order (files no reader saw
+ * tally from the just-loaded checkpoints), so row order, the row cap and
+ * every tally match the inline scan exactly.
  *
  * Below CODEX_FANOUT_THRESHOLD_BYTES of unread data the parent reads inline
  * instead — the warm path is byte-for-byte today's code path, so warm cycles
@@ -1164,7 +1165,14 @@ export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stat
  * so existing caches survive the upgrade with no forced re-read.
  */
 export const CODEX_FANOUT_THRESHOLD_BYTES = 64 * 1024 * 1024;
-/** Never more readers than this, however much unread data or however many CPUs. */
+/**
+ * Never more readers than this per scan, however much unread data or however
+ * many CPUs. Note this bounds each scan, not the process: every extra saved
+ * Codex source fans out its own scan independently. That is fine in practice
+ * (each scan only fans out past 64 MB of unread data, and extra Codex sources
+ * are rare), and a true process-wide cap would need cross-thread coordination
+ * for a case that never happens.
+ */
 export const CODEX_MAX_READERS = 4;
 /** About this much unread data per reader; fewer readers when there is less. */
 const CODEX_READER_BYTES = 512 * 1024 * 1024;
@@ -1177,10 +1185,11 @@ const CODEX_PARTITION_GRACE_MS = 2000;
 
 /**
  * How many readers split one codex scan: 1 (inline) unless at least two
- * files hold at least the threshold of unread bytes, then up to
- * CODEX_MAX_READERS, bounded by ~512 MB per reader, a quarter of the CPUs
+ * files with unread bytes hold at least the threshold between them, then up
+ * to CODEX_MAX_READERS, bounded by ~512 MB per reader, a quarter of the CPUs
  * (the rest stay free for the server and whatever else shares the host) and
- * the file count. Pure, so tests pin it without workers.
+ * the unread-file count. `fileCount` counts only files with unread bytes.
+ * Pure, so tests pin it without workers.
  */
 export function codexReaderCount(
   unreadBytes: number,
@@ -1352,13 +1361,18 @@ function tallyCodexFile(
 /**
  * Read every codex file, inline below the fan-out threshold (today's behavior,
  * reusing the just-loaded checkpoints) or fanned out across nested readers
- * above it. Results come back in global newest-first order either way.
+ * above it. Only files with unread bytes go to readers; the rest tally from
+ * the just-loaded checkpoints. Results come back in global newest-first order
+ * either way.
  *
- * Reader failures mirror the inline loop's: a reader that errors is every one
- * of its files throwing (no rows, failed++ each). A reader that overruns its
- * bound is every one of its files past the deadline (this pass's starting
- * rows, no failed++): its completed files already saved their checkpoints, so
- * the next pass resumes them and the scan converges.
+ * A reader that never answers (failed to start, crashed, OOM) reports this
+ * pass's starting rows for its files — dropping a whole partition would dip
+ * Codex on the page for a cycle — with failed++ so the next pass re-reads
+ * them. A reader that overruns its bound is every one of its files past the
+ * deadline (starting rows, no failed++): its finished files already saved
+ * their checkpoints, so the next pass resumes them and the scan converges. A
+ * single file a live reader could not read throws like the inline loop (no
+ * rows, failed++).
  */
 async function readCodexFiles(
   request: Extract<UsageWorkerRequest, { kind: 'codex' }>,
@@ -1389,13 +1403,16 @@ async function readCodexFiles(
     (sum, item) => sum + Math.max(0, item.stats.size - item.value.offset),
     0
   );
+  // N1: only files with unread bytes go to readers; the rest are tallied from
+  // the just-loaded checkpoints, so no reader starts with nothing to read.
+  const needsRead = loaded.filter((item) => item.stats.size - item.value.offset > 0);
   const readers = codexReaderCount(
     unreadBytes,
-    loaded.length,
+    needsRead.length,
     availableCpus(),
     options.fanoutThresholdBytes ?? CODEX_FANOUT_THRESHOLD_BYTES
   );
-  if (readers < 2 || Date.now() >= deadline) {
+  if (readers < 2 || Date.now() >= deadline || needsRead.length === 0) {
     for (const item of loaded) {
       try {
         const before = item.value.offset;
@@ -1422,18 +1439,17 @@ async function readCodexFiles(
     return { rows, ...counters };
   }
   const partitions = partitionCodexFiles(
-    loaded.map((item) => ({
+    needsRead.map((item) => ({
       file: item.file,
       unreadBytes: Math.max(0, item.stats.size - item.value.offset),
     })),
     readers
-  );
+  ).filter((chunk) => chunk.length > 0);
   // Readers stop new reads at the shared deadline; the grace only covers
   // their checkpoint saves and answers, so a fanned-out pass always ends
   // soon after the deadline, inside the worker's own time bound.
   const timeoutMs = Math.max(1, deadline - Date.now()) + CODEX_PARTITION_GRACE_MS;
   const runner = deps?.partitionRunner ?? spawnCodexPartitionReader;
-  const byFile = new Map(loaded.map((item) => [item.file, item]));
   const settled = await Promise.all(
     partitions.map(async (files) => {
       try {
@@ -1451,37 +1467,52 @@ async function readCodexFiles(
       }
     })
   );
+  // Merge back in global newest-first order, so row order, the row cap and
+  // every tally match the inline scan. Files no reader saw (nothing unread)
+  // tally from the just-loaded checkpoints.
+  const outcomes = new Map<string, CodexPartitionFileResult>();
+  const errors = new Map<string, unknown>();
+  const partitioned = new Set<string>();
   for (const part of settled) {
+    for (const file of part.files) partitioned.add(file);
     if ('error' in part) {
-      const timedOut = part.error instanceof CodexPartitionError && part.error.timedOut;
-      for (const file of part.files) {
-        if (timedOut) {
-          const item = byFile.get(file);
-          if (item)
-            tallyCodexFile(
-              rows,
-              {
-                rows: item.value.rows,
-                complete: item.value.complete,
-                skippedLines: item.value.skippedLines,
-                readBytes: 0,
-                unfinishedTail: item.value.unfinishedTail === true,
-              },
-              counters
-            );
-          else counters.failed++;
-        } else counters.failed++;
-      }
+      for (const file of part.files) errors.set(file, part.error);
+    } else {
+      for (const outcome of part.outcomes) outcomes.set(outcome.file, outcome);
+    }
+  }
+  const startingTallies = (item: (typeof loaded)[number]): CodexFileTallies => ({
+    rows: item.value.rows,
+    complete: item.value.complete,
+    skippedLines: item.value.skippedLines,
+    readBytes: 0,
+    unfinishedTail: item.value.unfinishedTail === true,
+  });
+  for (const item of loaded) {
+    const error = errors.get(item.file);
+    if (error !== undefined) {
+      // S1: the reader never answered (failed to start, crashed, OOM) while
+      // its files are presumably fine, so report this pass's starting rows:
+      // dropping the whole partition would dip Codex on the page for a cycle
+      // (partition 1 holds the newest files). failed++ keeps the scan
+      // honestly incomplete so the next pass re-reads them. A timeout is a
+      // file past the deadline: starting rows, no failed++.
+      tallyCodexFile(rows, startingTallies(item), counters);
+      if (!(error instanceof CodexPartitionError && error.timedOut)) counters.failed++;
       continue;
     }
-    const outcomes = new Map(part.outcomes.map((outcome) => [outcome.file, outcome]));
-    for (const file of part.files) {
-      const outcome = outcomes.get(file);
-      // Defensive: a reader must answer every assigned file; a missing one
-      // reads as a file error, like a throw in the inline loop.
-      if (!outcome || outcome.failed) counters.failed++;
-      else tallyCodexFile(rows, outcome, counters);
+    const outcome = outcomes.get(item.file);
+    if (outcome === undefined) {
+      tallyCodexFile(rows, startingTallies(item), counters);
+      // A reader that answered but omitted an assigned file violated the
+      // protocol: starting rows (its files are presumably fine), failed++.
+      if (partitioned.has(item.file)) counters.failed++;
+      continue;
     }
+    // A single file a live reader could not read (vanished, unreadable) reads
+    // as a file error with no rows, exactly like a throw in the inline loop.
+    if (outcome.failed) counters.failed++;
+    else tallyCodexFile(rows, outcome, counters);
   }
   return { rows, ...counters };
 }
