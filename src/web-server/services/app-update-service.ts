@@ -36,6 +36,7 @@ export type {
 } from './app-update-contract';
 import { runHost, syncRemoteHelpers, type HostRunControl } from './app-update-hosts';
 export {
+  antigravityReviewedArgument,
   appUpdateInvocation,
   parseDeployedChecksums,
   syncRemoteHelpers,

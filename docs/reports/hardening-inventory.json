@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1191,
+    "totalOccurrences": 1193,
     "filesAffected": 119,
     "hotpathOccurrences": 560,
     "hotpathFilesAffected": 68,
@@ -317,24 +317,8 @@
         "markers": []
       },
       {
-        "file": "src/management/shared-manager/migrations.ts",
-        "count": 25,
-        "calls": [
-          "copyFileSync",
-          "cpSync",
-          "existsSync",
-          "lstatSync",
-          "mkdirSync",
-          "readdirSync",
-          "symlinkSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/antigravity/runtime-refresh.ts",
-        "count": 23,
+        "count": 25,
         "calls": [
           "closeSync",
           "existsSync",
@@ -346,6 +330,22 @@
           "readFileSync",
           "renameSync",
           "rmSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/management/shared-manager/migrations.ts",
+        "count": 25,
+        "calls": [
+          "copyFileSync",
+          "cpSync",
+          "existsSync",
+          "lstatSync",
+          "mkdirSync",
+          "readdirSync",
+          "symlinkSync",
+          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []

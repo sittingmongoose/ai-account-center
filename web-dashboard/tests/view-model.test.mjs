@@ -568,6 +568,12 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
     updateViewModel({ state: 'completed', results: [{ status: 'action_required' }] }).tip,
     /1 need action/
   );
+  const held = updateViewModel({
+    state: 'completed',
+    results: [{ status: 'current' }, { status: 'held' }],
+  });
+  assert.equal(held.summary, '2 results · 1 held');
+  assert.match(held.tip, /2 results, 1 held\./);
 });
 
 test('Home headers, footer and the inline confirmation read the data truthfully (W2)', () => {

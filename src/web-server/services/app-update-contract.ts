@@ -19,7 +19,9 @@ export type UpdateResultStatus =
   | 'restart_failed'
   | 'skipped'
   | 'unknown'
-  | 'action_required';
+  | 'action_required'
+  /** Not installed on purpose: the newest build is waiting for a review (Antigravity CLI). */
+  | 'held';
 export interface AppUpdateResult {
   appId: UpdateAppId;
   appLabel: string;
@@ -32,6 +34,8 @@ export interface AppUpdateResult {
   updateAttempted: boolean;
   restartedProcesses: number;
   forcedStops: number;
+  /** The newest build a `held` row did not install, when the helper could read it. */
+  heldVersion?: string;
   restartTargets: Array<{
     kind: 'tmux' | 'terminal' | 'windows-terminal';
     server?: string;
@@ -98,6 +102,12 @@ export const MESSAGES = {
   codex_busy: 'Codex is busy with a task; run Update apps again when it is idle.',
   check_timeout: 'Check timed out: the app did not answer in time.',
   host_timeout: 'Timed out: this computer did not finish in time.',
+  held_for_review:
+    'Update held: the newest Antigravity version is waiting for a switching review; the reviewed version stays installed.',
+  held_unchecked:
+    'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
+  updated_unreviewed:
+    'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows'];
@@ -112,6 +122,7 @@ const STATUSES: UpdateResultStatus[] = [
   'skipped',
   'unknown',
   'action_required',
+  'held',
 ];
 const MANAGERS = ['native', 'npm', 'brew', 'winget', 'msix', 'apt', 'official-download'];
 export const MAX_OUTPUT = 64 * 1024;
@@ -278,6 +289,15 @@ export function normalizeAppUpdateRow(
       !MANAGERS.includes(row.manager))
   )
     return failure(platform, appId, 'helper_invalid');
+  // Only the Antigravity CLI is ever held, and only with a hold message.
+  const held = row.status === 'held';
+  if (
+    held !== (code === 'held_for_review' || code === 'held_unchecked') ||
+    (held && appId !== 'antigravity-cli') ||
+    (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated'))
+  )
+    return failure(platform, appId, 'helper_invalid');
+  const heldVersion = held && code === 'held_for_review' ? safeVersion(row.heldVersion) : null;
   return {
     appId,
     appLabel: UPDATE_APP_LABELS[appId],
@@ -290,6 +310,7 @@ export function normalizeAppUpdateRow(
     updateAttempted: row.updateAttempted === true,
     restartedProcesses: count,
     forcedStops: forced,
+    ...(heldVersion ? { heldVersion } : {}),
     restartTargets: targets,
   };
 }

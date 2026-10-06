@@ -47,7 +47,7 @@ def project_present_status(raw: bytes, *, projected_only=False):
     if (type(cwd) is not str or not cwd.startswith('/') or len(cwd) > 1024 or
             any(ord(char) < 32 or ord(char) == 127 for char in cwd) or os.path.normpath(cwd) != cwd):
         fail('status-workspace-invalid')
-    if type(value['version']) is not str or value['version'] != '1.2.16':
+    if type(value['version']) is not str or value['version'] != '1.3.0':
         fail('status-version-invalid')
     if type(value['agent_state']) is not str or value['agent_state'] not in STATES:
         fail('status-state-invalid')

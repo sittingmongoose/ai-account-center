@@ -3,6 +3,7 @@
  * injected, so no native binary is hashed and nothing outside tmp is touched.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -19,6 +20,8 @@ const V14 = '1.2.14';
 const V16 = '1.2.16';
 const SHA14 = '0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029';
 const SHA16 = 'a759ce7c7a235d9b6c281a25ead97cbbf2e92314a3ffd224e2f9144f3fae7a86';
+const V130 = '1.3.0';
+const SHA130 = '19be6af38f7beeaa0db415df9297e314ab3d33fdd6f853434d49f88819bc68e4';
 
 let root: string;
 let home: string;
@@ -256,17 +259,72 @@ describe('runtime descriptor refresh', () => {
     });
   });
 
-  it('reuses an identical backup but never clobbers a divergent one', async () => {
+  it('reuses an identical backup and keeps a divergent one beside a content-addressed copy', async () => {
     const backups = path.join(stateDir, 'descriptor-backups');
     fs.mkdirSync(backups, { mode: 0o700 });
     const backup = path.join(backups, `${SHA14}.json`);
     fs.writeFileSync(backup, fs.readFileSync(descriptorFile), { mode: 0o600 });
     expect((await refresh((binary, sha) => sha === SHA16)).status).toBe('refreshed');
+    expect(fs.readdirSync(backups)).toEqual([`${SHA14}.json`]);
     writeDescriptor(SHA14);
-    fs.writeFileSync(backup, '{"divergent":true}\n');
+    const divergent = Buffer.from('{"divergent":true}\n');
+    fs.writeFileSync(backup, divergent);
+    const before = fs.readFileSync(descriptorFile);
+    expect((await refresh((binary, sha) => sha === SHA16)).status).toBe('refreshed');
+    // The earlier generation's pin-named backup is never overwritten.
+    expect(fs.readFileSync(backup).equals(divergent)).toBe(true);
+    const named = fs.readdirSync(backups).filter((name) => name !== `${SHA14}.json`);
+    expect(named).toEqual([`${SHA14}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`]);
+    expect(fs.readFileSync(path.join(backups, named[0])).equals(before)).toBe(true);
+    expect(fs.lstatSync(path.join(backups, named[0])).mode & 0o777).toBe(0o600);
+    expect(readInstalledAntigravityRuntime(ccsDir, home)?.nativeSha256).toBe(SHA16);
+  });
+
+  it('refreshes over a rebuilt bundle whose pin-named backup holds an older bundle (the live 1.3.0 state)', async () => {
+    // Oct 4/5 shape: the pin-named backup of the reviewed pin keeps the
+    // descriptor of an earlier bundle, a parser rebuild added a content-
+    // addressed one, and the CLI then moved to the next reviewed build.
+    const backups = path.join(stateDir, 'descriptor-backups');
+    fs.mkdirSync(backups, { mode: 0o700 });
+    const older = Buffer.from(fs.readFileSync(descriptorFile).toString().replace('c'.repeat(64), 'e'.repeat(64)));
+    fs.writeFileSync(path.join(backups, `${SHA16}.json`), older, { mode: 0o600 });
+    fs.writeFileSync(path.join(backups, `${SHA16}-${'f'.repeat(16)}.json`), older, { mode: 0o600 });
+    writeRelease([
+      { nativeVersion: V14, nativeSha256: SHA14 },
+      { nativeVersion: V16, nativeSha256: SHA16 },
+      { nativeVersion: V130, nativeSha256: SHA130 },
+    ]);
+    const before = writeDescriptor(SHA16);
+    expect(await refresh((binary, sha) => sha === SHA130)).toEqual({
+      status: 'refreshed',
+      version: V130,
+      sha256: SHA130,
+      previousSha256: SHA16,
+    });
+    expect(fs.readFileSync(path.join(backups, `${SHA16}.json`)).equals(older)).toBe(true);
+    const kept = path.join(backups, `${SHA16}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`);
+    expect(fs.readFileSync(kept).equals(before)).toBe(true);
+    expect(readInstalledAntigravityRuntime(ccsDir, home)?.nativeSha256).toBe(SHA130);
+    expect((await refresh((binary, sha) => sha === SHA130)).status).toBe('current');
+  });
+
+  it('refuses an unsafe pin-named backup or a changed content-addressed one without writing', async () => {
+    const backups = path.join(stateDir, 'descriptor-backups');
+    fs.mkdirSync(backups, { mode: 0o700 });
+    const backup = path.join(backups, `${SHA14}.json`);
+    fs.writeFileSync(backup, '{"divergent":true}\n', { mode: 0o644 });
+    fs.chmodSync(backup, 0o644);
     const before = fs.readFileSync(descriptorFile);
     expect((await refresh((binary, sha) => sha === SHA16)).status).toBe('failed');
+    fs.chmodSync(backup, 0o600);
+    const addressed = path.join(backups, `${SHA14}-${createHash('sha256').update(before).digest('hex').slice(0, 16)}.json`);
+    fs.writeFileSync(addressed, '{"changed":true}\n', { mode: 0o600 });
+    expect((await refresh((binary, sha) => sha === SHA16)).status).toBe('failed');
+    fs.rmSync(addressed);
+    fs.symlinkSync('/nonexistent', addressed);
+    expect((await refresh((binary, sha) => sha === SHA16)).status).toBe('failed');
     expect(fs.readFileSync(descriptorFile).equals(before)).toBe(true);
+    expect(fs.readdirSync(stateDir).filter((name) => name.includes('.tmp-'))).toEqual([]);
   });
 
   it('converges when a rival rewrite settles instead of clobbering it', async () => {

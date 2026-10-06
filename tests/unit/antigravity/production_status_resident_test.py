@@ -29,7 +29,7 @@ class IntegratedStatusResidentFixtures(unittest.TestCase):
         source=f.standin.read_text().replace('import json,os,sys,time','import json,os,sys,time,subprocess,threading')
         source=source.replace('for line in sys.stdin:', '''def emit_status():
   account=json.loads((root/'fictional-account.json').read_text())
-  status={'email':account['email'],'conversation_id':cid,'cwd':os.getcwd(),'version':'1.2.16','agent_state':'idle'}
+  status={'email':account['email'],'conversation_id':cid,'cwd':os.getcwd(),'version':'1.3.0','agent_state':'idle'}
   subprocess.run([os.environ['FIXTURE_HELPER_PYTHON'],'-I',os.environ['FIXTURE_STATUS_HELPER'],
    '--socket',str(root/'ipc/status.sock'),'--original-command-file',str(root/'original-status.json')],
    input=json.dumps(status).encode(),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)

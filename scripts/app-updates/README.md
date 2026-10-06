@@ -45,7 +45,7 @@ modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
 | --- | --- |
-| Antigravity CLI | Active native `agy update` |
+| Antigravity CLI | Active native `agy update`, only to a build in the switching review set (held otherwise, see below) |
 | Muse Code | Active user launcher, fixed Meta installer run with bash (`set -o pipefail`, `[[ ]]`) with `MUSE_UPGRADE_MODE=1` and no PATH modification |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix |
@@ -60,6 +60,29 @@ Official methods: [Antigravity installer](https://antigravity.google/cli/install
 [Claude Code setup](https://code.claude.com/docs/en/setup),
 [OpenAI Linux package](https://learn.chatgpt.com/docs/linux/linux-app),
 [OpenAI app update management](https://learn.chatgpt.com/docs/manage-app-updates).
+
+**Antigravity CLI review hold (all three computers).** Account switching works only
+with native builds listed in `scripts/antigravity/runtime/release.json`
+(`reviewedNatives`), and `agy update` always installs the newest build. Before it
+runs, the helper reads the official release manifest for this computer (the fixed
+`.../manifests/<os>_<arch>.json` the CLI's own updater and installer use, 16 KB at
+most) and compares its version with the reviewed versions the dashboard passes as
+`--agy-reviewed` (on Windows they travel in the task request file; a manual Ubuntu
+run reads the packaged release file):
+
+- newest build reviewed: the normal update runs;
+- newest build already installed: `current`, and `agy update` is not run;
+- newest build not reviewed: nothing is installed, the row is `held` with
+  `held_for_review` and names that build (`heldVersion`), and the dashboard shows
+  "Update held: Antigravity X is waiting for a switching review";
+- review list or manifest unreadable: nothing is installed either
+  (`held`/`held_unchecked`);
+- an update that still lands outside the list (a release published between the
+  check and `agy update`) reports `updated_unreviewed`, never silently.
+
+The hold covers Update all only. The CLI also updates itself in the background
+during ordinary runs, which no dashboard button can hold; switching then pauses
+until a review, as before.
 
 Inventory disables background CLI updates (`MUSE_NO_AUTO_UPDATE=1`,
 `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `DISABLE_AUTOUPDATER=1`). This matters because

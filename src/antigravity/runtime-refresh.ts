@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -150,6 +151,31 @@ function fsyncDirectory(directory: string): void {
   }
 }
 
+/**
+ * Where the previous descriptor bytes are kept: `<pin>.json`, or, when an
+ * earlier generation already keeps different owned bytes under that pin name
+ * (a bundle rebuild re-pins the bundle but keeps the pin), the content-
+ * addressed `<pin>-<sha16>.json` beside it, the same name rebuild_bundle.py
+ * uses. An existing backup is never overwritten; an unsafe one refuses (null).
+ */
+function descriptorBackupPath(backups: string, pin: string, rawBefore: Buffer): string | null {
+  const named = path.join(backups, `${pin}.json`);
+  if (!fs.existsSync(named) && !isSymbolicLink(named)) return named;
+  const kept = readDescriptorBytes(named, backups);
+  if (!kept) return null;
+  if (kept.equals(rawBefore)) return named;
+  const digest = createHash('sha256').update(rawBefore).digest('hex').slice(0, 16);
+  return path.join(backups, `${pin}-${digest}.json`);
+}
+
+function isSymbolicLink(file: string): boolean {
+  try {
+    return fs.lstatSync(file).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 let tempCounter = 0;
 
 export async function refreshRuntimeDescriptor(
@@ -221,7 +247,8 @@ export async function refreshRuntimeDescriptor(
         if (!preRename || !preRename.equals(rawBefore)) continue;
         const backups = path.join(directory, 'descriptor-backups');
         if (!ensureBackupDirectory(backups)) return failed;
-        const backup = path.join(backups, `${record.nativeSha256}.json`);
+        const backup = descriptorBackupPath(backups, record.nativeSha256, rawBefore);
+        if (!backup) return failed;
         if (fs.existsSync(backup)) {
           const kept = readDescriptorBytes(backup, backups);
           if (!kept || !kept.equals(rawBefore)) return failed;
