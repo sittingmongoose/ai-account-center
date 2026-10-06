@@ -168,8 +168,12 @@ describe('fixed app update service', () => {
     rows[2] = { ...rows[2], status: 'action_required', messageCode: 'check_in_app' };
     const normalized = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'mac');
     expect(normalized[0].status).toBe('action_required');
-    expect(normalized[0].message).toBe('Quit the app, then run Update apps again.');
-    expect(normalized[1].message).toBe('Quit the app, then run Update apps again.');
+    expect(normalized[0].message).toBe(
+      `Quit ${normalized[0].appLabel} to finish its update, then run Update apps again.`
+    );
+    expect(normalized[1].message).toBe(
+      `Quit ${normalized[1].appLabel} to finish its update, then run Update apps again.`
+    );
     expect(normalized[2].message).toBe(
       'The download was blocked; open the app to check for updates.'
     );

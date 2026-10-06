@@ -218,6 +218,112 @@ def download(url, destination, maximum=800 * 1024 * 1024, timeout=180):
         raise UpdateFailure() from None
 
 
+_CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
+
+
+class RangeReader:
+    """A read-only, seekable view of one remote file, fetched in HTTP byte ranges.
+
+    zipfile can read a single member (an MSIX's AppxManifest.xml) through it
+    without downloading the whole package. Every limit is fixed: total time,
+    request count and bytes, so a slow or odd server only makes the caller
+    fall back, never wait. Anything unexpected raises UpdateFailure.
+    """
+
+    def __init__(self, url, timeout=20, maximum_bytes=8 * 1024 * 1024, maximum_requests=12, readahead=256 * 1024):
+        self.deadline = time.monotonic() + timeout
+        self.maximum_bytes, self.maximum_requests, self.readahead = maximum_bytes, maximum_requests, readahead
+        self.fetched = self.requests = self.position = 0
+        self.url = url
+        self.spans = []
+        # A suffix range learns the size (and the final URL behind any
+        # redirect) and already holds the zip's end records.
+        start, data, self.size = self._get("bytes=-65536")
+        self.spans.append((start, data))
+
+    def _get(self, value):
+        self.requests += 1
+        remaining = self.deadline - time.monotonic()
+        if self.requests > self.maximum_requests or remaining <= 0:
+            raise UpdateFailure("timeout")
+        request = urllib.request.Request(self.url, headers={"User-Agent": "CCS-Installed-App-Updater/1.0", "Range": value})
+        try:
+            with urllib.request.urlopen(request, timeout=min(15, remaining)) as response:
+                if response.status != 206 or not response.geturl().startswith("https://"):
+                    raise UpdateFailure()
+                match = _CONTENT_RANGE.match(response.headers.get("Content-Range") or "")
+                if not match:
+                    raise UpdateFailure()
+                first, last, total = (int(part) for part in match.groups())
+                expected = last - first + 1
+                if expected <= 0 or self.fetched + expected > self.maximum_bytes:
+                    raise UpdateFailure()
+                data = response.read(expected + 1)
+                if len(data) != expected:
+                    raise UpdateFailure()
+                self.fetched += expected
+                self.url = response.geturl()
+                return first, data, total
+        except UpdateFailure:
+            raise
+        except Exception:
+            raise UpdateFailure() from None
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.position
+
+    def seek(self, offset, whence=0):
+        base = {0: 0, 1: self.position, 2: self.size}[whence]
+        if base + offset < 0:
+            raise ValueError("negative seek")
+        self.position = base + offset
+        return self.position
+
+    def read(self, size=-1):
+        end = self.size if size is None or size < 0 else min(self.size, self.position + size)
+        if end <= self.position:
+            return b""
+        for start, data in self.spans:
+            if start <= self.position and end <= start + len(data):
+                chunk = data[self.position - start:end - start]
+                self.position = end
+                return chunk
+        last = min(self.size, max(end, self.position + self.readahead)) - 1
+        start, data, _ = self._get("bytes=%d-%d" % (self.position, last))
+        if start != self.position:
+            raise UpdateFailure()
+        self.spans.append((start, data))
+        chunk = data[:end - start]
+        self.position = end
+        return chunk
+
+    def close(self):
+        self.spans = []
+
+
+def remote_fingerprint(url, timeout=15):
+    """The final URL, size and validator of a remote file, from one HEAD request.
+
+    Lets a caller recognise a package it already verified without downloading
+    it again. None when the server does not answer clearly.
+    """
+    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if response.status != 200 or not response.geturl().startswith("https://"):
+                return None
+            length = response.headers.get("Content-Length")
+            validator = response.headers.get("ETag") or response.headers.get("Last-Modified")
+            if not length or not length.isdigit() or not validator:
+                return None
+            return {"url": response.geturl(), "size": int(length), "validator": validator[:200]}
+    except Exception:
+        return None
+
+
 @contextlib.contextmanager
 def private_temporary():
     root = pathlib.Path.home() / ".ccs/app-updates"

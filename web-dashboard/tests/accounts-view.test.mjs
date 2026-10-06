@@ -1240,6 +1240,52 @@ test('Update apps action-required rows read as needs-action warnings, never fail
   );
 });
 
+test('Update apps shows a desktop download live with how long it has run', () => {
+  const view = (phase, seconds) => updateResultsView(
+    {
+      state: 'running',
+      startedAt: at(-6),
+      finishedAt: null,
+      activePlatform: 'windows',
+      hosts: {
+        ubuntu: { state: 'done', currentApp: null, phase: null },
+        mac: { state: 'done', currentApp: null, phase: null },
+        windows: { state: 'running', currentApp: 'codex-desktop', phase, phaseSince: new Date(now - seconds * 1000).toISOString() },
+      },
+      expectedResults: 21,
+      results: [],
+    },
+    now
+  ).hosts.find((h) => h.id === 'windows').items[0];
+  const downloading = view('downloading', 65);
+  assert.equal(downloading.app, 'Codex Desktop');
+  assert.equal(downloading.result, 'Downloading · 1m 05s');
+  assert.equal(downloading.tip, 'Windows is downloading the new Codex Desktop now (1m 05s so far)');
+  assert.equal(view('downloading', 4).result, 'Downloading · 4s');
+  // Short checks and updates stay calm; a long one shows its time too.
+  assert.equal(view('updating', 3).result, 'Updating');
+  assert.equal(view('updating', 42).result, 'Updating · 42s');
+  // A job saved before phase times existed shows the plain word.
+  const legacy = updateResultsView({
+    state: 'running', startedAt: at(-1), finishedAt: null, activePlatform: 'windows', expectedResults: 21, results: [],
+    hosts: { ubuntu: { state: 'done', currentApp: null, phase: null }, mac: { state: 'done', currentApp: null, phase: null },
+      windows: { state: 'running', currentApp: 'codex-desktop', phase: 'downloading' } },
+  }, now).hosts.find((h) => h.id === 'windows').items[0];
+  assert.equal(legacy.result, 'Downloading');
+});
+
+test('Update apps reads a named quit-first row as the same needs-action warning', () => {
+  const view = updateResultsView({
+    state: 'completed', startedAt: at(-6), finishedAt: at(-1), activePlatform: null, expectedResults: 21,
+    hosts: null,
+    results: [{ appId: 'codex-desktop', appLabel: 'Codex Desktop', platform: 'windows', status: 'action_required',
+      previousVersion: '26.930.3748.0', version: '26.930.3748.0',
+      message: 'Quit Codex Desktop to finish its update, then run Update apps again.' }],
+  }, now);
+  const row = view.hosts.find((h) => h.id === 'windows').items[0];
+  assert.deepEqual([row.app, row.result, row.tone], ['Codex Desktop', 'Quit to finish update', 'warn']);
+});
+
 test('Update apps shows every computer working at once, each on its own app', () => {
   const result = (platform, appLabel, status, extra = {}) => ({
     appId: appLabel.toLowerCase().replace(/ /g, '-'),
