@@ -11,6 +11,8 @@ import os from 'os';
 import path from 'path';
 import {
   SshClaudeHostTransport,
+  WINDOWS_SCRIPT_MAX_BYTES,
+  checkWindowsScriptSize,
   windowsHostScript,
   type ClaudeHostRunner,
 } from '../../../src/web-server/services/claude-host-transport';
@@ -272,6 +274,42 @@ describe('Windows host script', () => {
     }
     expect(() => windowsHostScript('create', { profileId: "x'; exit" })).toThrow();
     expect(() => windowsHostScript('purge', { trashName: '..\\..\\Windows' })).toThrow();
+  });
+
+  it('keeps every script under the stdin cap, long non-ASCII paths included', () => {
+    // Real launcher paths stay under MAX_PATH; 200 three-byte letters each is past any of them.
+    const user = '\u5f20'.repeat(200);
+    const wide: ClaudeHostLauncher = {
+      ...launcher,
+      launcherPath: `C:\\Users\\${user}\\Desktop\\Claude (party).lnk`,
+      startMenuPath: `C:\\Users\\${user}\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Claude (party).lnk`,
+      profilePath: `C:\\Users\\${user}\\AppData\\Roaming\\Claude-party`,
+    };
+    const trashName = 'party-20261002T080000Z';
+    for (const values of [launcher, wide].map((item) => ({
+      create: { profileId: 'party' },
+      undo: { profileId: 'party', launcher: item },
+      state: { launcher: item },
+      session: { launcher: item },
+      trash: { profileId: 'party', trashName, launcher: item },
+      restore: { profileId: 'party', trashName, launcher: item },
+      purge: { trashName },
+    }))) {
+      for (const [op, value] of Object.entries(values)) {
+        const script = windowsHostScript(op as keyof typeof values, value);
+        expect(Buffer.byteLength(script, 'utf8')).toBeLessThan(WINDOWS_SCRIPT_MAX_BYTES);
+      }
+    }
+  });
+
+  it('refuses a script over the cap, counted in UTF-8 bytes as sent', () => {
+    const atCap = 'x'.repeat(WINDOWS_SCRIPT_MAX_BYTES);
+    expect(checkWindowsScriptSize(atCap)).toBe(atCap);
+    expect(() => checkWindowsScriptSize(`${atCap}x`)).toThrow('Claude host script is too large.');
+    // Fewer characters than the cap, more bytes.
+    const wide = '\u5f20'.repeat(Math.ceil(WINDOWS_SCRIPT_MAX_BYTES / 3));
+    expect(wide.length).toBeLessThan(WINDOWS_SCRIPT_MAX_BYTES);
+    expect(() => checkWindowsScriptSize(wide)).toThrow('Claude host script is too large.');
   });
 
   it('sends the script on stdin behind a fixed encoded bootstrap', async () => {

@@ -107,6 +107,25 @@ const WINDOWS_BOOTSTRAP = Buffer.from(
   'utf16le'
 ).toString('base64');
 
+/**
+ * Upper bound for a Windows script on stdin. Over Windows OpenSSH, PowerShell's
+ * `[Console]::In.ReadToEnd()` sometimes never returns once the input reaches
+ * tens of KB: the powershell.exe stays stuck for good and ssh gives up with
+ * "server not responding". Measured 2026-10-06 with this bootstrap and harmless
+ * scripts: 3 of 16 runs hung at 80 KB, against 102 of 102 clean runs at the
+ * real 3.6-4.3 KB and 36 of 36 at 8, 16 and 32 KB. The scripts stay on stdin
+ * and this cap keeps them in the measured range. A bigger payload must be read
+ * by a native child that reads stdin itself (`runClaudeHistoryHelper`).
+ */
+export const WINDOWS_SCRIPT_MAX_BYTES = 16 * 1024;
+
+export function checkWindowsScriptSize(script: string): string {
+  if (Buffer.byteLength(script, 'utf8') > WINDOWS_SCRIPT_MAX_BYTES) {
+    throw new ValidationError('Claude host script is too large.');
+  }
+  return script;
+}
+
 function psValue(value: string): string {
   if (!SAFE_PATH.test(value)) throw new ValidationError('Claude host value is not safe.');
   return `'${value}'`;
@@ -220,7 +239,7 @@ export function windowsHostScript(
       );
       break;
   }
-  return lines.join('\n');
+  return checkWindowsScriptSize(lines.join('\n'));
 }
 
 function reply(stdout: string): Record<string, unknown> {
