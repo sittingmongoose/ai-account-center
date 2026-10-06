@@ -383,6 +383,40 @@ export class ClaudeDesktopLiveUsageError extends NetworkError {
 }
 
 /**
+ * The Windows profile has no usable sign-in: the helper found no login marker
+ * or token for it, or Claude refused every token (401/403). Open still works;
+ * it shows Claude's own sign-in window. Carries no helper text.
+ */
+export class ClaudeDesktopSignInNeededError extends ClaudeDesktopLiveUsageError {
+  readonly signInNeeded = true as const;
+
+  constructor() {
+    super(false);
+    this.message = 'Sign-in needed on Windows.';
+    this.name = 'ClaudeDesktopSignInNeededError';
+  }
+}
+
+/** The helper's own bounded "needs_sign_in" answer for exactly this profile. */
+function helperSaysSignInNeeded(contents: string, profileId: string): boolean {
+  if (Buffer.byteLength(contents, 'utf8') > MAX_OUTPUT_BYTES) return false;
+  let result: unknown;
+  try {
+    result = JSON.parse(contents);
+  } catch {
+    return false;
+  }
+  return (
+    isRecord(result) &&
+    result.schemaVersion === 1 &&
+    result.provider === 'claude' &&
+    result.profileId === profileId &&
+    result.platform === 'windows' &&
+    result.status === 'needs_sign_in'
+  );
+}
+
+/**
  * Fixed helper path and manifest-resolved profile only; no credential ever
  * traverses SSH stdout. The expected email and profile directory come from the
  * same manifest entry, so the collector holds no hard-coded mapping.
@@ -494,9 +528,10 @@ function isArgparseRejection(error: unknown): boolean {
 /**
  * Read the account's existing Windows Desktop token in its own user context.
  * Errors are intentionally nullable: cached desktop history may still be shown.
- * The one exception is an outdated installed collector rejecting a new ID,
- * which throws ClaudeDesktopLiveUsageError with helperOutdated so the
- * dashboard can say so instead of showing a misleading state.
+ * Two exceptions: an outdated installed collector rejecting a new ID throws
+ * ClaudeDesktopLiveUsageError with helperOutdated, and a profile with no
+ * usable sign-in throws ClaudeDesktopSignInNeededError, so the dashboard can
+ * say either instead of showing a misleading state.
  */
 export async function getLiveClaudeDesktopUsage(
   profileId: string,
@@ -534,6 +569,9 @@ export async function getLiveClaudeDesktopUsage(
     )
       .then(async (contents) => {
         let usage = normalizeUsage(contents, profileId, profile.email);
+        if (!usage && helperSaysSignInNeeded(contents, profileId)) {
+          throw new ClaudeDesktopSignInNeededError();
+        }
         if (usage && cache.get(key) === entry && scope === getCcsDir()) {
           const [retained, memory] = await Promise.all([
             readClaudeDesktopLiveSnapshot(scope, profileId, manifestHash),
@@ -569,6 +607,7 @@ export async function getLiveClaudeDesktopUsage(
         (usage) => usage,
         (error) => {
           if (error instanceof ClaudeDesktopLiveUsageError && error.helperOutdated) throw error;
+          if (error instanceof ClaudeDesktopSignInNeededError) throw error;
           return null;
         }
       );

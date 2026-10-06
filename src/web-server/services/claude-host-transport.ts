@@ -19,7 +19,8 @@ import {
  *   on the host (a data folder must be a direct child of Application Support or
  *   %APPDATA% named `Claude*`; trash folders live only in `~/.ccs/trash/claude`).
  *   Create also appends the id to the helper's `ccs-claude-accounts.txt`
- *   allowlist, and undo takes it out again, so a new profile opens on Windows.
+ *   allowlist when that list exists, and undo takes it out again; every
+ *   Windows Open rebuilds the whole list from the current profiles first.
  * Renames stay on one volume; nothing is ever copied. Output is a small JSON
  * object; host text is never surfaced or logged.
  */
@@ -123,7 +124,11 @@ const WINDOWS_COMMON = [
   // profile; every other line is appended, never reordered, so the default stays.
   "$accountsFile = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude', 'ccs-claude-accounts.txt')",
   'function Fail([int]$code) { exit $code }',
-  "function Add-AccountId([string]$id) { $dir = [IO.Path]::GetDirectoryName($accountsFile); if (-not (Test-Path -LiteralPath $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir | Out-Null }; if (Test-Path -LiteralPath $accountsFile -PathType Leaf) { foreach ($line in @(Get-Content -LiteralPath $accountsFile)) { if ($line.Trim() -ceq $id) { return } }; $text = [IO.File]::ReadAllText($accountsFile); if (($text.Length -gt 0) -and -not $text.EndsWith([string][char]10)) { Add-Content -LiteralPath $accountsFile -Value '' -Encoding UTF8 } }; Add-Content -LiteralPath $accountsFile -Value $id -Encoding UTF8 }",
+  // Add never creates the file: a list started by a new profile would make that
+  // profile the first line, which the launcher opens as the default Store
+  // profile. Every Windows Open rebuilds the whole list from the server's
+  // current profiles (default first) before it starts the task.
+  "function Add-AccountId([string]$id) { if (-not (Test-Path -LiteralPath $accountsFile -PathType Leaf)) { return }; foreach ($line in @(Get-Content -LiteralPath $accountsFile)) { if ($line.Trim() -ceq $id) { return } }; $text = [IO.File]::ReadAllText($accountsFile); if (($text.Length -gt 0) -and -not $text.EndsWith([string][char]10)) { Add-Content -LiteralPath $accountsFile -Value '' -Encoding UTF8 }; Add-Content -LiteralPath $accountsFile -Value $id -Encoding UTF8 }",
   'function Drop-AccountId([string]$id) { if (-not (Test-Path -LiteralPath $accountsFile -PathType Leaf)) { return }; $kept = @(Get-Content -LiteralPath $accountsFile | Where-Object { $_.Trim() -cne $id }); if ($kept.Count -eq 0) { Remove-Item -LiteralPath $accountsFile -Force } else { Set-Content -LiteralPath $accountsFile -Value $kept -Encoding UTF8 } }',
   "function Check-Profile([string]$path) { $full = [IO.Path]::GetFullPath($path); if ([IO.Path]::GetDirectoryName($full) -ne $support -or -not [IO.Path]::GetFileName($full).StartsWith('Claude')) { Fail 1 }; return $full }",
   "function Check-Link([string]$path) { $full = [IO.Path]::GetFullPath($path); $dir = [IO.Path]::GetDirectoryName($full); $name = [IO.Path]::GetFileName($full); if (($dir -ne [Environment]::GetFolderPath('Desktop') -and $dir -ne [Environment]::GetFolderPath('Programs')) -or -not $name.StartsWith('Claude (') -or -not $name.EndsWith(').lnk')) { Fail 1 }; return $full }",

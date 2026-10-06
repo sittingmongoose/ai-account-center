@@ -8,7 +8,12 @@ import {
   type ClaudeDesktopProfile,
 } from './claude-desktop-profile-service';
 import { readPendingProfiles, type PendingClaudeProfile } from './claude-account-stores';
-import { openClaudeMacLauncher, openClaudeWindowsLauncher } from './claude-desktop-transport';
+import { isDefaultClaudeDataFolder } from './claude-account-records';
+import {
+  openClaudeMacLauncher,
+  openClaudeWindowsLauncher,
+  syncClaudeWindowsAccountList,
+} from './claude-desktop-transport';
 import {
   claudeHistoryOpenHeld,
   loadClaudeHistoryPolicy,
@@ -70,6 +75,53 @@ function pendingOpenProfile(profile: PendingClaudeProfile): ClaudeDesktopProfile
       sshHost: profile.windows.sshHost,
     },
   };
+}
+
+/**
+ * The Windows launcher's account list (`ccs-claude-accounts.txt`, read by
+ * scripts/windows-claude-launcher.cs), rebuilt from the current profiles: the
+ * computer's default Windows profile first (the launcher opens the first id in
+ * the default Store profile), then every other manifest or pending profile
+ * that opens on Windows, in manifest order. Null when there is not exactly one
+ * default Windows profile, because the first line would then name the wrong
+ * profile; the file is left alone in that case.
+ */
+export function claudeWindowsLauncherAccountList(
+  manifest: readonly ClaudeDesktopProfile[],
+  pending: readonly PendingClaudeProfile[] = []
+): string[] | null {
+  const windows = [...manifest, ...pending.map(pendingOpenProfile)].filter(
+    (profile): profile is ClaudeDesktopProfile & { id: string } =>
+      !!profile.id && canOpenClaudeWindowsProfile(profile)
+  );
+  const defaults = windows.filter(
+    (profile) =>
+      profile.windows?.isDefault === true || isDefaultClaudeDataFolder(profile.windows?.profilePath)
+  );
+  if (defaults.length !== 1) return null;
+  const ids = [defaults[0].id];
+  for (const profile of windows) if (!ids.includes(profile.id)) ids.push(profile.id);
+  return ids.length <= 64 ? ids : null;
+}
+
+/**
+ * One-off cleanup of the Windows launcher's account list from the current
+ * profiles, without opening any app. `dryRun` only reads it. Uses the default
+ * Windows profile's ssh alias. Never touches profiles, logins or tasks.
+ */
+export async function syncClaudeWindowsLauncherAccountList(
+  options: { dryRun?: boolean } = {}
+): Promise<{ want: string[]; listed: string[] | null; matches: boolean; dryRun: boolean }> {
+  const manifest = await listClaudeDesktopProfiles();
+  const want = claudeWindowsLauncherAccountList(manifest, await readPendingProfiles(getCcsDir()));
+  if (!want) {
+    throw new ConfigError('There is not exactly one default Claude profile on Windows.');
+  }
+  const sshHost = manifest.find((profile) => profile.id === want[0])?.windows?.sshHost;
+  if (!sshHost) throw new ConfigError('The default Claude profile has no Windows host.');
+  const dryRun = options.dryRun !== false;
+  const result = await syncClaudeWindowsAccountList(sshHost, want, dryRun);
+  return { want, ...result, dryRun };
 }
 
 async function resolveOpenTarget(id: string, platform: 'mac' | 'windows') {
@@ -160,7 +212,20 @@ export async function openClaudeDesktopProfile(
       throw new ClaudeHistoryOpenHeldError();
     notify(() => observer.opening?.());
     if (platform === 'mac') await openClaudeMacLauncher(launcher);
-    else await openClaudeWindowsLauncher(launcher, id);
+    else {
+      // Rebuild the launcher's account list from the current profiles in the
+      // same call, so a stale list never blocks this Open. Best effort only.
+      let accountList: string[] | null = null;
+      try {
+        accountList = claudeWindowsLauncherAccountList(
+          await listClaudeDesktopProfiles(),
+          await readPendingProfiles(getCcsDir())
+        );
+      } catch {
+        accountList = null;
+      }
+      await openClaudeWindowsLauncher(launcher, id, accountList ?? undefined);
+    }
   })();
   pendingOpens.set(key, opening);
   try {

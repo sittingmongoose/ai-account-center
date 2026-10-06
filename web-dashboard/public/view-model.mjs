@@ -230,6 +230,18 @@ export function fullWindowLabel(provider, w) {
     return { 'Five-hour usage': '5-hour usage' }[text(w.label)] || text(w.label) || 'Usage';
   return text(w.label) || 'Usage';
 }
+/**
+ * Claude only: the computers the server says need a sign-in before Open (`accounts[].signInNeeded`), as
+ * "Mac", "Windows" or "Mac and Windows"; '' when none. Each computer's profile signs in on its own, and
+ * Open stays allowed: it shows Claude's own sign-in window there.
+ */
+export function claudeSignInNeeded(account) {
+  const list = Array.isArray(account?.signInNeeded) ? account.signInNeeded : [];
+  return ['mac', 'windows']
+    .filter((p) => list.includes(p))
+    .map((p) => (p === 'mac' ? 'Mac' : 'Windows'))
+    .join(' and ');
+}
 export function statusWord(account) {
   return (
     {
@@ -609,6 +621,7 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
     if (!weekly) cells[1].key = `${account.id}|seven_day`;
     if (anyMax && isMaxPlan(account) && !fable) cells[2].key = `${account.id}|seven_day_fable`;
     const opening = openLine(openProgress, account.capabilities?.claudeProfileId);
+    const signIn = claudeSignInNeeded(account);
     return {
       id: account.id,
       provider: 'claude',
@@ -622,11 +635,14 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
           planLabel(text(account.plan)),
           account.status === 'ok' || account.status === 'cached'
             ? relative(account.sampledAt || account.fetchedAt, now)
-            : statusWord(account),
+            : signIn
+              ? ''
+              : statusWord(account),
+          signIn ? `Sign-in needed on ${signIn}` : '',
         ]
           .filter(Boolean)
           .join(' · '),
-      status: statusWord(account),
+      status: signIn ? `Sign-in needed on ${signIn}` : statusWord(account),
       note: text(account.message),
       platform: text(account.platform),
       active: false,

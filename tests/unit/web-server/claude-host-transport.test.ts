@@ -143,7 +143,10 @@ describe('Mac host program', () => {
     );
     expect(await transport.sessionState('mac', { launcher })).toBe('signed-in');
     // Either half missing reads as signed out, never as an error.
-    fs.writeFileSync(config, JSON.stringify({ lastKnownAccountUuid: '12345678-90ab-cdef-1234-567890abcdef' }));
+    fs.writeFileSync(
+      config,
+      JSON.stringify({ lastKnownAccountUuid: '12345678-90ab-cdef-1234-567890abcdef' })
+    );
     expect(await transport.sessionState('mac', { launcher })).toBe('signed-out');
     fs.writeFileSync(config, '{oops');
     expect(await transport.sessionState('mac', { launcher })).toBe('signed-out');
@@ -236,6 +239,12 @@ describe('Windows host script', () => {
     // default stays first), and a file without a trailing newline is fixed first.
     expect(create).toContain('if ($line.Trim() -ceq $id) { return }');
     expect(create).toContain('Add-Content -LiteralPath $accountsFile -Value $id -Encoding UTF8');
+    // A missing list is never started by a new profile (it would become the
+    // default Store profile); the next Open rebuilds the list instead.
+    expect(create).toContain(
+      'function Add-AccountId([string]$id) { if (-not (Test-Path -LiteralPath $accountsFile -PathType Leaf)) { return }'
+    );
+    expect(create).not.toContain('New-Item -ItemType Directory -Path $dir');
     const undo = windowsHostScript('undo', { profileId: 'work2', launcher });
     expect(undo).toContain('Drop-AccountId $id');
     // Undo takes out only that exact line, and deletes the file when emptied.
