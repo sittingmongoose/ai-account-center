@@ -2,9 +2,9 @@
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
     "totalOccurrences": 1172,
-    "filesAffected": 117,
+    "filesAffected": 119,
     "hotpathOccurrences": 541,
-    "hotpathFilesAffected": 66,
+    "hotpathFilesAffected": 68,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -76,25 +76,6 @@
         "markers": []
       },
       {
-        "file": "src/web-server/usage/experiment-usage-roots.ts",
-        "count": 22,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "fstatSync",
-          "mkdirSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "readSync",
-          "renameSync",
-          "rmSync",
-          "statSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/commands/bar/install-subcommand.ts",
         "count": 18,
         "calls": [
@@ -156,8 +137,25 @@
         "markers": []
       },
       {
+        "file": "src/web-server/services/account-refresh-settings.ts",
+        "count": 15,
+        "calls": [
+          "closeSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "renameSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/web-server/services/app-update-service.ts",
-        "count": 16,
+        "count": 15,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -606,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 36,
-      "totalSourceFiles": 395,
-      "coverageRatio": 0.0911,
+      "totalSourceFiles": 397,
+      "coverageRatio": 0.0907,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -634,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 141,
+          "count": 143,
           "withLogger": 20
         },
         {
@@ -754,11 +752,11 @@
     },
     "largeFiles": {
       "countOver400": 47,
-      "countOver600": 21,
+      "countOver600": 20,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 1606
+          "loc": 1607
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
@@ -805,16 +803,16 @@
           "loc": 708
         },
         {
-          "file": "src/web-server/usage/experiment-usage-roots.ts",
-          "loc": 702
-        },
-        {
           "file": "src/web-server/services/account-dashboard-service.ts",
           "loc": 674
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
           "loc": 669
+        },
+        {
+          "file": "src/web-server/services/codex-auto-switch-service.ts",
+          "loc": 667
         }
       ]
     }

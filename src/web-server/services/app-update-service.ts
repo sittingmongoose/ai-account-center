@@ -1,5 +1,4 @@
-import { execFile, spawn } from 'child_process';
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
@@ -12,13 +11,17 @@ import {
   MAX_OUTPUT,
   UPDATE_APP_LABELS,
   record,
+  failure,
   skipped,
   unknown,
+  isUpdateAppId,
   normalizeAppUpdateResults,
+  normalizeAppUpdateRow,
   type UpdateAppId,
   type UpdatePlatform,
   type AppUpdateResult,
   type AppUpdateJob,
+  type AppUpdateHostProgress,
 } from './app-update-contract';
 export { UPDATE_APP_LABELS, normalizeAppUpdateResults } from './app-update-contract';
 export type {
@@ -27,8 +30,23 @@ export type {
   UpdateResultStatus,
   AppUpdateResult,
   AppUpdateJob,
+  AppUpdateHostProgress,
 } from './app-update-contract';
-const MAX_HOST_DURATION_MS = 20 * 60 * 1000;
+import { runHost, syncRemoteHelpers, type HostRunControl } from './app-update-hosts';
+export {
+  appUpdateInvocation,
+  parseDeployedChecksums,
+  syncRemoteHelpers,
+  MAC_EXTRACT,
+} from './app-update-hosts';
+export type { HostRunControl } from './app-update-hosts';
+/**
+ * Hard bound for one computer's whole run (helper sync included). The helpers
+ * stop starting apps after 15 minutes and the Windows coordinator gives up
+ * after 16; past this the host process is stopped and every app without a
+ * result reads "Timed out" instead of the job waiting forever.
+ */
+const HOST_DEADLINE_MS = 18 * 60 * 1000;
 
 export class AppUpdateBusyError extends Error {
   constructor() {
@@ -37,224 +55,47 @@ export class AppUpdateBusyError extends Error {
   }
 }
 
-export function appUpdateInvocation(platform: UpdatePlatform): { binary: string; args: string[] } {
-  const local = path.resolve(__dirname, '../../../scripts/app-updates/app_updates.py');
-  if (platform === 'ubuntu')
-    return { binary: '/usr/bin/python3', args: [local, '--apply', '--platform', 'ubuntu'] };
-  const host = platform === 'mac' ? 'jared-mac' : 'jared-windows';
-  let command = '/usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform mac';
-  if (platform === 'windows') {
-    const script = [
-      "$ErrorActionPreference='Stop'",
-      "$env:PYTHONUTF8='1'",
-      "$env:PYTHONIOENCODING='utf-8'",
-      "$helper=[IO.Path]::Combine($HOME,'.ccs','app-updates','app_updates.py')",
-      '& python.exe $helper --apply --platform windows',
-      'exit $LASTEXITCODE',
-    ].join('; ');
-    command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
-  }
-  return {
-    binary: 'ssh',
-    args: [
-      '-T',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ConnectTimeout=5',
-      '-o',
-      'ConnectionAttempts=1',
-      '-o',
-      'ServerAliveInterval=10',
-      '-o',
-      'ServerAliveCountMax=2',
-      '--',
-      host,
-      command,
-    ],
-  };
-}
-
-function runHost(platform: UpdatePlatform): Promise<string> {
-  const command = appUpdateInvocation(platform);
-  return new Promise((resolve, reject) => {
-    execFile(
-      command.binary,
-      command.args,
-      {
-        encoding: 'utf8',
-        timeout: MAX_HOST_DURATION_MS,
-        maxBuffer: MAX_OUTPUT,
-        windowsHide: true,
-        env: {
-          ...process.env,
-          PYTHONUTF8: '1',
-          PYTHONIOENCODING: 'utf-8',
-          MUSE_NO_AUTO_UPDATE: '1',
-          AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
-          DISABLE_AUTOUPDATER: '1',
-        },
-      },
-      (error, stdout) => (error ? reject(new Error('App update host failed.')) : resolve(stdout))
-    );
-  });
-}
-
-/** The helper files every remote host must run from ~/.ccs/app-updates. */
-const HELPER_FILES = [
-  'app_updates.py',
-  'app_update_common.py',
-  'app_update_desktop.py',
-  'app_update_processes.py',
-  'app_update_terminal.py',
-  'app_update_terminal_child.py',
-  'app_update_pipe.py',
-  'app_update_probe.py',
-  'app_update_confirmed_codex.py',
-  'app_update_codex.cjs',
-] as const;
-const HELPER_QUERY_TIMEOUT_MS = 30_000;
-const HELPER_PUSH_TIMEOUT_MS = 90_000;
-const SSH_SYNC_OPTIONS = [
-  '-T',
-  '-o',
-  'BatchMode=yes',
-  '-o',
-  'ConnectTimeout=5',
-  '-o',
-  'ConnectionAttempts=1',
-];
-const MAC_EXTRACT =
-  '/bin/mkdir -p "$HOME/.ccs/app-updates" && /usr/bin/chmod 700 "$HOME/.ccs/app-updates" && /usr/bin/tar -x -f - -C "$HOME/.ccs/app-updates"';
-// The Windows sshd runs cmd.exe, so the extract script must travel as an
-// encoded powershell command; tar.exe reads the archive from the ssh stdin.
-const WINDOWS_EXTRACT = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
-  "$ErrorActionPreference='Stop'; $d=[IO.Path]::Combine($HOME,'.ccs','app-updates'); " +
-    'New-Item -ItemType Directory -Force -Path $d | Out-Null; tar.exe -x -f - -C $d; exit $LASTEXITCODE',
-  'utf16le'
-).toString('base64')}`;
-
-/** Parses "<sha256>  <name-or-path>" lines; keyed by basename, hex lowercased. */
-export function parseDeployedChecksums(output: string): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const line of output.split('\n')) {
-    const parts = line.trim().split(/\s+/);
-    if (parts.length < 2 || !/^[a-fA-F0-9]{64}$/.test(parts[0])) continue;
-    const name = parts[parts.length - 1].split(/[\\/]/).pop();
-    if (name) values[name] = parts[0].toLowerCase();
-  }
-  return values;
-}
-
-function localHelperChecksums(): Record<string, string> {
-  const source = path.resolve(__dirname, '../../../scripts/app-updates');
-  const values: Record<string, string> = {};
-  for (const name of HELPER_FILES)
-    values[name] = createHash('sha256')
-      .update(fs.readFileSync(path.join(source, name)))
-      .digest('hex');
-  return values;
-}
-
-function sshText(host: string, command: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'ssh',
-      [...SSH_SYNC_OPTIONS, '--', host, command],
-      {
-        encoding: 'utf8',
-        timeout: HELPER_QUERY_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-        windowsHide: true,
-      },
-      (error, stdout) => (error ? reject(error) : resolve(stdout))
-    );
-  });
-}
-
-const WINDOWS_HASH_QUERY = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
-  "$ErrorActionPreference='SilentlyContinue'; $d=[IO.Path]::Combine($HOME,'.ccs','app-updates'); " +
-    `foreach($n in @(${HELPER_FILES.map((name) => `'${name}'`).join(',')})){ ` +
-    '$p=[IO.Path]::Combine($d,$n); if(Test-Path -LiteralPath $p -PathType Leaf){ ' +
-    "$h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash; if($h){ Write-Output ($h.ToLowerInvariant()+'  '+$n) } } }; exit 0",
-  'utf16le'
-).toString('base64')}`;
-
-function pushHelpers(host: string, extract: string): Promise<void> {
-  // lib is ES2020, so the executor form is the available API here (as in runHost).
-  return new Promise((resolve, reject) => {
-    const archive = spawn(
-      'tar',
-      [
-        '-c',
-        '-f',
-        '-',
-        '-C',
-        path.resolve(__dirname, '../../../scripts/app-updates'),
-        ...HELPER_FILES,
-      ],
-      { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }
-    );
-    const remote = spawn('ssh', [...SSH_SYNC_OPTIONS, '--', host, extract], {
-      stdio: ['pipe', 'ignore', 'ignore'],
-      windowsHide: true,
-    });
-    const timer = setTimeout(() => {
-      archive.kill('SIGKILL');
-      remote.kill('SIGKILL');
-      reject(new Error('Helper sync timed out.'));
-    }, HELPER_PUSH_TIMEOUT_MS);
-    const fail = (error: Error): void => {
-      clearTimeout(timer);
-      reject(error);
-    };
-    archive.on('error', fail);
-    remote.on('error', fail);
-    remote.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error('Helper sync failed.'));
-    });
-    archive.stdout.pipe(remote.stdin);
-  });
-}
-
-/**
- * Aligns a remote host's deployed helpers with this build before invoking it.
- * Hosts keep their own copies under ~/.ccs/app-updates; a stale copy would
- * silently run old updater logic no matter what the server ships. Checksum-
- * gated, so an up-to-date host pays one hash query. Best effort: a sync
- * failure leaves the deployed helpers untouched and the run proceeds.
- */
-export async function syncRemoteHelpers(platform: UpdatePlatform): Promise<void> {
-  if (platform === 'ubuntu') return;
-  const local = localHelperChecksums();
-  const host = platform === 'mac' ? 'jared-mac' : 'jared-windows';
-  let deployed = '';
-  try {
-    deployed =
-      platform === 'mac'
-        ? await sshText(
-            host,
-            `/usr/bin/shasum -a 256 ${HELPER_FILES.map((name) => `"$HOME/.ccs/app-updates/${name}"`).join(' ')} 2>/dev/null; exit 0`
-          )
-        : await sshText(host, WINDOWS_HASH_QUERY);
-  } catch {
-    /* An unreachable host is reported by the run itself; treat it as stale. */
-  }
-  const remote = parseDeployedChecksums(deployed);
-  if (HELPER_FILES.every((name) => remote[name] === local[name])) return;
-  await pushHelpers(host, platform === 'mac' ? MAC_EXTRACT : WINDOWS_EXTRACT);
-}
-
 export interface AppUpdateDependencies {
-  runHost(platform: UpdatePlatform): Promise<string>;
+  runHost(platform: UpdatePlatform, control: HostRunControl): Promise<string>;
   /** Aligns deployed remote helpers with this build; production wires the real sync. */
   sync(platform: UpdatePlatform): Promise<void>;
   now(): number;
   id(): string;
   ccsDir?: string;
   persist?: boolean;
+  /** Hard bound for one computer's run; tests shorten it. */
+  hostDeadlineMs?: number;
+}
+
+function waitingHosts(): Record<UpdatePlatform, AppUpdateHostProgress> {
+  return {
+    ubuntu: { state: 'waiting', currentApp: null, phase: null },
+    mac: { state: 'waiting', currentApp: null, phase: null },
+    windows: { state: 'waiting', currentApp: null, phase: null },
+  };
+}
+
+/** Restores saved host progress only when every field is one of the fixed values. */
+function restoreHosts(value: unknown): Record<UpdatePlatform, AppUpdateHostProgress> | null {
+  const raw = record(value);
+  if (!raw) return null;
+  const hosts = waitingHosts();
+  for (const platform of PLATFORMS) {
+    const host = record(raw[platform]);
+    if (
+      !host ||
+      !['waiting', 'running', 'done'].includes(host.state as string) ||
+      !(host.currentApp === null || isUpdateAppId(host.currentApp)) ||
+      !(host.phase === null || host.phase === 'checking' || host.phase === 'updating')
+    )
+      return null;
+    hosts[platform] = {
+      state: host.state as AppUpdateHostProgress['state'],
+      currentApp: host.currentApp as UpdateAppId | null,
+      phase: host.phase as AppUpdateHostProgress['phase'],
+    };
+  }
+  return hosts;
 }
 
 /** Starts work only in response to the explicit authenticated POST action. */
@@ -263,6 +104,8 @@ export class AppUpdateService {
   private readonly deps: AppUpdateDependencies;
   private readonly directory: string;
   private lockHeld = false;
+  /** How to forward a cancel to each host helper that is running now. */
+  private readonly cancelHandlers = new Map<UpdatePlatform, () => void>();
 
   constructor(overrides: Partial<AppUpdateDependencies> = {}) {
     this.deps = {
@@ -292,6 +135,7 @@ export class AppUpdateService {
       startedAt: new Date(this.deps.now()).toISOString(),
       finishedAt: null,
       activePlatform: null,
+      hosts: waitingHosts(),
       cancelRequested: false,
       results: [],
       expectedResults: EXPECTED_RESULTS,
@@ -309,9 +153,9 @@ export class AppUpdateService {
   }
 
   /**
-   * Acknowledges a cancel at once. The host batch running now is never killed;
-   * it finishes, then every queued app is reported as skipped. Idempotent:
-   * a second cancel changes nothing. Never promises an undo.
+   * Acknowledges a cancel at once. Nothing running is killed: each computer
+   * finishes the app it is on now, then reports every app it has not started
+   * as skipped. Idempotent: a second cancel changes nothing. Never promises an undo.
    */
   cancel(): { job: AppUpdateJob | null; cancelling: boolean; notOwner?: true } {
     if (!this.lockHeld) this.restore();
@@ -322,7 +166,16 @@ export class AppUpdateService {
     if (this.deps.persist !== false && !this.lockHeld) {
       return { job: this.getStatus().job, cancelling: false, notOwner: true };
     }
+    const first = !this.job.cancelRequested;
     this.job.cancelRequested = true;
+    if (first)
+      for (const handler of this.cancelHandlers.values()) {
+        try {
+          handler();
+        } catch {
+          /* A host that cannot hear the cancel just finishes its apps. */
+        }
+      }
     try {
       this.save();
     } catch {
@@ -331,43 +184,17 @@ export class AppUpdateService {
     return { job: this.getStatus().job, cancelling: true };
   }
 
+  /**
+   * Every computer runs at the same time; each one still updates its own apps
+   * one at a time. The job ends when the slowest computer finishes or hits
+   * its hard deadline, so one stuck host never holds the others back.
+   */
   private async execute(): Promise<void> {
-    if (!this.job) return;
+    const job = this.job;
+    if (!job) return;
     try {
-      for (const platform of PLATFORMS) {
-        if (this.job.cancelRequested) {
-          this.job.results.push(
-            ...(Object.keys(UPDATE_APP_LABELS) as UpdateAppId[]).map((id) => skipped(platform, id))
-          );
-          this.save();
-          continue;
-        }
-        this.job.activePlatform = platform;
-        this.save();
-        // Ubuntu runs the helpers inside this installed build; only the remote
-        // hosts carry deployed copies that can go stale. Skipping the await
-        // also keeps start() launching the first host synchronously.
-        if (platform !== 'ubuntu') {
-          try {
-            await this.deps.sync(platform);
-          } catch {
-            /* Best effort: the deployed helpers stay as they are. */
-          }
-        }
-        try {
-          const output = await this.deps.runHost(platform);
-          this.job.results.push(...normalizeAppUpdateResults(output, platform));
-        } catch {
-          // The host never answered, so no check ran: unknown, not failed.
-          this.job.results.push(
-            ...(Object.keys(UPDATE_APP_LABELS) as UpdateAppId[]).map((id) =>
-              unknown(platform, id, 'host_unknown')
-            )
-          );
-        }
-        this.save();
-      }
-      this.job.state = this.job.results.some(
+      await Promise.all(PLATFORMS.map((platform) => this.runPlatform(job, platform)));
+      job.state = job.results.some(
         (result) =>
           result.status === 'failed' ||
           result.status === 'restart_failed' ||
@@ -376,19 +203,165 @@ export class AppUpdateService {
         ? 'failed'
         : 'completed';
     } catch {
-      this.job.state = 'failed';
+      job.state = 'failed';
     } finally {
       // A cancel that landed after the last app changed no result; leave no trace.
-      if (!this.job.results.some((result) => result.status === 'skipped'))
-        this.job.cancelRequested = false;
-      this.job.activePlatform = null;
-      this.job.finishedAt = new Date(this.deps.now()).toISOString();
-      try {
-        this.save();
-      } catch {
-        /* Never expose filesystem errors to clients. */
-      }
+      if (!job.results.some((result) => result.status === 'skipped')) job.cancelRequested = false;
+      job.activePlatform = null;
+      job.finishedAt = new Date(this.deps.now()).toISOString();
+      this.trySave();
       this.releaseLock();
+    }
+  }
+
+  private hostsOf(job: AppUpdateJob): Record<UpdatePlatform, AppUpdateHostProgress> {
+    if (!job.hosts) job.hosts = waitingHosts();
+    return job.hosts;
+  }
+
+  private async runPlatform(job: AppUpdateJob, platform: UpdatePlatform): Promise<void> {
+    const host = this.hostsOf(job)[platform];
+    if (job.cancelRequested) {
+      this.fillMissing(job, platform, (appId) => skipped(platform, appId));
+      this.hostDone(job, platform);
+      return;
+    }
+    host.state = 'running';
+    host.phase = 'checking';
+    this.refreshActive(job);
+    this.trySave();
+    let abort: (() => void) | undefined;
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error('App update host timed out.'));
+      }, this.deps.hostDeadlineMs ?? HOST_DEADLINE_MS);
+      timer.unref?.();
+    });
+    deadline.catch(() => {});
+    const control: HostRunControl = {
+      onEvent: (event) => this.hostEvent(job, platform, event),
+      setCancel: (handler) => {
+        this.cancelHandlers.set(platform, handler);
+        if (job.cancelRequested) handler();
+      },
+      setAbort: (handler) => {
+        abort = handler;
+      },
+    };
+    const work = async (): Promise<string | null> => {
+      // Ubuntu runs the helpers inside this installed build; only the remote
+      // hosts carry deployed copies that can go stale. Skipping the await
+      // also keeps start() launching the Ubuntu helper synchronously.
+      if (platform !== 'ubuntu') {
+        try {
+          await this.deps.sync(platform);
+        } catch {
+          /* Best effort: the deployed helpers stay as they are. */
+        }
+        if (timedOut) return null;
+        if (job.cancelRequested) return null;
+      }
+      return this.deps.runHost(platform, control);
+    };
+    try {
+      const output = await Promise.race([work(), deadline]);
+      if (output === null) this.fillMissing(job, platform, (appId) => skipped(platform, appId));
+      else this.mergeFinal(job, platform, output);
+    } catch {
+      if (timedOut) {
+        try {
+          abort?.();
+        } catch {
+          /* The process may already be gone. */
+        }
+      }
+      // Apps that reported keep their real rows; the rest never answered.
+      this.fillMissing(job, platform, (appId) =>
+        unknown(platform, appId, timedOut ? 'host_timeout' : 'host_unknown')
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.cancelHandlers.delete(platform);
+      this.hostDone(job, platform);
+    }
+  }
+
+  private hostDone(job: AppUpdateJob, platform: UpdatePlatform): void {
+    const host = this.hostsOf(job)[platform];
+    host.state = 'done';
+    host.currentApp = null;
+    host.phase = null;
+    this.refreshActive(job);
+    this.trySave();
+  }
+
+  private refreshActive(job: AppUpdateJob): void {
+    job.activePlatform =
+      PLATFORMS.find((platform) => job.hosts?.[platform].state === 'running') ?? null;
+  }
+
+  /** Live progress from one host: which app it is on, and each row as soon as it is known. */
+  private hostEvent(job: AppUpdateJob, platform: UpdatePlatform, event: Record<string, unknown>) {
+    const host = job.hosts?.[platform];
+    if (this.job !== job || job.state !== 'running' || host?.state !== 'running') return;
+    if (event.event === 'app') {
+      if (!(event.appId === null || isUpdateAppId(event.appId))) return;
+      if (event.phase !== 'checking' && event.phase !== 'updating') return;
+      host.currentApp = event.appId;
+      host.phase = event.phase;
+    } else if (event.event === 'result') {
+      const row = record(event.result);
+      if (!row || !isUpdateAppId(row.appId) || this.has(job, platform, row.appId)) return;
+      job.results.push(normalizeAppUpdateRow(row, row.appId, platform));
+      if (host.currentApp === row.appId) host.currentApp = null;
+    } else return;
+    this.trySave();
+  }
+
+  /**
+   * The helper's final document is authoritative for every app it names, except
+   * that a malformed final row never replaces a well-formed streamed one.
+   */
+  private mergeFinal(job: AppUpdateJob, platform: UpdatePlatform, output: string): void {
+    let payload: Record<string, unknown> | undefined;
+    try {
+      payload = record(JSON.parse(output));
+    } catch {
+      payload = undefined;
+    }
+    if (Array.isArray(payload?.results)) {
+      for (const row of normalizeAppUpdateResults(output, platform)) {
+        const index = job.results.findIndex(
+          (value) => value.platform === platform && value.appId === row.appId
+        );
+        if (index < 0) job.results.push(row);
+        else if (row.message !== MESSAGES.helper_invalid) job.results[index] = row;
+      }
+    }
+    this.fillMissing(job, platform, (appId) => failure(platform, appId, 'helper_invalid'));
+  }
+
+  private has(job: AppUpdateJob, platform: UpdatePlatform, appId: UpdateAppId): boolean {
+    return job.results.some((row) => row.platform === platform && row.appId === appId);
+  }
+
+  private fillMissing(
+    job: AppUpdateJob,
+    platform: UpdatePlatform,
+    make: (appId: UpdateAppId) => AppUpdateResult
+  ): void {
+    for (const appId of Object.keys(UPDATE_APP_LABELS) as UpdateAppId[])
+      if (!this.has(job, platform, appId)) job.results.push(make(appId));
+  }
+
+  private trySave(): void {
+    try {
+      this.save();
+    } catch {
+      /* Never expose filesystem errors to clients; the in-memory job stays right. */
     }
   }
 
@@ -515,6 +488,7 @@ export class AppUpdateService {
           !abandoned && PLATFORMS.includes(raw.activePlatform as UpdatePlatform)
             ? (raw.activePlatform as UpdatePlatform)
             : null,
+        hosts: abandoned ? null : restoreHosts(raw.hosts),
         cancelRequested: raw.cancelRequested === true,
         results,
         expectedResults:

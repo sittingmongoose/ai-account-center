@@ -523,6 +523,32 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
     }
   );
   assert.equal(
+    updateViewModel({
+      state: 'running',
+      activePlatform: 'ubuntu',
+      hosts: {
+        ubuntu: { state: 'running', currentApp: 'codex-cli', phase: 'updating' },
+        mac: { state: 'running', currentApp: null, phase: 'checking' },
+        windows: { state: 'running', currentApp: 'omp', phase: 'checking' },
+      },
+      results: [],
+    }).tip,
+    'Updating apps on Ubuntu, Mac and Windows · running apps may restart'
+  );
+  assert.equal(
+    updateViewModel({
+      state: 'running',
+      activePlatform: 'windows',
+      hosts: {
+        ubuntu: { state: 'done', currentApp: null, phase: null },
+        mac: { state: 'done', currentApp: null, phase: null },
+        windows: { state: 'running', currentApp: null, phase: 'checking' },
+      },
+      results: [],
+    }).tip,
+    'Updating apps on Windows · running apps may restart'
+  );
+  assert.equal(
     updateViewModel({ state: 'completed', results: [{ status: 'failed' }] }, { done: true }).done,
     true
   );

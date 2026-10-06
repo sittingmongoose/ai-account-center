@@ -15,7 +15,7 @@ import time
 import uuid
 
 from app_update_common import (
-    APP_LABELS, Install, UpdateFailure, cli_version, command, download, execution_lock,
+    APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
     powershell, private_temporary, ps_quote, result, version_text, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
@@ -23,6 +23,9 @@ from app_update_processes import cli_contexts, family, scan, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
 
 CLI_NAMES = {"antigravity-cli": "agy", "muse-code": "muse", "omp": "omp", "codex-cli": "codex", "claude-code": "claude"}
+# The Codex bridge's whole budget: lock (30 s) + update (180 s) + idle wait
+# (60 s) + proxy restart checks. It never waits hours for a busy Codex.
+CODEX_BRIDGE_SECONDS = 420
 
 
 def _candidates(name, platform):
@@ -63,7 +66,9 @@ def detect_cli(app_id, platform):
         except (OSError, ValueError):
             return None
         return Install(app_id, platform, path, version, "npm", package_root=root)
-    version = cli_version(path)
+    version, probe = cli_probe(path)
+    if probe == "timeout":
+        return Install(app_id, platform, path, None, "native", probe="timeout")
     resolved = path.resolve()
     home = pathlib.Path.home()
     if app_id == "codex-cli" and str(home / ".codex/packages/standalone/releases") in str(resolved):
@@ -73,8 +78,26 @@ def detect_cli(app_id, platform):
     return Install(app_id, platform, path, version, manager, package_root=root)
 
 
+def _detect_one(app_id, platform):
+    return detect_desktop(app_id, platform) if app_id.endswith("-desktop") else detect_cli(app_id, platform)
+
+
 def detect(platform):
-    return {app_id: detect_desktop(app_id, platform) if app_id.endswith("-desktop") else detect_cli(app_id, platform) for app_id in APP_LABELS}
+    """Read-only version probes for every app, side by side.
+
+    Each probe has its own timeout, so the slowest one bounds the whole check
+    instead of all seven adding up. Nothing here installs or stops anything.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=len(APP_LABELS)) as pool:
+        futures = {app_id: pool.submit(_detect_one, app_id, platform) for app_id in APP_LABELS}
+    found = {}
+    for app_id, future in futures.items():
+        try:
+            found[app_id] = future.result()
+        except Exception:
+            found[app_id] = Install(app_id, platform, None, probe="failed")
+    return found
 
 
 def resolve_muse_shell(platform):
@@ -193,7 +216,7 @@ def update_cli(install, deadline):
             contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
             check_terminal(install.platform, contexts)
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
-            seconds = max(30, min(900, int(deadline - time.monotonic())))
+            seconds = max(30, min(CODEX_BRIDGE_SECONDS, int(deadline - time.monotonic())))
             payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
             if payload.get("status") == "updated" and contexts:
                 refreshed = detect_cli(install.app_id, install.platform)
@@ -324,52 +347,167 @@ def check_readiness(install):
     return None
 
 
-def run_apply(platform):
+# One computer's whole run; apps not started by then report a timeout row.
+HOST_DEADLINE_SECONDS = 15 * 60
+
+
+def run_apply(platform, emit=None, cancelled=None):
+    """Check and update every app on this computer, one installer at a time.
+
+    emit(event) receives {"event": "app", ...} before each app's check and
+    update, and {"event": "result", ...} as soon as its row is known, so the
+    dashboard can show live progress. cancelled() is polled between apps: once
+    true, every app not yet started is reported as skipped.
+    """
+    emit = emit or (lambda event: None)
+    cancelled = cancelled or (lambda: False)
     results = []
-    deadline = time.monotonic() + 15 * 60
+    deadline = time.monotonic() + HOST_DEADLINE_SECONDS
+
+    def report(row):
+        results.append(row)
+        emit({"event": "result", "result": row})
+
     with execution_lock():
+        emit({"event": "app", "appId": None, "phase": "checking"})
         installations = detect(platform)
         # Update package apps first; the shared Codex daemon idle wait is last
         # so it cannot delay unrelated already-idle updates on this computer.
         order = [app_id for app_id in APP_LABELS if app_id != "codex-cli"] + ["codex-cli"]
         for app_id in order:
             install = installations[app_id]
-            if install is None:
-                results.append(result(app_id, platform, "not_installed"))
+            if cancelled():
+                report(result(app_id, platform, "skipped", code="skipped_cancelled"))
+            elif install is None:
+                report(result(app_id, platform, "not_installed"))
+            elif install.probe == "timeout":
+                report(result(app_id, platform, "unknown", None, None, install.manager, "check_timeout"))
+            elif install.probe is not None:
+                report(result(app_id, platform, "unknown", None, None, None, "readiness_unknown"))
             elif time.monotonic() >= deadline:
-                results.append(result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout"))
+                report(result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout"))
             else:
+                emit({"event": "app", "appId": app_id, "phase": "checking"})
                 gate = check_readiness(install)
                 if gate is not None:
                     status, code = gate
-                    results.append(result(app_id, platform, status, install.version, install.version, install.manager, code))
-                elif app_id.endswith("-desktop"):
-                    try: results.append(update_desktop(install, deadline))
-                    except Exception: results.append(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
+                    report(result(app_id, platform, status, install.version, install.version, install.manager, code))
+                    continue
+                emit({"event": "app", "appId": app_id, "phase": "updating"})
+                if app_id.endswith("-desktop"):
+                    try: report(update_desktop(install, deadline))
+                    except Exception: report(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
                 else:
-                    results.append(update_cli(install, deadline))
+                    report(update_cli(install, deadline))
     return {"results": results}
 
 
-def windows_interactive_apply():
-    """The fixed separate InteractiveToken task owns GUI/terminal restarts."""
+def windows_interactive_apply(emit=None, cancelled=None):
+    """The fixed separate InteractiveToken task owns GUI/terminal restarts.
+
+    The task child writes its progress to a private file; this coordinator
+    relays new events to emit() and forwards a cancel through a nonce-bound
+    cancel file the child polls between apps.
+    """
+    emit = emit or (lambda event: None)
+    cancelled = cancelled or (lambda: False)
     root = pathlib.Path.home() / ".ccs/app-updates"
     request_path, result_path = root / "windows-task-request.json", root / "windows-task-result.json"
+    progress_path, cancel_path = root / "windows-task-progress.json", root / "windows-task-cancel.json"
     with execution_lock("windows-coordinator.lock"):
         powershell("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}", timeout=15)
         nonce = uuid.uuid4().hex
+        for stale in (progress_path, cancel_path):
+            stale.unlink(missing_ok=True)
         write_private_json(request_path, {"nonce": nonce})
         powershell("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; Start-ScheduledTask -TaskName 'CCS App Updates'", timeout=15)
         deadline = time.monotonic() + 16 * 60
+        relayed, cancel_sent = 0, False
         while time.monotonic() < deadline:
+            if not cancel_sent and cancelled():
+                try:
+                    write_private_json(cancel_path, {"nonce": nonce})
+                    cancel_sent = True
+                except OSError:
+                    pass
+            try:
+                value = json.loads(progress_path.read_text(encoding="utf-8"))
+                events = value.get("events") if value.get("nonce") == nonce else None
+                if isinstance(events, list):
+                    for event in events[relayed:]:
+                        emit(event)
+                    relayed = max(relayed, len(events))
+            except (OSError, ValueError, AttributeError):
+                pass
             try:
                 value = json.loads(result_path.read_text(encoding="utf-8"))
                 if value.get("nonce") == nonce and isinstance(value.get("results"), list):
                     return {"results": value["results"]}
-            except (OSError, ValueError):
+            except (OSError, ValueError, AttributeError):
                 pass
             time.sleep(1)
         raise UpdateFailure("timeout")
+
+
+def task_child_progress(nonce):
+    """emit/cancelled pair for the Windows task child, bound to its nonce."""
+    root = pathlib.Path.home() / ".ccs/app-updates"
+    events = []
+
+    def emit(event):
+        events.append(event)
+        try:
+            write_private_json(root / "windows-task-progress.json", {"nonce": nonce, "events": events})
+        except (OSError, ValueError):
+            pass
+
+    def cancelled():
+        try:
+            return json.loads((root / "windows-task-cancel.json").read_text(encoding="utf-8")).get("nonce") == nonce
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    return emit, cancelled
+
+
+def stream_progress():
+    """emit/cancelled pair for a dashboard that asked for live progress.
+
+    Events go to stdout as one JSON object per line, flushed at once; the final
+    {"results": [...]} line stays last. A "cancel" line on stdin (the dashboard
+    writes it; over ssh it arrives the same way) stops apps not yet started.
+    """
+    import threading
+    stop = threading.Event()
+
+    def listen():
+        # Raw reads on the descriptor: a daemon thread parked inside the
+        # buffered sys.stdin would hold its lock while the interpreter exits.
+        try:
+            descriptor = sys.stdin.fileno()
+        except (AttributeError, OSError, ValueError):
+            return
+        seen = b""
+        while not stop.is_set():
+            try:
+                chunk = os.read(descriptor, 256)
+            except OSError:
+                return
+            if not chunk:
+                return
+            seen = (seen + chunk)[-64:]
+            if b"cancel\n" in seen or b"cancel\r\n" in seen:
+                stop.set()
+
+    threading.Thread(target=listen, daemon=True).start()
+
+    def emit(event):
+        try:
+            print(json.dumps(event, ensure_ascii=True, allow_nan=False, separators=(",", ":")), flush=True)
+        except (OSError, ValueError):
+            pass
+
+    return emit, stop.is_set
 
 
 def main():
@@ -392,6 +530,13 @@ def main():
                 task_nonce = value
         except (OSError, ValueError):
             pass
+    emit = cancelled = None
+    if args.apply and args.task_child and task_nonce:
+        emit, cancelled = task_child_progress(task_nonce)
+    elif args.apply and os.environ.get("AAC_UPDATE_PROGRESS") == "1":
+        # Only a dashboard that reads line-by-line progress sets this; an
+        # older one keeps receiving exactly one JSON document.
+        emit, cancelled = stream_progress()
     try:
         if not args.apply:
             installations = detect(args.platform)
@@ -400,9 +545,9 @@ def main():
                 for app_id, install in installations.items()
             ]}
         elif args.platform == "windows" and not args.task_child:
-            payload = windows_interactive_apply()
+            payload = windows_interactive_apply(emit, cancelled)
         else:
-            payload = run_apply(args.platform)
+            payload = run_apply(args.platform, emit, cancelled)
     except UpdateFailure as error:
         payload = {"results": [result(app_id, args.platform, "failed", code=error.code) for app_id in APP_LABELS]}
     except Exception:
