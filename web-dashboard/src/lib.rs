@@ -940,6 +940,55 @@ pub fn set_reduced_motion(reduced: bool) {
     with_ui(|ui| ui.set_reduced_motion(reduced));
 }
 
+/// Safe-area insets in CSS px (top, right, bottom, left), read from env() by bridge.js.
+#[wasm_bindgen]
+pub fn set_safe_area(top: f32, right: f32, bottom: f32, left: f32) {
+    with_ui(|ui| {
+        let device = ui.global::<Device>();
+        device.set_safe_top(safe_px(top));
+        device.set_safe_right(safe_px(right));
+        device.set_safe_bottom(safe_px(bottom));
+        device.set_safe_left(safe_px(left));
+    });
+}
+
+fn safe_px(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0., 200.)
+    } else {
+        0.
+    }
+}
+
+/// The input profile: a coarse pointer (touch), hover support, and standalone (installed PWA) display.
+#[wasm_bindgen]
+pub fn set_input_profile(coarse: bool, hover: bool, standalone: bool) {
+    with_ui(|ui| {
+        let device = ui.global::<Device>();
+        device.set_coarse(coarse);
+        device.set_hover(hover);
+        device.set_standalone(standalone);
+    });
+}
+
+/// The height of the on-screen keyboard (plus any AutoFill bar) covering the canvas, else 0.
+#[wasm_bindgen]
+pub fn set_keyboard(height: f32) {
+    with_ui(|ui| {
+        ui.global::<Device>().set_keyboard(if height.is_finite() {
+            height.max(0.)
+        } else {
+            0.
+        });
+    });
+}
+
+/// Whether the dashboard server is reachable (navigator.onLine and the last API call).
+#[wasm_bindgen]
+pub fn set_online(online: bool) {
+    with_ui(|ui| ui.global::<Device>().set_online(online));
+}
+
 /// kind: "ok" | "err" | "info". At most three toasts stay live.
 #[wasm_bindgen]
 pub fn push_toast(kind: &str, title: &str, body: &str, ms: i32) {

@@ -11,6 +11,8 @@
 //   ease-spring cubic-bezier(0.34, 1.45, 0.64, 1) hover lifts, nav indicator, buttons, panels only
 //   ease-in     cubic-bezier(0.4, 0, 1, 1)        quick exits
 //   spring-panel cubic-bezier(0.32, 1.12, 0.52, 1) the slide-over (its 28 px bleed hides the overshoot)
+//   sheet-open  cubic-bezier(0.32, 0.72, 0, 1)    sheets and side panels opening (no overshoot)
+//   sheet-close cubic-bezier(0.32, 0, 0.67, 0)    sheets and side panels closing
 
 import "fonts/InstrumentSans.ttf";
 import "fonts/InstrumentSansTab.ttf";
@@ -25,6 +27,12 @@ export global Motion {
     out property <duration> theme: 300ms;
     // A meter fill sweep; the count-up uses the same duration so number and bar land together.
     out property <duration> meter: 1050ms;
+    // Mobile sheets and side panels (section 7 of DESIGN-MOBILE.md); every use gates on Motion.on.
+    out property <duration> sheet-open: 380ms;
+    out property <duration> sheet-close: 220ms;
+    out property <duration> tab-glide: 280ms;
+    out property <duration> tip: 180ms;
+    out property <duration> focus-scroll: 200ms;
     // Headless screenshots and prefers-reduced-motion set this; every duration that reads `Motion.on` collapses.
     in-out property <bool> reduced: false;
     out property <bool> on: !reduced;
@@ -37,29 +45,57 @@ export global Motion {
     }
 }
 
+// Device state pushed by the JS shell (bridge.js) through the set-safe-area, set-input-profile,
+// set-keyboard and set-online wasm exports. The Dashboard window sets Breakpoints.height itself;
+// every other geometry (tiers, short) derives from these values on the next frame, with no animation.
+export global Device {
+    in-out property <length> safe-top: 0px;
+    in-out property <length> safe-right: 0px;
+    in-out property <length> safe-bottom: 0px;
+    in-out property <length> safe-left: 0px;
+    // The height of the on-screen keyboard (plus any AutoFill bar) covering the canvas, else 0.
+    in-out property <length> keyboard: 0px;
+    in-out property <bool> coarse: false;
+    in-out property <bool> hover: true;
+    in-out property <bool> standalone: false;
+    in-out property <bool> online: true;
+}
+
 export global Type {
     out property <string> sans: "Instrument Sans";
     // Instrument Sans with OpenType tnum frozen into the cmap: every digit has the same advance.
     out property <string> tab: "Instrument Sans Tab";
     out property <string> mono: "Martian Mono";
-    out property <length> caption: 11px;
-    out property <length> small: 12px;
-    out property <length> body: 13.5px;
-    out property <length> control: 13px;
-    out property <length> title: 18px;
-    out property <length> page-title: 28px;
+    // Tier type scale (DESIGN-MOBILE.md 2.1). The D values are today's literals and never change.
+    out property <length> caption: Breakpoints.tier-p || Breakpoints.tier-f ? 11.5px : 11px;
+    out property <length> small: Breakpoints.tier-p || Breakpoints.tier-f ? 13px : Breakpoints.tier-t ? 12.5px : 12px;
+    out property <length> body: Breakpoints.tier-p || Breakpoints.tier-f ? 15px : Breakpoints.tier-t ? 14px : 13.5px;
+    out property <length> control: Breakpoints.tier-p || Breakpoints.tier-f ? 15px : Breakpoints.tier-t ? 14px : 13px;
+    out property <length> title: Breakpoints.tier-p ? 17px : 18px;
+    out property <length> page-title: Breakpoints.tier-p ? 24px : Breakpoints.tier-f ? 26px : 28px;
 }
 
-// Named desktop widths: compact < 1280 <= regular < 1600 <= wide < 2200 <= ultra.
+// Width tiers: P (phone) < 600, F (foldable/small tablet) 600-899, T (tablet) 900-1279,
+// D (desktop) >= 1280, unchanged. The tier width is the window minus the live safe-area side
+// insets, floored at 320. The desktop names (compact/regular/wide/ultra) stay for the D layouts.
+// `short` is phone landscape and Duo outer landscape: window height under 500 outside D.
 export global Breakpoints {
     in-out property <length> width: 1440px;
+    in-out property <length> height: 900px;
     out property <bool> compact: width < 1280px;
     out property <bool> regular: width >= 1280px && width < 1600px;
     out property <bool> wide: width >= 1600px && width < 2200px;
     out property <bool> ultra: width >= 2200px;
     out property <bool> at-least-regular: width >= 1280px;
     out property <bool> at-least-wide: width >= 1600px;
-    out property <length> gutter: ultra ? 40px : compact ? 24px : 32px;
+    out property <length> tier-width: max(320px, width - Device.safe-left - Device.safe-right);
+    out property <bool> tier-p: tier-width < 600px;
+    out property <bool> tier-f: tier-width >= 600px && tier-width < 900px;
+    out property <bool> tier-t: tier-width >= 900px && tier-width < 1280px;
+    out property <bool> tier-d: tier-width >= 1280px;
+    out property <bool> short: height < 500px && !tier-d;
+    out property <bool> below-d: !tier-d;
+    out property <length> gutter: ultra ? 40px : tier-d ? 32px : tier-t ? 24px : tier-f ? 20px : 12px;
     out property <length> max-content: 2304px;
 }
 
@@ -135,6 +171,11 @@ export global Theme {
     out property <color> shadow-2: pick(#15202B21, #00000073);
     out property <color> shadow-pop: pick(#15202B2E, #0000008C);
     out property <color> scrim: pick(#15202B24, #03070B61);
+    // ---- touch (DESIGN-MOBILE.md 2.6; only used below D) ----
+    out property <color> pressed: pick(#E8EDF2, #1B2530);
+    out property <color> sheet-scrim: pick(#15202B5C, #0000008C);
+    out property <color> sheet: paper;
+    out property <color> grabber: pick(#15202B2E, #E6ECF23D);
     // ---- marks ----
     // Hairline outline for white-only artwork on light surfaces (none ship today; kept for marks.js parity).
     out property <color> mark-outline: pick(#C3CCD5, #00000000);
@@ -170,6 +211,11 @@ export global Theme {
     out property <length> r-plate: 14px;
     out property <length> r-card: 12px;
     out property <length> r-ctl: 8px;
+    // Touch radii (DESIGN-MOBILE.md 2.2; only used below D).
+    out property <length> r-sheet: 20px;
+    out property <length> r-touch: 10px;
+    out property <length> r-touch-inner: 8px;
+    out property <length> r-grabber: 2.5px;
 
     // Severity from a used percentage: -1 unavailable, 0 calm (< 80), 1 warning (80-95), 2 critical (95-100), 3 over.
     public pure function severity(has-value: bool, used: float) -> int {

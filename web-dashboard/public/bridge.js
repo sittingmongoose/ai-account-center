@@ -1,4 +1,4 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue } from './auth-view.mjs';
@@ -16,6 +16,7 @@ import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
+import { readSafeArea, keyboardHeight, themeColor, themeScreen } from './device.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -111,6 +112,7 @@ function auth(signedIn, state, extra = {}) {
   // sign-in pauses (signin.slint forgets the typed password in the limited state).
   if (signedIn || state === 'limited') { try { loginBridge?.clearPassword(); } catch {} }
   set_auth(signedIn, JSON.stringify(view));
+  syncThemeColor();
 }
 
 /** One request: { status, payload } on success; a refusal throws with its status, payload and headers. */
@@ -118,7 +120,9 @@ async function send(path, options = {}) {
   let response;
   try {
     response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+    setOnline(true);
   } catch (cause) {
+    setOnline(false);
     throw Object.assign(new Error('The dashboard did not answer.'), { network: true, status: 0, payload: null, cause });
   }
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
@@ -892,8 +896,95 @@ window.ccsDashboardAction = async (action, value) => {
   }
 };
 
+// ---------------------------------------------------------------- device environment
+// Safe-area insets (a probe element with env() paddings), the input profile (coarse pointer,
+// hover, standalone display), the keyboard height covering the canvas and reachability.
+// Pushed into the Device global; the tiers derive from them (DESIGN-MOBILE.md 1.1).
+let safeProbe = null;
+let keyboardFocus = false;
+let onlineState = typeof navigator !== 'undefined' && navigator.onLine === false ? false : true;
+function setOnline(value) {
+  const next = value !== false;
+  if (next === onlineState) return;
+  onlineState = next;
+  try { set_online(next); } catch {}
+}
+function pushSafeArea() {
+  const insets = readSafeArea(safeProbe, (element) => getComputedStyle(element));
+  try { set_safe_area(insets.top, insets.right, insets.bottom, insets.left); } catch {}
+}
+function pushInputProfile() {
+  let coarse = false, hover = true, standalone = false;
+  try {
+    if (typeof matchMedia === 'function') {
+      coarse = matchMedia('(pointer: coarse)').matches === true;
+      hover = matchMedia('(hover: hover)').matches !== false;
+      standalone = matchMedia('(display-mode: standalone)').matches === true;
+    }
+    if (typeof navigator !== 'undefined' && navigator.standalone === true) standalone = true;
+  } catch {}
+  try { set_input_profile(coarse, hover, standalone); } catch {}
+}
+function pushKeyboard() {
+  let height = 0;
+  try {
+    const viewport = typeof visualViewport !== 'undefined' ? visualViewport : null;
+    height = keyboardHeight(
+      innerHeight,
+      viewport ? { height: viewport.height, offsetTop: viewport.offsetTop ?? 0 } : null,
+      keyboardFocus
+    );
+    // The document is fixed (index.html), so iOS must not pan it while a field has focus.
+    if (keyboardFocus && viewport && viewport.offsetTop > 0) scrollTo(0, 0);
+  } catch {}
+  try { set_keyboard(height); } catch {}
+}
+function setupDevice() {
+  try {
+    safeProbe = document.createElement('div');
+    safeProbe.setAttribute('aria-hidden', 'true');
+    safeProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;visibility:hidden;padding-top:env(safe-area-inset-top);padding-right:env(safe-area-inset-right);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);';
+    document.body.appendChild(safeProbe);
+  } catch { safeProbe = null; }
+  pushSafeArea();
+  pushInputProfile();
+  pushKeyboard();
+  try { set_online(onlineState); } catch {}
+  addEventListener('resize', () => { pushSafeArea(); pushKeyboard(); });
+  addEventListener('orientationchange', () => setTimeout(() => { pushSafeArea(); pushKeyboard(); }, 60));
+  try {
+    visualViewport?.addEventListener?.('resize', () => { pushSafeArea(); pushKeyboard(); });
+    visualViewport?.addEventListener?.('scroll', pushKeyboard);
+  } catch {}
+  for (const query of ['(pointer: coarse)', '(hover: hover)', '(display-mode: standalone)']) {
+    try { matchMedia(query)?.addEventListener?.('change', pushInputProfile); } catch {}
+  }
+  // The login form's real inputs and Slint's hidden text input both live in this document.
+  try {
+    document.addEventListener('focusin', (event) => {
+      const target = event?.target;
+      keyboardFocus = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable === true);
+      pushKeyboard();
+    });
+    document.addEventListener('focusout', () => { keyboardFocus = false; pushKeyboard(); });
+  } catch {}
+  try {
+    addEventListener('online', () => setOnline(true));
+    addEventListener('offline', () => setOnline(false));
+  } catch {}
+}
+
 // ---------------------------------------------------------------- theme and motion
 const THEMES = { auto: 0, light: 1, dark: 2 };
+let themeModeName = 'auto';
+let themeSystemDark = false;
+/** The theme-color meta follows the resolved app theme and the current screen (device.mjs). */
+function syncThemeColor() {
+  try {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', themeColor({ mode: themeModeName, systemDark: themeSystemDark, screen: themeScreen(authenticated) }));
+  } catch {}
+}
 function storedTheme() {
   let theme = null;
   try {
@@ -909,7 +1000,9 @@ function storedTheme() {
 function saveTheme(value) {
   if (!(value in THEMES)) return;
   try { localStorage.setItem('aac-theme', value); } catch {}
+  themeModeName = value;
   set_theme_mode(THEMES[value]);
+  syncThemeColor();
 }
 function watchMedia(query, apply) {
   const media = typeof matchMedia === 'function' ? matchMedia(query) : null;
@@ -948,9 +1041,12 @@ try {
     if (currentPage === 'analytics' && authenticated) enterAnalytics();
     if (currentPage === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
   });
-  set_theme_mode(THEMES[storedTheme()]);
+  themeModeName = storedTheme();
+  set_theme_mode(THEMES[themeModeName]);
   // Auto follows the browser: the scheme is pushed now and on every change.
-  watchMedia('(prefers-color-scheme: dark)', dark => set_system_dark(dark));
+  watchMedia('(prefers-color-scheme: dark)', dark => { themeSystemDark = dark; set_system_dark(dark); syncThemeColor(); });
+  setupDevice();
+  syncThemeColor();
   // Headless captures settle instantly (the existing screenshot guard); ?motion keeps motion on.
   const headless = /HeadlessChrome/.test(navigator.userAgent) && !/[?&]motion\b/.test(location.search);
   watchMedia('(prefers-reduced-motion: reduce)', reduced => { motionReduced = reduced || headless; set_reduced_motion(motionReduced); });
