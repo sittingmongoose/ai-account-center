@@ -74,9 +74,10 @@ component PaperGrid inherits Rectangle {
 // Update apps: its own header button. Idle shows the arrow and "Update apps"; while a job runs the ring
 // spins and the result count rolls ("Updating 3 of 21"); on finish it morphs to a check for 2 s. The
 // header pins its group to the right, so every pixel of width the button gains moves the button's own left
-// edge and the label with it. Two rules keep the label rock-steady: the width changes only when the mode
-// changes (never on a count, so it never re-targets mid-job), and it steps in whole pixels, so the text is
-// never laid out at a fractional offset and re-rasterised frame after frame.
+// edge and the label with it. Three rules keep the label rock-steady: the width changes only when the mode
+// changes (never on a count, so it never re-targets mid-job), it steps in whole pixels, so the text is
+// never laid out at a fractional offset, and the pill never clips with its rounded corners (see `content`
+// below), so the spinning ring cannot drag the label through an offscreen layer every frame.
 component UpdateButton inherits Rectangle {
     in property <UpdateView> data;
     in property <bool> enabled: true;
@@ -117,7 +118,6 @@ component UpdateButton inherits Rectangle {
     max-width: root.w;
     border-radius: 9px;
     border-width: 1px;
-    clip: true;
     border-color: root.mode == "run" ? Theme.accent.mix(Theme.rule, 0.4) : root.mode == "done" ? Theme.calm.mix(Theme.rule, 0.45) : ta.has-hover ? Theme.rule-strong : Theme.rule;
     background: root.mode == "run" ? Theme.accent-soft : ta.has-hover ? Theme.paper-2 : Theme.paper;
     animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
@@ -137,111 +137,132 @@ component UpdateButton inherits Rectangle {
         font-size: Type.control;
         font-weight: 650;
     }
-    row := HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 13px;
-        spacing: 8px;
-        alignment: start;
-        Rectangle {
-            width: 18px;
-            // three glyphs cross-fade with a scale spring
-            Icon {
-                y: (parent.height - 18px) / 2;
-                width: 18px;
-                height: 18px;
-                name: "arrow-down-circle";
-                tint: Theme.ink-2;
-                opacity: root.mode == "idle" ? 1 : 0;
-                transform-scale: root.mode == "idle" ? 1 : 0.55;
-                animate opacity { duration: 180ms; }
-                animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
-            }
+    // The vibration seen on 13a93136: a clip with rounded corners makes the femtovg renderer draw the whole
+    // content into an offscreen layer and blend it back in, and that layer's placement follows the ring's
+    // angle (Slint 1.18.1 measures the rotated ring's bounding box with its transforms in the wrong order).
+    // So every frame of the spin moved the layer to a new fractional offset: the text, snapped to whole
+    // pixels inside the layer, landed up to a pixel off and blurred differently each frame, at 1x and 2x,
+    // while its words stood still. So the pill does not clip: this plain rectangle just inside the border
+    // does. A rectangular clip is a scissor (no layer), and the text is drawn straight to the window on the
+    // device pixel grid, pixel-identical frame after frame. The clip only matters during the one width
+    // morph, when the new words are wider than the pill for a moment; all content sits inside the border's
+    // straight sides (y 9..25 of 34 with a 9 px radius), so the square corners of the scissor never show.
+    content := Rectangle {
+        x: 1px;
+        y: 1px;
+        width: root.width - 2px;
+        height: root.height - 2px;
+        clip: true;
+        row := HorizontalLayout {
+            x: -1px;
+            y: -1px;
+            width: root.width;
+            height: root.height;
+            padding-left: 10px;
+            padding-right: 13px;
+            spacing: 8px;
+            alignment: start;
             Rectangle {
-                y: (parent.height - 18px) / 2;
                 width: 18px;
-                height: 18px;
-                opacity: root.mode == "run" ? 1 : 0;
-                animate opacity { duration: 180ms; }
-                transform-rotation: root.mode == "run" ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
-                Path {
+                // three glyphs cross-fade with a scale spring
+                Icon {
+                    y: (parent.height - 18px) / 2;
                     width: 18px;
                     height: 18px;
-                    viewbox-width: 24;
-                    viewbox-height: 24;
-                    commands: "M12 3 A9 9 0 1 1 11.99 3";
-                    stroke: root.fg.with-alpha(0.22);
-                    stroke-width: 1.75px;
-                    fill: transparent;
+                    name: "arrow-down-circle";
+                    tint: Theme.ink-2;
+                    opacity: root.mode == "idle" ? 1 : 0;
+                    transform-scale: root.mode == "idle" ? 1 : 0.55;
+                    animate opacity { duration: 180ms; }
+                    animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                 }
-                Path {
+                Rectangle {
+                    y: (parent.height - 18px) / 2;
                     width: 18px;
                     height: 18px;
-                    viewbox-width: 24;
-                    viewbox-height: 24;
-                    commands: "M12 3 A9 9 0 0 1 21 12";
-                    stroke: root.fg;
-                    stroke-width: 1.75px;
-                    stroke-line-cap: round;
-                    fill: transparent;
+                    opacity: root.mode == "run" ? 1 : 0;
+                    animate opacity { duration: 180ms; }
+                    transform-rotation: root.mode == "run" ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
+                    Path {
+                        width: 18px;
+                        height: 18px;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: "M12 3 A9 9 0 1 1 11.99 3";
+                        stroke: root.fg.with-alpha(0.22);
+                        stroke-width: 1.75px;
+                        fill: transparent;
+                    }
+                    Path {
+                        width: 18px;
+                        height: 18px;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: "M12 3 A9 9 0 0 1 21 12";
+                        stroke: root.fg;
+                        stroke-width: 1.75px;
+                        stroke-line-cap: round;
+                        fill: transparent;
+                    }
+                }
+                Icon {
+                    y: (parent.height - 18px) / 2;
+                    width: 18px;
+                    height: 18px;
+                    name: "check-circle";
+                    tint: Theme.good-text;
+                    opacity: root.mode == "done" ? 1 : 0;
+                    transform-scale: root.mode == "done" ? 1 : 0.55;
+                    animate opacity { duration: 180ms; }
+                    animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                 }
             }
-            Icon {
-                y: (parent.height - 18px) / 2;
-                width: 18px;
-                height: 18px;
-                name: "check-circle";
-                tint: Theme.good-text;
-                opacity: root.mode == "done" ? 1 : 0;
-                transform-scale: root.mode == "done" ? 1 : 0.55;
-                animate opacity { duration: 180ms; }
-                animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+            Text {
+                text: root.mode == "run" ? "Updating" : root.mode == "done" ? "Apps updated" : "Update apps";
+                font-size: Type.control;
+                font-weight: 580;
+                color: root.fg;
+                vertical-alignment: center;
             }
-        }
-        Text {
-            text: root.mode == "run" ? "Updating" : root.mode == "done" ? "Apps updated" : "Update apps";
-            font-size: Type.control;
-            font-weight: 580;
-            color: root.fg;
-            vertical-alignment: center;
-        }
-        // The count rolls in a box that keeps ONE width for the whole job - the width of `total`, the only
-        // value the count can reach - with the digits right-aligned against "of". A box that followed the
-        // digits changed the row's preferred width on every poll (and again when the roll settled), which
-        // re-targeted the width animation above and slid the label sideways: the reported jitter.
-        if root.mode == "run": Rectangle {
-            width: count-fit.preferred-width;
-            clip: true;
-            roll-old := Text {
-                width: parent.width;
-                horizontal-alignment: right;
-                y: (parent.height - self.preferred-height) / 2 - root.roll-e * parent.height * 0.85;
-                visible: root.rolling;
-                opacity: 1 - root.roll-e;
-                text: root.prev-count;
+            // The count rolls in a box that keeps ONE width for the whole job - the width of `total`, the only
+            // value the count can reach - with the digits right-aligned against "of". A box that followed the
+            // digits changed the row's preferred width on every poll (and again when the roll settled), which
+            // re-targeted the width animation above and slid the label sideways: the reported jitter.
+            if root.mode == "run": Rectangle {
+                width: count-fit.preferred-width;
+                clip: true;
+                roll-old := Text {
+                    width: parent.width;
+                    horizontal-alignment: right;
+                    y: (parent.height - self.preferred-height) / 2 - root.roll-e * parent.height * 0.85;
+                    visible: root.rolling;
+                    opacity: 1 - root.roll-e;
+                    text: root.prev-count;
+                    font-family: Type.tab;
+                    font-size: Type.control;
+                    font-weight: 650;
+                    color: root.fg;
+                }
+                roll-new := Text {
+                    width: parent.width;
+                    horizontal-alignment: right;
+                    y: (parent.height - self.preferred-height) / 2 + (1 - root.roll-e) * parent.height * 0.85;
+                    opacity: root.roll-e;
+                    text: root.shown-count;
+                    font-family: Type.tab;
+                    font-size: Type.control;
+                    font-weight: 650;
+                    color: root.fg;
+                }
+            }
+            if root.mode == "run": Text {
+                text: "of " + root.data.total;
                 font-family: Type.tab;
                 font-size: Type.control;
-                font-weight: 650;
                 color: root.fg;
+                opacity: 0.8;
+                vertical-alignment: center;
             }
-            roll-new := Text {
-                width: parent.width;
-                horizontal-alignment: right;
-                y: (parent.height - self.preferred-height) / 2 + (1 - root.roll-e) * parent.height * 0.85;
-                opacity: root.roll-e;
-                text: root.shown-count;
-                font-family: Type.tab;
-                font-size: Type.control;
-                font-weight: 650;
-                color: root.fg;
-            }
-        }
-        if root.mode == "run": Text {
-            text: "of " + root.data.total;
-            font-family: Type.tab;
-            font-size: Type.control;
-            color: root.fg;
-            opacity: 0.8;
-            vertical-alignment: center;
         }
     }
     ta := TouchArea {
