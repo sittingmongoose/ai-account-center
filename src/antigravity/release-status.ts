@@ -8,7 +8,14 @@ import {
 } from './production-runtime';
 import { defaultNativeReleaseFile, readNativeRelease, type ReviewedNative } from './native-version';
 import { AntigravityProfileRegistry } from './registry';
+import {
+  describeRuntimeServiceProblem,
+  diagnoseRuntimeService,
+  isRuntimeParserProblem,
+  runtimeServiceProblemDetail,
+} from './runtime-health';
 import { nativeBinaryProblem } from './signin-sandbox';
+import type { AntigravityRuntimeServiceProblem } from './usage-contract';
 
 /**
  * A read-only report of what stands between this computer and Antigravity
@@ -16,7 +23,9 @@ import { nativeBinaryProblem } from './signin-sandbox';
  * switching"): the native CLI pin, both release gates, the runtime
  * installation and adoption, the resident service socket, the saved profiles
  * and the automatic switching setting. It reads metadata only (no credential,
- * no network) and changes nothing.
+ * no network) and changes nothing. When the socket is missing it also runs the
+ * read-only runtime health check (runtime-health.ts), so a service that cannot
+ * start is named instead of reported as merely "not running".
  */
 export interface AntigravityReleaseStatus {
   nativeCli: 'missing' | 'pinned' | 'changed';
@@ -27,6 +36,8 @@ export interface AntigravityReleaseStatus {
   runtimeInstalled: boolean;
   adoption: 'none' | 'adopted' | 'unfinished';
   serviceSocket: boolean;
+  /** Why the service is not running, when the read-only check found a cause. */
+  serviceProblem: AntigravityRuntimeServiceProblem | null;
   profiles: Array<{ id: string; email: string; runtimeVerifiedActive: boolean }>;
   automaticSwitching: {
     enabled: boolean;
@@ -43,6 +54,8 @@ export interface ReleaseStatusDeps {
   releaseFile?: string;
   dashboardGate?: boolean;
   pinMatches?: (binary: string, sha256: string) => boolean;
+  /** Read-only runtime health check; production runs runtime-health.ts. */
+  diagnoseService?: (bundleDirectory: string) => AntigravityRuntimeServiceProblem | null;
 }
 
 function readRelease(file: string): { open: boolean; reviewed: ReviewedNative[] } {
@@ -76,6 +89,15 @@ function nextStep(status: Omit<AntigravityReleaseStatus, 'nextStep'>): string {
     return status.adoption === 'none'
       ? 'Adopt the runtime: python3 -I scripts/antigravity/adopt_runtime.py (step 4).'
       : 'Runtime adoption did not finish; review it or roll it back with adopt_runtime.py --rollback.';
+  if (
+    !status.serviceSocket &&
+    status.serviceProblem &&
+    isRuntimeParserProblem(status.serviceProblem)
+  )
+    // Starting the same bundle again would fail the same way.
+    return `${describeRuntimeServiceProblem(status.serviceProblem)}. Starting the service again will fail; rebuild the runtime bundle: python3 -I scripts/antigravity/rebuild_bundle.py --plan, then --apply. It restarts only the runtime service; the dashboard picks it up without a restart.`;
+  if (!status.serviceSocket && status.serviceProblem)
+    return `${describeRuntimeServiceProblem(status.serviceProblem)}. Read journalctl --user -u ai-account-center-antigravity.service and fix the cause before starting it again.`;
   if (!status.serviceSocket)
     return 'Start ai-account-center-antigravity.service, then restart ccs-dashboard (steps 4 and 5).';
   if (!status.automaticSwitching?.enabled)
@@ -107,11 +129,21 @@ export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): Antigravi
       : 'changed';
   const installed = readInstalledAntigravityRuntime(ccsDir, home);
   let serviceSocket = false;
+  let serviceProblem: AntigravityRuntimeServiceProblem | null = null;
   if (installed) {
     try {
       serviceSocket = fs.lstatSync(installed.socketPath).isSocket();
     } catch {
       serviceSocket = false;
+    }
+    if (!serviceSocket) {
+      try {
+        serviceProblem = (deps.diagnoseService ?? diagnoseRuntimeService)(
+          installed.bundleDirectory
+        );
+      } catch {
+        serviceProblem = null;
+      }
     }
   }
   let profiles: AntigravityReleaseStatus['profiles'] = [];
@@ -148,6 +180,7 @@ export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): Antigravi
     runtimeInstalled: installed !== null,
     adoption: readAdoption(ccsDir),
     serviceSocket,
+    serviceProblem,
     profiles,
     automaticSwitching,
   };
@@ -170,7 +203,13 @@ export function formatAntigravityReleaseStatus(status: AntigravityReleaseStatus)
     `  Runtime gate:        ${gate(status.runtimeGateOpen)}`,
     `  Runtime installed:   ${yes(status.runtimeInstalled)}`,
     `  Runtime adopted:     ${status.adoption === 'none' ? 'no' : status.adoption === 'adopted' ? 'yes' : 'unfinished'}`,
-    `  Runtime service:     ${status.serviceSocket ? 'socket present' : 'not running'}`,
+    `  Runtime service:     ${
+      status.serviceSocket
+        ? 'socket present'
+        : status.serviceProblem
+          ? `failed: ${runtimeServiceProblemDetail(status.serviceProblem)}`
+          : 'not running'
+    }`,
     `  Saved profiles:      ${
       status.profiles.length
         ? status.profiles

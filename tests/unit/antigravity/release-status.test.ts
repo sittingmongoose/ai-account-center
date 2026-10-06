@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
+import net from 'net';
 import os from 'os';
 import path from 'path';
 import {
@@ -13,6 +14,7 @@ import {
 } from '../../../src/antigravity/release-status';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import { AntigravityAutoSwitchFileStore } from '../../../src/antigravity/auto-switch/store';
+import type { AntigravityRuntimeServiceProblem } from '../../../src/antigravity/usage-contract';
 
 const PIN = 'a759ce7c7a235d9b6c281a25ead97cbbf2e92314a3ffd224e2f9144f3fae7a86';
 let root: string;
@@ -87,8 +89,28 @@ function read(extra: Partial<ReleaseStatusDeps> = {}) {
     releaseFile,
     dashboardGate: false,
     pinMatches: () => true,
+    // Hermetic: no interpreter or systemctl is ever spawned by these fixtures.
+    diagnoseService: () => null,
     ...extra,
   });
+}
+
+const MISSING_PYTE: AntigravityRuntimeServiceProblem = {
+  reason: 'missing-python-module',
+  module: 'pyte',
+  python: '3.14',
+  builtFor: '3.13',
+  exitStatus: null,
+};
+
+async function adoptedWithoutService(): Promise<string> {
+  installAgy();
+  await save('gmail');
+  await save('party');
+  writeRelease(true);
+  const state = installRuntime();
+  fs.writeFileSync(path.join(state, 'runtime-adoption.json'), '{"phase":"adopted"}');
+  return state;
 }
 
 function installRuntime(): string {
@@ -157,6 +179,94 @@ describe('Antigravity switching readiness', () => {
     const store = new AntigravityAutoSwitchFileStore(state);
     store.write({ ...store.read(), settings: { ...store.read().settings, enabled: true } });
     expect(read({ dashboardGate: true }).automaticSwitching?.enabled).toBe(true);
+  });
+
+  it('names a runtime service that cannot load its parser and never advises starting it', async () => {
+    await adoptedWithoutService();
+    const seen: string[] = [];
+    const status = read({
+      dashboardGate: true,
+      diagnoseService: (bundle) => {
+        seen.push(bundle);
+        return MISSING_PYTE;
+      },
+    });
+    expect(seen).toEqual([
+      path.join(home, '.local/share/ai-account-center/antigravity-runtime/bundles', 'b'.repeat(64)),
+    ]);
+    expect(status.serviceSocket).toBe(false);
+    expect(status.serviceProblem).toEqual(MISSING_PYTE);
+    expect(status.nextStep).toStartWith('Runtime service failed: missing Python module pyte');
+    expect(status.nextStep).toContain('rebuild_bundle.py --plan, then --apply');
+    expect(status.nextStep).toContain('Starting the service again will fail');
+    expect(status.nextStep).toContain('without a restart');
+    expect(status.nextStep).not.toContain('restart ccs-dashboard');
+    expect(status.nextStep).not.toContain('Start ai-account-center-antigravity.service');
+    const text = formatAntigravityReleaseStatus(status).join('\n');
+    expect(text).toContain(
+      'Runtime service:     failed: missing Python module pyte (system Python is 3.14; the runtime bundle was built for 3.13)'
+    );
+    expect(text).not.toContain('not running');
+  });
+
+  it('names a failed unit without a parser cause and points at its journal', async () => {
+    await adoptedWithoutService();
+    const status = read({
+      dashboardGate: true,
+      diagnoseService: () => ({
+        reason: 'service-failed',
+        module: null,
+        python: null,
+        builtFor: null,
+        exitStatus: 1,
+      }),
+    });
+    expect(status.nextStep).toStartWith('Runtime service failed: exit status 1.');
+    expect(status.nextStep).toContain('journalctl --user -u ai-account-center-antigravity.service');
+    expect(status.nextStep).not.toContain('Start ai-account-center-antigravity.service');
+    expect(formatAntigravityReleaseStatus(status).join('\n')).toContain(
+      'Runtime service:     failed: exit status 1'
+    );
+  });
+
+  it('keeps the start advice when nothing is known and checks nothing while the socket exists', async () => {
+    const state = await adoptedWithoutService();
+    const unknown = read({ dashboardGate: true });
+    expect(unknown.serviceProblem).toBeNull();
+    expect(unknown.nextStep).toContain('Start ai-account-center-antigravity.service');
+    expect(formatAntigravityReleaseStatus(unknown).join('\n')).toContain(
+      'Runtime service:     not running'
+    );
+    const throwing = read({
+      dashboardGate: true,
+      diagnoseService: () => {
+        throw new Error('synthetic probe failure');
+      },
+    });
+    expect(throwing.serviceProblem).toBeNull();
+    const runtime = path.join(ccsDir, 'antigravity-runtime');
+    fs.mkdirSync(runtime, { mode: 0o700 });
+    const server = net.createServer();
+    await new Promise<void>((resolve) =>
+      server.listen(path.join(runtime, 'control.sock'), resolve)
+    );
+    try {
+      let probes = 0;
+      const running = read({
+        dashboardGate: true,
+        diagnoseService: () => {
+          probes++;
+          return MISSING_PYTE;
+        },
+      });
+      expect(probes).toBe(0);
+      expect(running.serviceSocket).toBe(true);
+      expect(running.serviceProblem).toBeNull();
+      expect(running.nextStep).toContain('Manual switching can be tested');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    expect(fs.existsSync(state)).toBe(true);
   });
 
   it('pins any reviewed build and names the reviewed set', () => {

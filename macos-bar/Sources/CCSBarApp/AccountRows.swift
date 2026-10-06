@@ -277,21 +277,28 @@ struct SectionHeader: View {
   var body: some View {
     withPalette { palette in
       let multiAntigravity = layout.provider == "antigravity" && accounts.count > 1
+      // Codex shows its auto-switch here, above its accounts, whenever the dashboard reports it —
+      // the same condition the footer cluster used, so no connected user loses the toggle.
+      let codexAuto = layout.provider == "codex" && model.dashboard?.codexAutoSwitch != nil
+      let headerAuto = multiAntigravity || codexAuto
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: layout.gap) {
           HStack(spacing: 8) {
             ProviderMark(provider: layout.provider, size: 16).frame(width: TrayMetrics.markColumn)
             title(palette)
           }
-          .frame(width: multiAntigravity ? nil : TrayMetrics.markColumn + layout.gap + layout.identity, alignment: .leading)
+          .frame(width: headerAuto ? nil : TrayMetrics.markColumn + layout.gap + layout.identity, alignment: .leading)
           if multiAntigravity {
             Spacer(minLength: 8)
             AntigravityAutoControls(model: model)
+          } else if codexAuto {
+            Spacer(minLength: 8)
+            CodexAutoControls(model: model)
           } else {
             captions(palette)
           }
         }
-        if multiAntigravity {
+        if headerAuto {
           HStack(spacing: layout.gap) {
             Color.clear.frame(width: TrayMetrics.markColumn + layout.gap + layout.identity, height: 1)
             captions(palette)
@@ -339,6 +346,30 @@ struct SectionHeader: View {
   }
 }
 
+/// Why Codex automatic switching is stuck, in plain words, above the Codex accounts.
+/// Visible only for blocked outcomes; healthy switching adds no line and changes no layout.
+/// The money case (paid credits burning) gets the warn tint; other blocks stay a quiet note.
+struct CodexAutoStatusLine: View {
+  @ObservedObject var model: AccountsViewModel
+
+  var body: some View {
+    withPalette { palette in
+      if let text = AccountFormatting.codexAutoStatusText(
+        status: model.dashboard?.codexAutoSwitch, accounts: model.dashboard?.accounts ?? [])
+      {
+        Text(verbatim: text)
+          .font(.system(size: 12))
+          .foregroundStyle(model.dashboard?.codexAutoSwitch.usingCredits == true ? palette.warnText : palette.label2)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.leading, TrayMetrics.rowLeading)
+          .padding(.trailing, TrayMetrics.rowTrailing)
+          .padding(.top, 2)
+          .accessibilityIdentifier("codex-auto-status")
+      }
+    }
+  }
+}
+
 /// Antigravity's own auto-switch (thresholdUsedPercent, % used), shown once two accounts exist.
 struct AntigravityAutoControls: View {
   @ObservedObject var model: AccountsViewModel
@@ -368,6 +399,58 @@ struct AntigravityAutoControls: View {
       }
       .padding(.leading, 10).padding(.trailing, 4).frame(height: 30)
       .glassControl()
+      .alignmentProbe("antigravity-auto|header")
+    }
+  }
+}
+
+/// Codex's auto-switch in the Codex section header, above its accounts: the footer cluster moved up
+/// and restyled exactly like Antigravity's — same toggle, threshold menu and explainer, same writes,
+/// hover tags and disabled states, only the placement and the pill styling changed.
+struct CodexAutoControls: View {
+  @ObservedObject var model: AccountsViewModel
+  @State private var showAutoInfo = false
+
+  var body: some View {
+    withPalette { palette in
+      let status = model.dashboard?.codexAutoSwitch
+      HStack(spacing: 6) {
+        Toggle("Auto-switch", isOn: Binding(
+          get: { status?.enabled == true },
+          set: { model.toggleAutomaticSwitching($0) }
+        ))
+        .toggleStyle(.switch).controlSize(.mini).tint(palette.accent)
+        .font(.system(size: 12.5))
+        .disabled(status == nil || model.busyAction != nil || model.isRefreshing)
+        .background(RowActionExclusion())
+        .hoverHelp("Switch Codex accounts on Ubuntu automatically when the active one reaches the threshold",
+          id: "codex-auto-switch")
+        .alignmentProbe("codex-auto|toggle")
+        ThresholdMenu(value: 100 - Int(status?.thresholdPercent ?? 5),
+          enabled: status != nil && model.busyAction == nil && !model.isRefreshing,
+          id: "codex-auto-threshold") { model.setAutomaticThreshold(usedPercent: $0) }
+          .alignmentProbe("codex-auto|threshold")
+        let info = { showAutoInfo = true }
+        Button(action: info) {
+          Image(systemName: "info.circle").font(.system(size: 14)).foregroundStyle(palette.label2)
+            .frame(width: 28, height: 28).contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .hoverHelp("How Codex auto-switch works", id: "codex-auto-info", action: info)
+        .dismissedByPanel($showAutoInfo)
+        .popover(isPresented: $showAutoInfo, arrowEdge: .top) {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Codex automatic switching").font(.system(size: 13, weight: .semibold))
+            Text(status?.message ?? "").font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true)
+            Text("Switches at \(TrayFormat.number(100 - (status?.thresholdPercent ?? 5)))% used (\(TrayFormat.number(status?.thresholdPercent ?? 5))% left), checking every \(status?.pollIntervalSeconds ?? 60) seconds. Switching waits until Codex is idle. Claude accounts stay manual. The notch on each Codex meter marks the threshold.")
+              .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+          }
+          .padding(16).frame(width: 340)
+        }
+      }
+      .padding(.leading, 10).padding(.trailing, 4).frame(height: 30)
+      .glassControl()
+      .alignmentProbe("codex-auto|header")
     }
   }
 }

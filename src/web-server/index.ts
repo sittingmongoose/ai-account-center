@@ -60,6 +60,7 @@ import {
   startAccountLifecycleMaintenance,
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
+import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 
 export interface ServerOptions {
   port: number;
@@ -276,6 +277,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   };
   server.on('upgrade', onUpgrade);
   let httpsServer: https.Server | null = null;
+  let stopCgroupForeignCheck: (() => void) | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   // Account changes and sign-in jobs reach /ws clients as hints. A job goes only
@@ -295,6 +297,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     codexAutoSwitch.stop();
     stopAntigravityRuntime();
     stopAccountAnalyticsSampling();
+    stopCgroupForeignCheck?.();
+    stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
     shutdownUsageAggregator();
   };
@@ -348,6 +352,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       }
       codexAutoSwitch.start();
       startAccountAnalyticsSampling();
+      // Warn when launched apps leaked into the dashboard cgroup (read-only).
+      stopCgroupForeignCheck = startCgroupForeignCheck();
       // Staging folders of sign-ins from before a restart, and trash past 30 days.
       startAccountLifecycleMaintenance();
       // Usage cache loads on-demand when Analytics page is visited

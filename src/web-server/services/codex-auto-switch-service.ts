@@ -15,8 +15,11 @@ import {
 } from '../../codex-auth/codex-auth-dashboard-service';
 import type { CodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
 import { getCcsDir, runWithScopedConfigDir } from '../../utils/config-manager';
+import { createLogger } from '../../services/logging';
 import { getCodexProfileQuotaRows } from '../usage/native-quota-collector';
 import type { BarSummaryRow } from '../routes/bar-routes';
+
+const logger = createLogger('codex-auto-switch');
 
 const DEFAULT_THRESHOLD_PERCENT = 5;
 const POLL_MS = 60_000;
@@ -46,6 +49,10 @@ export interface CodexAutoSwitchStatus {
   activationInProgress: boolean;
   lastCheckedAt?: string;
   lastSwitchedAt?: string;
+  /** Profile the monitor chose but could not switch to yet. Present only for waiting_idle. */
+  candidate?: string;
+  /** True when the blocked message warns about paid credits being spent. */
+  usingCredits?: boolean;
 }
 
 interface AutoSwitchConfig {
@@ -90,6 +97,13 @@ export interface CodexAutoSwitchDeps {
   /** Private fingerprints are only compared in memory, never returned to the browser. */
   getAuthSnapshot?: (names: string[]) => CodexAutoSwitchAuthSnapshot;
   now?: () => number;
+  /** Outcome-trail sink; profile names only, never tokens or fingerprints. Tests inject a recorder. */
+  log?: (
+    level: 'info' | 'warn',
+    event: string,
+    message: string,
+    context: Record<string, unknown>
+  ) => void;
 }
 
 /** Pure private parser seam: quota's workspace header must match the decoded saved login. */
@@ -219,15 +233,19 @@ function writeConfigFile(ccsDir: string, config: AutoSwitchConfig): void {
   }
 }
 
+/** Why a quota row cannot decide a switch. Drives the plain-words message, never shown raw. */
+type RemainingRejection = 'missing' | 'not_network' | 'stale' | 'reset_passed' | 'no_windows';
+
+type RemainingAssessment = { remaining: number } | { reason: RemainingRejection };
+
 /** Network provenance and account identity are mandatory; local session logs cannot decide. */
-function minimumRemaining(
+function assessRemaining(
   row: BarSummaryRow | undefined,
   profile: string,
   now: number
-): number | null {
+): RemainingAssessment {
+  if (!row || row.profile !== profile) return { reason: 'missing' };
   if (
-    !row ||
-    row.profile !== profile ||
     row.surface !== 'ccsx' ||
     row.provider !== 'codex' ||
     row.is_subscription !== true ||
@@ -235,14 +253,14 @@ function minimumRemaining(
     row.quotaStatus !== 'ok' ||
     row.needsReauth
   )
-    return null;
+    return { reason: 'not_network' };
   const fetchedAt = Date.parse(row.fetchedAt);
   if (
     !Number.isFinite(fetchedAt) ||
     now - fetchedAt > MAX_QUOTA_AGE_MS ||
     fetchedAt - now > 30_000
   ) {
-    return null;
+    return { reason: 'stale' };
   }
   const windows = (row.quotaWindows ?? []).filter(
     (window) => window.key === 'five_hour' || window.key === 'seven_day'
@@ -251,15 +269,46 @@ function minimumRemaining(
     windows.length === 0 ||
     windows.some((window) => !Number.isFinite(window.usedPercent) || window.usedPercent < 0)
   )
-    return null;
+    return { reason: 'no_windows' };
   if (
     windows.some((window) => {
       const resetAt = window.resetAt ? Date.parse(window.resetAt) : NaN;
       return Number.isFinite(resetAt) && resetAt <= now && fetchedAt < resetAt;
     })
   )
-    return null;
-  return Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPercent)));
+    return { reason: 'reset_passed' };
+  return {
+    remaining: Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPercent))),
+  };
+}
+
+function remainingOrNull(assessment: RemainingAssessment): number | null {
+  return 'remaining' in assessment ? assessment.remaining : null;
+}
+
+/** Paid credits the active account can draw on; unlimited carries no amount. */
+interface ActiveCredits {
+  balance: number | null;
+  unlimited: boolean;
+}
+
+/**
+ * Paid credits the active account is drawing on. Claimed only when the same
+ * fresh network row that proved plan exhaustion carries an enabled credits
+ * balance; unknown, disabled or empty means no claim.
+ */
+function creditsInUse(row: BarSummaryRow | undefined): ActiveCredits | null {
+  const credits = row?.balanceWindows?.find((window) => window.key === 'credits_balance');
+  if (!credits || credits.enabled !== true) return null;
+  if (credits.unlimited === true) return { balance: null, unlimited: true };
+  const balance = credits.remaining ?? null;
+  if (balance !== null && (!Number.isFinite(balance) || balance <= 0)) return null;
+  return { balance, unlimited: false };
+}
+
+function creditsSuffix(credits: ActiveCredits): string {
+  if (credits.balance === null) return '';
+  return ` (${String(Math.round(credits.balance * 100) / 100)} left)`;
 }
 
 /** One monitor per CCS scope. Activation always uses the existing busy-aware transaction. */
@@ -275,6 +324,14 @@ export class CodexAutoSwitchService {
   private lastCheckedAt?: string;
   private lastSwitchedAt?: string;
   private retryAfter = 0;
+  private blockedCandidate?: string;
+  private blockedDetail?: string;
+  private blockedUsingCredits?: boolean;
+  private lastLoggedOutcome?: CodexAutoSwitchOutcome;
+  /** This cycle's vetted decision, so a busy activation can report what it blocked. */
+  private lastActive?: string;
+  private lastCandidate?: string;
+  private lastCredits?: ActiveCredits | null;
 
   constructor(private readonly deps: CodexAutoSwitchDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
@@ -302,17 +359,39 @@ export class CodexAutoSwitchService {
     } catch {
       outcome = 'error';
     }
+    const detail = outcome === this.outcome ? this.blockedDetail : undefined;
     return {
       enabled,
       thresholdPercent,
       thresholdUsedPercent: 100 - thresholdPercent,
       pollIntervalSeconds: POLL_MS / 1000,
       outcome,
-      message: messages[outcome],
+      message: detail ?? messages[outcome],
       activationInProgress: this.activationInProgress,
       ...(this.lastCheckedAt ? { lastCheckedAt: this.lastCheckedAt } : {}),
       ...(this.lastSwitchedAt ? { lastSwitchedAt: this.lastSwitchedAt } : {}),
+      ...(outcome === 'waiting_idle' && this.blockedCandidate
+        ? { candidate: this.blockedCandidate }
+        : {}),
+      ...(outcome === this.outcome && this.blockedUsingCredits ? { usingCredits: true } : {}),
     };
+  }
+
+  /**
+   * Commit a terminal state atomically. The previous detail, candidate and
+   * credits flag stay visible until a branch replaces them, so slow quota
+   * fetches never blank the reason mid-cycle.
+   */
+  private setBlocked(
+    outcome: CodexAutoSwitchOutcome,
+    detail?: string,
+    candidate?: string,
+    burning?: ActiveCredits | null
+  ): void {
+    this.outcome = outcome;
+    this.blockedDetail = detail;
+    this.blockedCandidate = candidate;
+    this.blockedUsingCredits = burning ? true : undefined;
   }
 
   setEnabled(enabled: boolean): CodexAutoSwitchStatus {
@@ -327,7 +406,7 @@ export class CodexAutoSwitchService {
     else writeConfigFile(this.ccsDir, config);
     this.generation++;
     this.retryAfter = 0;
-    if (!this.activationInProgress) this.outcome = config.enabled ? 'scheduled' : 'disabled';
+    if (!this.activationInProgress) this.setBlocked(config.enabled ? 'scheduled' : 'disabled');
     if (this.running) this.schedule(config.enabled ? 1000 : POLL_MS);
     return this.getStatus();
   }
@@ -374,13 +453,40 @@ export class CodexAutoSwitchService {
     return getCodexAuthProfilesSummary();
   }
 
+  private logConclusion(context: Record<string, unknown>): void {
+    const changed = this.outcome !== this.lastLoggedOutcome;
+    if (!changed && this.outcome !== 'switched' && this.outcome !== 'error') return;
+    this.lastLoggedOutcome = this.outcome;
+    const message = this.blockedDetail ?? messages[this.outcome];
+    const warn = this.outcome === 'error' || context.creditsBurning === true;
+    if (this.deps.log) {
+      this.deps.log(warn ? 'warn' : 'info', 'codex.auto_switch', message, {
+        outcome: this.outcome,
+        ...context,
+      });
+      return;
+    }
+    try {
+      if (warn) logger.warn('codex.auto_switch', message, { outcome: this.outcome, ...context });
+      else logger.info('codex.auto_switch', message, { outcome: this.outcome, ...context });
+    } catch {
+      // The outcome trail must never break the monitor.
+    }
+  }
+
   private async check(): Promise<void> {
     const now = this.deps.now ?? Date.now;
     const generation = this.generation;
+    // Decision scratch only; the status-visible state (outcome/detail/candidate)
+    // is committed atomically per terminal branch via setBlocked, never blanked.
+    this.lastActive = undefined;
+    this.lastCandidate = undefined;
+    this.lastCredits = undefined;
     try {
       const config = this.readConfig();
       if (this.stopped || !config.enabled) {
-        this.outcome = 'disabled';
+        this.setBlocked('disabled');
+        this.logConclusion({});
         return;
       }
       if (now() < this.retryAfter) return;
@@ -390,7 +496,11 @@ export class CodexAutoSwitchService {
       const valid = initial.profiles.filter((profile) => profile.authValid);
       const activeProfile = valid.find((profile) => profile.name === active);
       if (!active || !activeProfile) {
-        this.outcome = 'no_quota';
+        this.setBlocked(
+          'no_quota',
+          'The shared Codex login does not match any saved profile, so automatic switching has no account to watch.'
+        );
+        this.logConclusion({ cause: 'no_active_profile' });
         return;
       }
       const names = valid.map((profile) => profile.name);
@@ -402,34 +512,64 @@ export class CodexAutoSwitchService {
         !snapshot.live.accountId ||
         snapshot.live.accountId !== activeProfile.accountId
       ) {
-        this.outcome = 'no_quota';
+        this.setBlocked(
+          'no_quota',
+          'The shared Codex login changed outside the dashboard. Automatic switching is paused until it matches a saved profile again.'
+        );
+        this.logConclusion({ active, cause: 'live_login_mismatch' });
         return;
       }
       const rows = await (this.deps.getRows ?? getCodexProfileQuotaRows)(names);
       const byProfile = new Map(rows.map((row) => [row.profile, row]));
-      const activeRemaining = minimumRemaining(byProfile.get(active), active, now());
-      if (activeRemaining === null) {
-        this.outcome = 'no_quota';
+      const assessed = assessRemaining(byProfile.get(active), active, now());
+      if (!('remaining' in assessed)) {
+        this.setBlocked(
+          'no_quota',
+          assessed.reason === 'stale'
+            ? "The active Codex account's usage reading is out of date. Waiting for a new reading before deciding."
+            : assessed.reason === 'reset_passed'
+              ? "The active Codex account's usage window already reset. Waiting for a new reading before deciding."
+              : messages.no_quota
+        );
+        this.logConclusion({ active, cause: `no_usable_row:${assessed.reason}` });
         return;
       }
-      if (activeRemaining > config.thresholdPercent) {
-        this.outcome = 'healthy';
+      if (assessed.remaining > config.thresholdPercent) {
+        this.setBlocked('healthy');
+        this.logConclusion({ active, remaining: assessed.remaining });
         return;
       }
+      let freshnessBlocked = false;
       const candidates = valid
         .filter((profile) => profile.name !== active)
-        .map((profile) => ({
-          profile,
-          remaining: minimumRemaining(byProfile.get(profile.name), profile.name, now()),
-        }))
+        .map((profile) => {
+          const assessment = assessRemaining(byProfile.get(profile.name), profile.name, now());
+          if (!('remaining' in assessment)) freshnessBlocked = true;
+          return { profile, remaining: remainingOrNull(assessment) };
+        })
         .filter(
           (candidate): candidate is typeof candidate & { remaining: number } =>
             candidate.remaining !== null && candidate.remaining > config.thresholdPercent
         )
         .sort((a, b) => b.remaining - a.remaining || (a.profile.name < b.profile.name ? -1 : 1));
       const candidate = candidates[0];
+      // Credits only draw once every plan window is at 0, not merely past the
+      // switch threshold, so the burning claim needs remaining <= 0, not <= threshold.
+      const burning = assessed.remaining <= 0 ? creditsInUse(byProfile.get(active)) : null;
       if (!candidate) {
-        this.outcome = 'no_candidate';
+        // Credits are the last reserve: when no plan is left anywhere, the
+        // active account rightly stays. Running work is unproven on this path
+        // (no activation was attempted), so the spend stays conditional.
+        const detail = burning
+          ? `${freshnessBlocked ? 'No other account has a fresh reading with plan usage left.' : 'No other account has plan usage left.'} ${burning.unlimited ? 'Any new Codex work on the active account would draw on its unlimited extra usage.' : `Any new Codex work on the active account would draw on its paid credits${creditsSuffix(burning)}.`}`
+          : undefined;
+        this.setBlocked('no_candidate', detail, undefined, burning);
+        this.logConclusion({
+          active,
+          remaining: assessed.remaining,
+          cause: 'no_healthy_other',
+          ...(burning ? { creditsBurning: true, creditsBalance: burning.balance } : {}),
+        });
         return;
       }
       const current = await this.summary();
@@ -448,10 +588,15 @@ export class CodexAutoSwitchService {
         !target?.authValid ||
         target.email !== candidate.profile.email ||
         target.accountId !== candidate.profile.accountId ||
-        minimumRemaining(byProfile.get(active), active, now()) === null ||
-        minimumRemaining(byProfile.get(target.name), target.name, now()) === null
+        remainingOrNull(assessRemaining(byProfile.get(active), active, now())) === null ||
+        remainingOrNull(assessRemaining(byProfile.get(target.name), target.name, now())) === null
       ) {
-        this.outcome = 'scheduled';
+        this.setBlocked('scheduled');
+        this.logConclusion({
+          active,
+          candidate: candidate.profile.name,
+          cause: 'decision_changed_before_activation',
+        });
         return;
       }
       // No awaits between the last persisted enable check and starting activation.
@@ -463,22 +608,48 @@ export class CodexAutoSwitchService {
         !finalConfig.enabled ||
         finalConfig.thresholdPercent !== config.thresholdPercent
       ) {
-        this.outcome = finalConfig.enabled && !this.stopped ? 'scheduled' : 'disabled';
+        this.setBlocked(finalConfig.enabled && !this.stopped ? 'scheduled' : 'disabled');
+        this.logConclusion({ active, cause: 'settings_changed_before_activation' });
         return;
       }
+      this.lastActive = active;
+      this.lastCandidate = target.name;
+      this.lastCredits = burning;
       this.activationInProgress = true;
-      this.outcome = 'switching';
+      this.setBlocked('switching');
       try {
         await (this.deps.activate ?? activateCodexProfile)(target.name);
         this.lastSwitchedAt = new Date(now()).toISOString();
-        this.outcome = 'switched';
+        this.setBlocked('switched');
+        this.logConclusion({ active, candidate: target.name });
       } finally {
         this.activationInProgress = false;
       }
     } catch (error) {
-      this.outcome =
-        error instanceof CodexActivationError && error.code === 'busy' ? 'waiting_idle' : 'error';
-      if (this.outcome === 'error') this.retryAfter = now() + ERROR_BACKOFF_MS;
+      // Only the activation call above can throw CodexActivationError('busy'),
+      // so lastActive/lastCandidate/lastCredits are always this cycle's.
+      if (error instanceof CodexActivationError && error.code === 'busy') {
+        const burning = this.lastCredits ?? null;
+        const detail = burning
+          ? burning.unlimited
+            ? `${messages.waiting_idle} The active account has used up its plan usage, so this work is drawing on its unlimited extra usage.`
+            : `${messages.waiting_idle} The active account has used up its plan usage, so this work is drawing on its paid credits${creditsSuffix(burning)}.`
+          : undefined;
+        this.setBlocked('waiting_idle', detail, this.lastCandidate, burning);
+        this.logConclusion({
+          ...(this.lastActive ? { active: this.lastActive } : {}),
+          ...(this.lastCandidate ? { candidate: this.lastCandidate } : {}),
+          ...(burning ? { creditsBurning: true, creditsBalance: burning.balance } : {}),
+          cause: 'activation_busy',
+        });
+      } else {
+        this.setBlocked('error');
+        this.retryAfter = now() + ERROR_BACKOFF_MS;
+        this.logConclusion({
+          cause: 'activation_error',
+          ...(error instanceof CodexActivationError ? { code: error.code } : {}),
+        });
+      }
     }
   }
 }

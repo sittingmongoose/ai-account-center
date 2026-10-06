@@ -10,9 +10,11 @@ public struct ProviderGroup: Identifiable, Sendable {
   public let statusLabel: String
 }
 
-extension AccountDashboard {
-  public var providerGroups: [ProviderGroup] {
-    let shown = visibleAccounts
+/// Builds `AccountDashboard.providerGroups` once at decode time (N4): as a computed property it reran
+/// the grouping, the representative sort and its per-account ISO-8601 parses on every access,
+/// including every refresh tick and every panel body evaluation.
+enum ProviderGroupBuilder {
+  static func build(shown: [DashboardAccount]) -> [ProviderGroup] {
     let grouped = Dictionary(grouping: shown, by: \.provider)
     // Today's tray order: the three account sections, then the other providers.
     let preferredOrder = [

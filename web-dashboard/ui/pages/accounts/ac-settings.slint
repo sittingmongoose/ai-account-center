@@ -283,7 +283,7 @@ component PolicyRow inherits VerticalLayout {
         Text {
             text: root.policy.sub;
             font-size: Type.small;
-            color: Theme.ink-3;
+            color: root.policy.warn ? Theme.warn-text : Theme.ink-3;
             wrap: word-wrap;
         }
     }

@@ -5,13 +5,36 @@ import CCSBarCore
 /// Shared state between the panel window and its SwiftUI content.
 @MainActor
 final class PanelState: ObservableObject {
-  @Published var settingsOpen = false
+  @Published var settingsOpen = false {
+    didSet {
+      coveredHover.set(settingsOpen)
+      settingsHover.set(!settingsOpen)
+    }
+  }
+  /// Hover-tag gates: the whole panel (shut while it closes), the content Settings covers (the account list or
+  /// the sign-in screen), and Settings itself (shut from the moment it starts to close).
+  let panelHover = HoverGate()
+  let coveredHover = HoverGate()
+  let settingsHover = HoverGate(suppressed: true)
+  /// The account list and the sign-in screen replace each other: the one leaving is shut from the moment the
+  /// swap starts, so a row tag cannot present over the incoming sign-in screen during the fade (or the reverse).
+  let listHover = HoverGate()
+  let signInHover = HoverGate(suppressed: true)
+
+  func setNeedsConnection(_ needs: Bool) {
+    listHover.set(needs)
+    signInHover.set(!needs)
+  }
   /// Bumped on every open, so the content is rebuilt and replays its open motion.
   @Published var openGeneration = 0
   @Published var desiredHeight: CGFloat = 0
   @Published var shortcutProblem: String?
   /// Bumped to close every popover the panel shows (Escape closes Details before anything else).
   @Published var popoverDismissal = 0
+  /// False between the panel's close and its next open: `PanelRootView` then holds no content, so a
+  /// closed tray evaluates and lays out none of the panel's view tree on the refresh ticks (N4).
+  /// True by default so direct renders (previews, checks) show their content immediately.
+  @Published var contentInstalled = true
   var scrollToAbout = false
   var open = OpenContext()
   var panelWidth: CGFloat = 760
@@ -24,6 +47,8 @@ final class PanelState: ObservableObject {
 
   func setSettings(_ open: Bool) {
     guard settingsOpen != open else { return }
+    // A Details, packs or info popover anchored in the list closes when Settings covers its anchor.
+    if open { popoverDismissal += 1 }
     if reduceMotion {
       withAnimation(.easeInOut(duration: 0.15)) { settingsOpen = open }
     } else {
@@ -55,14 +80,24 @@ struct PanelRootView: View {
   @ObservedObject var prefs: TrayPreferences
   @ObservedObject var state: PanelState
   var body: some View {
-    AccountsMenuView(model: model, prefs: prefs, state: state)
-      .id(state.openGeneration)
-      .background { if state.staticRender { PreviewGlass() } }
-      .environment(\.trayStaticRender, state.staticRender)
-      .environment(\.trayPopoverDismissal, state.popoverDismissal)
-      .modifier(PreviewActiveControls(enabled: state.staticRender))
-      .modifier(PreviewAccessibility(reduceTransparency: state.previewReduceTransparency,
-        increaseContrast: state.previewIncreaseContrast))
+    Group {
+      // A closed panel holds no content: the tree is torn down after the close and built again on
+      // the open, which already rebuilt it through `.id(openGeneration)`, so the open looks exactly
+      // as before and a closed tray stays out of the view graph (N4).
+      if state.contentInstalled {
+        AccountsMenuView(model: model, prefs: prefs, state: state)
+          .id(state.openGeneration)
+          .background { if state.staticRender { PreviewGlass() } }
+      }
+    }
+    // The hover-occlusion gate stays on the Group, outside the `if`, so hidden rows keep their
+    // hover tags suppressed while Settings is open (hover fix).
+    .trayHoverLayer(state.panelHover)
+    .environment(\.trayStaticRender, state.staticRender)
+    .environment(\.trayPopoverDismissal, state.popoverDismissal)
+    .modifier(PreviewActiveControls(enabled: state.staticRender))
+    .modifier(PreviewAccessibility(reduceTransparency: state.previewReduceTransparency,
+      increaseContrast: state.previewIncreaseContrast))
   }
 }
 
@@ -128,7 +163,6 @@ struct AccountsMenuView: View {
   @Namespace private var glass
   @Namespace private var platters
   @State private var heights: (header: CGFloat, list: CGFloat, overlay: CGFloat, footer: CGFloat) = (0, 0, 0, 0)
-  @State private var showAutoInfo = false
 
   /// After a sign-in hand-off the list uses the first-open entrance (every meter sweeps from 0); otherwise the
   /// panel's own open.
@@ -146,6 +180,8 @@ struct AccountsMenuView: View {
             // The sign-in screen replaces the list; the header and the footer stay. It leaves with a fade and an
             // 8 pt lift while the list loads in underneath.
             SignInView(model: model.signIn)
+              .trayHoverLayer(state.coveredHover)
+              .trayHoverLayer(state.signInHover)
               .offset(x: state.settingsOpen ? -28 : 0)
               .opacity(state.settingsOpen ? 0 : 1)
               .allowsHitTesting(!state.settingsOpen)
@@ -159,12 +195,15 @@ struct AccountsMenuView: View {
                 .background(GeometryReader { Color.clear.preference(key: ListHeightKey.self, value: $0.size.height) })
             }
             .scrollEdgeEffectStyle(.soft, for: .bottom)
+            .trayHoverLayer(state.coveredHover)
+            .trayHoverLayer(state.listHover)
             .offset(x: state.settingsOpen ? -24 : 0)
             .opacity(state.settingsOpen ? 0 : 1)
             .allowsHitTesting(!state.settingsOpen)
           }
           if state.settingsOpen {
             SettingsPanelView(model: model, prefs: prefs, state: state, glass: glass)
+              .trayHoverLayer(state.settingsHover)
               .transition(state.reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
               .zIndex(1)
           }
@@ -180,6 +219,7 @@ struct AccountsMenuView: View {
       .foregroundStyle(palette.label)
       .containerShape(RoundedRectangle(cornerRadius: TrayMetrics.panelRadius, style: .continuous))
     }
+    .onChange(of: model.needsConnection, initial: true) { _, needs in state.setNeedsConnection(needs) }
     .onPreferenceChange(HeaderHeightKey.self) { heights.header = $0; report() }
     .onPreferenceChange(ListHeightKey.self) { heights.list = $0; report() }
     .onPreferenceChange(OverlayHeightKey.self) { heights.overlay = $0; report() }
@@ -188,6 +228,9 @@ struct AccountsMenuView: View {
   }
 
   private func report() {
+    // The close teardown resets the measured heights to zero: ignore it and keep the last height for
+    // the next open, so the panel opens at its real size instead of jumping (N4).
+    guard state.contentInstalled else { return }
     let body = max(heights.list, heights.overlay, model.dashboard == nil ? 170 : 0)
     let total = (heights.header + body + heights.footer).rounded(.up)
     if abs(total - state.desiredHeight) > 0.5 { state.desiredHeight = total }
@@ -240,7 +283,7 @@ struct AccountsMenuView: View {
     .font(.system(size: 12)).foregroundStyle(palette.label2).lineLimit(1).monospacedDigit()
     .contentTransition(.opacity)
     .animation(.easeOut(duration: 0.2), value: model.isRefreshing)
-    .help(statusHelp)
+    .trayHelp(statusHelp)
   }
 
   private var statusHelp: String {
@@ -317,6 +360,9 @@ struct AccountsMenuView: View {
     return VStack(alignment: .leading, spacing: 2) {
       SectionHeader(model: model, layout: layout, accounts: accounts)
         .animation(nil, value: activeID)
+      if provider == "codex" {
+        CodexAutoStatusLine(model: model)
+      }
       VStack(spacing: 0) {
         ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
           if index > 0 {
@@ -333,6 +379,7 @@ struct AccountsMenuView: View {
                 ActivePlatter().matchedGeometryEffect(id: "active-\(provider)", in: platters)
               }
             }
+            .alignmentProbe("row|\(account.id)")
           if let offer = model.pendingCodexSwitch, provider == "codex", offer.accountID == account.id {
             SwitchConfirmView(product: "Codex", identity: offer.identity, processes: offer.processes, warning: offer.warning,
               expiresAt: offer.confirmation.expiresAt, onCancel: model.cancelCodexSwitch,
@@ -348,6 +395,7 @@ struct AccountsMenuView: View {
         }
       }
     }
+    .alignmentProbe("section|\(provider)")
     .sectionPlatter()
     .animation(state.reduceMotion ? nil : .trayValue(duration: TrayMotion.platterDuration), value: activeID)
     .animation(.trayValue(duration: 0.3), value: model.pendingCodexSwitch?.id)
@@ -362,9 +410,8 @@ struct AccountsMenuView: View {
         if model.needsConnection {
           Text(model.signIn.footNote).font(.system(size: 12)).foregroundStyle(palette.label2)
             .contentTransition(.opacity)
-        } else if let status = model.dashboard?.codexAutoSwitch {
-          codexCluster(status, palette)
         }
+        // The Codex auto-switch moved into the Codex section header; the footer's left side stays empty.
         Spacer(minLength: 8)
         if !model.needsConnection {
           let openDashboard = { model.openDashboard() }
@@ -410,41 +457,11 @@ struct AccountsMenuView: View {
           .hoverHelp("Quit AI Account Center", id: "footer-quit")
         }
       }
+      .alignmentProbe("footer")
     }
     .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
   }
 
-  private func codexCluster(_ status: CodexAutoSwitch, _ palette: TrayPalette) -> some View {
-    HStack(spacing: 4) {
-      Toggle(isOn: Binding(get: { status.enabled }, set: { model.toggleAutomaticSwitching($0) })) {
-        Text("Codex auto-switch").font(.system(size: 13)).foregroundStyle(palette.label)
-      }
-      .toggleStyle(.switch).controlSize(.small).tint(palette.accent)
-      .disabled(model.busyAction != nil || model.isRefreshing)
-      .accessibilityIdentifier("codex-auto-switch")
-      ThresholdMenu(value: 100 - Int(status.thresholdPercent), enabled: model.busyAction == nil && !model.isRefreshing,
-        id: "codex-auto-threshold") { model.setAutomaticThreshold(usedPercent: $0) }
-      let info = { showAutoInfo = true }
-      Button(action: info) {
-        Image(systemName: "info.circle").font(.system(size: 14)).foregroundStyle(palette.label2)
-          .frame(width: 28, height: 28).contentShape(Circle())
-      }
-      .buttonStyle(.plain)
-      .hoverHelp("How Codex auto-switch works", id: "codex-auto-info", action: info)
-      .dismissedByPanel($showAutoInfo)
-      .popover(isPresented: $showAutoInfo, arrowEdge: .top) {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Codex automatic switching").font(.system(size: 13, weight: .semibold))
-          Text(status.message).font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true)
-          Text("Switches at \(TrayFormat.number(100 - status.thresholdPercent))% used (\(TrayFormat.number(status.thresholdPercent))% left), checking every \(status.pollIntervalSeconds) seconds. Switching waits until Codex is idle. Claude accounts stay manual. The notch on each Codex meter marks the threshold.")
-            .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(16).frame(width: 340)
-      }
-    }
-    .padding(.leading, 10).padding(.trailing, 3).frame(height: TrayMetrics.footerControl)
-    .glassControl()
-  }
 }
 
 /// The selected-row platter: a soft accent fill over a faint lift, a hairline accent outline and a 27-style

@@ -66,6 +66,33 @@ class RuntimePreparationTests(unittest.TestCase):
         self.assertTrue((Path(planned['bundleDirectory']) / 'lib/runtime-manifest.json').is_file())
         self.assertEqual((self.home / '.local/bin/agy').read_bytes(), self.native)
 
+    def test_parser_goes_to_a_version_neutral_directory_checked_by_the_service_python(self):
+        inherited = {'PIP_FIND_LINKS': '/tmp/invented-links', 'PIP_NO_INDEX': '1',
+                     'PIP_INDEX_URL': 'https://invented.example/simple', 'PIP_EXTRA_INDEX_URL': 'x',
+                     'PIP_TRUSTED_HOST': 'invented.example', 'PIP_CONSTRAINT': '/tmp/c.txt',
+                     'PYTHONPATH': '/tmp/invented'}
+        with patch.dict(install.os.environ, inherited):
+            planned = install.install(self.home, self.source, runner=self.runner)
+        for _, kwargs in self.calls:
+            env = kwargs['env']
+            self.assertEqual([key for key in env if key.startswith('PIP_')],
+                             ['PIP_CONFIG_FILE', 'PIP_DISABLE_PIP_VERSION_CHECK'])
+            self.assertNotIn('PYTHONPATH', env)
+        bundle = Path(planned['bundleDirectory'])
+        argv = [call[0] for call in self.calls]
+        self.assertEqual(len(argv), 3)
+        self.assertEqual(argv[0], ['/usr/bin/python3', '-I', '-m', 'venv', str(bundle / 'venv')])
+        pip = argv[1]
+        self.assertEqual(pip[:5], [str(bundle / 'venv/bin/python3'), '-I', '-m', 'pip', 'install'])
+        self.assertEqual(pip[pip.index('--target') + 1], str(bundle / 'parser'))
+        for flag in ('--require-hashes', '--no-deps', '--only-binary=:all:'):
+            self.assertIn(flag, pip)
+        self.assertFalse(any('site-packages' in item for item in pip))
+        # The service interpreter, not the venv one, proves the parser loads.
+        self.assertEqual(argv[2], ['/usr/bin/python3', '-I', '-B', str(SOURCE / 'runtime_health.py'),
+                                   '--require-ok', str(bundle)])
+        self.assertEqual(self.calls[1][1]['env']['PIP_CONFIG_FILE'], '/dev/null')
+
     def test_preparation_recovery_refuses_foreign_bundle(self):
         def fail(*args, **kwargs): raise OSError('synthetic failure')
         with self.assertRaises(OSError): install.install(self.home, self.source, runner=fail)

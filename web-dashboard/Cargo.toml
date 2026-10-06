@@ -31,4 +31,7 @@ strip = true
 [package.metadata.wasm-pack.profile.release]
 # Rust 1.98 emits instructions unsupported by wasm-pack 0.13.1's bundled wasm-opt.
 # Rust release optimization and LTO remain enabled.
+# N9 (2026-10-05): binaryen v133 with explicit --enable-* flags does run, but the wire
+# bytes grow (br11 2.268 -> 2.359 MB, +4.0%; -Oz: +4.4%) while raw shrinks, so serving
+# the unoptimized build stays the faster cold load. Keep wasm-opt off.
 wasm-opt = false

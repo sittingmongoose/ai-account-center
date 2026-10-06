@@ -393,6 +393,7 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
                 wait: b(p, "wait"),
                 sub: s(p, "sub"),
                 tip: s(p, "tip"),
+                warn: b(p, "warn"),
             })
             .collect(),
         |p: &AcPolicy| p.provider.clone(),

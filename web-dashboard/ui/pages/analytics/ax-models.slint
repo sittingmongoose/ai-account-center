@@ -292,6 +292,13 @@ export component AxCbmCard inherits AxCard {
         padding-bottom: 14px;
         Text { text: AxData.cbm.foot; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
     }
+    // A taller neighbour (the Model usage box beside it) stretches this card to the row's height.
+    // Nothing else in the card body stretches, and when no child of a Slint layout has a stretch
+    // factor they ALL grow evenly, so the spare height used to spread between the head, the column
+    // labels and the rows - about 100 px of empty space above the table at 16:9. This stretchy tail
+    // collects the spare height at the bottom instead: any spare height goes below the table, never
+    // above it, exactly as in the Session stats card.
+    Rectangle { vertical-stretch: 1; min-height: 0px; }
 }
 
 // ---------------------------------------------------------------- the donut

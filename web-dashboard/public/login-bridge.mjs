@@ -45,6 +45,9 @@ export function installLoginBridge({ document, onFilled = () => {}, onSubmit = (
     if (typeof event?.preventDefault === 'function') event.preventDefault();
     onSubmit(read());
   });
+  // form.submit() fires no submit event, so a manager that submits that way would make the browser post the
+  // form itself and land on the API's JSON answer. requestSubmit() fires the event above instead.
+  if (typeof form.requestSubmit === 'function') form.submit = () => form.requestSubmit();
   return {
     read,
     mirror({ username = '', password = '', remember: keep = true } = {}) {

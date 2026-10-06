@@ -17,6 +17,10 @@ public struct AccountDashboard: Decodable, Sendable {
   public let trayHiddenProviders: Set<String>
   /// The dashboard's own provider order and labels, when it sends them (`providers[]`).
   public let providers: [DashboardProvider]
+  /// The panel's provider sections, built once at decode. Grouping, sorting and the ISO-8601 parsing
+  /// behind `sampleDate` used to rerun on every access, which made this the tray's largest per-tick
+  /// CPU cost while the panel was closed (N4).
+  public let providerGroups: [ProviderGroup]
 
   private enum CodingKeys: String, CodingKey {
     case schemaVersion, updatedAt, accounts, codexAutoSwitch, settings, antigravityAutoSwitch, hiddenProviders, providers
@@ -37,6 +41,12 @@ public struct AccountDashboard: Decodable, Sendable {
     let rawProviders = (try? container.decodeIfPresent([FailableProvider].self, forKey: .providers)) ?? nil
     providers = (rawProviders ?? []).compactMap(\.value)
     trayHiddenProviders = Set(providers.filter { $0.trayVisible == false }.map(\.id) + (settings?.trayHiddenProviders ?? []))
+    // The same filter as `visibleAccounts`, on local copies: reading the stored properties inside a
+    // closure would capture `self` before every stored property is initialized.
+    let allAccounts = accounts
+    let hidden = trayHiddenProviders
+    let shown = allAccounts.filter { !hidden.contains($0.provider) && $0.trayHidden != true }
+    providerGroups = ProviderGroupBuilder.build(shown: shown)
   }
 
   /// Accounts the trays show: every account whose provider is shown in the tray (`providers[].trayVisible`) and
@@ -126,6 +136,10 @@ public struct CodexAutoSwitch: Decodable, Sendable {
   public let activationInProgress: Bool
   public let lastCheckedAt: String?
   public let lastSwitchedAt: String?
+  /// Profile the monitor chose but could not switch to yet. Present only for waiting_idle.
+  public let candidate: String?
+  /// True when the blocked message warns about paid credits being spent.
+  public let usingCredits: Bool?
 }
 
 public struct DashboardAccount: Decodable, Identifiable, Sendable {
@@ -212,27 +226,48 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
 }
 
 public enum AccountFormatting {
+  // Formatter construction loads ICU data and dominated the refresh-tick cost (N4): every parse
+  // built one or two ISO8601DateFormatters, and these run per account and per window. Configured
+  // Foundation formatters are safe to share across threads on macOS 10.9 and later.
+  private static let isoFractional: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
+  private static let isoPlain = ISO8601DateFormatter()
+
+  private static func formatter(_ format: String) -> DateFormatter {
+    let formatter = DateFormatter()
+    formatter.dateFormat = format
+    return formatter
+  }
+
+  private static let cachedSampleFormatter = formatter("MMM d, yyyy h:mm:ss a z")
+  private static let resetSameDayFormatter = formatter("h:mm a")
+  private static let resetFarDayFormatter = formatter("MMM d h:mm a")
+  private static let resetWeekdayFormatter = formatter("EEE h:mm a")
+  private static let expirationFormatter = formatter("MMM d, yyyy h:mm a")
+
+  /// A date as the connection file and the status file store it.
+  public static func iso8601(_ date: Date) -> String { isoPlain.string(from: date) }
+
   public static func cachedSample(status: String?, sampledAt: String?) -> String? {
     guard status == "cached" else { return nil }
     guard let sample = date(sampledAt) else { return "Cached · Sample time unavailable" }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "MMM d, yyyy h:mm:ss a z"
-    return "Cached · Sampled \(formatter.string(from: sample))"
+    return "Cached · Sampled \(cachedSampleFormatter.string(from: sample))"
   }
 
   public static func date(_ iso: String?) -> Date? {
     guard let iso else { return nil }
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return fractional.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+    return isoFractional.date(from: iso) ?? isoPlain.date(from: iso)
   }
 
   public static func reset(_ iso: String?, now: Date = Date()) -> String {
     guard let date = date(iso) else { return "Reset time unavailable" }
-    let formatter = DateFormatter()
     let daysAway = abs(date.timeIntervalSince(now)) / 86400
-    formatter.dateFormat = Calendar.current.isDate(date, inSameDayAs: now) ? "h:mm a" : daysAway >= 7 ? "MMM d h:mm a" : "EEE h:mm a"
-    let absolute = formatter.string(from: date)
+    let chosen = Calendar.current.isDate(date, inSameDayAs: now) ? resetSameDayFormatter
+      : daysAway >= 7 ? resetFarDayFormatter : resetWeekdayFormatter
+    let absolute = chosen.string(from: date)
     let seconds = date.timeIntervalSince(now)
     guard seconds > 0 else { return "Reset \(absolute)" }
     let minutes = Int(ceil(seconds / 60))
@@ -244,8 +279,18 @@ public enum AccountFormatting {
 
   public static func expiration(_ iso: String?) -> String {
     guard let date = date(iso) else { return "Expiration unavailable" }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "MMM d, yyyy h:mm a"
-    return "Expires \(formatter.string(from: date))"
+    return "Expires \(expirationFormatter.string(from: date))"
+  }
+
+  private static let blockedAutoSwitch: Set<String> = ["waiting_idle", "no_quota", "no_candidate", "error"]
+
+  /// Why Codex automatic switching is stuck, in plain words — nil unless the switch is
+  /// enabled and blocked, so healthy switching adds no line. waiting_idle names the vetted
+  /// candidate the monitor will switch to, resolved to the account identity when known.
+  public static func codexAutoStatusText(status: CodexAutoSwitch?, accounts: [DashboardAccount]) -> String? {
+    guard let status, status.enabled, blockedAutoSwitch.contains(status.outcome) else { return nil }
+    guard status.outcome == "waiting_idle", let candidate = status.candidate else { return status.message }
+    let identity = accounts.first(where: { $0.provider == "codex" && $0.capabilities.codexProfile == candidate })?.identity ?? candidate
+    return "\(status.message) Will switch to \(identity) when Codex goes idle. Activate \(identity) to switch now."
   }
 }
