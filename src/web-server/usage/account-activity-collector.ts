@@ -1194,8 +1194,12 @@ export async function collectAccountActivity(
         // Report the open response without storing it (R2-1): merging it
         // into a copy of this file's rows shows exactly what committing
         // would, while the checkpoint keeps it pending for the next scan.
+        // The rows are cloned (not just re-keyed) so the merge can never
+        // mutate checkpoint-held objects no matter when the save runs.
         // A cap miss here is transient (retried every scan), never stored.
-        const fileRows = new Map(value.rows.map((row) => [rowKey(row), row]));
+        const fileRows = new Map(
+          value.rows.map((row) => [rowKey(row), { entry: { ...row.entry }, events: row.events }])
+        );
         if (!addEntry(fileRows, value.pendingClaude.entry, options.minDate)) skippedLines++;
         rows.push(...[...fileRows.values()].slice(0, Math.max(0, available)));
         if (fileRows.size > available) failed++;
