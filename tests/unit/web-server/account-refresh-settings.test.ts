@@ -116,7 +116,11 @@ describe('account usage refresh settings', () => {
       const [warning] = getRecentLogEntries().filter((entry) => entry.level === 'warn');
       expect(warning).toBeDefined();
       expect(getRecentLogEntries().filter((entry) => entry.level === 'warn').length).toBe(1);
-      const logged = JSON.stringify(warning);
+      // Every field except the random or clock-based ones, which can contain "999" by
+      // chance (a uuid id, a .999Z timestamp); a new field that carries contents is still checked.
+      const volatile = new Set(['id', 'timestamp', 'processId', 'runId', 'requestId', 'latencyMs']);
+      const logged = JSON.stringify(Object.entries(warning).filter(([key]) => !volatile.has(key)));
+      expect(logged).toContain('account-refresh-settings.corrupt');
       expect(logged).not.toContain('999');
       expect(logged).not.toContain(dir);
       expect(fs.readFileSync(file, 'utf8')).toBe(contents);
