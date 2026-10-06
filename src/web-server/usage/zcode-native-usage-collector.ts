@@ -139,7 +139,13 @@ export function queryLocalZcodeUsage(
   dbPath: string,
   minDateMs: number,
   fingerprints: Record<string, ZcodeFingerprint>,
-  options: { pythonPath?: string; homeDir?: string; timeoutMs?: number } = {}
+  options: {
+    pythonPath?: string;
+    homeDir?: string;
+    timeoutMs?: number;
+    /** More databases read in the same call (experiment zcode homes); copies are already dropped. */
+    extraDbs?: string[];
+  } = {}
 ): ZcodeHelperResult {
   const helper = analyticsRemoteHelperPath();
   const source = fs.readFileSync(helper, 'utf8');
@@ -151,6 +157,7 @@ export function queryLocalZcodeUsage(
     minDateMs,
     immutableSqlite: false,
     fingerprints: { zcode: fingerprints },
+    ...(options.extraDbs?.length ? { extraRoots: { zcode: options.extraDbs } } : {}),
     deadlineMs: Math.min(20_000, Math.max(1000, (options.timeoutMs ?? 12_000) - 500)),
   });
   const output = execFileSync(python, [helper], {

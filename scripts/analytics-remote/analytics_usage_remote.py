@@ -69,6 +69,10 @@ SESSION_MAX_LEN = 160
 # The incremental request carries one fingerprint per known file; the Mac alone
 # holds thousands of session files, so the cap must fit tens of thousands.
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
+# Saved extra roots per kind; zcode also takes the experiment databases the server found
+# (one per content, experiment-usage-roots.ts), each read through its own fingerprint.
+EXTRA_ROOTS_MAX = 16
+EXTRA_ZCODE_DBS_MAX = 2048
 # Walk of one session root (the server collector's per-root ceilings).
 WALK_MAX_DIRS = 10000
 WALK_MAX_ENTRIES = 100000
@@ -1594,9 +1598,9 @@ def _read_request():
         or any(kind not in ("claude", "codex", "omp", "muse", "zcode") for kind in extra_roots)
         or any(
             not isinstance(paths, list)
-            or len(paths) > 16
+            or len(paths) > (EXTRA_ZCODE_DBS_MAX if kind == "zcode" else EXTRA_ROOTS_MAX)
             or any(not _valid_extra_root(path) for path in paths)
-            for paths in extra_roots.values()
+            for kind, paths in extra_roots.items()
         )
     ):
         _fail("request.extraRoots must map kinds to absolute paths")

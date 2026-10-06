@@ -19,18 +19,46 @@ export interface JsonlFieldMapping {
 }
 
 export type UsageWorkerRequest =
-  | { kind: 'claude'; projectsDir: string; activity?: AccountActivityScanOptions }
-  | { kind: 'codex'; codexHome: string; cacheDir: string; activity?: AccountActivityScanOptions }
+  /**
+   * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) make a separate request that
+   * reads only those roots, deduplicated record by record; the default root then serves only as
+   * the reference copies are checked against (see collectExperimentActivity).
+   */
+  | {
+      kind: 'claude';
+      projectsDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+    }
+  | {
+      kind: 'codex';
+      codexHome: string;
+      cacheDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+    }
   | { kind: 'omp'; roots: string[]; activity?: AccountActivityScanOptions }
-  | { kind: 'muse'; sessionsDir: string; activity?: AccountActivityScanOptions }
-  | { kind: 'zcode'; dbPath: string; activity?: AccountActivityScanOptions }
+  | {
+      kind: 'muse';
+      sessionsDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+    }
+  | {
+      kind: 'zcode';
+      dbPath: string;
+      experimentDbs?: string[];
+      activity?: AccountActivityScanOptions;
+    }
   | {
       kind: 'jsonl';
       roots: string[];
       mapping: JsonlFieldMapping;
       activity?: AccountActivityScanOptions;
     }
-  | { kind: 'droid'; homeDir: string };
+  | { kind: 'droid'; homeDir: string }
+  /** One slice of the experiment-root walk (experiment-usage-roots.ts); returns no usage. */
+  | { kind: 'experiment-roots'; cacheDir: string };
 
 export interface UsageWorkerResult {
   daily: DailyUsage[];

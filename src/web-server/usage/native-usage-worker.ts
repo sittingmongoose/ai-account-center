@@ -12,6 +12,7 @@ import { scanCodexNativeUsageEntries } from './codex-native-usage-collector';
 import { scanDroidNativeUsageEntries } from './droid-native-usage-collector';
 import { collectAccountActivity } from './account-activity-collector';
 import { lowerCollectorThreadPriority } from './collector-concurrency';
+import { runExperimentRootsSlice } from './experiment-usage-roots';
 import type { UsageWorkerRequest, UsageWorkerResponse } from './worker-client';
 
 async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerResponse> {
@@ -25,6 +26,14 @@ async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerRes
     request.activity
   )
     return { ok: true, data: await collectAccountActivity(request, request.activity) };
+  if (request.kind === 'experiment-roots') {
+    // Discovery only: the slice saves the roots it found under the cache dir.
+    runExperimentRootsSlice({ cacheDir: request.cacheDir });
+    return {
+      ok: true,
+      data: { daily: [], hourly: [], monthly: [], session: [], eventCount: 0 },
+    };
+  }
   let entries;
   let source;
   switch (request.kind) {
