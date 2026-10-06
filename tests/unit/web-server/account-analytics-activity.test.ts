@@ -747,11 +747,7 @@ describe('native local analytics activity', () => {
       now: () => NOW,
     });
     // Tool ids are not usage providers; only routed providers and `all` select.
-    const tool = await service.get(
-      { ...QUERY, provider: 'omp' as 'qwen' },
-      FROM,
-      NOW
-    );
+    const tool = await service.get({ ...QUERY, provider: 'omp' as 'qwen' }, FROM, NOW);
     const account = await service.get({ ...QUERY, account: 'codex:active' }, FROM, NOW);
     expect(calls).toBe(0);
     expect(tool.totals).toBeNull();
@@ -988,12 +984,14 @@ describe('native local analytics activity', () => {
     expect(done.totals?.inputTokens).toBe(20);
   });
 
-  it('runs at most two native parsers concurrently even across many local roots', async () => {
-    const resolvers: Array<(data: UsageWorkerResult) => void> = [];
+  it('starts every collector at once up to its bound, and a slow one never holds back the rest', async () => {
+    const releases = new Map<string, (data: UsageWorkerResult) => void>();
+    const started: string[] = [];
     let live = 0;
     let maximum = 0;
+    const budgets: number[] = [];
     const requests: Array<{ provider: 'claude'; request: UsageWorkerRequest }> = Array.from(
-      { length: 4 },
+      { length: 5 },
       (_, index) => ({
         provider: 'claude',
         request: { kind: 'claude', projectsDir: `/fixture/${index}` },
@@ -1004,11 +1002,15 @@ describe('native local analytics activity', () => {
       requests: () => requests,
       now: () => NOW,
       responseBudgetMs: 5,
-      loadWorker: async () => {
+      concurrency: 3,
+      loadWorker: async (request, budgetMs) => {
+        const root = request.kind === 'claude' ? request.projectsDir : '';
+        started.push(root);
+        budgets.push(budgetMs ?? -1);
         live++;
         maximum = Math.max(maximum, live);
         return new Promise((resolve) => {
-          resolvers.push((result) => {
+          releases.set(root, (result) => {
             live--;
             resolve(result);
           });
@@ -1016,17 +1018,93 @@ describe('native local analytics activity', () => {
       },
     });
     await service.get(QUERY, FROM, NOW);
-    expect(resolvers).toHaveLength(2);
-    expect(maximum).toBe(2);
-    resolvers[0](data('claude-sonnet-4-6', 1, 0));
-    resolvers[1](data('claude-sonnet-4-6', 1, 0));
+    const tick = () => new Promise((complete) => setTimeout(complete, 0));
+    await tick();
+    expect(started).toEqual(['/fixture/0', '/fixture/1', '/fixture/2']);
+    // /fixture/0 stays slow: every other finish starts the next root at once, no batch waits.
+    releases.get('/fixture/1')?.(data('claude-sonnet-4-6', 1, 0));
+    await tick();
+    expect(started).toEqual(['/fixture/0', '/fixture/1', '/fixture/2', '/fixture/3']);
+    releases.get('/fixture/2')?.(data('claude-sonnet-4-6', 1, 0));
+    await tick();
+    expect(started).toHaveLength(5);
+    expect(maximum).toBe(3);
+    releases.get('/fixture/3')?.(data('claude-sonnet-4-6', 1, 0));
+    releases.get('/fixture/4')?.(data('claude-sonnet-4-6', 1, 0));
+    await tick();
+    // Nothing publishes until the slow root has answered too.
+    expect((await service.get(QUERY, FROM, NOW)).totals).toBeNull();
+    releases.get('/fixture/0')?.(data('claude-sonnet-4-6', 1, 0));
+    expect((await settled(service)).totals?.inputTokens).toBe(5);
+    // Each collector keeps its own budget: what is left of the collection deadline.
+    for (const budget of budgets) {
+      expect(budget).toBeGreaterThan(0);
+      expect(budget).toBeLessThanOrEqual(60_000);
+    }
+  });
+
+  it('runs all local collectors together by default and never fewer than two', async () => {
+    let live = 0;
+    let maximum = 0;
+    const releases: Array<() => void> = [];
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
+      requests: () =>
+        (['claude', 'codex', 'omp', 'muse', 'zcode'] as const).map((provider) => ({
+          provider,
+          request: { kind: 'claude', projectsDir: `/fixture/${provider}` } as UsageWorkerRequest,
+        })),
+      now: () => NOW,
+      responseBudgetMs: 5,
+      concurrency: 8,
+      loadWorker: async () => {
+        live++;
+        maximum = Math.max(maximum, live);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        live--;
+        return data('claude-sonnet-4-6', 1, 0);
+      },
+    });
+    await service.get(QUERY, FROM, NOW);
     await new Promise((complete) => setTimeout(complete, 0));
-    expect(resolvers).toHaveLength(4);
-    expect(maximum).toBe(2);
-    resolvers[2](data('claude-sonnet-4-6', 1, 0));
-    resolvers[3](data('claude-sonnet-4-6', 1, 0));
+    expect(maximum).toBe(5);
+    for (const release of releases) release();
+    expect((await settled(service)).totals?.inputTokens).toBe(5);
+  });
+
+  it('starts the remote scans before local discovery has finished', async () => {
+    const order: string[] = [];
+    let finishDiscovery: () => void = () => {};
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => {
+        order.push('remote');
+        return { results: [], states: [] };
+      },
+      requests: async () => {
+        await new Promise<void>((resolve) => {
+          finishDiscovery = resolve;
+        });
+        order.push('discovered');
+        return [
+          {
+            provider: 'codex',
+            request: { kind: 'codex', codexHome: '/fixture', cacheDir: '/fixture/cache' },
+          },
+        ];
+      },
+      now: () => NOW,
+      responseBudgetMs: 5,
+      loadWorker: async () => {
+        order.push('local');
+        return data('gpt-5.4', 7, 0.01);
+      },
+    });
+    await service.get(QUERY, FROM, NOW);
     await new Promise((complete) => setTimeout(complete, 0));
-    expect((await service.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(4);
+    expect(order).toEqual(['remote']);
+    finishDiscovery();
+    expect((await settled(service)).totals?.inputTokens).toBe(7);
+    expect(order).toEqual(['remote', 'discovered', 'local']);
   });
 
   it('rescans remotes on manual refresh and names the hosts it waits on while the scan runs', async () => {

@@ -652,7 +652,17 @@ function oversizedLineCarriesUsage(
   return true;
 }
 
-async function readBatch(
+/** Bytes read per chunk; each chunk is a fresh buffer because line fragments keep slices of it. */
+const READ_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Read one file's next records into its checkpoint. Reads are synchronous on purpose: this runs
+ * inside a collector's worker thread, never on the server's event loop, so a blocking read only
+ * holds that thread. Several collectors running at once then read in parallel on their own
+ * (low-priority) threads instead of queueing on the process's small shared libuv pool, which the
+ * server's own file and crypto work also needs.
+ */
+function readBatch(
   file: string,
   value: Checkpoint,
   stats: fs.Stats,
@@ -660,7 +670,7 @@ async function readBatch(
   options: AccountActivityScanOptions,
   deadline: number,
   mapping?: JsonlFieldMapping
-): Promise<void> {
+): void {
   if (value.complete && value.offset === stats.size) return;
   value.unfinishedTail = false;
   const rows = new Map(value.rows.map((row) => [rowKey(row), row]));
@@ -677,11 +687,6 @@ async function readBatch(
     value.complete = position === stats.size && !discarding;
     return;
   }
-  const stream = fs.createReadStream(file, {
-    start: position,
-    end: end - 1,
-    highWaterMark: 1024 * 1024,
-  });
   const fileSessionId =
     kind === 'omp' ? ompSessionIdForFile(file) : kind === 'muse' ? museSessionIdForFile(file) : '';
   // Claude writes several assistant lines per API response (one per content
@@ -725,9 +730,14 @@ async function readBatch(
     }
     if (entry && !addEntry(rows, entry, options.minDate)) value.skippedLines++;
   };
+  const fd = fs.openSync(file, 'r');
   try {
-    for await (const raw of stream) {
-      const chunk = raw as Buffer;
+    for (let readAt = position; readAt < end; ) {
+      const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, end - readAt));
+      const read = fs.readSync(fd, buffer, 0, buffer.length, readAt);
+      if (read <= 0) break;
+      readAt += read;
+      const chunk = read === buffer.length ? buffer : buffer.subarray(0, read);
       let start = 0;
       while (start < chunk.length) {
         const newline = chunk.indexOf(10, start);
@@ -789,7 +799,7 @@ async function readBatch(
     value.complete = value.offset === stats.size && !discarding;
     value.rows = [...rows.values()];
   } finally {
-    stream.destroy();
+    fs.closeSync(fd);
   }
 }
 
@@ -1169,7 +1179,7 @@ export async function collectAccountActivity(
       const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
       const before = value.offset;
       if (Date.now() < deadline) {
-        await readBatch(
+        readBatch(
           file,
           value,
           stats,

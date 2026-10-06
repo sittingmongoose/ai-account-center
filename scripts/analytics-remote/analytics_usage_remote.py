@@ -1630,8 +1630,36 @@ def _read_request():
     )
 
 
+def _lower_priority():
+    """Scan at low CPU and IO priority, so a scan (the server may run one per
+    kind at once) never competes with the host's own foreground work: nice 10,
+    plus utility-tier disk IO on macOS; on Windows, below-normal CPU priority
+    and background mode, which also lowers IO and memory priority. Best-effort:
+    a host that refuses keeps normal priority and the scan still runs."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            process = kernel32.GetCurrentProcess()
+            kernel32.SetPriorityClass(process, 0x00004000)  # BELOW_NORMAL_PRIORITY_CLASS
+            kernel32.SetPriorityClass(process, 0x00100000)  # PROCESS_MODE_BACKGROUND_BEGIN
+            return
+        os.nice(10)
+        if sys.platform == "darwin":
+            import ctypes
+            import ctypes.util
+
+            libc = ctypes.CDLL(ctypes.util.find_library("c"))
+            # setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY)
+            libc.setiopolicy_np(0, 0, 4)
+    except Exception:
+        pass
+
+
 def main():
     kinds, min_date_ms, immutable, fingerprints, extra_roots, budget = _read_request()
+    _lower_priority()
     home = _home()
     env = dict(os.environ)
     collector = Collector(min_date_ms, time.monotonic() + budget, fingerprints, budget)

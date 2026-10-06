@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  'a0653cbcc3f9afa1f1bae6cd33119f615835b8f8907ea93126d4f1ae8cc64c77';
+  'd1f8fbe7b073e88de4be04291969cd340bb60c8da37f01e42518d1011876521c';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -325,6 +325,34 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
 }
 
 /**
+ * The fixed ssh command that runs the packaged helper on a host. Only this process's helper source,
+ * streamed on stdin with the request, is executed; aggregates travel back on stdout without
+ * temporary files. Python reads the request from stdin itself on every host. On Windows, PowerShell
+ * only finds Python and starts it: when PowerShell read a request of the helper's size from stdin
+ * (`[Console]::In.ReadToEnd()`) over Windows OpenSSH, about half the reads never saw the end of
+ * the input and hung until the ssh timeout (measured 2026-10-06: 4 of 8 80 KB reads hung, against
+ * 12 of 12 that completed when Python read the same input). Reading the bytes directly also keeps
+ * them UTF-8, where PowerShell's pipe re-encoded them.
+ */
+export function analyticsHelperCommand(platform: AnalyticsRemoteHost): string {
+  const code =
+    "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-analytics-helper','exec'))";
+  if (platform === 'mac') return `/usr/bin/python3 -c ${quoteShell(code)}`;
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$env:PYTHONIOENCODING = 'utf-8'",
+    "$env:PYTHONUTF8 = '1'",
+    '$python = (Get-Command python3.exe,python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
+    'if (-not $python) { exit 1 }',
+    // No pipeline input: Python inherits the ssh session's stdin and reads the request itself.
+    `& $python -c '${code.replace(/'/g, "''")}'`,
+    'exit $LASTEXITCODE',
+  ].join('; ');
+  return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+}
+
+/**
  * ONE fixed packaged helper, streamed on ssh stdin with a JSON request (the
  * `runClaudeHistoryHelper` pattern): no installed copies on the hosts. Roots
  * are fixed defaults resolved on the host plus the saved extra usage-log
@@ -379,27 +407,7 @@ export async function runAnalyticsRemoteHelper(
   );
   if (input.length > MAX_RESPONSE_BYTES)
     throw new ValidationError('Analytics remote request is invalid.');
-  // Fixed bootstrap: only this process's packaged helper source is executed;
-  // aggregates travel back on stdout without temporary files.
-  const code =
-    "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-analytics-helper','exec'))";
-  let command: string;
-  if (platform === 'mac') {
-    command = `/usr/bin/python3 -c ${quoteShell(code)}`;
-  } else {
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      "$ProgressPreference = 'SilentlyContinue'",
-      "$env:PYTHONIOENCODING = 'utf-8'",
-      "$env:PYTHONUTF8 = '1'",
-      '$request = [Console]::In.ReadToEnd()',
-      '$python = (Get-Command python3.exe,python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
-      'if (-not $python) { exit 1 }',
-      `$request | & $python -c '${code.replace(/'/g, "''")}'`,
-      'exit $LASTEXITCODE',
-    ].join('; ');
-    command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
-  }
+  const command = analyticsHelperCommand(platform);
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(
       'ssh',

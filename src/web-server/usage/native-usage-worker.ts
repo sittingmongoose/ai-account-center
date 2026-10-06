@@ -11,6 +11,7 @@ import {
 import { scanCodexNativeUsageEntries } from './codex-native-usage-collector';
 import { scanDroidNativeUsageEntries } from './droid-native-usage-collector';
 import { collectAccountActivity } from './account-activity-collector';
+import { lowerCollectorThreadPriority } from './collector-concurrency';
 import type { UsageWorkerRequest, UsageWorkerResponse } from './worker-client';
 
 async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerResponse> {
@@ -64,6 +65,9 @@ async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerRes
 
 if (parentPort) {
   const port = parentPort;
+  // Parsing and file reads run on this thread at a low priority, so several collectors running
+  // at once never compete with the server's own request handling.
+  lowerCollectorThreadPriority();
   void collectUsage(workerData as UsageWorkerRequest)
     .then((response) => port.postMessage(response))
     .catch((error: unknown) => {

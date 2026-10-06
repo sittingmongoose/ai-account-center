@@ -14,11 +14,14 @@ import {
   type AnalyticsRemoteFingerprint,
   type AnalyticsRemoteHost,
   type AnalyticsRemoteKind,
+  type AnalyticsRemoteKindResult,
+  type AnalyticsRemoteRequest,
   type AnalyticsRemoteResponse,
   type AnalyticsRemoteRow,
   type AnalyticsRemoteSessionRow,
 } from './analytics-remote-transport';
 import { readDashboardPreferences } from './dashboard-preferences';
+import { runBounded } from '../usage/collector-concurrency';
 
 export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
 export type AnalyticsSourceState =
@@ -45,11 +48,7 @@ export interface AnalyticsRemoteSourceDeps {
   runHelper?: (
     sshHost: string,
     platform: AnalyticsRemoteHost,
-    request: {
-      kinds: AnalyticsRemoteKind[];
-      minDateMs: number;
-      fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>;
-    }
+    request: AnalyticsRemoteRequest
   ) => Promise<AnalyticsRemoteResponse>;
   now?: () => number;
   cacheDir?: string;
@@ -90,6 +89,12 @@ interface RemoteCache {
   rows: AnalyticsRemoteRow[];
   srows: AnalyticsRemoteSessionRow[];
   lastScanAt: string | null;
+  /**
+   * The last scan read every kind to the end: no kind was cut short, skipped or failed. Such a
+   * host is scanned with one helper call; one still catching up gets a call per kind. Absent in
+   * older caches, which therefore start with a call per kind.
+   */
+  settled?: boolean;
 }
 
 function cacheFile(cacheDir: string, host: AnalyticsRemoteHost): string {
@@ -112,7 +117,8 @@ function loadCache(file: string): RemoteCache {
       value.rows.length > MAX_CACHED_ROWS ||
       !Array.isArray(value.srows) ||
       value.srows.length > MAX_CACHED_ROWS ||
-      (value.lastScanAt !== null && typeof value.lastScanAt !== 'string')
+      (value.lastScanAt !== null && typeof value.lastScanAt !== 'string') ||
+      (value.settled !== undefined && typeof value.settled !== 'boolean')
     )
       return blankCache();
     return value;
@@ -154,6 +160,22 @@ function samePrint(
   );
 }
 
+/**
+ * The pricing provider of a remote row, exactly as the local reader of its tool sets it, so a row
+ * prices the same on every host. The route the host logged wins. Without one, the local Claude Code
+ * and Codex readers leave the provider unset, so the tool's own provider prices the row
+ * (`anthropic`, `openai`); the other readers record an empty route, which prices by model name
+ * alone. A Codex row priced by model name alone found no rate for a model several providers list
+ * at different prices, and read as "not logged".
+ */
+function remoteRowProvider(
+  kind: AnalyticsRemoteKind,
+  route: string | undefined
+): { provider?: string } {
+  if (route) return { provider: route };
+  return kind === 'claude' || kind === 'codex' ? {} : { provider: '' };
+}
+
 function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
   return rows.map((row) => ({
     entry: {
@@ -168,7 +190,7 @@ function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
       projectPath: '',
       // The tool that logged the row; its routing provider prices it.
       target: row.k,
-      provider: row.p ?? '',
+      ...remoteRowProvider(row.k, row.p),
       // The helper never mixes logged and unlogged events in one row.
       ...(row.c > 0 ? { costUsd: row.c } : {}),
     },
@@ -181,7 +203,7 @@ function toSessionAggregates(srows: AnalyticsRemoteSessionRow[]): SessionAggrega
   return srows.map((row) => ({
     sessionId: row.s,
     model: row.m,
-    ...(row.p ? { provider: row.p } : {}),
+    ...remoteRowProvider(row.k, row.p),
     target: row.k,
     firstMs: Math.floor(row.a),
     lastMs: Math.floor(row.z),
@@ -341,6 +363,90 @@ export function remoteExtraRoots(
   return extra;
 }
 
+/**
+ * Give the server's event loop a turn between the steps of merging a host's answer (parsing,
+ * filtering, saving and converting a large host each take tens of milliseconds), so dashboard
+ * and analytics requests are answered in between instead of after one long stall.
+ */
+const yieldTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+/** Helper calls one host runs at once: one per kind, so every kind at once. */
+const REMOTE_KIND_CONCURRENCY = 5;
+
+type RemoteHelper = NonNullable<AnalyticsRemoteSourceDeps['runHelper']>;
+
+/**
+ * One host's scan. A host still catching up (a cold cache, or a last scan that a kind's size cut
+ * short) is scanned with one helper call per kind, all at once: each kind gets the helper's whole
+ * time budget, so a big Claude Code history no longer leaves the kinds after it unread until a
+ * later scan. A settled host, whose scan takes a couple of seconds, gets one call for every kind,
+ * so a quiet host is not asked for five ssh sessions a minute. Each call carries only its kind's
+ * fingerprints; the saved extra roots travel whole (the helper reads only its own kinds').
+ *
+ * The answers merge into one response holding each call's own kinds only. `cutKinds` are the kinds
+ * whose call stopped early (a per-kind `truncated`), `failedKinds` those whose call failed: they
+ * read as a kind the host could not read, keeping their earlier rows. Null when every call failed.
+ */
+async function scanHost(
+  runHelper: RemoteHelper,
+  alias: string,
+  host: AnalyticsRemoteHost,
+  kinds: AnalyticsRemoteKind[],
+  cached: RemoteCache,
+  extraRoots: Partial<Record<AnalyticsRemoteKind, string[]>>,
+  minDateMs: number
+): Promise<{
+  response: AnalyticsRemoteResponse;
+  cutKinds: Set<AnalyticsRemoteKind>;
+  failedKinds: Set<AnalyticsRemoteKind>;
+} | null> {
+  const groups = cached.settled === true ? [kinds] : kinds.map((kind) => [kind]);
+  const answers = new Map<AnalyticsRemoteKind[], AnalyticsRemoteResponse | null>();
+  await runBounded([groups], REMOTE_KIND_CONCURRENCY, async (group) => {
+    const fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
+    for (const kind of group)
+      if (cached.fingerprints[kind]) fingerprints[kind] = cached.fingerprints[kind];
+    try {
+      answers.set(
+        group,
+        await runHelper(alias, host, { kinds: group, minDateMs, fingerprints, extraRoots })
+      );
+    } catch {
+      answers.set(group, null);
+    }
+  });
+  const merged: AnalyticsRemoteResponse = {
+    version: 1,
+    truncated: false,
+    kinds: {} as AnalyticsRemoteResponse['kinds'],
+    rows: [],
+    srows: [],
+  };
+  const cutKinds = new Set<AnalyticsRemoteKind>();
+  const failedKinds = new Set<AnalyticsRemoteKind>();
+  for (const group of groups) {
+    const answer = answers.get(group) ?? null;
+    for (const kind of group) {
+      if (!answer) {
+        failedKinds.add(kind);
+        merged.kinds[kind] = { state: 'error', fingerprints: {} };
+        continue;
+      }
+      // A host's answer may leave a kind out; it then reads as scanned with nothing to report.
+      const entry: AnalyticsRemoteKindResult | undefined = answer.kinds[kind];
+      if (entry) merged.kinds[kind] = entry;
+      if (answer.truncated) {
+        cutKinds.add(kind);
+        merged.truncated = true;
+      }
+      if (kind === 'omp' && answer.discoveryTruncated === true) merged.discoveryTruncated = true;
+      merged.rows.push(...answer.rows.filter((row) => row.k === kind));
+      merged.srows.push(...(answer.srows ?? []).filter((row) => row.k === kind));
+    }
+  }
+  return failedKinds.size === kinds.length ? null : { response: merged, cutKinds, failedKinds };
+}
+
 export async function loadAnalyticsRemoteSources(
   minDateMs: number,
   deps: AnalyticsRemoteSourceDeps = {}
@@ -377,17 +483,18 @@ export async function loadAnalyticsRemoteSources(
             });
           return;
         }
-        let response: AnalyticsRemoteResponse;
         const onHostScan = deps.onHostScan;
         onHostScan?.(host, 'start');
-        try {
-          response = await runHelper(alias, host, {
-            kinds,
-            minDateMs,
-            fingerprints: cached.fingerprints,
-            extraRoots: remoteExtraRoots(host, kinds),
-          });
-        } catch {
+        const scan = await scanHost(
+          runHelper,
+          alias,
+          host,
+          kinds,
+          cached,
+          remoteExtraRoots(host, kinds),
+          minDateMs
+        );
+        if (!scan) {
           onHostScan?.(host, 'done');
           // Previous aggregates stay available; nothing remote fails the page.
           const part = cachedHostSources(host, cached, minDateMs, 'remote scan failed');
@@ -395,12 +502,14 @@ export async function loadAnalyticsRemoteSources(
           states.push(...part.states);
           return;
         }
+        const { response, cutKinds, failedKinds } = scan;
+        await yieldTurn();
         const errored = new Set(kinds.filter((tool) => response.kinds[tool]?.state === 'error'));
         // Files a scan did not reach keep their rows and prints until a scan
-        // reaches them: after a cut scan, a kind that could not be read, or
-        // (OMP) a root search that hit its bounds.
+        // reaches them: after a kind's scan was cut, a kind that could not be
+        // read, or (OMP) a root search that hit its bounds.
         const keepsUnvisited = (tool: AnalyticsRemoteKind): boolean =>
-          response.truncated ||
+          cutKinds.has(tool) ||
           errored.has(tool) ||
           (tool === 'omp' && response.discoveryTruncated === true);
         const freshPrints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
@@ -439,6 +548,7 @@ export async function loadAnalyticsRemoteSources(
             prints[kind][key] ??= print;
           }
         }
+        await yieldTurn();
         try {
           saveCache(file, {
             version: CACHE_VERSION,
@@ -446,11 +556,21 @@ export async function loadAnalyticsRemoteSources(
             rows: merged,
             srows: mergedSessions,
             lastScanAt: scannedAt,
+            settled:
+              cutKinds.size === 0 &&
+              failedKinds.size === 0 &&
+              kinds.every(
+                (tool) =>
+                  response.kinds[tool]?.state !== 'pending' &&
+                  response.kinds[tool]?.state !== 'error' &&
+                  response.kinds[tool]?.partial !== true
+              ),
           });
         } catch {
           /* Cache writes are best-effort; the rows are still served. */
         }
         for (const tool of kinds) {
+          await yieldTurn();
           const rows = merged.filter((row) => row.k === tool);
           const srows = mergedSessions.filter((row) => row.k === tool);
           const kind = response.kinds[tool];
@@ -495,9 +615,13 @@ export async function loadAnalyticsRemoteSources(
               state: kept ? 'cached' : 'unavailable',
               lastScanAt: scannedAt,
               rowCount: events,
-              detail: kept
-                ? 'remote read failed; showing previously read aggregates'
-                : 'remote read failed',
+              detail: failedKinds.has(tool)
+                ? kept
+                  ? 'remote scan failed; showing previously read aggregates'
+                  : 'remote scan failed'
+                : kept
+                  ? 'remote read failed; showing previously read aggregates'
+                  : 'remote read failed',
             });
             continue;
           }
