@@ -360,6 +360,109 @@ describe('bounded native account activity checkpoints', () => {
   });
 });
 
+describe('claude response collapsing', () => {
+  let seq = 0;
+  function line(mid: string | null, req: string | null, output: number) {
+    seq++;
+    return {
+      type: 'assistant',
+      uuid: `uuid-${seq}`,
+      ...(req === null ? {} : { requestId: req }),
+      sessionId: 's1',
+      timestamp: '2026-10-01T15:00:00Z',
+      message: {
+        ...(mid === null ? {} : { id: mid }),
+        model: 'claude-sonnet-4-6',
+        usage: {
+          input_tokens: 100,
+          output_tokens: output,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 5,
+        },
+      },
+    };
+  }
+  function writeClaude(lines: unknown[]) {
+    const dir = path.join(root, 'claude', 'projects', 'p');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 's.jsonl'),
+      lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
+    );
+  }
+  async function collectClaude(maxBytesPerFile?: number) {
+    return collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), maxBytesPerFile }
+    );
+  }
+  beforeEach(() => {
+    seq = 0;
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-claude-collapse-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('counts one multi-line API response once, keeping the last usage', async () => {
+    writeClaude([
+      line('m1', 'r1', 10),
+      line('m1', 'r1', 20),
+      line('m1', 'r1', 30),
+      line('m2', 'r2', 7),
+    ]);
+    const data = await collectClaude();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    expect(sum(data, 'outputTokens')).toBe(37);
+  });
+
+  it('counts lines without a message id solo', async () => {
+    writeClaude([line(null, 'r1', 10), line(null, 'r1', 20)]);
+    const data = await collectClaude();
+    expect(data.eventCount).toBe(2);
+    expect(sum(data, 'outputTokens')).toBe(30);
+  });
+
+  it('collapses a response split across bounded byte batches without double-counting', async () => {
+    writeClaude([line('m1', 'r1', 10), line('m1', 'r1', 20), line('m1', 'r1', 30)]);
+    let data = await collectClaude(350);
+    for (let attempt = 0; attempt < 6 && !data.scan?.complete; attempt++) {
+      data = await collectClaude(350);
+    }
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(sum(data, 'outputTokens')).toBe(30);
+    const warm = await collectClaude();
+    expect(warm.scan?.readBytes).toBe(0);
+    expect(warm.eventCount).toBe(1);
+  });
+
+  it('keeps a response being written pending across scans instead of double-counting', async () => {
+    // R2-1: a scan landing mid-response must not commit the half-written
+    // response at EOF; the next scan continues the same response. Committing
+    // early counted block 1, then block 2 as a second response (about +8%
+    // Claude cache-read at a 60 s refresh, creeping while the server runs).
+    writeClaude([line('m1', 'r1', 50)]);
+    let data = await collectClaude();
+    expect(data.eventCount).toBe(1);
+    expect(sum(data, 'outputTokens')).toBe(50);
+    fs.appendFileSync(
+      path.join(root, 'claude', 'projects', 'p', 's.jsonl'),
+      JSON.stringify(line('m1', 'r1', 55)) + '\n'
+    );
+    data = await collectClaude();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(sum(data, 'outputTokens')).toBe(55);
+    // A cold re-read agrees: one response, counted once.
+    const cold = await collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache-cold') }
+    );
+    expect(cold.eventCount).toBe(1);
+    expect(sum(cold, 'outputTokens')).toBe(55);
+  });
+});
+
 describe('pre-aggregated session rows', () => {
   it('groups helper rows into sessions with priced model breakdowns', () => {
     const a = Date.parse('2026-10-01T15:05:00Z');
@@ -446,5 +549,264 @@ describe('pre-aggregated session rows', () => {
       'omp-remote'
     );
     expect(session.map((row) => row.sessionId)).toEqual(['ok']);
+  });
+});
+
+describe('muse oversized-line completion', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-muse-complete-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  function museUsage(model: string, input: number, cacheRead: number, output: number, at: number) {
+    return {
+      record_type: 'event',
+      recorded_at: at,
+      id: `rec-${at}-${input}`,
+      payload: {
+        event: {
+          kind: 'model_completed',
+          model,
+          usage: {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cacheRead,
+            cache_write_tokens: 0,
+          },
+        },
+      },
+    };
+  }
+
+  it('completes despite an oversized non-usage checkpoint line, counting the real usage', async () => {
+    // Muse writes cumulative `context_projection_checkpoint` records that can be
+    // enormous (retained context) and carry no countable usage; one such line
+    // used to set skippedLines and pin scan.complete=false forever (N9), marking
+    // the whole activity partial. The small `model_completed` events around it
+    // are the real usage and must still be counted, and the scan must complete.
+    const sessionsDir = path.join(root, 'muse', 'sessions');
+    const sessDir = path.join(sessionsDir, '2026-10-01', 'sess-uuid');
+    fs.mkdirSync(sessDir, { recursive: true });
+    const at = Date.parse('2026-10-01T15:00:00Z');
+    const file = path.join(sessDir, 'session.jsonl');
+    const fd = fs.openSync(file, 'w');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 100, 20, 10, at)) + '\n');
+    // An oversized (>8 MiB) context_projection_checkpoint line: no usage record.
+    fs.writeSync(
+      fd,
+      '{"record_type":"event","payload_type":"runtime.session","payload":{"event":{"kind":"context_projection_checkpoint","blob":"'
+    );
+    const padding = Buffer.alloc(1024 * 1024, 32);
+    for (let index = 0; index < 10; index++) fs.writeSync(fd, padding);
+    fs.writeSync(fd, '"}},"recorded_at":' + at + ',"id":"cp-1"}\n');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 60, 10, 5, at + 60000)) + '\n');
+    fs.closeSync(fd);
+    const data = await collectAccountActivity(
+      { kind: 'muse', sessionsDir },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.skippedLines).toBe(0);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    // input is netted of cache reads, as the muse parser does.
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 50);
+  });
+
+  it('stays partial on an oversized children batch that may wrap usage, counting the rest', async () => {
+    // Older muse lines wrap a `model_completed` record in
+    // `children[].record_json`; such a batch can exceed MAX_LINE_BYTES, and
+    // dropping it silently would lose usage while the scan claims complete.
+    // The `children` key in the line prefix keeps the scan honestly partial
+    // while the small usage lines around it still count.
+    const sessionsDir = path.join(root, 'muse', 'sessions');
+    const sessDir = path.join(sessionsDir, '2026-10-01', 'sess-uuid');
+    fs.mkdirSync(sessDir, { recursive: true });
+    const at = Date.parse('2026-10-01T15:00:00Z');
+    const file = path.join(sessDir, 'session.jsonl');
+    const fd = fs.openSync(file, 'w');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 100, 20, 10, at)) + '\n');
+    fs.writeSync(fd, '{"record_type":"event","children":[{"record_json":"{\\"pad\\":\\"');
+    const padding = Buffer.alloc(1024 * 1024, 32);
+    for (let index = 0; index < 10; index++) fs.writeSync(fd, padding);
+    fs.writeSync(fd, '\\"}"}],"recorded_at":' + at + ',"id":"wrap-1"}\n');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 60, 10, 5, at + 60000)) + '\n');
+    fs.closeSync(fd);
+    const data = await collectAccountActivity(
+      { kind: 'muse', sessionsDir },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.skippedLines).toBe(1);
+    expect(data.scan?.complete).toBe(false);
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 50);
+  });
+});
+
+describe('mtime pre-filter skips files that cannot hold in-window events', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-mtime-prefilter-'));
+    fs.mkdirSync(path.join(root, 'codex', 'sessions'), { recursive: true });
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  function rollout(name: string, lines: unknown[], mtime: Date) {
+    const file = path.join(root, 'codex', 'sessions', name);
+    fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+    return file;
+  }
+  function collect() {
+    return collectAccountActivity(
+      { kind: 'codex', codexHome: path.join(root, 'codex'), cacheDir: path.join(root, 'cache') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+  }
+  function checkpoints(): string[] {
+    const dir = path.join(root, 'cache', 'account-activity-v1');
+    const found: string[] = [];
+    if (!fs.existsSync(dir)) return found;
+    const walk = (d: string) => {
+      for (const item of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, item.name);
+        if (item.isDirectory()) walk(full);
+        else found.push(full);
+      }
+    };
+    walk(dir);
+    return found;
+  }
+
+  it('reads the recent file, skips the stale one, and keeps the in-window total', async () => {
+    // A stale rollout (mtime before the window) holds only out-of-window events;
+    // append-only logs cannot gain in-window records after their last write, so
+    // it is skipped without being read. The recent rollout is read in full.
+    rollout(
+      'rollout-old.jsonl',
+      [meta(), model(), tokens(999, 0, 999, '2026-08-01T15:00:00Z')],
+      new Date(NOW - 40 * 86400000)
+    );
+    rollout(
+      'rollout-recent.jsonl',
+      [meta(), model(), tokens(100, 20, 10, '2026-10-01T15:05:00Z')],
+      new Date(NOW)
+    );
+    const data = await collect();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80);
+    // Only the recent file was read, so only it has a checkpoint.
+    expect(checkpoints()).toHaveLength(1);
+  });
+
+  it('still reads a file written 12 h before the window (24 h margin)', async () => {
+    // Timezone-naive timestamps and NAS-clocked mtimes can lag the window by
+    // hours; the 24 h margin keeps such files readable while months-old logs
+    // are still skipped. A 60 s margin would skip this file and lose the event.
+    rollout(
+      'rollout-lagging.jsonl',
+      [meta(), model(), tokens(100, 20, 10, '2026-10-01T15:05:00Z')],
+      new Date(NOW - 31 * 86400000 - 12 * 3600000)
+    );
+    const data = await collect();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80);
+    expect(checkpoints()).toHaveLength(1);
+  });
+
+  it('reports a complete empty scan (not unavailable) when every file predates the window', async () => {
+    // A kind whose logs all predate the window has no in-window usage; the mtime
+    // pre-filter drops every file, and the scan must complete empty rather than
+    // throw 'Native log sources are unavailable' (which would mark the source
+    // failed). Regression: codex threw when a bounded traversal reached only
+    // stale date dirs before its deadline.
+    rollout(
+      'rollout-old.jsonl',
+      [meta(), model(), tokens(999, 0, 999, '2026-08-01T15:00:00Z')],
+      new Date(NOW - 40 * 86400000)
+    );
+    const data = await collect();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(0);
+    expect(data.hourly).toHaveLength(0);
+  });
+});
+
+describe('exact-duplicate session file dedup', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-dedup-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('counts a byte-identical session file copied under two project dirs once', async () => {
+    // A Claude subagent transcript written under two project dirs (a session
+    // spanning two cwds) is the same usage twice; the collector must drop the
+    // exact copy so tokens are not doubled.
+    const line =
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'claude-dup',
+        timestamp: '2026-10-01T15:00:00Z',
+        message: {
+          model: 'claude-sonnet-4-6',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 40,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 5,
+          },
+        },
+      }) + '\n';
+    for (const proj of ['projA', 'projB']) {
+      const dir = path.join(root, 'claude', 'projects', proj, 'sess', 'subagents');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'agent-same.jsonl'), line);
+    }
+    const data = await collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(100);
+  });
+
+  it('counts two same-size files with different content (no false dedup)', async () => {
+    // The exact-duplicate fingerprint is (size, head, tail): two files of the
+    // same byte size but different records must both count. Same-length
+    // session ids and token values keep the sizes equal.
+    const lineFor = (sessionId: string, input: number) =>
+      JSON.stringify({
+        type: 'assistant',
+        sessionId,
+        timestamp: '2026-10-01T15:00:00Z',
+        message: {
+          model: 'claude-sonnet-4-6',
+          usage: {
+            input_tokens: input,
+            output_tokens: 40,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 5,
+          },
+        },
+      }) + '\n';
+    const lineA = lineFor('claude-neg-aa', 100);
+    const lineB = lineFor('claude-neg-bb', 200);
+    expect(lineB.length).toBe(lineA.length);
+    expect(lineB).not.toBe(lineA);
+    fs.mkdirSync(path.join(root, 'claude', 'projects', 'projA', 'sess'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'claude', 'projects', 'projB', 'sess'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'claude', 'projects', 'projA', 'sess', 'a.jsonl'), lineA);
+    fs.writeFileSync(path.join(root, 'claude', 'projects', 'projB', 'sess', 'b.jsonl'), lineB);
+    const data = await collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(300);
   });
 });

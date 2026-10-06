@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1135,
-    "filesAffected": 116,
-    "hotpathOccurrences": 504,
-    "hotpathFilesAffected": 65,
+    "totalOccurrences": 1142,
+    "filesAffected": 117,
+    "hotpathOccurrences": 511,
+    "hotpathFilesAffected": 66,
     "topHotpathFiles": [
       {
         "file": "src/management/shared-manager/diverged-file-adopter.ts",
@@ -22,6 +22,24 @@
           "renameSync",
           "statSync",
           "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/usage/account-activity-collector.ts",
+        "count": 29,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "existsSync",
+          "mkdirSync",
+          "opendirSync",
+          "openSync",
+          "readFileSync",
+          "readSync",
+          "renameSync",
+          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -53,23 +71,6 @@
           "readdirSync",
           "symlinkSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 23,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "existsSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
-          "readSync",
-          "renameSync",
-          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -265,6 +266,24 @@
         "markers": []
       },
       {
+        "file": "src/web-server/usage/account-activity-collector.ts",
+        "count": 29,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "existsSync",
+          "mkdirSync",
+          "opendirSync",
+          "openSync",
+          "readFileSync",
+          "readSync",
+          "renameSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/web-server/services/account-analytics-activity.ts",
         "count": 28,
         "calls": [
@@ -327,23 +346,6 @@
           "readFileSync",
           "renameSync",
           "rmSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 23,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "existsSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
-          "readSync",
-          "renameSync",
-          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -602,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 36,
-      "totalSourceFiles": 394,
-      "coverageRatio": 0.0914,
+      "totalSourceFiles": 395,
+      "coverageRatio": 0.0911,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -630,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 140,
+          "count": 141,
           "withLogger": 20
         },
         {
@@ -749,24 +751,24 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 45,
-      "countOver600": 19,
+      "countOver400": 46,
+      "countOver600": 20,
       "topOver400": [
         {
           "file": "src/web-server/model-pricing.ts",
           "loc": 1322
         },
         {
+          "file": "src/web-server/usage/account-activity-collector.ts",
+          "loc": 1260
+        },
+        {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1174
+          "loc": 1244
         },
         {
           "file": "src/antigravity/registry.ts",
           "loc": 1104
-        },
-        {
-          "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 1102
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -805,12 +807,12 @@
           "loc": 674
         },
         {
-          "file": "src/web-server/services/codex-auto-switch-service.ts",
-          "loc": 667
+          "file": "src/web-server/services/analytics-remote-sources.ts",
+          "loc": 669
         },
         {
-          "file": "src/antigravity/switch-service.ts",
-          "loc": 636
+          "file": "src/web-server/services/codex-auto-switch-service.ts",
+          "loc": 667
         }
       ]
     }

@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   ANALYTICS_HELPER_SHA256,
+  analyticsHelperCommand,
   analyticsHelperPath,
   parseAnalyticsRemoteResponse,
   runAnalyticsRemoteHelper,
@@ -14,6 +15,10 @@ import {
   loadAnalyticsRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
 import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
+import {
+  clearModelsDevRegistryCache,
+  setCachedModelsDevRegistry,
+} from '../../../src/web-server/models-dev/registry-cache';
 import {
   defaultDashboardPreferences,
   writeDashboardPreferences,
@@ -188,6 +193,21 @@ describe('analytics remote transport', () => {
     ).rejects.toThrow();
   });
 
+  it('lets Python read the request from stdin itself, never PowerShell', () => {
+    const encoded = analyticsHelperCommand('windows').match(
+      /^powershell\.exe -NoProfile -NonInteractive -EncodedCommand ([A-Za-z0-9+/=]+)$/
+    );
+    expect(encoded).not.toBeNull();
+    const script = Buffer.from(encoded?.[1] ?? '', 'base64').toString('utf16le');
+    // Reading a helper-sized request through [Console]::In hung about half the time over
+    // Windows OpenSSH; with no pipeline input, Python inherits stdin and reads it.
+    expect(script).not.toContain('[Console]::In');
+    expect(script).not.toContain('$request |');
+    expect(script).toContain("& $python -c 'import sys,json,io;");
+    expect(script).toContain('sys.stdin.buffer.read()');
+    expect(analyticsHelperCommand('mac')).toStartWith("/usr/bin/python3 -c 'import sys,json,io;");
+  });
+
   it('refuses malformed extra roots without running ssh', async () => {
     const bad = (extraRoots: unknown) =>
       runAnalyticsRemoteHelper('fine-alias', 'mac', {
@@ -297,7 +317,7 @@ describe('analytics remote sources', () => {
         version: number;
         srows: unknown[];
       };
-      expect(saved.version).toBe(3);
+      expect(saved.version).toBe(4);
       expect(saved.srows).toHaveLength(1);
       fs.writeFileSync(file, JSON.stringify({ ...saved, version: 2, srows: [] }));
     }
@@ -616,5 +636,293 @@ describe('analytics remote sources', () => {
         'done',
       ]);
     }
+  });
+});
+
+describe('analytics remote scans per kind', () => {
+  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias' });
+  const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode'];
+  const FILE_2 = 'a2'.repeat(32);
+  /** A clean answer for exactly the kinds asked, with an OMP row when OMP is asked. */
+  const answer = (kinds: string[], extra: Record<string, unknown> = {}) =>
+    parseAnalyticsRemoteResponse(
+      JSON.stringify({
+        version: 1,
+        truncated: false,
+        kinds: Object.fromEntries(
+          kinds.map((kind) => [
+            kind,
+            {
+              state: 'ok',
+              fingerprints: kind === 'omp' ? { [FILE_1]: { size: 10, mtimeMs: 20 } } : {},
+            },
+          ])
+        ),
+        rows: kinds.includes('omp') ? [row()] : [],
+        ...extra,
+      })
+    );
+
+  it('scans a cold host with one call per kind, all at once, so a slow kind holds up none', async () => {
+    const calls: Array<{ host: string; kinds: string[]; prints: string[] }> = [];
+    let releaseClaude: () => void = () => {};
+    const slowClaude = new Promise<void>((resolve) => {
+      releaseClaude = resolve;
+    });
+    const loading = loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, platform, request) => {
+        calls.push({
+          host: platform,
+          kinds: request.kinds,
+          prints: Object.keys(request.fingerprints),
+        });
+        if (request.kinds.includes('claude')) await slowClaude;
+        return answer(request.kinds);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Every kind on both hosts is in flight together while Claude Code is still reading.
+    for (const host of ['mac', 'windows'])
+      expect(
+        calls
+          .filter((call) => call.host === host)
+          .map((call) => call.kinds.join(','))
+          .sort()
+      ).toEqual([...ALL].sort());
+    releaseClaude();
+    const { results, states } = await loading;
+    expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(2);
+    expect(states.filter((entry) => entry.state === 'ok')).toHaveLength(2);
+    // A settled host's next scan is one call for every kind.
+    calls.length = 0;
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, platform, request) => {
+        calls.push({
+          host: platform,
+          kinds: request.kinds,
+          prints: Object.keys(request.fingerprints),
+        });
+        return answer(request.kinds);
+      },
+    });
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.kinds).toEqual(ALL);
+      expect([...call.prints].sort()).toEqual([...ALL].sort());
+    }
+  });
+
+  it('goes back to one call per kind after a scan a kind did not finish', async () => {
+    const seen: string[][] = [];
+    const prints: string[][] = [];
+    const runHelper = async (
+      _alias: string,
+      platform: 'mac' | 'windows',
+      request: { kinds: string[]; fingerprints: Record<string, unknown> }
+    ) => {
+      if (platform === 'mac') {
+        seen.push(request.kinds);
+        prints.push(Object.keys(request.fingerprints));
+      }
+      return request.kinds.includes('codex')
+        ? answer(request.kinds, {
+            truncated: true,
+            kinds: { codex: { state: 'ok', partial: true, fingerprints: {} } },
+          })
+        : answer(request.kinds);
+    };
+    await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
+    seen.length = 0;
+    prints.length = 0;
+    await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
+    expect(seen).toHaveLength(5);
+    // Each call carries only its own kind's fingerprints.
+    seen.forEach((kinds, index) => expect(prints[index]).toEqual(kinds));
+  });
+
+  it('keeps a failed kind on its earlier rows while the other kinds update', async () => {
+    // Scan 1 leaves Codex unfinished, so the host is still catching up and scan 2 fans out.
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, _platform, request) =>
+        request.kinds.includes('codex')
+          ? answer(request.kinds, {
+              kinds: { codex: { state: 'pending', fingerprints: {} } },
+            })
+          : answer(request.kinds),
+    });
+    const fresh = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, _platform, request) => {
+        if (request.kinds.includes('omp')) throw new Error('ssh dropped');
+        return answer(request.kinds);
+      },
+    });
+    const omp = fresh.states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
+    expect(omp).toMatchObject({ state: 'cached', rowCount: 2 });
+    expect(omp?.detail).toBe('remote scan failed; showing previously read aggregates');
+    expect(fresh.results.filter((entry) => entry.tool === 'omp')).toHaveLength(2);
+    expect(
+      fresh.states.find((entry) => entry.tool === 'claude' && entry.host === 'mac')?.state
+    ).toBe('no_usage');
+  });
+
+  it('keeps unvisited files only for the kind whose own scan was cut', async () => {
+    const prints = (kind: string) =>
+      kind === 'omp'
+        ? { [FILE_1]: { size: 10, mtimeMs: 20 } }
+        : kind === 'claude'
+          ? { [FILE_2]: { size: 10, mtimeMs: 20 } }
+          : {};
+    // Scan 1: a Claude Code file and an OMP file; zcode is left pending, so scan 2 fans out.
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, _platform, request) => {
+        const kind = request.kinds[0];
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify({
+            version: 1,
+            truncated: kind === 'zcode',
+            kinds: {
+              [kind]: { state: kind === 'zcode' ? 'pending' : 'ok', fingerprints: prints(kind) },
+            },
+            rows:
+              kind === 'omp'
+                ? [row()]
+                : kind === 'claude'
+                  ? [row({ k: 'claude', f: FILE_2, m: 'claude-sonnet-4-6' })]
+                  : [],
+          })
+        );
+      },
+    });
+    // Scan 2: Claude Code's own call is cut before it reaches its file; OMP's call finishes and
+    // its file is gone. Only Claude Code keeps its unvisited file.
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, _platform, request) => {
+        expect(request.kinds).toHaveLength(1);
+        const kind = request.kinds[0];
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify({
+            version: 1,
+            truncated: kind === 'claude',
+            kinds: { [kind]: { state: 'ok', fingerprints: {} } },
+            rows: [],
+          })
+        );
+      },
+    });
+    expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(0);
+    expect(results.filter((entry) => entry.tool === 'claude')).toHaveLength(2);
+  });
+});
+
+describe('remote rows price like the local rows of their tool', () => {
+  const hosts = async () => ({ mac: 'mac-alias', windows: null });
+  let tempRoot = '';
+  let originalCcsHome: string | undefined;
+  let originalCcsDir: string | undefined;
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-remote-pricing-'));
+    originalCcsHome = process.env.CCS_HOME;
+    originalCcsDir = process.env.CCS_DIR;
+    process.env.CCS_HOME = tempRoot;
+    delete process.env.CCS_DIR;
+    clearModelsDevRegistryCache();
+    // Two providers list the Codex model at different prices, so by name alone it is ambiguous.
+    setCachedModelsDevRegistry({
+      openai: {
+        id: 'openai',
+        name: 'OpenAI',
+        models: {
+          'gpt-test-sol': {
+            id: 'gpt-test-sol',
+            name: 'GPT test',
+            cost: { input: 2, output: 10, cache_read: 0.2 },
+          },
+        },
+      },
+      azure: {
+        id: 'azure',
+        name: 'Azure',
+        models: {
+          'gpt-test-sol': {
+            id: 'gpt-test-sol',
+            name: 'GPT test',
+            cost: { input: 2.5, output: 12, cache_read: 0.25 },
+          },
+        },
+      },
+    } as unknown as Parameters<typeof setCachedModelsDevRegistry>[0]);
+  });
+  afterEach(() => {
+    clearModelsDevRegistryCache();
+    if (originalCcsHome === undefined) delete process.env.CCS_HOME;
+    else process.env.CCS_HOME = originalCcsHome;
+    if (originalCcsDir === undefined) delete process.env.CCS_DIR;
+    else process.env.CCS_DIR = originalCcsDir;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('prices a Codex row without a route at OpenAI list rates, and leaves a model with no rate not logged', async () => {
+    const codexRow = (model: string) =>
+      row({ k: 'codex', m: model, i: 1_000_000, o: 100_000, cr: 2_000_000, cw: 0, c: 0, n: 3 });
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, _platform, request) =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify({
+            version: 1,
+            truncated: false,
+            kinds: Object.fromEntries(
+              request.kinds.map((k) => [k, { state: 'ok', fingerprints: {} }])
+            ),
+            rows: request.kinds.includes('codex')
+              ? [codexRow('gpt-test-sol'), codexRow('gpt-unlisted-model')]
+              : request.kinds.includes('muse')
+                ? [row({ k: 'muse', m: 'gpt-test-sol', c: 0 })]
+                : [],
+            srows: request.kinds.includes('codex')
+              ? [
+                  srow({
+                    k: 'codex',
+                    m: 'gpt-test-sol',
+                    i: 1_000_000,
+                    o: 100_000,
+                    cr: 2_000_000,
+                    cw: 0,
+                    c: 0,
+                  }),
+                ]
+              : [],
+          })
+        ),
+    });
+    const codex = results.find((entry) => entry.tool === 'codex')?.data;
+    const breakdowns = codex?.hourly[0].modelBreakdowns ?? [];
+    const priced = breakdowns.find((item) => item.modelName === 'gpt-test-sol');
+    // input, cached input and output priced separately at the model's own rates: 2 + 0.4 + 1.
+    expect(priced?.provider).toBe('openai');
+    expect(priced?.cost).toBeCloseTo(3.4, 9);
+    expect(priced?.fallbackCost).toBeUndefined();
+    // No listed rate anywhere: an estimate is never invented; that part reads as not logged.
+    const unlisted = breakdowns.find((item) => item.modelName === 'gpt-unlisted-model');
+    expect(unlisted?.fallbackCost).toBeGreaterThan(0);
+    expect(unlisted?.fallbackCost).toBeCloseTo(unlisted?.cost ?? -1, 9);
+    expect(codex?.session[0].cost).toBeCloseTo(3.4, 9);
+    expect(codex?.session[0].fallbackCost).toBeUndefined();
+    // Muse logs no route; like the local Muse reader it prices by model name alone.
+    const muse = results.find((entry) => entry.tool === 'muse')?.data.hourly[0].modelBreakdowns[0];
+    expect(muse?.provider).toBeUndefined();
   });
 });

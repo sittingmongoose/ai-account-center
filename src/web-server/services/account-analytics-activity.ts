@@ -17,6 +17,8 @@ import { USAGE_PROVIDER_ORDER } from './account-analytics-attribution';
 import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
+import { collectorConcurrency, runBounded } from '../usage/collector-concurrency';
+import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
   analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
@@ -167,7 +169,17 @@ export function coldScanningSourceStates(): AccountAnalyticsSource[] {
 }
 
 export interface AccountAnalyticsActivityDeps {
-  loadWorker?: (request: UsageWorkerRequest) => Promise<UsageWorkerResult>;
+  /** Reads one request; `budgetMs` is what is left of the collection's deadline. */
+  loadWorker?: (request: UsageWorkerRequest, budgetMs?: number) => Promise<UsageWorkerResult>;
+  /** Local collectors that may run at once; sized to the machine by default (collectorConcurrency). */
+  concurrency?: number;
+  /**
+   * Keep the model price list current, off the request path: called as each collection starts. The
+   * live service refreshes the models.dev registry when its cached copy is a day old, so a model
+   * released after the last refresh gets a listed rate instead of reading as not logged. Tests and
+   * ad-hoc readers leave it unset and never touch the network.
+   */
+  refreshPricing?: () => unknown;
   requests?: () => AccountAnalyticsActivityRequest[] | Promise<AccountAnalyticsActivityRequest[]>;
   remote?: (
     minDateMs: number,
@@ -352,15 +364,21 @@ export function loadAccountAnalyticsWorker(
       settled = true;
       clearTimeout(timer);
       worker.removeAllListeners();
-      void worker.terminate().catch(() => {});
-      if (
-        data &&
+      const bounded =
+        !!data &&
         [data.daily, data.hourly, data.monthly, data.session].every(
           (rows) => Array.isArray(rows) && rows.length <= MAX_ROWS
-        )
-      )
-        resolve(data);
-      else reject(new CCSError('Local analytics worker could not return bounded usage history'));
+        );
+      // Settle only once the thread has stopped: a worker cut off by its time bound must never
+      // still be writing a checkpoint when the next collection reads the same files.
+      void worker
+        .terminate()
+        .catch(() => 0)
+        .then(() => {
+          if (bounded && data) resolve(data);
+          else
+            reject(new CCSError('Local analytics worker could not return bounded usage history'));
+        });
     };
     const timer = setTimeout(() => finish(), Math.min(MAX_WORKER_TIME_MS, Math.max(1, budgetMs)));
     worker.once('message', (response: UsageWorkerResponse) =>
@@ -380,11 +398,17 @@ async function isDirectory(directory: string): Promise<boolean> {
 }
 
 /**
- * The local log roots to read. The OMP marker scan awaits every directory
- * read, so it never blocks the server's event loop; it runs once per
- * collection, and the tools it returns are also what says which are installed.
+ * The local log roots to read, in two parts so the collectors start at once instead of waiting
+ * for the slowest discovery step. `ready` holds the roots a few stats find (Claude Code, Codex,
+ * Muse Code, zcode). `later` resolves once the OMP marker scan has run (it awaits every directory
+ * read, so it never blocks the event loop, and it is bounded at 30 s) together with the saved
+ * extras, which must know every built-in root so the same logs are never read twice. Together
+ * they also say which tools are installed. `later` never rejects.
  */
-async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
+function localRequestPlan(): {
+  ready: AccountAnalyticsActivityRequest[];
+  later: Promise<AccountAnalyticsActivityRequest[]>;
+} {
   const ccsDir = getCcsDir();
   const activity = { minDate: Date.now() - 31 * 86_400_000, cacheDir: path.join(ccsDir, 'cache') };
   const claudeRoots = [getClaudeProjectsDirForAnalytics()];
@@ -429,23 +453,6 @@ async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
     });
   }
   try {
-    const ompRoots: string[] = [];
-    for (const root of await resolveOmpSessionRoots({ cacheDir: path.join(ccsDir, 'cache') }))
-      if (await isDirectory(root)) ompRoots.push(root);
-    if (ompRoots.length) {
-      for (const root of ompRoots) {
-        try {
-          seen('omp', fs.realpathSync(root));
-        } catch {
-          /* Realpath failure still scans under the resolved root. */
-        }
-      }
-      requests.push({ provider: 'omp', request: { kind: 'omp', roots: ompRoots, activity } });
-    }
-  } catch {
-    /* Absent history is not an error or measured zero. */
-  }
-  try {
     const sessionsDir = resolveMuseSessionsDir();
     if (fs.statSync(sessionsDir).isDirectory()) {
       try {
@@ -471,13 +478,49 @@ async function localRequests(): Promise<AccountAnalyticsActivityRequest[]> {
   } catch {
     /* Absent history is not an error or measured zero. */
   }
+  const later = (async (): Promise<AccountAnalyticsActivityRequest[]> => {
+    const discovered: AccountAnalyticsActivityRequest[] = [];
+    try {
+      const ompRoots: string[] = [];
+      for (const root of await resolveOmpSessionRoots({ cacheDir: path.join(ccsDir, 'cache') }))
+        if (await isDirectory(root)) ompRoots.push(root);
+      if (ompRoots.length) {
+        for (const root of ompRoots) {
+          try {
+            seen('omp', fs.realpathSync(root));
+          } catch {
+            /* Realpath failure still scans under the resolved root. */
+          }
+        }
+        discovered.push({ provider: 'omp', request: { kind: 'omp', roots: ompRoots, activity } });
+      }
+    } catch {
+      /* Absent history is not an error or measured zero. */
+    }
+    try {
+      const prefs = readDashboardPreferences(ccsDir);
+      discovered.push(...extraActivityRequests(prefs.usageLogSources, activity, ccsDir, unique));
+    } catch {
+      /* Without prefs the built-in roots still scan. */
+    }
+    return discovered;
+  })();
+  return { ready: requests, later };
+}
+
+/** Injected requests (tests, embedders) in the same two parts: a list is ready at once. */
+function injectedRequestPlan(requests: NonNullable<AccountAnalyticsActivityDeps['requests']>): {
+  ready: AccountAnalyticsActivityRequest[];
+  later: Promise<AccountAnalyticsActivityRequest[]>;
+} {
   try {
-    const prefs = readDashboardPreferences(ccsDir);
-    requests.push(...extraActivityRequests(prefs.usageLogSources, activity, ccsDir, unique));
-  } catch {
-    /* Without prefs the built-in roots still scan. */
+    const listed = requests();
+    return Array.isArray(listed)
+      ? { ready: listed, later: Promise.resolve([]) }
+      : { ready: [], later: Promise.resolve(listed) };
+  } catch (error) {
+    return { ready: [], later: Promise.reject(error) };
   }
-  return requests;
 }
 
 /**
@@ -602,13 +645,14 @@ export class AccountAnalyticsActivityService {
   }
 
   private async collect(state: ActivityState, generation: number): Promise<void> {
-    const requests = (await (this.deps.requests ?? localRequests)()).slice(0, MAX_DIRECTORIES + 1);
-    const presence = this.deps.requests === undefined ? localSourcePresence(requests) : null;
-    const collected = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
-    let failed = false;
     const deadline = Date.now() + MAX_COLLECTION_TIME_MS;
     const cutoff = (this.deps.now ?? Date.now)() - 31 * 86_400_000;
-    // Remote scans run alongside the local workers; a timeout or failure only
+    try {
+      void this.deps.refreshPricing?.();
+    } catch {
+      /* A price-list refresh never holds up or fails a collection. */
+    }
+    // Remote scans start first and run alongside the local workers; a timeout or failure only
     // marks those sources, never the whole collection. The page names the
     // hosts a refresh is waiting on, so a slow Windows scan reads as
     // "Refreshing Mac and Windows…" instead of a stuck spinner.
@@ -627,59 +671,82 @@ export class AccountAnalyticsActivityService {
       ((ms: number, opts?: { onHostScan?: typeof onHostScan }) =>
         loadAnalyticsRemoteSources(ms, opts ?? {}));
     const remotePromise = loadRemote(cutoff, { onHostScan }).catch(() => null);
+    const collected = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
+    let failed = false;
+    // The roots a few stats find start reading at once; the OMP marker scan's roots join the queue
+    // when that scan finishes, without holding the others back.
+    const plan = this.deps.requests ? injectedRequestPlan(this.deps.requests) : localRequestPlan();
+    const later = plan.later.catch((): AccountAnalyticsActivityRequest[] => {
+      failed = true;
+      return [];
+    });
+    // Every collector runs at once up to a bound sized to the machine; each starts the moment a
+    // slot frees, so a slow one never holds back the next. Each keeps its own scan budget, and
+    // results are read back in request order, however the workers finish.
+    const settled: Array<PromiseSettledResult<UsageWorkerResult> | undefined> = [];
+    const { items: requests, skipped } = await runBounded(
+      [plan.ready, later],
+      this.deps.concurrency ?? collectorConcurrency(),
+      async (source, index) => {
+        const budget = Math.max(1, deadline - Date.now());
+        try {
+          settled[index] = {
+            status: 'fulfilled',
+            value: await (this.deps.loadWorker
+              ? this.deps.loadWorker(source.request, budget)
+              : loadAccountAnalyticsWorker(source.request, budget)),
+          };
+        } catch (reason) {
+          settled[index] = { status: 'rejected', reason };
+        }
+      },
+      {
+        // A manual refresh supersedes the old read without starting overlapping generations:
+        // running workers finish, queued ones never start, then the new generation scans afresh.
+        stop: () => generation !== state.generation || Date.now() >= deadline,
+        maxItems: MAX_DIRECTORIES + 1,
+      }
+    );
+    // Roots the deadline left unread make the collection partial.
+    if (skipped > 0) failed = true;
+    const presence = this.deps.requests === undefined ? localSourcePresence(requests) : null;
     const succeeded = new Set<AccountAnalyticsActivityProvider>();
     const attempted = new Set<AccountAnalyticsActivityProvider>();
     const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
-    // Two concurrent workers bound memory while preserving all detected roots.
-    for (let index = 0; index < requests.length; index += 2) {
-      // A manual refresh supersedes the old read without starting overlapping
-      // generations. Let its current bounded batch finish, then scan afresh.
-      if (generation !== state.generation) return;
-      if (Date.now() >= deadline) {
+    requests.forEach((source, index) => {
+      const result = settled[index];
+      if (!result) return;
+      const provider = source.provider;
+      attempted.add(provider);
+      if (result.status === 'rejected') {
         failed = true;
-        break;
+        return;
       }
-      const batch = requests.slice(index, index + 2);
-      const results = await Promise.allSettled(
-        batch.map((source) =>
-          this.deps.loadWorker
-            ? this.deps.loadWorker(source.request)
-            : loadAccountAnalyticsWorker(source.request, deadline - Date.now())
-        )
+      const existing = collected.get(provider) ?? [];
+      const data = result.value;
+      if (data.scan && !data.scan.complete) failed = true;
+      // An unfinished cold scan with no events is not a measured zero.
+      if (data.scan && !data.scan.complete && data.eventCount === 0) return;
+      // The analytics response only covers 30 days. Keep bounded recent
+      // summaries in memory rather than retaining historical project paths.
+      const hourly = data.hourly
+        .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
+        .slice(0, 744);
+      const recentSessions = data.session.filter(
+        (session) => Date.parse(session.lastActivity) >= cutoff
       );
-      results.forEach((result, position) => {
-        const provider = batch[position].provider;
-        attempted.add(provider);
-        if (result.status === 'rejected') {
-          failed = true;
-          return;
-        }
-        const existing = collected.get(provider) ?? [];
-        const data = result.value;
-        if (data.scan && !data.scan.complete) failed = true;
-        // An unfinished cold scan with no events is not a measured zero.
-        if (data.scan && !data.scan.complete && data.eventCount === 0) return;
-        // The analytics response only covers 30 days. Keep bounded recent
-        // summaries in memory rather than retaining historical project paths.
-        const hourly = data.hourly
-          .filter((hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff)
-          .slice(0, 744);
-        const recentSessions = data.session.filter(
-          (session) => Date.parse(session.lastActivity) >= cutoff
-        );
-        if (recentSessions.length > MAX_RETAINED_SESSIONS) failed = true;
-        existing.push({
-          ...data,
-          daily: [],
-          monthly: [],
-          hourly,
-          session: retainedSessions(recentSessions, cutoff),
-        });
-        collected.set(provider, existing);
-        succeeded.add(provider);
-        localEvents.set(provider, (localEvents.get(provider) ?? 0) + data.eventCount);
+      if (recentSessions.length > MAX_RETAINED_SESSIONS) failed = true;
+      existing.push({
+        ...data,
+        daily: [],
+        monthly: [],
+        hourly,
+        session: retainedSessions(recentSessions, cutoff),
       });
-    }
+      collected.set(provider, existing);
+      succeeded.add(provider);
+      localEvents.set(provider, (localEvents.get(provider) ?? 0) + data.eventCount);
+    });
     if (generation !== state.generation) return;
     // Phase 1: publish the fresh local rows now, merged with the previous remote answer, so a
     // slow or timing-out remote scan (Windows) never holds fresh local data hostage. The remote
@@ -1169,6 +1236,9 @@ export function getAccountAnalyticsActivity(
   to: number,
   options: { tz?: string } = {}
 ): Promise<AccountAnalyticsActivityResult> {
-  service ??= new AccountAnalyticsActivityService({ persistSnapshot: true });
+  service ??= new AccountAnalyticsActivityService({
+    persistSnapshot: true,
+    refreshPricing: startModelsDevRegistryRefresh,
+  });
   return service.get(query, from, to, options);
 }

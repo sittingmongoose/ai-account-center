@@ -50,6 +50,13 @@ interface Checkpoint {
   parser?: number;
   state: CodexNativeParserState;
   rows: CompactEntry[];
+  /**
+   * Claude's current API response: consecutive same-response lines collapse
+   * to the last (complete) usage, so the group-in-progress rides here until
+   * the next response arrives or the file ends. Survives pass cuts; a corrupt
+   * value invalidates the checkpoint like any other field.
+   */
+  pendingClaude?: { key: string; entry: RawUsageEntry };
 }
 export interface AccountActivityScanOptions {
   minDate: number;
@@ -68,6 +75,17 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_ROWS = 10_000;
 const MAX_TOTAL_ROWS = 100_000;
+/**
+ * Append-only usage logs never gain in-window records after their last write,
+ * so a file whose mtime predates the window cannot hold in-window events. The
+ * 24 h margin absorbs clock jitter between a record's own timestamp and the
+ * write that flushed it, timezone-naive timestamps some tools write, and
+ * mtimes from a NAS clock when a network share is added as an extra source.
+ * Skipping such files is a pure optimization: addEntry already drops
+ * out-of-window records, so totals are unchanged while cold starts read far
+ * less (Codex ~24.7 GB -> ~11.8 GB), so Analytics converges sooner.
+ */
+const MTIME_SKIP_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
@@ -77,9 +95,12 @@ type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl';
 /**
  * Checkpoints of these kinds hold rows from an older parser and are read
  * again from the start: OMP rows now keep the routing provider and never mix
- * logged and unlogged events; Muse input no longer includes cache reads.
+ * logged and unlogged events; Muse input no longer includes cache reads;
+ * Claude rows now count one API response, not one content block, and the
+ * open response is never committed at EOF (R2-1: old rows may hold an
+ * early-committed half response that a later scan would count again).
  */
-const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2 };
+const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2, claude: 2 };
 
 function wantedFile(kind: string, name: string): boolean {
   if (kind === 'claude') return name.endsWith('.jsonl');
@@ -145,13 +166,18 @@ export function parseJsonlMappedUsageLine(
   if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) entry.costUsd = cost;
   return entry;
 }
-async function filesUnder(
+/**
+ * The candidate log files under one root. Like the reads, the walk is synchronous on purpose: it
+ * runs on the collector's own worker thread, so several collectors walking at once never queue
+ * on the process's shared libuv pool, which the server's own file work also needs.
+ */
+function filesUnder(
   root: string,
   kind: string,
   issues: { failed: number },
   deadline: number,
   limits: AccountActivityScanOptions['traversalLimits']
-): Promise<string[]> {
+): string[] {
   const ceiling = (value: number | undefined, maximum: number): number =>
     Number.isSafeInteger(value) && (value as number) >= 1
       ? Math.min(value as number, maximum)
@@ -174,19 +200,30 @@ async function filesUnder(
     try {
       // Streaming iteration also bounds directories containing many irrelevant
       // entries; neither empty directories nor non-JSONL files evade the cap.
-      const directory = await fs.promises.opendir(current.directory);
-      for await (const item of directory) {
-        if (Date.now() >= deadline || visitedEntries >= maxEntries || result.length >= MAX_FILES) {
-          issues.failed++;
-          return result;
-        }
-        visitedEntries++;
-        const file = path.join(current.directory, item.name);
-        if (item.isDirectory()) {
-          if (current.depth >= maxDepth || pending.length + visitedDirectories >= maxDirectories) {
+      const directory = fs.opendirSync(current.directory);
+      try {
+        for (let item = directory.readSync(); item !== null; item = directory.readSync()) {
+          if (
+            Date.now() >= deadline ||
+            visitedEntries >= maxEntries ||
+            result.length >= MAX_FILES
+          ) {
             issues.failed++;
-          } else pending.push({ directory: file, depth: current.depth + 1 });
-        } else if (item.isFile() && wantedFile(kind, item.name)) result.push(file);
+            return result;
+          }
+          visitedEntries++;
+          const file = path.join(current.directory, item.name);
+          if (item.isDirectory()) {
+            if (
+              current.depth >= maxDepth ||
+              pending.length + visitedDirectories >= maxDirectories
+            ) {
+              issues.failed++;
+            } else pending.push({ directory: file, depth: current.depth + 1 });
+          } else if (item.isFile() && wantedFile(kind, item.name)) result.push(file);
+        }
+      } finally {
+        directory.closeSync();
       }
     } catch {
       issues.failed++;
@@ -244,7 +281,11 @@ function loadCheckpoint(
       typeof value.state.sessionId !== 'string' ||
       (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
       (value.skippedLines > 0 && value.largeLineParserVersion !== 3) ||
-      value.parser !== PARSER_VERSION[kind]
+      value.parser !== PARSER_VERSION[kind] ||
+      (value.pendingClaude !== undefined &&
+        (typeof value.pendingClaude.key !== 'string' ||
+          !value.pendingClaude.entry ||
+          typeof value.pendingClaude.entry !== 'object'))
     )
       return fresh(stats, minDate, kind);
     const fd = fs.openSync(file, 'r');
@@ -604,7 +645,42 @@ export function aggregateRows(
   };
 }
 
-async function readBatch(
+/**
+ * Whether an oversized (> MAX_LINE_BYTES) line could carry a countable usage
+ * record for the kind, so a skipped oversized line only blocks scan completion
+ * when it may have held usage. Muse writes direct usage in small fixed-envelope
+ * `model_completed` events (~730 B, never oversized); its oversized lines are
+ * `context_projection_checkpoint`/retained content records the parser never
+ * counts (cumulative, would double tokens), so skipping them must not pin the
+ * whole activity partial forever (N9). But older lines can wrap a usage record
+ * in `children[].record_json`, and a `children` batch can be oversized, so an
+ * oversized line with a `children` key in its prefix stays honestly partial.
+ * (The checkpoint kind itself sits ~25 KB into the line, past a huge
+ * instructions string, so the prefix cannot match on kind directly.) Codex's
+ * oversized lines are `response_item` conversation content, never token_count.
+ * Claude/OMP can carry usage in a large assistant/message line, so stay honest.
+ */
+function oversizedLineCarriesUsage(
+  kind: ActivityKind,
+  recordType: string | undefined,
+  prefix: string
+): boolean {
+  if (kind === 'muse') return /"children"\s*:/.test(prefix);
+  if (kind === 'codex') return recordType !== 'response_item';
+  return true;
+}
+
+/** Bytes read per chunk; each chunk is a fresh buffer because line fragments keep slices of it. */
+const READ_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Read one file's next records into its checkpoint. Reads are synchronous on purpose: this runs
+ * inside a collector's worker thread, never on the server's event loop, so a blocking read only
+ * holds that thread. Several collectors running at once then read in parallel on their own
+ * (low-priority) threads instead of queueing on the process's small shared libuv pool, which the
+ * server's own file and crypto work also needs.
+ */
+function readBatch(
   file: string,
   value: Checkpoint,
   stats: fs.Stats,
@@ -612,7 +688,7 @@ async function readBatch(
   options: AccountActivityScanOptions,
   deadline: number,
   mapping?: JsonlFieldMapping
-): Promise<void> {
+): void {
   if (value.complete && value.offset === stats.size) return;
   value.unfinishedTail = false;
   const rows = new Map(value.rows.map((row) => [rowKey(row), row]));
@@ -629,13 +705,20 @@ async function readBatch(
     value.complete = position === stats.size && !discarding;
     return;
   }
-  const stream = fs.createReadStream(file, {
-    start: position,
-    end: end - 1,
-    highWaterMark: 1024 * 1024,
-  });
   const fileSessionId =
     kind === 'omp' ? ompSessionIdForFile(file) : kind === 'muse' ? museSessionIdForFile(file) : '';
+  // Claude writes several assistant lines per API response (one per content
+  // block, usage repeated, last line complete). Consecutive same-response
+  // lines collapse to the last; the group-in-progress rides in the checkpoint
+  // so a pass cut mid-response resumes rather than double-counts. A group
+  // only commits when the next response (or solo line) arrives — never at
+  // EOF, where the file may still be growing (R2-1).
+  const flushPendingClaude = (): void => {
+    const pending = value.pendingClaude;
+    if (kind !== 'claude' || !pending) return;
+    value.pendingClaude = undefined;
+    if (!addEntry(rows, pending.entry, options.minDate)) value.skippedLines++;
+  };
   const consume = (buffer: Buffer): void => {
     const line = buffer.toString('utf8');
     // Avoid parsing conversations/prompts: only actual native usage and the
@@ -643,8 +726,20 @@ async function readBatch(
     let entry: RawUsageEntry | null = null;
     if (kind === 'codex') entry = parseCodexNativeUsageLine(line, value.state);
     else if (kind === 'claude') {
-      if (/"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line))
-        entry = parseUsageEntry(line, '');
+      if (/"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line)) {
+        const parsed = parseUsageEntry(line, '');
+        if (parsed) {
+          if (parsed.responseKey === undefined) {
+            flushPendingClaude();
+            entry = parsed;
+          } else if (value.pendingClaude?.key === parsed.responseKey) {
+            value.pendingClaude.entry = parsed;
+          } else {
+            flushPendingClaude();
+            value.pendingClaude = { key: parsed.responseKey, entry: parsed };
+          }
+        }
+      }
     } else if (kind === 'omp') {
       if (/"type"\s*:\s*"message"/.test(line) && /"usage"\s*:/.test(line))
         entry = parseOmpUsageLine(line, fileSessionId);
@@ -655,9 +750,14 @@ async function readBatch(
     }
     if (entry && !addEntry(rows, entry, options.minDate)) value.skippedLines++;
   };
+  const fd = fs.openSync(file, 'r');
   try {
-    for await (const raw of stream) {
-      const chunk = raw as Buffer;
+    for (let readAt = position; readAt < end; ) {
+      const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, end - readAt));
+      const read = fs.readSync(fd, buffer, 0, buffer.length, readAt);
+      if (read <= 0) break;
+      readAt += read;
+      const chunk = read === buffer.length ? buffer : buffer.subarray(0, read);
       let start = 0;
       while (start < chunk.length) {
         const newline = chunk.indexOf(10, start);
@@ -682,7 +782,7 @@ async function readBatch(
             const recordType = prefix.match(
               /^\s*\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"([^"\\]+)"/
             );
-            if (!(kind === 'codex' && recordType?.[1] === 'response_item')) value.skippedLines++;
+            if (oversizedLineCarriesUsage(kind, recordType?.[1], prefix)) value.skippedLines++;
             fragments = [];
           } else fragments.push(slice);
         }
@@ -712,10 +812,14 @@ async function readBatch(
       }
     } else if (discarding) value.offset = position;
     value.discardingLine = discarding;
+    // The open response is never committed at EOF: the last group may still
+    // be growing, and committing it here counts it again when the next scan
+    // continues it (R2-1). It stays in the checkpoint and is folded into the
+    // reported totals only (see collectAccountActivity).
     value.complete = value.offset === stats.size && !discarding;
     value.rows = [...rows.values()];
   } finally {
-    stream.destroy();
+    fs.closeSync(fd);
   }
 }
 
@@ -972,6 +1076,47 @@ export function dropOmpResumeCopies<T extends { file: string; stats: fs.Stats }>
   return dropped.size ? files.filter((item) => !dropped.has(item.file)) : files;
 }
 
+/**
+ * Byte-identical copies of one session log — e.g. a Claude subagent transcript
+ * written under two project dirs when a session spans two cwds (observed: 147
+ * duplicated `subagents/agent-*.jsonl` files, ~25k double-counted records), or a
+ * manually copied session. Each copy holds the same records, so reading both
+ * double-counts. Group by the same (size, head, tail) fingerprint the checkpoints
+ * use and keep one per group. OMP copies are prefix copies handled by
+ * dropOmpResumeCopies (a superset of exact copies), so this covers the rest.
+ */
+export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stats }>(
+  files: T[]
+): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  let dropped = 0;
+  for (const item of files) {
+    let fd: number | undefined;
+    let key: string | null;
+    try {
+      fd = fs.openSync(item.file, 'r');
+      const size = item.stats.size;
+      const tailStart = Math.max(0, size - 256);
+      key = `${size}:${fingerprint(fd, 0, Math.min(256, size))}:${fingerprint(fd, tailStart, size - tailStart)}`;
+    } catch {
+      key = null;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+    // Unreadable here: keep it so readBatch surfaces the failure honestly.
+    if (key !== null) {
+      if (seen.has(key)) {
+        dropped++;
+        continue;
+      }
+      seen.add(key);
+    }
+    result.push(item);
+  }
+  return dropped ? result : files;
+}
+
 /** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
 export async function collectAccountActivity(
   request: Extract<UsageWorkerRequest, { kind: ActivityKind }>,
@@ -1004,20 +1149,21 @@ export async function collectAccountActivity(
     return collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
   const issues = { failed: 0 };
   const files: Array<{ file: string; stats: fs.Stats }> = [];
+  // Whether traversal saw any candidate file at all, before the mtime pre-filter
+  // drops out-of-window ones. "Found files but all are stale" means no usage in
+  // the window (a complete, empty scan), never an unavailable source.
+  let sawAnyFile = false;
   for (const root of roots) {
-    for (const file of await filesUnder(
-      root,
-      request.kind,
-      issues,
-      deadline,
-      options.traversalLimits
-    )) {
+    for (const file of filesUnder(root, request.kind, issues, deadline, options.traversalLimits)) {
+      sawAnyFile = true;
       if (Date.now() >= deadline) {
         issues.failed++;
         break;
       }
       try {
-        files.push({ file, stats: fs.statSync(file) });
+        const stats = fs.statSync(file);
+        if (stats.mtimeMs < options.minDate - MTIME_SKIP_MARGIN_MS) continue;
+        files.push({ file, stats });
       } catch {
         issues.failed++;
       }
@@ -1028,9 +1174,10 @@ export async function collectAccountActivity(
     }
     if (files.length >= MAX_FILES || Date.now() >= deadline) break;
   }
-  if (!files.length && issues.failed) throw new CCSError('Native log sources are unavailable');
+  if (!sawAnyFile && issues.failed) throw new CCSError('Native log sources are unavailable');
   // Resumed OMP runs copy a session into a new root; its records count once.
-  const scanned = request.kind === 'omp' ? dropOmpResumeCopies(files) : files;
+  const scanned =
+    request.kind === 'omp' ? dropOmpResumeCopies(files) : dropExactDuplicateFiles(files);
   scanned.sort(
     (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
   );
@@ -1046,7 +1193,7 @@ export async function collectAccountActivity(
       const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
       const before = value.offset;
       if (Date.now() < deadline) {
-        await readBatch(
+        readBatch(
           file,
           value,
           stats,
@@ -1063,8 +1210,19 @@ export async function collectAccountActivity(
       if (value.unfinishedTail) unfinishedFiles++;
       skippedLines += value.skippedLines;
       const available = MAX_TOTAL_ROWS - rows.length;
-      rows.push(...value.rows.slice(0, Math.max(0, available)));
-      if (value.rows.length > available) failed++;
+      if (request.kind === 'claude' && value.pendingClaude) {
+        // Report the open response without storing it (R2-1): merging it
+        // into a copy of this file's rows shows exactly what committing
+        // would, while the checkpoint keeps it pending for the next scan.
+        // A cap miss here is transient (retried every scan), never stored.
+        const fileRows = new Map(value.rows.map((row) => [rowKey(row), row]));
+        if (!addEntry(fileRows, value.pendingClaude.entry, options.minDate)) skippedLines++;
+        rows.push(...[...fileRows.values()].slice(0, Math.max(0, available)));
+        if (fileRows.size > available) failed++;
+      } else {
+        rows.push(...value.rows.slice(0, Math.max(0, available)));
+        if (value.rows.length > available) failed++;
+      }
     } catch {
       failed++;
     }
@@ -1079,7 +1237,7 @@ export async function collectAccountActivity(
         : request.kind === 'muse'
           ? 'muse-native'
           : 'custom-parser';
-  if (!rows.length && failed >= scanned.length && failed > 0)
+  if (!rows.length && scanned.length > 0 && failed >= scanned.length && failed > 0)
     throw new CCSError('Native log sources could not be read');
   const { hourly, session } = aggregateRows(rows, source, request.kind);
   return {

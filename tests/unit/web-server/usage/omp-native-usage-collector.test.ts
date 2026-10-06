@@ -140,10 +140,12 @@ describe('omp session roots', () => {
     expect(roots).not.toContain(skipped);
   });
 
-  it('treats any jsonl-bearing sessions dir as a root, and empty ones as none', async () => {
+  it('treats an OMP-named sessions dir as a root, and empty ones as none', async () => {
+    // Presence alone (any `.jsonl`) used to qualify; it accepted synthetic
+    // Muse trees, so a `sessions/` dir must now hold an OMP-named file.
     const generic = path.join(home, 'PM-Experiments', 'proj', 'sessions');
     fs.mkdirSync(generic, { recursive: true });
-    fs.writeFileSync(path.join(generic, 'rollout-anything.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(generic, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
     const empty = path.join(home, 'PM-Experiments', 'other', 'sessions');
     fs.mkdirSync(empty, { recursive: true });
     const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
@@ -154,7 +156,7 @@ describe('omp session roots', () => {
   it('honors explicit scan bounds', async () => {
     const custom = path.join(home, 'PM-Experiments', 'proj', 'sessions');
     fs.mkdirSync(custom, { recursive: true });
-    fs.writeFileSync(path.join(custom, 'x.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(custom, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
     const starved = await resolveOmpSessionRoots({
       env: {},
       homeDir: home,
@@ -169,7 +171,7 @@ describe('omp session roots', () => {
     const cacheDir = path.join(home, 'cache');
     const first = path.join(home, 'PM-Experiments', 'a', 'sessions');
     fs.mkdirSync(first, { recursive: true });
-    fs.writeFileSync(path.join(first, 'x.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(first, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
     const now = Date.now();
     const scanned = await resolveOmpSessionRoots({
       env: {},
@@ -180,7 +182,7 @@ describe('omp session roots', () => {
     expect(scanned).toContain(first);
     const second = path.join(home, 'PM-Experiments', 'b', 'sessions');
     fs.mkdirSync(second, { recursive: true });
-    fs.writeFileSync(path.join(second, 'y.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(second, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
     const cached = await resolveOmpSessionRoots({
       env: {},
       homeDir: home,
@@ -205,5 +207,181 @@ describe('omp session roots', () => {
     expect(
       roots.filter((root) => root === path.join(home, '.omp', 'agent', 'sessions'))
     ).toHaveLength(1);
+  });
+
+  it('accepts a custom --session-dir root by content, not the literal name sessions', async () => {
+    // Wave-4 workers wrote `<branch>-sessions` dirs (e.g. fw4-t2-sessions) that
+    // the old name-only check missed; each holds `<ts>_<uuid>.jsonl` directly.
+    const worker = path.join(home, 'PM-Experiments', 'proj', 'worktrees', 'omp', 'fw4-t2-sessions');
+    fs.mkdirSync(worker, { recursive: true });
+    fs.writeFileSync(path.join(worker, '2026-10-05T10-07-46-206Z_01a10b88_uuid.jsonl'), '{}\n');
+    // A subagent subdir is reached by the collector's own recursive read; an
+    // accepted root is never descended, so it must not become a separate root.
+    const sub = path.join(worker, '2026-10-05T10-07-46-206Z_01a10b88_uuid');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, '__advisor.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).toContain(worker);
+    expect(roots).not.toContain(sub);
+  });
+
+  it('does not accept a non-sessions dir that holds only non-session jsonl', async () => {
+    const src = path.join(home, 'PM-Experiments', 'proj', 'src');
+    fs.mkdirSync(src, { recursive: true });
+    fs.writeFileSync(path.join(src, 'notes.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).not.toContain(src);
+  });
+
+  it('enumerates per-profile OMP session roots under ~/.omp/profiles', async () => {
+    const profile = path.join(home, '.omp', 'profiles', 'pm-probe', 'agent', 'sessions');
+    fs.mkdirSync(profile, { recursive: true });
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).toContain(profile);
+  });
+
+  it('examines a sessions dir one level past the depth cap', async () => {
+    // Experiment runners nest per-job session dirs one level deeper than the
+    // scan's depth cap (`runs/<run>/jobs/<job>/sessions` is depth 7); the walk examines
+    // session-container children of a max-depth dir inline, without
+    // descending further. Use a tiny maxDepth so the fixture stays small.
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      'exp',
+      'runs',
+      'r1',
+      'stage',
+      'jobs',
+      'j1',
+      'sessions'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      scanBounds: { maxDepth: 6 },
+    });
+    expect(roots).toContain(deep);
+  });
+
+  it('excludes a marked sandbox tree while a sibling worker sessions root still counts', async () => {
+    // Sandbox generators write `.aac-synthetic` at their data-tree root; the
+    // scan skips the whole subtree so fixtures never count as real usage.
+    const data = path.join(home, 'PM-Experiments', 'worktrees', 'omp', 'fw4-t9x-run', 'data');
+    const sandbox = path.join(data, 'omp', 'sessions');
+    fs.mkdirSync(sandbox, { recursive: true });
+    fs.writeFileSync(path.join(sandbox, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(data, '.aac-synthetic'), 'synthetic\n');
+    const worker = path.join(home, 'PM-Experiments', 'worktrees', 'omp', 'fw4-n4o-sessions');
+    fs.mkdirSync(worker, { recursive: true });
+    fs.writeFileSync(path.join(worker, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).not.toContain(sandbox);
+    expect(roots).toContain(worker);
+  });
+
+  it('excludes a marked sessions dir one level past the depth cap', async () => {
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      'exp',
+      'runs',
+      'r1',
+      'stage',
+      'jobs',
+      'j1',
+      'sessions'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(deep, '.aac-synthetic'), 'synthetic\n');
+    const roots = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      scanBounds: { maxDepth: 6 },
+    });
+    expect(roots).not.toContain(deep);
+  });
+
+  it('skips generator manifests, non-OMP sessions dirs and fixture dirs', async () => {
+    // T5-recipe sandboxes predate the marker: their data/MANIFEST.json with a
+    // `trees` key marks the tree instead.
+    const data = path.join(home, 'PM-Experiments', 'worktrees', 'omp', 'fw4-t9x-run', 'data');
+    const legacy = path.join(data, 'omp', 'sessions');
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.writeFileSync(path.join(legacy, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(data, 'MANIFEST.json'), JSON.stringify({ trees: { omp: {} } }));
+    // Synthetic Muse trees (`<uuid>/session.jsonl`) are not OMP-named
+    // (kept outside the manifest tree so this isolates the name rule).
+    const museRoot = path.join(home, 'PM-Experiments', 'other', 'sessions');
+    const muse = path.join(museRoot, 'some-uuid');
+    fs.mkdirSync(muse, { recursive: true });
+    fs.writeFileSync(path.join(muse, 'session.jsonl'), '{}\n');
+    // Fixture/test/build dirs are never descended.
+    const hidden = path.join(home, 'PM-Experiments', 'exp', 'tests', 'sessions');
+    fs.mkdirSync(hidden, { recursive: true });
+    fs.writeFileSync(path.join(hidden, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).not.toContain(legacy);
+    expect(roots).not.toContain(museRoot);
+    expect(roots).not.toContain(hidden);
+  });
+
+  it('does not examine a non-sessions dir past the depth cap', async () => {
+    // The one-level-past-the-cap exception is only for session containers:
+    // an `evidence/` dir holding a session file one level too deep stays out
+    // of reach (explicit extra usage-log sources cover those).
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      'exp',
+      'runs',
+      'r1',
+      'stage',
+      'jobs',
+      'j1',
+      'evidence'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      scanBounds: { maxDepth: 6 },
+    });
+    expect(roots).not.toContain(deep);
+  });
+
+  it('rescans a truncated marker scan on a short TTL and unions roots', async () => {
+    const cacheDir = path.join(home, 'cache');
+    const dirA = path.join(home, 'PM-Experiments', 'a-sessions');
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.writeFileSync(path.join(dirA, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const cacheFile = path.join(cacheDir, 'omp-session-roots-v1.json');
+    const now = Date.now();
+    // Starve the first walk so it truncates before reaching dirA.
+    await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      cacheDir,
+      now: () => now,
+      scanBounds: { maxDirs: 1 },
+    });
+    const first = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    expect(first.truncated).toBe(true);
+    // A truncated cache is not frozen for six hours: past its short TTL the walk
+    // reruns, converges on the small tree, and unions dirA into the cache.
+    const later = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      cacheDir,
+      now: () => now + 31 * 60_000,
+    });
+    expect(later).toContain(dirA);
+    const second = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    expect(second.truncated).toBe(false);
+    expect(second.roots).toContain(dirA);
   });
 });

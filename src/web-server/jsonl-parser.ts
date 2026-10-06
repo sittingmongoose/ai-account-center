@@ -45,6 +45,14 @@ export interface RawUsageEntry {
    * to the price resolver.
    */
   costUsd?: number;
+  /**
+   * One API response, not one content block: Claude Code writes several
+   * assistant lines per response (same message id and request id, usage
+   * repeated, last line complete). The collector collapses consecutive
+   * same-key lines and counts the response once. Absent when the line names
+   * no message id; such lines count solo.
+   */
+  responseKey?: string;
 }
 
 /** Internal structure matching JSONL assistant entries */
@@ -131,6 +139,18 @@ export function parseUsageEntry(line: string, projectPath: string): RawUsageEntr
       typeof assistant.cwd === 'string' && assistant.cwd.trim().length > 0
         ? assistant.cwd
         : projectPath;
+    const messageId = (entry.message as { id?: unknown })?.id;
+    const requestId =
+      (entry as { requestId?: unknown }).requestId ??
+      (entry.message as { requestId?: unknown })?.requestId;
+    // Overlong ids fail open to solo-counting; real ids are tens of chars.
+    const responseKey =
+      typeof messageId === 'string' &&
+      messageId.length > 0 &&
+      messageId.length <= 200 &&
+      (requestId === undefined || (typeof requestId === 'string' && requestId.length <= 200))
+        ? `${messageId}\n${typeof requestId === 'string' ? requestId : ''}`
+        : undefined;
 
     return {
       inputTokens,
@@ -141,6 +161,7 @@ export function parseUsageEntry(line: string, projectPath: string): RawUsageEntr
       sessionId: assistant.sessionId || '',
       timestamp: assistant.timestamp,
       projectPath: normalizedProjectPath,
+      ...(responseKey === undefined ? {} : { responseKey }),
       version: assistant.version,
       target:
         typeof (entry as { target?: unknown }).target === 'string'

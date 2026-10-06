@@ -78,8 +78,27 @@ SCAN_MAX_DEPTH = 6
 SCAN_MAX_DIRS = 100000
 SCAN_MAX_ENTRIES = 2000000
 SCAN_BUDGET_SHARE = 0.4
-SCAN_MAX_ROOTS = 128
-SCAN_SKIP_DIRS = frozenset(["node_modules", ".git"])
+SCAN_MAX_ROOTS = 512
+SCAN_SKIP_DIRS = frozenset(
+    [
+        "node_modules",
+        ".git",
+        "tests",
+        "test",
+        "fixtures",
+        "__fixtures__",
+        "target",
+        "dist",
+        "coverage",
+        "test-results",
+    ]
+)
+# Sandbox marker: synthetic-log generators write this file at their
+# data-tree root, and the session-root scan skips any subtree whose
+# directory holds it, so measurement fixtures never count as real usage.
+# Explicit roots (env vars, extra sources) are exempt: configuring a path
+# explicitly means it should count.
+AAC_SANDBOX_MARKER = ".aac-synthetic"
 SESSION_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}")
 MODEL_MAX_LEN = 160
 PROVIDER_MAX_LEN = 64
@@ -389,6 +408,17 @@ def _omp_roots(home, env, collector, extra_roots=()):
 
     default_agent = os.path.join(home, ".omp", "agent")
     _add(os.path.join(default_agent, "sessions"))
+    # Per-profile OMP instances (Windows keeps `~/.omp/profiles/<name>`) store
+    # their own sessions under `<profile>/agent/sessions`; enumerate the bounded
+    # profile dirs so their usage is discovered too, not just the default agent.
+    profiles_root = os.path.join(home, ".omp", "profiles")
+    try:
+        for profile in sorted(os.listdir(profiles_root))[:SCAN_MAX_ROOTS]:
+            candidate = os.path.join(profiles_root, profile, "agent", "sessions")
+            if os.path.isdir(candidate):
+                _add(candidate)
+    except OSError:
+        pass
     custom_agent = env.get("PI_CODING_AGENT_DIR")
     if custom_agent:
         expanded = os.path.expanduser(custom_agent)
@@ -461,11 +491,65 @@ def _scan_session_roots(base, collector):
         except OSError:
             continue
         examined += len(entries)
-        if os.path.basename(directory) == "sessions" and directory != base:
-            if _sessions_dir_has_marker(directory):
-                found.append(directory)
+        # Synthetic sandbox trees are never roots and never descended: their
+        # fixture records would otherwise count as real usage.
+        if _is_sandbox_tree(directory, entries):
             continue
+        if directory != base:
+            if os.path.basename(directory) == "sessions":
+                if _sessions_dir_has_marker(directory):
+                    found.append(directory)
+                continue
+            # Custom `--session-dir` roots are named freely (`<branch>-sessions`,
+            # `rev-<id>-sessions`, ...); a literal `sessions` name check missed
+            # them. Accept any non-base dir that directly holds an OMP session
+            # file, by the same name rule the reader uses. Accepted roots are not
+            # descended; the reader walks their nested subagent files. Mirrors the
+            # TypeScript scanSessionRoots fix.
+            if any(
+                entry.is_file(follow_symlinks=False) and _is_session_filename(entry.name)
+                for entry in entries
+            ):
+                found.append(directory)
+                continue
         if depth >= SCAN_MAX_DEPTH:
+            # One level past the depth cap, still examine session-container
+            # children: experiment runners nest per-job session dirs one level
+            # deeper than the cap (`runs/<run>/jobs/<job>/sessions`), and the
+            # usage inside is real. Only `*sessions*`-named children are
+            # examined, inline and never descended, so the extra work stays
+            # bounded by that small set. Mirrors the TypeScript fix.
+            if depth == SCAN_MAX_DEPTH:
+                for entry in entries:
+                    if (
+                        len(found) >= SCAN_MAX_ROOTS
+                        or examined > SCAN_MAX_ENTRIES
+                        or time.monotonic() >= deadline
+                    ):
+                        break
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if not is_dir or "sessions" not in entry.name:
+                        continue
+                    try:
+                        with os.scandir(entry.path) as iterator:
+                            child_entries = list(iterator)
+                    except OSError:
+                        continue
+                    examined += len(child_entries) + 1
+                    if _is_sandbox_tree(entry.path, child_entries):
+                        continue
+                    if entry.name == "sessions":
+                        if _sessions_dir_has_marker(entry.path):
+                            found.append(entry.path)
+                    elif any(
+                        child.is_file(follow_symlinks=False)
+                        and _is_session_filename(child.name)
+                        for child in child_entries
+                    ):
+                        found.append(entry.path)
             continue
         for entry in entries:
             if entry.name in SCAN_SKIP_DIRS:
@@ -480,11 +564,45 @@ def _scan_session_roots(base, collector):
     return found
 
 
-def _sessions_dir_has_marker(directory):
-    """True when a sessions/ dir holds a *.jsonl file within depth 2.
+def _is_sandbox_tree(directory, entries):
+    """True when the scanned directory is a synthetic sandbox tree: it holds
+    the sandbox marker, a SANDBOX.md, or a generator MANIFEST.json with a
+    `trees` key (the T5-recipe sandboxes predate the marker). The MANIFEST
+    read is one bounded small file, only for dirs that hold one; anything
+    unparseable or oversized fails open (not a sandbox) so real logs are
+    never hidden."""
+    names = set()
+    for entry in entries:
+        try:
+            is_file = entry.is_file(follow_symlinks=False)
+        except OSError:
+            continue
+        if is_file:
+            names.add(entry.name)
+    if AAC_SANDBOX_MARKER in names or "SANDBOX.md" in names:
+        return True
+    if "MANIFEST.json" not in names:
+        return False
+    try:
+        with open(os.path.join(directory, "MANIFEST.json"), "rb") as handle:
+            text = handle.read(64 * 1024 + 1)
+        if len(text) > 64 * 1024:
+            return False
+        parsed = json.loads(text.decode("utf-8"))
+        return (
+            isinstance(parsed, dict)
+            and isinstance(parsed.get("trees"), dict)
+        )
+    except (OSError, ValueError):
+        return False
 
-    Custom --session-dir layouts name files freely, so the marker is
-    presence, not naming; the OMP line parser rejects non-OMP records.
+
+def _sessions_dir_has_marker(directory):
+    """True when a sessions/ dir holds an OMP-named file within depth 2.
+
+    Presence alone (any .jsonl) accepted synthetic Muse trees
+    (<uuid>/session.jsonl); the OMP line parser still rejects non-OMP
+    records inside an accepted root.
     """
     pending = [(directory, 0)]
     checked = 0
@@ -501,7 +619,7 @@ def _sessions_dir_has_marker(directory):
             path = os.path.join(current, name)
             try:
                 if os.path.isfile(path):
-                    if name.endswith(".jsonl"):
+                    if _is_session_filename(name):
                         return True
                 elif depth < 1 and os.path.isdir(path) and not os.path.islink(path):
                     pending.append((path, depth + 1))
@@ -892,8 +1010,12 @@ def _newest_first(paths):
     return [path for _, path in stamped]
 
 
-def _scan_kind_files(collector, kind, dirs, accept, parse):
-    """Scan dirs for kind's files, newest first; parse(line, collector, kind, filekey, box) reads one line with a per-file box."""
+def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None):
+    """Scan dirs for kind's files, newest first; parse(line, collector, kind, filekey, box) reads one line with a per-file box.
+
+    flush(collector, kind, filekey, box), when given, runs once per fully
+    read file (never on a cut pass: cut files are re-read whole next pass).
+    """
     stopped = False
     paths = []
     for directory in dirs:
@@ -941,6 +1063,8 @@ def _scan_kind_files(collector, kind, dirs, accept, parse):
                 parse(line, collector, kind, filekey, box)
                 if collector.row_cap:
                     return True
+            if flush is not None:
+                flush(collector, kind, filekey, box)
             collector.confirm_file(kind, filekey)
     return stopped
 
@@ -991,10 +1115,50 @@ def _parse_claude_line(line, collector, kind, filekey, box):
     hour = _hour_label(epoch_ms, collector.now_ms)
     if hour is None:
         return
+    # One API response, not one content block: Claude Code writes several
+    # assistant lines per response (same message id and request id, usage
+    # repeated, last line complete). Consecutive same-response lines collapse
+    # to the last; files are read whole or not at all per pass, so the
+    # group-in-progress lives in the per-file box and flushes at EOF.
+    message_id = message.get("id")
+    request_id = record.get("requestId", message.get("requestId"))
+    session = _session_key(kind, record.get("sessionId"))
+    if (
+        isinstance(message_id, str)
+        and message_id
+        and len(message_id) <= 200
+        and (
+            request_id is None
+            or (isinstance(request_id, str) and len(request_id) <= 200)
+        )
+    ):
+        key = message_id + "\n" + (request_id or "")
+        pending = box.get("claude_pending")
+        if pending is not None and pending[0] == key:
+            box["claude_pending"] = (key, model, hour, tokens, epoch_ms, session)
+        else:
+            if pending is not None:
+                _emit_claude_response(collector, kind, filekey, pending)
+            box["claude_pending"] = (key, model, hour, tokens, epoch_ms, session)
+        return
+    pending = box.pop("claude_pending", None)
+    if pending is not None:
+        _emit_claude_response(collector, kind, filekey, pending)
     # Claude Code logs no cost; the server prices the tokens at its rates.
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
-    session = _session_key(kind, record.get("sessionId"))
     collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
+
+
+def _emit_claude_response(collector, kind, filekey, pending):
+    _, model, hour, tokens, epoch_ms, session = pending
+    collector.add(kind, filekey, model, None, hour, tokens, 0.0)
+    collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
+
+
+def _flush_claude_box(collector, kind, filekey, box):
+    pending = box.pop("claude_pending", None)
+    if pending is not None:
+        _emit_claude_response(collector, kind, filekey, pending)
 
 
 def _collect_claude(collector, home, env, extra=()):
@@ -1007,7 +1171,14 @@ def _collect_claude(collector, home, env, extra=()):
     dirs = _dedup_dirs([os.path.join(base, "projects"), *extra])
     if not any(os.path.isdir(d) and not os.path.islink(d) for d in dirs):
         return "not_installed"
-    _scan_kind_files(collector, "claude", dirs, lambda name: name.endswith(".jsonl"), _parse_claude_line)
+    _scan_kind_files(
+        collector,
+        "claude",
+        dirs,
+        lambda name: name.endswith(".jsonl"),
+        _parse_claude_line,
+        _flush_claude_box,
+    )
     return "ok"
 
 
@@ -1459,8 +1630,36 @@ def _read_request():
     )
 
 
+def _lower_priority():
+    """Scan at low CPU and IO priority, so a scan (the server may run one per
+    kind at once) never competes with the host's own foreground work: nice 10,
+    plus utility-tier disk IO on macOS; on Windows, below-normal CPU priority
+    and background mode, which also lowers IO and memory priority. Best-effort:
+    a host that refuses keeps normal priority and the scan still runs."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            process = kernel32.GetCurrentProcess()
+            kernel32.SetPriorityClass(process, 0x00004000)  # BELOW_NORMAL_PRIORITY_CLASS
+            kernel32.SetPriorityClass(process, 0x00100000)  # PROCESS_MODE_BACKGROUND_BEGIN
+            return
+        os.nice(10)
+        if sys.platform == "darwin":
+            import ctypes
+            import ctypes.util
+
+            libc = ctypes.CDLL(ctypes.util.find_library("c"))
+            # setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_UTILITY)
+            libc.setiopolicy_np(0, 0, 4)
+    except Exception:
+        pass
+
+
 def main():
     kinds, min_date_ms, immutable, fingerprints, extra_roots, budget = _read_request()
+    _lower_priority()
     home = _home()
     env = dict(os.environ)
     collector = Collector(min_date_ms, time.monotonic() + budget, fingerprints, budget)
