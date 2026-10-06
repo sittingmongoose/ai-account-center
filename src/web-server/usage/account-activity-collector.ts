@@ -96,9 +96,11 @@ type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl';
  * Checkpoints of these kinds hold rows from an older parser and are read
  * again from the start: OMP rows now keep the routing provider and never mix
  * logged and unlogged events; Muse input no longer includes cache reads;
- * Claude rows now count one API response, not one content block.
+ * Claude rows now count one API response, not one content block, and the
+ * open response is never committed at EOF (R2-1: old rows may hold an
+ * early-committed half response that a later scan would count again).
  */
-const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2, claude: 1 };
+const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2, claude: 2 };
 
 function wantedFile(kind: string, name: string): boolean {
   if (kind === 'claude') return name.endsWith('.jsonl');
@@ -687,7 +689,9 @@ async function readBatch(
   // Claude writes several assistant lines per API response (one per content
   // block, usage repeated, last line complete). Consecutive same-response
   // lines collapse to the last; the group-in-progress rides in the checkpoint
-  // so a pass cut mid-response resumes rather than double-counts.
+  // so a pass cut mid-response resumes rather than double-counts. A group
+  // only commits when the next response (or solo line) arrives — never at
+  // EOF, where the file may still be growing (R2-1).
   const flushPendingClaude = (): void => {
     const pending = value.pendingClaude;
     if (kind !== 'claude' || !pending) return;
@@ -782,10 +786,10 @@ async function readBatch(
       }
     } else if (discarding) value.offset = position;
     value.discardingLine = discarding;
-    // A clean EOF ends the last response group; a cut, discard or unfinished
-    // tail keeps it pending so the next pass continues the same response.
-    if (kind === 'claude' && value.offset === stats.size && !discarding && !value.unfinishedTail)
-      flushPendingClaude();
+    // The open response is never committed at EOF: the last group may still
+    // be growing, and committing it here counts it again when the next scan
+    // continues it (R2-1). It stays in the checkpoint and is folded into the
+    // reported totals only (see collectAccountActivity).
     value.complete = value.offset === stats.size && !discarding;
     value.rows = [...rows.values()];
   } finally {
@@ -1186,8 +1190,19 @@ export async function collectAccountActivity(
       if (value.unfinishedTail) unfinishedFiles++;
       skippedLines += value.skippedLines;
       const available = MAX_TOTAL_ROWS - rows.length;
-      rows.push(...value.rows.slice(0, Math.max(0, available)));
-      if (value.rows.length > available) failed++;
+      if (request.kind === 'claude' && value.pendingClaude) {
+        // Report the open response without storing it (R2-1): merging it
+        // into a copy of this file's rows shows exactly what committing
+        // would, while the checkpoint keeps it pending for the next scan.
+        // A cap miss here is transient (retried every scan), never stored.
+        const fileRows = new Map(value.rows.map((row) => [rowKey(row), row]));
+        if (!addEntry(fileRows, value.pendingClaude.entry, options.minDate)) skippedLines++;
+        rows.push(...[...fileRows.values()].slice(0, Math.max(0, available)));
+        if (fileRows.size > available) failed++;
+      } else {
+        rows.push(...value.rows.slice(0, Math.max(0, available)));
+        if (value.rows.length > available) failed++;
+      }
     } catch {
       failed++;
     }

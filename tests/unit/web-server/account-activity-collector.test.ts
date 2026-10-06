@@ -435,6 +435,32 @@ describe('claude response collapsing', () => {
     expect(warm.scan?.readBytes).toBe(0);
     expect(warm.eventCount).toBe(1);
   });
+
+  it('keeps a response being written pending across scans instead of double-counting', async () => {
+    // R2-1: a scan landing mid-response must not commit the half-written
+    // response at EOF; the next scan continues the same response. Committing
+    // early counted block 1, then block 2 as a second response (about +8%
+    // Claude cache-read at a 60 s refresh, creeping while the server runs).
+    writeClaude([line('m1', 'r1', 50)]);
+    let data = await collectClaude();
+    expect(data.eventCount).toBe(1);
+    expect(sum(data, 'outputTokens')).toBe(50);
+    fs.appendFileSync(
+      path.join(root, 'claude', 'projects', 'p', 's.jsonl'),
+      JSON.stringify(line('m1', 'r1', 55)) + '\n'
+    );
+    data = await collectClaude();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(sum(data, 'outputTokens')).toBe(55);
+    // A cold re-read agrees: one response, counted once.
+    const cold = await collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache-cold') }
+    );
+    expect(cold.eventCount).toBe(1);
+    expect(sum(cold, 'outputTokens')).toBe(55);
+  });
 });
 
 describe('pre-aggregated session rows', () => {
