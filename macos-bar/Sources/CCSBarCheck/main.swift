@@ -1269,6 +1269,41 @@ private func checkAntigravityClient() async throws {
 
 // MARK: Dashboard additions: Antigravity policy, capabilities, hidden providers
 
+/// Claude "Sign-in needed" before Open (`accounts[].signInNeeded`), fake profiles only. Read loosely: junk items are
+/// skipped and a malformed value never fails the dashboard; a computer the profile cannot open on is not named.
+private func checkClaudeSignInNeeded() throws {
+  var object = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  let prototype = (object["accounts"] as! [[String: Any]])[0]
+  func claude(_ id: String, _ signIn: Any?, platforms: [String] = ["mac", "windows"]) -> [String: Any] {
+    var value = prototype
+    value["id"] = "claude:\(id)"
+    value["provider"] = "claude"
+    value["email"] = "\(id)@example.com"
+    var caps = prototype["capabilities"] as! [String: Any]
+    caps["claudeProfileId"] = id
+    caps["claudePlatforms"] = platforms
+    value["capabilities"] = caps
+    if let signIn { value["signInNeeded"] = signIn } else { value.removeValue(forKey: "signInNeeded") }
+    return value
+  }
+  object["accounts"] = [
+    claude("fake-a", ["windows"]), claude("fake-b", ["windows", "mac", 7, "ubuntu"]), claude("fake-c", "windows"),
+    claude("fake-d", ["windows"], platforms: ["mac"]), claude("fake-e", nil), claude("fake-f", NSNull()),
+  ]
+  let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  let byID = Dictionary(uniqueKeysWithValues: dashboard.accounts.map { ($0.id, $0) })
+  try expect(byID["claude:fake-a"]?.signInNeededText == "Sign-in needed on Windows"
+    && byID["claude:fake-b"]?.signInNeededText == "Sign-in needed on Mac and Windows",
+    "A Claude row names each computer that needs a sign-in, Mac first")
+  try expect(byID["claude:fake-c"]?.signInNeededText == nil && byID["claude:fake-d"]?.signInNeededText == nil
+    && byID["claude:fake-e"]?.signInNeededText == nil && byID["claude:fake-f"]?.signInNeededText == nil,
+    "A malformed, missing or null signInNeeded, or a computer the profile cannot open on, names nothing")
+  try expect(byID["claude:fake-a"]!.claudeOpenHelp("windows")
+    .hasPrefix("Sign-in needed on Windows. Open shows the Claude sign-in window")
+    && byID["claude:fake-a"]!.claudeOpenHelp("mac") == "Open fake-a@example.com in Claude on Mac",
+    "The Open tip says what Open will show on the computer that needs a sign-in")
+}
+
 private func checkDashboardAdditions() throws {
   var object = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
   let prototype = (object["accounts"] as! [[String: Any]])[0]
@@ -3351,6 +3386,8 @@ do {
   try await checkAntigravityClient()
   print("PASS Antigravity activation, one-use confirmation, fixed guidance, and % used automatic settings")
   try checkDashboardAdditions()
+  try checkClaudeSignInNeeded()
+  print("PASS Claude Sign-in needed per computer before Open, read loosely")
   print("PASS Antigravity policy and capabilities, activation guards, tray order, and tray-hidden providers and accounts")
   try checkTrayPresentation()
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")

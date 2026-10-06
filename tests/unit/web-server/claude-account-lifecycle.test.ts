@@ -346,7 +346,10 @@ describe('Pending profiles open on both hosts', () => {
         profilePath: '/fake/windows/Claude-work2',
         sshHost: 'jared-windows',
       },
-      'work2'
+      'work2',
+      // The launcher's account list is rebuilt from the current profiles in the same call:
+      // the Windows default first, then the others, the new pending profile included.
+      ['gmail', 'party', 'work2']
     );
     // In neither the pending registry nor the manifest: refused, nothing opens.
     // A malformed id is refused the same way.

@@ -161,8 +161,28 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   /// Hidden in the trays (`accounts[].trayHidden`: "Show in tray" off for this account or its provider). The
   /// dashboard's `accounts[].hidden` is not decoded at all: it never changes what a tray shows. Missing means shown.
   public let trayHidden: Bool?
+  /// Claude only (`accounts[].signInNeeded`): the computers where this profile is not signed in, so the tray can say
+  /// so before Open. Read loosely: anything but strings is skipped, and a malformed value never fails the dashboard.
+  public let signInNeeded: LenientStringList?
 
   public var identity: String { email ?? label }
+  /// The computers that need a sign-in before Open, in Mac, Windows order, limited to where this profile opens.
+  public var signInNeededPlatforms: [String] {
+    guard provider == "claude", let listed = signInNeeded?.values else { return [] }
+    return ["mac", "windows"].filter { listed.contains($0) && capabilities.claudePlatforms.contains($0) }
+  }
+  /// "Sign-in needed on Windows" (or Mac, or Mac and Windows); nil when no computer needs one.
+  public var signInNeededText: String? {
+    let names = signInNeededPlatforms.map { $0 == "mac" ? "Mac" : "Windows" }
+    return names.isEmpty ? nil : "Sign-in needed on " + names.joined(separator: " and ")
+  }
+  /// The Open tip for one computer: plain, or what Open will show when that computer's profile is not signed in.
+  public func claudeOpenHelp(_ platform: String) -> String {
+    let name = platform == "mac" ? "Mac" : "Windows"
+    return signInNeededPlatforms.contains(platform)
+      ? "Sign-in needed on \(name). Open shows the Claude sign-in window for \(identity); sign in once on that computer."
+      : "Open \(identity) in Claude on \(name)"
+  }
   public var canOpenOnMac: Bool {
     provider == "claude" && capabilities.claudeProfileId != nil && capabilities.claudePlatforms.contains("mac")
   }
@@ -179,6 +199,25 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
     antigravityProfile != nil && !isActive && status != "needs_sign_in"
       && capabilities.antigravityCanActivate == true
       && capabilities.antigravityHostIds == ["ubuntu"]
+  }
+}
+
+/// A JSON array read loosely: string items are kept, any other item is skipped, and a value that is not an array
+/// reads as empty instead of failing the whole dashboard.
+public struct LenientStringList: Decodable, Sendable {
+  public let values: [String]
+
+  private struct Skip: Decodable { init(from decoder: Decoder) throws {} }
+
+  public init(from decoder: Decoder) throws {
+    var values: [String] = []
+    if var items = try? decoder.unkeyedContainer() {
+      while !items.isAtEnd {
+        if let value = try? items.decode(String.self) { values.append(value) }
+        else if (try? items.decode(Skip.self)) == nil { break }
+      }
+    }
+    self.values = values
   }
 }
 

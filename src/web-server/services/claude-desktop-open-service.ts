@@ -224,7 +224,8 @@ export async function openClaudeDesktopProfile(
       } catch {
         accountList = null;
       }
-      await openClaudeWindowsLauncher(launcher, id, accountList ?? undefined);
+      if (accountList) await openClaudeWindowsLauncher(launcher, id, accountList);
+      else await openClaudeWindowsLauncher(launcher, id);
     }
   })();
   pendingOpens.set(key, opening);
