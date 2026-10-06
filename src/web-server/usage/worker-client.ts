@@ -36,31 +36,47 @@ export interface CodexPartitionSpec {
 }
 
 export type UsageWorkerRequest =
-  | { kind: 'claude'; projectsDir: string; activity?: AccountActivityScanOptions }
+  /**
+   * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) make a separate request that
+   * reads only those roots, deduplicated record by record; the default root then serves only as
+   * the reference copies are checked against (see collectExperimentActivity).
+   */
+  | {
+      kind: 'claude';
+      projectsDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+    }
   | {
       kind: 'codex';
       codexHome: string;
       cacheDir: string;
+      experimentRoots?: string[];
       activity?: AccountActivityScanOptions;
       partition?: CodexPartitionSpec;
-      /**
-       * Experiment Codex session dirs, owned by the experiment-roots lane
-       * (fix/aac-fw4-experiment-roots-20261006): when set, roots come from
-       * here instead of codexHome, and the request bypasses the N14 fan-out
-       * (its checkpoint mode differs), reading inline.
-       */
-      experimentRoots?: string[];
     }
   | { kind: 'omp'; roots: string[]; activity?: AccountActivityScanOptions }
-  | { kind: 'muse'; sessionsDir: string; activity?: AccountActivityScanOptions }
-  | { kind: 'zcode'; dbPath: string; activity?: AccountActivityScanOptions }
+  | {
+      kind: 'muse';
+      sessionsDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+    }
+  | {
+      kind: 'zcode';
+      dbPath: string;
+      experimentDbs?: string[];
+      activity?: AccountActivityScanOptions;
+    }
   | {
       kind: 'jsonl';
       roots: string[];
       mapping: JsonlFieldMapping;
       activity?: AccountActivityScanOptions;
     }
-  | { kind: 'droid'; homeDir: string };
+  | { kind: 'droid'; homeDir: string }
+  /** One slice of the experiment-root walk (experiment-usage-roots.ts); returns no usage. */
+  | { kind: 'experiment-roots'; cacheDir: string };
 
 export interface UsageWorkerResult {
   daily: DailyUsage[];

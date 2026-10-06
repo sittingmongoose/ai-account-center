@@ -18,8 +18,11 @@ export const OMP_SCAN_CACHE_TTL_MS = 6 * 3_600_000;
  * configuring a path explicitly means it should count.
  */
 export const AAC_SANDBOX_MARKER = '.aac-synthetic';
-/** Directory names the root scan never descends into (fixtures, builds). */
-const SCAN_SKIP_DIRS = new Set([
+/**
+ * Directory names the root scans never descend into (fixtures, builds); the experiment-root walk
+ * (experiment-usage-roots.ts) shares the list.
+ */
+export const SCAN_SKIP_DIRS: ReadonlySet<string> = new Set([
   'node_modules',
   '.git',
   'tests',

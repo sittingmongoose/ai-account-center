@@ -1,14 +1,14 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1145,
-    "filesAffected": 117,
-    "hotpathOccurrences": 514,
-    "hotpathFilesAffected": 66,
+    "totalOccurrences": 1175,
+    "filesAffected": 119,
+    "hotpathOccurrences": 544,
+    "hotpathFilesAffected": 68,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 32,
+        "count": 38,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -18,6 +18,21 @@
           "openSync",
           "readFileSync",
           "readSync",
+          "renameSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/services/account-analytics-activity.ts",
+        "count": 30,
+        "calls": [
+          "chmodSync",
+          "existsSync",
+          "mkdirSync",
+          "readFileSync",
+          "realpathSync",
           "renameSync",
           "statSync",
           "writeFileSync"
@@ -40,21 +55,6 @@
           "renameSync",
           "statSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 28,
-        "calls": [
-          "chmodSync",
-          "existsSync",
-          "mkdirSync",
-          "readFileSync",
-          "realpathSync",
-          "renameSync",
-          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -247,7 +247,7 @@
       },
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 32,
+        "count": 38,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -257,6 +257,21 @@
           "openSync",
           "readFileSync",
           "readSync",
+          "renameSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/services/account-analytics-activity.ts",
+        "count": 30,
+        "calls": [
+          "chmodSync",
+          "existsSync",
+          "mkdirSync",
+          "readFileSync",
+          "realpathSync",
           "renameSync",
           "statSync",
           "writeFileSync"
@@ -279,21 +294,6 @@
           "renameSync",
           "statSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 28,
-        "calls": [
-          "chmodSync",
-          "existsSync",
-          "mkdirSync",
-          "readFileSync",
-          "realpathSync",
-          "renameSync",
-          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -604,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 36,
-      "totalSourceFiles": 395,
-      "coverageRatio": 0.0911,
+      "totalSourceFiles": 397,
+      "coverageRatio": 0.0907,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 141,
+          "count": 143,
           "withLogger": 20
         },
         {
@@ -751,20 +751,20 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 46,
+      "countOver400": 47,
       "countOver600": 20,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 1648
+          "loc": 2022
+        },
+        {
+          "file": "src/web-server/services/account-analytics-activity.ts",
+          "loc": 1357
         },
         {
           "file": "src/web-server/model-pricing.ts",
           "loc": 1322
-        },
-        {
-          "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1244
         },
         {
           "file": "src/antigravity/registry.ts",

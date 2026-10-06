@@ -17,6 +17,7 @@ import { USAGE_PROVIDER_ORDER } from './account-analytics-attribution';
 import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
+import { readExperimentRoots, type ExperimentRootSet } from '../usage/experiment-usage-roots';
 import { collectorConcurrency, runBounded } from '../usage/collector-concurrency';
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
@@ -478,6 +479,27 @@ function localRequestPlan(): {
   } catch {
     /* Absent history is not an error or measured zero. */
   }
+  // Experiment roots: what the background walk has found so far (a small cached file), read now so
+  // these collectors start with the rest; the walk itself advances one slice in the background.
+  try {
+    requests.push(
+      ...experimentActivityRequests(
+        readExperimentRoots(activity.cacheDir).roots,
+        {
+          projectsDir: claudeRoots[0],
+          codexHome,
+          sessionsDir: resolveMuseSessionsDir(),
+          dbPath: resolveZcodeDbPath(),
+        },
+        activity,
+        path.join(ccsDir, 'cache'),
+        unique
+      )
+    );
+  } catch {
+    /* Without experiment roots the default roots still scan. */
+  }
+  startExperimentRootsSlice(activity.cacheDir);
   const later = (async (): Promise<AccountAnalyticsActivityRequest[]> => {
     const discovered: AccountAnalyticsActivityRequest[] = [];
     try {
@@ -506,6 +528,97 @@ function localRequestPlan(): {
     return discovered;
   })();
   return { ready: requests, later };
+}
+
+let experimentSliceRunning = false;
+
+/**
+ * One background slice of the experiment-root walk (experiment-usage-roots.ts) on a collector
+ * worker thread at low priority, at most one at a time per process. Never awaited by a
+ * collection: the roots it finds are read from the next collection on, so the walk never delays
+ * a collector or touches the event loop.
+ */
+function startExperimentRootsSlice(cacheDir: string): void {
+  if (experimentSliceRunning) return;
+  experimentSliceRunning = true;
+  void loadAccountAnalyticsWorker({ kind: 'experiment-roots', cacheDir })
+    .catch(() => undefined)
+    .finally(() => {
+      experimentSliceRunning = false;
+    });
+}
+
+/**
+ * Requests for the experiment roots found so far, one per tool, each reading only its experiment
+ * roots and deduplicating against the tool's default root (collectExperimentActivity). A root that
+ * no longer exists, or that resolves to (or inside) a root already read, is left out.
+ */
+export function experimentActivityRequests(
+  found: ExperimentRootSet,
+  defaults: { projectsDir: string; codexHome: string; sessionsDir: string; dbPath: string },
+  activity: { minDate: number; cacheDir: string },
+  cacheDir: string,
+  scanned: Set<string>
+): AccountAnalyticsActivityRequest[] {
+  const readRoots = [...scanned].map((key) => key.slice(key.indexOf(':') + 1));
+  const usable = (candidate: string, wantFile: boolean): string | null => {
+    try {
+      const stats = fs.statSync(candidate);
+      if (wantFile ? !stats.isFile() : !stats.isDirectory()) return null;
+      const real = fs.realpathSync(candidate);
+      const inside = readRoots.some(
+        (root) => real === root || real.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
+      );
+      return inside ? null : real;
+    } catch {
+      return null;
+    }
+  };
+  const pick = (list: string[], wantFile = false): string[] => {
+    const kept = new Set<string>();
+    for (const candidate of list) {
+      const real = usable(candidate, wantFile);
+      if (real) kept.add(real);
+    }
+    return [...kept];
+  };
+  const requests: AccountAnalyticsActivityRequest[] = [];
+  const claude = pick(found.claude);
+  if (claude.length)
+    requests.push({
+      provider: 'claude',
+      request: {
+        kind: 'claude',
+        projectsDir: defaults.projectsDir,
+        experimentRoots: claude,
+        activity,
+      },
+    });
+  const codex = pick(found.codex);
+  if (codex.length)
+    requests.push({
+      provider: 'codex',
+      request: {
+        kind: 'codex',
+        codexHome: defaults.codexHome,
+        cacheDir,
+        experimentRoots: codex,
+        activity,
+      },
+    });
+  const muse = pick(found.muse);
+  if (muse.length)
+    requests.push({
+      provider: 'muse',
+      request: { kind: 'muse', sessionsDir: defaults.sessionsDir, experimentRoots: muse, activity },
+    });
+  const zcode = pick(found.zcode, true);
+  if (zcode.length)
+    requests.push({
+      provider: 'zcode',
+      request: { kind: 'zcode', dbPath: defaults.dbPath, experimentDbs: zcode, activity },
+    });
+  return requests;
 }
 
 /** Injected requests (tests, embedders) in the same two parts: a list is ready at once. */

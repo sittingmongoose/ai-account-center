@@ -301,6 +301,17 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(() =>
       runHelper({ kinds: ['omp'], minDateMs: MIN_DATE, extraRoots: { omp: ['/x/../y'] } })
     ).toThrow();
+    // Saved extra roots stay capped at 16 per kind; zcode also takes the experiment databases.
+    const many = (count: number) => Array.from({ length: count }, (_, i) => `/nope/${i}.sqlite`);
+    expect(() =>
+      runHelper({ kinds: ['claude'], minDateMs: MIN_DATE, extraRoots: { claude: many(17) } })
+    ).toThrow();
+    expect(
+      runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE, extraRoots: { zcode: many(600) } }).kinds
+    ).toBeDefined();
+    expect(() =>
+      runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE, extraRoots: { zcode: many(2049) } })
+    ).toThrow();
   });
 
   it('scans saved extra roots alongside the defaults without leaking paths', () => {
@@ -686,9 +697,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(serialized).not.toContain('hidden prompt');
     // Missing projects read as not installed.
     const missing = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
-    expect((missing.kinds as Record<string, { state: string }>).codex.state).toBe(
-      'not_installed'
-    );
+    expect((missing.kinds as Record<string, { state: string }>).codex.state).toBe('not_installed');
   });
 
   it('counts one multi-line claude response once, keeping the last usage', () => {
@@ -795,7 +804,11 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
             { input_tokens: 500, output_tokens: 60 }
           )
         ),
-        JSON.stringify({ timestamp: '2026-10-01T15:06:00Z', type: 'response_item', payload: { text: 'hidden prompt' } }),
+        JSON.stringify({
+          timestamp: '2026-10-01T15:06:00Z',
+          type: 'response_item',
+          payload: { text: 'hidden prompt' },
+        }),
       ].join('\n')
     );
     fs.writeFileSync(
@@ -807,7 +820,10 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
           payload: { id: 'cx2', model_provider: 'cliproxy' },
         }),
         JSON.stringify(
-          token({ input_tokens: 999, output_tokens: 999 }, { input_tokens: 999, output_tokens: 999 })
+          token(
+            { input_tokens: 999, output_tokens: 999 },
+            { input_tokens: 999, output_tokens: 999 }
+          )
         ),
       ].join('\n')
     );
@@ -874,8 +890,16 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     fs.writeFileSync(
       path.join(extraHome, 'sessions', 'rollout-x.jsonl'),
       [
-        JSON.stringify({ timestamp: '2026-10-01T15:00:00Z', type: 'session_meta', payload: { id: 'e1' } }),
-        JSON.stringify({ timestamp: '2026-10-01T15:01:00Z', type: 'turn_context', payload: { model: 'extra-codex-model' } }),
+        JSON.stringify({
+          timestamp: '2026-10-01T15:00:00Z',
+          type: 'session_meta',
+          payload: { id: 'e1' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-10-01T15:01:00Z',
+          type: 'turn_context',
+          payload: { model: 'extra-codex-model' },
+        }),
         JSON.stringify({
           timestamp: '2026-10-01T15:02:00Z',
           type: 'event_msg',
@@ -917,9 +941,12 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
   it('visits omp session files newest first so a cut scan banks the newest progress', () => {
     const dir = path.join(home, '.omp', 'agent', 'sessions', 'slug');
     fs.mkdirSync(dir, { recursive: true });
-    const files = ['2026-09-01T10-00_old.jsonl', '2026-09-15T10-00_mid.jsonl', '2026-10-01T10-00_new.jsonl'];
-    for (const name of files)
-      fs.writeFileSync(path.join(dir, name), `${ompRecord()}\n`);
+    const files = [
+      '2026-09-01T10-00_old.jsonl',
+      '2026-09-15T10-00_mid.jsonl',
+      '2026-10-01T10-00_new.jsonl',
+    ];
+    for (const name of files) fs.writeFileSync(path.join(dir, name), `${ompRecord()}\n`);
     // Alphabetical order is old, mid, new; stamp the reverse so order must come from mtime.
     const atime = new Date('2026-10-02T00:00:00Z');
     fs.utimesSync(path.join(dir, files[0]), atime, new Date('2026-10-03T00:00:00Z'));
@@ -943,7 +970,8 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       message: { model: 'claude-haiku-4-5', usage: { input_tokens: 3 } },
       timestamp: '2026-10-01T15:05:00Z',
     });
-    for (const name of ['a.jsonl', 'b.jsonl', 'c.jsonl']) fs.writeFileSync(path.join(dir, name), `${record}\n`);
+    for (const name of ['a.jsonl', 'b.jsonl', 'c.jsonl'])
+      fs.writeFileSync(path.join(dir, name), `${record}\n`);
     const atime = new Date('2026-10-02T00:00:00Z');
     fs.utimesSync(path.join(dir, 'a.jsonl'), atime, new Date('2026-10-01T00:00:00Z'));
     fs.utimesSync(path.join(dir, 'b.jsonl'), atime, new Date('2026-10-03T00:00:00Z'));

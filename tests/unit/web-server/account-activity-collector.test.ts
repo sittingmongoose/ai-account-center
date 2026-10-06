@@ -1267,15 +1267,15 @@ describe('codex partitioned reading (N14)', () => {
     expect(data.session).toEqual(inline.session);
   });
 
-  it('experiment-roots requests never fan out (owned by the other lane)', async () => {
-    // Coordination with fix/aac-fw4-experiment-roots-20261006: a codex
-    // request carrying experimentRoots reads inline even above the fan-out
-    // threshold, because its checkpoint mode differs. (Roots still come from
-    // codexHome here; that lane changes the roots selection.)
+  it('experiment-roots requests route past the fan-out (owned by the other lane)', async () => {
+    // Coordination with fix/aac-fw4-experiment-roots-20261006: a codex request
+    // carrying experimentRoots is served by collectExperimentActivity and never
+    // reaches the N14 fan-out. Only the routing is asserted here (a throwing
+    // runner would fail the test); their suite owns the experiment semantics.
     rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
     rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
     let partitions = 0;
-    const data = await collectAccountActivity(
+    await collectAccountActivity(
       {
         kind: 'codex',
         codexHome: path.join(root, 'codex'),
@@ -1291,8 +1291,6 @@ describe('codex partitioned reading (N14)', () => {
       }
     );
     expect(partitions).toBe(0);
-    expect(data.scan?.complete).toBe(true);
-    expect(data.eventCount).toBe(2);
   });
 
   it('a reader that never answers times out and its thread stops', async () => {
