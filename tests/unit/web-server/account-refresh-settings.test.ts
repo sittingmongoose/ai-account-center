@@ -116,7 +116,13 @@ describe('account usage refresh settings', () => {
       const [warning] = getRecentLogEntries().filter((entry) => entry.level === 'warn');
       expect(warning).toBeDefined();
       expect(getRecentLogEntries().filter((entry) => entry.level === 'warn').length).toBe(1);
-      const logged = JSON.stringify(warning);
+      // Only the fields that could carry the file contents; id, runId, processId and
+      // timestamp are random or clock-based and can contain "999" by chance.
+      const logged = JSON.stringify({
+        message: warning.message,
+        context: warning.context,
+        error: warning.error,
+      });
       expect(logged).not.toContain('999');
       expect(logged).not.toContain(dir);
       expect(fs.readFileSync(file, 'utf8')).toBe(contents);
