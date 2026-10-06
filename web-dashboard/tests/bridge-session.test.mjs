@@ -79,7 +79,7 @@ function hiddenLoginForm() {
   const user = element({ value: '', style: {} }), pass = element({ value: '', type: 'password', style: {} });
   const remember = element({ checked: true, style: {} }), button = element({ style: {} });
   return {
-    user, pass, remember, button,
+    form, user, pass, remember, button,
     byId: { 'aac-login': form, 'aac-login-user': user, 'aac-login-pass': pass, 'aac-login-remember': remember, 'aac-login-submit': button },
     fill(username, password) { user.value = username; user.fire('input'); pass.value = password; pass.fire('input'); },
     submit() { let prevented = false; form.fire('submit', { preventDefault: () => { prevented = true; } }); return prevented; },
@@ -290,7 +290,11 @@ test('the real login inputs follow the sign-in layer, the Slint Sign in button u
     assert.deepEqual([b.lastAuth().signedIn, b.lastAuth().state], [false, 'default']);
     // the sign-in layer reports the form on screen: the inputs show over the Slint boxes
     await b.action('login-overlay', overlay(true));
-    assert.deepEqual([login.user.style.display, login.user.style.left, login.user.style.top], ['block', '177px', '401px']);
+    // the form is a box around the fields and each field sits inside it (position:absolute), so a manager sees an
+    // offsetParent: the username is at the form's corner, the form at the Slint box's corner
+    assert.deepEqual([login.form.style.left, login.form.style.top], ['177px', '401px']);
+    assert.deepEqual([login.user.style.display, login.user.style.left, login.user.style.top], ['block', '0px', '0px']);
+    assert.equal(login.pass.style.top, '75px');
     assert.deepEqual([login.pass.style.display, login.button.style.display], ['block', 'block']);
     // sign-in pauses: the password is forgotten in the HTML input as in the Slint field
     login.user.value = 'owner'; login.pass.value = 'too-many';
