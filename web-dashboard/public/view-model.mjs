@@ -1194,6 +1194,22 @@ export function detailsViewModel(data, id, ctx = {}) {
   };
 }
 
+/** "Ubuntu", "Ubuntu and Mac", "Ubuntu, Mac and Windows". */
+const listWords = (words) =>
+  words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+
+/**
+ * The computers an update job is working on now. Every computer runs at once
+ * (job.hosts); a job saved before that names a single activePlatform.
+ */
+export function updateRunningHosts(job) {
+  if (job?.state !== 'running') return [];
+  const hosts = job.hosts && typeof job.hosts === 'object' ? job.hosts : null;
+  if (hosts)
+    return ['ubuntu', 'mac', 'windows'].filter((id) => hosts[id]?.state === 'running');
+  return job.activePlatform ? [job.activePlatform] : [];
+}
+
 /** Update apps button state from /api/app-updates/status. */
 export function updateViewModel(job, { done = false } = {}) {
   const results = Array.isArray(job?.results) ? job.results : [];
@@ -1202,8 +1218,9 @@ export function updateViewModel(job, { done = false } = {}) {
   ).length;
   const action = results.filter((row) => row.status === 'action_required').length;
   const running = job?.state === 'running';
+  const where = listWords(updateRunningHosts(job).map((id) => platformLabel(id)));
   const tip = running
-    ? `Updating apps on ${platformLabel(job.activePlatform || '') || 'the next computer'} · running apps may restart`
+    ? `Updating apps on ${where || 'your computers'} · running apps may restart`
     : job
       ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}. Details under Accounts & Settings.`
       : 'Update the Claude and Codex apps and CLIs on Mac, Windows and Ubuntu';

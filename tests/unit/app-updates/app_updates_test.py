@@ -96,8 +96,7 @@ class UpdaterTests(unittest.TestCase):
                     raise OSError('fixture')
 
     def test_private_inventory_limit_does_not_expand_public_output_limit(self):
-        response = subprocess.CompletedProcess(['fixture'], 0, stdout=b'x' * 112071)
-        with mock.patch.object(common.subprocess, 'run', return_value=response):
+        with mock.patch.object(common, '_run_bounded', return_value=(0, b'x' * 112071)):
             with self.assertRaises(common.UpdateFailure):
                 common.command(['fixture'], capture=True)
             self.assertEqual(len(common.command(['fixture'], capture=True, capture_limit=2 * 1024 * 1024)), 112071)
@@ -640,6 +639,229 @@ int main(int argc,char **argv){
                     if child.poll() is None: child.terminate()
                     child.wait(timeout=3)
                 os.close(master)
+
+
+def _script(path, body):
+    """A fixture executable (never a real app)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('#!/bin/sh\n' + body + '\n')
+    path.chmod(0o755)
+    return path
+
+
+class BoundedUpdateTests(unittest.TestCase):
+    """Update all can never hang: every probe and step ends at its timeout."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='ccs-update-bounded-')
+        self.root = pathlib.Path(self.directory.name)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def test_command_kills_a_hanging_child_and_its_helpers_at_the_timeout(self):
+        marker = self.root / 'grandchild.pid'
+        hang = ('import subprocess, sys, time\n'
+                'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])\n'
+                'open(sys.argv[1], "w").write(str(child.pid))\n'
+                'time.sleep(60)\n')
+        started = time.monotonic()
+        with self.assertRaises(common.UpdateFailure) as raised:
+            common.command([sys.executable, '-c', hang, marker], timeout=1, capture=True)
+        self.assertEqual(raised.exception.code, 'timeout')
+        self.assertLess(time.monotonic() - started, 8)
+        grandchild = int(marker.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+            # A killed child stays a zombie until its (also killed) parent is reaped.
+            try:
+                if pathlib.Path('/proc/%d/stat' % grandchild).read_text().split(')')[-1].split()[0] == 'Z':
+                    break
+            except OSError:
+                break
+            time.sleep(.05)
+        else:
+            self.fail('the timed-out command left its helper process running')
+
+    def test_short_timeouts_report_timeout_not_a_generic_failure(self):
+        with self.assertRaises(common.UpdateFailure) as raised:
+            common.command([sys.executable, '-c', 'import time; time.sleep(30)'], timeout=0.5)
+        self.assertEqual(raised.exception.code, 'timeout')
+
+    def test_commands_get_no_terminal_and_empty_stdin(self):
+        probe = ('import sys\n'
+                 'try:\n    open("/dev/tty").close(); tty = "tty"\n'
+                 'except OSError:\n    tty = "no-tty"\n'
+                 'print(tty, "eof" if sys.stdin.read() == "" else "input")\n')
+        started = time.monotonic()
+        text = common.command([sys.executable, '-c', probe], timeout=10, capture=True)
+        self.assertEqual(text.split(), ['no-tty', 'eof'])
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_hanging_version_probe_reports_check_timed_out_without_updating(self):
+        home = self.root
+        _script(home / '.local/bin/omp', 'sleep 60')
+        _script(home / '.local/bin/claude', 'echo 2.1.0')
+        events = []
+        def fake_update(install, deadline):
+            return common.result(install.app_id, 'ubuntu', 'current', install.version, install.version, 'native', attempted=True)
+        # Only the fixture home is searched: a real CLI on this machine is never probed or updated.
+        with mock.patch.object(pathlib.Path, 'home', return_value=home), \
+                mock.patch.object(updater, '_candidates', side_effect=lambda name, platform: [home / '.local/bin' / name]), \
+                mock.patch.object(common, 'VERSION_PROBE_TIMEOUT', 1), \
+                mock.patch.object(updater, 'detect_desktop', return_value=None), \
+                mock.patch.object(updater, 'check_readiness', return_value=None), \
+                mock.patch.object(updater, 'update_desktop') as desktop_update, \
+                mock.patch.object(updater, 'update_cli', side_effect=fake_update) as update:
+            started = time.monotonic()
+            value = updater.run_apply('ubuntu', emit=events.append)
+            elapsed = time.monotonic() - started
+        rows = {row['appId']: row for row in value['results']}
+        self.assertEqual(rows['omp']['status'], 'unknown')
+        self.assertEqual(rows['omp']['messageCode'], 'check_timeout')
+        self.assertFalse(rows['omp']['updateAttempted'])
+        self.assertEqual(rows['claude-code']['status'], 'current')
+        self.assertEqual([call.args[0].app_id for call in update.call_args_list], ['claude-code'])
+        desktop_update.assert_not_called()
+        self.assertLess(elapsed, 8)
+        streamed = [event['result']['appId'] for event in events if event['event'] == 'result']
+        self.assertEqual(sorted(streamed), sorted(common.APP_LABELS))
+
+    def test_version_probes_run_side_by_side(self):
+        home = self.root
+        for name in ('agy', 'muse', 'omp', 'codex', 'claude'):
+            _script(home / '.local/bin' / name, 'sleep 1; echo 1.0.0')
+        with mock.patch.object(pathlib.Path, 'home', return_value=home), \
+                mock.patch.object(updater, '_candidates', side_effect=lambda name, platform: [home / '.local/bin' / name]), \
+                mock.patch.object(updater, 'detect_desktop', return_value=None):
+            started = time.monotonic()
+            found = updater.detect('ubuntu')
+            elapsed = time.monotonic() - started
+        self.assertEqual({key: value.version for key, value in found.items() if value}, {
+            'antigravity-cli': '1.0.0', 'muse-code': '1.0.0', 'omp': '1.0.0', 'codex-cli': '1.0.0', 'claude-code': '1.0.0'})
+        self.assertLess(elapsed, 3.5, 'five 1 s probes in series would take 5 s')
+
+    def test_windows_package_query_timeout_is_not_not_installed(self):
+        with mock.patch.object(desktop, 'powershell', side_effect=common.UpdateFailure('timeout')):
+            install = desktop.windows_package('codex-desktop')
+        self.assertIsNotNone(install)
+        self.assertEqual(install.probe, 'timeout')
+        with mock.patch.object(desktop, 'powershell', side_effect=common.UpdateFailure('update_failed')):
+            self.assertIsNone(desktop.windows_package('codex-desktop'))
+
+    def test_cancel_skips_every_app_not_yet_started(self):
+        installations = {key: common.Install(key, 'ubuntu', pathlib.Path('/fixture/app'), '1.0.0') for key in common.APP_LABELS}
+        state = {'cancelled': False}
+        def cli(install, deadline):
+            state['cancelled'] = True  # the cancel lands while this first app runs
+            return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
+        with mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
+                mock.patch.object(updater, 'detect', return_value=installations), \
+                mock.patch.object(updater, 'check_readiness', return_value=None), \
+                mock.patch.object(updater, 'update_desktop') as desktop_update, \
+                mock.patch.object(updater, 'update_cli', side_effect=cli) as update:
+            value = updater.run_apply('ubuntu', cancelled=lambda: state['cancelled'])
+        self.assertEqual(update.call_count, 1)
+        desktop_update.assert_not_called()
+        rows = value['results']
+        self.assertEqual(rows[0]['status'], 'current')
+        self.assertEqual({row['status'] for row in rows[1:]}, {'skipped'})
+        self.assertEqual({row['messageCode'] for row in rows[1:]}, {'skipped_cancelled'})
+        self.assertEqual(len(rows), 7)
+
+    def test_progress_streams_json_lines_and_hears_cancel_on_stdin(self):
+        output = io.StringIO()
+        read_end, write_end = os.pipe()
+        with open(read_end, 'rb', buffering=0) as stdin, mock.patch.object(sys, 'stdin', stdin), contextlib.redirect_stdout(output):
+            emit, cancelled = updater.stream_progress()
+            emit({'event': 'app', 'appId': 'omp', 'phase': 'checking'})
+            os.write(write_end, b'noise\n')
+            time.sleep(.1)
+            self.assertFalse(cancelled())
+            os.write(write_end, b'cancel\n')
+            deadline = time.monotonic() + 2
+            while not cancelled() and time.monotonic() < deadline:
+                time.sleep(.01)
+            os.close(write_end)
+        self.assertTrue(cancelled())
+        self.assertEqual(json.loads(output.getvalue().splitlines()[0]), {'event': 'app', 'appId': 'omp', 'phase': 'checking'})
+
+    def test_progress_is_opt_in_so_older_dashboards_get_one_document(self):
+        installations = {key: None for key in common.APP_LABELS}
+        output = io.StringIO()
+        environment = {key: value for key, value in os.environ.items() if key != 'AAC_UPDATE_PROGRESS'}
+        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
+                mock.patch.object(updater, 'detect', return_value=installations), \
+                mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu']), contextlib.redirect_stdout(output):
+            updater.main()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(len(json.loads(lines[0])['results']), 7)
+        output = io.StringIO()
+        devnull = open(os.devnull, 'rb')
+        self.addCleanup(devnull.close)
+        with mock.patch.dict(os.environ, {'AAC_UPDATE_PROGRESS': '1'}), mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
+                mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(sys, 'stdin', devnull), \
+                mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu']), contextlib.redirect_stdout(output):
+            updater.main()
+        lines = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([line.get('event') for line in lines[:-1]], ['app'] + ['result'] * 7)
+        self.assertEqual(len(lines[-1]['results']), 7)
+
+    def test_windows_coordinator_relays_task_progress_and_forwards_cancel(self):
+        import threading
+        app_root = self.root / '.ccs/app-updates'
+        app_root.mkdir(parents=True)
+        common.write_private_json(app_root / 'windows-task-progress.json', {'nonce': 'stale', 'events': [{'event': 'app', 'appId': 'omp', 'phase': 'checking'}]})
+        events, state = [], {'cancel': False}
+        def task_child():
+            deadline = time.monotonic() + 10
+            nonce = None
+            while nonce is None and time.monotonic() < deadline:
+                try: nonce = json.loads((app_root / 'windows-task-request.json').read_text())['nonce']
+                except (OSError, ValueError): time.sleep(.05)
+            emit, cancelled = updater.task_child_progress(nonce)
+            emit({'event': 'app', 'appId': 'codex-cli', 'phase': 'updating'})
+            emit({'event': 'result', 'result': {'appId': 'codex-cli', 'status': 'current', 'messageCode': 'current'}})
+            state['cancel'] = True
+            while not cancelled() and time.monotonic() < deadline:
+                time.sleep(.05)
+            common.write_private_json(app_root / 'windows-task-result.json', {'nonce': nonce, 'results': [{'appId': 'codex-cli', 'status': 'current'}, {'appId': 'omp', 'status': 'skipped'}]})
+        with mock.patch.object(pathlib.Path, 'home', return_value=self.root), mock.patch.object(updater, 'powershell', return_value='') as shell:
+            worker = threading.Thread(target=task_child)
+            worker.start()
+            value = updater.windows_interactive_apply(events.append, lambda: state['cancel'])
+            worker.join(5)
+        self.assertEqual(shell.call_count, 2)
+        self.assertEqual([event['event'] for event in events], ['app', 'result'])
+        self.assertEqual(events[0]['appId'], 'codex-cli', 'stale progress from an earlier nonce is never relayed')
+        self.assertEqual(value['results'][1]['status'], 'skipped')
+
+    def test_ubuntu_codex_busy_row_passes_through_without_stopping_anything(self):
+        install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), '1.0.0')
+        daemon = processes.Process(10, 1, 1, '/fixture/codex', '10', ['codex', 'app-server', '--listen', 'unix://'])
+        busy = {'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'action_required', 'previousVersion': '1.0.0',
+                'version': '1.1.0', 'manager': 'native', 'messageCode': 'codex_busy', 'updateAttempted': True,
+                'restartedProcesses': 0, 'forcedStops': 0}
+        with mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
+                mock.patch.object(updater, 'scan', return_value=[daemon]), \
+                mock.patch.object(updater, 'family', return_value=[daemon]), \
+                mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'command', return_value=json.dumps(busy)) as run, \
+                mock.patch.object(updater, 'terminate_cli') as stop, mock.patch.object(updater, 'restart_cli') as restart:
+            value = updater.update_cli(install, time.monotonic() + 15 * 60)
+        self.assertEqual(value['status'], 'action_required')
+        self.assertEqual(value['messageCode'], 'codex_busy')
+        stop.assert_not_called(); restart.assert_not_called()
+        # The bridge gets a bounded budget, never the old 15-minute idle wait.
+        argv, timeout = run.call_args.args[0], run.call_args.kwargs['timeout']
+        self.assertLessEqual(int(argv[argv.index('--timeout-seconds') + 1]), updater.CODEX_BRIDGE_SECONDS)
+        self.assertLessEqual(timeout, updater.CODEX_BRIDGE_SECONDS + 15)
 
 
 if __name__ == '__main__': unittest.main()

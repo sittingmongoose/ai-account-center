@@ -10,6 +10,10 @@
 //   layout, breakpoints, banners, the wrong-password shake), as the `login-overlay` action; `place` puts the inputs
 //   there in whole pixels, or hides them (display:none) whenever the form is not on screen (loading, signed in, the
 //   success look, the first-run form, the layer fading in or out).
+// - Placement: the form is a fixed box around the fields (it lets the mouse through to Slint) and every field is
+//   position:absolute inside it. A position:fixed field has no offsetParent, and 1Password's field collector reads
+//   "no offsetParent" as "not viewable": it then fills only the field that has focus, one field per fill
+//   (status/FW4-LOGIN-FILL.md). Inside a positioned form each field's offsetParent is the form, so both fill at once.
 // - Values: typing and manager fills reach Slint through `onFilled` (bridge.js set_login_fields), so the Slint fields
 //   show the same text whenever the inputs are hidden. `mirror` sets values silently, so a Slint sign-in never loops
 //   back through `onFilled`.
@@ -48,8 +52,9 @@ const boxOf = ({ left, top, right, bottom }) => ({ left, top, width: right - lef
 
 /**
  * Where each element of the form goes for one `login-overlay` report (lib.rs login_overlay_json), in whole CSS
- * pixels. The username input covers its whole box; the password input stops at the end of its text area, so the
- * Slint eye button beside it stays clickable. Each input's padding puts its text where the Slint text area starts.
+ * pixels of the window. The username input covers its whole box; the password input stops at the end of its text
+ * area, so the Slint eye button beside it stays clickable. Each input's padding puts its text where the Slint text
+ * area starts. `frame` is the form's box around all of them (`place` positions the fields inside it).
  * `on` is false (everything hidden) unless the report says the form is on screen and both boxes are real.
  */
 export function overlayLayout(overlay) {
@@ -61,10 +66,19 @@ export function overlayLayout(overlay) {
   const passRight = Math.min(pass.right, Math.max(passText.right, pass.left + 1));
   const color = (value) => (typeof value === 'string' && COLOR.test(value) ? value : null);
   const check = edges(o.check), submit = edges(o.submit);
+  // the form's own box: everything it places, so each field sits inside a real, positioned form
+  const parts = [user, { ...pass, right: passRight }, check, submit].filter(Boolean);
+  const frame = boxOf({
+    left: Math.min(...parts.map((b) => b.left)),
+    top: Math.min(...parts.map((b) => b.top)),
+    right: Math.max(...parts.map((b) => b.right)),
+    bottom: Math.max(...parts.map((b) => b.bottom)),
+  });
   return {
     ...base,
     on: true,
     enabled: o.enabled === true,
+    frame,
     user: { ...boxOf(user), paddingLeft: Math.max(0, userText.left - user.left), paddingRight: Math.max(0, user.right - userText.right) + RIGHT_AIR },
     pass: { ...boxOf({ ...pass, right: passRight }), paddingLeft: Math.max(0, passText.left - pass.left), paddingRight: RIGHT_AIR },
     check: check ? boxOf(check) : null,
@@ -111,6 +125,15 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
   // form.submit() fires no submit event, so a manager that submits that way would make the browser post the
   // form itself and land on the API's JSON answer. requestSubmit() fires the event above instead.
   if (typeof form.requestSubmit === 'function') form.submit = () => form.requestSubmit();
+  // A manager's auto-submit may instead press Enter in a field with a synthetic key event, which a browser never
+  // turns into a submit (only a real Enter submits a form by itself), so an untrusted Enter submits here.
+  for (const input of [user, pass]) {
+    input.addEventListener('keydown', (event) => {
+      if (event?.key !== 'Enter' || event.isTrusted !== false || typeof form.requestSubmit !== 'function') return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      form.requestSubmit();
+    });
+  }
 
   // focus and hover of the two inputs, for the Slint boxes under them
   const pointer = { focus: '', hover: '' };
@@ -126,15 +149,23 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
   const placed = new Map();
   let on = false;
   let wanted = null;
-  const show = (element, box, extra = {}) => {
+  const apply = (element, next) => {
     const style = element.style;
     if (!style) return;
-    const next = box ? { display: 'block', left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`, ...extra } : { display: 'none' };
     const key = JSON.stringify(next);
     if (placed.get(element) === key) return;
     placed.set(element, key);
     for (const [name, value] of Object.entries(next)) style[name] = value;
   };
+  // The form's box in the window; the fields are placed inside it (position:absolute), relative to its corner.
+  let origin = { left: 0, top: 0 };
+  const frameAt = (box) => {
+    origin = box ? { left: box.left, top: box.top } : origin;
+    apply(form, box ? { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` } : { width: '0px', height: '0px' });
+  };
+  const show = (element, box, extra = {}) => apply(element, box
+    ? { display: 'block', left: `${box.left - origin.left}px`, top: `${box.top - origin.top}px`, width: `${box.width}px`, height: `${box.height}px`, ...extra }
+    : { display: 'none' });
   const focusIn = () => parts.includes(document.activeElement);
   const focusField = (field) => {
     const input = field === 'pass' ? pass : field === 'user' ? user : null;
@@ -150,6 +181,7 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
       const hadFocus = focusIn();
       on = false;
       for (const element of parts) show(element, null);
+      frameAt(null);
       if (pointer.hover || pointer.focus) { pointer.hover = ''; pointer.focus = ''; report(); }
       // a hidden input drops the keyboard; the canvas takes it back, so the dashboard's keys keep working
       if (hadFocus) { try { screen?.focus?.({ preventScroll: true }); } catch {} }
@@ -162,6 +194,7 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
     const readOnly = !layout.enabled;
     if (user.readOnly !== readOnly) user.readOnly = readOnly;
     if (pass.readOnly !== readOnly) pass.readOnly = readOnly;
+    frameAt(layout.frame);
     show(user, layout.user, { paddingLeft: `${layout.user.paddingLeft}px`, paddingRight: `${layout.user.paddingRight}px` });
     show(pass, layout.pass, { paddingLeft: `${layout.pass.paddingLeft}px`, paddingRight: `${layout.pass.paddingRight}px` });
     show(remember, layout.check);
@@ -191,17 +224,24 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
 }
 
 /**
- * Chrome's autofill heuristics, as a checklist one input must pass to be filled: it is in a form, its autocomplete
- * attribute names the field, and it is rendered (a box on the page, not display:none or visibility:hidden).
- * `styleOf` is getComputedStyle.
+ * What a password manager checks before it fills one input, as a checklist:
+ * - Chrome's autofill heuristics: it is in a form, its autocomplete attribute names the field, and it is rendered
+ *   (a box on the page, not display:none or visibility:hidden);
+ * - 1Password's field collector ("viewable"): it has an offsetParent (null for a position:fixed field, which 1Password
+ *   reads as hidden), it is at least 10 by 10 pixels, and the element at its centre is the input itself.
+ * `styleOf` is getComputedStyle; `elementAt` is document.elementFromPoint (optional).
  */
-export function autofillChecks(input, styleOf) {
+export function autofillChecks(input, styleOf, elementAt = null) {
   const style = styleOf(input);
   const rect = typeof input.getBoundingClientRect === 'function' ? input.getBoundingClientRect() : { width: 0, height: 0 };
+  const rendered = !!rect && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  const positioned = !!input.offsetParent;
+  const centre = typeof elementAt === 'function' && rendered ? elementAt(rect.left + rect.width / 2, rect.top + rect.height / 2) : input;
   return {
     inForm: !!input.form,
     autocomplete: input.getAttribute ? input.getAttribute('autocomplete') : null,
-    rendered:
-      !!rect && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+    rendered,
+    positioned,
+    viewable: rendered && positioned && input.clientWidth >= 10 && input.clientHeight >= 10 && centre === input,
   };
 }

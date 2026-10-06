@@ -68,7 +68,7 @@ def windows_package(app_id):
     # Sort-Object keeps the query a single object when two versions coexist mid-staging.
     script = "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name " + ps_quote(identity) + " | Sort-Object {[Version]$_.Version} -Descending | Select-Object -First 1; if($p){@{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation}|ConvertTo-Json -Compress}"
     try:
-        raw = powershell(script, timeout=15)
+        raw = powershell(script, timeout=30)
         value = json.loads(raw) if raw.strip() else None
         if not isinstance(value, dict) or value.get("name") != identity or not isinstance(value.get("root"), str):
             return None
@@ -77,7 +77,11 @@ def windows_package(app_id):
         if not target.is_file():
             return None
         return Install(app_id, "windows", target, version_text(value.get("version")), "msix", identity, value.get("publisher"), root)
-    except (UpdateFailure, ValueError):
+    except UpdateFailure as error:
+        # A query that ran out of time says nothing about the package: report
+        # "Check timed out" rather than "not installed".
+        return Install(app_id, "windows", None, manager="msix", probe="timeout") if error.code == "timeout" else None
+    except ValueError:
         return None
 
 
@@ -95,9 +99,11 @@ def detect_desktop(app_id, platform):
     if not pathlib.Path(executable).is_file():
         return None
     try:
-        text = command(["/usr/bin/dpkg-query", "-W", "-f=${Version}", package], timeout=10, capture=True)
+        text = command(["/usr/bin/dpkg-query", "-W", "-f=${Version}", package], timeout=20, capture=True)
         return Install(app_id, platform, pathlib.Path(executable), version_text(text), "apt", package, package_root=pathlib.Path(executable).parent)
-    except UpdateFailure:
+    except UpdateFailure as error:
+        if error.code == "timeout":
+            return Install(app_id, platform, pathlib.Path(executable), None, "apt", package, probe="timeout")
         return None
 
 
@@ -397,7 +403,8 @@ def update_linux(install, deadline=None):
             if not trusted:
                 raise UpdateFailure("signature_failed")
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
-            seconds = max(30, min(900, int((deadline or time.monotonic() + 900) - time.monotonic())))
+            # Same bounded bridge budget as the Codex CLI (lock, idle wait, apt).
+            seconds = max(30, min(420, int((deadline or time.monotonic() + 420) - time.monotonic())))
             return json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "desktop", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
         contexts = main_contexts(install, scan("ubuntu"))
         forced = terminate_desktops(install, contexts)

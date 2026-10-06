@@ -7,9 +7,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Metric | Value |
 |---|---:|
 | Sync fs occurrences (all) | 1145 |
-| Sync fs files affected (all) | 116 |
+| Sync fs files affected (all) | 117 |
 | Sync fs occurrences (runtime hotpaths) | 514 |
-| Sync fs files affected (runtime hotpaths) | 65 |
+| Sync fs files affected (runtime hotpaths) | 66 |
 | Legacy shim markers | 198 |
 | Legacy shim files affected | 75 |
 
@@ -25,8 +25,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/management/shared-manager/plugin-layout-internals.ts` | 18 | copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync |
 | `src/cliproxy/accounts/registry.ts` | 17 | existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync |
 | `src/management/shared-manager/shared-dir-linker.ts` | 16 | copyFileSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync |
-| `src/web-server/services/app-update-service.ts` | 16 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
+| `src/web-server/services/app-update-service.ts` | 15 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -57,7 +57,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 36/394 |
+| files with createLogger | 36/395 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
 | files > 400 LOC | 46 |
 | files > 600 LOC | 20 |
@@ -86,7 +86,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | LOC |
 |---|---:|
-| `src/web-server/usage/account-activity-collector.ts` | 1629 |
+| `src/web-server/usage/account-activity-collector.ts` | 1648 |
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/web-server/services/account-analytics-activity.ts` | 1244 |
 | `src/antigravity/registry.ts` | 1104 |

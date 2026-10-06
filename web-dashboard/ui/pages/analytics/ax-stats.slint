@@ -12,14 +12,18 @@ import { AxColor, AxCard, AxCardHead, AxNum, AxTip, AxSwatch, AxLegendEntry } fr
 // these same components, so the columns and styling line up exactly and the list reads as one. The fixed
 // columns are one shared grid, identical in the header and every row, so each value sits exactly under
 // its header whatever the labels measure; each width fits its Martian Mono 11 px header (0.65 em a glyph
-// plus 0.66 px letter spacing: PROVIDER needs 62, LAST ACTIVE 86) and the widest value it carries at
-// 12.5 px ("Unavailable", 89), and absurd magnitudes elide inside the column instead of shifting the
-// grid. The models column flexes and elides, with the full list in the row's tip. The first column names
-// the provider that served the session, never the CLI whose logs held it.
+// plus 0.66 px letter spacing: PROVIDER needs 62, TOKENS 47, LAST ACTIVE 86) and the widest value it
+// carries at 12.5 px ("Unavailable", 67), and absurd magnitudes elide inside the column instead of
+// shifting the grid. Every header keeps at least 16 px of clear space to the next one: PROVIDER is
+// left-aligned, so its column carries 10 px of air past the label before the gap, and the right-aligned
+// numeric heads are short against their columns. The models column flexes and elides, with the full list
+// in the row's tip. The first column names the provider that served the session, never the CLI whose
+// logs held it. The provider rows in Session stats use the same three numeric columns, so their numbers
+// sit on the same right edges as TOKENS, COST and LAST ACTIVE below them.
 global SessCols {
     out property <length> gap: 10px;
-    out property <length> prov: 64px;
-    out property <length> tok: 92px;
+    out property <length> prov: 72px;
+    out property <length> tok: 84px;
     out property <length> cost: 92px;
     out property <length> when: 92px;
 }
@@ -89,12 +93,13 @@ export component AxSessionsCard inherits AxCard {
     property <bool> pad16: Breakpoints.width < 1180px;
     // ONE shared grid for the provider header and every provider row: the provider column takes the
     // remainder and the three numeric columns are fixed and right-aligned, identical in the header and
-    // every row, so each value sits exactly under its header whatever the labels measure. Each width fits
-    // its Martian Mono 11 px header (0.65 em a glyph plus 0.66 px letter spacing: SESSIONS needs 63, PER
-    // SESSION 86, EVENTS PER SESSION 141) and the widest value it carries ("Unavailable", 89).
-    property <length> col-sessions: 92px;
-    property <length> col-per: 92px;
-    property <length> col-events: 146px;
+    // every row, so each value sits exactly under its header whatever the labels measure. They are the
+    // session table's TOKENS, COST and LAST ACTIVE columns (SessCols), with the same gap. The two
+    // per-session heads stack on two lines ("COST PER" over "SESSION", "EVENTS PER" over "SESSION"), so
+    // each head is narrower than its column and stays clearly apart from its neighbours (Martian Mono
+    // 11 px, 0.65 em a glyph plus 0.66 px letter spacing: SESSIONS and COST PER need 62, EVENTS PER 78);
+    // on one line they ran together into "SESSIONS PER SESSION EVENTS PER SESSION". Single-line heads
+    // sit on the bottom line, next to the data.
     AxCardHead { title: "Session stats"; sub: AxData.sessions.sub; note: AxData.sessions.note; probe: "sess-head"; }
     VerticalLayout {
         // a card stretched by a taller neighbour (an open donut legend) keeps its content at the top
@@ -135,15 +140,29 @@ export component AxSessionsCard inherits AxCard {
             vertical-stretch: 0;
             HorizontalLayout {
                 padding-bottom: 6px;
-                Caps { text: "PROVIDER"; horizontal-stretch: 1; min-width: 0px; }
-                Caps { text: "SESSIONS"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-sessions; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:sessions"; } }
-                Caps { text: "PER SESSION"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-per; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:per"; } }
-                Caps { text: "EVENTS PER SESSION"; horizontal-alignment: right; horizontal-stretch: 0; width: root.col-events; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:events"; } }
+                spacing: SessCols.gap;
+                Caps { text: "PROVIDER"; vertical-alignment: bottom; horizontal-stretch: 1; min-width: 0px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:label"; } }
+                Caps { text: "SESSIONS"; vertical-alignment: bottom; horizontal-alignment: right; horizontal-stretch: 0; width: SessCols.tok; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:sessions"; } }
+                VerticalLayout {
+                    width: SessCols.cost;
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    Caps { text: "COST PER"; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:per-1"; } }
+                    Caps { text: "SESSION"; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:per"; } }
+                }
+                VerticalLayout {
+                    width: SessCols.when;
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    Caps { text: "EVENTS PER"; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:events-1"; } }
+                    Caps { text: "SESSION"; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:events"; } }
+                }
             }
             for r in AxData.sess-rows: VerticalLayout {
                 Rectangle { height: 1px; background: Theme.rule-2; }
                 HorizontalLayout {
                     min-height: 32px;
+                    spacing: SessCols.gap;
                     HorizontalLayout {
                         horizontal-stretch: 1;
                         min-width: 0px;
@@ -151,9 +170,9 @@ export component AxSessionsCard inherits AxCard {
                         VerticalLayout { alignment: center; ProviderMark { provider: r.provider; size: 16px; } }
                         Text { text: r.label; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
-                    SessCell { text: r.sessions; horizontal-stretch: 0; width: root.col-sessions; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":sessions"; } }
-                    SessCell { text: r.per; horizontal-stretch: 0; width: root.col-per; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":per"; } }
-                    SessCell { text: r.events; horizontal-stretch: 0; width: root.col-events; AxTip { tip: r.events-tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":events"; } }
+                    SessCell { text: r.sessions; horizontal-stretch: 0; width: SessCols.tok; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":sessions"; } }
+                    SessCell { text: r.per; horizontal-stretch: 0; width: SessCols.cost; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":per"; } }
+                    SessCell { text: r.events; horizontal-stretch: 0; width: SessCols.when; AxTip { tip: r.events-tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":events"; } }
                 }
             }
         }
