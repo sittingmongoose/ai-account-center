@@ -120,29 +120,123 @@ export async function openClaudeMacLauncher(launcher: ClaudeDesktopLauncher): Pr
   await runDesktopSsh(checkHost(launcher.sshHost), command);
 }
 
-/** Start only the existing fixed interactive task; SSH never launches a desktop app in session 0. */
+/**
+ * PowerShell lines that rewrite the Windows launcher's account list
+ * (`%LOCALAPPDATA%\CCS-Claude\ccs-claude-accounts.txt`) to exactly `ids`,
+ * only when it differs. The previous file is kept once as
+ * `ccs-claude-accounts.previous.txt` beside it, and the new one is written to
+ * a temporary file and moved into place. Any failure is swallowed: the Open
+ * goes ahead with whatever list is there. Ids are validated here and again
+ * by the launcher. Nothing else in that folder is touched.
+ */
+/** Safely under the 8191-character Windows command-line limit. */
+const MAX_WINDOWS_COMMAND = 7600;
+
+export function windowsAccountListScript(ids: readonly string[]): string[] {
+  if (
+    ids.length === 0 ||
+    ids.length > 64 ||
+    new Set(ids).size !== ids.length ||
+    ids.some((id) => !CLAUDE_PROFILE_ID_PATTERN.test(id))
+  ) {
+    throw new ValidationError('Claude Windows account list is not valid.');
+  }
+  return [
+    `$tmp = $null; try { $dir = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude'); if (Test-Path -LiteralPath $dir -PathType Container) {` +
+      ` $list = Join-Path $dir 'ccs-claude-accounts.txt'; $want = "${ids.map((id) => `${id}\`n`).join('')}";` +
+      ` $have = $null; if (Test-Path -LiteralPath $list -PathType Leaf) { if ((Get-Item -LiteralPath $list).Length -le 8192) { $have = [IO.File]::ReadAllText($list) -replace "\`r\`n", "\`n" } };` +
+      ` if ($have -cne $want) {` +
+      ` if ($null -ne $have) { Copy-Item -LiteralPath $list -Destination (Join-Path $dir 'ccs-claude-accounts.previous.txt') -Force };` +
+      ` $tmp = Join-Path $dir 'ccs-claude-accounts.txt.tmp'; [IO.File]::WriteAllText($tmp, $want, (New-Object Text.UTF8Encoding($false)));` +
+      ` if (Test-Path -LiteralPath $list -PathType Leaf) { [IO.File]::Replace($tmp, $list, [NullString]::Value) } else { [IO.File]::Move($tmp, $list) } } } } catch { try { if ($tmp) { [IO.File]::Delete($tmp) } } catch { } }`,
+  ];
+}
+
+/**
+ * Bring the Windows launcher's account list in line with `ids` without
+ * opening anything (or, with `dryRun`, only read it). Answers the ids the
+ * file lists after the step (profile ids only; the file holds nothing else)
+ * and whether they match `ids`. For the orchestrator's one-off cleanup.
+ */
+export async function syncClaudeWindowsAccountList(
+  sshHost: string,
+  ids: readonly string[],
+  dryRun: boolean
+): Promise<{ listed: string[] | null; matches: boolean }> {
+  const lines = windowsAccountListScript(ids);
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    ...(dryRun ? [] : lines),
+    "$list = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude', 'ccs-claude-accounts.txt')",
+    "$listed = $null; if ((Test-Path -LiteralPath $list -PathType Leaf) -and (Get-Item -LiteralPath $list).Length -le 8192) { $listed = @(Get-Content -LiteralPath $list | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' }) }",
+    '[Console]::Write((ConvertTo-Json -Compress @{ listed = $listed }))',
+  ].join('; ');
+  const command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  if (command.length > MAX_WINDOWS_COMMAND) {
+    throw new ValidationError('The Windows launcher account list is too long to send.');
+  }
+  const stdout = await runDesktopSsh(checkHost(sshHost), command);
+  let listed: string[] | null = null;
+  try {
+    const value = JSON.parse(stdout.trim()) as { listed?: unknown };
+    const raw = typeof value.listed === 'string' ? [value.listed] : value.listed;
+    if (Array.isArray(raw)) {
+      listed = raw.filter(
+        (id): id is string => typeof id === 'string' && CLAUDE_PROFILE_ID_PATTERN.test(id)
+      );
+    }
+  } catch {
+    throw new ValidationError('The Windows launcher account list could not be read.');
+  }
+  return {
+    listed,
+    matches: !!listed && listed.length === ids.length && listed.every((id, i) => id === ids[i]),
+  };
+}
+
+/**
+ * Start only the existing fixed interactive task; SSH never launches a desktop
+ * app in session 0. With `accountList` (default Windows profile first, from the
+ * server's current profiles), the launcher's account list is first brought in
+ * line with it in the same call, so a stale entry never blocks an Open.
+ */
 export async function openClaudeWindowsLauncher(
   launcher: ClaudeDesktopLauncher,
-  profileId: string
+  profileId: string,
+  accountList?: readonly string[]
 ): Promise<void> {
   // The caller resolved this launcher from the manifest, which proves the ID
   // exists; this only rejects unsafe strings before they reach the command.
   if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) {
     throw new ValidationError('Select a configured Claude Windows account.');
   }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$task = Get-ScheduledTask -TaskPath '\\' -TaskName 'ccs-claude-${profileId}' -ErrorAction Stop`,
-    '$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-    '$taskUser = [string]$task.Principal.UserId',
-    "$taskSid = if ($taskUser -match '^S-1-') { $taskUser } else { (New-Object Security.Principal.NTAccount($taskUser)).Translate([Security.Principal.SecurityIdentifier]).Value }",
-    "if ($taskSid -ne $currentSid -or [string]$task.Principal.LogonType -notin @('Interactive', 'InteractiveToken') -or [string]$task.Principal.RunLevel -ne 'Limited') { exit 1 }",
-    "$helper = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude', 'ccs-claude.exe')",
-    `if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ne $helper -or $task.Actions[0].Arguments -cne 'ccs-claude://launch/${profileId}') { exit 1 }`,
-    'if (@($task.Triggers | Where-Object { $null -ne $_ }).Count -ne 0 -or -not $task.Settings.Enabled -or -not $task.Settings.AllowDemandStart) { exit 1 }',
-    'Start-ScheduledTask -InputObject $task',
-  ].join('; ');
-  const command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  const encode = (listLines: string[]): string => {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      ...listLines,
+      `$task = Get-ScheduledTask -TaskPath '\\' -TaskName 'ccs-claude-${profileId}' -ErrorAction Stop`,
+      '$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+      '$taskUser = [string]$task.Principal.UserId',
+      "$taskSid = if ($taskUser -match '^S-1-') { $taskUser } else { (New-Object Security.Principal.NTAccount($taskUser)).Translate([Security.Principal.SecurityIdentifier]).Value }",
+      "if ($taskSid -ne $currentSid -or [string]$task.Principal.LogonType -notin @('Interactive', 'InteractiveToken') -or [string]$task.Principal.RunLevel -ne 'Limited') { exit 1 }",
+      "$helper = [IO.Path]::Combine($env:LOCALAPPDATA, 'CCS-Claude', 'ccs-claude.exe')",
+      `if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ne $helper -or $task.Actions[0].Arguments -cne 'ccs-claude://launch/${profileId}') { exit 1 }`,
+      'if (@($task.Triggers | Where-Object { $null -ne $_ }).Count -ne 0 -or -not $task.Settings.Enabled -or -not $task.Settings.AllowDemandStart) { exit 1 }',
+      'Start-ScheduledTask -InputObject $task',
+    ].join('; ');
+    return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  };
+  let command = encode([]);
+  if (accountList && accountList.includes(profileId)) {
+    // An invalid list, or one that would pass the 8191-character Windows
+    // command-line limit, is left for later: the Open matters more.
+    try {
+      const withList = encode(windowsAccountListScript(accountList));
+      if (withList.length <= MAX_WINDOWS_COMMAND) command = withList;
+    } catch {
+      /* Open without the list step. */
+    }
+  }
   await runDesktopSsh(checkHost(launcher.sshHost), command);
 }
 

@@ -10,6 +10,7 @@ import {
 } from '../../../src/web-server/services/account-dashboard-projection';
 import {
   ClaudeDesktopLiveUsageError,
+  ClaudeDesktopSignInNeededError,
   getCachedClaudeDesktopLiveUsage,
   getLiveClaudeDesktopUsage,
   invalidateClaudeDesktopLiveUsageCache,
@@ -524,11 +525,7 @@ describe('identity-bound Claude Desktop live usage', () => {
 
   it('retries an old installed collector once with the old argument set', async () => {
     exec.mockImplementation((...args: unknown[]) => {
-      const callback = args.at(-1) as (
-        error: Error | null,
-        stdout: string,
-        stderr: string
-      ) => void;
+      const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void;
       if (exec.mock.calls.length === 1) {
         callback(
           argparseFailure(
@@ -556,11 +553,7 @@ describe('identity-bound Claude Desktop live usage', () => {
   it('reports an outdated collector for a new ID the old copy cannot know', async () => {
     writeProfiles([{ ...profile, id: 'added-profile', email: 'added@example.com' }]);
     exec.mockImplementation((...args: unknown[]) => {
-      const callback = args.at(-1) as (
-        error: Error | null,
-        stdout: string,
-        stderr: string
-      ) => void;
+      const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void;
       const stderr = remoteScript(args).includes('--expected-email')
         ? 'claude_usage.py: error: unrecognized arguments: --expected-email'
         : "claude_usage.py: error: argument --profile: invalid choice: 'added-profile'";
@@ -576,13 +569,44 @@ describe('identity-bound Claude Desktop live usage', () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
+  it("carries the helper's own needs_sign_in answer, with no helper text", async () => {
+    output = payload({
+      status: 'needs_sign_in',
+      email: null,
+      accountVerified: false,
+      organizationVerified: false,
+      fetchedAt: null,
+      windows: [],
+    });
+    const failure = await getLiveClaudeDesktopUsage('gmail').then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(ClaudeDesktopSignInNeededError);
+    expect((failure as ClaudeDesktopSignInNeededError).helperOutdated).toBe(false);
+    expect((failure as Error).message).toBe('Sign-in needed on Windows.');
+    expect(JSON.stringify(failure)).not.toContain('credential-sentinel');
+    // The answer is held for the failure backoff like any other failed read.
+    await getLiveClaudeDesktopUsage('gmail').catch(() => null);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a needs_sign_in answer for another profile or platform', async () => {
+    for (const overrides of [
+      { status: 'needs_sign_in', profileId: 'other' },
+      { status: 'needs_sign_in', platform: 'mac' },
+      { status: 'needs_sign_in', schemaVersion: 2 },
+      { status: 'unavailable' },
+    ]) {
+      invalidateClaudeDesktopLiveUsageCache();
+      output = payload({ ...overrides, windows: [] });
+      expect(await getLiveClaudeDesktopUsage('gmail')).toBeNull();
+    }
+  });
+
   it('does not retry when exit 2 carries no argparse rejection', async () => {
     exec.mockImplementation((...args: unknown[]) => {
-      const callback = args.at(-1) as (
-        error: Error | null,
-        stdout: string,
-        stderr: string
-      ) => void;
+      const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void;
       const stderr = "/usr/bin/python3: can't open file: [Errno 2] No such file";
       callback(argparseFailure(stderr), '', stderr);
       return {} as childProcess.ChildProcess;

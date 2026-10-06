@@ -2193,3 +2193,35 @@ test('the snapshot cleanup block shows the toggle, the button and the last note'
   assert.equal(running.cleanup.busy, true);
   assert.equal(running.cleanup.enabled, false);
 });
+
+test('Claude rows say "Sign-in needed on Windows" before Open, and Open stays allowed (fake profiles)', () => {
+  const profiles = [{ id: 'fake-one', mac: { canOpen: true }, windows: { canOpen: true } }];
+  const r = registry([reg('claude:fake-one', 'claude', { actions: { remove: true } })]);
+  const view = (extra) =>
+    row(
+      accountsViewModel(data([claude('fake-one', extra)], { providers: providers() }), {
+        now,
+        profiles,
+        platform: 'mac',
+        registry: r,
+      }),
+      'claude:fake-one'
+    );
+  const needs = view({ status: 'cached', signInNeeded: ['windows'] });
+  assert.equal(needs.status, 'Sign-in needed on Windows');
+  const [mac, windows] = needs.actions;
+  assert.equal(mac.act, 'launch');
+  assert.equal(mac.enabled, true);
+  assert.equal(mac.style, 'default');
+  assert.equal(windows.enabled, true);
+  assert.equal(windows.style, 'accent-line');
+  assert.match(windows.tip, /^Sign-in needed on Windows\. Open shows the Claude sign-in window/);
+  assert.equal(view({ status: 'needs_sign_in', windows: [], signInNeeded: ['mac', 'windows'] }).status, 'Sign-in needed on Mac and Windows');
+  // Without the field (an older server, or every computer signed in) nothing changes.
+  const plain = view({});
+  assert.equal(plain.status, '');
+  assert.equal(plain.actions[1].style, 'default');
+  assert.doesNotMatch(plain.actions[1].tip, /Sign-in needed/);
+  // Junk is ignored.
+  assert.equal(view({ signInNeeded: ['ubuntu', 7] }).status, '');
+});

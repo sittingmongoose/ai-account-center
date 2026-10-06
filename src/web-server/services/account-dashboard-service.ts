@@ -42,8 +42,10 @@ import { getSignInJobRunner, lifecycleProviderFacts } from './account-lifecycle-
 import { readPendingProfiles, type PendingClaudeProfile } from './claude-account-stores';
 import { getOpenCodeConsoleWalletAccounts } from './opencode-console-wallet-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
+import { getClaudeMacSignInState, type ClaudeSignInState } from './claude-desktop-signin-state';
 import {
   ClaudeDesktopLiveUsageError,
+  ClaudeDesktopSignInNeededError,
   getCachedClaudeDesktopLiveUsage,
   getLiveClaudeDesktopUsage,
   type ClaudeDesktopLiveUsage,
@@ -72,6 +74,7 @@ import {
   additionalAccounts,
   applyClaudeLiveUsage,
   emailForComparison,
+  withClaudeSignIn,
 } from './account-dashboard-projection';
 
 export type { AccountDashboard, DashboardAccount } from './account-dashboard-types';
@@ -87,6 +90,11 @@ export interface AccountDashboardDeps {
     refresh: boolean
   ) => Promise<ClaudeDesktopLiveUsage | null>;
   getCachedLiveClaudeUsage?: (profileId: string) => Promise<ClaudeDesktopLiveUsage | null>;
+  /** Mac profile sign-in marker (no secrets); null when unknown. */
+  getClaudeMacSignIn?: (
+    profile: ClaudeDesktopProfile,
+    refresh: boolean
+  ) => Promise<ClaudeSignInState | null>;
   /** Legacy fixture source: rows as the version 1 manifest returns them. */
   getAdditionalAccounts?: () => Promise<DashboardAccount[]>;
   /** Rows plus the store that listed them (version 1 manifest or registry v2). */
@@ -140,6 +148,8 @@ export class AccountDashboardService {
   private readonly codexInventories = new Map<string, CodexAuthProfilesSummary>();
   private readonly claudeInventories = new Map<string, ClaudeDesktopProfile[]>();
   private readonly claudeLiveSamples = new Map<string, ClaudeDesktopLiveUsage>();
+  /** Last known "Sign-in needed" computers per Claude manifest entry, kept across collections. */
+  private readonly claudeSignIn = new Map<string, Set<ClaudeDashboardPlatform>>();
   private readonly visibility = new VisibilityMemory(MAX_SCOPES);
 
   constructor(private readonly deps: AccountDashboardDeps = {}) {}
@@ -216,6 +226,26 @@ export class AccountDashboardService {
           : Promise.resolve(null)
       )
     );
+    const signIn = sampleKeys.map(
+      (key) => new Set<ClaudeDashboardPlatform>(this.claudeSignIn.get(key) ?? [])
+    );
+    const withSignIn = (rows: DashboardAccount[]): DashboardAccount[] =>
+      rows.map((row, index) => withClaudeSignIn(row, signIn[index]));
+    const markSignIn = (index: number, host: ClaudeDashboardPlatform, needed: boolean): boolean => {
+      const set = signIn[index];
+      if (set.has(host) === needed) return false;
+      if (needed) set.add(host);
+      else set.delete(host);
+      this.claudeSignIn.delete(sampleKeys[index]);
+      this.claudeSignIn.set(sampleKeys[index], new Set(set));
+      while (this.claudeSignIn.size > MAX_SCOPES * 4) {
+        const oldest = this.claudeSignIn.keys().next().value;
+        if (oldest === undefined) break;
+        this.claudeSignIn.delete(oldest);
+      }
+      return true;
+    };
+    const publish = (): void => publishCached(withSignIn(accounts));
     let accounts = profiles.map((profile, index) => {
       const account = claudeAccount(profile, platform);
       const previous = this.claudeLiveSamples.get(sampleKeys[index]);
@@ -233,7 +263,7 @@ export class AccountDashboardService {
       if (oldest === undefined) break;
       this.claudeLiveSamples.delete(oldest);
     }
-    publishCached(accounts);
+    publish();
     const history = Promise.resolve()
       .then(() => (this.deps.getClaudeUsage ?? getClaudeDesktopUsage)(platform))
       .catch(() => null)
@@ -252,12 +282,13 @@ export class AccountDashboardService {
             )
           );
         });
-        publishCached(accounts);
+        publish();
       });
     const live = Promise.all(
       profiles.map(async (profile, index) => {
         if (!profile.id) return;
         let helperOutdated = false;
+        let signInNeeded = false;
         const sample = await Promise.resolve()
           .then(() =>
             (
@@ -269,8 +300,14 @@ export class AccountDashboardService {
             if (error instanceof ClaudeDesktopLiveUsageError && error.helperOutdated) {
               helperOutdated = true;
             }
+            if (error instanceof ClaudeDesktopSignInNeededError) signInNeeded = true;
             return null;
           });
+        if (signInNeeded) {
+          if (markSignIn(index, 'windows', true)) publish();
+          return;
+        }
+        if (sample && markSignIn(index, 'windows', false)) publish();
         if (!sample) {
           // A new ID the old installed collector cannot know: say so, instead
           // of a misleading sign-in prompt. Rows that already show live or
@@ -290,7 +327,7 @@ export class AccountDashboardService {
                   }
                 : account
             );
-            publishCached(accounts);
+            publish();
           }
           return;
         }
@@ -306,11 +343,27 @@ export class AccountDashboardService {
           this.claudeLiveSamples.delete(oldest);
         }
         accounts = accounts.map((account, rowIndex) => (rowIndex === index ? result : account));
-        publishCached(accounts);
+        publish();
       })
     );
-    await Promise.all([history, live]);
-    return accounts;
+    const macCheck =
+      this.deps.getClaudeMacSignIn ??
+      (this.deps.listClaudeProfiles
+        ? async () => null
+        : (profile: ClaudeDesktopProfile, force: boolean) =>
+            getClaudeMacSignInState(profile, { refresh: force }));
+    const mac = Promise.all(
+      profiles.map(async (profile, index) => {
+        if (!profile.id || !profile.mac) return;
+        const state = await Promise.resolve()
+          .then(() => macCheck(profile, refresh))
+          .catch(() => null);
+        if (state === null) return;
+        if (markSignIn(index, 'mac', state === 'signed-out')) publish();
+      })
+    );
+    await Promise.all([history, live, mac]);
+    return withSignIn(accounts);
   }
 
   private additionalSnapshot(

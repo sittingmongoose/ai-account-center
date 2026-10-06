@@ -217,6 +217,45 @@ export function applyClaudeLiveUsage(
   };
 }
 
+/** "Mac", "Windows" or "Mac and Windows", in that order. */
+export function claudeSignInHosts(platforms: Iterable<ClaudeDashboardPlatform>): string {
+  const set = new Set(platforms);
+  return (['mac', 'windows'] as const)
+    .filter((platform) => set.has(platform))
+    .map((platform) => (platform === 'mac' ? 'Mac' : 'Windows'))
+    .join(' and ');
+}
+
+/**
+ * Carry the per-computer sign-in state onto a Claude row. Readings already on
+ * the row stay (as before, cached); only the wording says why they are not
+ * live. A row with no readings at all reads as "Sign-in needed".
+ */
+export function withClaudeSignIn(
+  account: DashboardAccount,
+  needed: ReadonlySet<ClaudeDashboardPlatform> | undefined
+): DashboardAccount {
+  const rest: DashboardAccount = { ...account };
+  delete rest.signInNeeded;
+  const platforms = (['mac', 'windows'] as const).filter(
+    (platform) => needed?.has(platform) && account.capabilities.claudePlatforms.includes(platform)
+  );
+  if (account.provider !== 'claude' || platforms.length === 0) {
+    return 'signInNeeded' in account ? rest : account;
+  }
+  const hosts = claudeSignInHosts(platforms);
+  const live = account.status === 'ok';
+  const message = live
+    ? account.message
+    : `Sign-in needed on ${hosts}. Open shows the sign-in window.`;
+  return {
+    ...rest,
+    signInNeeded: platforms,
+    ...(account.windows.length === 0 ? { status: 'needs_sign_in' as const } : {}),
+    message,
+  };
+}
+
 export function additionalFallback(
   provider: DashboardProvider,
   providerLabel: string

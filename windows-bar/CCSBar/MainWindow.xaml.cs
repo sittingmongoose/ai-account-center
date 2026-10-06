@@ -801,7 +801,14 @@ public partial class MainWindow : Window
         if (openText is not null) return Ui.Text(openText, 11.5, "Ink3", trim: true);
         var parts = new[] { Formatting.PlanLabel(account.Plan), Formatting.PlatformName(account.Platform), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part));
         var text = Ui.Text(string.Join(" · ", parts), 11.5, "Ink3", trim: true);
-        if (account.Status == "needs_sign_in") { text.Text = ""; text.Inlines.Add(new Run("Sign-in needed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold }); text.Inlines.Add(new Run(" · " + Formatting.PlatformName(account.Platform))); }
+        if (account.SignInNeededText is { } needed)
+        {
+            // Claude: say which computer needs a sign-in before Open; the plan and last reading follow.
+            text.Text = ""; text.Inlines.Add(new Run(needed) { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold });
+            var rest = string.Join(" · ", new[] { Formatting.PlanLabel(account.Plan), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part)));
+            if (rest.Length > 0) text.Inlines.Add(new Run(" · " + rest));
+        }
+        else if (account.Status == "needs_sign_in") { text.Text = ""; text.Inlines.Add(new Run("Sign-in needed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold }); text.Inlines.Add(new Run(" · " + Formatting.PlatformName(account.Platform))); }
         return text;
     }
 
@@ -893,8 +900,11 @@ public partial class MainWindow : Window
             foreach (var platform in new[] { "mac", "windows" }.Where(account.Capabilities.ClaudePlatforms.Contains))
             {
                 var name = platform == "mac" ? "Mac" : "Windows";
-                var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush("Ink2")), ToolTip = Ui.Tip("Open " + (account.Email ?? account.Label) + " in Claude on " + name), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation", IsEnabled = !openRunning };
-                System.Windows.Automation.AutomationProperties.SetName(button, "Open on " + name);
+                // Sign-in needed on this computer: the glyph takes the warning colour and the tip says Open shows the
+                // sign-in window. Open stays allowed.
+                var signIn = account.SignInNeededPlatforms.Contains(platform);
+                var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush(signIn ? "WarnText" : "Ink2")), ToolTip = Ui.Tip(OpenTip(account, platform)), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation", IsEnabled = !openRunning };
+                System.Windows.Automation.AutomationProperties.SetName(button, signIn ? "Open on " + name + ", sign-in needed" : "Open on " + name);
                 button.Click += async (_, _) => await OpenClaude(account, platform);
                 pair.Children.Add(button);
             }
@@ -912,6 +922,15 @@ public partial class MainWindow : Window
             return ActivateButton(account, () => ActivateAntigravity(account), dashboard?.AntigravityAutoSwitch?.ActivationInProgress == true);
         if (accounts.Any(other => other.IsActive)) return null;
         return NotReportedLabel();
+    }
+
+    /// <summary>The Open tip: plain, or, when that computer's profile is not signed in, what Open will show.</summary>
+    internal static string OpenTip(DashboardAccount account, string platform)
+    {
+        var name = platform == "mac" ? "Mac" : "Windows";
+        return account.SignInNeededPlatforms.Contains(platform)
+            ? "Sign-in needed on " + name + ". Open shows the Claude sign-in window for " + (account.Email ?? account.Label) + "; sign in once on that computer."
+            : "Open " + (account.Email ?? account.Label) + " in Claude on " + name;
     }
 
     private Button ActivateButton(DashboardAccount account, Func<Task> activate, bool inProgress)
@@ -1265,7 +1284,9 @@ public partial class MainWindow : Window
             foreach (var platform in new[] { "mac", "windows" }.Where(account.Capabilities.ClaudePlatforms.Contains))
             {
                 var name = platform == "mac" ? "Mac" : "Windows";
-                var button = Ui.Button("Open on " + name, icon: Icons.PlatformGlyph(platform, 14, Theme.Brush("Ink2")));
+                var signIn = account.SignInNeededPlatforms.Contains(platform);
+                var button = Ui.Button(signIn ? "Open on " + name + " to sign in" : "Open on " + name, icon: Icons.PlatformGlyph(platform, 14, Theme.Brush(signIn ? "WarnText" : "Ink2")));
+                button.ToolTip = Ui.Tip(OpenTip(account, platform));
                 button.Margin = new Thickness(0, 0, 8, 0); button.Uid = "mutation"; button.IsEnabled = !OpenRunning(account.Id);
                 button.Click += async (_, _) => await OpenClaude(account, platform);
                 actions.Children.Add(button);

@@ -110,6 +110,13 @@ struct AccountRow: View {
     if account.provider == "claude", let progress = model.openProgress[account.id] {
       return Text(verbatim: progress.text)
     }
+    if let signIn = account.signInNeededText {
+      // Claude: which computer needs a sign-in before Open; the plan and last reading follow.
+      let needed = Text(verbatim: signIn).foregroundColor(palette.warnText).fontWeight(.semibold)
+      var rest = [TrayFormat.planLabel(account.plan)].filter { !$0.isEmpty }
+      if let sampled = AccountFormatting.date(account.sampledAt ?? account.fetchedAt) { rest.append(TrayFormat.relative(sampled)) }
+      return rest.isEmpty ? needed : Text("\(needed) · \(rest.joined(separator: " · "))")
+    }
     if account.status == "needs_sign_in" {
       let needed = Text(verbatim: "Sign-in needed").foregroundColor(palette.warnText).fontWeight(.semibold)
       return Text("\(needed) · \(TrayFormat.platformName(account.platform))")
@@ -227,16 +234,19 @@ struct ClaudeOpenPair: View {
   @ObservedObject var model: AccountsViewModel
   let account: DashboardAccount
   @Environment(\.trayStaticRender) private var staticRender
+  @Environment(\.colorScheme) private var scheme
+  @Environment(\.colorSchemeContrast) private var contrast
 
   var body: some View {
     let platforms = account.capabilities.claudeProfileId == nil ? [] : account.capabilities.claudePlatforms.filter { ["mac", "windows"].contains($0) }
     if !platforms.isEmpty && staticRender {
       HStack(spacing: TrayMetrics.openPairGap) {
         ForEach(platforms, id: \.self) { platform in
-          PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary)
+          PlatformGlyph(platform: platform, size: 14)
+            .foregroundStyle(account.signInNeededPlatforms.contains(platform) ? AnyShapeStyle(TrayPalette(scheme, increasedContrast: contrast == .increased).warnText) : AnyShapeStyle(.primary))
             .frame(width: TrayMetrics.openButton, height: TrayMetrics.openButton)
             .glassControl(circle: true)
-            .hoverHelp("Open \(account.identity) in Claude on \(platform == "mac" ? "Mac" : "Windows")", id: "claude-\(platform)-\(account.id)")
+            .hoverHelp(account.claudeOpenHelp(platform), id: "claude-\(platform)-\(account.id)")
         }
       }
     } else if !platforms.isEmpty {
@@ -251,7 +261,10 @@ struct ClaudeOpenPair: View {
               if model.busyAction == "\(account.id)|\(platform)" || running?.running == true && running?.platform == platform {
                 ProgressView().controlSize(.mini)
               }
-              else { PlatformGlyph(platform: platform, size: 14).foregroundStyle(.primary) }
+              else {
+                PlatformGlyph(platform: platform, size: 14)
+                  .foregroundStyle(account.signInNeededPlatforms.contains(platform) ? AnyShapeStyle(TrayPalette(scheme, increasedContrast: contrast == .increased).warnText) : AnyShapeStyle(.primary))
+              }
             }
             .frame(width: TrayMetrics.openButton, height: TrayMetrics.openButton)
             .contentShape(Circle())
@@ -259,7 +272,8 @@ struct ClaudeOpenPair: View {
           .buttonStyle(.plain)
           .disabled(!enabled)
           .glassEffect(.regular.interactive(), in: Circle())
-          .hoverHelp("Open \(account.identity) in Claude on \(name)", id: "claude-\(platform)-\(account.id)",
+          .accessibilityLabel(account.signInNeededPlatforms.contains(platform) ? "Open on \(name), sign-in needed" : "Open on \(name)")
+          .hoverHelp(account.claudeOpenHelp(platform), id: "claude-\(platform)-\(account.id)",
             action: enabled ? action : nil)
         }
       }

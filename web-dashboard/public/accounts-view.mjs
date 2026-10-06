@@ -7,7 +7,7 @@
 // and per account `actions` and `removeRefusal` in GET /api/accounts/registry. A control is "coming" only where
 // the server has no flow for it yet (`not_implemented`, or a route that does not exist on this server); any other
 // reason it is off is said in plain words. Nothing here ever shows an example value as real data.
-import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, planLabel, relative, intervalLabel, run, statusWord, duration } from './view-model.mjs';
+import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, planLabel, relative, intervalLabel, run, statusWord, duration, claudeSignInNeeded } from './view-model.mjs';
 import { antigravityView } from './antigravity-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
@@ -132,8 +132,9 @@ function rowStatus(account, now, reg) {
   const at = validDate(account.sampledAt) ? account.sampledAt : validDate(account.fetchedAt) ? account.fetchedAt : null;
   const normal = account.status === 'ok' || account.status === 'cached';
   const stale = !!at && now - Date.parse(at) > STALE_MS;
+  const signIn = account.provider === 'claude' ? claudeSignInNeeded(account) : '';
   return {
-    status: !normal ? statusWord(account) : stale ? 'Stale' : '',
+    status: signIn ? `Sign-in needed on ${signIn}` : !normal ? statusWord(account) : stale ? 'Stale' : '',
     sampled: at ? `sampled ${relative(at, now)}` : 'no reading yet',
     sampledTip: at ? `Last reading ${dateTime.format(new Date(at))}${account.status === 'cached' ? ', from the cache' : ''}` : 'No reading has arrived yet',
   };
@@ -206,10 +207,16 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
     case 'desktop': {
       const profile = homeRow?.profile || text(account.capabilities?.claudeProfileId);
       const meta = (ctx.profiles || []).find(row => row?.id === profile) || null;
+      const needs = Array.isArray(account.signInNeeded) ? account.signInNeeded : [];
       const open = (target, label, platform) => {
         const can = target === 'mac' ? !!homeRow?.canMac : !!homeRow?.canWindows;
+        // Sign-in needed on this computer: Open stays allowed (it shows Claude's sign-in window) and says so first.
+        const signIn = can && needs.includes(target);
         return action({ act: 'launch', value: `${profile}:${target}`, label, platform, enabled: LIVE.openClaude && can && !!profile, probe: `open-${target}:${account.id}`,
-          tip: can ? `Open ${text(account.email) || 'this profile'} in its own Claude profile on ${label}, to use it or sign in again` : `Open on ${label} is not set up for this profile` });
+          ...(signIn ? { style: 'accent-line' } : {}),
+          tip: !can ? `Open on ${label} is not set up for this profile`
+            : signIn ? `Sign-in needed on ${label}. Open shows the Claude sign-in window for ${text(account.email) || 'this profile'}; sign in once on that computer.`
+              : `Open ${text(account.email) || 'this profile'} in its own Claude profile on ${label}, to use it or sign in again` });
       };
       const protectedProfile = claudeDefaultProfile(meta) || reg?.removeRefusal === 'account_protected' || reg?.removeRefusal === 'account_default';
       return [open('mac', 'Mac', 'apple'), open('windows', 'Windows', 'windows'), removeControl(provider, account, reg, entry, { protectedProfile })];

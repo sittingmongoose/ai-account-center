@@ -78,6 +78,16 @@ export interface DashboardAccount {
   status: DashboardAccountStatus;
   /** Present only with a precise reason; absent otherwise. */
   statusReason?: DashboardAccountStatusReason;
+  /**
+   * Claude only: the computers where this profile is not signed in, so the
+   * clients can say "Sign-in needed on Windows" before Open. Each computer's
+   * profile signs in on its own; Open stays allowed and shows Claude's own
+   * sign-in window. Windows comes from the usage helper's own answer, Mac
+   * from the profile's plaintext sign-in marker; nothing secret is read.
+   * Absent when no computer is known to need a sign-in (an unreachable
+   * computer is unknown, never "needed"). Order: mac, then windows.
+   */
+  signInNeeded?: ClaudeDashboardPlatform[];
   message: string | null;
   fetchedAt: string | null;
   sampledAt: string | null;

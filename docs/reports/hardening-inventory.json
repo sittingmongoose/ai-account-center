@@ -522,16 +522,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 649,
-      "typedThrows": 149,
+      "totalThrows": 660,
+      "typedThrows": 159,
       "plainThrows": 72,
-      "otherThrows": 428,
-      "adoptionRatio": 0.2296,
+      "otherThrows": 429,
+      "adoptionRatio": 0.2409,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 293,
-          "typed": 87,
+          "count": 304,
+          "typed": 97,
           "plain": 10
         },
         {
@@ -604,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 36,
-      "totalSourceFiles": 397,
-      "coverageRatio": 0.0907,
+      "totalSourceFiles": 398,
+      "coverageRatio": 0.0905,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 143,
+          "count": 144,
           "withLogger": 20
         },
         {
@@ -799,12 +799,12 @@
           "loc": 767
         },
         {
-          "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 708
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 727
         },
         {
-          "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 674
+          "file": "src/web-server/services/account-analytics-projection.ts",
+          "loc": 708
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",

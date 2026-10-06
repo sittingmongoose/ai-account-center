@@ -16,6 +16,7 @@ import {
 } from '../../../src/web-server/services/claude-desktop-profile-service';
 import {
   ClaudeDesktopLiveUsageError,
+  ClaudeDesktopSignInNeededError,
   getCachedClaudeDesktopLiveUsage,
   type ClaudeDesktopLiveUsage,
 } from '../../../src/web-server/services/claude-desktop-live-service';
@@ -617,6 +618,120 @@ describe('consolidated account dashboard', () => {
     expect(row?.status).toBe('unavailable');
     expect(row?.message).toBe('Update the usage helper on Windows.');
     expect(row?.windows).toEqual([]);
+  });
+
+  describe('Sign-in needed before Open (fake profiles only)', () => {
+    const fake: ClaudeDesktopProfile = {
+      id: 'fake-one',
+      email: 'fake-one@example.com',
+      mac: {
+        launcherName: 'Mac',
+        sshHost: 'fixture-mac',
+        launcherPath: '/Applications/Fixture.app',
+        profilePath: '/Users/fixture/Library/Application Support/Claude-fake-one',
+      },
+      windows: {
+        launcherName: 'Windows',
+        sshHost: 'fixture-windows',
+        profilePath: 'C:\\fixture\\Claude-fake-one',
+      },
+    };
+    const history = async (platform: 'mac' | 'windows') => ({
+      platform,
+      fetchedAt: '2026-10-01T12:00:00Z',
+      profiles: [],
+    });
+
+    it('says Windows needs a sign-in when the usage helper says so, and keeps Open', async () => {
+      const result = await new AccountDashboardService(
+        deps({
+          listClaudeProfiles: async () => [fake],
+          getClaudeUsage: history,
+          getLiveClaudeUsage: async () => {
+            throw new ClaudeDesktopSignInNeededError();
+          },
+          getClaudeMacSignIn: async () => 'signed-in',
+        })
+      ).get('mac');
+      const row = result.accounts.find((account) => account.id === 'claude:fake-one');
+      expect(row?.signInNeeded).toEqual(['windows']);
+      expect(row?.status).toBe('needs_sign_in');
+      expect(row?.message).toContain('Sign-in needed on Windows.');
+      expect(row?.capabilities.claudePlatforms).toEqual(['mac', 'windows']);
+    });
+
+    it('says Mac and Windows when both computers need it; readings already shown stay', async () => {
+      const result = await new AccountDashboardService(
+        deps({
+          listClaudeProfiles: async () => [fake],
+          getClaudeUsage: async (platform) => ({
+            platform,
+            fetchedAt: '2026-10-01T12:00:00Z',
+            profiles: [
+              {
+                id: 'fake-one',
+                email: 'fake-one@example.com',
+                status: 'cached',
+                cached: true,
+                fetchedAt: '2026-10-01T12:00:00Z',
+                sampledAt: '2026-10-01T11:00:00Z',
+                utilization: { fiveHour: 10, weekly: 20 },
+              },
+            ],
+          }),
+          getLiveClaudeUsage: async () => {
+            throw new ClaudeDesktopSignInNeededError();
+          },
+          getClaudeMacSignIn: async () => 'signed-out',
+        })
+      ).get('mac');
+      const row = result.accounts.find((account) => account.id === 'claude:fake-one');
+      expect(row?.signInNeeded).toEqual(['mac', 'windows']);
+      expect(row?.status).toBe('cached');
+      expect(row?.windows.length).toBeGreaterThan(0);
+      expect(row?.message).toContain('Sign-in needed on Mac and Windows.');
+    });
+
+    it('treats an unreachable computer as unknown, never as needing a sign-in', async () => {
+      const result = await new AccountDashboardService(
+        deps({
+          listClaudeProfiles: async () => [fake],
+          getClaudeUsage: history,
+          getLiveClaudeUsage: async () => null,
+          getClaudeMacSignIn: async () => null,
+        })
+      ).get('mac');
+      const row = result.accounts.find((account) => account.id === 'claude:fake-one');
+      expect(row && 'signInNeeded' in row).toBe(false);
+      expect(row?.status).toBe('unavailable');
+    });
+
+    it('clears Windows once a verified reading arrives', async () => {
+      let signedIn = false;
+      let clock = Date.parse('2026-10-01T12:00:00Z');
+      const service = new AccountDashboardService(
+        deps({
+          now: () => clock,
+          listClaudeProfiles: async () => [{ ...fake, email: 'fake-one@example.com' }],
+          getClaudeUsage: history,
+          getLiveClaudeUsage: async (profileId) => {
+            if (!signedIn) throw new ClaudeDesktopSignInNeededError();
+            return { ...liveClaude(profileId), email: 'fake-one@example.com' };
+          },
+          getClaudeMacSignIn: async () => 'signed-in',
+        })
+      );
+      const first = await service.get('mac', true);
+      expect(first.accounts.find((a) => a.id === 'claude:fake-one')?.signInNeeded).toEqual([
+        'windows',
+      ]);
+      signedIn = true;
+      clock += 10_000;
+      const second = await service.get('mac', true);
+      const row = second.accounts.find((a) => a.id === 'claude:fake-one');
+      expect(row && 'signInNeeded' in row).toBe(false);
+      expect(row?.status).toBe('ok');
+    });
   });
 
   it('uses verified live Claude quota while keeping the selected launcher platform', async () => {

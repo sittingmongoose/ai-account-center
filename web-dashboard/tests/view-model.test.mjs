@@ -1084,3 +1084,32 @@ test('a limit of 100 with no unit only restates the percent, so cards show no "N
     '50 of 100 requests'
   );
 });
+
+test('Home Claude rows say which computer needs a sign-in before Open (fake profiles)', () => {
+  const needs = {
+    ...claude('fake-one', 'max', [window()]),
+    status: 'cached',
+    signInNeeded: ['windows'],
+  };
+  const vm = dashboardViewModel(data([needs]), { now });
+  const r = section(vm, 'claude').rows.find((x) => x.id === 'claude:fake-one');
+  assert.equal(r.status, 'Sign-in needed on Windows');
+  assert.match(r.meta, /· Sign-in needed on Windows$/);
+  const both = dashboardViewModel(
+    data([
+      {
+        ...claude('fake-two', 'pro', []),
+        status: 'needs_sign_in',
+        signInNeeded: ['windows', 'mac'],
+      },
+    ]),
+    { now }
+  );
+  const r2 = section(both, 'claude').rows.find((x) => x.id === 'claude:fake-two');
+  assert.equal(r2.meta, 'Pro · Sign-in needed on Mac and Windows');
+  const plain = dashboardViewModel(data([claude('fake-three', 'max', [window()])]), { now });
+  assert.doesNotMatch(
+    section(plain, 'claude').rows.find((x) => x.id === 'claude:fake-three').meta,
+    /Sign-in/
+  );
+});

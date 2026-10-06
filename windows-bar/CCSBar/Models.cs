@@ -216,6 +216,22 @@ public sealed class DashboardAccount
     public bool? TrayHidden { get; set; }
     public List<QuotaWindow> Windows { get; set; } = new();
     public AccountCapabilities Capabilities { get; set; } = new();
+    /// <summary>Claude only (accounts[].signInNeeded): the computers where this profile is not signed in, so the
+    /// tray says so before Open. Read loosely: anything but "mac" and "windows" strings is ignored, and a missing or
+    /// malformed value never fails the dashboard.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public System.Text.Json.JsonElement SignInNeeded { get; set; }
+    [JsonIgnore] public IReadOnlyList<string> SignInNeededPlatforms
+    {
+        get
+        {
+            if (Provider != "claude" || SignInNeeded.ValueKind != System.Text.Json.JsonValueKind.Array) return Array.Empty<string>();
+            var listed = SignInNeeded.EnumerateArray().Where(item => item.ValueKind == System.Text.Json.JsonValueKind.String).Select(item => item.GetString()).ToHashSet(StringComparer.Ordinal);
+            return new[] { "mac", "windows" }.Where(platform => listed.Contains(platform) && Capabilities.ClaudePlatforms.Contains(platform)).ToArray();
+        }
+    }
+    /// <summary>"Sign-in needed on Windows" (or Mac, or Mac and Windows); null when no computer needs one.</summary>
+    [JsonIgnore] public string? SignInNeededText => SignInNeededPlatforms.Count == 0 ? null
+        : "Sign-in needed on " + string.Join(" and ", SignInNeededPlatforms.Select(Formatting.PlatformName));
     [JsonIgnore] public bool HasUsableUsage => Windows.Exists(window => window.HasUsableUsage);
     [JsonIgnore] public bool HiddenInTray => TrayHidden == true;
 }
