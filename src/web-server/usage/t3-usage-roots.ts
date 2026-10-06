@@ -14,8 +14,9 @@
  *   `shadowHomePath` for Codex), so a home outside these folders is found too.
  *
  * Any folder name counts (T3 lets the user name an instance's home), bounded to T3_MAX_HOMES per
- * base. Symlinks are followed only inside these roots (filesUnderT3Root), with a loop guard and
- * real-path dedupe; the experiment walk and the OMP marker scan never follow them.
+ * base. Symlinks are followed only inside these roots, and only to a target that stays inside the
+ * same root (filesUnderT3Root), with a loop guard and real-path dedupe; the experiment walk and the
+ * OMP marker scan never follow them.
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -150,6 +151,25 @@ export function resolveT3UsageRoots(options: { homeDir?: string } = {}): T3Usage
   };
 }
 
+/**
+ * The real path of a link found at `link`, or null when its target leaves `root`. The target is
+ * first checked as written (no stat), so a link to a network mount is never touched: a stat on a
+ * dead mount can block, and no deadline interrupts it. Windows may prefix the target with `\\?\`.
+ */
+function linkInside(link: string, root: string): string | null {
+  try {
+    const written = fs
+      .readlinkSync(link)
+      .replace(/^\\\\\?\\UNC\\/i, '\\\\')
+      .replace(/^\\\\\?\\/, '');
+    if (!inside(path.resolve(path.dirname(link), written), [root])) return null;
+    const real = fs.realpathSync(link);
+    return inside(real, [root]) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
 function inside(child: string, roots: string[]): boolean {
   return roots.some(
     (root) => child === root || child.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
@@ -166,11 +186,12 @@ export interface T3WalkLimits {
 
 /**
  * The wanted log files under one T3 root, by real path, each real file once. Unlike the default
- * walk this follows symlinks, because a T3 shadow home is made of them: a linked folder or file
- * is resolved to its real path, and is skipped when that lies inside `exclude` (the roots of the
- * same tool the app already reads), so a shadow home's links back into `~/.codex` add nothing.
- * Every folder is entered once by device and inode, so a link loop ends. Bounded like the default
- * walk; `truncated` says a bound stopped it.
+ * walk this follows symlinks, because a T3 home may be made of them, but only to a target inside
+ * the root's own real path: a link out of the root (into `~/.codex`, `~/PM-Experiments`, a network
+ * mount) is skipped without touching its target. A root inside `exclude` (the roots of the same
+ * tool the app already reads, so a shadow `sessions` linked to `~/.codex/sessions`) is not read,
+ * nor is a folder of `exclude` inside the root. Every folder is entered once by device and inode,
+ * so a link loop ends. Bounded like the default walk; `truncated` says a bound stopped it.
  */
 export function filesUnderT3Root(
   root: string,
@@ -222,8 +243,10 @@ export function filesUnderT3Root(
       let isDirectory = entry.isDirectory();
       let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
+        const real = linkInside(full, start);
+        if (!real) continue;
         try {
-          full = fs.realpathSync(full);
+          full = real;
           const target = fs.statSync(full);
           isDirectory = target.isDirectory();
           isFile = target.isFile();

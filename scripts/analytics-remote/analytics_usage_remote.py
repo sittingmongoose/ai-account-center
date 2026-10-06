@@ -1190,7 +1190,9 @@ def _t3_roots(home, kind):
                 instances = json.loads(handle.read().decode("utf-8")).get("providerInstances")
         else:
             instances = None
-    except (OSError, ValueError, AttributeError):
+    except Exception:
+        # Any unreadable settings file (deep nesting raises RecursionError)
+        # only means no settings homes; it must never fail the scan.
         instances = None
     driver_keys = {"claude": ("claudeAgent", ("homePath",)),
                    "codex": ("codex", ("homePath", "shadowHomePath"))}[kind]
@@ -1216,11 +1218,37 @@ def _same_or_inside(child, roots):
     return False
 
 
+def _t3_link_inside(path, start):
+    """The real path of the link (or junction) at path, or None when its target
+    leaves start. The target is checked as written first, without a stat, so a
+    link to a network mount is never touched (a stat on a dead mount blocks)."""
+    try:
+        written = os.readlink(path)
+    except (OSError, ValueError, AttributeError, NotImplementedError):
+        return None
+    if written.startswith("\\\\?\\UNC\\"):
+        written = "\\\\" + written[8:]
+    elif written.startswith("\\\\?\\"):
+        written = written[4:]
+    target = os.path.normpath(os.path.join(os.path.dirname(path), written))
+    if not _same_or_inside(target, [start]):
+        return None
+    real = os.path.realpath(path)
+    return real if _same_or_inside(real, [start]) else None
+
+
+def _is_link(path):
+    isjunction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+
 def _iter_t3_files(root, accept, collector, exclude):
     """Yield (path, identity) of wanted files under one T3 root. Unlike every
-    other walk here it follows links (a T3 shadow home is made of them), each
-    resolved to its real path and skipped inside `exclude` (the real default
-    roots), and enters each folder once by identity, so a link loop ends."""
+    other walk here it follows links (a T3 home may be made of them), but only
+    to a target inside the root's own real path: a link out of the root (into
+    ~/.codex, ~/PM-Experiments, a network mount) is skipped untouched. A root
+    or folder inside `exclude` (the real default roots) is not read, and each
+    folder is entered once by identity, so a link loop ends."""
     try:
         start = os.path.realpath(root)
     except (OSError, ValueError):
@@ -1252,15 +1280,15 @@ def _iter_t3_files(root, accept, collector, exclude):
                 continue
             path = os.path.join(directory, name)
             try:
-                if os.path.isdir(path):
-                    real = os.path.realpath(path)
-                    if depth < 64 and not _same_or_inside(real, exclude):
+                real = _t3_link_inside(path, start) if _is_link(path) else path
+                if real is None or _same_or_inside(real, exclude):
+                    continue
+                if os.path.isdir(real):
+                    if depth < 64:
                         pending.append((real, depth + 1))
-                elif os.path.isfile(path) and accept(name):
-                    real = os.path.realpath(path) if os.path.islink(path) else path
-                    if not _same_or_inside(real, exclude):
-                        stat = os.stat(real)
-                        yield real, (stat.st_dev, stat.st_ino)
+                elif os.path.isfile(real) and accept(name):
+                    stat = os.stat(real)
+                    yield real, (stat.st_dev, stat.st_ino)
             except (OSError, ValueError):
                 continue
 

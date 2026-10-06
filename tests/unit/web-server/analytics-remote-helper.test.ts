@@ -1204,4 +1204,52 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper: T3 Code homes', () => {
     const response = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
     expect(totals(response, 'claude')).toEqual({ n: 1, i: 10, o: 10 });
   });
+
+  it('follows a link inside a T3 root once, and never a link out of it', () => {
+    write('.claude/projects/p/s1.jsonl', [claudeLine('m1', 10)]);
+    write('.claude-t3/alpha/projects/p/s2.jsonl', [claudeLine('m2', 5, 's2')]);
+    write('.claude-t3/alpha/projects/kept/s3.jsonl', [claudeLine('m3', 7, 's3')]);
+    // Inside: a relative and an absolute link to the same folder, a file link and a loop.
+    fs.symlinkSync('../kept', path.join(home, '.claude-t3/alpha/projects/p/kept-rel'));
+    link('.claude-t3/alpha/projects/kept', '.claude-t3/alpha/projects/kept-abs');
+    link('.claude-t3/alpha/projects/kept/s3.jsonl', '.claude-t3/alpha/projects/file-link.jsonl');
+    link('.claude-t3/alpha/projects', '.claude-t3/alpha/projects/kept/loop');
+    // Outside: a folder beside the home (like a NAS mount), ~/PM-Experiments, a sibling account,
+    // a relative link up and out, and a file link out.
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-t3-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'o.jsonl'), JSON.stringify(claudeLine('m9', 99)) + '\n');
+      fs.symlinkSync(outside, path.join(home, '.claude-t3/alpha/projects/to-mount'));
+      write('PM-Experiments/exp/sessions/x.jsonl', [claudeLine('m8', 88)]);
+      link('PM-Experiments/exp', '.claude-t3/alpha/projects/to-experiments');
+      fs.symlinkSync('../../../PM-Experiments', path.join(home, '.claude-t3/alpha/projects/up'));
+      link('PM-Experiments/exp/sessions/x.jsonl', '.claude-t3/alpha/projects/p/file-out.jsonl');
+      write('.claude-t3/beta/projects/q/t.jsonl', [claudeLine('m4', 3, 's4')]);
+      link('.claude-t3/beta/projects', '.claude-t3/alpha/projects/to-beta');
+      const response = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+      expect(response.truncated).toBe(false);
+      // s1 (default) + s2 + s3 once (alpha) + t (beta, as its own root) = 4; nothing from outside.
+      expect(totals(response, 'claude')).toEqual({ n: 4, i: 40, o: 25 });
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a deeply nested T3 settings file instead of failing every tool', () => {
+    write('.claude/projects/p/s1.jsonl', [claudeLine('m1', 10)]);
+    writeFixtures();
+    fs.mkdirSync(path.join(home, '.t3', 'userdata'), { recursive: true });
+    // About 400 KB, under the 1 MB settings cap: json.loads raises RecursionError on it.
+    const depth = 200_000;
+    fs.writeFileSync(
+      path.join(home, '.t3', 'userdata', 'settings.json'),
+      `{"providerInstances":${'['.repeat(depth)}${']'.repeat(depth)}}`
+    );
+    const response = runHelper({ kinds: ['claude', 'codex', 'omp'], minDateMs: MIN_DATE });
+    const kinds = response.kinds as Record<string, { state: string }>;
+    expect(kinds.claude.state).toBe('ok');
+    expect(kinds.codex.state).toBe('not_installed');
+    expect(kinds.omp.state).toBe('ok');
+    expect(totals(response, 'claude')).toEqual({ n: 1, i: 10, o: 10 });
+  });
 });

@@ -6,9 +6,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1207 |
+| Sync fs occurrences (all) | 1208 |
 | Sync fs files affected (all) | 120 |
-| Sync fs occurrences (runtime hotpaths) | 574 |
+| Sync fs occurrences (runtime hotpaths) | 575 |
 | Sync fs files affected (runtime hotpaths) | 69 |
 | Legacy shim markers | 198 |
 | Legacy shim files affected | 75 |

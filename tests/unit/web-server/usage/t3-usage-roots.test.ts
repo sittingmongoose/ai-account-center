@@ -201,34 +201,54 @@ describe('T3 Code usage roots', () => {
     expect(resolveT3UsageRoots({ homeDir: home }).claude).toHaveLength(T3_MAX_HOMES);
   });
 
-  it('follows links inside a T3 root once, never into an excluded root, and ends on a loop', () => {
-    put('.codex/sessions/2026/10/01/rollout-a.jsonl', [codexMeta(ID_A)]);
+  const walk = (root: string, exclude: string[] = []) =>
+    filesUnderT3Root(path.join(home, root), (name) => name.endsWith('.jsonl'), exclude, {
+      deadline: Date.now() + 10_000,
+      maxDepth: 64,
+      maxDirectories: 1000,
+      maxEntries: 1000,
+      maxFiles: 100,
+    });
+
+  it('follows a link that stays inside the T3 root once, and ends on a loop', () => {
     const own = put('.codex-t3/alpha/sessions/2026/10/02/rollout-b.jsonl', [codexMeta(ID_B)]);
-    put('outside/2026/10/03/rollout-c.jsonl', [codexMeta(ID_NEW)]);
-    link('.codex/sessions/2026', '.codex-t3/alpha/sessions/linked-default');
-    link('outside', '.codex-t3/alpha/sessions/linked-outside');
-    link('outside', '.codex-t3/alpha/sessions/linked-outside-again');
+    const kept = put('.codex-t3/alpha/sessions/kept/rollout-k.jsonl', [codexMeta(ID_NEW)]);
+    // Relative and absolute links to folders and a file inside the root, plus a loop.
+    fs.symlinkSync('../kept', path.join(home, '.codex-t3/alpha/sessions/2026/kept-rel'));
+    link('.codex-t3/alpha/sessions/kept', '.codex-t3/alpha/sessions/kept-abs');
+    link(
+      '.codex-t3/alpha/sessions/kept/rollout-k.jsonl',
+      '.codex-t3/alpha/sessions/file-link.jsonl'
+    );
     link('.codex-t3/alpha/sessions', '.codex-t3/alpha/sessions/2026/loop');
     link('.codex-t3/alpha/sessions/missing', '.codex-t3/alpha/sessions/dangling');
-    const walked = filesUnderT3Root(
-      path.join(home, '.codex-t3/alpha/sessions'),
-      (name) => name.startsWith('rollout-'),
-      [path.join(home, '.codex', 'sessions')],
-      {
-        deadline: Date.now() + 10_000,
-        maxDepth: 64,
-        maxDirectories: 1000,
-        maxEntries: 1000,
-        maxFiles: 100,
-      }
-    );
+    const walked = walk('.codex-t3/alpha/sessions', [path.join(home, '.codex', 'sessions')]);
     expect(walked.truncated).toBe(false);
-    expect(walked.files.sort()).toEqual(
-      [
-        fs.realpathSync(own),
-        fs.realpathSync(path.join(home, 'outside/2026/10/03/rollout-c.jsonl')),
-      ].sort()
-    );
+    expect(walked.files.sort()).toEqual([fs.realpathSync(own), fs.realpathSync(kept)].sort());
+  });
+
+  it('never follows a link out of the T3 root: not into a default root, ~/PM-Experiments or a mount', () => {
+    put('.codex/sessions/2026/10/01/rollout-a.jsonl', [codexMeta(ID_A)]);
+    put('PM-Experiments/exp/sessions/a.jsonl', [transcriptLine('m8', 8)]);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-t3-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'o.jsonl'), jsonl([transcriptLine('m9', 9)]));
+      const own = put('.claude-t3/alpha/projects/p/s.jsonl', [transcriptLine('m1', 1)]);
+      link('.codex/sessions/2026', '.claude-t3/alpha/projects/to-default');
+      link('PM-Experiments/exp', '.claude-t3/alpha/projects/to-experiments');
+      link('PM-Experiments/exp/sessions/a.jsonl', '.claude-t3/alpha/projects/p/file-out.jsonl');
+      fs.symlinkSync(outside, path.join(home, '.claude-t3/alpha/projects/to-mount'));
+      // Relative, through the parent: lexically outside the root.
+      fs.symlinkSync('../../../PM-Experiments', path.join(home, '.claude-t3/alpha/projects/up'));
+      // A sibling account's folder is outside this root too.
+      put('.claude-t3/beta/projects/q/t.jsonl', [transcriptLine('m2', 2)]);
+      link('.claude-t3/beta/projects', '.claude-t3/alpha/projects/to-beta');
+      const walked = walk('.claude-t3/alpha/projects', [path.join(home, '.codex', 'sessions')]);
+      expect(walked.truncated).toBe(false);
+      expect(walked.files).toEqual([fs.realpathSync(own)]);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
