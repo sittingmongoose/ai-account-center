@@ -206,4 +206,66 @@ describe('omp session roots', () => {
       roots.filter((root) => root === path.join(home, '.omp', 'agent', 'sessions'))
     ).toHaveLength(1);
   });
+
+  it('accepts a custom --session-dir root by content, not the literal name sessions', async () => {
+    // Wave-4 workers wrote `<branch>-sessions` dirs (e.g. fw4-t2-sessions) that
+    // the old name-only check missed; each holds `<ts>_<uuid>.jsonl` directly.
+    const worker = path.join(home, 'PM-Experiments', 'proj', 'worktrees', 'omp', 'fw4-t2-sessions');
+    fs.mkdirSync(worker, { recursive: true });
+    fs.writeFileSync(path.join(worker, '2026-10-05T10-07-46-206Z_01a10b88_uuid.jsonl'), '{}\n');
+    // A subagent subdir is reached by the collector's own recursive read; an
+    // accepted root is never descended, so it must not become a separate root.
+    const sub = path.join(worker, '2026-10-05T10-07-46-206Z_01a10b88_uuid');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, '__advisor.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).toContain(worker);
+    expect(roots).not.toContain(sub);
+  });
+
+  it('does not accept a non-sessions dir that holds only non-session jsonl', async () => {
+    const src = path.join(home, 'PM-Experiments', 'proj', 'src');
+    fs.mkdirSync(src, { recursive: true });
+    fs.writeFileSync(path.join(src, 'notes.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).not.toContain(src);
+  });
+
+  it('enumerates per-profile OMP session roots under ~/.omp/profiles', async () => {
+    const profile = path.join(home, '.omp', 'profiles', 'pm-probe', 'agent', 'sessions');
+    fs.mkdirSync(profile, { recursive: true });
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+    expect(roots).toContain(profile);
+  });
+
+  it('rescans a truncated marker scan on a short TTL and unions roots', async () => {
+    const cacheDir = path.join(home, 'cache');
+    const dirA = path.join(home, 'PM-Experiments', 'a-sessions');
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.writeFileSync(path.join(dirA, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const cacheFile = path.join(cacheDir, 'omp-session-roots-v1.json');
+    const now = Date.now();
+    // Starve the first walk so it truncates before reaching dirA.
+    await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      cacheDir,
+      now: () => now,
+      scanBounds: { maxDirs: 1 },
+    });
+    const first = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    expect(first.truncated).toBe(true);
+    // A truncated cache is not frozen for six hours: past its short TTL the walk
+    // reruns, converges on the small tree, and unions dirA into the cache.
+    const later = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      cacheDir,
+      now: () => now + 31 * 60_000,
+    });
+    expect(later).toContain(dirA);
+    const second = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    expect(second.truncated).toBe(false);
+    expect(second.roots).toContain(dirA);
+  });
 });

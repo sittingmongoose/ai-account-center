@@ -68,6 +68,15 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_ROWS = 10_000;
 const MAX_TOTAL_ROWS = 100_000;
+/**
+ * Append-only usage logs never gain in-window records after their last write,
+ * so a file whose mtime predates the window cannot hold in-window events. The
+ * small margin absorbs clock jitter between a record's own timestamp and the
+ * write that flushed it. Skipping such files is a pure optimization: addEntry
+ * already drops out-of-window records, so totals are unchanged while cold starts
+ * read far less (Codex ~24.7 GB -> ~11.8 GB), so Analytics converges sooner.
+ */
+const MTIME_SKIP_MARGIN_MS = 60_000;
 
 function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
@@ -604,6 +613,22 @@ export function aggregateRows(
   };
 }
 
+/**
+ * Whether an oversized (> MAX_LINE_BYTES) line could carry a countable usage
+ * record for the kind, so a skipped oversized line only blocks scan completion
+ * when it may have held usage. Muse writes usage in small `model_completed`
+ * events; its oversized lines are `context_projection_checkpoint`/retained
+ * content records the parser never counts (cumulative, would double tokens), so
+ * skipping them must not pin the whole activity partial forever (N9). Codex's
+ * oversized lines are `response_item` conversation content, never token_count.
+ * Claude/OMP can carry usage in a large assistant/message line, so stay honest.
+ */
+function oversizedLineCarriesUsage(kind: ActivityKind, recordType: string | undefined): boolean {
+  if (kind === 'muse') return false;
+  if (kind === 'codex') return recordType !== 'response_item';
+  return true;
+}
+
 async function readBatch(
   file: string,
   value: Checkpoint,
@@ -682,7 +707,7 @@ async function readBatch(
             const recordType = prefix.match(
               /^\s*\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"([^"\\]+)"/
             );
-            if (!(kind === 'codex' && recordType?.[1] === 'response_item')) value.skippedLines++;
+            if (oversizedLineCarriesUsage(kind, recordType?.[1])) value.skippedLines++;
             fragments = [];
           } else fragments.push(slice);
         }
@@ -972,6 +997,47 @@ export function dropOmpResumeCopies<T extends { file: string; stats: fs.Stats }>
   return dropped.size ? files.filter((item) => !dropped.has(item.file)) : files;
 }
 
+/**
+ * Byte-identical copies of one session log — e.g. a Claude subagent transcript
+ * written under two project dirs when a session spans two cwds (observed: 147
+ * duplicated `subagents/agent-*.jsonl` files, ~25k double-counted records), or a
+ * manually copied session. Each copy holds the same records, so reading both
+ * double-counts. Group by the same (size, head, tail) fingerprint the checkpoints
+ * use and keep one per group. OMP copies are prefix copies handled by
+ * dropOmpResumeCopies (a superset of exact copies), so this covers the rest.
+ */
+export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stats }>(
+  files: T[]
+): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  let dropped = 0;
+  for (const item of files) {
+    let fd: number | undefined;
+    let key: string | null;
+    try {
+      fd = fs.openSync(item.file, 'r');
+      const size = item.stats.size;
+      const tailStart = Math.max(0, size - 256);
+      key = `${size}:${fingerprint(fd, 0, Math.min(256, size))}:${fingerprint(fd, tailStart, size - tailStart)}`;
+    } catch {
+      key = null;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+    // Unreadable here: keep it so readBatch surfaces the failure honestly.
+    if (key !== null) {
+      if (seen.has(key)) {
+        dropped++;
+        continue;
+      }
+      seen.add(key);
+    }
+    result.push(item);
+  }
+  return dropped ? result : files;
+}
+
 /** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
 export async function collectAccountActivity(
   request: Extract<UsageWorkerRequest, { kind: ActivityKind }>,
@@ -1004,6 +1070,10 @@ export async function collectAccountActivity(
     return collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
   const issues = { failed: 0 };
   const files: Array<{ file: string; stats: fs.Stats }> = [];
+  // Whether traversal saw any candidate file at all, before the mtime pre-filter
+  // drops out-of-window ones. "Found files but all are stale" means no usage in
+  // the window (a complete, empty scan), never an unavailable source.
+  let sawAnyFile = false;
   for (const root of roots) {
     for (const file of await filesUnder(
       root,
@@ -1012,12 +1082,15 @@ export async function collectAccountActivity(
       deadline,
       options.traversalLimits
     )) {
+      sawAnyFile = true;
       if (Date.now() >= deadline) {
         issues.failed++;
         break;
       }
       try {
-        files.push({ file, stats: fs.statSync(file) });
+        const stats = fs.statSync(file);
+        if (stats.mtimeMs < options.minDate - MTIME_SKIP_MARGIN_MS) continue;
+        files.push({ file, stats });
       } catch {
         issues.failed++;
       }
@@ -1028,9 +1101,10 @@ export async function collectAccountActivity(
     }
     if (files.length >= MAX_FILES || Date.now() >= deadline) break;
   }
-  if (!files.length && issues.failed) throw new CCSError('Native log sources are unavailable');
+  if (!sawAnyFile && issues.failed) throw new CCSError('Native log sources are unavailable');
   // Resumed OMP runs copy a session into a new root; its records count once.
-  const scanned = request.kind === 'omp' ? dropOmpResumeCopies(files) : files;
+  const scanned =
+    request.kind === 'omp' ? dropOmpResumeCopies(files) : dropExactDuplicateFiles(files);
   scanned.sort(
     (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
   );
@@ -1079,7 +1153,7 @@ export async function collectAccountActivity(
         : request.kind === 'muse'
           ? 'muse-native'
           : 'custom-parser';
-  if (!rows.length && failed >= scanned.length && failed > 0)
+  if (!rows.length && scanned.length > 0 && failed >= scanned.length && failed > 0)
     throw new CCSError('Native log sources could not be read');
   const { hourly, session } = aggregateRows(rows, source, request.kind);
   return {

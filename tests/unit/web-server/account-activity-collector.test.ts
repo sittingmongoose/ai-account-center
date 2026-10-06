@@ -448,3 +448,181 @@ describe('pre-aggregated session rows', () => {
     expect(session.map((row) => row.sessionId)).toEqual(['ok']);
   });
 });
+
+describe('muse oversized-line completion', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-muse-complete-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  function museUsage(model: string, input: number, cacheRead: number, output: number, at: number) {
+    return {
+      record_type: 'event',
+      recorded_at: at,
+      id: `rec-${at}-${input}`,
+      payload: {
+        event: {
+          kind: 'model_completed',
+          model,
+          usage: {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cacheRead,
+            cache_write_tokens: 0,
+          },
+        },
+      },
+    };
+  }
+
+  it('completes despite an oversized non-usage checkpoint line, counting the real usage', async () => {
+    // Muse writes cumulative `context_projection_checkpoint` records that can be
+    // enormous (retained context) and carry no countable usage; one such line
+    // used to set skippedLines and pin scan.complete=false forever (N9), marking
+    // the whole activity partial. The small `model_completed` events around it
+    // are the real usage and must still be counted, and the scan must complete.
+    const sessionsDir = path.join(root, 'muse', 'sessions');
+    const sessDir = path.join(sessionsDir, '2026-10-01', 'sess-uuid');
+    fs.mkdirSync(sessDir, { recursive: true });
+    const at = Date.parse('2026-10-01T15:00:00Z');
+    const file = path.join(sessDir, 'session.jsonl');
+    const fd = fs.openSync(file, 'w');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 100, 20, 10, at)) + '\n');
+    // An oversized (>8 MiB) context_projection_checkpoint line: no usage record.
+    fs.writeSync(
+      fd,
+      '{"record_type":"event","payload_type":"runtime.session","payload":{"event":{"kind":"context_projection_checkpoint","blob":"'
+    );
+    const padding = Buffer.alloc(1024 * 1024, 32);
+    for (let index = 0; index < 10; index++) fs.writeSync(fd, padding);
+    fs.writeSync(fd, '"}},"recorded_at":' + at + ',"id":"cp-1"}\n');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 60, 10, 5, at + 60000)) + '\n');
+    fs.closeSync(fd);
+    const data = await collectAccountActivity(
+      { kind: 'muse', sessionsDir },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.skippedLines).toBe(0);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    // input is netted of cache reads, as the muse parser does.
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 50);
+  });
+});
+
+describe('mtime pre-filter skips files that cannot hold in-window events', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-mtime-prefilter-'));
+    fs.mkdirSync(path.join(root, 'codex', 'sessions'), { recursive: true });
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  function rollout(name: string, lines: unknown[], mtime: Date) {
+    const file = path.join(root, 'codex', 'sessions', name);
+    fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+    fs.utimesSync(file, mtime, mtime);
+    return file;
+  }
+  function collect() {
+    return collectAccountActivity(
+      { kind: 'codex', codexHome: path.join(root, 'codex'), cacheDir: path.join(root, 'cache') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+  }
+  function checkpoints(): string[] {
+    const dir = path.join(root, 'cache', 'account-activity-v1');
+    const found: string[] = [];
+    if (!fs.existsSync(dir)) return found;
+    const walk = (d: string) => {
+      for (const item of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, item.name);
+        if (item.isDirectory()) walk(full);
+        else found.push(full);
+      }
+    };
+    walk(dir);
+    return found;
+  }
+
+  it('reads the recent file, skips the stale one, and keeps the in-window total', async () => {
+    // A stale rollout (mtime before the window) holds only out-of-window events;
+    // append-only logs cannot gain in-window records after their last write, so
+    // it is skipped without being read. The recent rollout is read in full.
+    rollout(
+      'rollout-old.jsonl',
+      [meta(), model(), tokens(999, 0, 999, '2026-08-01T15:00:00Z')],
+      new Date(NOW - 40 * 86400000)
+    );
+    rollout(
+      'rollout-recent.jsonl',
+      [meta(), model(), tokens(100, 20, 10, '2026-10-01T15:05:00Z')],
+      new Date(NOW)
+    );
+    const data = await collect();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80);
+    // Only the recent file was read, so only it has a checkpoint.
+    expect(checkpoints()).toHaveLength(1);
+  });
+
+  it('reports a complete empty scan (not unavailable) when every file predates the window', async () => {
+    // A kind whose logs all predate the window has no in-window usage; the mtime
+    // pre-filter drops every file, and the scan must complete empty rather than
+    // throw 'Native log sources are unavailable' (which would mark the source
+    // failed). Regression: codex threw when a bounded traversal reached only
+    // stale date dirs before its deadline.
+    rollout(
+      'rollout-old.jsonl',
+      [meta(), model(), tokens(999, 0, 999, '2026-08-01T15:00:00Z')],
+      new Date(NOW - 40 * 86400000)
+    );
+    const data = await collect();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(0);
+    expect(data.hourly).toHaveLength(0);
+  });
+});
+
+describe('exact-duplicate session file dedup', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-dedup-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('counts a byte-identical session file copied under two project dirs once', async () => {
+    // A Claude subagent transcript written under two project dirs (a session
+    // spanning two cwds) is the same usage twice; the collector must drop the
+    // exact copy so tokens are not doubled.
+    const line =
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'claude-dup',
+        timestamp: '2026-10-01T15:00:00Z',
+        message: {
+          model: 'claude-sonnet-4-6',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 40,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 5,
+          },
+        },
+      }) + '\n';
+    for (const proj of ['projA', 'projB']) {
+      const dir = path.join(root, 'claude', 'projects', proj, 'sess', 'subagents');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'agent-same.jsonl'), line);
+    }
+    const data = await collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(100);
+  });
+});

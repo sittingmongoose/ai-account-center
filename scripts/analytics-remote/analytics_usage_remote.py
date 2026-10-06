@@ -384,6 +384,17 @@ def _omp_roots(home, env, collector, extra_roots=()):
 
     default_agent = os.path.join(home, ".omp", "agent")
     _add(os.path.join(default_agent, "sessions"))
+    # Per-profile OMP instances (Windows keeps `~/.omp/profiles/<name>`) store
+    # their own sessions under `<profile>/agent/sessions`; enumerate the bounded
+    # profile dirs so their usage is discovered too, not just the default agent.
+    profiles_root = os.path.join(home, ".omp", "profiles")
+    try:
+        for profile in sorted(os.listdir(profiles_root))[:SCAN_MAX_ROOTS]:
+            candidate = os.path.join(profiles_root, profile, "agent", "sessions")
+            if os.path.isdir(candidate):
+                _add(candidate)
+    except OSError:
+        pass
     custom_agent = env.get("PI_CODING_AGENT_DIR")
     if custom_agent:
         expanded = os.path.expanduser(custom_agent)
@@ -456,10 +467,23 @@ def _scan_session_roots(base, collector):
         except OSError:
             continue
         examined += len(entries)
-        if os.path.basename(directory) == "sessions" and directory != base:
-            if _sessions_dir_has_marker(directory):
+        if directory != base:
+            if os.path.basename(directory) == "sessions":
+                if _sessions_dir_has_marker(directory):
+                    found.append(directory)
+                continue
+            # Custom `--session-dir` roots are named freely (`<branch>-sessions`,
+            # `rev-<id>-sessions`, ...); a literal `sessions` name check missed
+            # them. Accept any non-base dir that directly holds an OMP session
+            # file, by the same name rule the reader uses. Accepted roots are not
+            # descended; the reader walks their nested subagent files. Mirrors the
+            # TypeScript scanSessionRoots fix.
+            if any(
+                entry.is_file(follow_symlinks=False) and _is_session_filename(entry.name)
+                for entry in entries
+            ):
                 found.append(directory)
-            continue
+                continue
         if depth >= SCAN_MAX_DEPTH:
             continue
         for entry in entries:
