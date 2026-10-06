@@ -68,6 +68,8 @@ interface ActivityState {
   remote: RemoteAnswer | null;
   /** Remote hosts the current generation's scan is still waiting on. */
   remotePending: AnalyticsRemoteHost[];
+  /** When the published grid first showed a still-scanning cell; null once settled. Bounds the converge cadence. */
+  scanningSince: number | null;
   /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
   pricing: AccountAnalyticsPricingLookup;
   /** Recent cost of projecting this snapshot, reserved out of the response budget. */
@@ -118,6 +120,52 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   return entries;
 }
 
+/** The grid's order: tools in reading order, hosts Ubuntu, Mac then Windows. */
+const SOURCE_TOOL_ORDER = [
+  'claude',
+  'codex',
+  'omp',
+  'muse',
+  'zcode',
+  'jsonl',
+  'antigravity',
+  'cursor',
+];
+const SOURCE_HOST_ORDER = ['ubuntu', 'mac', 'windows'];
+function sortSourceEntries(entries: AccountAnalyticsSource[]): AccountAnalyticsSource[] {
+  return entries.sort(
+    (a, b) =>
+      SOURCE_TOOL_ORDER.indexOf(a.tool) - SOURCE_TOOL_ORDER.indexOf(b.tool) ||
+      SOURCE_HOST_ORDER.indexOf(a.host) - SOURCE_HOST_ORDER.indexOf(b.host)
+  );
+}
+
+/**
+ * The grid of a cold `loading` answer, before the first publish: every tool on
+ * every host is being read by the first collection, which is already running.
+ * The measured states replace it seconds later, at the first publish.
+ */
+export function coldScanningSourceStates(): AccountAnalyticsSource[] {
+  const entries: AccountAnalyticsSource[] = [];
+  for (const host of ['ubuntu', 'mac', 'windows'] as const) {
+    const tools =
+      host === 'ubuntu'
+        ? (['claude', 'codex', 'omp', 'muse', 'zcode'] as const)
+        : analyticsRemoteTargets(host);
+    for (const tool of tools)
+      entries.push({
+        tool,
+        host,
+        state: 'scanning',
+        lastScanAt: null,
+        rowCount: 0,
+        detail: 'the first scan is running',
+      });
+  }
+  entries.push(...fixedAnalyticsSourceEntries());
+  return sortSourceEntries(entries);
+}
+
 export interface AccountAnalyticsActivityDeps {
   loadWorker?: (request: UsageWorkerRequest) => Promise<UsageWorkerResult>;
   requests?: () => AccountAnalyticsActivityRequest[] | Promise<AccountAnalyticsActivityRequest[]>;
@@ -163,6 +211,15 @@ const MAX_WORKER_TIME_MS = 20_000;
 const MAX_COLLECTION_TIME_MS = 60_000;
 /** Retained sessions per published source; more than this marks the local collection incomplete. */
 const MAX_RETAINED_SESSIONS = 10_000;
+/**
+ * Cold-start convergence: while the published grid still holds a scanning
+ * cell, the next automatic collection starts after this shorter interval
+ * instead of the configured refresh interval - for CONVERGE_WINDOW_MS after
+ * the first such cell appeared at most, so a host whose logs stay too big to
+ * finish falls back to the normal cadence instead of scanning forever.
+ */
+const CONVERGE_INTERVAL_MS = 20_000;
+const CONVERGE_WINDOW_MS = 600_000;
 
 /**
  * The sessions one published source keeps: inside the 31-day window, bounded, and without a
@@ -635,6 +692,7 @@ export class AccountAnalyticsActivityService {
       attempted,
       remoteStates: state.remote ? state.remote.states : null,
       remotePending: true,
+      pendingHosts: [...state.remotePending],
       localEvents,
       presence,
       failed,
@@ -688,6 +746,7 @@ export class AccountAnalyticsActivityService {
       remoteStates,
       remoteAnswer,
       remotePending: false,
+      pendingHosts: [...state.remotePending],
       localEvents,
       presence,
       failed,
@@ -697,8 +756,9 @@ export class AccountAnalyticsActivityService {
 
   /**
    * Publish one snapshot from local rows plus a remote answer, without mutating either input, then
-   * persist it for the next restart. `remotePending` keeps previous remote states untouched while
-   * the current remote scan is still running (they are not timed out yet).
+   * persist it for the next restart. While the remote scan is in flight (`remotePending`), previous
+   * remote states stand untouched (they are not timed out yet) and a host without a previous answer
+   * says "scanning"; `pendingHosts` names the hosts whose scan outlived this collection's deadline.
    */
   private publish(
     state: ActivityState,
@@ -711,6 +771,7 @@ export class AccountAnalyticsActivityService {
       remoteStates: AnalyticsRemoteSourceState[] | null;
       remoteAnswer?: RemoteAnswer | null;
       remotePending: boolean;
+      pendingHosts: readonly AnalyticsRemoteHost[];
       localEvents: Map<AccountAnalyticsActivityProvider, number>;
       presence: Record<AccountAnalyticsActivityProvider, boolean> | null;
       failed: boolean;
@@ -726,6 +787,7 @@ export class AccountAnalyticsActivityService {
       remoteStates,
       remoteAnswer,
       remotePending,
+      pendingHosts,
       localEvents,
       presence,
       failed,
@@ -771,8 +833,13 @@ export class AccountAnalyticsActivityService {
       localEvents,
       fetchedAt,
       presence,
-      remotePending
+      remotePending,
+      pendingHosts
     );
+    // Convergence tracking: a grid that still holds a scanning cell re-collects
+    // on the shorter converge cadence (bounded; see get()).
+    if (state.sourceStates.some((entry) => entry.state === 'scanning')) state.scanningSince ??= now;
+    else state.scanningSince = null;
     state.pricing = this.snapshotPricing();
     state.partial = failed || requests.length >= MAX_DIRECTORIES + 1;
     state.fetchedAt = now;
@@ -787,7 +854,8 @@ export class AccountAnalyticsActivityService {
     localEvents: Map<AccountAnalyticsActivityProvider, number>,
     fetchedAt: string,
     presence: Record<AccountAnalyticsActivityProvider, boolean> | null,
-    remotePending = false
+    remotePending = false,
+    pendingHosts: readonly AnalyticsRemoteHost[] = []
   ): AccountAnalyticsSource[] {
     const entries: AccountAnalyticsSource[] = [];
     const previous = new Map(
@@ -797,13 +865,16 @@ export class AccountAnalyticsActivityService {
       const key = `${tool}\0ubuntu`;
       const old = previous.get(key);
       if (succeeded.has(tool)) {
+        const events = localEvents.get(tool) ?? 0;
         entries.push({
           tool,
           host: 'ubuntu',
-          state: 'ok',
+          // A tool whose logs were read and hold nothing in the window says so,
+          // exactly like a remote host in the same situation.
+          state: events > 0 ? 'ok' : 'no_usage',
           lastScanAt: fetchedAt,
-          rowCount: localEvents.get(tool) ?? 0,
-          detail: null,
+          rowCount: events,
+          detail: events > 0 ? null : 'no usage recorded in the last 31 days',
         });
       } else if (old && attempted.has(tool)) {
         entries.push({ ...old, state: old.rowCount > 0 ? 'cached' : 'unavailable' });
@@ -831,19 +902,51 @@ export class AccountAnalyticsActivityService {
     }
     if (remote) {
       for (const entry of remote) entries.push({ ...entry });
-    } else if (remotePending) {
-      // The remote scan is still running behind this publish: previous remote states stand
-      // untouched (they are not timed out yet), and hosts with no previous answer stay absent.
-      for (const entry of previous.values())
-        if (entry.host === 'mac' || entry.host === 'windows') entries.push({ ...entry });
     } else {
-      // The remote scans never answered; the previous remote aggregates are
-      // still in the totals, and are marked. Every scanned kind is listed,
-      // so Claude Code and Codex remotes are never silently absent.
       for (const host of ['mac', 'windows'] as const) {
+        // A scan that outlived the collection deadline is still running, but
+        // its answer is gone: the tools honestly go back to "scanning" (the
+        // next refresh continues), carrying their previous counts.
+        if (pendingHosts.includes(host)) {
+          for (const tool of analyticsRemoteTargets(host)) {
+            const old = previous.get(`${tool}\0${host}`);
+            entries.push({
+              tool,
+              host,
+              state: 'scanning',
+              lastScanAt: old?.lastScanAt ?? null,
+              rowCount: old?.rowCount ?? 0,
+              detail: 'the scan is taking longer than one refresh; it continues on the next one',
+            });
+          }
+          continue;
+        }
+        if (remotePending) {
+          // The remote scan is still running behind this publish: previous
+          // remote states stand untouched (they are not timed out yet), and a
+          // host with no previous answer says "scanning", so a cold load
+          // never shows an absent or failed remote grid.
+          for (const tool of analyticsRemoteTargets(host)) {
+            const old = previous.get(`${tool}\0${host}`);
+            if (old) entries.push({ ...old });
+            else
+              entries.push({
+                tool,
+                host,
+                state: 'scanning',
+                lastScanAt: null,
+                rowCount: 0,
+                detail: 'the first scan is running',
+              });
+          }
+          continue;
+        }
+        // The remote scans never answered; the previous remote aggregates are
+        // still in the totals, and are marked. Every scanned kind is listed,
+        // so Claude Code and Codex remotes are never silently absent.
         for (const tool of analyticsRemoteTargets(host)) {
           const old = previous.get(`${tool}\0${host}`);
-          if (old)
+          if (old && (old.rowCount > 0 || old.state !== 'scanning'))
             entries.push(
               old.rowCount > 0
                 ? {
@@ -866,11 +969,7 @@ export class AccountAnalyticsActivityService {
       }
     }
     entries.push(...fixedAnalyticsSourceEntries());
-    const order = (tool: string): number =>
-      ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity', 'cursor'].indexOf(tool);
-    const hostOrder = (host: string): number => ['ubuntu', 'mac', 'windows'].indexOf(host);
-    entries.sort((a, b) => order(a.tool) - order(b.tool) || hostOrder(a.host) - hostOrder(b.host));
-    return entries;
+    return sortSourceEntries(entries);
   }
 
   private snapshotPricing(): AccountAnalyticsPricingLookup {
@@ -918,6 +1017,7 @@ export class AccountAnalyticsActivityService {
         sourceStates: [],
         remote: null,
         remotePending: [],
+        scanningSince: null,
         pricing: this.snapshotPricing(),
         projectionMs: 0,
       };
@@ -968,12 +1068,17 @@ export class AccountAnalyticsActivityService {
       state.generation++;
       state.manualRefreshPending = true;
       if (!state.pending) this.startCollection(state);
-    } else if (
-      !state.pending &&
-      (this.deps.now ?? Date.now)() - state.fetchedAt >= this.refreshIntervalMs()
-    ) {
-      state.generation++;
-      this.startCollection(state);
+    } else if (!state.pending) {
+      const now = (this.deps.now ?? Date.now)();
+      const converging =
+        state.scanningSince !== null && now - state.scanningSince < CONVERGE_WINDOW_MS;
+      const interval = converging
+        ? Math.min(this.refreshIntervalMs(), CONVERGE_INTERVAL_MS)
+        : this.refreshIntervalMs();
+      if (now - state.fetchedAt >= interval) {
+        state.generation++;
+        this.startCollection(state);
+      }
     }
     const budget = this.deps.responseBudgetMs ?? 1500;
     const elapsed = this.deps.elapsedMs ?? (() => performance.now());
@@ -1001,6 +1106,13 @@ export class AccountAnalyticsActivityService {
         : state.partial || state.pending
           ? 'cached'
           : 'ok';
+    // A cold answer while the first collection is still running: the grid
+    // names every tool as scanning, so the loading page shows per-host
+    // progress from the very first answer instead of an empty grid.
+    const answerSourceStates =
+      status === 'loading' && state.sourceStates.length === 0
+        ? coldScanningSourceStates()
+        : state.sourceStates;
     const scans = state.sources.flatMap((source) =>
       source.data
         .map((data) => data.scan)
@@ -1026,15 +1138,15 @@ export class AccountAnalyticsActivityService {
         : status === 'unavailable'
           ? 'No usable Claude Code, Codex, OMP, Muse or zcode history is available.'
           : state.pending
-            ? 'CLI activity is refreshing. Previously read records are shown until the bounded scan completes; cost is an API-equivalent estimate, not a subscription charge.'
+            ? 'CLI activity is refreshing. Records read so far are shown; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.'
             : state.partial
-              ? 'The available records are shown while the bounded history scan continues; some sources may be unavailable. Cost is an API-equivalent estimate, not a subscription charge.' +
+              ? 'Records read so far are shown while a bounded scan completes in the background; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.' +
                 scanProgress
               : `CLI activity from Ubuntu, Mac and Windows (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
       {
         tz,
         pricing: state.pricing,
-        sources: state.sourceStates,
+        sources: answerSourceStates,
         refreshing: state.pending !== null,
         refreshingRemote: [...state.remotePending],
       }

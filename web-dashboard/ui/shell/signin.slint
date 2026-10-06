@@ -9,7 +9,7 @@
 // grow from the summit on entry, the scale bar sweeps while connecting and fills on success, and the rings dim
 // while sign-in is paused. Only opacity, scale and one clip width move; nothing loops while idle.
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
-import { AuthView, StrengthView } from "../models.slint";
+import { AuthView, StrengthView, LoginBox, LoginOverlay } from "../models.slint";
 import { Icon } from "../components/icon.slint";
 import { AppLogo } from "../components/logo.slint";
 import { Field } from "../components/field.slint";
@@ -251,6 +251,12 @@ export component SignInLayer inherits Rectangle {
     callback typing(string, string);
     callback recheck();
     callback limit-over();
+    // The login form's real HTML inputs (index.html #aac-login, public/login-bridge.mjs) lie over the username and
+    // password boxes, so password managers can see and fill them; their focus and hover come back in here.
+    in property <string> login-focus;
+    in property <string> login-hover;
+    callback login-overlay(LoginOverlay);
+    callback login-focus-request(string);
 
     property <string> state: root.auth.state;
     property <bool> success: root.state == "success";
@@ -282,6 +288,44 @@ export component SignInLayer inherits Rectangle {
     property <string> code-text;
     property <bool> entered: false;
     init => { root.entered = true; }
+
+    // The HTML inputs are on screen only while the login form is on screen and still: the layer fully faded in and
+    // asked for, the card's load-in finished, and the page neither loading, nor setting up (the first-run form keeps
+    // its Slint fields), nor signed in (the success look and the fade into the dashboard). In every other moment they
+    // are hidden and the Slint fields draw the same text themselves, so the text never doubles and never vanishes.
+    property <bool> overlay-on: root.visible && root.shown && root.opacity > 0.999 && card-reveal.level > 0.999
+        && root.form && !root.setup && !root.signed-in && !root.loading;
+    // where the fields are, copied out of the conditional form below whenever the layout moves them (a resize, the
+    // short layout, a breakpoint, a banner opening, the wrong-password shake)
+    property <LoginBox> user-box;
+    property <LoginBox> user-text-box;
+    property <LoginBox> pass-box;
+    property <LoginBox> pass-text-box;
+    property <LoginBox> check-box;
+    property <bool> fields-enabled;
+    property <bool> pass-plain;
+    property <LoginOverlay> overlay-off: { on: false, revealed: root.pass-plain, remember: root.remember-me };
+    // only read while the inputs are on screen, so a load-in or a fade never reports a frame it does not need
+    property <LoginOverlay> overlay-live: {
+        on: true,
+        enabled: root.fields-enabled,
+        revealed: root.pass-plain,
+        remember: root.remember-me,
+        user: root.user-box,
+        user-text: root.user-text-box,
+        pass: root.pass-box,
+        pass-text: root.pass-text-box,
+        check: root.check-box,
+        submit: { x: submit-btn.absolute-position.x, y: submit-btn.absolute-position.y, width: submit-btn.width, height: submit-btn.height },
+        font-size: Type.body,
+        // a disabled field fades its box to 0.72, text included
+        ink: Theme.ink.with-alpha(root.fields-enabled ? 1 : 0.72),
+        placeholder: Theme.ink-4,
+        selection: Theme.accent.with-alpha(0.25),
+        accent: Theme.accent,
+    };
+    property <LoginOverlay> overlay: root.overlay-on ? root.overlay-live : root.overlay-off;
+    changed overlay => { root.login-overlay(self.overlay); }
     // a paused sign-in forgets the typed password, as the concept does
     changed state => { if root.limited { root.password = ""; } }
 
@@ -377,7 +421,7 @@ export component SignInLayer inherits Rectangle {
         VerticalLayout {
             alignment: center;
             width: root.card-w;
-            Reveal {
+            card-reveal := Reveal {
                 delay: 124ms;
                 card := Rectangle {
                     min-height: form.preferred-height;
@@ -514,6 +558,28 @@ export component SignInLayer inherits Rectangle {
                         if root.form: Rectangle {
                           min-height: fields.preferred-height;
                           preferred-height: fields.preferred-height;
+                          // the login fields' boxes, handed to the root for the HTML inputs laid over them
+                          property <LoginBox> user-at: { x: user.box-x, y: user.box-y, width: user.box-width, height: user.box-h };
+                          property <LoginBox> user-text-at: { x: user.text-x, y: user.text-y, width: user.text-width, height: user.text-height };
+                          property <LoginBox> pass-at: { x: pass.box-x, y: pass.box-y, width: pass.box-width, height: pass.box-h };
+                          property <LoginBox> pass-text-at: { x: pass.text-x, y: pass.text-y, width: pass.text-width, height: pass.text-height };
+                          property <bool> usable: user.enabled;
+                          property <bool> plain: pass.plain;
+                          function publish() {
+                              root.user-box = self.user-at;
+                              root.user-text-box = self.user-text-at;
+                              root.pass-box = self.pass-at;
+                              root.pass-text-box = self.pass-text-at;
+                              root.fields-enabled = self.usable;
+                              root.pass-plain = self.plain;
+                          }
+                          init => { self.publish(); }
+                          changed user-at => { self.publish(); }
+                          changed user-text-at => { self.publish(); }
+                          changed pass-at => { self.publish(); }
+                          changed pass-text-at => { self.publish(); }
+                          changed usable => { self.publish(); }
+                          changed plain => { self.publish(); }
                           fields := VerticalLayout {
                             x: root.shake-x;
                             width: parent.width;
@@ -529,6 +595,11 @@ export component SignInLayer inherits Rectangle {
                                     enabled: root.can-submit || root.wrong;
                                     bad: root.setup && root.auth.field == "user";
                                     box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                    mirror: !root.setup;
+                                    covered: root.overlay-on;
+                                    ext-focus: root.overlay-on && root.login-focus == "user";
+                                    ext-hover: root.overlay-on && root.login-hover == "user";
+                                    focus-request => { root.login-focus-request("user"); }
                                     accepted => { pass.focus-input(); }
                                 }
                                 ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-user"; }
@@ -543,6 +614,11 @@ export component SignInLayer inherits Rectangle {
                                     enabled: root.can-submit || root.wrong;
                                     bad: root.wrong || (root.setup && root.auth.field == "pass");
                                     box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                    mirror: !root.setup;
+                                    covered: root.overlay-on;
+                                    ext-focus: root.overlay-on && root.login-focus == "pass";
+                                    ext-hover: root.overlay-on && root.login-hover == "pass";
+                                    focus-request => { root.login-focus-request("pass"); }
                                     edited(v) => { if root.setup { root.typing(v, root.confirm-text); } }
                                     accepted => { if !root.setup { root.go(); } }
                                 }
@@ -637,16 +713,19 @@ export component SignInLayer inherits Rectangle {
                         if root.form: Rectangle { height: root.short ? 8px : 12px; }
 
                         // Remember me (login only): off gives a browser-session cookie, on the
-                        // configured session lifetime. Password managers fill the hidden HTML
-                        // form (public/login-bridge.mjs); its values land in the fields above.
+                        // configured session lifetime. The HTML form's checkbox (public/login-bridge.mjs)
+                        // lies over the box as its keyboard focus target and stays in step with it.
                         if root.form && !root.setup: Rectangle {
                             min-height: remember-row.preferred-height;
+                            property <LoginBox> where: { x: check.absolute-position.x, y: check.absolute-position.y, width: check.width, height: check.height };
+                            init => { root.check-box = self.where; }
+                            changed where => { root.check-box = self.where; }
                             remember-row := HorizontalLayout {
                                 spacing: 9px;
                                 alignment: start;
                                 VerticalLayout {
                                     alignment: center;
-                                    Rectangle {
+                                    check := Rectangle {
                                         width: 16px;
                                         height: 16px;
                                         border-radius: 4px;

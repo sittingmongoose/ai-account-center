@@ -109,7 +109,15 @@ export type AccountAnalyticsActivityProvider =
  */
 export type AccountAnalyticsUsageProvider = DashboardProvider | 'other';
 
-export type AccountAnalyticsSourceState = 'ok' | 'cached' | 'unavailable' | 'not_installed';
+export type AccountAnalyticsSourceState =
+  | 'ok'
+  | 'cached'
+  | 'unavailable'
+  | 'not_installed'
+  /** The scan is still working on this tool: it is running now, or ran out of time before it finished. */
+  | 'scanning'
+  /** The tool was scanned and its logs hold no usage inside the 31-day window. */
+  | 'no_usage';
 
 export interface AccountAnalyticsSource {
   tool: AccountAnalyticsActivityProvider | 'antigravity' | 'cursor';

@@ -1,4 +1,4 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue } from './auth-view.mjs';
@@ -48,6 +48,8 @@ let analyticsGeneration = 0;
 // While the log scan runs behind the page (loading, or a cached snapshot with a refresh running),
 // the page re-reads the server every few seconds so the new numbers land on their own.
 let analyticsPollTimer = 0;
+// Consecutive background-poll failures; the first retries silently, the second surfaces.
+let pollFails = 0;
 let openDetailsId = '';
 // Counts Details opens, so a click outside the panel can tell a row click (which opens that row) from any other.
 let detailsOpens = 0;
@@ -105,6 +107,9 @@ function auth(signedIn, state, extra = {}) {
   // sets it again. So the first pushes after any sign-in (a sign-out, or a session that ended in this tab, such
   // as a server restart) must reach Slint even when their JSON matches the last one sent, or Home never reveals.
   if (!signedIn) pushedJson.clear();
+  // The login form's HTML password goes with the Slint one: once signed in (lib.rs set_auth clears Slint's), and when
+  // sign-in pauses (signin.slint forgets the typed password in the limited state).
+  if (signedIn || state === 'limited') { try { loginBridge?.clearPassword(); } catch {} }
   set_auth(signedIn, JSON.stringify(view));
 }
 
@@ -395,8 +400,14 @@ function renderAnalytics(mode = 'static') {
   pushModel('analytics', JSON.stringify(slintView), set_analytics);
   clearTimeout(analyticsPollTimer);
   const act = analyticsPayload?.activity;
-  if (currentPage === 'analytics' && (act?.status === 'loading' || act?.refreshing === true))
-    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(); }, 5000);
+  // While the server is reading (a cold load or a refresh running) the page re-reads it every
+  // 10 s - a live analytics projection costs real server CPU, so the poll stays calm; while
+  // cells are merely waiting for the next scheduled scan, a 15 s poll watches them settle.
+  // Poll answers render as morphs, so converging numbers glide in place.
+  const busyNow = act?.status === 'loading' || act?.refreshing === true;
+  const converging = Array.isArray(act?.sources) && act.sources.some(r => r?.state === 'scanning');
+  if (currentPage === 'analytics' && (busyNow || converging))
+    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, busyNow ? 10000 : 15000);
   shownSize = size;
   if (!morph) { shownGeo = next; return; }
   const t0 = performance.now();
@@ -424,10 +435,16 @@ function analyticsCovers(payload, now = Date.now()) {
     : Number.isFinite(analyticsPage.from) ? analyticsPage.from : now - 30 * D;
   return from <= start + H;
 }
-async function refreshAnalytics(force = false, mode = 'static') {
+/**
+ * opts.silent: a background poll. It keeps the view calm - no loading flag, and a single failed
+ * fetch does not replace the page's words; it simply tries again on the next tick. A second
+ * consecutive failure surfaces like any other error.
+ */
+async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
   if (!authenticated) return;
+  const silent = opts.silent === true && !force;
   const generation = ++analyticsGeneration;
-  set_analytics_loading(true, '');
+  if (!silent) set_analytics_loading(true, '');
   // the backend accepts 24h, 7d and 30d: Month, All and custom ranges read the covering window and are cut here
   const query = new URLSearchParams({ platform, range: apiRangeFor(analyticsPage, Date.now()), provider: 'all', account: 'all' });
   if (force) query.set('refresh', 'true');
@@ -435,8 +452,15 @@ async function refreshAnalytics(force = false, mode = 'static') {
     const result = await request(`/api/accounts/analytics?${query}`);
     if (generation !== analyticsGeneration || !authenticated) return;
     if (result?.schemaVersion !== 1 || !Array.isArray(result.accounts)) throw new Error('Unsupported analytics response.');
-    analyticsPayload = result; renderAnalytics(mode); set_analytics_loading(false, '');
-  } catch (error) { if (generation === analyticsGeneration) { renderAnalytics(); set_analytics_loading(false, error?.message || 'Unable to load account analytics.'); } }
+    analyticsPayload = result; renderAnalytics(mode);
+    pollFails = 0; set_analytics_loading(false, '');
+  } catch (error) {
+    if (generation !== analyticsGeneration) return;
+    renderAnalytics();
+    if (silent && ++pollFails < 2) return;
+    pollFails = 0;
+    set_analytics_loading(false, error?.message || 'Unable to load account analytics.');
+  }
 }
 /**
  * Entering the Analytics page. A payload that still covers the page range and is younger than the refresh
@@ -529,7 +553,7 @@ function applyRefreshInterval(seconds, confirmed = true) {
   set_refresh_interval(seconds, confirmed);
   renderAccounts();
   if (usageTimer) clearInterval(usageTimer);
-  usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(); } }, seconds * 1000);
+  usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(false, 'morph'); } }, seconds * 1000);
 }
 async function loadSettings() {
   // The two independent reads fly together; each still applies (or fails) on its own, in order.
@@ -631,6 +655,7 @@ async function signOut() {
   }
   forgetSignIn(globalThis.localStorage);
   analyticsGeneration++; analyticsPayload = null; analyticsChoices = null; analyticsChoicesPayload = null; analyticsChoicesCatalog = null; clearTimeout(analyticsPollTimer); data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = ''; pushedJson.clear();
+  pollFails = 0;
   claudeOpen.reset();
   accounts.reset();
   showSignedOut('default', { notice: true, message: 'Signed out.' });
@@ -679,12 +704,17 @@ async function signedIn(name) {
   await enterDashboard();
 }
 let loginBridge = null;
+/** The Slint sign-in value ("user\npassword\n1|0", auth-view.mjs parseLoginValue) for what the HTML form holds. */
+const loginValue = filled => `${filled.username}\n${filled.password}\n${filled.remember ? '1' : '0'}`;
 async function signIn(value) {
   if (busy) return;
-  const { username: user, password, remember } = parseLoginValue(value);
+  // While the login form's HTML inputs are on screen they hold what was typed or filled, so the Slint Sign in button
+  // signs in with them too, even when a manager set the values without input events.
+  const shown = loginBridge?.shown() === true;
+  const { username: user, password, remember } = shown ? parseLoginValue(loginValue(loginBridge.read())) : parseLoginValue(value);
   if (!user || !password) { authNonce++; auth(false, 'default', { message: 'Enter your username and password.' }); return; }
-  // the hidden form holds the same values, so managers offer to save them
-  try { loginBridge?.mirror({ username: user, password, remember }); } catch {}
+  // the HTML form holds the same values, so managers offer to save them
+  if (!shown) { try { loginBridge?.mirror({ username: user, password, remember }); } catch {} }
   auth(false, 'connecting'); setBusy(true);
   try {
     const result = await mutation('/api/auth/login', { username: user, password, rememberMe: remember });
@@ -737,6 +767,14 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'details') { detailsOpens++; renderDetails(value); return; }
     if (action === 'details-closed') { openDetailsId = ''; return; }
     if (action === 'login') { await signIn(value); return; }
+    // the sign-in layer moved, showed or hid the login form's fields: the HTML inputs follow (login-bridge.mjs)
+    if (action === 'login-overlay') {
+      const overlay = JSON.parse(value);
+      if (e2e) globalThis.__aacLoginOverlay = overlay;
+      loginBridge?.place(overlay);
+      return;
+    }
+    if (action === 'login-field-focus') { loginBridge?.focus(value); return; }
     if (action === 'setup') { await createSignIn(value); return; }
     if (action === 'setup-typing') {
       const [pass = '', confirm = ''] = String(value).split('\n');
@@ -890,13 +928,15 @@ try {
   earlyCheck.catch(() => {});
   await init();
   startSlintDashboard(() => start_dashboard(innerWidth, innerHeight, devicePixelRatio));
-  // password managers fill the hidden HTML form; its values land in the Slint fields, and its
-  // submit runs the same login as Sign in
+  // The login form's real HTML inputs lie over the Slint fields (login-bridge.mjs): what is typed or filled lands
+  // in the Slint fields too, their focus and hover reach the Slint boxes, and a submit runs the same login as Sign in.
   try {
     loginBridge = installLoginBridge({
       document,
+      canvas: document.querySelector('#canvas'),
       onFilled: filled => { if (!authenticated && !busy) set_login_fields(filled.username, filled.password, filled.remember); },
-      onSubmit: filled => { if (!authenticated && !busy) void signIn(`${filled.username}\n${filled.password}\n${filled.remember ? '1' : '0'}`); },
+      onSubmit: filled => { if (!authenticated && !busy) void signIn(loginValue(filled)); },
+      onPointer: ({ focus, hover }) => { try { set_login_pointer(focus, hover); } catch {} },
     });
   } catch {}
   set_current_page(currentPage);

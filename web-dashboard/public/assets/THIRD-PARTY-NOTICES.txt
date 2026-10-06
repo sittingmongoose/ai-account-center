@@ -10,6 +10,12 @@ Fonts (web-dashboard/ui/fonts)
   ui/fonts/OFL-InstrumentSans.txt. Shipped as InstrumentSans.ttf (width axis pinned at 100,
   subset to Latin) and InstrumentSansTab.ttf, a renamed copy with the OpenType tnum feature
   frozen into its character map ("Instrument Sans Tab"). ui/fonts/build_fonts.py rebuilds both.
+  An identical copy of InstrumentSans.ttf ships as public/assets/InstrumentSans.ttf, the font of the
+  sign-in page's HTML username and password inputs, so their text matches the Slint fields under them.
+- Inter: Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1
+  with Reserved Font Name "Inter", full text in ui/fonts/OFL-Inter.txt. Slint embeds Inter as its fallback
+  font and draws masked passwords with its U+25CF glyph; that one glyph ships as public/assets/AACMask.ttf,
+  renamed "AAC Mask", so the HTML password input's dots match. ui/fonts/build_mask_font.py rebuilds it.
 - Martian Mono: Copyright 2021 The Martian Mono Project Authors (https://github.com/evilmartians/mono).
   SIL Open Font License 1.1, full text in ui/fonts/OFL-MartianMono.txt. Shipped as MartianMono.ttf
   (width axis pinned at 87.5, subset to Latin).

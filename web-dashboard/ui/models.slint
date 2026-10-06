@@ -265,6 +265,37 @@ export struct AuthView {
     nonce: int,
 }
 
+// A rectangle in window pixels (logical px, which are CSS px in the browser).
+export struct LoginBox {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
+
+// The login form's real HTML inputs (index.html #aac-login, public/login-bridge.mjs) lie over the Slint fields so
+// password managers can see and fill them. The sign-in layer reports, whenever any of it changes, whether they are on
+// screen, where each field box and its text area are, where Remember me and Sign in are (their keyboard focus
+// targets), and the colours and size the HTML text takes so it looks like the field it covers.
+export struct LoginOverlay {
+    on: bool,
+    enabled: bool,
+    // the password's eye button shows it in plain text
+    revealed: bool,
+    remember: bool,
+    user: LoginBox,
+    user-text: LoginBox,
+    pass: LoginBox,
+    pass-text: LoginBox,
+    check: LoginBox,
+    submit: LoginBox,
+    font-size: length,
+    ink: color,
+    placeholder: color,
+    selection: color,
+    accent: color,
+}
+
 // The first-run form's password strength (public/auth-view.mjs strength) and whether the confirmation matches.
 export struct StrengthView {
     lv: int,
@@ -274,15 +305,16 @@ export struct StrengthView {
     matches: bool,
 }
 
-// The Analytics header (version 4): loading and error come from set_analytics_loading, the rest from the view model.
+// The Analytics header (version 5): loading and error come from set_analytics_loading, the rest from the view model.
+// `updating` is the calm background indicator: a scan runs now, or source cells are still converging.
 export struct AnalyticsHeadView {
     loading: bool,
-    refreshing: bool,
+    updating: bool,
     error: string,
     scope: string,
     read: string,
     read-tip: string,
-    refresh-note: string,
+    update-note: string,
     date: string,
     custom: bool,
 }

@@ -715,6 +715,8 @@ pub fn start_dashboard(width: f32, height: f32, scale_factor: f32) -> Result<(),
             ),
         )
     });
+    // The login form's HTML inputs (public/login-bridge.mjs) follow the Slint field boxes.
+    ui.on_login_overlay(|overlay| dispatch_action("login-overlay", &login_overlay_json(&overlay)));
     ax.on_layout(|kind, width, height| {
         dispatch_action(
             "analytics-layout",
@@ -835,8 +837,8 @@ pub fn set_busy(busy: bool) {
     with_ui(|ui| ui.set_busy(busy));
 }
 
-/// A password manager filled the hidden HTML login form (public/login-bridge.mjs):
-/// copy its values into the visible Slint sign-in fields.
+/// The login form's HTML inputs (public/login-bridge.mjs) were typed in or filled by a password manager:
+/// copy their values into the Slint sign-in fields, which show them whenever the inputs are hidden.
 #[wasm_bindgen]
 pub fn set_login_fields(username: &str, password: &str, remember: bool) {
     let username = username.to_string();
@@ -846,6 +848,78 @@ pub fn set_login_fields(username: &str, password: &str, remember: bool) {
         ui.set_password(password.into());
         ui.set_remember_me(remember);
     });
+}
+
+/// The login form's HTML inputs (public/login-bridge.mjs): which one has keyboard focus and which one the
+/// pointer is over ("user", "pass" or ""), so the Slint boxes under them draw their focus halo and hover border.
+#[wasm_bindgen]
+pub fn set_login_pointer(focus: &str, hover: &str) {
+    let focus = login_field(focus);
+    let hover = login_field(hover);
+    with_ui(|ui| {
+        ui.set_login_focus(focus.into());
+        ui.set_login_hover(hover.into());
+    });
+}
+
+fn login_field(name: &str) -> &'static str {
+    match name {
+        "user" => "user",
+        "pass" => "pass",
+        _ => "",
+    }
+}
+
+/// Window pixels to two decimals; bridge.js snaps the inputs to whole pixels.
+fn px(value: f32) -> f32 {
+    if value.is_finite() {
+        (value * 100.).round() / 100.
+    } else {
+        0.
+    }
+}
+
+fn css_color(color: slint::Color) -> String {
+    format!(
+        "rgba({},{},{},{:.3})",
+        color.red(),
+        color.green(),
+        color.blue(),
+        f32::from(color.alpha()) / 255.
+    )
+}
+
+fn login_box(b: &LoginBox) -> serde_json::Value {
+    serde_json::json!({ "x": px(b.x), "y": px(b.y), "w": px(b.width), "h": px(b.height) })
+}
+
+/// The sign-in layer's report for the HTML login inputs (the `login-overlay` action, login-bridge.mjs `place`).
+fn login_overlay_json(o: &LoginOverlay) -> String {
+    let mut value = serde_json::json!({
+        "on": o.on,
+        "revealed": o.revealed,
+        "remember": o.remember,
+    });
+    if o.on {
+        let extra = serde_json::json!({
+            "enabled": o.enabled,
+            "user": login_box(&o.user),
+            "userText": login_box(&o.user_text),
+            "pass": login_box(&o.pass),
+            "passText": login_box(&o.pass_text),
+            "check": login_box(&o.check),
+            "submit": login_box(&o.submit),
+            "fontSize": px(o.font_size),
+            "ink": css_color(o.ink),
+            "placeholder": css_color(o.placeholder),
+            "selection": css_color(o.selection),
+            "accent": css_color(o.accent),
+        });
+        if let (Some(target), serde_json::Value::Object(fields)) = (value.as_object_mut(), extra) {
+            target.extend(fields);
+        }
+    }
+    value.to_string()
 }
 
 /// 0 = Auto (follows the browser), 1 = Light, 2 = Dark.
