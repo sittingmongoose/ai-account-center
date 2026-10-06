@@ -78,12 +78,14 @@ const MAX_TOTAL_ROWS = 100_000;
 /**
  * Append-only usage logs never gain in-window records after their last write,
  * so a file whose mtime predates the window cannot hold in-window events. The
- * small margin absorbs clock jitter between a record's own timestamp and the
- * write that flushed it. Skipping such files is a pure optimization: addEntry
- * already drops out-of-window records, so totals are unchanged while cold starts
- * read far less (Codex ~24.7 GB -> ~11.8 GB), so Analytics converges sooner.
+ * 24 h margin absorbs clock jitter between a record's own timestamp and the
+ * write that flushed it, timezone-naive timestamps some tools write, and
+ * mtimes from a NAS clock when a network share is added as an extra source.
+ * Skipping such files is a pure optimization: addEntry already drops
+ * out-of-window records, so totals are unchanged while cold starts read far
+ * less (Codex ~24.7 GB -> ~11.8 GB), so Analytics converges sooner.
  */
-const MTIME_SKIP_MARGIN_MS = 60_000;
+const MTIME_SKIP_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
@@ -628,15 +630,24 @@ export function aggregateRows(
 /**
  * Whether an oversized (> MAX_LINE_BYTES) line could carry a countable usage
  * record for the kind, so a skipped oversized line only blocks scan completion
- * when it may have held usage. Muse writes usage in small `model_completed`
- * events; its oversized lines are `context_projection_checkpoint`/retained
- * content records the parser never counts (cumulative, would double tokens), so
- * skipping them must not pin the whole activity partial forever (N9). Codex's
+ * when it may have held usage. Muse writes direct usage in small fixed-envelope
+ * `model_completed` events (~730 B, never oversized); its oversized lines are
+ * `context_projection_checkpoint`/retained content records the parser never
+ * counts (cumulative, would double tokens), so skipping them must not pin the
+ * whole activity partial forever (N9). But older lines can wrap a usage record
+ * in `children[].record_json`, and a `children` batch can be oversized, so an
+ * oversized line with a `children` key in its prefix stays honestly partial.
+ * (The checkpoint kind itself sits ~25 KB into the line, past a huge
+ * instructions string, so the prefix cannot match on kind directly.) Codex's
  * oversized lines are `response_item` conversation content, never token_count.
  * Claude/OMP can carry usage in a large assistant/message line, so stay honest.
  */
-function oversizedLineCarriesUsage(kind: ActivityKind, recordType: string | undefined): boolean {
-  if (kind === 'muse') return false;
+function oversizedLineCarriesUsage(
+  kind: ActivityKind,
+  recordType: string | undefined,
+  prefix: string
+): boolean {
+  if (kind === 'muse') return /"children"\s*:/.test(prefix);
   if (kind === 'codex') return recordType !== 'response_item';
   return true;
 }
@@ -741,7 +752,7 @@ async function readBatch(
             const recordType = prefix.match(
               /^\s*\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"([^"\\]+)"/
             );
-            if (oversizedLineCarriesUsage(kind, recordType?.[1])) value.skippedLines++;
+            if (oversizedLineCarriesUsage(kind, recordType?.[1], prefix)) value.skippedLines++;
             fragments = [];
           } else fragments.push(slice);
         }

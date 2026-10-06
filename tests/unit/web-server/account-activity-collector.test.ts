@@ -586,6 +586,35 @@ describe('muse oversized-line completion', () => {
     // input is netted of cache reads, as the muse parser does.
     expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 50);
   });
+
+  it('stays partial on an oversized children batch that may wrap usage, counting the rest', async () => {
+    // Older muse lines wrap a `model_completed` record in
+    // `children[].record_json`; such a batch can exceed MAX_LINE_BYTES, and
+    // dropping it silently would lose usage while the scan claims complete.
+    // The `children` key in the line prefix keeps the scan honestly partial
+    // while the small usage lines around it still count.
+    const sessionsDir = path.join(root, 'muse', 'sessions');
+    const sessDir = path.join(sessionsDir, '2026-10-01', 'sess-uuid');
+    fs.mkdirSync(sessDir, { recursive: true });
+    const at = Date.parse('2026-10-01T15:00:00Z');
+    const file = path.join(sessDir, 'session.jsonl');
+    const fd = fs.openSync(file, 'w');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 100, 20, 10, at)) + '\n');
+    fs.writeSync(fd, '{"record_type":"event","children":[{"record_json":"{\\"pad\\":\\"');
+    const padding = Buffer.alloc(1024 * 1024, 32);
+    for (let index = 0; index < 10; index++) fs.writeSync(fd, padding);
+    fs.writeSync(fd, '\\"}"}],"recorded_at":' + at + ',"id":"wrap-1"}\n');
+    fs.writeSync(fd, JSON.stringify(museUsage('muse-spark-1.3', 60, 10, 5, at + 60000)) + '\n');
+    fs.closeSync(fd);
+    const data = await collectAccountActivity(
+      { kind: 'muse', sessionsDir },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.skippedLines).toBe(1);
+    expect(data.scan?.complete).toBe(false);
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 50);
+  });
 });
 
 describe('mtime pre-filter skips files that cannot hold in-window events', () => {
@@ -645,6 +674,22 @@ describe('mtime pre-filter skips files that cannot hold in-window events', () =>
     expect(checkpoints()).toHaveLength(1);
   });
 
+  it('still reads a file written 12 h before the window (24 h margin)', async () => {
+    // Timezone-naive timestamps and NAS-clocked mtimes can lag the window by
+    // hours; the 24 h margin keeps such files readable while months-old logs
+    // are still skipped. A 60 s margin would skip this file and lose the event.
+    rollout(
+      'rollout-lagging.jsonl',
+      [meta(), model(), tokens(100, 20, 10, '2026-10-01T15:05:00Z')],
+      new Date(NOW - 31 * 86400000 - 12 * 3600000)
+    );
+    const data = await collect();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80);
+    expect(checkpoints()).toHaveLength(1);
+  });
+
   it('reports a complete empty scan (not unavailable) when every file predates the window', async () => {
     // A kind whose logs all predate the window has no in-window usage; the mtime
     // pre-filter drops every file, and the scan must complete empty rather than
@@ -701,5 +746,41 @@ describe('exact-duplicate session file dedup', () => {
     expect(data.scan?.complete).toBe(true);
     expect(data.eventCount).toBe(1);
     expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(100);
+  });
+
+  it('counts two same-size files with different content (no false dedup)', async () => {
+    // The exact-duplicate fingerprint is (size, head, tail): two files of the
+    // same byte size but different records must both count. Same-length
+    // session ids and token values keep the sizes equal.
+    const lineFor = (sessionId: string, input: number) =>
+      JSON.stringify({
+        type: 'assistant',
+        sessionId,
+        timestamp: '2026-10-01T15:00:00Z',
+        message: {
+          model: 'claude-sonnet-4-6',
+          usage: {
+            input_tokens: input,
+            output_tokens: 40,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 5,
+          },
+        },
+      }) + '\n';
+    const lineA = lineFor('claude-neg-aa', 100);
+    const lineB = lineFor('claude-neg-bb', 200);
+    expect(lineB.length).toBe(lineA.length);
+    expect(lineB).not.toBe(lineA);
+    fs.mkdirSync(path.join(root, 'claude', 'projects', 'projA', 'sess'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'claude', 'projects', 'projB', 'sess'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'claude', 'projects', 'projA', 'sess', 'a.jsonl'), lineA);
+    fs.writeFileSync(path.join(root, 'claude', 'projects', 'projB', 'sess', 'b.jsonl'), lineB);
+    const data = await collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(300);
   });
 });
