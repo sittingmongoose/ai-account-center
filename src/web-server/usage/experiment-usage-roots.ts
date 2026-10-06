@@ -181,6 +181,8 @@ export interface ExperimentRootsView {
   truncated: boolean;
   /** Kinds whose root cap dropped further finds. */
   capped: ExperimentKind[];
+  /** When the last round completed (0: never). */
+  completedAt: number;
 }
 
 /**
@@ -194,12 +196,14 @@ export function readExperimentRoots(
 ): ExperimentRootsView {
   const base = path.join(options.homeDir ?? os.homedir(), 'PM-Experiments');
   const file = readRootsFile(cacheDir, base);
-  if (!file) return { roots: emptyRootSet(), scanning: true, truncated: false, capped: [] };
+  if (!file)
+    return { roots: emptyRootSet(), scanning: true, truncated: false, capped: [], completedAt: 0 };
   return {
     roots: { ...file.roots, zcode: onePerDigest(file.roots.zcode, file.digests) },
     scanning: file.scanning,
     truncated: file.truncated,
     capped: file.capped,
+    completedAt: file.completedAt,
   };
 }
 

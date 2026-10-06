@@ -312,6 +312,48 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(() =>
       runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE, extraRoots: { zcode: many(2049) } })
     ).toThrow();
+    expect(() =>
+      runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE, zcodeRecords: 'yes' })
+    ).toThrow();
+  });
+
+  it('sends zcode rows as keyed records in records mode, never ids, and nothing when unchanged', () => {
+    writeFixtures({ muse: false });
+    const first = runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE, zcodeRecords: true });
+    expect(first.rows).toEqual([]);
+    expect(first.srows).toEqual([]);
+    const zrecs = first.zrecs as Record<string, unknown[][]>;
+    const lists = Object.values(zrecs);
+    expect(lists).toHaveLength(1);
+    expect(lists[0]).toHaveLength(1);
+    const [key, session, model, provider, started, input, output, cacheRead, cacheWrite] =
+      lists[0][0];
+    expect(key).toMatch(/^[0-9a-f]{16}$/);
+    expect(session).toMatch(/^[0-9a-f]{16}$/);
+    expect([model, provider, started, input, output, cacheRead, cacheWrite]).toEqual([
+      'GLM-5.3-Flash',
+      'zai',
+      Date.parse('2026-10-01T15:20:00Z'),
+      1000,
+      200,
+      9000,
+      100,
+    ]);
+    expect(JSON.stringify(first)).not.toContain('sess-9');
+    // Without records mode the response carries no records field.
+    expect(runHelper({ kinds: ['zcode'], minDateMs: MIN_DATE }).zrecs).toBeUndefined();
+    // Unchanged since the fingerprints sent: confirmed, no records again.
+    const kinds = first.kinds as Record<string, { fingerprints: unknown }>;
+    const again = runHelper({
+      kinds: ['zcode'],
+      minDateMs: MIN_DATE,
+      zcodeRecords: true,
+      fingerprints: { zcode: kinds.zcode.fingerprints },
+    });
+    expect(again.zrecs).toEqual({});
+    expect((again.kinds as Record<string, { fingerprints: object }>).zcode.fingerprints).toEqual(
+      kinds.zcode.fingerprints
+    );
   });
 
   it('scans saved extra roots alongside the defaults without leaking paths', () => {

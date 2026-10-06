@@ -17,7 +17,12 @@ import { USAGE_PROVIDER_ORDER } from './account-analytics-attribution';
 import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
-import { readExperimentRoots, type ExperimentRootSet } from '../usage/experiment-usage-roots';
+import {
+  EXPERIMENT_ROOTS_TTL_MS,
+  readExperimentRoots,
+  type ExperimentRootSet,
+  type ExperimentRootsView,
+} from '../usage/experiment-usage-roots';
 import { collectorConcurrency, runBounded } from '../usage/collector-concurrency';
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
@@ -481,10 +486,34 @@ function localRequestPlan(): {
   }
   // Experiment roots: what the background walk has found so far (a small cached file), read now so
   // these collectors start with the rest; the walk itself advances one slice in the background.
+  // Saved extra sources count as read roots too: experiment roots inside them are left to them,
+  // and Claude experiment copies are also checked against saved Claude sources.
+  const readNow = new Set(unique);
   try {
+    for (const source of readDashboardPreferences(ccsDir).usageLogSources) {
+      if (!source || source.host !== 'ubuntu') continue;
+      try {
+        if (source.tool === 'claude-code' && fs.statSync(source.path).isDirectory())
+          readNow.add(`claude:${fs.realpathSync(source.path)}`);
+        else if (source.tool === 'codex' && fs.existsSync(path.join(source.path, 'sessions')))
+          readNow.add(`codex:${fs.realpathSync(path.join(source.path, 'sessions'))}`);
+        else if (source.tool === 'muse' && fs.statSync(source.path).isDirectory())
+          readNow.add(`muse:${fs.realpathSync(source.path)}`);
+        else if (source.tool === 'zcode' && fs.statSync(source.path).isFile())
+          readNow.add(`zcode:${fs.realpathSync(source.path)}`);
+      } catch {
+        /* An unreadable saved source is skipped here as it is below. */
+      }
+    }
+  } catch {
+    /* Without prefs only the built-in roots count as read. */
+  }
+  let experimentView: ExperimentRootsView | null = null;
+  try {
+    experimentView = readExperimentRoots(activity.cacheDir);
     requests.push(
       ...experimentActivityRequests(
-        readExperimentRoots(activity.cacheDir).roots,
+        experimentView.roots,
         {
           projectsDir: claudeRoots[0],
           codexHome,
@@ -493,13 +522,13 @@ function localRequestPlan(): {
         },
         activity,
         path.join(ccsDir, 'cache'),
-        unique
+        readNow
       )
     );
   } catch {
     /* Without experiment roots the default roots still scan. */
   }
-  startExperimentRootsSlice(activity.cacheDir);
+  if (experimentView) startExperimentRootsSlice(activity.cacheDir, experimentView);
   const later = (async (): Promise<AccountAnalyticsActivityRequest[]> => {
     const discovered: AccountAnalyticsActivityRequest[] = [];
     try {
@@ -538,8 +567,10 @@ let experimentSliceRunning = false;
  * collection: the roots it finds are read from the next collection on, so the walk never delays
  * a collector or touches the event loop.
  */
-function startExperimentRootsSlice(cacheDir: string): void {
+function startExperimentRootsSlice(cacheDir: string, view: ExperimentRootsView): void {
   if (experimentSliceRunning) return;
+  // A completed round younger than its TTL needs no slice: no worker is spawned.
+  if (!view.scanning && Date.now() - view.completedAt <= EXPERIMENT_ROOTS_TTL_MS) return;
   experimentSliceRunning = true;
   void loadAccountAnalyticsWorker({ kind: 'experiment-roots', cacheDir })
     .catch(() => undefined)
@@ -550,8 +581,10 @@ function startExperimentRootsSlice(cacheDir: string): void {
 
 /**
  * Requests for the experiment roots found so far, one per tool, each reading only its experiment
- * roots and deduplicating against the tool's default root (collectExperimentActivity). A root that
- * no longer exists, or that resolves to (or inside) a root already read, is left out.
+ * roots and deduplicating against the tool's default roots (collectExperimentActivity). `scanned`
+ * holds `<kind>:<real path>` for every root the other requests read (built-in, instances, saved
+ * sources). An experiment root that no longer exists, or that resolves to (or inside) a root of
+ * its tool already read, is left out; every Claude root read is the Claude request's reference.
  */
 export function experimentActivityRequests(
   found: ExperimentRootSet,
@@ -560,41 +593,49 @@ export function experimentActivityRequests(
   cacheDir: string,
   scanned: Set<string>
 ): AccountAnalyticsActivityRequest[] {
-  const readRoots = [...scanned].map((key) => key.slice(key.indexOf(':') + 1));
-  const usable = (candidate: string, wantFile: boolean): string | null => {
-    try {
-      const stats = fs.statSync(candidate);
-      if (wantFile ? !stats.isFile() : !stats.isDirectory()) return null;
-      const real = fs.realpathSync(candidate);
-      const inside = readRoots.some(
-        (root) => real === root || real.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
-      );
-      return inside ? null : real;
-    } catch {
-      return null;
-    }
-  };
-  const pick = (list: string[], wantFile = false): string[] => {
+  const readRoots = (kind: string): string[] =>
+    [...scanned]
+      .filter((key) => key.startsWith(`${kind}:`))
+      .map((key) => key.slice(kind.length + 1));
+  const pick = (kind: string, list: string[], wantFile = false): string[] => {
+    const read = readRoots(kind);
     const kept = new Set<string>();
     for (const candidate of list) {
-      const real = usable(candidate, wantFile);
-      if (real) kept.add(real);
+      try {
+        const stats = fs.statSync(candidate);
+        if (wantFile ? !stats.isFile() : !stats.isDirectory()) continue;
+        const real = fs.realpathSync(candidate);
+        const inside = read.some(
+          (root) =>
+            real === root || real.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
+        );
+        if (!inside) kept.add(real);
+      } catch {
+        /* A root that is gone is skipped. */
+      }
     }
     return [...kept];
   };
   const requests: AccountAnalyticsActivityRequest[] = [];
-  const claude = pick(found.claude);
+  const claude = pick('claude', found.claude);
+  let projectsDir = defaults.projectsDir;
+  try {
+    projectsDir = fs.realpathSync(projectsDir);
+  } catch {
+    /* A missing default folder still names the request's cache. */
+  }
   if (claude.length)
     requests.push({
       provider: 'claude',
       request: {
         kind: 'claude',
-        projectsDir: defaults.projectsDir,
+        projectsDir,
         experimentRoots: claude,
+        referenceRoots: [...new Set([projectsDir, ...readRoots('claude')])],
         activity,
       },
     });
-  const codex = pick(found.codex);
+  const codex = pick('codex', found.codex);
   if (codex.length)
     requests.push({
       provider: 'codex',
@@ -606,13 +647,13 @@ export function experimentActivityRequests(
         activity,
       },
     });
-  const muse = pick(found.muse);
+  const muse = pick('muse', found.muse);
   if (muse.length)
     requests.push({
       provider: 'muse',
       request: { kind: 'muse', sessionsDir: defaults.sessionsDir, experimentRoots: muse, activity },
     });
-  const zcode = pick(found.zcode, true);
+  const zcode = pick('zcode', found.zcode, true);
   if (zcode.length)
     requests.push({
       provider: 'zcode',

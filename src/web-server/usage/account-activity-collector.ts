@@ -18,8 +18,10 @@ import {
 import { museSessionIdForFile, parseMuseUsageLine } from './muse-native-usage-collector';
 import {
   queryLocalZcodeUsage,
+  zcodeFileKey,
   type ZcodeFingerprint,
   type ZcodeHelperSessionRow,
+  type ZcodeRecord,
 } from './zcode-native-usage-collector';
 import { analyticsSessionKey } from './analytics-session-key';
 import { EXPERIMENT_CLAUDE_ROOT_DEPTH } from './experiment-usage-roots';
@@ -997,20 +999,13 @@ function sameZcodePrint(left: ZcodeFingerprint | undefined, right: ZcodeFingerpr
   );
 }
 
-/**
- * zcode databases through the helper. `dbPaths[0]` is the database the helper opens by default;
- * the rest ride along as extra databases in the same call (experiment zcode homes, already one
- * per content). `cacheName` keeps an experiment request's cache apart from the default one.
- */
 async function collectZcodeAccountActivity(
-  dbPaths: string[],
+  dbPath: string,
   options: AccountActivityScanOptions,
   directory: string,
-  deadline: number,
-  cacheName = dbPaths[0]
+  deadline: number
 ): Promise<UsageWorkerResult> {
-  const dbPath = dbPaths[0];
-  const cache = zcodeCachePath(directory, cacheName);
+  const cache = zcodeCachePath(directory, dbPath);
   const cached = loadZcodeCache(cache, options.minDate);
   let failed = 0;
   let truncated = false;
@@ -1018,16 +1013,12 @@ async function collectZcodeAccountActivity(
     try {
       const fresh = queryLocalZcodeUsage(dbPath, options.minDate, cached.fingerprints, {
         timeoutMs: Math.max(1000, deadline - Date.now()),
-        extraDbs: dbPaths.slice(1),
       });
       if (fresh.state === 'not_installed') throw new CCSError('Native log sources are unavailable');
-      // Experiment databases are many: one that cannot be read leaves the others' rows standing
-      // (its fingerprint stays unconfirmed, so it is tried again), and the scan says partial.
-      const experiment = cacheName !== dbPath;
-      if (fresh.state === 'error') failed++;
-      if (fresh.state === 'error' && !experiment) {
+      if (fresh.state === 'error') {
         // The database could not be read (for example mid-write): keep what
         // was read before, and say the scan is incomplete.
+        failed++;
       } else {
         truncated = fresh.truncated;
         const prior = cached.fingerprints;
@@ -1143,6 +1134,204 @@ async function collectZcodeAccountActivity(
   };
 }
 
+interface ZcodeExperimentCache {
+  version: 1;
+  minDate: number;
+  fingerprints: Record<string, ZcodeFingerprint>;
+  /** The default database's row keys: experiment copies of those rows never count. */
+  referenceKeys: string[];
+  /** Each experiment database's in-window rows, by its file key. */
+  records: Record<string, ZcodeRecord[]>;
+}
+/** Experiment zcode rows plus default-database keys stay well under this (about 2 MB today). */
+const MAX_ZCODE_EXPERIMENT_CACHE_BYTES = 32 * 1024 * 1024;
+
+function loadZcodeExperimentCache(file: string, minDate: number): ZcodeExperimentCache {
+  const blank: ZcodeExperimentCache = {
+    version: 1,
+    minDate,
+    fingerprints: {},
+    referenceKeys: [],
+    records: {},
+  };
+  try {
+    if (fs.statSync(file).size > MAX_ZCODE_EXPERIMENT_CACHE_BYTES) return blank;
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as ZcodeExperimentCache;
+    if (
+      value.version !== 1 ||
+      !Number.isFinite(value.minDate) ||
+      value.minDate > minDate ||
+      !value.fingerprints ||
+      typeof value.fingerprints !== 'object' ||
+      !Array.isArray(value.referenceKeys) ||
+      !value.records ||
+      typeof value.records !== 'object'
+    )
+      return blank;
+    for (const key of Object.keys(value.records))
+      value.records[key] = value.records[key].filter((record) => record[4] >= minDate);
+    return value;
+  } catch {
+    return blank;
+  }
+}
+
+/**
+ * Experiment zcode databases (experiment-usage-roots.ts), counted once per usage row however many
+ * databases hold a copy of it. The helper reads each new or changed database in records mode (one
+ * entry per in-window row, keyed by a digest of its id and content) together with the default
+ * database, whose row keys only exclude their copies. A database that cannot be read keeps its
+ * last good rows and fingerprint, so it is retried and the scan says partial; a database that is
+ * gone drops out.
+ */
+async function collectZcodeExperimentActivity(
+  dbPath: string,
+  experimentDbs: string[],
+  options: AccountActivityScanOptions,
+  directory: string,
+  deadline: number
+): Promise<UsageWorkerResult> {
+  const cache = path.join(directory, `${hash(`zcode-experiments:${dbPath}`)}.json`);
+  const cached = loadZcodeExperimentCache(cache, options.minDate);
+  const referenceKey = zcodeFileKey(dbPath);
+  const wanted = new Map<string, string>([[referenceKey, dbPath]]);
+  for (const db of experimentDbs) wanted.set(zcodeFileKey(db), db);
+  let failed = 0;
+  let truncated = false;
+  if (Date.now() < deadline) {
+    try {
+      const fresh = queryLocalZcodeUsage(dbPath, options.minDate, cached.fingerprints, {
+        timeoutMs: Math.max(1000, deadline - Date.now()),
+        extraDbs: experimentDbs,
+        records: true,
+      });
+      if (fresh.state === 'not_installed') throw new CCSError('Native log sources are unavailable');
+      truncated = fresh.truncated;
+      const prior = cached.fingerprints;
+      const next: Record<string, ZcodeFingerprint> = {};
+      for (const [key, print] of Object.entries(fresh.fingerprints))
+        if (wanted.has(key)) next[key] = print;
+      for (const [key, file] of wanted) {
+        if (key in next || !(key in prior)) continue;
+        // Not confirmed this call: cut by the deadline or a cap, or unreadable. Keep the last good
+        // rows while the database is still there (and say partial); drop a database that is gone.
+        if (truncated || fs.existsSync(file)) next[key] = prior[key];
+        if (!truncated && fs.existsSync(file)) failed++;
+      }
+      if (fresh.state === 'error' && failed === 0) failed++;
+      const records: Record<string, ZcodeRecord[]> = {};
+      let referenceKeys = cached.referenceKeys;
+      for (const key of Object.keys(next)) {
+        const unchanged = sameZcodePrint(prior[key], next[key]);
+        if (key === referenceKey) {
+          if (!unchanged || !(key in prior))
+            referenceKeys = (fresh.records?.[key] ?? []).map((record) => record[0]);
+        } else
+          records[key] =
+            unchanged && cached.records[key] ? cached.records[key] : (fresh.records?.[key] ?? []);
+      }
+      if (!(referenceKey in next)) referenceKeys = [];
+      cached.fingerprints = next;
+      cached.referenceKeys = referenceKeys;
+      cached.records = records;
+      cached.minDate = options.minDate;
+      const body = JSON.stringify(cached);
+      if (Buffer.byteLength(body) > MAX_ZCODE_EXPERIMENT_CACHE_BYTES)
+        throw new CCSError('Native checkpoint exceeds limit');
+      const temporary = `${cache}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, body, { mode: 0o600 });
+      fs.renameSync(temporary, cache);
+      fs.chmodSync(cache, 0o600);
+    } catch (error) {
+      if (error instanceof CCSError && error.message === 'Native log sources are unavailable')
+        throw error;
+      failed++;
+    }
+  }
+  // One copy per row: rows the default database holds never count; between experiment
+  // databases, the first in path order keeps a row.
+  const reference = new Set(cached.referenceKeys);
+  const chosen = new Map<string, ZcodeRecord>();
+  for (const db of [...experimentDbs].sort()) {
+    for (const record of cached.records[zcodeFileKey(db)] ?? []) {
+      if (reference.has(record[0]) || chosen.has(record[0])) continue;
+      chosen.set(record[0], record);
+    }
+  }
+  const rowMap = new Map<string, CompactEntry>();
+  const sessions = new Map<string, SessionAggregateRow>();
+  for (const [
+    ,
+    session,
+    model,
+    provider,
+    started,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+  ] of chosen.values()) {
+    const entry: RawUsageEntry = {
+      inputTokens: input,
+      outputTokens: output,
+      cacheCreationTokens: cacheWrite,
+      cacheReadTokens: cacheRead,
+      model,
+      sessionId: '',
+      timestamp: new Date(started).toISOString(),
+      projectPath: '',
+      target: 'zcode',
+      provider,
+    };
+    if (!addEntry(rowMap, entry, options.minDate)) failed++;
+    if (!session) continue;
+    const sessionKey = `${session}\0${model}\0${provider}`;
+    const aggregate = sessions.get(sessionKey) ?? {
+      sessionId: session,
+      model,
+      ...(provider ? { provider } : {}),
+      target: 'zcode',
+      firstMs: started,
+      lastMs: started,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      events: 0,
+    };
+    aggregate.firstMs = Math.min(aggregate.firstMs, started);
+    aggregate.lastMs = Math.max(aggregate.lastMs, started);
+    aggregate.inputTokens += input;
+    aggregate.outputTokens += output;
+    aggregate.cacheCreationTokens += cacheWrite;
+    aggregate.cacheReadTokens += cacheRead;
+    aggregate.events++;
+    sessions.set(sessionKey, aggregate);
+  }
+  const { hourly } = aggregateRows(
+    [...rowMap.values()].slice(0, MAX_TOTAL_ROWS),
+    'zcode-native',
+    'zcode'
+  );
+  const { session } = aggregateSessionAggregates([...sessions.values()], 'zcode-native');
+  return {
+    daily: [],
+    monthly: [],
+    hourly,
+    session,
+    eventCount: chosen.size,
+    scan: {
+      complete: !truncated && failed === 0,
+      completedFiles: failed === 0 ? experimentDbs.length : 0,
+      totalFiles: experimentDbs.length,
+      skippedLines: 0,
+      failedFiles: failed,
+      readBytes: 0,
+      unfinishedFiles: 0,
+    },
+  };
+}
+
 /** True when `small` is a byte prefix of `large`: the same head and the same bytes where `small` ends. */
 function isPrefixCopy(
   small: { file: string; stats: fs.Stats },
@@ -1240,11 +1429,59 @@ export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stat
   return dropped ? result : files;
 }
 
-/** The part of a log's path a copy keeps: the rollout name (Codex), `<session>/session.jsonl` (Muse). */
-function experimentCopyKey(kind: 'codex' | 'muse', file: string): string {
+const SESSION_UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+/**
+ * The session a Codex or Muse log belongs to, as its path names it: the conversation id that ends
+ * a rollout's name (Codex), the session folder (Muse). A copied or resumed log keeps it, so only
+ * default logs of the same session can hold copies of an experiment log's records.
+ */
+function experimentSessionOf(kind: 'codex' | 'muse', file: string): string {
   return kind === 'codex'
-    ? path.basename(file)
-    : `${path.basename(path.dirname(file))}/${path.basename(file)}`;
+    ? (SESSION_UUID.exec(path.basename(file))?.[1]?.toLowerCase() ?? path.basename(file))
+    : path.basename(path.dirname(file));
+}
+
+const LAST_RESULT_FILE = 'last-result.json';
+
+/** The last experiment result computed against a caught-up default root (see S2 below). */
+function loadLastResult(directory: string, minDate: number): UsageWorkerResult | null {
+  try {
+    const file = path.join(directory, LAST_RESULT_FILE);
+    if (fs.statSync(file).size > MAX_CACHE_BYTES) return null;
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as UsageWorkerResult;
+    if (!Array.isArray(value.hourly) || !Array.isArray(value.session)) return null;
+    const cutoff = new Date(minDate).toISOString();
+    return {
+      daily: [],
+      monthly: [],
+      hourly: value.hourly.filter(
+        (hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= minDate - 3_600_000
+      ),
+      session: value.session.filter((session) => session.lastActivity >= cutoff),
+      eventCount: Number.isSafeInteger(value.eventCount) ? value.eventCount : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveLastResult(directory: string, result: UsageWorkerResult): void {
+  try {
+    const body = JSON.stringify({
+      hourly: result.hourly,
+      session: result.session,
+      eventCount: result.eventCount,
+    });
+    if (Buffer.byteLength(body) > MAX_CACHE_BYTES) return;
+    const file = path.join(directory, LAST_RESULT_FILE);
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, body, { mode: 0o600 });
+    fs.renameSync(temporary, file);
+    fs.chmodSync(file, 0o600);
+  } catch {
+    /* The next caught-up scan saves again. */
+  }
 }
 
 /**
@@ -1254,12 +1491,15 @@ function experimentCopyKey(kind: 'codex' | 'muse', file: string): string {
  * - Files are read in `keyed` mode: each in-window record keeps a key (experimentRecordKey), and
  *   aggregation keeps one copy per key (the larger output wins: a Claude copy taken mid-response
  *   holds an earlier, smaller block). Byte-identical copies are skipped before reading.
- * - Against the default root: Claude reads the default projects folder in `keys` mode (its
- *   checkpoints live here, so the default request's own checkpoints and totals never change) and
- *   drops every experiment response whose message id it holds. Until that reference read is
- *   complete the request reports nothing, so a cold start never counts a copy. Codex and Muse
- *   drop an experiment log that is a byte prefix of the default log it copies (same rollout
- *   name, same `<session>/session.jsonl`); measured record overlap beyond file copies is zero.
+ * - Against the default roots, record by record: Claude reads every default Claude root the app
+ *   reads (`referenceRoots`: the projects folder, account instances, saved Claude sources) in
+ *   `keys` mode, with its checkpoints here, so the default requests' own checkpoints and totals
+ *   never change, and drops every experiment response whose message id it holds. Codex and Muse
+ *   read, the same way, only the default logs of the sessions an experiment log names, and drop
+ *   every record those hold, so a copy that kept growing still counts only its new records.
+ * - Until the reference reads have caught up (every file read to its last complete line) the
+ *   request repeats its last result computed against caught-up references, or reports nothing on
+ *   a first run, so a copy is never counted and the totals never dip for a refresh.
  * - The per-response collapse and the open-response rule (R2-1) apply exactly as in the default
  *   reader: readBatch is shared.
  */
@@ -1268,16 +1508,20 @@ async function collectExperimentActivity(
   options: AccountActivityScanOptions
 ): Promise<UsageWorkerResult> {
   const kind = request.kind;
-  const reference =
+  const primary =
     request.kind === 'claude'
       ? request.projectsDir
       : request.kind === 'codex'
         ? path.join(request.codexHome, 'sessions')
         : request.sessionsDir;
+  const references =
+    request.kind === 'claude' && request.referenceRoots?.length
+      ? request.referenceRoots
+      : [primary];
   const directory = path.join(
     options.cacheDir,
     'account-activity-v1',
-    hash(`experiments:${kind}:${reference}`)
+    hash(`experiments:${kind}:${primary}`)
   );
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
@@ -1315,34 +1559,23 @@ async function collectExperimentActivity(
   }
   const referenceFiles: Array<{ file: string; stats: fs.Stats }> = [];
   let referenceComplete = true;
-  if (fs.existsSync(reference)) {
+  const sessions =
+    kind === 'claude'
+      ? null
+      : new Set(experimentFiles.map((item) => experimentSessionOf(kind, item.file)));
+  for (const reference of references) {
+    if (!fs.existsSync(reference)) continue;
     const referenceIssues = { failed: 0 };
     const listed = filesUnder(reference, kind, referenceIssues, deadline, options.traversalLimits);
     if (referenceIssues.failed) referenceComplete = false;
-    if (kind === 'claude') statFiles(listed, referenceFiles, seen);
-    else {
-      // Codex/Muse: an experiment log that is a byte prefix of the default log it copies holds
-      // nothing new; only same-named logs are compared.
-      const byKey = new Map<string, string[]>();
-      for (const file of listed) {
-        const key = experimentCopyKey(kind, file);
-        byKey.set(key, [...(byKey.get(key) ?? []), file]);
-      }
-      for (let index = experimentFiles.length - 1; index >= 0; index--) {
-        const item = experimentFiles[index];
-        for (const candidate of byKey.get(experimentCopyKey(kind, item.file)) ?? []) {
-          try {
-            const large = { file: candidate, stats: fs.statSync(candidate) };
-            if (isPrefixCopy(item, large)) {
-              experimentFiles.splice(index, 1);
-              break;
-            }
-          } catch {
-            /* A vanished default log copies nothing. */
-          }
-        }
-      }
-    }
+    // Codex/Muse: only default logs of a session an experiment log names can hold its records.
+    statFiles(
+      sessions && kind !== 'claude'
+        ? listed.filter((file) => sessions.has(experimentSessionOf(kind, file)))
+        : listed,
+      referenceFiles,
+      seen
+    );
   }
   const scanned = dropExactDuplicateFiles(experimentFiles);
   scanned.sort(
@@ -1355,39 +1588,46 @@ async function collectExperimentActivity(
   let unfinishedFiles = 0;
   const referenceKeys = new Set<string>();
   const keyedByFile: Array<{ file: string; entries: KeyedEntry[] }> = [];
+  /** The file's checkpoint after this pass, and whether this pass read it (budget left). */
   const visit = (
     item: { file: string; stats: fs.Stats },
     mode: ReadMode
-  ): Checkpoint | undefined => {
+  ): { value: Checkpoint; read: boolean } | undefined => {
     const cache = path.join(directory, `${hash(`${mode}:${item.file}`)}.json`);
     try {
       const value = loadCheckpoint(cache, item.file, item.stats, options.minDate, kind, mode);
       const before = value.offset;
-      if (Date.now() < deadline) {
+      const read = Date.now() < deadline;
+      if (read) {
         readBatch(item.file, value, item.stats, kind, options, deadline, undefined, mode);
         if (value.offset !== before || !fs.existsSync(cache))
           saveCheckpoint(cache, item.file, value, item.stats);
       }
       readBytes += Math.max(0, value.offset - before);
       if (value.unfinishedTail) unfinishedFiles++;
-      return value;
+      return { value, read };
     } catch {
       failed++;
       return undefined;
     }
   };
   for (const item of referenceFiles) {
-    const value = visit(item, 'keys');
-    if (!value || !value.complete) referenceComplete = false;
-    if (!value) continue;
+    const visited = visit(item, 'keys');
+    // Caught up: read to the end, or to a last line still being written (a default transcript in
+    // use always has one; its response is not complete anywhere yet, so it has no copies).
+    if (!visited || !(visited.value.complete || (visited.read && visited.value.unfinishedTail)))
+      referenceComplete = false;
+    if (!visited) continue;
+    const value = visited.value;
     for (const key of value.keys ?? []) referenceKeys.add(key);
     // The open response is a response too: its copies must not count either.
     if (value.pendingClaude)
       referenceKeys.add(experimentRecordKey(kind, value.pendingClaude.entry));
   }
   for (const item of scanned) {
-    const value = visit(item, 'keyed');
-    if (!value) continue;
+    const visited = visit(item, 'keyed');
+    if (!visited) continue;
+    const value = visited.value;
     if (value.complete) completed++;
     skippedLines += value.skippedLines;
     const entries = [...(value.keyed ?? [])];
@@ -1410,9 +1650,14 @@ async function collectExperimentActivity(
   });
   const source =
     kind === 'codex' ? 'codex-native' : kind === 'muse' ? 'muse-native' : 'custom-parser';
-  if (kind === 'claude' && !referenceComplete) {
-    // Without every default-root key a copy cannot be told from new usage: report nothing yet.
-    return { daily: [], monthly: [], hourly: [], session: [], eventCount: 0, scan: scan(false) };
+  if (!referenceComplete) {
+    // Without every default key a copy cannot be told from new usage: repeat the last result
+    // computed against caught-up references (no dip), or nothing on a first run.
+    const last = loadLastResult(directory, options.minDate);
+    return {
+      ...(last ?? { daily: [], monthly: [], hourly: [], session: [], eventCount: 0 }),
+      scan: scan(false),
+    };
   }
   // One copy per record: the default root's keys first, then experiment files in path order,
   // the larger output winning between experiment copies.
@@ -1431,7 +1676,7 @@ async function collectExperimentActivity(
   const rows = [...rowMap.values()].slice(0, MAX_TOTAL_ROWS);
   if (capped || rowMap.size > MAX_TOTAL_ROWS) failed++;
   const { hourly, session } = aggregateRows(rows, source, kind);
-  return {
+  const result: UsageWorkerResult = {
     daily: [],
     monthly: [],
     hourly,
@@ -1445,6 +1690,8 @@ async function collectExperimentActivity(
         referenceComplete
     ),
   };
+  saveLastResult(directory, result);
+  return result;
 }
 
 /** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
@@ -1482,14 +1729,14 @@ export async function collectAccountActivity(
   const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
   if (request.kind === 'zcode')
     return request.experimentDbs
-      ? collectZcodeAccountActivity(
+      ? collectZcodeExperimentActivity(
+          request.dbPath,
           request.experimentDbs,
           options,
           directory,
-          deadline,
-          `experiments:${request.dbPath}`
+          deadline
         )
-      : collectZcodeAccountActivity([request.dbPath], options, directory, deadline);
+      : collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
   const issues = { failed: 0 };
   const files: Array<{ file: string; stats: fs.Stats }> = [];
   // Whether traversal saw any candidate file at all, before the mtime pre-filter

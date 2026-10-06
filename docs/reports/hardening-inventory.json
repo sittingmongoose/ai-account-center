@@ -1,14 +1,14 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1172,
+    "totalOccurrences": 1188,
     "filesAffected": 119,
-    "hotpathOccurrences": 541,
+    "hotpathOccurrences": 557,
     "hotpathFilesAffected": 68,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 35,
+        "count": 46,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -26,7 +26,7 @@
       },
       {
         "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 30,
+        "count": 35,
         "calls": [
           "chmodSync",
           "existsSync",
@@ -214,6 +214,24 @@
         "markers": []
       },
       {
+        "file": "src/web-server/usage/account-activity-collector.ts",
+        "count": 46,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "existsSync",
+          "mkdirSync",
+          "opendirSync",
+          "openSync",
+          "readFileSync",
+          "readSync",
+          "renameSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/cliproxy/accounts/__tests__/account-registry-integrity.test.ts",
         "count": 45,
         "calls": [
@@ -246,26 +264,8 @@
         "markers": []
       },
       {
-        "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 35,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "existsSync",
-          "mkdirSync",
-          "opendirSync",
-          "openSync",
-          "readFileSync",
-          "readSync",
-          "renameSync",
-          "statSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 30,
+        "count": 35,
         "calls": [
           "chmodSync",
           "existsSync",
@@ -522,16 +522,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 644,
-      "typedThrows": 144,
+      "totalThrows": 649,
+      "typedThrows": 149,
       "plainThrows": 72,
       "otherThrows": 428,
-      "adoptionRatio": 0.2236,
+      "adoptionRatio": 0.2296,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 288,
-          "typed": 82,
+          "count": 293,
+          "typed": 87,
           "plain": 10
         },
         {
@@ -756,11 +756,11 @@
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 1607
+          "loc": 1854
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1357
+          "loc": 1398
         },
         {
           "file": "src/web-server/model-pricing.ts",
