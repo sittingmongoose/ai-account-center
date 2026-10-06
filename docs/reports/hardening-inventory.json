@@ -758,7 +758,7 @@
         },
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 1225
+          "loc": 1240
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
