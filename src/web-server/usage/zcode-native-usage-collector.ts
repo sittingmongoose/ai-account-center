@@ -1,5 +1,6 @@
 /** zcode usage: local queries run through the packaged analytics helper. */
 import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -70,13 +71,45 @@ export interface ZcodeFingerprint {
   walMtimeMs?: number;
 }
 
+/**
+ * One in-window usage row in records mode: [row key, session key, model, provider, started_at ms,
+ * net input, output, cache read, cache write]. Keys are digests computed by the helper.
+ */
+export type ZcodeRecord = [string, string, string, string, number, number, number, number, number];
+
 export interface ZcodeHelperResult {
-  /** `error`: the database exists but could not be read; nothing was confirmed. */
+  /** `error`: a database exists but could not be read; it was not confirmed. */
   state: 'ok' | 'not_installed' | 'error';
   fingerprints: Record<string, ZcodeFingerprint>;
   rows: ZcodeHelperRow[];
   sessions: ZcodeHelperSessionRow[];
   truncated: boolean;
+  /** Records mode only: the rows of each new or changed database, by its file key. */
+  records?: Record<string, ZcodeRecord[]>;
+}
+
+function isZcodeRecord(value: unknown): value is ZcodeRecord {
+  if (!Array.isArray(value) || value.length !== 9) return false;
+  const [key, session, model, provider, ...numbers] = value as unknown[];
+  return (
+    typeof key === 'string' &&
+    /^[0-9a-f]{16}$/.test(key) &&
+    typeof session === 'string' &&
+    session.length <= 64 &&
+    typeof model === 'string' &&
+    model.length > 0 &&
+    model.length <= 256 &&
+    typeof provider === 'string' &&
+    provider.length <= 128 &&
+    numbers.every((item) => typeof item === 'number' && Number.isFinite(item) && item >= 0)
+  );
+}
+
+/** The helper's file key for a zcode database (`_filekey` in analytics_usage_remote.py). */
+export function zcodeFileKey(dbPath: string): string {
+  return createHash('sha256')
+    .update(`zcode\0${path.resolve(dbPath)}`)
+    .digest('hex');
 }
 
 function isRow(value: unknown): value is ZcodeHelperRow {
@@ -143,8 +176,10 @@ export function queryLocalZcodeUsage(
     pythonPath?: string;
     homeDir?: string;
     timeoutMs?: number;
-    /** More databases read in the same call (experiment zcode homes); copies are already dropped. */
+    /** More databases read in the same call (experiment zcode homes). */
     extraDbs?: string[];
+    /** Per-row records instead of hourly and session rows (experiment databases). */
+    records?: boolean;
   } = {}
 ): ZcodeHelperResult {
   const helper = analyticsRemoteHelperPath();
@@ -158,6 +193,7 @@ export function queryLocalZcodeUsage(
     immutableSqlite: false,
     fingerprints: { zcode: fingerprints },
     ...(options.extraDbs?.length ? { extraRoots: { zcode: options.extraDbs } } : {}),
+    ...(options.records ? { zcodeRecords: true } : {}),
     deadlineMs: Math.min(20_000, Math.max(1000, (options.timeoutMs ?? 12_000) - 500)),
   });
   const output = execFileSync(python, [helper], {
@@ -178,6 +214,7 @@ export function queryLocalZcodeUsage(
     kinds?: { zcode?: { state?: string; fingerprints?: Record<string, unknown> } };
     rows?: unknown[];
     srows?: unknown[];
+    zrecs?: unknown;
     truncated?: boolean;
   };
   const kind = response?.kinds?.zcode;
@@ -203,11 +240,27 @@ export function queryLocalZcodeUsage(
           : {}),
       };
   }
+  let records: Record<string, ZcodeRecord[]> | undefined;
+  if (options.records) {
+    records = {};
+    const raw = response.zrecs;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+      throw new CCSError('Analytics helper result is invalid.');
+    let total = 0;
+    for (const [key, list] of Object.entries(raw as Record<string, unknown>)) {
+      if (!/^[0-9a-f]{64}$/.test(key) || !Array.isArray(list) || !list.every(isZcodeRecord))
+        throw new CCSError('Analytics helper result is invalid.');
+      total += list.length;
+      if (total > 100_000) throw new CCSError('Analytics helper result is invalid.');
+      records[key] = list;
+    }
+  }
   return {
     state: kind.state,
     fingerprints: prints,
     rows,
     sessions,
     truncated: response.truncated === true,
+    ...(records ? { records } : {}),
   };
 }

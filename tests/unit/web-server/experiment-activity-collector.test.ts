@@ -148,6 +148,46 @@ describe('Claude experiment roots', () => {
     expect(total(data, 'outputTokens')).toBe(3);
   });
 
+  it('checks copies against every default Claude root, account instances included (S1)', async () => {
+    put('claude/projects/p/s.jsonl', [transcriptLine('m1', 10)]);
+    // A response stored under an account instance, and its experiment copy.
+    put('instances/work/projects/p/t.jsonl', [transcriptLine('inst-1', 30)]);
+    put('exp/jobs/J1/sessions/t.jsonl', [transcriptLine('inst-1', 30), transcriptLine('new-2', 4)]);
+    const data = await collectAccountActivity(
+      {
+        kind: 'claude',
+        projectsDir: projects(),
+        experimentRoots: [path.join(root, 'exp/jobs/J1/sessions')],
+        referenceRoots: [projects(), path.join(root, 'instances/work/projects')],
+      },
+      { minDate, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(total(data, 'outputTokens')).toBe(4);
+  });
+
+  it('keeps the last good totals while the default root catches up, never a dip (S2)', async () => {
+    const original = put('claude/projects/p/s.jsonl', [transcriptLine('m1', 10)]);
+    put('exp/a/grader/stream.jsonl', [streamLine('new-1', 40)]);
+    const roots = [path.join(root, 'exp/a/grader')];
+    let data = await experiment(roots);
+    expect(data.scan?.complete).toBe(true);
+    expect(total(data, 'outputTokens')).toBe(40);
+    // A default transcript in use ends in a half-written line: still caught up, still counted.
+    fs.appendFileSync(original, JSON.stringify(transcriptLine('m2', 5)).slice(0, 40));
+    data = await experiment(roots);
+    expect(data.eventCount).toBe(1);
+    expect(total(data, 'outputTokens')).toBe(40);
+    // The default root grows faster than one pass can read: the last good totals stand.
+    const more = Array.from({ length: 30 }, (_, index) => transcriptLine(`b${index}`, 1));
+    fs.writeFileSync(original, jsonl([transcriptLine('m1', 10), ...more]));
+    data = await experiment(roots, 'cache', 1024);
+    expect(data.scan?.complete).toBe(false);
+    expect(data.eventCount).toBe(1);
+    expect(total(data, 'outputTokens')).toBe(40);
+  });
+
   it('reads a Claude root two levels deep (session subagents) and no deeper, without failing', async () => {
     put('exp/a/sessions/s.jsonl', [transcriptLine('m1', 1)]);
     put('exp/a/sessions/s/subagents/agent-1.jsonl', [transcriptLine('m2', 2)]);
@@ -213,6 +253,75 @@ describe('Codex and Muse experiment roots', () => {
     expect(data.eventCount).toBe(2);
     expect(total(data, 'inputTokens')).toBe(250);
     expect(total(data, 'outputTokens')).toBe(30);
+  });
+
+  it('counts a continued copy of a default Codex session only for its new records (S3)', async () => {
+    const day = 'sessions/2026/10/01';
+    const id = '01a0f2a8-a754-7233-903b-569c995cf226';
+    const turn = { type: 'turn_context', payload: { model: 'gpt-6-sol' } };
+    const shared = [
+      codexMeta(id),
+      turn,
+      codexTokens(100, 10, '2026-10-01T14:00:00Z'),
+      codexTokens(150, 20, '2026-10-01T14:10:00Z'),
+    ];
+    put(`codex/${day}/rollout-2026-10-01T14-00-00-${id}.jsonl`, shared);
+    // The experiment copy was continued after copying, under another name.
+    put(`exp/a/private/codex-home/${day}/rollout-2026-10-01T15-00-00-${id}.jsonl`, [
+      ...shared,
+      codexTokens(400, 25, '2026-10-01T15:00:00Z'),
+    ]);
+    const data = await collectAccountActivity(
+      {
+        kind: 'codex',
+        codexHome: path.join(root, 'codex'),
+        cacheDir: path.join(root, 'cache'),
+        experimentRoots: [path.join(root, 'exp/a/private/codex-home/sessions')],
+      },
+      { minDate, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(total(data, 'inputTokens')).toBe(250);
+    expect(total(data, 'outputTokens')).toBe(5);
+  });
+
+  it('counts a continued copy of a default Muse session only for its new records (S3)', async () => {
+    const at = Date.parse('2026-10-01T15:00:00Z');
+    const usage = (n: number) => ({
+      record_type: 'event',
+      recorded_at: at + n * 1000,
+      id: `rec-${n}`,
+      payload: {
+        event: {
+          kind: 'model_completed',
+          model: 'muse-spark-1.3',
+          usage: {
+            input_tokens: 100,
+            output_tokens: n,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+          },
+        },
+      },
+    });
+    put('muse/sessions/2026/10/01/01a0-sess/session.jsonl', [usage(1), usage(2)]);
+    put('exp/a/private/muse-data/sessions/2026/10/01/01a0-sess/session.jsonl', [
+      usage(1),
+      usage(2),
+      usage(7),
+    ]);
+    const data = await collectAccountActivity(
+      {
+        kind: 'muse',
+        sessionsDir: path.join(root, 'muse', 'sessions'),
+        experimentRoots: [path.join(root, 'exp/a/private/muse-data/sessions')],
+      },
+      { minDate, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(total(data, 'outputTokens')).toBe(7);
   });
 
   it('counts a Muse session kept in a private home and its native copy once', async () => {
@@ -281,6 +390,54 @@ describe('zcode experiment databases', () => {
     return file;
   }
 
+  const scanZcode = (dbPath: string, experimentDbs: string[]) =>
+    collectAccountActivity(
+      { kind: 'zcode', dbPath, experimentDbs },
+      { minDate, cacheDir: path.join(root, 'cache') }
+    );
+
+  it('counts rows shared by continued copies once, default database rows never (S3)', async () => {
+    const defaultDb = database('zcode/cli/db/db.sqlite', [7, 8]);
+    // An experiment home started from a copy of the default database, then kept running.
+    const copy = path.join(root, 'exp/a/zc/cli/db/db.sqlite');
+    fs.mkdirSync(path.dirname(copy), { recursive: true });
+    fs.copyFileSync(defaultDb, copy);
+    database('exp/a/zc/cli/db/db.sqlite', [50]);
+    // A second experiment database copied from the first, then continued too.
+    const second = path.join(root, 'exp/b/zc/cli/db/db.sqlite');
+    fs.mkdirSync(path.dirname(second), { recursive: true });
+    fs.copyFileSync(copy, second);
+    database('exp/b/zc/cli/db/db.sqlite', [600]);
+    const data = await scanZcode(defaultDb, [copy, second]);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    expect(total(data, 'inputTokens')).toBe(650);
+  });
+
+  it('keeps the last good rows of a database that cannot be read, and says partial (S4)', async () => {
+    const first = database('exp/a/zc/cli/db/db.sqlite', [100]);
+    const second = database('exp/b/zc/cli/db/db.sqlite', [20]);
+    const defaultDb = path.join(root, 'zcode.sqlite');
+    let data = await scanZcode(defaultDb, [first, second]);
+    expect(total(data, 'inputTokens')).toBe(120);
+    // The second database is rewritten unreadable (a changed, corrupt file).
+    const good = fs.readFileSync(second);
+    fs.writeFileSync(second, Buffer.alloc(good.length + 4096, 7));
+    data = await scanZcode(defaultDb, [first, second]);
+    expect(data.scan?.complete).toBe(false);
+    expect(total(data, 'inputTokens')).toBe(120);
+    // Readable again: read afresh, complete.
+    fs.writeFileSync(second, good);
+    database('exp/b/zc/cli/db/db.sqlite', [3]);
+    data = await scanZcode(defaultDb, [first, second]);
+    expect(data.scan?.complete).toBe(true);
+    expect(total(data, 'inputTokens')).toBe(123);
+    // A database that is gone drops out.
+    fs.rmSync(second);
+    data = await scanZcode(defaultDb, [first, second]);
+    expect(total(data, 'inputTokens')).toBe(100);
+  });
+
   it('keeps each database rows apart, so a change to one never drops or doubles another', async () => {
     const first = database('exp/a/zc/cli/db/db.sqlite', [100]);
     const second = database('exp/b/zc/cli/db/db.sqlite', [20]);
@@ -341,7 +498,11 @@ describe('experiment activity requests', () => {
       new Set([`claude:${claudeDefault}`])
     );
     expect(requests.map((entry) => entry.provider)).toEqual(['claude', 'codex', 'muse', 'zcode']);
-    expect(requests[0].request).toMatchObject({ kind: 'claude', experimentRoots: [jobs] });
+    expect(requests[0].request).toMatchObject({
+      kind: 'claude',
+      experimentRoots: [jobs],
+      referenceRoots: [claudeDefault],
+    });
     expect(requests[1].request).toMatchObject({ kind: 'codex', experimentRoots: [codexRoot] });
     expect(requests[2].request).toMatchObject({ kind: 'muse', experimentRoots: [museRoot] });
     expect(requests[3].request).toMatchObject({ kind: 'zcode', experimentDbs: [db] });

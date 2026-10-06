@@ -45,6 +45,8 @@ export type UsageWorkerRequest =
       kind: 'claude';
       projectsDir: string;
       experimentRoots?: string[];
+      /** Experiment requests: every default Claude root, whose responses' copies never count. */
+      referenceRoots?: string[];
       activity?: AccountActivityScanOptions;
     }
   | {

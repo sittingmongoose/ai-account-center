@@ -30,6 +30,15 @@ Response:
 Only files whose fingerprint is new or changed contribute rows; the caller
 merges rows by filekey and drops rows whose filekey disappeared.
 
+"zcodeRecords": true (local experiment databases only, never sent to a remote
+host) replaces zcode's hourly and session rows with one entry per in-window
+usage row of each new or changed database, so the server can count a row once
+however many copies of its database exist:
+  "zrecs": {"<filekey>": [["<row key>", "<session key>", "<model>",
+             "<provider>", <started_at ms>, i, o, cr, cw], ...]}
+The row key is sha256 of the row's id and content, truncated to 16 hex
+characters; ids, like session ids, never leave the host.
+
 "s" is sha256("aac-session-v1:<kind>:<session id>") truncated to 16 hex
 characters: the same key the server derives from its own local readers, so one
 session groups across hosts and the id itself never leaves this one. A kind
@@ -73,6 +82,9 @@ MAX_REQUEST_BYTES = 8 * 1024 * 1024
 # (one per content, experiment-usage-roots.ts), each read through its own fingerprint.
 EXTRA_ROOTS_MAX = 16
 EXTRA_ZCODE_DBS_MAX = 2048
+# zcodeRecords: row entries one response carries (about 110 bytes each); past it the scan
+# says truncated and the unconfirmed databases are read on the next call.
+MAX_ZRECS = 60000
 # Walk of one session root (the server collector's per-root ceilings).
 WALK_MAX_DIRS = 10000
 WALK_MAX_ENTRIES = 100000
@@ -267,6 +279,10 @@ class Collector(object):
         self.discovery_truncated = False
         self.wal_unread = False
         self.files_seen = 0
+        # zcodeRecords mode: per-row entries by database filekey instead of zcode rows.
+        self.zcode_records = False
+        self.zrecs = {}
+        self.zrec_count = 0
 
     def expired(self):
         return time.monotonic() >= self.deadline
@@ -1349,6 +1365,8 @@ def _scan_zcode_db(collector, db_path, immutable):
         db_path.replace("?", "%3F").replace("#", "%23"),
         "&immutable=1" if immutable else "",
     )
+    if collector.zcode_records:
+        return _scan_zcode_records(collector, filekey, uri)
     try:
         connection = sqlite3.connect(uri, uri=True, timeout=5.0)
     except sqlite3.Error:
@@ -1523,6 +1541,71 @@ def _scan_zcode_db(collector, db_path, immutable):
     return "ok"
 
 
+def _scan_zcode_records(collector, filekey, uri):
+    """zcodeRecords mode: one entry per in-window usage row, keyed by a digest of the row's id
+    and content, so a row copied into several databases (copied or continued zcode homes) is
+    counted once by the server. Hashed keys, model names and integers only."""
+    if collector.expired():
+        collector.truncated = True
+        return "ok"
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+    except sqlite3.Error:
+        return "error"
+    try:
+        cursor = connection.cursor()
+        columns = [row[1] for row in cursor.execute('PRAGMA table_info("model_usage")')]
+        cursor.execute(
+            "SELECT %s, %s, model_id, provider_id, started_at, input_tokens, output_tokens,"
+            " cache_read_input_tokens, cache_creation_input_tokens"
+            " FROM model_usage WHERE started_at >= ?"
+            % (
+                # A copied database keeps its row ids (and rowids): the key a copy shares.
+                "id" if "id" in columns else "rowid",
+                "session_id" if "session_id" in columns else "NULL",
+            ),
+            (int(collector.min_date_ms),),
+        )
+        found = cursor.fetchall()
+    except sqlite3.Error:
+        return "error"
+    finally:
+        try:
+            connection.close()
+        except sqlite3.Error:
+            pass
+    records = []
+    for row in found:
+        model = _clean_model(row[2])
+        started = row[4]
+        if model is None or not isinstance(started, int) or isinstance(started, bool):
+            continue
+        if started < collector.min_date_ms or _hour_label(started, collector.now_ms) is None:
+            continue
+        sums = [_non_negative_number(value or 0) for value in row[5:9]]
+        if any(value is None for value in sums):
+            continue
+        sums = [int(value) for value in sums]
+        row_id = row[0] if isinstance(row[0], (str, int)) and not isinstance(row[0], bool) else None
+        session_id = row[1] if isinstance(row[1], str) else None
+        identity = json.dumps([row_id, session_id, model, started] + sums)
+        key = hashlib.sha256(("zcode-row:" + identity).encode("utf-8")).hexdigest()[:16]
+        provider = _clean_provider(row[3]) or ""
+        session = _session_key("zcode", session_id) or ""
+        # input_tokens includes cache reads (same convention as the hourly rows).
+        records.append(
+            [key, session, model, provider, started, max(0, sums[0] - sums[2])] + sums[1:4]
+        )
+    if collector.zrec_count + len(records) > MAX_ZRECS:
+        # Left unconfirmed: the next call reads it once the confirmed ones send nothing.
+        collector.truncated = True
+        return "ok"
+    collector.zrecs[filekey] = records
+    collector.zrec_count += len(records)
+    collector.confirm_file("zcode", filekey)
+    return "ok"
+
+
 def _collect_zcode(collector, home, env, immutable, extra=()):
     override = env.get("ZCODE_DB_PATH")
     if override and os.path.isabs(os.path.expanduser(override)):
@@ -1604,6 +1687,9 @@ def _read_request():
         )
     ):
         _fail("request.extraRoots must map kinds to absolute paths")
+    zcode_records = request.get("zcodeRecords", False)
+    if not isinstance(zcode_records, bool):
+        _fail("request.zcodeRecords must be a boolean")
     deadline_ms = request.get("deadlineMs", 20000)
     if (
         isinstance(deadline_ms, bool)
@@ -1619,6 +1705,7 @@ def _read_request():
         "fingerprints",
         "extraRoots",
         "deadlineMs",
+        "zcodeRecords",
     }
     if any(key not in allowed for key in request):
         _fail("request has unknown fields")
@@ -1631,6 +1718,7 @@ def _read_request():
         fingerprints,
         extra_roots,
         float(deadline_ms) / 1000.0,
+        zcode_records,
     )
 
 
@@ -1662,11 +1750,14 @@ def _lower_priority():
 
 
 def main():
-    kinds, min_date_ms, immutable, fingerprints, extra_roots, budget = _read_request()
+    kinds, min_date_ms, immutable, fingerprints, extra_roots, budget, zcode_records = (
+        _read_request()
+    )
     _lower_priority()
     home = _home()
     env = dict(os.environ)
     collector = Collector(min_date_ms, time.monotonic() + budget, fingerprints, budget)
+    collector.zcode_records = zcode_records
     states = {}
     # Kinds whose own scan a cap or the deadline cut short: their numbers are
     # partial, unlike kinds that finished before a later kind hit a cap.
@@ -1706,6 +1797,9 @@ def main():
         collector.srows = {
             key: srow for key, srow in collector.srows.items() if srow["f"] in confirmed
         }
+        collector.zrecs = {
+            key: records for key, records in collector.zrecs.items() if key in confirmed
+        }
     kind_entries = {}
     for kind in kinds:
         # A kind the deadline skipped was never visited: "pending", never a
@@ -1732,6 +1826,8 @@ def main():
             key=lambda srow: (srow["z"], srow["k"], srow["s"], srow["m"]),
         ),
     }
+    if collector.zcode_records:
+        response["zrecs"] = collector.zrecs
     sys.stdout.write(json.dumps(response))
 
 

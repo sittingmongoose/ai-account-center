@@ -28,7 +28,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  'bf67aa3aec164088f6698d7a1a7720a1070a5af963ac1655233465495adcec95';
+  '42d759dcead5506bf676ac09cf7305994d474994578a3b26afcfb171b189e700';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
