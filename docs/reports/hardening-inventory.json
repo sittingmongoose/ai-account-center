@@ -1,11 +1,29 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1142,
+    "totalOccurrences": 1145,
     "filesAffected": 116,
-    "hotpathOccurrences": 511,
+    "hotpathOccurrences": 514,
     "hotpathFilesAffected": 65,
     "topHotpathFiles": [
+      {
+        "file": "src/web-server/usage/account-activity-collector.ts",
+        "count": 32,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "existsSync",
+          "mkdirSync",
+          "opendirSync",
+          "openSync",
+          "readFileSync",
+          "readSync",
+          "renameSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
       {
         "file": "src/management/shared-manager/diverged-file-adopter.ts",
         "count": 29,
@@ -22,24 +40,6 @@
           "renameSync",
           "statSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 29,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "existsSync",
-          "mkdirSync",
-          "opendirSync",
-          "openSync",
-          "readFileSync",
-          "readSync",
-          "renameSync",
-          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -246,6 +246,24 @@
         "markers": []
       },
       {
+        "file": "src/web-server/usage/account-activity-collector.ts",
+        "count": 32,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "existsSync",
+          "mkdirSync",
+          "opendirSync",
+          "openSync",
+          "readFileSync",
+          "readSync",
+          "renameSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/management/shared-manager/diverged-file-adopter.ts",
         "count": 29,
         "calls": [
@@ -261,24 +279,6 @@
           "renameSync",
           "statSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 29,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "existsSync",
-          "mkdirSync",
-          "opendirSync",
-          "openSync",
-          "readFileSync",
-          "readSync",
-          "renameSync",
-          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -755,12 +755,12 @@
       "countOver600": 20,
       "topOver400": [
         {
-          "file": "src/web-server/model-pricing.ts",
-          "loc": 1322
+          "file": "src/web-server/usage/account-activity-collector.ts",
+          "loc": 1629
         },
         {
-          "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 1260
+          "file": "src/web-server/model-pricing.ts",
+          "loc": 1322
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",

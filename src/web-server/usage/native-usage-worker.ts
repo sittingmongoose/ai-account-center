@@ -10,11 +10,26 @@ import {
 } from './data-aggregator';
 import { scanCodexNativeUsageEntries } from './codex-native-usage-collector';
 import { scanDroidNativeUsageEntries } from './droid-native-usage-collector';
-import { collectAccountActivity } from './account-activity-collector';
+import { collectAccountActivity, collectCodexPartition } from './account-activity-collector';
 import { lowerCollectorThreadPriority } from './collector-concurrency';
 import type { UsageWorkerRequest, UsageWorkerResponse } from './worker-client';
 
 async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerResponse> {
+  // A fanned-out codex shard: read only the assigned files and hand the
+  // per-file outcomes back for the parent's merge. Only `partitionFiles`
+  // carries meaning here; the aggregate fields stay empty.
+  if (request.kind === 'codex' && request.activity && request.partition)
+    return {
+      ok: true,
+      data: {
+        daily: [],
+        monthly: [],
+        hourly: [],
+        session: [],
+        eventCount: 0,
+        partitionFiles: await collectCodexPartition(request.partition, request.activity),
+      },
+    };
   if (
     (request.kind === 'claude' ||
       request.kind === 'codex' ||

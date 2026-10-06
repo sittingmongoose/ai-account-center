@@ -6,9 +6,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1142 |
+| Sync fs occurrences (all) | 1145 |
 | Sync fs files affected (all) | 116 |
-| Sync fs occurrences (runtime hotpaths) | 511 |
+| Sync fs occurrences (runtime hotpaths) | 514 |
 | Sync fs files affected (runtime hotpaths) | 65 |
 | Legacy shim markers | 198 |
 | Legacy shim files affected | 75 |
@@ -17,8 +17,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | Sync Calls | API Names |
 |---|---:|---|
+| `src/web-server/usage/account-activity-collector.ts` | 32 | chmodSync, closeSync, existsSync, mkdirSync, opendirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync |
 | `src/management/shared-manager/diverged-file-adopter.ts` | 29 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync |
-| `src/web-server/usage/account-activity-collector.ts` | 29 | chmodSync, closeSync, existsSync, mkdirSync, opendirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync |
 | `src/web-server/services/account-analytics-activity.ts` | 28 | chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync |
 | `src/management/shared-manager/migrations.ts` | 25 | copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
@@ -86,8 +86,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | LOC |
 |---|---:|
+| `src/web-server/usage/account-activity-collector.ts` | 1629 |
 | `src/web-server/model-pricing.ts` | 1322 |
-| `src/web-server/usage/account-activity-collector.ts` | 1260 |
 | `src/web-server/services/account-analytics-activity.ts` | 1244 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1057 |
