@@ -32,6 +32,13 @@ const CONFIG_SUBCOMMAND_ROUTES: readonly NamedCommandRoute[] = [
       await handleConfigAuthCommand(args);
     },
   },
+  {
+    name: 'usage-hub',
+    handle: async (args) => {
+      const { handleUsageHubCommand } = await import('./usage-hub-command');
+      process.exitCode = await handleUsageHubCommand(args);
+    },
+  },
 ];
 
 interface ConfigCommandDependencies {

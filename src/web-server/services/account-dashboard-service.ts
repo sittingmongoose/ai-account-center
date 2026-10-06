@@ -490,8 +490,25 @@ export class AccountDashboardService {
     refresh = false,
     context: AccountDashboardRequestContext = {}
   ): Promise<AccountDashboard> {
-    const dashboard = await this.read(platform, refresh, context);
-    // Per response: a window's reset can pass while its sample is still cached.
+    return this.withPassedResets(await this.read(platform, refresh, context, true));
+  }
+
+  /**
+   * The rows the last collection left, projected exactly like `get`, without
+   * ever starting or waiting for a collection: no provider is asked for usage.
+   * Used by the T3 usage hub, which must never add upstream quota reads on top
+   * of the dashboard's own refresh (the Analytics sampler keeps it current).
+   * Before the first collection of this scope and platform it has no rows.
+   */
+  async peek(
+    platform: ClaudeDashboardPlatform = 'mac',
+    context: AccountDashboardRequestContext = {}
+  ): Promise<AccountDashboard> {
+    return this.withPassedResets(await this.read(platform, false, context, false));
+  }
+
+  /** Per response: a window's reset can pass while its sample is still cached. */
+  private withPassedResets(dashboard: AccountDashboard): AccountDashboard {
     const now = (this.deps.now ?? Date.now)();
     return {
       ...dashboard,
@@ -502,7 +519,8 @@ export class AccountDashboardService {
   private async read(
     platform: ClaudeDashboardPlatform,
     refresh: boolean,
-    context: AccountDashboardRequestContext
+    context: AccountDashboardRequestContext,
+    collect: boolean
   ): Promise<AccountDashboard> {
     const startedAt = Date.now();
     const now = (this.deps.now ?? Date.now)();
@@ -532,7 +550,7 @@ export class AccountDashboardService {
       this.deps.refreshIntervalSeconds ?? getAccountRefreshIntervalSeconds
     )();
     const expired = now - state.fetchedAt >= refreshIntervalSeconds * 1000;
-    if (!state.pending && (force || expired)) {
+    if (collect && !state.pending && (force || expired)) {
       state.refreshedAt = now;
       const current = state;
       // Scheduled checks must bypass individual source TTLs, while those sources
@@ -541,8 +559,8 @@ export class AccountDashboardService {
         current.pending = null;
       });
     }
-    const usedCache = state.pending === null;
-    if (state.pending) await state.pending;
+    const usedCache = !collect || state.pending === null;
+    if (collect && state.pending) await state.pending;
     // Account switches invalidate the native summary by live auth file signature.
     // Refresh this inexpensive identity even when quota samples are still cached.
     const registeredAntigravity = (
@@ -716,6 +734,15 @@ export function getAccountDashboard(
 ): Promise<AccountDashboard> {
   service ??= new AccountDashboardService();
   return service.get(platform, refresh, context);
+}
+
+/** Cache only: never starts a collection (see AccountDashboardService.peek). */
+export function peekAccountDashboard(
+  platform: ClaudeDashboardPlatform = 'mac',
+  context: AccountDashboardRequestContext = {}
+): Promise<AccountDashboard> {
+  service ??= new AccountDashboardService();
+  return service.peek(platform, context);
 }
 
 export function invalidateAccountDashboard(): void {

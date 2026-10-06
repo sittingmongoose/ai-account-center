@@ -61,6 +61,8 @@ import {
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
+import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
+import { createUsageHubRouter } from './usage-hub/usage-hub-router';
 
 export interface ServerOptions {
   port: number;
@@ -203,6 +205,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     if (sendAuthPathError(req, res, 404, 'not_found', 'API endpoint was not found.')) return;
     res.status(404).json({ error: 'API endpoint was not found.' });
   });
+
+  // The T3 usage hub: read-only CLIProxyAPI-shaped usage from the dashboard's
+  // cache, off until a key is set (ai-account-center dashboard usage-hub).
+  app.use(USAGE_HUB_MOUNT, createUsageHubRouter());
 
   app.use(precompressedStatic(staticUi));
   app.use(
