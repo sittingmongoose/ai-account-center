@@ -19,10 +19,12 @@ import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
 import {
   EXPERIMENT_ROOTS_TTL_MS,
+  emptyRootSet,
   readExperimentRoots,
   type ExperimentRootSet,
   type ExperimentRootsView,
 } from '../usage/experiment-usage-roots';
+import { resolveT3UsageRoots, type T3UsageRoots } from '../usage/t3-usage-roots';
 import { collectorConcurrency, runBounded } from '../usage/collector-concurrency';
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
@@ -511,9 +513,21 @@ function localRequestPlan(): {
   let experimentView: ExperimentRootsView | null = null;
   try {
     experimentView = readExperimentRoots(activity.cacheDir);
+  } catch {
+    /* Without experiment roots the default and T3 roots still scan. */
+  }
+  // T3 Code account homes (a few directory reads): counted with the experiment roots, against the
+  // same default roots, so a transcript or shadow-home link already read counts once.
+  let t3: T3UsageRoots = { claude: [], codex: [] };
+  try {
+    t3 = resolveT3UsageRoots();
+  } catch {
+    /* Without T3 homes the other roots still scan. */
+  }
+  try {
     requests.push(
       ...experimentActivityRequests(
-        experimentView.roots,
+        experimentView?.roots ?? emptyRootSet(),
         {
           projectsDir: claudeRoots[0],
           codexHome,
@@ -522,7 +536,8 @@ function localRequestPlan(): {
         },
         activity,
         path.join(ccsDir, 'cache'),
-        readNow
+        readNow,
+        t3
       )
     );
   } catch {
@@ -585,13 +600,17 @@ function startExperimentRootsSlice(cacheDir: string, view: ExperimentRootsView):
  * holds `<kind>:<real path>` for every root the other requests read (built-in, instances, saved
  * sources). An experiment root that no longer exists, or that resolves to (or inside) a root of
  * its tool already read, is left out; every Claude root read is the Claude request's reference.
+ * T3 Code homes (`t3`, t3-usage-roots.ts) ride in the same Claude and Codex requests as
+ * `homeRoots`, under the same rule: a Codex shadow home whose `sessions` links into `~/.codex`
+ * resolves inside the default root and is left out, so it is never read twice.
  */
 export function experimentActivityRequests(
   found: ExperimentRootSet,
   defaults: { projectsDir: string; codexHome: string; sessionsDir: string; dbPath: string },
   activity: { minDate: number; cacheDir: string },
   cacheDir: string,
-  scanned: Set<string>
+  scanned: Set<string>,
+  t3: T3UsageRoots = { claude: [], codex: [] }
 ): AccountAnalyticsActivityRequest[] {
   const readRoots = (kind: string): string[] =>
     [...scanned]
@@ -599,11 +618,22 @@ export function experimentActivityRequests(
       .map((key) => key.slice(kind.length + 1));
   const pick = (kind: string, list: string[], wantFile = false): string[] => {
     const read = readRoots(kind);
+    // The same folder reached another way (a bind mount) is a root already read, too.
+    const readIdentities = new Set<string>();
+    for (const root of read) {
+      try {
+        const stats = fs.statSync(root);
+        readIdentities.add(`${stats.dev}:${stats.ino}`);
+      } catch {
+        /* A read root that is gone has no identity. */
+      }
+    }
     const kept = new Set<string>();
     for (const candidate of list) {
       try {
         const stats = fs.statSync(candidate);
         if (wantFile ? !stats.isFile() : !stats.isDirectory()) continue;
+        if (readIdentities.has(`${stats.dev}:${stats.ino}`)) continue;
         const real = fs.realpathSync(candidate);
         const inside = read.some(
           (root) =>
@@ -618,25 +648,28 @@ export function experimentActivityRequests(
   };
   const requests: AccountAnalyticsActivityRequest[] = [];
   const claude = pick('claude', found.claude);
+  const claudeHomes = pick('claude', t3.claude).filter((root) => !claude.includes(root));
   let projectsDir = defaults.projectsDir;
   try {
     projectsDir = fs.realpathSync(projectsDir);
   } catch {
     /* A missing default folder still names the request's cache. */
   }
-  if (claude.length)
+  if (claude.length || claudeHomes.length)
     requests.push({
       provider: 'claude',
       request: {
         kind: 'claude',
         projectsDir,
         experimentRoots: claude,
+        ...(claudeHomes.length ? { homeRoots: claudeHomes } : {}),
         referenceRoots: [...new Set([projectsDir, ...readRoots('claude')])],
         activity,
       },
     });
   const codex = pick('codex', found.codex);
-  if (codex.length)
+  const codexHomes = pick('codex', t3.codex).filter((root) => !codex.includes(root));
+  if (codex.length || codexHomes.length)
     requests.push({
       provider: 'codex',
       request: {
@@ -644,6 +677,7 @@ export function experimentActivityRequests(
         codexHome: defaults.codexHome,
         cacheDir,
         experimentRoots: codex,
+        ...(codexHomes.length ? { homeRoots: codexHomes } : {}),
         activity,
       },
     });

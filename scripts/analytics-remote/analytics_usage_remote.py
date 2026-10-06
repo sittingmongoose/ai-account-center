@@ -2,7 +2,10 @@
 """Aggregate Claude Code, Codex, OMP, Muse and zcode usage into per-model, per-hour rows.
 
 Reads one JSON request on stdin, scans the fixed default roots resolved on
-this host plus the validated extra roots in the request, and prints
+this host, T3 Code's account homes (Claude config dirs and Codex homes found
+under ~/.claude-t3, ~/.codex-t3 and T3's settings; each real file and each
+record read once, see _t3_roots) plus the validated extra roots in the
+request, and prints
 per-model, per-hour aggregates plus per-file fingerprints. Only model names,
 providers, hour buckets, numeric token and cost sums and one hashed session key
 per session aggregate leave the host; paths, session ids, prompts, tool output
@@ -115,6 +118,13 @@ SCAN_SKIP_DIRS = frozenset(
 # Explicit roots (env vars, extra sources) are exempt: configuring a path
 # explicitly means it should count.
 AAC_SANDBOX_MARKER = ".aac-synthetic"
+# T3 Code account homes (see _t3_roots): account folders read per base, and
+# the largest T3 settings file read.
+T3_MAX_HOMES = 64
+T3_SETTINGS_MAX_BYTES = 1024 * 1024
+CODEX_SESSION_UUID = re.compile(
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$", re.I
+)
 SESSION_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}")
 MODEL_MAX_LEN = 160
 PROVIDER_MAX_LEN = 64
@@ -283,12 +293,29 @@ class Collector(object):
         self.zcode_records = False
         self.zrecs = {}
         self.zrec_count = 0
+        # T3 copies (_scan_kind_files): while `capture` is a set, Claude and
+        # Codex parsers only collect record keys into it; while `skip` is a
+        # set, records whose key it holds are not counted.
+        self.capture = None
+        self.skip = None
+
+    def keep_record(self, key):
+        """False when the record is captured as a key or is a known copy."""
+        if self.capture is not None:
+            if key is not None:
+                self.capture.add(key)
+            return False
+        return self.skip is None or key is None or key not in self.skip
 
     def expired(self):
         return time.monotonic() >= self.deadline
 
-    def note_file(self, kind, path):
-        """Return the filekey when the file needs parsing (new or changed)."""
+    def note_file(self, kind, path, deps=None):
+        """Return the filekey when the file needs parsing (new or changed).
+
+        `deps` (a T3 file's copy references, _deps_print) is folded into the
+        tail print, so the file is read again when one of them changes.
+        """
         self.files_seen += 1
         if self.files_seen > MAX_FILES:
             self.truncated = True
@@ -296,6 +323,10 @@ class Collector(object):
         current = _fingerprint(path)
         if current is None:
             return None
+        if deps:
+            current["tail"] = hashlib.sha256(
+                (current["tail"] + "\n" + deps).encode("utf-8")
+            ).hexdigest()
         key = _filekey(kind, path)
         self.pending.setdefault(kind, {})[key] = current
         prior = self.prior.get(kind, {}).get(key)
@@ -1030,13 +1061,46 @@ def _newest_first(paths):
     return [path for _, path in stamped]
 
 
-def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None):
+def _read_file(collector, kind, path, filekey, parse, flush):
+    """Parse one file whole: "ok", "cut" (deadline or row cap) or "unreadable"."""
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        return "unreadable"
+    box = {}
+    with handle:
+        while True:
+            if collector.expired():
+                collector.truncated = True
+                return "cut"
+            chunk = handle.readline(MAX_LINE_BYTES + 2)
+            if not chunk:
+                break
+            if len(chunk) > MAX_LINE_BYTES + 1:
+                # Skip the oversized line without decoding content.
+                while chunk and not chunk.endswith(b"\n"):
+                    chunk = handle.readline(MAX_LINE_BYTES + 2)
+                continue
+            try:
+                line = chunk.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            parse(line, collector, kind, filekey, box)
+            if collector.row_cap:
+                return "cut"
+        if flush is not None:
+            flush(collector, kind, filekey, box)
+    return "ok"
+
+
+def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None, t3_dirs=()):
     """Scan dirs for kind's files, newest first; parse(line, collector, kind, filekey, box) reads one line with a per-file box.
 
     flush(collector, kind, filekey, box), when given, runs once per fully
     read file (never on a cut pass: cut files are re-read whole next pass).
+    t3_dirs (T3 Code homes, _t3_roots) are read too, each real file once and
+    never a record a default file (or an earlier T3 file) already holds.
     """
-    stopped = False
     paths = []
     for directory in dirs:
         if not os.path.isdir(directory) or os.path.islink(directory):
@@ -1048,45 +1112,228 @@ def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None):
                 break
         if collector.expired() or len(paths) > MAX_FILES:
             break
+    refs = _t3_files(collector, kind, dirs, paths, t3_dirs, accept) if t3_dirs else {}
+    paths.extend(refs)
     for path in _newest_first(paths):
         if collector.expired():
             collector.truncated = True
             return True
-        filekey = collector.note_file(kind, path)
+        copies = refs.get(path)
+        filekey = collector.note_file(kind, path, _deps_print(kind, copies) if copies else None)
         if filekey is None:
             staged = _filekey(kind, path)
             if staged in collector.pending.get(kind, {}):
                 collector.confirm_file(kind, staged)
             continue
+        if copies:
+            known = _record_keys(collector, kind, copies, parse, flush)
+            if known is None:
+                return True
+            collector.skip = known
         try:
-            handle = open(path, "rb")
+            outcome = _read_file(collector, kind, path, filekey, parse, flush)
+        finally:
+            collector.skip = None
+        if outcome == "cut":
+            return True
+        if outcome == "ok":
+            collector.confirm_file(kind, filekey)
+    return False
+
+
+def _t3_child_dirs(base):
+    """Sub-folders of base (a link to a folder counts), by name, at most T3_MAX_HOMES."""
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        if len(found) >= T3_MAX_HOMES:
+            break
+        if os.path.isdir(os.path.join(base, name)):
+            found.append(os.path.join(base, name))
+    return found
+
+
+def _t3_home_path(value, home):
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 1024 or "\x00" in text:
+        return None
+    if text == "~":
+        text = home
+    elif text[:2] in ("~/", "~\\"):
+        text = os.path.join(home, text[2:])
+    return os.path.normpath(text) if os.path.isabs(text) else None
+
+
+def _t3_roots(home, kind):
+    """T3 Code's account homes on this host: `projects` of each Claude config
+    dir (~/.claude-t3/<account>), `sessions` of each Codex home and shadow home
+    (~/.codex-t3/<account>, T3's managed ones under its state folder), plus the
+    homes T3's settings name (providerInstances.<id>.config.homePath, and
+    shadowHomePath for Codex; no other field is read). Any folder name counts."""
+    state = os.path.join(home, ".t3", "userdata")
+    homes = []
+    if kind == "claude":
+        homes.extend(_t3_child_dirs(os.path.join(home, ".claude-t3")))
+    else:
+        homes.extend(_t3_child_dirs(os.path.join(home, ".codex-t3")))
+        for managed in _t3_child_dirs(os.path.join(state, "providers", "codex")):
+            homes.append(os.path.join(managed, "shadow"))
+    try:
+        settings = os.path.join(state, "settings.json")
+        if os.path.getsize(settings) <= T3_SETTINGS_MAX_BYTES:
+            with open(settings, "rb") as handle:
+                instances = json.loads(handle.read().decode("utf-8")).get("providerInstances")
+        else:
+            instances = None
+    except (OSError, ValueError, AttributeError):
+        instances = None
+    driver_keys = {"claude": ("claudeAgent", ("homePath",)),
+                   "codex": ("codex", ("homePath", "shadowHomePath"))}[kind]
+    if isinstance(instances, dict):
+        for instance in list(instances.values())[:T3_MAX_HOMES]:
+            if not isinstance(instance, dict) or instance.get("driver") != driver_keys[0]:
+                continue
+            config = instance.get("config")
+            for key in driver_keys[1] if isinstance(config, dict) else ():
+                path = _t3_home_path(config.get(key), home)
+                if path:
+                    homes.append(path)
+    sub = "projects" if kind == "claude" else "sessions"
+    return _dedup_dirs([os.path.join(path, sub) for path in homes])
+
+
+def _same_or_inside(child, roots):
+    child = os.path.normcase(child)
+    for root in roots:
+        root = os.path.normcase(root)
+        if child == root or child.startswith(root.rstrip("\\/") + os.sep):
+            return True
+    return False
+
+
+def _iter_t3_files(root, accept, collector, exclude):
+    """Yield (path, identity) of wanted files under one T3 root. Unlike every
+    other walk here it follows links (a T3 shadow home is made of them), each
+    resolved to its real path and skipped inside `exclude` (the real default
+    roots), and enters each folder once by identity, so a link loop ends."""
+    try:
+        start = os.path.realpath(root)
+    except (OSError, ValueError):
+        return
+    if not os.path.isdir(start) or _same_or_inside(start, exclude):
+        return
+    pending = [(start, 0)]
+    seen = set()
+    entries = 0
+    while pending:
+        if len(seen) >= WALK_MAX_DIRS or collector.expired():
+            collector.truncated = True
+            return
+        directory, depth = pending.pop()
+        try:
+            stat = os.stat(directory)
+            if (stat.st_dev, stat.st_ino) in seen:
+                continue
+            seen.add((stat.st_dev, stat.st_ino))
+            names = sorted(os.listdir(directory))
         except OSError:
             continue
-        box = {}
-        with handle:
-            while True:
-                if collector.expired():
-                    collector.truncated = True
-                    return True
-                chunk = handle.readline(MAX_LINE_BYTES + 2)
-                if not chunk:
-                    break
-                if len(chunk) > MAX_LINE_BYTES + 1:
-                    # Skip the oversized line without decoding content.
-                    while chunk and not chunk.endswith(b"\n"):
-                        chunk = handle.readline(MAX_LINE_BYTES + 2)
-                    continue
-                try:
-                    line = chunk.decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-                parse(line, collector, kind, filekey, box)
-                if collector.row_cap:
-                    return True
-            if flush is not None:
-                flush(collector, kind, filekey, box)
-            collector.confirm_file(kind, filekey)
-    return stopped
+        for name in names:
+            entries += 1
+            if entries > WALK_MAX_ENTRIES:
+                collector.truncated = True
+                return
+            if name in SCAN_SKIP_DIRS:
+                continue
+            path = os.path.join(directory, name)
+            try:
+                if os.path.isdir(path):
+                    real = os.path.realpath(path)
+                    if depth < 64 and not _same_or_inside(real, exclude):
+                        pending.append((real, depth + 1))
+                elif os.path.isfile(path) and accept(name):
+                    real = os.path.realpath(path) if os.path.islink(path) else path
+                    if not _same_or_inside(real, exclude):
+                        stat = os.stat(real)
+                        yield real, (stat.st_dev, stat.st_ino)
+            except (OSError, ValueError):
+                continue
+
+
+def _copy_key(kind, path):
+    """Where copies of a log's records can be: a log of the same name (Claude
+    keeps <session>.jsonl and agent-<id>.jsonl), or of the same conversation
+    id (a Codex rollout's name ends with it)."""
+    name = os.path.basename(path)
+    match = CODEX_SESSION_UUID.search(name) if kind == "codex" else None
+    return match.group(1).lower() if match else name
+
+
+def _t3_files(collector, kind, dirs, default_paths, t3_dirs, accept):
+    """T3 files to read, each mapped to the default and earlier T3 files that
+    may hold copies of its records. A file that is a default file (a link or a
+    hard link to it) or an earlier T3 file is not listed at all."""
+    exclude = []
+    for directory in dirs:
+        try:
+            if os.path.isdir(directory):
+                exclude.append(os.path.realpath(directory))
+        except (OSError, ValueError):
+            continue
+    identities = set()
+    for path in default_paths:
+        try:
+            stat = os.stat(path)
+            identities.add((stat.st_dev, stat.st_ino))
+        except OSError:
+            continue
+    found = []
+    for root in t3_dirs:
+        for path, identity in _iter_t3_files(root, accept, collector, exclude):
+            if identity in identities:
+                continue
+            identities.add(identity)
+            found.append(path)
+            if len(default_paths) + len(found) > MAX_FILES:
+                collector.truncated = True
+                break
+    by_key = {}
+    for path in default_paths:
+        by_key.setdefault(_copy_key(kind, path), []).append(path)
+    copies = {}
+    for path in sorted(found):
+        key = _copy_key(kind, path)
+        copies[path] = list(by_key.get(key, ()))
+        by_key.setdefault(key, []).append(path)
+    return copies
+
+
+def _deps_print(kind, copies):
+    prints = []
+    for path in sorted(copies):
+        print_ = _fingerprint(path) or {}
+        prints.append("%s:%s:%s:%s:%s" % (_filekey(kind, path), print_.get("size"),
+                                         print_.get("mtimeMs"), print_.get("head"),
+                                         print_.get("tail")))
+    return hashlib.sha256("\n".join(prints).encode("utf-8")).hexdigest()
+
+
+def _record_keys(collector, kind, copies, parse, flush):
+    """The record keys the copy references hold, or None when the deadline cut the read."""
+    keys = set()
+    collector.capture = keys
+    try:
+        for path in copies:
+            if _read_file(collector, kind, path, "", parse, flush) == "cut":
+                return None
+    finally:
+        collector.capture = None
+    return keys
 
 
 def _dedup_dirs(candidates):
@@ -1164,13 +1411,19 @@ def _parse_claude_line(line, collector, kind, filekey, box):
     pending = box.pop("claude_pending", None)
     if pending is not None:
         _emit_claude_response(collector, kind, filekey, pending)
+    if not collector.keep_record(None):
+        return
     # Claude Code logs no cost; the server prices the tokens at its rates.
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
     collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
 
 
 def _emit_claude_response(collector, kind, filekey, pending):
-    _, model, hour, tokens, epoch_ms, session = pending
+    key, model, hour, tokens, epoch_ms, session = pending
+    # A copy is the same API response: its message id, as the server's
+    # experiment dedup keys it (a stream capture spells the request id apart).
+    if not collector.keep_record("m:" + key.split("\n")[0]):
+        return
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
     collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
 
@@ -1189,7 +1442,8 @@ def _collect_claude(collector, home, env, extra=()):
         else os.path.join(home, ".claude")
     )
     dirs = _dedup_dirs([os.path.join(base, "projects"), *extra])
-    if not any(os.path.isdir(d) and not os.path.islink(d) for d in dirs):
+    t3_dirs = [d for d in _t3_roots(home, "claude") if os.path.isdir(d)]
+    if not t3_dirs and not any(os.path.isdir(d) and not os.path.islink(d) for d in dirs):
         return "not_installed"
     _scan_kind_files(
         collector,
@@ -1198,6 +1452,7 @@ def _collect_claude(collector, home, env, extra=()):
         lambda name: name.endswith(".jsonl"),
         _parse_claude_line,
         _flush_claude_box,
+        t3_dirs,
     )
     return "ok"
 
@@ -1295,6 +1550,10 @@ def _parse_codex_line(line, collector, kind, filekey, box):
     if model is None:
         return
     tokens = [int(delta[0]), int(delta[3]), int(delta[2]), int(delta[1])]
+    if not collector.keep_record(
+        "c:%s|%s|%s|%s" % (box.get("session"), timestamp, model, tokens)
+    ):
+        return
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
     session = _session_key(kind, box.get("session"))
     collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
@@ -1309,13 +1568,14 @@ def _collect_codex(collector, home, env, extra=()):
     )
     # Extra codex roots are codex homes, as locally (sessions hangs under each).
     dirs = _dedup_dirs([os.path.join(h, "sessions") for h in [default_home, *extra]])
-    if not any(os.path.isdir(d) and not os.path.islink(d) for d in dirs):
+    t3_dirs = [d for d in _t3_roots(home, "codex") if os.path.isdir(d)]
+    if not t3_dirs and not any(os.path.isdir(d) and not os.path.islink(d) for d in dirs):
         return "not_installed"
 
     def _accept(name):
         return name.startswith("rollout-") and name.endswith(".jsonl")
 
-    _scan_kind_files(collector, "codex", dirs, _accept, _parse_codex_line)
+    _scan_kind_files(collector, "codex", dirs, _accept, _parse_codex_line, None, t3_dirs)
     return "ok"
 
 

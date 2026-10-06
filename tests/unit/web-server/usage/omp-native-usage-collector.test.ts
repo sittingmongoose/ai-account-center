@@ -140,6 +140,23 @@ describe('omp session roots', () => {
     expect(roots).not.toContain(skipped);
   });
 
+  it('never follows a symlink to a folder outside the home under PM-Experiments', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-omp-outside-'));
+    try {
+      const remote = path.join(outside, 'proj', 'sessions');
+      fs.mkdirSync(remote, { recursive: true });
+      fs.writeFileSync(path.join(remote, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+      fs.mkdirSync(path.join(home, 'PM-Experiments'), { recursive: true });
+      fs.symlinkSync(outside, path.join(home, 'PM-Experiments', 'nas-link'));
+      const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home });
+      expect(roots.some((root) => root.includes('nas-link') || root.startsWith(outside))).toBe(
+        false
+      );
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it('treats an OMP-named sessions dir as a root, and empty ones as none', async () => {
     // Presence alone (any `.jsonl`) used to qualify; it accepted synthetic
     // Muse trees, so a `sessions/` dir must now hold an OMP-named file.

@@ -37,14 +37,20 @@ export interface CodexPartitionSpec {
 
 export type UsageWorkerRequest =
   /**
-   * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) make a separate request that
-   * reads only those roots, deduplicated record by record; the default root then serves only as
-   * the reference copies are checked against (see collectExperimentActivity).
+   * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) and `homeRoots`
+   * (t3-usage-roots.ts) make a separate request that reads only those roots, deduplicated record
+   * by record; the default root then serves only as the reference copies are checked against
+   * (see collectExperimentActivity).
    */
   | {
       kind: 'claude';
       projectsDir: string;
       experimentRoots?: string[];
+      /**
+       * T3 Code account homes (t3-usage-roots.ts), read like experiment roots but in full depth
+       * and following their symlinks: each real file once, copies of default records dropped.
+       */
+      homeRoots?: string[];
       /** Experiment requests: every default Claude root, whose responses' copies never count. */
       referenceRoots?: string[];
       activity?: AccountActivityScanOptions;
@@ -54,6 +60,8 @@ export type UsageWorkerRequest =
       codexHome: string;
       cacheDir: string;
       experimentRoots?: string[];
+      /** T3 Code shadow homes' `sessions` folders that are not links into the default root. */
+      homeRoots?: string[];
       activity?: AccountActivityScanOptions;
       partition?: CodexPartitionSpec;
     }
