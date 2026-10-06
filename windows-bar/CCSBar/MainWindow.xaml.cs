@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -12,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
@@ -171,6 +173,9 @@ public partial class MainWindow : Window
     internal void SetRefreshingForCheck(bool spinning) => SetRefreshing(spinning);
     internal bool RefreshSpinning => refreshTurn.HasAnimatedProperties;
     internal bool RenderDirtyForCheck => renderDirty;
+    /// <summary>Reopens that cleared the previous open's kept frame before mapping (FW4 tray flicker).</summary>
+    private int retainedFrameClears;
+    internal int RetainedFrameClearsForCheck => retainedFrameClears;
     /// <summary>Checks only: pretends this is a hidden live panel, so the deferred-render path runs headless.</summary>
     internal void SimulateHideForCheck() { hiddenSimulated = true; renderDirty = false; }
     /// <summary>Checks only: the deferred rebuild ShowPanel runs on open.</summary>
@@ -203,10 +208,23 @@ public partial class MainWindow : Window
         PositionPopup();
         if (!wasVisible)
         {
-            Show();
+            // The opening frame is ready before the window maps, so an open is one clean entrance. A hidden layered
+            // window keeps the last frame it showed, and Windows draws that frame again the moment the window maps,
+            // until WPF hands over a new one. With the N6 rebuild and the new tree's layout running after Show, the
+            // previous open's panel stood on screen for 3 to 5 frames and then vanished as the entrance began from
+            // transparent: the open flickered, reset and reopened (FW4 tray flicker).
             // Samples that arrived while hidden painted nothing: rebuild once now, before the entrance animation
             // reads the meters, so the panel shows the latest reading and the platter lands on open (N6).
             if (renderDirty) FlushDeferredRender();
+            var handle = new WindowInteropHelper(this).Handle;
+            if (handle != IntPtr.Zero)
+            {
+                // Lay the rebuilt tree out while hidden, so WPF's first frame after Show follows at once, and make the
+                // frame the window kept from the last open transparent, so mapping it shows nothing stale.
+                UpdateLayout();
+                ClearRetainedFrame(handle);
+            }
+            Show();
             PlayOpen();
             if (signInVisible && signInView is not null && !signInEntered) { signInEntered = true; signInView.PlayEntrance(true); }
             if (busy) SetRefreshing(true);
@@ -215,6 +233,21 @@ public partial class MainWindow : Window
         }
         Activate();
     }
+
+    /// <summary>Makes the frame a hidden layered window still holds fully transparent (constant alpha 0; the bitmap is
+    /// untouched), so mapping the window shows nothing until WPF's first new frame, whose own present sets the alpha
+    /// back to opaque. WPF does the same for a layered window enabled at zero size. Safe while hidden: WPF's render
+    /// thread does not present to a hidden window.</summary>
+    private void ClearRetainedFrame(IntPtr handle)
+    {
+        // It fails harmlessly when the window never handed a frame over (nothing is kept then).
+        retainedFrameClears++;
+        var blend = new BlendFunction { BlendOp = 0 /* AC_SRC_OVER */, SourceConstantAlpha = 0 };
+        UpdateLayeredWindow(handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, ref blend, 2 /* ULW_ALPHA */);
+    }
+
+    [StructLayout(LayoutKind.Sequential)] private struct BlendFunction { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
+    [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, IntPtr pptDst, IntPtr psize, IntPtr hdcSrc, IntPtr pptSrc, int crKey, ref BlendFunction pblend, int dwFlags);
 
     /// <summary>The deferred visual pass an open runs: the list (or the deferred failure card) and the status
     /// line, exactly once. One body for the product flush and its check helper, so they cannot drift (N6).</summary>
@@ -263,7 +296,12 @@ public partial class MainWindow : Window
     private void PlayOpen()
     {
         var first = !openedOnce; openedOnce = true;
-        Root.Opacity = 0;
+        // Every element starts from its entrance start, not from the last open's arrival. An animation still holding
+        // the last open's end value keeps showing it until the new one begins, so a block (always the footer) whose
+        // stagger delay had not passed stood at full opacity while the panel faded in, then dropped to transparent
+        // and faded in again (FW4 tray flicker). Clearing the held animation first lets the start value show.
+        Root.BeginAnimation(OpacityProperty, null); Root.Opacity = 0;
+        RootShift.BeginAnimation(TranslateTransform.YProperty, null); RootShift.Y = 12;
         Motion.To(Root, OpacityProperty, 1, 200, from: 0);
         Motion.To(RootShift, TranslateTransform.YProperty, 0, 320, from: 12);
         var items = new List<FrameworkElement> { HeaderBar };
@@ -274,7 +312,8 @@ public partial class MainWindow : Window
             var delay = first ? i * 26 : Math.Min(150, i * 7);
             var item = items[i];
             if (item.RenderTransform is not TranslateTransform shift) item.RenderTransform = shift = new TranslateTransform();
-            item.Opacity = 0;
+            item.BeginAnimation(OpacityProperty, null); item.Opacity = 0;
+            shift.BeginAnimation(TranslateTransform.YProperty, null); shift.Y = 8;
             Motion.To(item, OpacityProperty, 1, 240, delay: delay, from: 0);
             Motion.To(shift, TranslateTransform.YProperty, 0, 380, delay: delay, from: 8);
         }
@@ -449,6 +488,7 @@ public partial class MainWindow : Window
         renderPasses++;
         pendingResets = PendingResets(dashboard);
         var offset = ContentScroll.VerticalOffset;
+        var entrance = EntranceInProgress();
         foreach (var meter in meters.Values) Ui.Detach(meter);
         foreach (var platter in platters.Values) Ui.Detach(platter);
         activeRows.Clear();
@@ -468,9 +508,42 @@ public partial class MainWindow : Window
             if (hidden.Count == 0) RenderEmpty("Every account is hidden in the tray", "Turn on Tray for an account in the dashboard's Accounts and Settings.");
             else RenderEmpty("Every provider is hidden in the trays", "Turn on Show in tray for a provider in the dashboard's Accounts and Settings.");
         }
+        if (entrance is not null) ContinueEntrance(entrance);
         RenderFooter();
         if (busy || staleSample) DisableMutations();
         Dispatcher.BeginInvoke(new Action(() => { ContentScroll.ScrollToVerticalOffset(offset); PlacePlatters(); UpdateFade(); }), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>The list blocks' entrance state while an open's entrance is still playing (only PlayOpen moves a
+    /// block's own opacity and offset), or null once every block has arrived.</summary>
+    private List<(string Uid, double Opacity, double Y)>? EntranceInProgress()
+    {
+        if (!IsVisible || !Motion.Enabled) return null;
+        var blocks = ContentPanel.Children.OfType<FrameworkElement>()
+            .Select(block => (block.Uid, block.Opacity, Y: block.RenderTransform is TranslateTransform shift ? shift.Y : 0)).ToList();
+        return blocks.Any(block => block.Opacity < 0.999 || Math.Abs(block.Y) > 0.01) ? blocks : null;
+    }
+
+    /// <summary>The open's own refresh can land while the entrance still plays (a fast or debounced dashboard
+    /// answer): the rebuilt blocks carry on from where the old ones were, so rows never snap to full mid-fade.</summary>
+    private void ContinueEntrance(List<(string Uid, double Opacity, double Y)> before)
+    {
+        var blocks = ContentPanel.Children.OfType<FrameworkElement>().ToList();
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            var block = blocks[i];
+            var match = before.FindIndex(old => old.Uid.Length > 0 && old.Uid == block.Uid);
+            if (match < 0) match = i < before.Count ? i : -1;
+            if (match < 0) continue;
+            var (_, opacity, y) = before[match];
+            if (opacity >= 0.999 && Math.Abs(y) <= 0.01) continue;
+            var shift = new TranslateTransform(0, y);
+            block.RenderTransform = shift;
+            block.Opacity = opacity;
+            // The time an ease-out from the entrance's start would still need from this value (240 ms fade, 380 ms rise).
+            Motion.To(block, OpacityProperty, 1, 240 * Math.Cbrt(Math.Max(0, 1 - opacity)), from: opacity);
+            if (Math.Abs(y) > 0.01) Motion.To(shift, TranslateTransform.YProperty, 0, 380 * Math.Cbrt(Math.Min(1, Math.Abs(y) / 8)), from: y);
+        }
     }
 
     /// <summary>Every window now drawn as "new reading pending" (F6), as one comparable string.</summary>

@@ -109,6 +109,7 @@ public static partial class Checks
         await ClaudeOpenChecks(report);
         await PairingChecks(report);
         await EnergyChecks(report);
+        await OpenFrameChecks(report);
         report.Passed = report.Checks.Values.All(value => value);
         return report;
     }
@@ -1248,6 +1249,85 @@ public static partial class Checks
             if (window is not null) { window.AllowClose = true; window.Close(); }
             try { Directory.Delete(folder, true); } catch { }
         }
+    }
+
+    /// <summary>
+    /// FW4 tray flicker: a hidden layered window keeps the last frame it showed, and Windows draws that frame again
+    /// the moment the window maps, until WPF hands over a new one. So a reopen must have its frame ready before the
+    /// window maps: the deferred rebuild (N6) done, the new tree laid out, the kept frame made transparent, and the
+    /// window mapped exactly once (no hide and re-show). Observed at WM_SHOWWINDOW, the moment the window maps.
+    /// </summary>
+    private static async Task OpenFrameChecks(CheckReport report)
+    {
+        var fixture = FixtureRender.LoadFixture(out _);
+        var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+        var motion = Motion.Enabled; Motion.Enabled = true; // the entrance runs as on a desktop with animations on
+        try
+        {
+            window.UseFixtureConnection();
+            window.SimulateHideForCheck();
+            window.ApplyDashboardSample(fixture);
+            window.ShowPanel();
+            await Task.Delay(150);
+            window.HidePopup();
+            var maps = new List<(bool Dirty, bool LaidOut, bool Fresh, int Clears)>();
+            var hides = 0;
+            var source = System.Windows.Interop.HwndSource.FromHwnd(new System.Windows.Interop.WindowInteropHelper(window).Handle)!;
+            System.Windows.Interop.HwndSourceHook hook = (IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) =>
+            {
+                if (message == 0x0018) // WM_SHOWWINDOW
+                {
+                    if (wParam == IntPtr.Zero) hides++;
+                    else maps.Add((window.RenderDirtyForCheck, window.ContentPanel.IsMeasureValid && window.ContentPanel.IsArrangeValid,
+                        FixtureRender.FindUid(window.ContentPanel, "section:codex") is null, window.RetainedFrameClearsForCheck));
+                }
+                return IntPtr.Zero;
+            };
+            source.AddHook(hook);
+            // A hidden poll while closed: the rebuild is deferred to the open (N6).
+            var changed = JsonSerializer.Deserialize<AccountDashboard>(JsonSerializer.Serialize(fixture, Formatting.Json), Formatting.Json)!;
+            changed.Accounts.RemoveAll(account => account.Provider == "codex");
+            window.ApplyDashboardSample(changed);
+            var deferred = window.RenderDirtyForCheck;
+            var clears = window.RetainedFrameClearsForCheck;
+            window.ShowPanel();
+            await Task.Delay(150);
+            source.RemoveHook(hook);
+            report.Checks["reopen_maps_the_window_once"] = maps.Count == 1 && hides == 0;
+            report.Checks["reopen_paints_the_deferred_sample_before_the_window_maps"] = deferred && maps.Count == 1 && !maps[0].Dirty && maps[0].Fresh;
+            report.Checks["reopen_lays_out_before_the_window_maps"] = maps.Count == 1 && maps[0].Fresh && maps[0].LaidOut;
+            report.Checks["reopen_clears_the_kept_frame_before_the_window_maps"] = maps.Count == 1 && maps[0].Clears == clears + 1;
+            // A reopen with nothing rebuilt (the list and the footer still hold the last open's arrival): on the first
+            // frame every block waits transparent for its stagger instead of standing at full. Then the open's own
+            // refresh lands while the entrance plays: the rebuilt blocks carry on from where the old ones were.
+            {
+                window.HidePopup();
+                await Task.Delay(400);
+                window.ShowPanel();
+                var rendered = new TaskCompletionSource();
+                EventHandler once = (_, _) => rendered.TrySetResult();
+                System.Windows.Media.CompositionTarget.Rendering += once;
+                await Task.WhenAny(rendered.Task, Task.Delay(2000));
+                System.Windows.Media.CompositionTarget.Rendering -= once;
+                var before = window.ContentPanel.Children.OfType<System.Windows.FrameworkElement>().Select(block => (block.Uid, block.Opacity)).ToList();
+                var footer = window.Footer.Opacity;
+                report.Notes["reopen_first_frame"] = "blocks " + string.Join("/", before.Select(old => old.Opacity.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)))
+                    + " footer " + footer.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                report.Checks["reopen_blocks_wait_transparent_for_their_entrance"] = rendered.Task.IsCompleted && before.Count > 0
+                    && before.All(old => old.Opacity < 0.5) && footer < 0.5;
+                window.ApplyDashboardSample(JsonSerializer.Deserialize<AccountDashboard>(JsonSerializer.Serialize(fixture, Formatting.Json), Formatting.Json)!);
+                var after = window.ContentPanel.Children.OfType<System.Windows.FrameworkElement>().ToList();
+                var matched = after.Where(block => block.Uid.Length > 0 && before.Any(old => old.Uid == block.Uid)).ToList();
+                report.Checks["refresh_landing_mid_entrance_keeps_the_entrance"] = before.Count > 0 && before.All(old => old.Opacity < 0.5) && matched.Count == before.Count
+                    && matched.All(block => Math.Abs(block.Opacity - before.First(old => old.Uid == block.Uid).Opacity) < 0.02);
+            }
+        }
+        catch (Exception error)
+        {
+            report.Checks["open_frame_checks_completed"] = false;
+            report.Notes["open_frame_checks"] = error.GetType().Name + ": " + error.Message;
+        }
+        finally { Motion.Enabled = motion; window.AllowClose = true; window.Close(); }
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
