@@ -73,10 +73,16 @@ describe('fixed app update service', () => {
     expect(started.job.state).toBe('running');
     expect(calls).toEqual(['ubuntu']);
     expect(() => service.start()).toThrow(AppUpdateBusyError);
+    // Mac and Windows never wait for the blocked Ubuntu run.
+    for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect([...calls].sort()).toEqual(['mac', 'ubuntu', 'windows']);
+    expect(
+      service.getStatus().job!.results.filter((row) => row.platform !== 'ubuntu')
+    ).toHaveLength(14);
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(calls).toEqual(['ubuntu', 'mac', 'windows']);
+    expect(calls).toHaveLength(3);
     expect(job.results).toHaveLength(21);
     expect(job.state).toBe('failed');
     expect(job.activePlatform).toBeNull();
@@ -273,13 +279,15 @@ describe('fixed app update service', () => {
     });
     service.start();
     await finish(service);
-    expect(events).toEqual([
-      'run:ubuntu',
+    // Hosts run side by side; each remote host still syncs before it runs.
+    expect(events).toHaveLength(5);
+    expect(events.indexOf('sync:mac')).toBeLessThan(events.indexOf('run:mac'));
+    expect(events.indexOf('sync:windows')).toBeLessThan(events.indexOf('run:windows'));
+    expect(events.filter((event) => event.startsWith('sync:')).sort()).toEqual([
       'sync:mac',
-      'run:mac',
       'sync:windows',
-      'run:windows',
     ]);
+    expect(events).not.toContain('sync:ubuntu');
     expect(service.getStatus().job!.state).toBe('completed');
     expect(JSON.stringify(service.getStatus().job)).not.toContain('PRIVATE_SENTINEL');
   });

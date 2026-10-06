@@ -104,6 +104,47 @@ describe('Codex update idle and restart coordinator', () => {
     expect(result.status).toBe('current');
     expect(value.events).toEqual(['update']);
   });
+  it('gives up on a Codex that stays busy after about a minute, never fifteen', async () => {
+    // The live 2026-10-06 run waited 14.8 minutes here while Mac and Windows queued.
+    const value = fixture();
+    let stops = 0;
+    value.deps.runtime = () => ({
+      stop: async () => {
+        stops++;
+        throw Object.assign(new Error('PRIVATE_SENTINEL'), { code: 'busy' });
+      },
+      start: async () => {
+        value.events.push('start');
+      },
+      dispose: async () => {},
+    });
+    const before = value.deps.now();
+    const result = await bridge.execute(value.deps);
+    const waited = value.deps.now() - before;
+    expect(waited).toBeLessThanOrEqual(60_000);
+    expect(waited).toBeGreaterThanOrEqual(55_000);
+    expect(stops).toBeLessThanOrEqual(14);
+    expect(result.status).toBe('action_required');
+    expect(result.messageCode).toBe('codex_busy');
+    expect(result.version).toBe('2.0.0');
+    // Nothing was stopped, so nothing restarts; the marker stays for the next click.
+    expect(value.events).not.toContain('start');
+    expect(value.pending()).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL');
+  });
+  it('honours a shorter idle budget', async () => {
+    const value = fixture();
+    value.deps.runtime = () => ({
+      stop: async () => {
+        throw Object.assign(new Error('busy'), { code: 'busy' });
+      },
+      start: async () => {},
+      dispose: async () => {},
+    });
+    const result = await bridge.execute({ ...value.deps, idleSeconds: 10 });
+    expect(value.deps.now()).toBeLessThanOrEqual(10_000);
+    expect(result.messageCode).toBe('codex_busy');
+  });
   it('reports an unreplaced proxy as a restart failure', async () => {
     const value = fixture();
     value.deps.hasOldProxies = async () => true;

@@ -40,6 +40,9 @@ class Install:
     publisher: str = None
     package_root: pathlib.Path = None
     command: list = dataclasses.field(default_factory=list, repr=False)
+    # "timeout" when the read-only detection probe ran out of time: the app
+    # is reported as "Check timed out", never as not installed or failed.
+    probe: str = None
 
 
 def environment(extra=None):
@@ -49,19 +52,62 @@ def environment(extra=None):
     return result
 
 
+def _stop_group(process):
+    """Stop a timed-out child. On POSIX the child leads its own session, so the
+    whole group goes (an installer's helpers included); a detached app relaunch
+    always starts its own session and is never part of it."""
+    try:
+        if os.name == "nt":
+            process.kill()
+        else:
+            import signal
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+    if process.stdout is not None:
+        try: process.stdout.close()
+        except OSError: pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _run_bounded(argv, timeout, env, capture):
+    """Run one fixed command with no TTY and no stdin, killed at its timeout.
+
+    A new session means the child has no controlling terminal, so a prompt that
+    opens /dev/tty fails at once instead of waiting forever; stdin is empty.
+    Returns (returncode, stdout bytes); raises subprocess.TimeoutExpired.
+    """
+    options = {} if os.name == "nt" else {"start_new_session": True}
+    process = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, env=env, **options,
+    )
+    try:
+        stdout, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _stop_group(process)
+        raise
+    except BaseException:
+        _stop_group(process)
+        raise
+    return process.returncode, stdout or b""
+
+
 def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536):
     try:
-        completed = subprocess.run(
-            [str(arg) for arg in argv], stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, timeout=timeout, env=dict(env) if preserve_env and env is not None else environment(env),
-            check=False,
+        returncode, data = _run_bounded(
+            [str(arg) for arg in argv], timeout,
+            dict(env) if preserve_env and env is not None else environment(env), capture,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        raise UpdateFailure("timeout" if timeout >= 60 else "update_failed") from None
-    if completed.returncode != 0:
+    except subprocess.TimeoutExpired:
+        raise UpdateFailure("timeout") from None
+    except OSError:
+        raise UpdateFailure("update_failed") from None
+    if returncode != 0:
         raise UpdateFailure()
-    data = completed.stdout or b""
     if len(data) > min(2 * 1024 * 1024, capture_limit):
         raise UpdateFailure()
     return data.decode("utf-8", "replace") if capture else ""
@@ -88,11 +134,20 @@ def version_tuple(value):
     return tuple(int(part) for part in re.findall(r"\d+", (value or "").split("-")[0]))
 
 
-def cli_version(path, args=("--version",)):
+# Version probes run side by side now, so a busy host gets a little longer.
+VERSION_PROBE_TIMEOUT = 20
+
+
+def cli_probe(path, args=("--version",)):
+    """(version or None, 'timeout' when the probe ran out of time, else None)."""
     try:
-        return version_text(command([path, *args], timeout=10, capture=True))
-    except UpdateFailure:
-        return None
+        return version_text(command([path, *args], timeout=VERSION_PROBE_TIMEOUT, capture=True)), None
+    except UpdateFailure as error:
+        return None, ("timeout" if error.code == "timeout" else None)
+
+
+def cli_version(path, args=("--version",)):
+    return cli_probe(path, args)[0]
 
 
 def result(app_id, platform, status, before=None, after=None, manager=None, code=None, attempted=False, restarted=0):

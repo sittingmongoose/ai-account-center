@@ -728,13 +728,35 @@ function policies(data, home, ag) {
 
 // ---------------------------------------------------------------- Update apps results
 const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows'], ['ubuntu', 'Ubuntu', 'ubuntu']];
+const UPDATE_APP_NAMES = {
+  'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP', 'codex-cli': 'Codex CLI',
+  'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop',
+};
 const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],
   failed: ['Failed', 'crit'], restart_failed: ['Updated, restart failed', 'crit'],
   skipped: ['Skipped: cancelled', ''], action_required: ['Needs action', 'warn'],
 };
 // An unknown row on an unreachable host names the computer; any other unknown stays a plain word.
-const unknownWord = (row, label) => text(row.message).includes('not reachable') ? `Unknown: ${label} not reachable` : 'Unknown';
+const unknownWord = (row, label) => {
+  const message = text(row.message);
+  if (message.includes('not reachable')) return `Unknown: ${label} not reachable`;
+  if (message.startsWith('Check timed out')) return 'Check timed out';
+  if (message.startsWith('Timed out')) return 'Timed out';
+  return 'Unknown';
+};
+// A row that needs the user says what to do in its own words, never "failed".
+const actionWord = (row) => {
+  const message = text(row.message);
+  if (message.startsWith('Quit the app')) return 'Quit to finish update';
+  if (message.startsWith('Codex is busy')) return 'Codex busy, try later';
+  if (message.startsWith('The download was blocked')) return 'Update it in the app';
+  return RESULT.action_required[0];
+};
+const rowWord = (row, label) => row.status === 'unknown'
+  ? [unknownWord(row, label), /timed out/i.test(text(row.message)) ? 'warn' : '']
+  : row.status === 'action_required' ? [actionWord(row), 'warn']
+    : (RESULT[row.status] || ['Unknown result', '']);
 export function updateResultsView(job, now = Date.now()) {
   const results = Array.isArray(job?.results) ? job.results.filter(row => row && typeof row === 'object') : [];
   const running = job?.state === 'running';
@@ -758,12 +780,15 @@ export function updateResultsView(job, now = Date.now()) {
     headRuns = [run('Last run '), run(validDate(when) ? relative(when, now) : 'time unknown', true),
       run(` · ${parts.join(', ')}`)];
   }
-  const order = ['ubuntu', 'mac', 'windows'];   // the order the server runs the hosts in
+  // Every computer runs at once and reports its own progress (job.hosts). A job
+  // saved before that ran the hosts in turn and only names activePlatform.
+  const progress = job?.hosts && typeof job.hosts === 'object' ? job.hosts : null;
+  const order = ['ubuntu', 'mac', 'windows'];   // the order a legacy job ran the hosts in
   const activeIndex = running ? order.indexOf(job.activePlatform) : -1;
   const hosts = job ? UPDATE_HOSTS.map(([id, label, platform]) => {
     const rows = results.filter(row => row.platform === id);
     const items = rows.map((row, index) => {
-      const [word, tone] = row.status === 'unknown' ? [unknownWord(row, label), ''] : (RESULT[row.status] || ['Unknown result', '']);
+      const [word, tone] = rowWord(row, label);
       const versions = text(row.previousVersion) && text(row.version) && row.previousVersion !== row.version ? `${row.previousVersion} to ${row.version}` : text(row.version) ? `version ${row.version}` : '';
       return {
         key: `${id}|${text(row.appId) || index}`, app: text(row.appLabel) || text(row.appId) || 'App',
@@ -771,7 +796,21 @@ export function updateResultsView(job, now = Date.now()) {
         tip: [text(row.message), versions].filter(Boolean).join(' · '),
       };
     });
-    if (!rows.length) {
+    if (progress) {
+      const host = progress[id] || {};
+      const live = running && host.state === 'running';
+      const current = live && UPDATE_APP_NAMES[host.currentApp];
+      if (current) {
+        const updating = host.phase === 'updating';
+        items.push({ key: `${id}|current`, app: current, result: updating ? 'Updating' : 'Checking', tone: 'run', running: true,
+          tip: updating ? `${label} is updating ${current} now` : `${label} is checking ${current} now` });
+      } else if (live) {
+        items.push({ key: `${id}|state`, app: rows.length ? 'More apps' : 'Checking the apps', result: 'Running', tone: 'run', running: true, tip: '' });
+      } else if (!rows.length) {
+        const waiting = running && host.state === 'waiting';
+        items.push({ key: `${id}|state`, app: waiting ? 'Starting' : 'No results from this computer', result: '', tone: '', running: false, tip: '' });
+      }
+    } else if (!rows.length) {
       const index = order.indexOf(id);
       const state = running ? (index === activeIndex ? 'run' : index > activeIndex ? 'wait' : 'none') : 'none';
       items.push({ key: `${id}|state`, app: state === 'run' ? 'Checking the apps' : state === 'wait' ? 'Waiting for its turn' : 'No results from this computer',

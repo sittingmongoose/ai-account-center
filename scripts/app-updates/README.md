@@ -6,6 +6,38 @@ It starts one asynchronous, persisted job and returns immediately. Authenticated
 The server invokes only Ubuntu locally and the fixed `jared-mac`/`jared-windows`
 SSH hosts; callers cannot supply hosts, commands, app IDs, paths or download URLs.
 
+## Every computer at once, and never stuck
+
+Ubuntu, Mac and Windows run **at the same time**; each computer still updates
+its own apps one at a time (one installer per host). The job ends when the
+slowest computer finishes, so a busy or unreachable host never holds the others
+back. Per-computer progress is live: the helper prints one JSON line per event
+(`{"event":"app","appId":...,"phase":"checking"|"updating"}` and
+`{"event":"result","result":{...}}`) when the dashboard sets
+`AAC_UPDATE_PROGRESS=1`, then the usual final `{"results":[...]}` line; an older
+dashboard gets exactly one document. Windows relays its task child's progress
+through a nonce-bound private file. A cancel is a `cancel` line on the helper's
+stdin (forwarded over ssh; Windows forwards it to its task child through a
+nonce-bound cancel file): the app running at that moment finishes and every app
+not yet started reports `skipped`.
+
+Nothing can wait forever:
+
+- every helper command runs in its own session with empty stdin and no
+  controlling terminal, so a prompt fails at once instead of waiting; at its
+  timeout the command and its helper processes are stopped (`timeout`);
+- version probes run side by side (20 s each); a probe that runs out of time
+  reports `unknown` / `check_timeout` ("Check timed out"), never "not installed";
+- the Ubuntu Codex bridge waits at most 30 s for the account-switch lock and
+  60 s for shared Codex work to go idle (it used to wait up to 15 minutes, which
+  stalled the whole job on a VM where Codex is always busy); a busy Codex reports
+  `action_required` / `codex_busy` and, for the CLI, keeps its pending marker so
+  the next click restarts the daemon on the new version once Codex is idle;
+- each helper stops starting apps after 15 minutes (`timeout` rows), and the
+  dashboard stops a computer after 18 minutes (helper sync included): every app
+  without a result then reads `unknown` / `host_timeout` ("Timed out") while
+  rows that did arrive keep their real results.
+
 The Python helper defaults to **read-only inventory**. Only `--apply` updates or
 restarts apps. It detects the active installation, skips absent apps, and returns
 one bounded, whitelist result for each of the seven fixed apps. It does not copy,
@@ -59,8 +91,8 @@ terminal/tmux sessions; authentication environment is never serialized.
 
 Ubuntu Codex updates additionally serialize against account switching via the
 existing `.ccs-activation.lock` and use the established idle/startup-lock runtime
-for the shared daemon and desktop app server. Busy Codex work is queued until the
-bounded deadline. SSH proxies use verified native client reconnect behavior:
+for the shared daemon and desktop app server. Busy Codex work is waited on for
+at most 60 seconds, then reported as `codex_busy` (see above). SSH proxies use verified native client reconnect behavior:
 Mac/Windows desktop transports recreate `exec codex app-server proxy` after exit.
 The updater stops only captured proxies with SSH ancestry, then verifies old PIDs
 are gone and replacement proxies execute the updated active binary. Unknown
@@ -85,6 +117,10 @@ user: its fixed `CCS App Updates` InteractiveToken/Limited task runs the private
 helper. Registration does **not** run an update. The helper queues that task
 from SSH session zero, so the user's interactive session must be signed in.
 Existing CCS Bar tasks are untouched.
+
+The Mac sync extracts with `/bin/mkdir`, `/bin/chmod` and `/usr/bin/tar`
+(macOS has no `/usr/bin/chmod`; that path silently broke every Mac sync until
+2026-10-06, so Mac kept running its Oct-2 helpers).
 
 Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
 `skipped`, `unknown`, or `action_required`, with bounded versions, fixed message

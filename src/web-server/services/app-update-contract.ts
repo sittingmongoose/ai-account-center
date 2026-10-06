@@ -38,12 +38,23 @@ export interface AppUpdateResult {
     session?: string;
   }>;
 }
+/** One computer's live progress: every computer runs at the same time. */
+export interface AppUpdateHostProgress {
+  state: 'waiting' | 'running' | 'done';
+  /** The app this computer works on now; null between apps or while it checks them all. */
+  currentApp: UpdateAppId | null;
+  /** 'checking' while read-only checks run, 'updating' once an app's update starts. */
+  phase: 'checking' | 'updating' | null;
+}
 export interface AppUpdateJob {
   id: string;
   state: 'running' | 'completed' | 'failed';
   startedAt: string;
   finishedAt: string | null;
+  /** The first computer still running (kept for older clients); see hosts. */
   activePlatform: UpdatePlatform | null;
+  /** Per-computer progress; null for a job saved before hosts ran in parallel. */
+  hosts: Record<UpdatePlatform, AppUpdateHostProgress> | null;
   /**
    * True once a cancel is acknowledged. The running host batch still finishes;
    * every queued app is reported as skipped. Never promises an undo.
@@ -77,6 +88,9 @@ export const MESSAGES = {
   readiness_unknown: 'Unknown: the readiness check could not run.',
   quit_first: 'Quit the app, then run Update apps again.',
   check_in_app: 'The download was blocked; open the app to check for updates.',
+  codex_busy: 'Codex is busy with a task; run Update apps again when it is idle.',
+  check_timeout: 'Check timed out: the app did not answer in time.',
+  host_timeout: 'Timed out: this computer did not finish in time.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows'];
@@ -152,7 +166,7 @@ export function skipped(platform: UpdatePlatform, appId: UpdateAppId): AppUpdate
 export function unknown(
   platform: UpdatePlatform,
   appId: UpdateAppId,
-  code: 'host_unknown' | 'readiness_unknown'
+  code: 'host_unknown' | 'readiness_unknown' | 'host_timeout' | 'check_timeout'
 ): AppUpdateResult {
   return {
     appId,
@@ -168,6 +182,12 @@ export function unknown(
     forcedStops: 0,
     restartTargets: [],
   };
+}
+
+export function isUpdateAppId(value: unknown): value is UpdateAppId {
+  return (
+    typeof value === 'string' && Object.prototype.hasOwnProperty.call(UPDATE_APP_LABELS, value)
+  );
 }
 
 /** Only fixed identifiers, bounded versions, enums and counters cross the helper boundary. */
@@ -186,69 +206,76 @@ export function normalizeAppUpdateResults(
   const rows = Array.isArray(payload?.results) ? payload.results : [];
   return (Object.keys(UPDATE_APP_LABELS) as UpdateAppId[]).map((appId) => {
     const matches = rows.map(record).filter((row) => row?.appId === appId);
-    const row = matches.length === 1 ? matches[0] : undefined;
-    if (!row || !STATUSES.includes(row.status as UpdateResultStatus))
-      return failure(platform, appId, 'helper_invalid');
-    if (
-      typeof row.messageCode !== 'string' ||
-      !Object.prototype.hasOwnProperty.call(MESSAGES, row.messageCode)
-    )
-      return failure(platform, appId, 'helper_invalid');
-    const code = row.messageCode as MessageCode;
-    const count =
-      typeof row.restartedProcesses === 'number' &&
-      Number.isSafeInteger(row.restartedProcesses) &&
-      row.restartedProcesses >= 0 &&
-      row.restartedProcesses <= 10000
-        ? row.restartedProcesses
-        : 0;
-    const forced =
-      typeof row.forcedStops === 'number' &&
-      Number.isSafeInteger(row.forcedStops) &&
-      row.forcedStops >= 0 &&
-      row.forcedStops <= 10000
-        ? row.forcedStops
-        : 0;
-    const targets: AppUpdateResult['restartTargets'] = [];
-    for (const candidate of (Array.isArray(row.restartTargets) ? row.restartTargets : []).slice(
-      0,
-      100
-    )) {
-      const target = record(candidate);
-      if (target?.kind === 'terminal' || target?.kind === 'windows-terminal')
-        targets.push({ kind: target.kind });
-      else if (
-        target?.kind === 'tmux' &&
-        typeof target.server === 'string' &&
-        /^ccs-updates-[a-f0-9]{12}$/.test(target.server) &&
-        typeof target.session === 'string' &&
-        /^ccs-updated-(?:antigravity-cli|muse-code|omp|codex-cli|claude-code)-[1-9]\d{0,3}$/.test(
-          target.session
-        )
-      )
-        targets.push({ kind: 'tmux', server: target.server, session: target.session });
-    }
-    if (
-      row.status === 'updated' &&
-      (!safeVersion(row.version) ||
-        typeof row.manager !== 'string' ||
-        !MANAGERS.includes(row.manager))
-    )
-      return failure(platform, appId, 'helper_invalid');
-    return {
-      appId,
-      appLabel: UPDATE_APP_LABELS[appId],
-      platform,
-      status: row.status as UpdateResultStatus,
-      previousVersion: safeVersion(row.previousVersion),
-      version: safeVersion(row.version),
-      manager:
-        typeof row.manager === 'string' && MANAGERS.includes(row.manager) ? row.manager : null,
-      message: MESSAGES[code],
-      updateAttempted: row.updateAttempted === true,
-      restartedProcesses: count,
-      forcedStops: forced,
-      restartTargets: targets,
-    };
+    return normalizeAppUpdateRow(matches.length === 1 ? matches[0] : undefined, appId, platform);
   });
+}
+
+/** One helper row for a known app; anything unexpected becomes a fixed helper_invalid row. */
+export function normalizeAppUpdateRow(
+  row: Record<string, unknown> | undefined,
+  appId: UpdateAppId,
+  platform: UpdatePlatform
+): AppUpdateResult {
+  if (!row || !STATUSES.includes(row.status as UpdateResultStatus))
+    return failure(platform, appId, 'helper_invalid');
+  if (
+    typeof row.messageCode !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(MESSAGES, row.messageCode)
+  )
+    return failure(platform, appId, 'helper_invalid');
+  const code = row.messageCode as MessageCode;
+  const count =
+    typeof row.restartedProcesses === 'number' &&
+    Number.isSafeInteger(row.restartedProcesses) &&
+    row.restartedProcesses >= 0 &&
+    row.restartedProcesses <= 10000
+      ? row.restartedProcesses
+      : 0;
+  const forced =
+    typeof row.forcedStops === 'number' &&
+    Number.isSafeInteger(row.forcedStops) &&
+    row.forcedStops >= 0 &&
+    row.forcedStops <= 10000
+      ? row.forcedStops
+      : 0;
+  const targets: AppUpdateResult['restartTargets'] = [];
+  for (const candidate of (Array.isArray(row.restartTargets) ? row.restartTargets : []).slice(
+    0,
+    100
+  )) {
+    const target = record(candidate);
+    if (target?.kind === 'terminal' || target?.kind === 'windows-terminal')
+      targets.push({ kind: target.kind });
+    else if (
+      target?.kind === 'tmux' &&
+      typeof target.server === 'string' &&
+      /^ccs-updates-[a-f0-9]{12}$/.test(target.server) &&
+      typeof target.session === 'string' &&
+      /^ccs-updated-(?:antigravity-cli|muse-code|omp|codex-cli|claude-code)-[1-9]\d{0,3}$/.test(
+        target.session
+      )
+    )
+      targets.push({ kind: 'tmux', server: target.server, session: target.session });
+  }
+  if (
+    row.status === 'updated' &&
+    (!safeVersion(row.version) ||
+      typeof row.manager !== 'string' ||
+      !MANAGERS.includes(row.manager))
+  )
+    return failure(platform, appId, 'helper_invalid');
+  return {
+    appId,
+    appLabel: UPDATE_APP_LABELS[appId],
+    platform,
+    status: row.status as UpdateResultStatus,
+    previousVersion: safeVersion(row.previousVersion),
+    version: safeVersion(row.version),
+    manager: typeof row.manager === 'string' && MANAGERS.includes(row.manager) ? row.manager : null,
+    message: MESSAGES[code],
+    updateAttempted: row.updateAttempted === true,
+    restartedProcesses: count,
+    forcedStops: forced,
+    restartTargets: targets,
+  };
 }

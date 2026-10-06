@@ -1228,11 +1228,103 @@ test('Update apps action-required rows read as needs-action warnings, never fail
   );
   assert.deepEqual(
     done.hosts[0].items.map((i) => [i.app, i.result, i.tone]),
-    [['Codex Desktop', 'Needs action', 'warn']]
+    [['Codex Desktop', 'Quit to finish update', 'warn']]
   );
   assert.equal(
     done.hosts[0].items[0].tip,
     'Quit the app, then run Update apps again.'
+  );
+  assert.deepEqual(
+    done.hosts[1].items.map((i) => [i.app, i.result, i.tone]),
+    [['Claude Desktop', 'Update it in the app', 'warn']]
+  );
+});
+
+test('Update apps shows every computer working at once, each on its own app', () => {
+  const result = (platform, appLabel, status, extra = {}) => ({
+    appId: appLabel.toLowerCase().replace(/ /g, '-'),
+    appLabel,
+    platform,
+    status,
+    previousVersion: null,
+    version: null,
+    message: 'Done',
+    ...extra,
+  });
+  const running = updateResultsView(
+    {
+      state: 'running',
+      startedAt: at(-1),
+      finishedAt: null,
+      activePlatform: 'ubuntu',
+      hosts: {
+        ubuntu: { state: 'running', currentApp: 'codex-cli', phase: 'updating' },
+        mac: { state: 'running', currentApp: null, phase: 'checking' },
+        windows: { state: 'done', currentApp: null, phase: null },
+      },
+      expectedResults: 21,
+      results: [
+        result('ubuntu', 'OMP', 'current'),
+        result('windows', 'Codex CLI', 'updated', { previousVersion: '1.0.0', version: '1.1.0' }),
+      ],
+    },
+    now
+  );
+  const byId = Object.fromEntries(running.hosts.map((h) => [h.id, h.items]));
+  // Ubuntu: its finished row, then the app it is updating right now.
+  assert.deepEqual(
+    byId.ubuntu.map((i) => [i.app, i.result, i.running]),
+    [
+      ['OMP', 'Already current', false],
+      ['Codex CLI', 'Updating', true],
+    ]
+  );
+  assert.equal(byId.ubuntu[1].tip, 'Ubuntu is updating Codex CLI now');
+  // Mac is checking at the same time; it never waits for Ubuntu.
+  assert.deepEqual(
+    byId.mac.map((i) => [i.app, i.result, i.running]),
+    [['Checking the apps', 'Running', true]]
+  );
+  assert.ok(!JSON.stringify(running).includes('Waiting for its turn'));
+  assert.deepEqual(
+    byId.windows.map((i) => i.result),
+    ['Updated to 1.1.0']
+  );
+  const timedOut = updateResultsView(
+    {
+      state: 'failed',
+      startedAt: at(-30),
+      finishedAt: at(-10),
+      activePlatform: null,
+      hosts: {
+        ubuntu: { state: 'done', currentApp: null, phase: null },
+        mac: { state: 'done', currentApp: null, phase: null },
+        windows: { state: 'done', currentApp: null, phase: null },
+      },
+      results: [
+        result('ubuntu', 'OMP', 'unknown', { message: 'Check timed out: the app did not answer in time.' }),
+        result('ubuntu', 'Muse Code', 'unknown', { message: 'Timed out: this computer did not finish in time.' }),
+        result('ubuntu', 'Codex CLI', 'action_required', {
+          message: 'Codex is busy with a task; run Update apps again when it is idle.',
+          previousVersion: '0.160.0',
+          version: '0.160.1',
+        }),
+      ],
+    },
+    now
+  );
+  assert.deepEqual(
+    timedOut.hosts[2].items.map((i) => [i.app, i.result, i.tone]),
+    [
+      ['OMP', 'Check timed out', 'warn'],
+      ['Muse Code', 'Timed out', 'warn'],
+      ['Codex CLI', 'Codex busy, try later', 'warn'],
+    ]
+  );
+  assert.match(timedOut.hosts[2].items[2].tip, /0\.160\.0 to 0\.160\.1/);
+  assert.deepEqual(
+    timedOut.hosts[0].items.map((i) => i.app),
+    ['No results from this computer']
   );
 });
 
