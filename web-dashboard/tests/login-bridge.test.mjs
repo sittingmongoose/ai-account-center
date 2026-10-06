@@ -15,7 +15,10 @@ function stubInput(id, { value = '', checked = true, autocomplete = null, form =
     getAttribute: (name) => (name === 'autocomplete' ? autocomplete : null),
     addEventListener: (event, fn) => { (listeners[event] ||= []).push(fn); },
     dispatch: (event) => { for (const fn of listeners[event] || []) fn({}); },
-    getBoundingClientRect: () => ({ width: 200, height: 28 }),
+    getBoundingClientRect: () => ({ left: 100, top: 50, width: 200, height: 28 }),
+    clientWidth: 200,
+    clientHeight: 28,
+    offsetParent: form,
   };
 }
 
@@ -74,15 +77,24 @@ test('readLoginForm reads the three fields; missing form installs to null', () =
   assert.equal(installLoginBridge({ document: { getElementById: () => null } }), null);
 });
 
-test("Chrome's autofill heuristics checklist: in a form, named, and rendered", () => {
+test("a manager's fill checklist: Chrome's (in a form, named, rendered) and 1Password's viewable rule", () => {
   const { user, pass } = stubDocument();
   const styleOf = () => ({ display: 'block', visibility: 'visible' });
-  assert.deepEqual(autofillChecks(user, styleOf), { inForm: true, autocomplete: 'username', rendered: true });
-  assert.deepEqual(autofillChecks(pass, styleOf), { inForm: true, autocomplete: 'current-password', rendered: true });
+  const at = (el) => () => el;
+  const all = { rendered: true, positioned: true, viewable: true };
+  assert.deepEqual(autofillChecks(user, styleOf, at(user)), { inForm: true, autocomplete: 'username', ...all });
+  assert.deepEqual(autofillChecks(pass, styleOf, at(pass)), { inForm: true, autocomplete: 'current-password', ...all });
   // display:none fails the checklist, as it fails Chrome
   assert.equal(autofillChecks(user, () => ({ display: 'none', visibility: 'visible' })).rendered, false);
   const orphan = stubInput('x', { autocomplete: 'username', form: null });
   assert.equal(autofillChecks(orphan, styleOf).inForm, false);
+  // a position:fixed field has no offsetParent: 1Password's collector calls it not viewable and fills only the
+  // field that has focus, one field per fill (the 13a93136 behaviour)
+  const fixed = { ...user, offsetParent: null };
+  assert.deepEqual([autofillChecks(fixed, styleOf, at(fixed)).positioned, autofillChecks(fixed, styleOf, at(fixed)).viewable], [false, false]);
+  // covered by the canvas, or too small, is not viewable either
+  assert.equal(autofillChecks(user, styleOf, () => ({ id: 'canvas' })).viewable, false);
+  assert.equal(autofillChecks({ ...user, clientHeight: 8 }, styleOf, at(user)).viewable, false);
 });
 
 test('form.submit() from a manager runs the same sign-in instead of the browser posting the form', () => {
@@ -139,6 +151,8 @@ function liveDocument() {
         if (before && before !== el) { doc.activeElement = null; before.fire?.('blur'); }
         doc.activeElement = el; el.fire('focus');
       },
+      blur: () => { if (doc.activeElement === el) { doc.activeElement = null; el.fire('blur'); } },
+      click: () => el.fire('click'),
     };
     return el;
   };
@@ -166,6 +180,8 @@ function liveDocument() {
 test('overlayLayout puts the inputs over the Slint boxes in whole pixels, with the text where Slint draws it', () => {
   const layout = overlayLayout(report());
   assert.equal(layout.on, true);
+  // the form's own box holds everything it places: the fields, Remember me and Sign in
+  assert.deepEqual(layout.frame, { left: 177, top: 401, width: 340, height: 270 });
   // 176.5 -> 177 (rounded edges, so the box never grows or shrinks by more than a pixel)
   assert.deepEqual(layout.user, { left: 177, top: 401, width: 340, height: 42, paddingLeft: 12, paddingRight: 14 });
   // the password input stops where its text area ends, so the Slint eye button beside it stays clickable
@@ -196,17 +212,21 @@ test('place shows, moves and hides the real inputs; Remember me and the eye butt
   const bridge = installLoginBridge({ document: live.document, onFilled: (v) => fills.push(v), onPointer: (p) => pointer.push(p) });
   bridge.place(report());
   assert.equal(bridge.shown(), true);
+  // the form is a box around the fields in window pixels; each field sits inside it, relative to its corner
+  assert.deepEqual(['left', 'top', 'width', 'height'].map((k) => live.form.style[k]), ['177px', '401px', '340px', '270px']);
   assert.deepEqual(
     ['display', 'left', 'top', 'width', 'height', 'paddingLeft', 'paddingRight'].map((k) => live.user.style[k]),
-    ['block', '177px', '401px', '340px', '42px', '12px', '14px'],
+    ['block', '0px', '0px', '340px', '42px', '12px', '14px'],
   );
-  assert.deepEqual([live.pass.style.display, live.pass.style.width], ['block', '298px']);
-  assert.deepEqual([live.remember.style.display, live.remember.style.left], ['block', '177px']);
-  assert.deepEqual([live.submit.style.display, live.submit.style.top], ['block', '627px']);
+  assert.deepEqual([live.pass.style.display, live.pass.style.top, live.pass.style.width], ['block', '75px', '298px']);
+  assert.deepEqual([live.remember.style.display, live.remember.style.left, live.remember.style.top], ['block', '0px', '190px']);
+  assert.deepEqual([live.submit.style.display, live.submit.style.top], ['block', '226px']);
   assert.equal(live.vars['--aac-login-accent'], 'rgba(37,82,204,1.000)');
   // the shake and a resize move the boxes: the inputs follow
   bridge.place(report({ user: { x: 183.4, y: 401.25, w: 340, h: 42 }, userText: { x: 195.4, y: 401.25, w: 316, h: 42 } }));
-  assert.equal(live.user.style.left, '183px');
+  assert.deepEqual([live.form.style.left, live.form.style.width, live.user.style.left], ['177px', '346px', '6px']);
+  bridge.place(report({ user: { x: 183.4, y: 401.25, w: 340, h: 42 }, userText: { x: 195.4, y: 401.25, w: 316, h: 42 }, pass: { x: 183.4, y: 476.25, w: 340, h: 42 }, passText: { x: 195.4, y: 476.25, w: 286, h: 42 }, check: { x: 183.4, y: 590.75, w: 16, h: 16 }, submit: { x: 183.4, y: 627, w: 340, h: 44 } }));
+  assert.deepEqual([live.form.style.left, live.user.style.left, live.pass.style.left], ['183px', '0px', '0px'], 'the shake moves the form');
   // connecting: the fields are disabled, so the inputs keep focus but take no typing
   bridge.place(report({ enabled: false }));
   assert.deepEqual([live.user.readOnly, live.pass.readOnly], [true, true]);
@@ -230,6 +250,7 @@ test('place shows, moves and hides the real inputs; Remember me and the eye butt
   bridge.place({ on: false, remember: true, revealed: false });
   assert.equal(bridge.shown(), false);
   for (const el of [live.user, live.pass, live.remember, live.submit]) assert.equal(el.style.display, 'none');
+  assert.deepEqual([live.form.style.width, live.form.style.height], ['0px', '0px'], 'an empty form keeps no box');
   assert.equal(live.document.activeElement, live.canvas);
   assert.deepEqual(pointer.at(-1), { focus: '', hover: '' });
 });
@@ -262,4 +283,89 @@ test('clearPassword empties the real password input and mirror skips unchanged v
   assert.deepEqual([live.user.value, live.pass.value], ['owner', '']);
   bridge.mirror({ username: 'owner', password: 'x', remember: false });
   assert.deepEqual([live.user.value, live.pass.value, live.remember.checked], ['owner', 'x', false]);
+});
+
+/**
+ * 1Password's own fill operations for one field, as its fill script runs them (agilebits onepassword-app-extension,
+ * fill `G`: click and focus, keydown/keypress/keyup, the value, keydown/keypress/keyup, input, change, blur).
+ */
+function onePasswordFill(el, value) {
+  el.click();
+  el.focus();
+  for (const type of ['keydown', 'keypress', 'keyup']) el.fire(type);
+  el.value = value;
+  for (const type of ['keydown', 'keypress', 'keyup', 'input', 'change']) el.fire(type);
+  el.blur();
+}
+
+test('a 1Password fill sets the username and the password in one go, then auto-submits with both', () => {
+  const live = liveDocument();
+  const fills = [], submitted = [];
+  const snapshot = () => ({ display: live.pass.style.display, left: live.pass.style.left, top: live.pass.style.top, readOnly: live.pass.readOnly, type: live.pass.type });
+  let bridge;
+  // Slint answers every focus and hover change and every value as it does in the page: the pointer report redraws
+  // the boxes' halo and border and re-reports the same geometry; the values land in the Slint fields
+  bridge = installLoginBridge({
+    document: live.document,
+    canvas: live.canvas,
+    onFilled: (v) => { fills.push(v); bridge.place(report()); },
+    onPointer: () => bridge.place(report()),
+    onSubmit: (v) => submitted.push(v),
+  });
+  bridge.place(report());
+  const before = snapshot();
+  onePasswordFill(live.user, 'owner');
+  // nothing the username fill set off moved, hid, disabled or retyped the password input, or took the keyboard
+  assert.deepEqual(snapshot(), before);
+  assert.notEqual(live.document.activeElement, live.canvas);
+  assert.equal(bridge.shown(), true);
+  onePasswordFill(live.pass, 's3cret-password');
+  assert.deepEqual(fills.at(-1), { username: 'owner', password: 's3cret-password', remember: true }, 'both values reach Slint');
+  assert.deepEqual([live.user.value, live.pass.value], ['owner', 's3cret-password']);
+  // 1Password's auto-submit: a click on the form's submit button fires the form's submit event
+  live.form.fire('submit', { preventDefault: () => {} });
+  assert.deepEqual(submitted, [{ username: 'owner', password: 's3cret-password', remember: true }]);
+});
+
+test('a fill while the username has focus (the inline menu) fills both too', () => {
+  const live = liveDocument();
+  const fills = [];
+  let bridge;
+  bridge = installLoginBridge({ document: live.document, canvas: live.canvas, onFilled: (v) => fills.push(v), onPointer: () => bridge.place(report()) });
+  bridge.place(report());
+  live.user.fire('pointerenter');
+  live.user.focus();
+  onePasswordFill(live.user, 'owner');
+  onePasswordFill(live.pass, 'pw-2');
+  // and with a manager that never focuses: values and input events only
+  live.user.value = 'owner'; live.user.fire('input');
+  live.pass.value = 'pw-3'; live.pass.fire('input');
+  assert.deepEqual(fills.map((f) => f.password), ['', 'pw-2', 'pw-2', 'pw-3']);
+  assert.deepEqual([live.user.style.display, live.pass.style.display], ['block', 'block']);
+});
+
+test("a manager's auto-submit by a synthetic Enter signs in; a real Enter is left to the browser", () => {
+  const { document, form, user, pass } = stubDocument();
+  const listeners = [];
+  form.addEventListener = (event, fn) => { if (event === 'submit') listeners.push(fn); };
+  form.requestSubmit = () => { for (const fn of listeners) fn({ preventDefault: () => {} }); };
+  const keys = {};
+  for (const input of [user, pass]) {
+    input.addEventListener = (event, fn) => { (keys[`${input.id}:${event}`] ||= []).push(fn); };
+  }
+  const submitted = [];
+  installLoginBridge({ document, onSubmit: (v) => submitted.push(v) });
+  const press = (input, event) => { for (const fn of keys[`${input.id}:keydown`] || []) fn(event); };
+  user.value = 'owner';
+  pass.value = 's3cret-password';
+  // the fill's own key events carry no key, and other keys do nothing
+  press(pass, { isTrusted: false });
+  press(pass, { key: 'a', isTrusted: false });
+  // a real Enter submits through the browser's implicit submission, so the bridge must not submit a second time
+  press(pass, { key: 'Enter', isTrusted: true });
+  assert.equal(submitted.length, 0);
+  let stopped = false;
+  press(pass, { key: 'Enter', isTrusted: false, preventDefault: () => { stopped = true; } });
+  assert.deepEqual(submitted, [{ username: 'owner', password: 's3cret-password', remember: true }]);
+  assert.equal(stopped, true);
 });
