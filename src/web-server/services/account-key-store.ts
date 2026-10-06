@@ -293,6 +293,11 @@ export function keyHelperCommand(
       "$env:PYTHONIOENCODING = 'utf-8'",
       "$env:PYTHONUTF8 = '1'",
       "$helper = [IO.Path]::Combine($HOME, '.ccs', 'account-usage', 'key_store.py')",
+      // PowerShell reads stdin here. Over Windows OpenSSH that read can hang for
+      // good once the input reaches tens of KB, but the secret is at most 512
+      // bytes (API_KEY_PATTERN): measured 2026-10-06, 70 of 70 clean runs at 0,
+      // 64 and 512 bytes. A larger payload must go to a native child that reads
+      // stdin itself (see WINDOWS_SCRIPT_MAX_BYTES in claude-host-transport.ts).
       `$input | & python.exe $helper ${args}`,
       'exit $LASTEXITCODE',
     ].join('; ');
