@@ -481,12 +481,23 @@ def stream_progress():
     stop = threading.Event()
 
     def listen():
+        # Raw reads on the descriptor: a daemon thread parked inside the
+        # buffered sys.stdin would hold its lock while the interpreter exits.
         try:
-            for line in sys.stdin:
-                if line.strip() == "cancel":
-                    stop.set()
-        except (OSError, ValueError):
-            pass
+            descriptor = sys.stdin.fileno()
+        except (AttributeError, OSError, ValueError):
+            return
+        seen = b""
+        while not stop.is_set():
+            try:
+                chunk = os.read(descriptor, 256)
+            except OSError:
+                return
+            if not chunk:
+                return
+            seen = (seen + chunk)[-64:]
+            if b"cancel\n" in seen or b"cancel\r\n" in seen:
+                stop.set()
 
     threading.Thread(target=listen, daemon=True).start()
 

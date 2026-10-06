@@ -775,12 +775,18 @@ class BoundedUpdateTests(unittest.TestCase):
 
     def test_progress_streams_json_lines_and_hears_cancel_on_stdin(self):
         output = io.StringIO()
-        with mock.patch.object(sys, 'stdin', io.StringIO('noise\ncancel\n')), contextlib.redirect_stdout(output):
+        read_end, write_end = os.pipe()
+        with open(read_end, 'rb', buffering=0) as stdin, mock.patch.object(sys, 'stdin', stdin), contextlib.redirect_stdout(output):
             emit, cancelled = updater.stream_progress()
             emit({'event': 'app', 'appId': 'omp', 'phase': 'checking'})
+            os.write(write_end, b'noise\n')
+            time.sleep(.1)
+            self.assertFalse(cancelled())
+            os.write(write_end, b'cancel\n')
             deadline = time.monotonic() + 2
             while not cancelled() and time.monotonic() < deadline:
                 time.sleep(.01)
+            os.close(write_end)
         self.assertTrue(cancelled())
         self.assertEqual(json.loads(output.getvalue().splitlines()[0]), {'event': 'app', 'appId': 'omp', 'phase': 'checking'})
 
@@ -796,8 +802,10 @@ class BoundedUpdateTests(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertEqual(len(json.loads(lines[0])['results']), 7)
         output = io.StringIO()
+        devnull = open(os.devnull, 'rb')
+        self.addCleanup(devnull.close)
         with mock.patch.dict(os.environ, {'AAC_UPDATE_PROGRESS': '1'}), mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
-                mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(sys, 'stdin', io.StringIO('')), \
+                mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(sys, 'stdin', devnull), \
                 mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu']), contextlib.redirect_stdout(output):
             updater.main()
         lines = [json.loads(line) for line in output.getvalue().splitlines()]

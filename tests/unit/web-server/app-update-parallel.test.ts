@@ -352,6 +352,64 @@ describe('fake helper processes', () => {
   });
 });
 
+describe('the real Python helper with fake apps', () => {
+  it('streams live rows and stops starting apps after a cancel on stdin', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-helper-stream-'));
+    directories.push(home);
+    // Every app is a fixture: detection, readiness and updates are replaced, so
+    // nothing on this computer is probed, stopped or updated.
+    const driver = path.join(home, 'driver.py');
+    fs.writeFileSync(
+      driver,
+      [
+        'import pathlib, sys, time',
+        `sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, '../../../scripts/app-updates'))})`,
+        'import app_updates as u, app_update_common as c',
+        "u.detect = lambda platform: {k: c.Install(k, platform, pathlib.Path('/fixture/' + k), '1.0.0') for k in c.APP_LABELS}",
+        'u.check_readiness = lambda install: None',
+        'def fake(install, deadline):',
+        '    time.sleep(0.3)',
+        "    return c.result(install.app_id, install.platform, 'current', '1.0.0', '1.0.0', 'native', attempted=True)",
+        'u.update_cli = fake',
+        'u.update_desktop = fake',
+        "sys.argv = ['app_updates.py', '--apply', '--platform', 'ubuntu']",
+        'u.main()',
+      ].join('\n')
+    );
+    const events: Array<Record<string, unknown>> = [];
+    let cancel: () => void = () => {};
+    const control: HostRunControl = {
+      onEvent: (event) => {
+        events.push(event);
+        if (event.event === 'result' && events.filter((e) => e.event === 'result').length === 1)
+          cancel();
+      },
+      setCancel: (handler) => {
+        cancel = handler;
+      },
+      setAbort: () => {},
+    };
+    const t0 = Date.now();
+    const output = await runHelperProcess(
+      'python3',
+      [driver],
+      { ...process.env, HOME: home, AAC_UPDATE_PROGRESS: '1' },
+      control
+    );
+    const rows = JSON.parse(output).results as Array<{ status: string; messageCode: string }>;
+    expect(rows).toHaveLength(7);
+    expect(rows[0].status).toBe('current');
+    const skippedRows = rows.filter((value) => value.status === 'skipped');
+    // The app already started when the cancel landed may finish; nothing after it starts.
+    expect(skippedRows.length).toBeGreaterThanOrEqual(5);
+    expect(skippedRows.every((value) => value.messageCode === 'skipped_cancelled')).toBe(true);
+    expect(rows.every((value) => ['current', 'skipped'].includes(value.status))).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(events[0]).toEqual({ event: 'app', appId: null, phase: 'checking' });
+    expect(events.filter((event) => event.event === 'result')).toHaveLength(7);
+  });
+});
+
 describe('Mac helper sync', () => {
   it('uses only tools that exist on macOS', () => {
     expect(MAC_EXTRACT).not.toContain('/usr/bin/chmod');
