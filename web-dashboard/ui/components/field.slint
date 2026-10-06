@@ -18,7 +18,31 @@ export component Field inherits VerticalLayout {
     callback edited(string);
     public function focus-input() { input.focus(); }
 
+    // The sign-in page's login fields are real HTML inputs laid over this box (public/login-bridge.mjs), so password
+    // managers can see and fill them. `mirror`: the text is typed there, never here; this TextInput only shows a
+    // copy of it (bridge.js set_login_fields) and never takes focus, and a click on the part of the box the HTML
+    // input leaves free (beside the eye button) asks for that input with `focus-request`. `covered`: the HTML input
+    // is on screen now and draws the text, placeholder and caret, so this field draws none of them. `ext-focus` and
+    // `ext-hover` are that input's focus and hover, so the border and the focus halo still answer it.
+    in property <bool> mirror: false;
+    in property <bool> covered: false;
+    in property <bool> ext-focus: false;
+    in property <bool> ext-hover: false;
+    callback focus-request();
+    // the box and its text area in window pixels, for the HTML input laid over them
+    out property <length> box-x: box.absolute-position.x;
+    out property <length> box-y: box.absolute-position.y;
+    out property <length> box-width: box.width;
+    out property <length> box-h: box.height;
+    out property <length> text-x: viewport.absolute-position.x;
+    out property <length> text-y: viewport.absolute-position.y;
+    out property <length> text-width: viewport.width;
+    out property <length> text-height: viewport.height;
+    // the eye button shows the password in plain text
+    out property <bool> plain: root.revealed;
+
     property <bool> revealed: false;
+    property <bool> focused: input.has-focus || root.ext-focus;
     spacing: 6px;
     HorizontalLayout {
         Text { text: root.label; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; horizontal-stretch: 1; }
@@ -34,7 +58,7 @@ export component Field inherits VerticalLayout {
         height: root.box-height;
         border-radius: 10px;
         border-width: 1px;
-        border-color: root.bad ? Theme.crit : input.has-focus ? Theme.accent : root.ok ? Theme.calm.mix(Theme.rule-strong, 0.7) : hover.has-hover ? Theme.ink-3.mix(Theme.rule-strong, 0.4) : Theme.rule-strong;
+        border-color: root.bad ? Theme.crit : root.focused ? Theme.accent : root.ok ? Theme.calm.mix(Theme.rule-strong, 0.7) : hover.has-hover || root.ext-hover ? Theme.ink-3.mix(Theme.rule-strong, 0.4) : Theme.rule-strong;
         background: root.enabled ? Theme.paper : Theme.paper-2;
         opacity: root.enabled ? 1 : 0.72;
         animate opacity { duration: Motion.tint(Motion.med); }
@@ -47,12 +71,18 @@ export component Field inherits VerticalLayout {
             height: parent.height + 6px;
             border-radius: 13px;
             border-width: 3px;
-            border-color: (root.bad ? Theme.crit : Theme.accent).with-alpha(input.has-focus ? 0.18 : 0);
+            border-color: (root.bad ? Theme.crit : Theme.accent).with-alpha(root.focused ? 0.18 : 0);
             animate border-color { duration: Motion.tint(Motion.fast); }
         }
         hover := TouchArea {
             mouse-cursor: MouseCursor.text;
-            clicked => { input.focus(); }
+            clicked => {
+                if root.mirror {
+                    root.focus-request();
+                } else {
+                    input.focus();
+                }
+            }
         }
         HorizontalLayout {
             padding-left: 12px;
@@ -71,7 +101,8 @@ export component Field inherits VerticalLayout {
                     width: max(parent.width - 2px, self.preferred-width);
                     height: 100%;
                     text <=> root.text;
-                    enabled: root.enabled;
+                    enabled: root.enabled && !root.mirror;
+                    visible: !root.covered;
                     input-type: root.password && !root.revealed ? InputType.password : InputType.text;
                     font-size: Type.body;
                     color: Theme.ink;

@@ -6,6 +6,8 @@ export component Reveal inherits Rectangle {
     in property <length> rise: 12px;
     in property <bool> armed: true;
     out property <bool> shown: !Motion.on;
+    // how far the fade-in has come (0 hidden, 1 settled), for HTML laid over the content (the sign-in inputs)
+    out property <float> level: surface.opacity;
     min-height: inner.min-height;
     preferred-height: inner.preferred-height;
     min-width: inner.min-width;
