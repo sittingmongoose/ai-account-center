@@ -757,16 +757,16 @@
           "loc": 1322
         },
         {
+          "file": "src/web-server/services/account-analytics-activity.ts",
+          "loc": 1174
+        },
+        {
           "file": "src/antigravity/registry.ts",
           "loc": 1104
         },
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
           "loc": 1102
-        },
-        {
-          "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1062
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",

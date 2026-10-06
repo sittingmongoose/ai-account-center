@@ -21,7 +21,15 @@ import {
 import { readDashboardPreferences } from './dashboard-preferences';
 
 export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
-export type AnalyticsSourceState = 'ok' | 'cached' | 'unavailable' | 'not_installed';
+export type AnalyticsSourceState =
+  | 'ok'
+  | 'cached'
+  | 'unavailable'
+  | 'not_installed'
+  /** The scan is still working on this tool: it is running now, or ran out of time before it finished. */
+  | 'scanning'
+  /** The tool was scanned and its logs hold no usage inside the 31-day window. */
+  | 'no_usage';
 
 export interface AnalyticsRemoteSourceState {
   tool: AnalyticsSourceTool;
@@ -444,7 +452,8 @@ export async function loadAnalyticsRemoteSources(
         for (const tool of kinds) {
           const rows = merged.filter((row) => row.k === tool);
           const srows = mergedSessions.filter((row) => row.k === tool);
-          const kindState = response.kinds[tool]?.state ?? 'ok';
+          const kind = response.kinds[tool];
+          const kindState = kind?.state ?? 'ok';
           if (kindState === 'not_installed') {
             states.push({
               tool,
@@ -458,26 +467,71 @@ export async function loadAnalyticsRemoteSources(
           }
           if (rows.length || srows.length)
             results.push({ tool, data: toWorkerResult(rows, srows, tool) });
-          const partial = response.truncated || errored.has(tool);
-          const reason = errored.has(tool) ? 'remote read failed' : 'remote scan hit its bounds';
+          const events = rows.reduce((sum, row) => sum + Math.floor(row.n), 0);
+          const kept = rows.length > 0;
+          if (kindState === 'pending') {
+            // The scan ran out of time before it reached this tool. That is a
+            // step of a cold start, never a failure: the next scan continues
+            // from the saved fingerprints, so the cell says "scanning".
+            states.push({
+              tool,
+              host,
+              state: 'scanning',
+              lastScanAt: scannedAt,
+              rowCount: events,
+              detail: kept
+                ? 'the scan ran out of time before it reached this tool again; records from earlier scans stay included'
+                : 'the scan ran out of time before it reached this tool; the next scan continues',
+            });
+            continue;
+          }
+          if (kindState === 'error') {
+            states.push({
+              tool,
+              host,
+              // A read that failed with earlier records in hand is a cached
+              // result; with nothing to show it is a real failure.
+              state: kept ? 'cached' : 'unavailable',
+              lastScanAt: scannedAt,
+              rowCount: events,
+              detail: kept
+                ? 'remote read failed; showing previously read aggregates'
+                : 'remote read failed',
+            });
+            continue;
+          }
+          if (kind?.partial === true) {
+            // A cap or the deadline cut this tool's own scan short: partial
+            // numbers are shown until a later scan finishes it, and with
+            // nothing read yet it is still scanning, not failed.
+            states.push({
+              tool,
+              host,
+              state: kept ? 'cached' : 'scanning',
+              lastScanAt: scannedAt,
+              rowCount: events,
+              detail: kept
+                ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+            });
+            continue;
+          }
           states.push({
             tool,
             host,
-            // Partial with nothing to show is not a cached result.
-            state: partial ? (rows.length ? 'cached' : 'unavailable') : 'ok',
+            state: kept ? 'ok' : 'no_usage',
             lastScanAt: scannedAt,
-            rowCount: rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
-            detail: partial
-              ? rows.length
-                ? `${reason}; showing partial aggregates`
-                : `${reason} before any usage was read`
-              : tool === 'omp' && response.discoveryTruncated === true
+            rowCount: events,
+            detail:
+              tool === 'omp' && response.discoveryTruncated === true
                 ? 'the search for custom OMP session folders hit its bounds; folders it did not reach are not read'
                 : tool === 'zcode' && response.kinds.zcode?.walUnread === true
                   ? "zcode's newest usage waits in its write-ahead log, which a read-only open here cannot read; it appears once zcode checkpoints it"
-                  : rows.length === 0 && Object.keys(freshPrints[tool] ?? {}).length > 0
-                    ? 'usage logs found but no usage in the last 31 days'
-                    : null,
+                  : kept
+                    ? null
+                    : Object.keys(freshPrints[tool] ?? {}).length > 0
+                      ? 'usage logs found but no usage in the last 31 days'
+                      : 'no usage recorded in the last 31 days',
           });
         }
         onHostScan?.(host, 'done');

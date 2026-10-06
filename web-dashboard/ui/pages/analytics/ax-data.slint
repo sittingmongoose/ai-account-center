@@ -1,4 +1,4 @@
-// Analytics view model (version 6, public/analytics-data.mjs analyticsSlintModel): the structs and the
+// Analytics view model (version 7, public/analytics-data.mjs analyticsSlintModel): the structs and the
 // AxData global that src/analytics.rs fills. Every number, label and "unavailable" decision is made in
 // public/analytics-*.mjs; these components only lay out and animate what they are given. Chart geometry
 // (paths, ticks, label positions) arrives in pixels of the box the page reported through AxData.layout().
@@ -6,10 +6,13 @@ import { RunView, AnalyticsHeadView } from "../../models.slint";
 
 export struct AxScopeLine { icon: string, text: string }
 
-// ---- included usage (activity.sources): one cell per tool and computer; tone ok | cached | unavailable | quiet ----
-export struct AxSrcCell { text: string, tone: string, tip: string }
+// ---- included usage (activity.sources): one cell per tool and computer; tone ok | cached | unavailable | scanning | quiet ----
+// `id` is the cell's host, its stable key: a state flip updates the cell in place instead of re-creating it.
+export struct AxSrcCell { id: string, text: string, tone: string, tip: string }
 export struct AxSrcRow { tool: string, cells: [AxSrcCell] }
 export struct AxIncluded { shown: bool, label: string, line: string, foot: string }
+// ---- loading screen: one row per computer with its scan progress while the first useful answer is held ----
+export struct AxLoadHost { name: string, detail: string }
 
 // ---- tokens by provider: a summary under the KPI row (packed into lines by the view model); never a section ----
 export struct AxProvItem { key: string, label: string, mark: string, value: string, tip: string, quiet: bool }
@@ -273,6 +276,8 @@ export global AxData {
     in-out property <AnalyticsHeadView> head: { loading: true };
     // true once the first analytics response has been rendered
     in-out property <bool> ready: false;
+    // one row per computer: how far its scan is ("2 of 5 tools · scanning now"), for the held loading screen
+    in-out property <[AxLoadHost]> load-hosts;
     in-out property <bool> available: false;
     in-out property <string> status-note;
     in-out property <string> apport-tip;

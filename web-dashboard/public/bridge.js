@@ -48,6 +48,8 @@ let analyticsGeneration = 0;
 // While the log scan runs behind the page (loading, or a cached snapshot with a refresh running),
 // the page re-reads the server every few seconds so the new numbers land on their own.
 let analyticsPollTimer = 0;
+// Consecutive background-poll failures; the first retries silently, the second surfaces.
+let pollFails = 0;
 let openDetailsId = '';
 // Counts Details opens, so a click outside the panel can tell a row click (which opens that row) from any other.
 let detailsOpens = 0;
@@ -395,8 +397,14 @@ function renderAnalytics(mode = 'static') {
   pushModel('analytics', JSON.stringify(slintView), set_analytics);
   clearTimeout(analyticsPollTimer);
   const act = analyticsPayload?.activity;
-  if (currentPage === 'analytics' && (act?.status === 'loading' || act?.refreshing === true))
-    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(); }, 5000);
+  // While the server is reading (a cold load or a refresh running) the page re-reads it every
+  // 10 s - a live analytics projection costs real server CPU, so the poll stays calm; while
+  // cells are merely waiting for the next scheduled scan, a 15 s poll watches them settle.
+  // Poll answers render as morphs, so converging numbers glide in place.
+  const busyNow = act?.status === 'loading' || act?.refreshing === true;
+  const converging = Array.isArray(act?.sources) && act.sources.some(r => r?.state === 'scanning');
+  if (currentPage === 'analytics' && (busyNow || converging))
+    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, busyNow ? 10000 : 15000);
   shownSize = size;
   if (!morph) { shownGeo = next; return; }
   const t0 = performance.now();
@@ -424,10 +432,16 @@ function analyticsCovers(payload, now = Date.now()) {
     : Number.isFinite(analyticsPage.from) ? analyticsPage.from : now - 30 * D;
   return from <= start + H;
 }
-async function refreshAnalytics(force = false, mode = 'static') {
+/**
+ * opts.silent: a background poll. It keeps the view calm - no loading flag, and a single failed
+ * fetch does not replace the page's words; it simply tries again on the next tick. A second
+ * consecutive failure surfaces like any other error.
+ */
+async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
   if (!authenticated) return;
+  const silent = opts.silent === true && !force;
   const generation = ++analyticsGeneration;
-  set_analytics_loading(true, '');
+  if (!silent) set_analytics_loading(true, '');
   // the backend accepts 24h, 7d and 30d: Month, All and custom ranges read the covering window and are cut here
   const query = new URLSearchParams({ platform, range: apiRangeFor(analyticsPage, Date.now()), provider: 'all', account: 'all' });
   if (force) query.set('refresh', 'true');
@@ -435,8 +449,15 @@ async function refreshAnalytics(force = false, mode = 'static') {
     const result = await request(`/api/accounts/analytics?${query}`);
     if (generation !== analyticsGeneration || !authenticated) return;
     if (result?.schemaVersion !== 1 || !Array.isArray(result.accounts)) throw new Error('Unsupported analytics response.');
-    analyticsPayload = result; renderAnalytics(mode); set_analytics_loading(false, '');
-  } catch (error) { if (generation === analyticsGeneration) { renderAnalytics(); set_analytics_loading(false, error?.message || 'Unable to load account analytics.'); } }
+    analyticsPayload = result; renderAnalytics(mode);
+    pollFails = 0; set_analytics_loading(false, '');
+  } catch (error) {
+    if (generation !== analyticsGeneration) return;
+    renderAnalytics();
+    if (silent && ++pollFails < 2) return;
+    pollFails = 0;
+    set_analytics_loading(false, error?.message || 'Unable to load account analytics.');
+  }
 }
 /**
  * Entering the Analytics page. A payload that still covers the page range and is younger than the refresh
@@ -529,7 +550,7 @@ function applyRefreshInterval(seconds, confirmed = true) {
   set_refresh_interval(seconds, confirmed);
   renderAccounts();
   if (usageTimer) clearInterval(usageTimer);
-  usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(); } }, seconds * 1000);
+  usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(false, 'morph'); } }, seconds * 1000);
 }
 async function loadSettings() {
   // The two independent reads fly together; each still applies (or fails) on its own, in order.
@@ -631,6 +652,7 @@ async function signOut() {
   }
   forgetSignIn(globalThis.localStorage);
   analyticsGeneration++; analyticsPayload = null; analyticsChoices = null; analyticsChoicesPayload = null; analyticsChoicesCatalog = null; clearTimeout(analyticsPollTimer); data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null; refreshGeneration++; openDetailsId = ''; pushedJson.clear();
+  pollFails = 0;
   claudeOpen.reset();
   accounts.reset();
   showSignedOut('default', { notice: true, message: 'Signed out.' });

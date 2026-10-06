@@ -18,8 +18,9 @@ Request (all fields validated, unknown fields rejected):
 
 Response:
   {"version": 1, "truncated": false, "discoveryTruncated": false,
-   "kinds": {"omp": {"state": "ok"|"not_installed"|"error",
-                     "fingerprints": {...}, "walUnread": true?}} ,
+   "kinds": {"omp": {"state": "ok"|"not_installed"|"error"|"pending",
+                     "partial": true?, "fingerprints": {...},
+                     "walUnread": true?}} ,
    "rows": [{"k": "omp", "f": "<filekey>", "m": "<model>", "p": "<provider>",
              "h": "2026-10-01 15:00", "i": 1, "o": 2, "cr": 3, "cw": 4,
              "c": 0.01, "n": 5}],
@@ -39,7 +40,11 @@ were not read; "discoveryTruncated" means only that the search for custom OMP
 session roots hit its bounds, so roots it did not reach were not read. A row
 is either wholly logged (c > 0) or wholly unlogged (c == 0): events with and
 without a logged cost never share a row. "error" means the kind's data exists
-but could not be read; nothing of that kind is confirmed.
+but could not be read; nothing of that kind is confirmed. "pending" means the
+scan ran out of time before it reached the kind: none of its files were
+visited, and the next scan continues from the saved fingerprints. "partial"
+marks a kind whose own scan a cap or the deadline cut short after some of its
+files were read; its numbers are incomplete until a later scan finishes it.
 """
 
 import collections
@@ -1460,8 +1465,12 @@ def main():
     env = dict(os.environ)
     collector = Collector(min_date_ms, time.monotonic() + budget, fingerprints, budget)
     states = {}
+    # Kinds whose own scan a cap or the deadline cut short: their numbers are
+    # partial, unlike kinds that finished before a later kind hit a cap.
+    partials = set()
     for kind in kinds:
         collector.fresh.setdefault(kind, {})
+        cut_before = collector.truncated
         if kind == "claude":
             states[kind] = _collect_claude(collector, home, env, extra_roots.get("claude", ()))
         elif kind == "codex":
@@ -1474,6 +1483,15 @@ def main():
             states[kind] = _collect_zcode(
                 collector, home, env, immutable, extra_roots.get("zcode", ())
             )
+        # A cap that outlives the kind that hit it (row_cap) cuts every later kind
+        # short too, and a kind that ends past the deadline never flipped the flag
+        # itself: mark partial where the data stops, not only where the flag flips.
+        if (
+            (collector.truncated and not cut_before)
+            or collector.row_cap
+            or collector.expired()
+        ):
+            partials.add(kind)
         if collector.expired():
             collector.truncated = True
             break
@@ -1487,7 +1505,14 @@ def main():
         }
     kind_entries = {}
     for kind in kinds:
-        entry = {"state": states.get(kind, "ok"), "fingerprints": collector.fresh.get(kind, {})}
+        # A kind the deadline skipped was never visited: "pending", never a
+        # silent "ok" (the server reads pending as still scanning, not read).
+        entry = {
+            "state": states.get(kind, "pending"),
+            "fingerprints": collector.fresh.get(kind, {}),
+        }
+        if kind in partials:
+            entry["partial"] = True
         if kind == "zcode" and collector.wal_unread:
             entry["walUnread"] = True
         kind_entries[kind] = entry

@@ -253,7 +253,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
   };
 }
 
-export const ANALYTICS_VIEW_VERSION = 6;
+export const ANALYTICS_VIEW_VERSION = 7;
 const percentOf = window => usedPercent(window);
 function relativeReset(value, now) {
   const time = timestamp(value);
@@ -292,7 +292,7 @@ export function quotaHistory(accounts, histories, range, now = Date.now()) {
   return groups;
 }
 /**
- * The JSON src/analytics.rs reads (version 6). `page` carries the Analytics page: the page state echoed to
+ * The JSON src/analytics.rs reads (version 7). `page` carries the Analytics page: the page state echoed to
  * the controls, the Usage blocks (analytics-usage.mjs), the quota history with the focus charts of open rows
  * and the resets agenda (analytics-quota.mjs). The head, KPI and quota-group fields of the earlier seam stay.
  */

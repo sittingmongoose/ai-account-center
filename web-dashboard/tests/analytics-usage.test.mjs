@@ -335,21 +335,25 @@ test('usageHead is the analytics header alone and always equals the full view he
   for (const [p, st] of cases) {
     assert.deepEqual(usageHead(p, st, { now }), usageView(p, st, { now }).head);
   }
-  // the tick reads "logs read …" and the refreshing state, never the blocks
+  // the tick reads "logs read …" and the updating state, never the blocks
   const head = usageHead(refreshing, state(), { now });
-  assert.equal(head.refreshing, true);
-  assert.match(head.readTip, /scan is refreshing/);
+  assert.equal(head.updating, true);
+  assert.equal(head.updateNote, 'Updating…');
+  assert.match(head.readTip, /bounded scan continues/);
   assert.ok(!('kpis' in head) && !('trend' in head));
 });
 
 test('the header names the remote hosts a refresh waits on', () => {
   const both = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['windows', 'mac'] });
-  assert.equal(usageHead(both, state(), { now }).refreshNote, '· Refreshing Mac and Windows…');
+  assert.equal(usageHead(both, state(), { now }).updateNote, 'Updating · refreshing Mac and Windows…');
   const one = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['windows'] });
-  assert.equal(usageHead(one, state(), { now }).refreshNote, '· Refreshing Windows…');
-  // settled or host-less answers carry no note; the page falls back to its plain line
-  assert.equal(usageHead(payload(), state(), { now }).refreshNote, '');
-  const junk = payload({}, { refreshingRemote: ['mac', 'mac', 'mars', null] });
-  assert.equal(usageHead(junk, state(), { now }).refreshNote, '· Refreshing Mac…');
-  assert.equal(usageView(both, state(), { now }).head.refreshNote, '· Refreshing Mac and Windows…');
+  assert.equal(usageHead(one, state(), { now }).updateNote, 'Updating · refreshing Windows…');
+  // settled answers carry no note and no pill
+  const settled = usageHead(payload(), state(), { now });
+  assert.equal(settled.updating, false);
+  assert.equal(settled.updateNote, '');
+  // junk host names are filtered before they reach the note
+  const junk = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['mac', 'mac', 'mars', null] });
+  assert.equal(usageHead(junk, state(), { now }).updateNote, 'Updating · refreshing Mac…');
+  assert.equal(usageView(both, state(), { now }).head.updateNote, 'Updating · refreshing Mac and Windows…');
 });
