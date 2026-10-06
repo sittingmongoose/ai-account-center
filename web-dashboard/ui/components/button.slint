@@ -1,8 +1,9 @@
 // Buttons: tint on hover, scale to 0.97 on press (a spring only on this non-value property).
-import { Theme, Motion, Type } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { Icon } from "icon.slint";
 import { PlatformGlyph } from "mark.slint";
 import { ProbeMark } from "probe.slint";
+import { Hover } from "hover-card.slint";
 
 // kind: "default" | "primary" | "ink" | "accent-line" | "danger" | "danger-solid" | "danger-text" | "ghost"
 export component Button inherits Rectangle {
@@ -12,15 +13,35 @@ export component Button inherits Rectangle {
     in property <string> platform;
     in property <string> kind: "default";
     in property <bool> small: false;
+    // Primary and full-width buttons below D (Sign in, Try again, sheet actions): 44 on T, 48 on F/P.
+    in property <bool> tall: false;
     in property <bool> enabled: true;
     in property <string> hint;
     // drawn dimmed but still clickable: the click opens the reason it cannot act (a refusal), never the action
     in property <bool> muted: false;
     // a request runs: a small spinner takes the icon's place and clicks are ignored
     in property <bool> busy: false;
+    // Touch long-press tip (DESIGN-MOBILE.md 5.2.3): shown after a 450 ms press, which then never activates.
+    in property <string> long-tip: "";
     // names the button for the end-to-end harness (components/probe.slint)
     in property <string> probe;
     callback clicked();
+
+    // Long-press: touch only (a desktop press-and-hold still clicks on release).
+    property <bool> lp-armed: (Device.coarse || Breakpoints.below-d) && root.long-tip != "";
+    property <bool> lp-fired: false;
+    property <bool> lp-dead: false;
+    lp-timer := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.lp-armed && ta.pressed && !root.lp-dead {
+                root.lp-fired = true;
+                Hover.tip-now("long-press", ta.absolute-position, ta.width, ta.height, root.long-tip);
+            }
+        }
+    }
 
     out property <bool> hovered: ta.has-hover && root.enabled;
     out property <length> pad-left: root.kind == "danger-text" ? 6px : root.kind == "ghost" ? 9px : root.small ? 10px : 13px;
@@ -50,10 +71,13 @@ export component Button inherits Rectangle {
         : root.kind == "danger-text" || root.kind == "ghost" ? Theme.rule.with-alpha(0)
         : (root.hovered ? Theme.rule-strong : Theme.rule);
 
-    height: root.small ? 28px : 32px;
+    // Below D every button is a touch target: default 40 on T and 44 on F/P, tall 44/48.
+    height: Breakpoints.tier-d ? (root.small ? 28px : 32px)
+        : root.tall ? (Breakpoints.tier-t ? 44px : 48px)
+        : Breakpoints.tier-t ? 40px : 44px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
-    border-radius: Theme.r-ctl;
+    border-radius: Breakpoints.tier-d ? Theme.r-ctl : Theme.r-touch;
     border-width: 1px;
     background: root.bg;
     border-color: root.line;
@@ -100,16 +124,48 @@ export component Button inherits Rectangle {
         if root.text != "": Text {
             text: root.text;
             color: root.fg;
-            font-size: root.small ? 12.5px : Type.control;
+            font-size: root.small && Breakpoints.tier-d ? 12.5px : Type.control;
             font-weight: 560;
             vertical-alignment: center;
             overflow: elide;
         }
     }
+    // Hit-slop below D: the TouchArea grows to at least 44 x 44, centred on the visual.
+    property <length> slop-x: Breakpoints.below-d ? max(0px, (44px - root.width) / 2) : 0px;
+    property <length> slop-y: Breakpoints.below-d ? max(0px, (44px - root.height) / 2) : 0px;
     ta := TouchArea {
+        x: -root.slop-x;
+        y: -root.slop-y;
+        width: root.width + 2 * root.slop-x;
+        height: root.height + 2 * root.slop-y;
         enabled: root.enabled;
         mouse-cursor: root.enabled && !root.busy ? pointer : root.busy ? progress : default;
-        clicked => { if !root.busy { root.clicked(); } }
+        changed pressed => {
+            if self.pressed {
+                root.lp-dead = false;
+                root.lp-fired = false;
+                if root.lp-armed { lp-timer.running = true; }
+            } else {
+                lp-timer.running = false;
+                // Release hides the tip; clicked (either order) swallows the activation.
+                Hover.leave("long-press");
+            }
+        }
+        moved => {
+            if self.pressed && (self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px) {
+                root.lp-dead = true;
+                lp-timer.running = false;
+                if root.lp-fired { root.lp-fired = false; Hover.leave("long-press"); }
+            }
+        }
+        clicked => {
+            if root.lp-fired {
+                root.lp-fired = false;
+                Hover.leave("long-press");
+            } else if !root.busy {
+                root.clicked();
+            }
+        }
     }
     ProbeMark { x: 0px; y: 0px; id: root.probe; width: root.width; height: root.height; }
 }

@@ -2,7 +2,7 @@
 // Hover.meter(...) or Hover.tip(...) with its absolute rectangle on hover and Hover.leave(owner) when the
 // pointer leaves; the window-level HoverLayer fades the card in and rises it 4 px after a 90 ms intent
 // delay, glides it between targets, and keeps it inside the window.
-import { Theme, Motion, Type } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { MeterView } from "../models.slint";
 import { Caps, ValueUnit } from "text.slint";
 
@@ -19,11 +19,26 @@ export global Hover {
     in-out property <string> sub;
     in-out property <MeterView> meter;
     in-out property <string> scale-note;
+    // A long-press tip (touch): shows at once, pinned above the anchor.
+    in-out property <bool> now: false;
 
     public function tip(owner: string, pos: Point, w: length, h: length, text: string) {
         if text == "" { return; }
         self.owner = owner;
         self.kind = "tip";
+        self.now = false;
+        self.text = text;
+        self.ax = pos.x;
+        self.ay = pos.y;
+        self.aw = w;
+        self.ah = h;
+        self.active = true;
+    }
+    public function tip-now(owner: string, pos: Point, w: length, h: length, text: string) {
+        if text == "" { return; }
+        self.owner = owner;
+        self.kind = "tip";
+        self.now = true;
         self.text = text;
         self.ax = pos.x;
         self.ay = pos.y;
@@ -34,6 +49,7 @@ export global Hover {
     public function meter-card(owner: string, pos: Point, w: length, h: length, meter: MeterView, sub: string) {
         self.owner = owner;
         self.kind = "meter";
+        self.now = false;
         self.meter = meter;
         self.title = meter.full-label != "" ? meter.full-label : meter.label;
         self.sub = sub;
@@ -112,11 +128,18 @@ export component HoverLayer inherits Rectangle {
     in property <length> view-h;
 
     property <bool> shown: false;
-    property <length> card-w: Hover.kind == "meter" ? 310px : min(340px, tip-text.preferred-width + 18px);
+    // Touch clamps the card inside the gutters and safe areas; D keeps the 8 px edges.
+    property <length> edge-l: Breakpoints.tier-d ? 8px : Breakpoints.gutter + Device.safe-left;
+    property <length> edge-r: Breakpoints.tier-d ? 8px : Breakpoints.gutter + Device.safe-right;
+    property <length> edge-t: Breakpoints.tier-d ? 8px : Device.safe-top + 8px;
+    property <length> card-w: Hover.kind == "meter"
+        ? min(310px, max(0px, root.view-w - root.edge-l - root.edge-r))
+        : min(340px, min(tip-text.preferred-width + 18px, max(0px, root.view-w - root.edge-l - root.edge-r)));
     property <length> card-h: Hover.kind == "meter" ? meter-body.preferred-height + 25px : tip-text.preferred-height + 12px;
     property <length> below: Hover.ay + Hover.ah + 8px;
-    property <length> tx: clamp(Hover.ax + Hover.aw / 2 - root.card-w / 2, 8px, root.view-w - root.card-w - 8px);
-    property <length> ty: root.below + root.card-h + 8px > root.view-h ? max(8px, Hover.ay - root.card-h - 8px) : root.below;
+    property <length> tx: clamp(Hover.ax + Hover.aw / 2 - root.card-w / 2, root.edge-l, max(root.edge-l, root.view-w - root.card-w - root.edge-r));
+    property <length> ty: Hover.now ? max(root.edge-t, Hover.ay - root.card-h - 8px)
+        : root.below + root.card-h + 8px > root.view-h ? max(8px, Hover.ay - root.card-h - 8px) : root.below;
 
     intent := Timer {
         interval: 90ms;
@@ -127,10 +150,11 @@ export component HoverLayer inherits Rectangle {
     init => { root.shown = false; }
 
     // Show after a short intent delay the first time; swap instantly while one is already showing.
+    // A long-press tip (Hover.now) shows at once: its own 450 ms press was the delay.
     property <bool> want: Hover.active;
     changed want => {
         if root.want {
-            if root.shown { } else { intent.running = true; }
+            if root.shown || Hover.now { root.shown = true; } else { intent.running = true; }
         } else {
             intent.running = false;
             root.shown = false;

@@ -597,28 +597,26 @@ component StepButton inherits Rectangle {
     in property <string> icon;
     in property <bool> enabled: true;
     in property <string> hint;
-    callback clicked();
-    width: 26px;
-    height: 26px;
-    background: ta.has-hover && root.enabled ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
+    // Driven by the Stepper's own TouchAreas (they extend past the clipped visuals).
+    in property <bool> hov: false;
+    in property <bool> press: false;
+    // Below D each part is 36 wide and 36 tall with a 44 hit area (DESIGN-MOBILE.md 2.3).
+    width: Breakpoints.tier-d ? 26px : 36px;
+    height: Breakpoints.tier-d ? 26px : 36px;
+    background: root.hov && root.enabled ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); }
     accessible-role: button;
     accessible-label: root.hint;
     Icon {
-        x: 6px;
-        y: 6px;
+        x: (parent.width - 14px) / 2;
+        y: (parent.height - 14px) / 2;
         width: 14px;
         height: 14px;
         name: root.icon;
-        tint: ta.has-hover && root.enabled ? Theme.ink : Theme.ink-3;
+        tint: root.hov && root.enabled ? Theme.ink : Theme.ink-3;
         opacity: root.enabled ? 1 : 0.4;
-        transform-scale: ta.pressed && root.enabled ? 0.85 : 1;
+        transform-scale: root.press && root.enabled ? 0.85 : 1;
         animate transform-scale { duration: 100ms; }
-    }
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: root.enabled ? pointer : default;
-        clicked => { root.clicked(); }
     }
 }
 
@@ -630,37 +628,67 @@ export component Stepper inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> known: true;
     callback step(int);
-    width: 26px + 46px + 26px + 2px;
-    height: 28px;
+    // Below D the group is 36 + 56 + 36 = 128 wide and 36 tall (DESIGN-MOBILE.md 2.3).
+    property <length> part: Breakpoints.tier-d ? 26px : 36px;
+    width: Breakpoints.tier-d ? 26px + 46px + 26px + 2px : 36px + 56px + 36px + 2px;
+    height: Breakpoints.tier-d ? 28px : 38px;
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.rule;
     background: Theme.paper;
-    clip: true;
-    HorizontalLayout {
-        padding: 1px;
-        StepButton { icon: "minus"; hint: "Lower threshold"; enabled: root.enabled && root.known && root.value > root.min; clicked => { root.step(-1); } }
-        Rectangle {
-            width: 46px;
-            if root.known: ValueUnit {
-                x: (parent.width - self.preferred-width) / 2;
-                y: (parent.height - self.preferred-height) / 2;
-                width: self.preferred-width;
-                height: self.preferred-height;
-                value: root.value;
-                size: 13.5px;
-                weight: 640;
-                ink: root.enabled ? Theme.ink : Theme.ink-3;
+    // No clip on the root: each part's TouchArea extends to 44 x 44 past the border (the value
+    // box is not interactive, so the sideways slop collides with nothing). The inner visuals clip.
+    visuals := Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+        border-radius: 7px;
+        clip: true;
+        HorizontalLayout {
+            minus := StepButton { icon: "minus"; hint: "Lower threshold"; enabled: root.enabled && root.known && root.value > root.min; hov: minus-ta.has-hover; press: minus-ta.pressed; }
+            Rectangle {
+                width: Breakpoints.tier-d ? 46px : 56px;
+                if root.known: ValueUnit {
+                    x: (parent.width - self.preferred-width) / 2;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: self.preferred-width;
+                    height: self.preferred-height;
+                    value: root.value;
+                    size: Breakpoints.tier-d ? 13.5px : Type.control;
+                    weight: 640;
+                    ink: root.enabled ? Theme.ink : Theme.ink-3;
+                }
+                if !root.known: Text {
+                    x: (parent.width - self.preferred-width) / 2;
+                    y: (parent.height - self.preferred-height) / 2;
+                    text: "—";
+                    font-size: Breakpoints.tier-d ? 13.5px : Type.control;
+                    color: Theme.ink-3;
+                }
             }
-            if !root.known: Text {
-                x: (parent.width - self.preferred-width) / 2;
-                y: (parent.height - self.preferred-height) / 2;
-                text: "—";
-                font-size: 13.5px;
-                color: Theme.ink-3;
-            }
+            plus := StepButton { icon: "plus"; hint: "Raise threshold"; enabled: root.enabled && root.known && root.value < root.max; hov: plus-ta.has-hover; press: plus-ta.pressed; }
         }
-        StepButton { icon: "plus"; hint: "Raise threshold"; enabled: root.enabled && root.known && root.value < root.max; clicked => { root.step(1); } }
+    }
+    property <length> slop-x: Breakpoints.below-d ? (44px - root.part) / 2 : 0px;
+    property <length> slop-y: Breakpoints.below-d ? (44px - root.part) / 2 : 0px;
+    minus-ta := TouchArea {
+        x: 1px - root.slop-x;
+        y: 1px - root.slop-y;
+        width: root.part + 2 * root.slop-x;
+        height: root.part + 2 * root.slop-y;
+        enabled: root.enabled && root.known && root.value > root.min;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.step(-1); }
+    }
+    plus-ta := TouchArea {
+        x: root.width - 1px - root.part - root.slop-x;
+        y: 1px - root.slop-y;
+        width: root.part + 2 * root.slop-x;
+        height: root.part + 2 * root.slop-y;
+        enabled: root.enabled && root.known && root.value < root.max;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.step(1); }
     }
 }
 
