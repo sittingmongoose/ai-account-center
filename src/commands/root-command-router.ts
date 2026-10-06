@@ -15,7 +15,11 @@ export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
         showConfigAuthHelp();
         return;
       }
-      if (args[0] !== 'auth' && (hasAnyFlag(args, ['--help', '-h']) || args[0] === 'help')) {
+      if (
+        args[0] !== 'auth' &&
+        args[0] !== 'usage-hub' &&
+        (hasAnyFlag(args, ['--help', '-h']) || args[0] === 'help')
+      ) {
         const { showConfigCommandHelp } = await import('./config-command-options');
         showConfigCommandHelp();
         return;
@@ -111,6 +115,12 @@ export async function requiresRuntimeServices(args: string[]): Promise<boolean> 
     if (subcommand === 'auth') {
       return (
         ['setup', 'show', 'status', 'disable'].includes(rest[0]) &&
+        !rest.some((arg) => ['help', '--help', '-h'].includes(arg))
+      );
+    }
+    if (subcommand === 'usage-hub') {
+      return (
+        ['status', 'generate', 'rotate', 'off'].includes(rest[0]) &&
         !rest.some((arg) => ['help', '--help', '-h'].includes(arg))
       );
     }

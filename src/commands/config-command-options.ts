@@ -104,6 +104,10 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine('  auth setup         Configure dashboard username and password');
   writeLine('  auth show          Display dashboard authentication status');
   writeLine('  auth disable       Disable dashboard authentication');
+  writeLine('  usage-hub status   Show the T3 usage hub state and the URL for T3');
+  writeLine('  usage-hub generate --stdout   Create the T3 usage hub key (shown once)');
+  writeLine('  usage-hub rotate --stdout     Replace the T3 usage hub key');
+  writeLine('  usage-hub off      Turn the T3 usage hub off');
   writeLine('');
   writeLine('Options:');
   writeLine('  --port, -p PORT    Server port (default: auto-detect)');

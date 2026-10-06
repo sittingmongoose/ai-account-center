@@ -219,6 +219,9 @@ describe('configuration-backed runtime service gate', () => {
     ['antigravity'],
     ['antigravity', 'help'],
     ['antigravity', 'signin', 'party', '--help'],
+    ['dashboard', 'usage-hub'],
+    ['dashboard', 'usage-hub', '--help'],
+    ['dashboard', 'usage-hub', 'generate', '--help'],
   ])(
     'keeps metadata and retired invocations outside configuration logging: %j',
     async (...args) => {
@@ -234,6 +237,8 @@ describe('configuration-backed runtime service gate', () => {
     ['antigravity', 'signin', 'party'],
     ['antigravity', 'status'],
     ['bar', 'status'],
+    ['dashboard', 'usage-hub', 'status'],
+    ['config', 'usage-hub', 'generate', '--stdout'],
   ])('preserves runtime service setup for account operations: %j', async (...args) => {
     expect(await requiresRuntimeServices(args)).toBe(true);
   });

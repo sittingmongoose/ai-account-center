@@ -4,8 +4,9 @@ import { createLogger, withRequestContext } from '../../services/logging';
 
 const logger = createLogger('web-server:http');
 
-const TOKEN_IN_URL = /aacd_[A-Za-z0-9_%-]{8,}/g;
-const REDACTED_TOKEN = 'aacd_[redacted]';
+/** Device tokens (`aacd_`) and usage hub keys (`aacu_`); each keeps its prefix when redacted. */
+const TOKEN_IN_URL = /(aac[du])_[A-Za-z0-9_%-]{8,}/g;
+const REDACTED_TOKEN = '$1_[redacted]';
 
 /** Percent-decodes ASCII escapes only; never throws on a malformed sequence. */
 function decodeAsciiEscapes(value: string): string {
@@ -15,11 +16,11 @@ function decodeAsciiEscapes(value: string): string {
 }
 
 /**
- * A device token sent in a URL is refused (400 `token_in_query`), but the URL
- * is still logged; its token never is, whatever the redaction setting
- * (CONTRACT-auth-devices section 6). An encoded token (`%61acd_...`, even
- * encoded twice) is found in the decoded URL, and then the decoded URL is
- * logged with the token replaced.
+ * A device token (or a usage hub key) sent in a URL is refused (400
+ * `token_in_query` / `key_in_query`), but the URL is still logged; its token
+ * never is, whatever the redaction setting (CONTRACT-auth-devices section 6).
+ * An encoded token (`%61acd_...`, even encoded twice) is found in the decoded
+ * URL, and then the decoded URL is logged with the token replaced.
  */
 export function scrubLoggedUrl(url: string): string {
   const scrubbed = url.replace(TOKEN_IN_URL, REDACTED_TOKEN);

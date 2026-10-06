@@ -522,15 +522,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 667,
+      "totalThrows": 668,
       "typedThrows": 166,
       "plainThrows": 72,
-      "otherThrows": 429,
-      "adoptionRatio": 0.2489,
+      "otherThrows": 430,
+      "adoptionRatio": 0.2485,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 311,
+          "count": 312,
           "typed": 104,
           "plain": 10
         },
@@ -603,9 +603,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 36,
-      "totalSourceFiles": 400,
-      "coverageRatio": 0.09,
+      "filesWithCreateLogger": 37,
+      "totalSourceFiles": 406,
+      "coverageRatio": 0.0911,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,8 +632,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 146,
-          "withLogger": 20
+          "count": 151,
+          "withLogger": 21
         },
         {
           "subdomain": "utils",
@@ -647,7 +647,7 @@
         },
         {
           "subdomain": "commands",
-          "count": 32,
+          "count": 33,
           "withLogger": 1
         },
         {
@@ -800,7 +800,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 727
+          "loc": 754
         },
         {
           "file": "src/web-server/services/account-analytics-projection.ts",
