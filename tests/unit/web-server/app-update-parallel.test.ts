@@ -17,7 +17,10 @@ import {
   type UpdatePlatform,
 } from '../../../src/web-server/services/app-update-service';
 import { runHelperProcess } from '../../../src/web-server/services/app-update-hosts';
-import { MESSAGES } from '../../../src/web-server/services/app-update-contract';
+import {
+  MESSAGES,
+  normalizeAppUpdateResults,
+} from '../../../src/web-server/services/app-update-contract';
 
 const APPS = Object.keys(UPDATE_APP_LABELS) as UpdateAppId[];
 const directories: string[] = [];
@@ -107,6 +110,7 @@ describe('Update apps runs every computer at once', () => {
       state: 'running',
       currentApp: 'muse-code',
       phase: 'checking',
+      phaseSince: expect.any(String),
     });
     expect(running.activePlatform).toBe('ubuntu');
     await finish(service);
@@ -137,6 +141,57 @@ describe('Update apps runs every computer at once', () => {
     const mac = service.getStatus().job!.results.filter((value) => value.platform === 'mac');
     expect(mac).toHaveLength(7);
     expect(mac.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
+  });
+
+  it('shows a desktop download live with the time its phase began', async () => {
+    let clock = Date.parse('2026-10-06T15:09:16.000Z');
+    let finishWindows!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finishWindows = resolve;
+    });
+    let control!: HostRunControl;
+    const service = new AppUpdateService({
+      persist: false,
+      now: () => clock,
+      runHost: async (platform, value) => {
+        if (platform !== 'windows') return payload();
+        control = value;
+        value.onEvent({ event: 'app', appId: 'codex-desktop', phase: 'updating' });
+        await gate;
+        return payload();
+      },
+    });
+    service.start();
+    await sleep(20);
+    clock += 2000;
+    control.onEvent({ event: 'app', appId: 'codex-desktop', phase: 'downloading' });
+    const downloading = service.getStatus().job!.hosts!.windows;
+    expect(downloading.currentApp).toBe('codex-desktop');
+    expect(downloading.phase).toBe('downloading');
+    expect(downloading.phaseSince).toBe('2026-10-06T15:09:18.000Z');
+    // The same phase again keeps its start, so the elapsed time keeps counting.
+    clock += 5000;
+    control.onEvent({ event: 'app', appId: 'codex-desktop', phase: 'downloading' });
+    expect(service.getStatus().job!.hosts!.windows.phaseSince).toBe('2026-10-06T15:09:18.000Z');
+    control.onEvent({ event: 'app', appId: 'codex-desktop', phase: 'quitting' });
+    expect(service.getStatus().job!.hosts!.windows.phase).toBe('downloading');
+    finishWindows();
+    await finish(service);
+    expect(service.getStatus().job!.hosts!.windows).toEqual({
+      state: 'done',
+      currentApp: null,
+      phase: null,
+    });
+  });
+
+  it('names the app in its quit-first row', () => {
+    const rows = JSON.parse(payload()).results;
+    const index = rows.findIndex((value: { appId: string }) => value.appId === 'codex-desktop');
+    rows[index] = { ...rows[index], status: 'action_required', messageCode: 'quit_first' };
+    const normalized = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'windows');
+    expect(normalized.find((value) => value.appId === 'codex-desktop')!.message).toBe(
+      'Quit Codex Desktop to finish its update, then run Update apps again.'
+    );
   });
 
   it('streams each app row as it lands and merges the final document once', async () => {

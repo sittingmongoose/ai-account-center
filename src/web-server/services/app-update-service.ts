@@ -22,6 +22,8 @@ import {
   type AppUpdateResult,
   type AppUpdateJob,
   type AppUpdateHostProgress,
+  APP_UPDATE_PHASES,
+  type AppUpdatePhase,
 } from './app-update-contract';
 export { UPDATE_APP_LABELS, normalizeAppUpdateResults } from './app-update-contract';
 export type {
@@ -86,7 +88,7 @@ function restoreHosts(value: unknown): Record<UpdatePlatform, AppUpdateHostProgr
       !host ||
       !['waiting', 'running', 'done'].includes(host.state as string) ||
       !(host.currentApp === null || isUpdateAppId(host.currentApp)) ||
-      !(host.phase === null || host.phase === 'checking' || host.phase === 'updating')
+      !(host.phase === null || APP_UPDATE_PHASES.includes(host.phase as AppUpdatePhase))
     )
       return null;
     hosts[platform] = {
@@ -94,6 +96,8 @@ function restoreHosts(value: unknown): Record<UpdatePlatform, AppUpdateHostProgr
       currentApp: host.currentApp as UpdateAppId | null,
       phase: host.phase as AppUpdateHostProgress['phase'],
     };
+    if (typeof host.phaseSince === 'string' && !Number.isNaN(Date.parse(host.phaseSince)))
+      hosts[platform].phaseSince = new Date(Date.parse(host.phaseSince)).toISOString();
   }
   return hosts;
 }
@@ -228,6 +232,7 @@ export class AppUpdateService {
     }
     host.state = 'running';
     host.phase = 'checking';
+    host.phaseSince = new Date(this.deps.now()).toISOString();
     this.refreshActive(job);
     this.trySave();
     let abort: (() => void) | undefined;
@@ -294,6 +299,7 @@ export class AppUpdateService {
     host.state = 'done';
     host.currentApp = null;
     host.phase = null;
+    delete host.phaseSince;
     this.refreshActive(job);
     this.trySave();
   }
@@ -309,9 +315,11 @@ export class AppUpdateService {
     if (this.job !== job || job.state !== 'running' || host?.state !== 'running') return;
     if (event.event === 'app') {
       if (!(event.appId === null || isUpdateAppId(event.appId))) return;
-      if (event.phase !== 'checking' && event.phase !== 'updating') return;
+      if (!APP_UPDATE_PHASES.includes(event.phase as AppUpdatePhase)) return;
+      if (host.currentApp !== event.appId || host.phase !== event.phase)
+        host.phaseSince = new Date(this.deps.now()).toISOString();
       host.currentApp = event.appId;
-      host.phase = event.phase;
+      host.phase = event.phase as AppUpdatePhase;
     } else if (event.event === 'result') {
       const row = record(event.result);
       if (!row || !isUpdateAppId(row.appId) || this.has(job, platform, row.appId)) return;

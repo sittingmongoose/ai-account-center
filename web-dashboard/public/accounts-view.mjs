@@ -748,7 +748,7 @@ const unknownWord = (row, label) => {
 // A row that needs the user says what to do in its own words, never "failed".
 const actionWord = (row) => {
   const message = text(row.message);
-  if (message.startsWith('Quit the app')) return 'Quit to finish update';
+  if (message.startsWith('Quit ')) return 'Quit to finish update';
   if (message.startsWith('Codex is busy')) return 'Codex busy, try later';
   if (message.startsWith('The download was blocked')) return 'Update it in the app';
   return RESULT.action_required[0];
@@ -757,6 +757,14 @@ const rowWord = (row, label) => row.status === 'unknown'
   ? [unknownWord(row, label), /timed out/i.test(text(row.message)) ? 'warn' : '']
   : row.status === 'action_required' ? [actionWord(row), 'warn']
     : (RESULT[row.status] || ['Unknown result', '']);
+// How long a computer has been on its current step ("45s", "3m 05s"); '' below the
+// threshold or when the step's start is unknown, so short steps stay calm.
+const phaseElapsed = (host, now, threshold) => {
+  const since = validDate(host?.phaseSince) ? Date.parse(host.phaseSince) : NaN;
+  const seconds = Math.floor((now - since) / 1000);
+  if (!Number.isFinite(seconds) || seconds < Math.max(threshold, 1)) return '';
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+};
 export function updateResultsView(job, now = Date.now()) {
   const results = Array.isArray(job?.results) ? job.results.filter(row => row && typeof row === 'object') : [];
   const running = job?.state === 'running';
@@ -801,9 +809,10 @@ export function updateResultsView(job, now = Date.now()) {
       const live = running && host.state === 'running';
       const current = live && UPDATE_APP_NAMES[host.currentApp];
       if (current) {
-        const updating = host.phase === 'updating';
-        items.push({ key: `${id}|current`, app: current, result: updating ? 'Updating' : 'Checking', tone: 'run', running: true,
-          tip: updating ? `${label} is updating ${current} now` : `${label} is checking ${current} now` });
+        const [word, verb] = host.phase === 'downloading' ? ['Downloading', 'downloading the new'] : host.phase === 'updating' ? ['Updating', 'updating'] : ['Checking', 'checking'];
+        const took = phaseElapsed(host, now, host.phase === 'downloading' ? 0 : 10);
+        items.push({ key: `${id}|current`, app: current, result: took ? `${word} · ${took}` : word, tone: 'run', running: true,
+          tip: `${label} is ${verb} ${current} now${took ? ` (${took} so far)` : ''}` });
       } else if (live) {
         items.push({ key: `${id}|state`, app: rows.length ? 'More apps' : 'Checking the apps', result: 'Running', tone: 'run', running: true, tip: '' });
       } else if (!rows.length) {

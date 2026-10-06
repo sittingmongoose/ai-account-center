@@ -395,7 +395,11 @@ def run_apply(platform, emit=None, cancelled=None):
                     continue
                 emit({"event": "app", "appId": app_id, "phase": "updating"})
                 if app_id.endswith("-desktop"):
-                    try: report(update_desktop(install, deadline))
+                    # A desktop app reports its long steps (a package download,
+                    # then the install) so the page shows what it waits on.
+                    def phase(name, app_id=app_id):
+                        emit({"event": "app", "appId": app_id, "phase": name})
+                    try: report(update_desktop(install, deadline, phase))
                     except Exception: report(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
                 else:
                     report(update_cli(install, deadline))

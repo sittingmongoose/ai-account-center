@@ -68,15 +68,20 @@ Muse otherwise checks/updates even during a `--version` invocation.
 Restart scope is the **same user's exact app executable/package family**,
 validated against PID creation identity. Generic Node/Python/terminal processes
 are never selected. Desktop updates preserve existing absolute profile directory
-arguments. Mac uses its native application quit API and verified atomic bundle
-replacement; Windows uses an interactive task to close/reopen windows and preserve
-MSIX LocalState. Desktop apps are **never force-stopped** on Mac and Windows:
-a graceful quit is requested first, and nothing is swapped or deployed while
-anything runs — a refusal, or instances that cannot be captured for a safe
-relaunch, reports the actionable `action_required`/`quit_first` row instead of
-failing, because swapping files under a running app would mix old and new
-versions (Ubuntu desktops keep the previous bounded terminate-and-relaunch
-flow). CLI forced stops stay bounded, app-family-only and counted.
+arguments. Mac uses verified atomic bundle replacement; Windows runs in an
+interactive task and Add-AppxPackage preserves MSIX LocalState. Desktop apps on
+Mac and Windows are **never quit, closed, restarted or killed**: the updater
+does not even ask them to quit. A running app with a newer version reports the
+actionable `action_required`/`quit_first` row ("Quit Codex Desktop to finish
+its update") within seconds, before any package download: Windows reads only
+the published MSIX manifest over HTTP ranges (three requests, under 1 MB),
+Claude on Mac reads its release feed, and Codex on Mac remembers the version of
+the last verified DMG by its HEAD fingerprint. Only when that version is
+unknown does the full download decide, shown live on the page as
+"Downloading" with its elapsed time. The app is checked again right before
+the install, so one opened during the download is left alone (Ubuntu desktops
+keep the previous bounded terminate-and-relaunch flow). CLI forced stops stay
+bounded, app-family-only and counted.
 A successful result verifies
 that replacement processes exist.
 
@@ -132,8 +137,8 @@ does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
-user exactly what to do. Mac and Windows desktops whose running instances will
-not quit (or cannot be mapped) report `quit_first`: nothing is swapped or
+user exactly what to do. Mac and Windows desktops that are running report
+`quit_first` (they are never asked to quit): nothing is swapped or
 deployed while anything runs, and the next click after the user quits updates
 cleanly. MSIX deployments rejected for apps that need closing also report
 `quit_first`. Desktop downloads refused by a bot challenge (HTTP 403 or a

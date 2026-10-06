@@ -11,10 +11,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from app_update_common import (
-    Install, UpdateFailure, command, download, powershell, private_temporary,
-    ps_quote, result, version_text, version_tuple, write_private_json,
+    Install, RangeReader, UpdateFailure, command, download, powershell, private_temporary,
+    ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
 )
-from app_update_processes import main_contexts, request_desktop_quit, restart_desktops, scan, terminate_desktops
+from app_update_processes import family, main_contexts, restart_desktops, scan, terminate_desktops
 
 
 # Desktop packages are hundreds of megabytes (the Codex MSIX is over 900 MB)
@@ -53,6 +53,43 @@ WINDOWS = {
     "codex-desktop": ("OpenAI.Codex", "app/ChatGPT.exe"),
     "claude-desktop": ("Claude", "app/Claude.exe"),
 }
+
+
+# Reading only an MSIX's manifest over HTTP ranges takes well under a second
+# (three requests, under 1 MB); past this the caller falls back to the full
+# download, shown live as "Downloading".
+REMOTE_MANIFEST_SECONDS = 20
+
+
+def desktop_running(install):
+    """True while any process of this desktop app runs. Read-only: never asks it to quit.
+
+    A running Mac or Windows desktop app is never quit, closed, restarted or
+    killed by the updater (N3). Its update waits until the user quits it, and
+    that is reported at once instead of after a download or a close request.
+    """
+    return bool(family(install, scan(install.platform)))
+
+
+def quit_first(install, before):
+    return result(install.app_id, install.platform, "action_required", before, before, install.manager, "quit_first", False)
+
+
+def remote_msix_identity(url, timeout=REMOTE_MANIFEST_SECONDS):
+    """The Identity of the published MSIX, read from its manifest alone; None when unavailable.
+
+    Only decides whether a newer version exists. Installing still downloads
+    the whole package and verifies it (manifest here, publisher signature in
+    Add-AppxPackage) before anything changes.
+    """
+    try:
+        reader = RangeReader(url, timeout=timeout)
+        try:
+            return msix_info(reader)
+        finally:
+            reader.close()
+    except (UpdateFailure, OSError, ValueError):
+        return None
 
 
 def bundle_info(path):
@@ -146,13 +183,14 @@ def dmg_candidates(install, temporary):
     return candidates, attached
 
 
-def claude_zip_candidates(install, temporary):
-    """Claude's own release feed; None when the installed app is already current.
+def claude_release_url(install, temporary):
+    """Claude's own release feed: the newer package URL, or None when the installed app is current.
 
     The old claude.ai download redirect answers 403 (Cloudflare challenge) to
     every non-browser client, so the version check and the package come from
     the publisher's plain-CDN release feed that redirect pointed at. Checking
-    the feed first keeps a current app from downloading hundreds of megabytes.
+    the feed first keeps a current app from downloading hundreds of megabytes,
+    and lets a running app report "quit first" before any download.
     """
     feed = temporary / "RELEASES.json"
     download(CLAUDE_DARWIN_FEED, feed, maximum=256 * 1024, timeout=60)
@@ -167,17 +205,17 @@ def claude_zip_candidates(install, temporary):
         raise UpdateFailure("update_failed")
     if version_tuple(parsed) <= version_tuple(install.version):
         return None
-    url = None
     for entry in releases:
         target = entry.get("updateTo") if isinstance(entry, dict) else None
         if not isinstance(target, dict) or version_text(str(target.get("version") or "")) != parsed:
             continue
         candidate = target.get("url")
         if isinstance(candidate, str) and candidate.startswith(CLAUDE_DARWIN_PREFIX):
-            url = candidate
-            break
-    if url is None:
-        raise UpdateFailure("update_failed")
+            return candidate
+    raise UpdateFailure("update_failed")
+
+
+def claude_zip_candidates(install, temporary, url):
     package = temporary / "update.zip"
     download_desktop(url, package)
     extracted = temporary / "extracted"
@@ -187,47 +225,96 @@ def claude_zip_candidates(install, temporary):
     return [path for path in extracted.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
 
 
-def update_mac(install):
+def package_memory(install):
+    """Where the version of the last verified Mac DMG is remembered, keyed by its HEAD fingerprint."""
+    return pathlib.Path.home() / ".ccs/app-updates" / (install.app_id + "-mac-package.json")
+
+
+def remembered_dmg_version(install, fingerprint):
+    """The verified version of this exact published DMG, or None when it was never verified here.
+
+    The Codex DMG has no version feed; without this every check of a running
+    Codex would download 750 MB just to learn whether it is newer.
+    """
+    if fingerprint is None:
+        return None
+    try:
+        value = json.loads(package_memory(install).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, dict) or any(value.get(key) != fingerprint[key] for key in ("url", "size", "validator")):
+        return None
+    return version_text(str(value.get("version") or "")) or None
+
+
+def remember_dmg_version(install, fingerprint, version):
+    if fingerprint is None:
+        return
+    try:
+        write_private_json(package_memory(install), {**fingerprint, "version": version})
+    except (OSError, ValueError):
+        pass
+
+
+def update_mac(install, phase=None):
+    """Update a Mac desktop app only while it is not running; never quit it.
+
+    A running app with a newer version reports quit_first within seconds:
+    Claude knows the newer version from its small release feed, Codex from the
+    remembered fingerprint of its last verified DMG. Only when the version is
+    unknown does a running Codex wait for the download (shown live as
+    Downloading) before it can say whether it needs a quit.
+    """
+    phase = phase or (lambda name: None)
     before = install.version
-    contexts, installed = [], False
+    installed = False
     backup, stage = None, None
+    try:
+        running = desktop_running(install)
+    except UpdateFailure as error:
+        return result(install.app_id, "mac", "failed", before, before, install.manager, error.code)
     with private_temporary() as temporary:
         attached = None
+        fingerprint = None
         try:
             if install.app_id == "claude-desktop":
-                candidates = claude_zip_candidates(install, temporary)
-                if candidates is None:
+                url = claude_release_url(install, temporary)
+                if url is None:
                     return result(install.app_id, "mac", "current", before, before, install.manager)
+                if running:
+                    return quit_first(install, before)
+                phase("downloading")
+                candidates = claude_zip_candidates(install, temporary, url)
             else:
+                fingerprint = remote_fingerprint(MAC[install.app_id][3])
+                known = remembered_dmg_version(install, fingerprint)
+                if known and version_tuple(known) <= version_tuple(before):
+                    return result(install.app_id, "mac", "current", before, before, install.manager)
+                if known and running:
+                    return quit_first(install, before)
+                phase("downloading")
                 candidates, attached = dmg_candidates(install, temporary)
+            phase("updating")
             if len(candidates) != 1:
                 raise UpdateFailure("signature_failed")
             info = verify_mac(candidates[0], install.app_id)
             after = version_text(info.get("CFBundleShortVersionString"))
+            if install.app_id != "claude-desktop":
+                remember_dmg_version(install, fingerprint, after)
             if version_tuple(after) <= version_tuple(before):
                 return result(install.app_id, "mac", "current", before, before, install.manager)
+            if running or desktop_running(install):
+                return quit_first(install, before)
             if not os.access(install.path.parent, os.W_OK):
                 raise UpdateFailure("unsupported")
             stage = install.path.parent / (".CCS-update-stage-" + uuid.uuid4().hex + ".app")
             backup = install.path.parent / (".CCS-update-backup-" + uuid.uuid4().hex + ".app")
             shutil.copytree(candidates[0], stage, symlinks=True)
             verify_mac(stage, install.app_id)
-            try:
-                contexts = main_contexts(install, scan("mac"))
-            except UpdateFailure:
-                # Instances exist but cannot be mapped safely; ask the user
-                # to quit instead of touching anything running.
-                return result(install.app_id, "mac", "action_required", before, before, install.manager, "quit_first", False)
-            exited, refused = request_desktop_quit(install, contexts)
-            if refused:
-                # Never force a desktop shut and never swap under a running
-                # app; the user quits it and the next click updates cleanly.
-                if exited:
-                    try:
-                        restart_desktops(install, exited)
-                    except (UpdateFailure, OSError):
-                        pass
-                return result(install.app_id, "mac", "action_required", before, before, install.manager, "quit_first", False)
+            # The app may have been opened while the package downloaded: look
+            # again right before the swap and never replace it under a user.
+            if desktop_running(install):
+                return quit_first(install, before)
             os.rename(install.path, backup)
             try:
                 os.rename(stage, install.path)
@@ -244,25 +331,12 @@ def update_mac(install):
                 install.version = before
                 installed = False
                 raise
-            mark_restart(install, after)
-            try:
-                restarted = restart_desktops(install, contexts)
-            except (UpdateFailure, OSError):
-                return result(install.app_id, "mac", "restart_failed", before, after, install.manager, "restart_failed", True)
-            value = result(install.app_id, "mac", "updated", before, after, install.manager, attempted=True, restarted=restarted)
+            value = result(install.app_id, "mac", "updated", before, after, install.manager, attempted=True, restarted=0)
             value["forcedStops"] = 0
-            clear_restart(install)
             return value
         except (UpdateFailure, OSError) as error:
             if isinstance(error, UpdateFailure) and error.code == "download_blocked":
                 return result(install.app_id, "mac", "action_required", before, before, install.manager, "check_in_app", False)
-            if contexts and not installed:
-                # Restore only closed instances if a graceful close was refused.
-                from app_update_processes import live_contexts
-                remaining = live_contexts("mac", contexts)
-                closed = [item for item in contexts if item not in remaining]
-                try: restart_desktops(install, closed)
-                except (UpdateFailure, OSError): pass
             return result(install.app_id, "mac", "failed", before, install.version, install.manager, error.code if isinstance(error, UpdateFailure) else "update_failed", installed)
         finally:
             if attached:
@@ -307,74 +381,67 @@ def add_appx_package(package):
     raise UpdateFailure()
 
 
-def update_windows(install):
+def update_windows(install, phase=None):
+    """Update a Windows MSIX desktop app only while it is not running; never close it.
+
+    The published manifest alone (HTTP ranges, under a second) says whether a
+    newer version exists, so a current app reports current and a running app
+    with an update reports quit_first within seconds, before any download.
+    Only when the manifest cannot be read does the full package decide, and
+    that download shows live as Downloading.
+    """
+    phase = phase or (lambda name: None)
     before = install.version
-    contexts, installed = [], False
+    installed = False
     architecture = "arm64" if os.environ.get("PROCESSOR_ARCHITECTURE", "").upper() == "ARM64" else "x64"
     url = ("https://persistent.oaistatic.com/codex-app-prod/ChatGPT-" + architecture + ".msix" if install.app_id == "codex-desktop"
            else "https://claude.ai/api/desktop/win32/" + architecture + "/msix/latest/redirect")
+
+    def published(info):
+        if info.get("Name") != install.identity or info.get("Publisher") != install.publisher or info.get("ProcessorArchitecture", "").lower() not in (architecture, "neutral"):
+            return None
+        return version_text(info.get("Version"))
+
+    try:
+        running = desktop_running(install)
+        remote = remote_msix_identity(url)
+        available = published(remote) if remote is not None else None
+        if available and version_tuple(available) <= version_tuple(before):
+            return result(install.app_id, "windows", "current", before, before, install.manager)
+        if available and running:
+            return quit_first(install, before)
+    except UpdateFailure as error:
+        return result(install.app_id, "windows", "failed", before, before, install.manager, error.code)
     with private_temporary() as temporary:
         package = temporary / "update.msix"
         try:
+            phase("downloading")
             download_desktop(url, package)
-            info = msix_info(package)
-            if info.get("Name") != install.identity or info.get("Publisher") != install.publisher or info.get("ProcessorArchitecture", "").lower() not in (architecture, "neutral"):
-                raise UpdateFailure("signature_failed")
-            after = version_text(info.get("Version"))
+            phase("updating")
+            after = published(msix_info(package))
             if not after:
                 raise UpdateFailure("signature_failed")
             if version_tuple(after) <= version_tuple(before):
                 return result(install.app_id, "windows", "current", before, before, install.manager)
-            try:
-                contexts = main_contexts(install, scan("windows"))
-            except UpdateFailure:
-                # Instances exist but cannot be mapped safely; ask the user
-                # to quit instead of failing the whole update (as on Mac).
-                return result(install.app_id, "windows", "action_required", before, before, install.manager, "quit_first", False)
-            exited, refused = request_desktop_quit(install, contexts)
-            if refused:
-                # Never force a desktop shut; the user quits it instead.
-                if exited:
-                    try:
-                        restart_desktops(install, exited)
-                    except (UpdateFailure, OSError):
-                        pass
-                return result(install.app_id, "windows", "action_required", before, before, install.manager, "quit_first", False)
-            try:
-                # Add-AppxPackage verifies the Microsoft Store/publisher
-                # signature and upgrades the same per-user package, preserving
-                # LocalState.
-                add_appx_package(package)
-            except UpdateFailure as deploy:
-                if deploy.code == "quit_first":
-                    if exited:
-                        try:
-                            restart_desktops(install, exited)
-                        except (UpdateFailure, OSError):
-                            pass
-                    return result(install.app_id, "windows", "action_required", before, before, install.manager, "quit_first", False)
-                raise
+            # Look again: the app may have been opened during the download.
+            if running or desktop_running(install):
+                return quit_first(install, before)
+            # Add-AppxPackage verifies the Microsoft Store/publisher signature
+            # and upgrades the same per-user package, preserving LocalState. A
+            # rejection for a running app (0x80073D02) reports quit_first.
+            add_appx_package(package)
             installed = True
-            mark_restart(install, after)
             refreshed = windows_package(install.app_id)
             if refreshed is None or refreshed.version != after:
                 raise UpdateFailure("version_unknown")
-            try:
-                restarted = restart_desktops(refreshed, contexts)
-            except (UpdateFailure, OSError):
-                return result(install.app_id, "windows", "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
-            value = result(install.app_id, "windows", "updated", before, refreshed.version, install.manager, attempted=True, restarted=restarted)
+            value = result(install.app_id, "windows", "updated", before, refreshed.version, install.manager, attempted=True, restarted=0)
             value["forcedStops"] = 0
-            clear_restart(install)
             return value
         except UpdateFailure as error:
             if error.code == "download_blocked":
                 return result(install.app_id, "windows", "action_required", before, before, install.manager, "check_in_app", False)
-            if contexts and not installed:
-                from app_update_processes import live_contexts
-                closed = [item for item in contexts if item not in live_contexts("windows", contexts)]
-                try: restart_desktops(install, closed)
-                except (UpdateFailure, OSError): pass
+            if error.code == "quit_first":
+                return quit_first(install, before)
             return result(install.app_id, "windows", "failed", before, before, install.manager, error.code, installed)
 
 
@@ -429,49 +496,23 @@ def update_linux(install, deadline=None):
         return result(install.app_id, "ubuntu", "failed", before, before, "apt", error.code)
 
 
-def update_desktop(install, deadline=None):
+def update_desktop(install, deadline=None, phase=None):
+    """phase(name) reports a long step ("downloading", then "updating") so the page can show it live."""
     if install.platform == "ubuntu":
         return update_linux(install, deadline)
-    # A prior verified package update may have timed out during relaunch. A
-    # subsequent explicit button click retries that restart without reinstalling.
+    # Older builds quit the app, installed, then relaunched it, and left this
+    # marker when the relaunch failed. The installed bits are already the new
+    # version and nothing is ever relaunched or quit now, so the marker is
+    # obsolete: drop it and run the normal check.
     try:
-        pending = json.loads(restart_marker(install).read_text(encoding="utf-8"))
-        retry = pending.get("version") == install.version
-    except (OSError, ValueError):
-        retry = False
-    if retry:
-        try:
-            contexts = main_contexts(install, scan(install.platform))
-        except UpdateFailure:
-            # Installed bits are already the new version; instances that
-            # cannot be mapped finish by quitting. The marker stays so a
-            # later click completes the relaunch once the app is down.
-            return result(install.app_id, install.platform, "action_required", install.version, install.version, install.manager, "quit_first", False)
-        try:
-            exited, refused = request_desktop_quit(install, contexts)
-            if refused:
-                if exited:
-                    try:
-                        restart_desktops(install, exited)
-                    except (UpdateFailure, OSError):
-                        pass
-                return result(install.app_id, install.platform, "action_required", install.version, install.version, install.manager, "quit_first", False)
-            restarted = restart_desktops(install, contexts)
-            clear_restart(install)
-            value = result(install.app_id, install.platform, "updated", install.version, install.version, install.manager, attempted=False, restarted=restarted)
-            value["forcedStops"] = 0
-            return value
-        except (UpdateFailure, OSError):
-            return result(install.app_id, install.platform, "restart_failed", install.version, install.version, install.manager, "restart_failed")
-    return {"mac": update_mac, "windows": update_windows}[install.platform](install)
+        clear_restart(install)
+    except OSError:
+        pass
+    return {"mac": update_mac, "windows": update_windows}[install.platform](install, phase)
 
 
 def restart_marker(install):
     return pathlib.Path.home() / ".ccs/app-updates" / (install.app_id + "-pending-restart.json")
-
-
-def mark_restart(install, version):
-    write_private_json(restart_marker(install), {"version": version})
 
 
 def clear_restart(install):

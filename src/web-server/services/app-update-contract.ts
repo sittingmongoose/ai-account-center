@@ -43,9 +43,16 @@ export interface AppUpdateHostProgress {
   state: 'waiting' | 'running' | 'done';
   /** The app this computer works on now; null between apps or while it checks them all. */
   currentApp: UpdateAppId | null;
-  /** 'checking' while read-only checks run, 'updating' once an app's update starts. */
-  phase: 'checking' | 'updating' | null;
+  /**
+   * 'checking' while read-only checks run, 'updating' once an app's update
+   * starts, 'downloading' while a desktop app's package downloads.
+   */
+  phase: AppUpdatePhase | null;
+  /** When the current phase began (ISO time), so the page can show how long it has run. */
+  phaseSince?: string | null;
 }
+export type AppUpdatePhase = 'checking' | 'updating' | 'downloading';
+export const APP_UPDATE_PHASES: readonly AppUpdatePhase[] = ['checking', 'updating', 'downloading'];
 export interface AppUpdateJob {
   id: string;
   state: 'running' | 'completed' | 'failed';
@@ -210,6 +217,13 @@ export function normalizeAppUpdateResults(
   });
 }
 
+/** A row's words; "quit first" names the app, so the page says exactly what to quit. */
+export function messageFor(code: MessageCode, appId: UpdateAppId): string {
+  if (code === 'quit_first')
+    return `Quit ${UPDATE_APP_LABELS[appId]} to finish its update, then run Update apps again.`;
+  return MESSAGES[code];
+}
+
 /** One helper row for a known app; anything unexpected becomes a fixed helper_invalid row. */
 export function normalizeAppUpdateRow(
   row: Record<string, unknown> | undefined,
@@ -272,7 +286,7 @@ export function normalizeAppUpdateRow(
     previousVersion: safeVersion(row.previousVersion),
     version: safeVersion(row.version),
     manager: typeof row.manager === 'string' && MANAGERS.includes(row.manager) ? row.manager : null,
-    message: MESSAGES[code],
+    message: messageFor(code, appId),
     updateAttempted: row.updateAttempted === true,
     restartedProcesses: count,
     forcedStops: forced,
