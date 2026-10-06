@@ -9,7 +9,7 @@ const COLLECTOR_MEMORY_BYTES = 1024 ** 3;
 /** The nice value a collector thread runs at; the server's own threads keep theirs. */
 export const COLLECTOR_NICE = 10;
 
-function availableCpus(): number {
+export function availableCpus(): number {
   try {
     return typeof os.availableParallelism === 'function'
       ? os.availableParallelism()

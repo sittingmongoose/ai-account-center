@@ -1,34 +1,14 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1142,
-    "filesAffected": 117,
-    "hotpathOccurrences": 511,
-    "hotpathFilesAffected": 66,
+    "totalOccurrences": 1175,
+    "filesAffected": 119,
+    "hotpathOccurrences": 544,
+    "hotpathFilesAffected": 68,
     "topHotpathFiles": [
       {
-        "file": "src/management/shared-manager/diverged-file-adopter.ts",
-        "count": 29,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "fsyncSync",
-          "linkSync",
-          "lstatSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "readlinkSync",
-          "renameSync",
-          "statSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 29,
+        "count": 38,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -46,7 +26,7 @@
       },
       {
         "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 28,
+        "count": 30,
         "calls": [
           "chmodSync",
           "existsSync",
@@ -55,6 +35,26 @@
           "realpathSync",
           "renameSync",
           "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/management/shared-manager/diverged-file-adopter.ts",
+        "count": 29,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "fsyncSync",
+          "linkSync",
+          "lstatSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "readlinkSync",
+          "renameSync",
+          "statSync",
+          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
@@ -246,28 +246,8 @@
         "markers": []
       },
       {
-        "file": "src/management/shared-manager/diverged-file-adopter.ts",
-        "count": 29,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "fsyncSync",
-          "linkSync",
-          "lstatSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "readlinkSync",
-          "renameSync",
-          "statSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 29,
+        "count": 38,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -285,7 +265,7 @@
       },
       {
         "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 28,
+        "count": 30,
         "calls": [
           "chmodSync",
           "existsSync",
@@ -294,6 +274,26 @@
           "realpathSync",
           "renameSync",
           "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/management/shared-manager/diverged-file-adopter.ts",
+        "count": 29,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "fsyncSync",
+          "linkSync",
+          "lstatSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "readlinkSync",
+          "renameSync",
+          "statSync",
+          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
@@ -604,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 36,
-      "totalSourceFiles": 395,
-      "coverageRatio": 0.0911,
+      "totalSourceFiles": 397,
+      "coverageRatio": 0.0907,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 141,
+          "count": 143,
           "withLogger": 20
         },
         {
@@ -751,20 +751,20 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 46,
+      "countOver400": 47,
       "countOver600": 20,
       "topOver400": [
         {
-          "file": "src/web-server/model-pricing.ts",
-          "loc": 1322
-        },
-        {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 1264
+          "loc": 2022
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1244
+          "loc": 1357
+        },
+        {
+          "file": "src/web-server/model-pricing.ts",
+          "loc": 1322
         },
         {
           "file": "src/antigravity/registry.ts",

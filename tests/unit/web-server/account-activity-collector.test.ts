@@ -4,8 +4,16 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   aggregateSessionAggregates,
+  codexReaderCount,
   collectAccountActivity,
+  collectCodexPartition,
+  partitionCodexFiles,
+  type CollectAccountActivityDeps,
 } from '../../../src/web-server/usage/account-activity-collector';
+import {
+  CodexPartitionError,
+  spawnCodexPartitionReader,
+} from '../../../src/web-server/usage/worker-client';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import { setCachedModelsDevRegistry } from '../../../src/web-server/models-dev/registry-cache';
 import { scanCodexNativeUsageEntries } from '../../../src/web-server/usage/codex-native-usage-collector';
@@ -808,5 +816,501 @@ describe('exact-duplicate session file dedup', () => {
     expect(data.scan?.complete).toBe(true);
     expect(data.eventCount).toBe(2);
     expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(300);
+  });
+});
+
+describe('codex partitioned reading (N14)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-partition-'));
+    fs.mkdirSync(path.join(root, 'codex', 'sessions'), { recursive: true });
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  function rollout(name: string, lines: unknown[], mtimeMs = NOW) {
+    const file = path.join(root, 'codex', 'sessions', name);
+    fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+    fs.utimesSync(file, new Date(mtimeMs), new Date(mtimeMs));
+    return file;
+  }
+  function usageLines(session: string, input: number, output: number, hour: string) {
+    return [
+      { type: 'session_meta', payload: { id: session, model_provider: 'openai' } },
+      { type: 'turn_context', payload: { model: 'gpt-5.4' } },
+      tokens(input, 20, output, `2026-10-01T${hour}:05:00Z`),
+    ];
+  }
+  function collect(
+    cache: string,
+    extra: Record<string, unknown> = {},
+    deps?: CollectAccountActivityDeps
+  ) {
+    return collectAccountActivity(
+      { kind: 'codex', codexHome: path.join(root, 'codex'), cacheDir: path.join(root, cache) },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, cache), ...extra },
+      deps
+    );
+  }
+  function totals(data: Awaited<ReturnType<typeof collect>>) {
+    return {
+      events: data.eventCount,
+      input: data.hourly.reduce((t, h) => t + h.inputTokens, 0),
+      output: data.hourly.reduce((t, h) => t + h.outputTokens, 0),
+      read: data.hourly.reduce((t, h) => t + h.cacheReadTokens, 0),
+      sessions: data.session.length,
+      complete: data.scan?.complete,
+      readBytes: data.scan?.readBytes,
+    };
+  }
+
+  it('pins the reader count: inline below threshold, bounded above it', () => {
+    // One file never fans out, however large; below-threshold unread reads inline.
+    expect(codexReaderCount(10 * 1024 ** 3, 1, 56)).toBe(1);
+    expect(codexReaderCount(1024, 100, 56)).toBe(1);
+    expect(codexReaderCount(64 * 1024 ** 2 - 1, 100, 56)).toBe(1);
+    // Above the threshold: about 512 MB per reader, at least 2, at most 4.
+    expect(codexReaderCount(64 * 1024 ** 2, 100, 56)).toBe(2);
+    expect(codexReaderCount(1024 ** 3, 100, 56)).toBe(2);
+    expect(codexReaderCount(1024 ** 3 + 1, 100, 56)).toBe(3);
+    expect(codexReaderCount(13 * 1024 ** 3, 1422, 56)).toBe(4);
+    expect(codexReaderCount(100 * 1024 ** 3, 10000, 256)).toBe(4);
+    // A quarter of the CPUs, never fewer than 2 when fanning out; never more than files.
+    expect(codexReaderCount(13 * 1024 ** 3, 1422, 4)).toBe(2);
+    expect(codexReaderCount(13 * 1024 ** 3, 3, 56)).toBe(3);
+    expect(codexReaderCount(13 * 1024 ** 3, 2, 56)).toBe(2);
+  });
+
+  it('partitions disjointly, in order, balanced by unread bytes', () => {
+    const entries = [
+      { file: 'a', unreadBytes: 300 },
+      { file: 'b', unreadBytes: 300 },
+      { file: 'c', unreadBytes: 300 },
+      { file: 'd', unreadBytes: 300 },
+    ];
+    const chunks = partitionCodexFiles(entries, 2);
+    // Disjoint and covering, global order preserved (the merge relies on it).
+    expect(chunks.flat().sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect(chunks.flat()).toEqual(['a', 'b', 'c', 'd']);
+    // Balanced by unread bytes.
+    const sizes = new Map(entries.map((e) => [e.file, e.unreadBytes]));
+    const sums = chunks.map((chunk) => chunk.reduce((t, f) => t + (sizes.get(f) ?? 0), 0));
+    expect(sums).toEqual([600, 600]);
+    // One giant file cannot split (one reader per file): its chunk overshoots
+    // by at most that file, and every file is still covered exactly once.
+    const giant = [
+      { file: 'a', unreadBytes: 100 },
+      { file: 'b', unreadBytes: 100 },
+      { file: 'c', unreadBytes: 800 },
+      { file: 'd', unreadBytes: 100 },
+      { file: 'e', unreadBytes: 100 },
+    ];
+    const giantChunks = partitionCodexFiles(giant, 2);
+    expect(giantChunks.flat()).toEqual(['a', 'b', 'c', 'd', 'e']);
+    const giantSizes = new Map(giant.map((e) => [e.file, e.unreadBytes]));
+    const giantSums = giantChunks.map((chunk) =>
+      chunk.reduce((t, f) => t + (giantSizes.get(f) ?? 0), 0)
+    );
+    expect(Math.max(...giantSums)).toBeLessThanOrEqual(1200 / 2 + 800);
+    // A cut never lands on the last entry: two uneven files still split.
+    expect(
+      partitionCodexFiles(
+        [
+          { file: 'a', unreadBytes: 470 },
+          { file: 'b', unreadBytes: 471 },
+        ],
+        2
+      )
+    ).toEqual([['a'], ['b']]);
+    // Never more chunks than files or readers; one reader keeps one chunk.
+    expect(partitionCodexFiles(entries, 99)).toHaveLength(4);
+    expect(partitionCodexFiles(entries, 1)).toEqual([['a', 'b', 'c', 'd']]);
+    expect(partitionCodexFiles([], 4)).toEqual([[]]);
+  });
+
+  it('reads each file exactly once across readers (one reader per file)', async () => {
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    rollout('rollout-c.jsonl', usageLines('s-c', 300, 30, '12'));
+    rollout('rollout-d.jsonl', usageLines('s-d', 400, 40, '13'));
+    const seen: string[][] = [];
+    const data = await collect(
+      'cache',
+      { fanoutThresholdBytes: 1 },
+      {
+        partitionRunner: async (_request, options, partition) => {
+          seen.push([...partition.files]);
+          return collectCodexPartition(partition, options);
+        },
+      }
+    );
+    expect(seen.length).toBeGreaterThan(1);
+    const all = seen.flat();
+    expect(all).toHaveLength(4);
+    expect(new Set(all).size).toBe(4);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(4);
+  });
+
+  it('merged totals equal a single inline reader on fixtures', async () => {
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    rollout('rollout-c.jsonl', usageLines('s-c', 300, 30, '12'));
+    const inline = await collect('cache-inline');
+    const fanned = await collect('cache-fanned', { fanoutThresholdBytes: 1 });
+    expect(totals(fanned)).toEqual(totals(inline));
+    expect(fanned.hourly).toEqual(inline.hourly);
+    expect(fanned.session).toEqual(inline.session);
+    expect(fanned.scan).toEqual(inline.scan);
+    // The fanned-out pass wrote the same shared checkpoints an inline pass
+    // reads: a warm inline scan over the same cache reads nothing new.
+    const warm = await collect('cache-fanned');
+    expect(warm.scan?.readBytes).toBe(0);
+    expect(warm.hourly).toEqual(inline.hourly);
+    expect(warm.session).toEqual(inline.session);
+  });
+
+  it('merged totals equal a single reader through real nested workers', async () => {
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    rollout('rollout-c.jsonl', usageLines('s-c', 300, 30, '12'));
+    rollout('rollout-d.jsonl', usageLines('s-d', 400, 40, '13'));
+    const inline = await collect('cache-inline');
+    // No injected runner: the default spawns real nested reader threads.
+    const fanned = await collect('cache-fanned', { fanoutThresholdBytes: 1 });
+    expect(fanned.hourly).toEqual(inline.hourly);
+    expect(fanned.session).toEqual(inline.session);
+    expect(fanned.scan).toEqual(inline.scan);
+    expect(fanned.eventCount).toBe(4);
+  });
+
+  it('a slow partition does not hold up the others', async () => {
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    rollout('rollout-c.jsonl', usageLines('s-c', 300, 30, '12'));
+    rollout('rollout-d.jsonl', usageLines('s-d', 400, 40, '13'));
+    const finished: string[] = [];
+    let calls = 0;
+    const data = await collect(
+      'cache',
+      { fanoutThresholdBytes: 1 },
+      {
+        partitionRunner: async (_request, options, partition) => {
+          calls++;
+          const mine = calls;
+          // The first partition started stalls; the others must still finish first.
+          if (mine === 1) await new Promise((resolve) => setTimeout(resolve, 500));
+          const outcomes = await collectCodexPartition(partition, options);
+          finished.push(`p${mine}`);
+          return outcomes;
+        },
+      }
+    );
+    expect(calls).toBeGreaterThan(1);
+    // Every partition ran concurrently: the stalled first finished last.
+    expect(finished[finished.length - 1]).toBe('p1');
+    expect(finished).toHaveLength(calls);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(4);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(1000 - 80);
+  });
+
+  it('a timed-out reader falls back to this pass starting rows (deadline analog)', async () => {
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    // Pass 1 (inline) banks both files' rows; then both grow. Pass 2 fans out
+    // and b's reader times out: b contributes its starting rows, like a file
+    // the budget never reached, and the scan stays honestly incomplete.
+    await collect('cache');
+    fs.appendFileSync(
+      path.join(root, 'codex', 'sessions', 'rollout-a.jsonl'),
+      JSON.stringify(tokens(200, 30, 25, '2026-10-01T10:55:00Z')) + '\n'
+    );
+    fs.appendFileSync(
+      path.join(root, 'codex', 'sessions', 'rollout-b.jsonl'),
+      JSON.stringify(tokens(999, 60, 99, '2026-10-01T11:55:00Z')) + '\n'
+    );
+    let calls = 0;
+    const data = await collect(
+      'cache',
+      { fanoutThresholdBytes: 1 },
+      {
+        partitionRunner: async (_request, options, partition) => {
+          calls++;
+          if (partition.files.some((f) => f.endsWith('rollout-b.jsonl')))
+            throw new CodexPartitionError(true);
+          return collectCodexPartition(partition, options);
+        },
+      }
+    );
+    expect(calls).toBe(2);
+    expect(data.scan?.complete).toBe(false);
+    expect(data.scan?.failedFiles).toBe(0);
+    // a's new tail is counted (80 + 200 - 30 - 80); b's starting rows are
+    // kept but its new tail is not counted yet.
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(170 + 180);
+    expect(data.eventCount).toBe(3);
+  });
+
+  it('a crashed reader keeps its starting rows and counts its files failed (S1)', async () => {
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    // Pass 1 banks both files; then both grow and b's reader crashes (OOM,
+    // spawn failure). b still reports its starting rows — dropping the whole
+    // partition would dip Codex on the page for a cycle — with failed++ so
+    // the next pass re-reads it.
+    await collect('cache');
+    fs.appendFileSync(
+      path.join(root, 'codex', 'sessions', 'rollout-a.jsonl'),
+      JSON.stringify(tokens(200, 30, 25, '2026-10-01T10:55:00Z')) + '\n'
+    );
+    fs.appendFileSync(
+      path.join(root, 'codex', 'sessions', 'rollout-b.jsonl'),
+      JSON.stringify(tokens(999, 60, 99, '2026-10-01T11:55:00Z')) + '\n'
+    );
+    const data = await collect(
+      'cache',
+      { fanoutThresholdBytes: 1 },
+      {
+        partitionRunner: async (_request, options, partition) => {
+          if (partition.files.some((f) => f.endsWith('rollout-b.jsonl')))
+            throw new Error('reader crashed');
+          return collectCodexPartition(partition, options);
+        },
+      }
+    );
+    expect(data.scan?.complete).toBe(false);
+    expect(data.scan?.failedFiles).toBe(1);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(170 + 180);
+    expect(data.eventCount).toBe(3);
+    // The next pass (healthy readers) converges and counts b's new tail.
+    const converged = await collect('cache', { fanoutThresholdBytes: 1 });
+    expect(converged.scan?.failedFiles).toBe(0);
+    expect(converged.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(170 + 180 + 759);
+  });
+
+  it('dedup and the mtime pre-filter hold under fan-out', async () => {
+    // The parent dedups before partitioning, so two byte-identical rollouts
+    // count once even fanned out; a stale rollout is never read.
+    const lines = usageLines('s-dup', 500, 50, '14');
+    rollout('rollout-dupe-1.jsonl', lines, NOW);
+    rollout('rollout-dupe-2.jsonl', lines, NOW - 3600000);
+    rollout('rollout-c.jsonl', usageLines('s-c', 200, 20, '15'));
+    rollout(
+      'rollout-stale.jsonl',
+      [meta(), model(), tokens(999, 0, 999, '2026-08-01T15:00:00Z')],
+      NOW - 40 * 86400000
+    );
+    let partitions = 0;
+    const data = await collect(
+      'cache',
+      { fanoutThresholdBytes: 1 },
+      {
+        partitionRunner: async (_request, options, partition) => {
+          partitions++;
+          return collectCodexPartition(partition, options);
+        },
+      }
+    );
+    expect(partitions).toBeGreaterThan(1);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(480 + 180);
+    const cacheDir = path.join(root, 'cache', 'account-activity-v1');
+    const checkpoints: string[] = [];
+    const walk = (d: string) => {
+      for (const item of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, item.name);
+        if (item.isDirectory()) walk(full);
+        else checkpoints.push(full);
+      }
+    };
+    walk(cacheDir);
+    // The kept copy and rollout-c have checkpoints; the dropped copy and the
+    // stale file were never read, so they do not.
+    expect(checkpoints).toHaveLength(2);
+  });
+
+  it('fan-out honors an explicit maxBytesPerFile across passes', async () => {
+    // The default byte cap is lifted for partition readers (deadline-bounded
+    // instead), but an explicitly set one still bounds each pass, as inline:
+    // two files converge over bounded passes with identical totals.
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    // 250 bytes: smaller than the ~339-byte files (so several passes are
+    // needed) but larger than any line (a cap below a line length stalls even
+    // inline, by design: a pass only banks whole lines).
+    const extra = { fanoutThresholdBytes: 1, maxBytesPerFile: 250 };
+    let data = await collect('cache', extra);
+    expect(data.scan?.complete).toBe(false);
+    for (let attempt = 0; attempt < 12 && !data.scan?.complete; attempt++) {
+      data = await collect('cache', extra);
+    }
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 180);
+    let inline = await collect('cache-inline', { maxBytesPerFile: 250 });
+    for (let attempt = 0; attempt < 12 && !inline.scan?.complete; attempt++) {
+      inline = await collect('cache-inline', { maxBytesPerFile: 250 });
+    }
+    expect(data.hourly).toEqual(inline.hourly);
+    expect(data.session).toEqual(inline.session);
+  });
+
+  it('readers only get files with unread bytes (N1)', async () => {
+    // Pass 1 banks a and b; then fresh c and d arrive. Pass 2 fans out, but
+    // the readers only see c and d — a and b tally from the just-loaded
+    // checkpoints, so no reader starts with nothing to read.
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    await collect('cache');
+    rollout('rollout-c.jsonl', usageLines('s-c', 300, 30, '12'));
+    rollout('rollout-d.jsonl', usageLines('s-d', 400, 40, '13'));
+    const seen: string[][] = [];
+    const data = await collect(
+      'cache',
+      { fanoutThresholdBytes: 1 },
+      {
+        partitionRunner: async (_request, options, partition) => {
+          seen.push([...partition.files]);
+          return collectCodexPartition(partition, options);
+        },
+      }
+    );
+    expect(seen.length).toBe(2);
+    const names = seen.flat().map((f) => path.basename(f)).sort();
+    expect(names).toEqual(['rollout-c.jsonl', 'rollout-d.jsonl']);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(4);
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 180 + 280 + 380);
+  });
+
+  it('a file moving between partitions counts once (N5)', async () => {
+    // Bounded passes (250 B cap) force re-partitioning: between passes a
+    // grows by a 200-byte garbage line (no usage; under the cap so passes
+    // keep banking whole lines), which moves b to the other partition.
+    // Totals still match a fully converged inline run.
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    rollout('rollout-c.jsonl', usageLines('s-c', 300, 30, '12'));
+    const extra = { fanoutThresholdBytes: 1, maxBytesPerFile: 250 };
+    // Record each pass's partitions in call order.
+    const calls: string[][] = [];
+    const deps: CollectAccountActivityDeps = {
+      partitionRunner: async (_request, options, partition) => {
+        calls.push(partition.files.map((f) => path.basename(f)));
+        return collectCodexPartition(partition, options);
+      },
+    };
+    let data = await collect('cache', extra, deps);
+    expect(data.scan?.complete).toBe(false);
+    const pass1 = calls.splice(0);
+    // Grow a mid-convergence: its unread share jumps, so the next pass
+    // repartitions and b lands in a different partition.
+    const grown = path.join(root, 'codex', 'sessions', 'rollout-a.jsonl');
+    fs.appendFileSync(grown, `${'x'.repeat(199)}\n`);
+    fs.utimesSync(grown, new Date(NOW + 3600000), new Date(NOW + 3600000));
+    data = await collect('cache', extra, deps);
+    const pass2 = calls.splice(0);
+    const indexOf = (pass: string[][], name: string) => pass.findIndex((c) => c.includes(name));
+    expect(pass1.length).toBe(2);
+    expect(pass2.length).toBe(2);
+    expect(indexOf(pass1, 'rollout-b.jsonl')).toBe(0);
+    expect(indexOf(pass2, 'rollout-b.jsonl')).toBe(1);
+    for (let attempt = 0; attempt < 12 && !data.scan?.complete; attempt++) {
+      data = await collect('cache', extra, deps);
+    }
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(3);
+    let inline = await collect('cache-inline');
+    for (let attempt = 0; attempt < 12 && !inline.scan?.complete; attempt++) {
+      inline = await collect('cache-inline');
+    }
+    expect(data.hourly).toEqual(inline.hourly);
+    expect(data.session).toEqual(inline.session);
+  });
+
+  it('rotation and deletion between fan-out passes match inline (N5)', async () => {
+    // Pass 1 converges; then b is rewritten with new usage (rotation), c is
+    // deleted, and a grows, so pass 2 fans out over a changed tree. Totals
+    // match a fully converged inline run over the same final files.
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    rollout('rollout-c.jsonl', usageLines('s-c', 300, 30, '12'));
+    const extra = { fanoutThresholdBytes: 1 };
+    let data = await collect('cache', extra);
+    expect(data.scan?.complete).toBe(true);
+    fs.writeFileSync(
+      path.join(root, 'codex', 'sessions', 'rollout-b.jsonl'),
+      usageLines('s-b2', 500, 50, '14')
+        .map((line) => JSON.stringify(line))
+        .join('\n') + '\n'
+    );
+    fs.appendFileSync(
+      path.join(root, 'codex', 'sessions', 'rollout-a.jsonl'),
+      JSON.stringify(tokens(200, 30, 25, '2026-10-01T10:55:00Z')) + '\n'
+    );
+    fs.rmSync(path.join(root, 'codex', 'sessions', 'rollout-c.jsonl'));
+    data = await collect('cache', extra);
+    for (let attempt = 0; attempt < 12 && !data.scan?.complete; attempt++) {
+      data = await collect('cache', extra);
+    }
+    expect(data.scan?.complete).toBe(true);
+    // b's old rows are gone (checkpoint identity missed on rewrite), c is
+    // gone, a counts both its events.
+    expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(170 + 480);
+    expect(data.eventCount).toBe(3);
+    let inline = await collect('cache-inline');
+    for (let attempt = 0; attempt < 12 && !inline.scan?.complete; attempt++) {
+      inline = await collect('cache-inline');
+    }
+    expect(data.hourly).toEqual(inline.hourly);
+    expect(data.session).toEqual(inline.session);
+  });
+
+  it('experiment-roots requests route past the fan-out (owned by the other lane)', async () => {
+    // Coordination with fix/aac-fw4-experiment-roots-20261006: a codex request
+    // carrying experimentRoots is served by collectExperimentActivity and never
+    // reaches the N14 fan-out. Only the routing is asserted here (a throwing
+    // runner would fail the test); their suite owns the experiment semantics.
+    rollout('rollout-a.jsonl', usageLines('s-a', 100, 10, '10'));
+    rollout('rollout-b.jsonl', usageLines('s-b', 200, 20, '11'));
+    let partitions = 0;
+    await collectAccountActivity(
+      {
+        kind: 'codex',
+        codexHome: path.join(root, 'codex'),
+        cacheDir: path.join(root, 'cache'),
+        experimentRoots: [path.join(root, 'codex', 'sessions')],
+      },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), fanoutThresholdBytes: 1 },
+      {
+        partitionRunner: async () => {
+          partitions++;
+          throw new Error('must not fan out');
+        },
+      }
+    );
+    expect(partitions).toBe(0);
+  });
+
+  it('a reader that never answers times out and its thread stops', async () => {
+    const hangWorker = path.join(root, 'hang-worker.cjs');
+    fs.writeFileSync(hangWorker, 'setInterval(() => {}, 1000);\n');
+    const started = Date.now();
+    const error = await spawnCodexPartitionReader(
+      { kind: 'codex', codexHome: path.join(root, 'codex'), cacheDir: path.join(root, 'cache') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') },
+      { files: [], checkpointDir: path.join(root, 'cache'), deadline: Date.now() + 60000 },
+      100,
+      hangWorker
+    ).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(error).toBeInstanceOf(CodexPartitionError);
+    expect((error as CodexPartitionError).timedOut).toBe(true);
+    // The spawner only settles after terminate() resolves, so a prompt
+    // rejection proves the hung thread was actually stopped.
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });

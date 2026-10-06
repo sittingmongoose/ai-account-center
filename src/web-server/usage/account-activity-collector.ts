@@ -22,11 +22,20 @@ import {
   type ZcodeHelperSessionRow,
 } from './zcode-native-usage-collector';
 import { analyticsSessionKey } from './analytics-session-key';
+import { EXPERIMENT_CLAUDE_ROOT_DEPTH } from './experiment-usage-roots';
 import type { AccountAnalyticsActivityProvider } from '../services/account-analytics-types';
 import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
 import type { ModelBreakdown } from './types';
-import type { JsonlFieldMapping, UsageWorkerRequest, UsageWorkerResult } from './worker-client';
+import {
+  CodexPartitionError,
+  spawnCodexPartitionReader,
+  type CodexPartitionSpec,
+  type JsonlFieldMapping,
+  type UsageWorkerRequest,
+  type UsageWorkerResult,
+} from './worker-client';
+import { availableCpus } from './collector-concurrency';
 
 export interface CompactEntry {
   entry: RawUsageEntry;
@@ -57,6 +66,21 @@ interface Checkpoint {
    * value invalidates the checkpoint like any other field.
    */
   pendingClaude?: { key: string; entry: RawUsageEntry };
+  /**
+   * Experiment requests only (collectExperimentActivity): `keyed` files keep one entry per
+   * in-window record with its dedup key instead of hourly rows, so copies across files collapse
+   * at aggregation; `keys` files (the default Claude root, read as the reference) keep only the
+   * keys of their responses.
+   */
+  mode?: ReadMode;
+  keyed?: KeyedEntry[];
+  keys?: string[];
+}
+/** How readBatch stores a file's records: hourly rows (default), keyed entries, or keys only. */
+type ReadMode = 'keyed' | 'keys';
+interface KeyedEntry {
+  k: string;
+  e: RawUsageEntry;
 }
 export interface AccountActivityScanOptions {
   minDate: number;
@@ -66,6 +90,21 @@ export interface AccountActivityScanOptions {
   maxBytesPerFile?: number;
   /** Smaller fixture/embedding budgets cannot raise the production ceilings. */
   traversalLimits?: { maxDepth?: number; maxDirectories?: number; maxEntries?: number };
+  /**
+   * Unread codex bytes that trigger a fanned-out scan (N14). Below it the
+   * worker reads inline, exactly as before, so warm cycles never pay for a
+   * fan-out they do not need. Defaults to CODEX_FANOUT_THRESHOLD_BYTES.
+   */
+  fanoutThresholdBytes?: number;
+  /**
+   * Internal: set only by a codex partition reader. The default per-file byte
+   * cap (256 MB) exists so one giant file cannot starve the other files of a
+   * single reader's pass; a partition reader owns its chunk alone, so it is
+   * bounded by the shared scan deadline instead and the byte cap is lifted.
+   * An explicitly set maxBytesPerFile is still honored (see
+   * collectCodexPartition).
+   */
+  codexPartitionRead?: boolean;
 }
 const MAX_FILES = 20_000;
 const MAX_DEPTH = 64;
@@ -74,6 +113,8 @@ const MAX_ENTRIES = 100_000;
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_ROWS = 10_000;
+/** Response keys one reference Claude file keeps (a 10k-response transcript is ~170 KB). */
+const MAX_FILE_KEYS = 50_000;
 const MAX_TOTAL_ROWS = 100_000;
 /**
  * Append-only usage logs never gain in-window records after their last write,
@@ -176,7 +217,9 @@ function filesUnder(
   kind: string,
   issues: { failed: number },
   deadline: number,
-  limits: AccountActivityScanOptions['traversalLimits']
+  limits: AccountActivityScanOptions['traversalLimits'],
+  /** Folders deeper than this are outside the root's scope: skipped without counting a failure. */
+  scopeDepth?: number
 ): string[] {
   const ceiling = (value: number | undefined, maximum: number): number =>
     Number.isSafeInteger(value) && (value as number) >= 1
@@ -214,6 +257,7 @@ function filesUnder(
           visitedEntries++;
           const file = path.join(current.directory, item.name);
           if (item.isDirectory()) {
+            if (scopeDepth !== undefined && current.depth >= scopeDepth) continue;
             if (
               current.depth >= maxDepth ||
               pending.length + visitedDirectories >= maxDirectories
@@ -236,7 +280,7 @@ function fingerprint(fd: number, start: number, length: number): string {
   const read = fs.readSync(fd, buffer, 0, length, start);
   return hash(buffer.subarray(0, read));
 }
-function fresh(stats: fs.Stats, minDate: number, kind: ActivityKind): Checkpoint {
+function fresh(stats: fs.Stats, minDate: number, kind: ActivityKind, mode?: ReadMode): Checkpoint {
   return {
     version: 2,
     size: stats.size,
@@ -254,6 +298,7 @@ function fresh(stats: fs.Stats, minDate: number, kind: ActivityKind): Checkpoint
     ...(PARSER_VERSION[kind] === undefined ? {} : { parser: PARSER_VERSION[kind] }),
     state: createCodexNativeParserState(),
     rows: [],
+    ...(mode === undefined ? {} : { mode, ...(mode === 'keyed' ? { keyed: [] } : { keys: [] }) }),
   };
 }
 function loadCheckpoint(
@@ -261,10 +306,11 @@ function loadCheckpoint(
   file: string,
   stats: fs.Stats,
   minDate: number,
-  kind: ActivityKind
+  kind: ActivityKind,
+  mode?: ReadMode
 ): Checkpoint {
   try {
-    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate, kind);
+    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate, kind, mode);
     const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
     if (
       value.version !== 2 ||
@@ -285,9 +331,12 @@ function loadCheckpoint(
       (value.pendingClaude !== undefined &&
         (typeof value.pendingClaude.key !== 'string' ||
           !value.pendingClaude.entry ||
-          typeof value.pendingClaude.entry !== 'object'))
+          typeof value.pendingClaude.entry !== 'object')) ||
+      value.mode !== mode ||
+      (mode === 'keyed' && (!Array.isArray(value.keyed) || value.keyed.length > MAX_FILE_ROWS)) ||
+      (mode === 'keys' && (!Array.isArray(value.keys) || value.keys.length > MAX_FILE_KEYS))
     )
-      return fresh(stats, minDate, kind);
+      return fresh(stats, minDate, kind, mode);
     const fd = fs.openSync(file, 'r');
     try {
       // Check the consumed prefix and boundary before resuming an append. A
@@ -296,15 +345,17 @@ function loadCheckpoint(
         value.head !== fingerprint(fd, 0, Math.min(256, value.offset)) ||
         value.tail !== fingerprint(fd, Math.max(0, value.offset - 256), Math.min(256, value.offset))
       )
-        return fresh(stats, minDate, kind);
+        return fresh(stats, minDate, kind, mode);
     } finally {
       fs.closeSync(fd);
     }
     value.rows = value.rows.filter((row) => Date.parse(row.entry.timestamp) >= minDate);
+    if (value.keyed)
+      value.keyed = value.keyed.filter((item) => Date.parse(item.e.timestamp) >= minDate);
     if (stats.size > value.size) value.complete = false;
     return value;
   } catch {
-    return fresh(stats, minDate, kind);
+    return fresh(stats, minDate, kind, mode);
   }
 }
 function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: fs.Stats): void {
@@ -362,6 +413,51 @@ function addEntry(rows: Map<string, CompactEntry>, entry: RawUsageEntry, minDate
 }
 function rowKey(row: CompactEntry): string {
   return compactKey(row.entry, row.entry.timestamp);
+}
+
+/**
+ * The identity one usage record keeps across copies of its log. Claude: the API response's
+ * message id (unique per response; a stream capture spells the request id differently, so the
+ * message id alone matches it to its transcript). Codex and Muse: session, timestamp, model and
+ * tokens, which a copied or resumed log repeats exactly. Hashed: no id or session leaves the file.
+ */
+export function experimentRecordKey(kind: string, entry: RawUsageEntry, recordId?: string): string {
+  const messageId =
+    kind === 'claude' && entry.responseKey ? entry.responseKey.split('\n')[0] : undefined;
+  const identity = recordId
+    ? `r:${recordId}`
+    : messageId
+      ? `m:${messageId}`
+      : `c:${entry.sessionId}|${entry.timestamp}|${entry.model}|${entry.inputTokens}|${entry.outputTokens}|${entry.cacheReadTokens}|${entry.cacheCreationTokens}`;
+  return hash(identity).slice(0, 16);
+}
+
+function parseRecord(line: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(line);
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The fields aggregation needs from a keyed record; paths and versions are dropped. */
+function keyedEntry(entry: RawUsageEntry): RawUsageEntry {
+  return {
+    inputTokens: entry.inputTokens,
+    outputTokens: entry.outputTokens,
+    cacheCreationTokens: entry.cacheCreationTokens,
+    cacheReadTokens: entry.cacheReadTokens,
+    model: entry.model,
+    sessionId: entry.sessionId,
+    timestamp: entry.timestamp,
+    projectPath: '',
+    ...(entry.target === undefined ? {} : { target: entry.target }),
+    ...(entry.provider === undefined ? {} : { provider: entry.provider }),
+    ...(entry.costUsd === undefined ? {} : { costUsd: entry.costUsd }),
+  };
 }
 
 /**
@@ -687,19 +783,43 @@ function readBatch(
   kind: ActivityKind,
   options: AccountActivityScanOptions,
   deadline: number,
-  mapping?: JsonlFieldMapping
+  mapping?: JsonlFieldMapping,
+  mode?: ReadMode
 ): void {
   if (value.complete && value.offset === stats.size) return;
   value.unfinishedTail = false;
   const rows = new Map(value.rows.map((row) => [rowKey(row), row]));
+  const keySet = mode === 'keys' ? new Set(value.keys ?? []) : null;
+  const keyed = mode === 'keyed' ? (value.keyed ?? []) : null;
+  // Where one finished record goes: an hourly row, a keyed entry (experiment files), or just its
+  // key (the reference Claude root an experiment request checks copies against).
+  const commit = (entry: RawUsageEntry, recordId?: string): void => {
+    if (!keySet && !keyed) {
+      if (!addEntry(rows, entry, options.minDate)) value.skippedLines++;
+      return;
+    }
+    const epoch = Date.parse(entry.timestamp);
+    if (keySet) {
+      // The margin keeps a response a stream capture stamped just inside the window matched
+      // even when the transcript stamped it just outside.
+      if (Number.isFinite(epoch) && epoch >= options.minDate - MTIME_SKIP_MARGIN_MS)
+        if (keySet.size < MAX_FILE_KEYS) keySet.add(experimentRecordKey(kind, entry, recordId));
+      return;
+    }
+    if (!keyed || !Number.isFinite(epoch) || epoch < options.minDate) return;
+    if (keyed.length >= MAX_FILE_ROWS) value.skippedLines++;
+    else keyed.push({ k: experimentRecordKey(kind, entry, recordId), e: keyedEntry(entry) });
+  };
   let fragments: Buffer[] = [];
   let lineBytes = 0;
   let discarding = value.discardingLine;
   let position = value.offset;
-  const maxBytes = Math.max(
-    1,
-    Math.min(512 * 1024 * 1024, options.maxBytesPerFile ?? 256 * 1024 * 1024)
-  );
+  // A partition reader owns its chunk alone: no file can starve another, so the
+  // default per-file byte cap is lifted and the scan deadline bounds the read.
+  const maxBytes =
+    options.codexPartitionRead === true && options.maxBytesPerFile === undefined
+      ? Number.MAX_SAFE_INTEGER
+      : Math.max(1, Math.min(512 * 1024 * 1024, options.maxBytesPerFile ?? 256 * 1024 * 1024));
   const end = Math.min(stats.size, position + maxBytes);
   if (end <= position) {
     value.complete = position === stats.size && !discarding;
@@ -717,7 +837,7 @@ function readBatch(
     const pending = value.pendingClaude;
     if (kind !== 'claude' || !pending) return;
     value.pendingClaude = undefined;
-    if (!addEntry(rows, pending.entry, options.minDate)) value.skippedLines++;
+    commit(pending.entry);
   };
   const consume = (buffer: Buffer): void => {
     const line = buffer.toString('utf8');
@@ -728,6 +848,9 @@ function readBatch(
     else if (kind === 'claude') {
       if (/"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line)) {
         const parsed = parseUsageEntry(line, '');
+        // A stream capture (experiment roots) names its session `session_id`.
+        if (parsed && mode && !parsed.sessionId)
+          parsed.sessionId = /"session_id"\s*:\s*"([^"\\]{1,160})"/.exec(line)?.[1] ?? '';
         if (parsed) {
           if (parsed.responseKey === undefined) {
             flushPendingClaude();
@@ -745,10 +868,18 @@ function readBatch(
         entry = parseOmpUsageLine(line, fileSessionId);
     } else if (kind === 'muse') {
       if (line.includes('model_completed')) entry = parseMuseUsageLine(line, fileSessionId);
+      // Experiment copies: Muse stamps records to the second, so the record's own id keys it.
+      if (entry && mode) {
+        const id = (parseRecord(line) as { id?: unknown } | null)?.id;
+        if (typeof id === 'string' && id && id.length <= 200) {
+          commit(entry, id);
+          return;
+        }
+      }
     } else if (kind === 'jsonl') {
       if (mapping) entry = parseJsonlMappedUsageLine(line, mapping);
     }
-    if (entry && !addEntry(rows, entry, options.minDate)) value.skippedLines++;
+    if (entry) commit(entry);
   };
   const fd = fs.openSync(file, 'r');
   try {
@@ -818,6 +949,8 @@ function readBatch(
     // reported totals only (see collectAccountActivity).
     value.complete = value.offset === stats.size && !discarding;
     value.rows = [...rows.values()];
+    if (keySet) value.keys = [...keySet];
+    if (keyed) value.keyed = keyed;
   } finally {
     fs.closeSync(fd);
   }
@@ -889,13 +1022,20 @@ function sameZcodePrint(left: ZcodeFingerprint | undefined, right: ZcodeFingerpr
   );
 }
 
+/**
+ * zcode databases through the helper. `dbPaths[0]` is the database the helper opens by default;
+ * the rest ride along as extra databases in the same call (experiment zcode homes, already one
+ * per content). `cacheName` keeps an experiment request's cache apart from the default one.
+ */
 async function collectZcodeAccountActivity(
-  dbPath: string,
+  dbPaths: string[],
   options: AccountActivityScanOptions,
   directory: string,
-  deadline: number
+  deadline: number,
+  cacheName = dbPaths[0]
 ): Promise<UsageWorkerResult> {
-  const cache = zcodeCachePath(directory, dbPath);
+  const dbPath = dbPaths[0];
+  const cache = zcodeCachePath(directory, cacheName);
   const cached = loadZcodeCache(cache, options.minDate);
   let failed = 0;
   let truncated = false;
@@ -903,12 +1043,16 @@ async function collectZcodeAccountActivity(
     try {
       const fresh = queryLocalZcodeUsage(dbPath, options.minDate, cached.fingerprints, {
         timeoutMs: Math.max(1000, deadline - Date.now()),
+        extraDbs: dbPaths.slice(1),
       });
       if (fresh.state === 'not_installed') throw new CCSError('Native log sources are unavailable');
-      if (fresh.state === 'error') {
+      // Experiment databases are many: one that cannot be read leaves the others' rows standing
+      // (its fingerprint stays unconfirmed, so it is tried again), and the scan says partial.
+      const experiment = cacheName !== dbPath;
+      if (fresh.state === 'error') failed++;
+      if (fresh.state === 'error' && !experiment) {
         // The database could not be read (for example mid-write): keep what
         // was read before, and say the scan is incomplete.
-        failed++;
       } else {
         truncated = fresh.truncated;
         const prior = cached.fingerprints;
@@ -925,7 +1069,11 @@ async function collectZcodeAccountActivity(
             Date.parse(row.entry.timestamp) >= options.minDate
           );
         });
-        const byKey = new Map(rows.map((row) => [rowKey(row), row]));
+        // Rows stay per database: a row merged across databases would keep only one database's
+        // key, so replacing a changed database's rows would drop or double another's tokens.
+        const fileRowKey = (row: CompactEntry): string =>
+          `${rowKey(row)}\0${(row.entry as { fileKey?: string }).fileKey ?? ''}`;
+        const byKey = new Map(rows.map((row) => [fileRowKey(row), row]));
         for (const helperRow of fresh.rows) {
           const timestamp = `${helperRow.h.replace(' ', 'T')}:00Z`;
           if (Date.parse(timestamp) < options.minDate) continue;
@@ -942,8 +1090,8 @@ async function collectZcodeAccountActivity(
             provider: helperRow.p ?? '',
             fileKey: helperRow.f,
           };
-          // Helper rows are already per model and hour; merge duplicates.
-          const key = rowKey({ entry, events: 0 });
+          // Helper rows are already per model and hour; merge duplicates within one database.
+          const key = fileRowKey({ entry, events: 0 });
           const existing = byKey.get(key);
           if (existing) {
             existing.entry.inputTokens += entry.inputTokens;
@@ -1117,11 +1265,599 @@ export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stat
   return dropped ? result : files;
 }
 
+/**
+ * A fanned-out codex scan (N14). One collector reading ~13 GB alone needs ~6
+ * passes of its 12 s budget to converge cold; several readers, each with the
+ * full budget on its own low-priority thread, converge in ~2. Only codex
+ * fans out: it is the only kind whose cold read spans many passes.
+ *
+ * Shape of a fanned-out scan, all inside this file plus one spawner:
+ * discovery (walk, stat, mtime pre-filter, exact-dedup, newest-first sort)
+ * runs once in the parent, exactly as the inline scan does. The parent loads
+ * every checkpoint, splits the files with unread bytes into contiguous
+ * balanced chunks, and hands each chunk to a nested partition reader with the
+ * shared checkpoint directory: exactly one reader per file, per-file
+ * checkpoints, the same readBatch, the same rows. The parent merges the
+ * per-file outcomes back in global newest-first order (files no reader saw
+ * tally from the just-loaded checkpoints), so row order, the row cap and
+ * every tally match the inline scan exactly.
+ *
+ * Below CODEX_FANOUT_THRESHOLD_BYTES of unread data the parent reads inline
+ * instead — the warm path is byte-for-byte today's code path, so warm cycles
+ * never get slower. Checkpoint names, directories and content are unchanged,
+ * so existing caches survive the upgrade with no forced re-read.
+ */
+export const CODEX_FANOUT_THRESHOLD_BYTES = 64 * 1024 * 1024;
+/**
+ * Never more readers than this per scan, however much unread data or however
+ * many CPUs. Note this bounds each scan, not the process: every extra saved
+ * Codex source fans out its own scan independently. That is fine in practice
+ * (each scan only fans out past 64 MB of unread data, and extra Codex sources
+ * are rare), and a true process-wide cap would need cross-thread coordination
+ * for a case that never happens.
+ */
+export const CODEX_MAX_READERS = 4;
+/** About this much unread data per reader; fewer readers when there is less. */
+const CODEX_READER_BYTES = 512 * 1024 * 1024;
+/**
+ * How long past the shared read deadline the parent waits for a reader's
+ * checkpoint saves and answer before terminating it. Readers stop new reads
+ * at the deadline themselves; this only covers finishing the current file.
+ */
+const CODEX_PARTITION_GRACE_MS = 2000;
+
+/**
+ * How many readers split one codex scan: 1 (inline) unless at least two
+ * files with unread bytes hold at least the threshold between them, then up
+ * to CODEX_MAX_READERS, bounded by ~512 MB per reader, a quarter of the CPUs
+ * (the rest stay free for the server and whatever else shares the host) and
+ * the unread-file count. `fileCount` counts only files with unread bytes.
+ * Pure, so tests pin it without workers.
+ */
+export function codexReaderCount(
+  unreadBytes: number,
+  fileCount: number,
+  cpus: number,
+  thresholdBytes: number = CODEX_FANOUT_THRESHOLD_BYTES
+): number {
+  if (fileCount < 2 || unreadBytes < thresholdBytes) return 1;
+  const byData = Math.ceil(unreadBytes / CODEX_READER_BYTES);
+  const byMachine = Math.max(2, Math.floor(cpus / 4));
+  return Math.max(2, Math.min(CODEX_MAX_READERS, byData, byMachine, fileCount));
+}
+
+/**
+ * Split files, in their global newest-first order, into at most `readerCount`
+ * contiguous chunks balanced by unread bytes. Contiguous chunks keep the merge
+ * order identical to the inline scan; balancing by unread bytes (not file
+ * count) keeps one live-tailed giant from idling every other reader. Pure.
+ */
+export function partitionCodexFiles(
+  entries: ReadonlyArray<{ file: string; unreadBytes: number }>,
+  readerCount: number
+): string[][] {
+  const readers = Math.max(1, Math.min(readerCount, entries.length));
+  if (readers === 1) return [entries.map((entry) => entry.file)];
+  const prefix: number[] = [];
+  let running = 0;
+  for (const entry of entries) {
+    running += Math.max(0, entry.unreadBytes);
+    prefix.push(running);
+  }
+  const target = running / readers;
+  // Cut after the entry nearest each multiple of the target. Every cut must
+  // leave room for the cuts still to come plus a non-empty remainder, so a
+  // cut never lands on the last entry and chunks are never empty (trailing
+  // zero-unread files just yield fewer chunks than readers).
+  const cuts: number[] = [];
+  let previous = -1;
+  for (let j = 1; j <= readers - 1; j++) {
+    const goal = target * j;
+    const low = previous + 1;
+    const high = entries.length - 1 - readers + j;
+    if (low > high) break;
+    let cut = low;
+    while (cut < high && prefix[cut] < goal) cut++;
+    if (cut > low && goal - prefix[cut - 1] < prefix[cut] - goal) cut--;
+    cuts.push(cut);
+    previous = cut;
+  }
+  const chunks: string[][] = [];
+  let start = 0;
+  for (const cut of cuts) {
+    chunks.push(entries.slice(start, cut + 1).map((entry) => entry.file));
+    start = cut + 1;
+  }
+  chunks.push(entries.slice(start).map((entry) => entry.file));
+  return chunks;
+}
+
+/** One file's outcome: what the inline loop tallies per file, as data. */
+export interface CodexPartitionFileResult {
+  file: string;
+  rows: CompactEntry[];
+  complete: boolean;
+  skippedLines: number;
+  readBytes: number;
+  unfinishedTail: boolean;
+  failed: boolean;
+}
+
+/**
+ * The child side of a fanned-out scan: read exactly the assigned files
+ * against the shared checkpoint directory, one file at a time, stopping new
+ * reads at the shared deadline. The per-file logic mirrors the inline loop
+ * (load, read, save-if-moved, tally); a file that cannot be read reports
+ * `failed`, like a throw in the inline loop.
+ */
+export async function collectCodexPartition(
+  spec: CodexPartitionSpec,
+  options: AccountActivityScanOptions
+): Promise<CodexPartitionFileResult[]> {
+  // Deadline-bounded (the default byte cap is lifted in readBatch); an
+  // explicitly set maxBytesPerFile still bounds the read, as inline.
+  const readerOptions =
+    options.maxBytesPerFile === undefined ? { ...options, codexPartitionRead: true } : options;
+  const outcomes: CodexPartitionFileResult[] = [];
+  for (const file of spec.files) {
+    const cache = path.join(spec.checkpointDir, `${hash(file)}.json`);
+    try {
+      const stats = fs.statSync(file);
+      const value = loadCheckpoint(cache, file, stats, options.minDate, 'codex');
+      const before = value.offset;
+      if (Date.now() < spec.deadline) {
+        readBatch(file, value, stats, 'codex', readerOptions, spec.deadline);
+        if (value.offset !== before || !fs.existsSync(cache))
+          saveCheckpoint(cache, file, value, stats);
+      }
+      outcomes.push({
+        file,
+        rows: value.rows,
+        complete: value.complete,
+        skippedLines: value.skippedLines,
+        readBytes: Math.max(0, value.offset - before),
+        unfinishedTail: value.unfinishedTail === true,
+        failed: false,
+      });
+    } catch {
+      outcomes.push({
+        file,
+        rows: [],
+        complete: false,
+        skippedLines: 0,
+        readBytes: 0,
+        unfinishedTail: false,
+        failed: true,
+      });
+    }
+  }
+  return outcomes;
+}
+
+/** Runs one partition; the default spawns a nested reader thread. Injected by tests. */
+export type CodexPartitionRunner = (
+  request: Extract<UsageWorkerRequest, { kind: 'codex' }>,
+  options: AccountActivityScanOptions,
+  partition: CodexPartitionSpec,
+  timeoutMs: number
+) => Promise<CodexPartitionFileResult[]>;
+
+export interface CollectAccountActivityDeps {
+  partitionRunner?: CodexPartitionRunner;
+}
+
+interface CodexFileTallies {
+  rows: CompactEntry[];
+  complete: boolean;
+  skippedLines: number;
+  readBytes: number;
+  unfinishedTail: boolean;
+}
+
+interface CodexCounters {
+  completed: number;
+  skippedLines: number;
+  failed: number;
+  readBytes: number;
+  unfinishedFiles: number;
+}
+
+/**
+ * Fold one file's tallies into the running rows and counters, in global
+ * order. Both codex paths (inline and merged) share this, so the row cap and
+ * every tally match by construction.
+ */
+function tallyCodexFile(
+  rows: CompactEntry[],
+  tallies: CodexFileTallies,
+  counters: CodexCounters
+): void {
+  counters.readBytes += tallies.readBytes;
+  if (tallies.complete) counters.completed++;
+  if (tallies.unfinishedTail) counters.unfinishedFiles++;
+  counters.skippedLines += tallies.skippedLines;
+  const available = MAX_TOTAL_ROWS - rows.length;
+  rows.push(...tallies.rows.slice(0, Math.max(0, available)));
+  if (tallies.rows.length > available) counters.failed++;
+}
+
+/**
+ * Read every codex file, inline below the fan-out threshold (today's behavior,
+ * reusing the just-loaded checkpoints) or fanned out across nested readers
+ * above it. Only files with unread bytes go to readers; the rest tally from
+ * the just-loaded checkpoints. Results come back in global newest-first order
+ * either way.
+ *
+ * A reader that never answers (failed to start, crashed, OOM) reports this
+ * pass's starting rows for its files — dropping a whole partition would dip
+ * Codex on the page for a cycle — with failed++ so the next pass re-reads
+ * them. A reader that overruns its bound is every one of its files past the
+ * deadline (starting rows, no failed++): its finished files already saved
+ * their checkpoints, so the next pass resumes them and the scan converges. A
+ * single file a live reader could not read throws like the inline loop (no
+ * rows, failed++).
+ */
+async function readCodexFiles(
+  request: Extract<UsageWorkerRequest, { kind: 'codex' }>,
+  options: AccountActivityScanOptions,
+  directory: string,
+  deadline: number,
+  scanned: ReadonlyArray<{ file: string; stats: fs.Stats }>,
+  deps?: CollectAccountActivityDeps
+): Promise<{ rows: CompactEntry[] } & CodexCounters> {
+  const counters: CodexCounters = {
+    completed: 0,
+    skippedLines: 0,
+    failed: 0,
+    readBytes: 0,
+    unfinishedFiles: 0,
+  };
+  const rows: CompactEntry[] = [];
+  const loaded = scanned.map(({ file, stats }) => {
+    const cache = path.join(directory, `${hash(file)}.json`);
+    return {
+      file,
+      stats,
+      cache,
+      value: loadCheckpoint(cache, file, stats, options.minDate, 'codex'),
+    };
+  });
+  const unreadBytes = loaded.reduce(
+    (sum, item) => sum + Math.max(0, item.stats.size - item.value.offset),
+    0
+  );
+  // N1: only files with unread bytes go to readers; the rest are tallied from
+  // the just-loaded checkpoints, so no reader starts with nothing to read.
+  const needsRead = loaded.filter((item) => item.stats.size - item.value.offset > 0);
+  const readers = codexReaderCount(
+    unreadBytes,
+    needsRead.length,
+    availableCpus(),
+    options.fanoutThresholdBytes ?? CODEX_FANOUT_THRESHOLD_BYTES
+  );
+  if (readers < 2 || Date.now() >= deadline || needsRead.length === 0) {
+    for (const item of loaded) {
+      try {
+        const before = item.value.offset;
+        if (Date.now() < deadline) {
+          readBatch(item.file, item.value, item.stats, 'codex', options, deadline);
+          if (item.value.offset !== before || !fs.existsSync(item.cache))
+            saveCheckpoint(item.cache, item.file, item.value, item.stats);
+        }
+        tallyCodexFile(
+          rows,
+          {
+            rows: item.value.rows,
+            complete: item.value.complete,
+            skippedLines: item.value.skippedLines,
+            readBytes: Math.max(0, item.value.offset - before),
+            unfinishedTail: item.value.unfinishedTail === true,
+          },
+          counters
+        );
+      } catch {
+        counters.failed++;
+      }
+    }
+    return { rows, ...counters };
+  }
+  const partitions = partitionCodexFiles(
+    needsRead.map((item) => ({
+      file: item.file,
+      unreadBytes: Math.max(0, item.stats.size - item.value.offset),
+    })),
+    readers
+  ).filter((chunk) => chunk.length > 0);
+  // Readers stop new reads at the shared deadline; the grace only covers
+  // their checkpoint saves and answers, so a fanned-out pass always ends
+  // soon after the deadline, inside the worker's own time bound.
+  const timeoutMs = Math.max(1, deadline - Date.now()) + CODEX_PARTITION_GRACE_MS;
+  const runner = deps?.partitionRunner ?? spawnCodexPartitionReader;
+  const settled = await Promise.all(
+    partitions.map(async (files) => {
+      try {
+        return {
+          files,
+          outcomes: await runner(
+            request,
+            options,
+            { files, checkpointDir: directory, deadline },
+            timeoutMs
+          ),
+        };
+      } catch (error) {
+        return { files, error };
+      }
+    })
+  );
+  // Merge back in global newest-first order, so row order, the row cap and
+  // every tally match the inline scan. Files no reader saw (nothing unread)
+  // tally from the just-loaded checkpoints.
+  const outcomes = new Map<string, CodexPartitionFileResult>();
+  const errors = new Map<string, unknown>();
+  const partitioned = new Set<string>();
+  for (const part of settled) {
+    for (const file of part.files) partitioned.add(file);
+    if ('error' in part) {
+      for (const file of part.files) errors.set(file, part.error);
+    } else {
+      for (const outcome of part.outcomes) outcomes.set(outcome.file, outcome);
+    }
+  }
+  const startingTallies = (item: (typeof loaded)[number]): CodexFileTallies => ({
+    rows: item.value.rows,
+    complete: item.value.complete,
+    skippedLines: item.value.skippedLines,
+    readBytes: 0,
+    unfinishedTail: item.value.unfinishedTail === true,
+  });
+  for (const item of loaded) {
+    const error = errors.get(item.file);
+    if (error !== undefined) {
+      // S1: the reader never answered (failed to start, crashed, OOM) while
+      // its files are presumably fine, so report this pass's starting rows:
+      // dropping the whole partition would dip Codex on the page for a cycle
+      // (partition 1 holds the newest files). failed++ keeps the scan
+      // honestly incomplete so the next pass re-reads them. A timeout is a
+      // file past the deadline: starting rows, no failed++.
+      tallyCodexFile(rows, startingTallies(item), counters);
+      if (!(error instanceof CodexPartitionError && error.timedOut)) counters.failed++;
+      continue;
+    }
+    const outcome = outcomes.get(item.file);
+    if (outcome === undefined) {
+      tallyCodexFile(rows, startingTallies(item), counters);
+      // A reader that answered but omitted an assigned file violated the
+      // protocol: starting rows (its files are presumably fine), failed++.
+      if (partitioned.has(item.file)) counters.failed++;
+      continue;
+    }
+    // A single file a live reader could not read (vanished, unreadable) reads
+    // as a file error with no rows, exactly like a throw in the inline loop.
+    if (outcome.failed) counters.failed++;
+    else tallyCodexFile(rows, outcome, counters);
+  }
+  return { rows, ...counters };
+}
+
+/** The part of a log's path a copy keeps: the rollout name (Codex), `<session>/session.jsonl` (Muse). */
+function experimentCopyKey(kind: 'codex' | 'muse', file: string): string {
+  return kind === 'codex'
+    ? path.basename(file)
+    : `${path.basename(path.dirname(file))}/${path.basename(file)}`;
+}
+
+/**
+ * Logs under experiment roots (experiment-usage-roots.ts): a separate request that reads only
+ * those roots and counts every record once, however many experiment folders hold a copy of it.
+ *
+ * - Files are read in `keyed` mode: each in-window record keeps a key (experimentRecordKey), and
+ *   aggregation keeps one copy per key (the larger output wins: a Claude copy taken mid-response
+ *   holds an earlier, smaller block). Byte-identical copies are skipped before reading.
+ * - Against the default root: Claude reads the default projects folder in `keys` mode (its
+ *   checkpoints live here, so the default request's own checkpoints and totals never change) and
+ *   drops every experiment response whose message id it holds. Until that reference read is
+ *   complete the request reports nothing, so a cold start never counts a copy. Codex and Muse
+ *   drop an experiment log that is a byte prefix of the default log it copies (same rollout
+ *   name, same `<session>/session.jsonl`); measured record overlap beyond file copies is zero.
+ * - The per-response collapse and the open-response rule (R2-1) apply exactly as in the default
+ *   reader: readBatch is shared.
+ */
+async function collectExperimentActivity(
+  request: Extract<UsageWorkerRequest, { kind: 'claude' | 'codex' | 'muse' }>,
+  options: AccountActivityScanOptions
+): Promise<UsageWorkerResult> {
+  const kind = request.kind;
+  const reference =
+    request.kind === 'claude'
+      ? request.projectsDir
+      : request.kind === 'codex'
+        ? path.join(request.codexHome, 'sessions')
+        : request.sessionsDir;
+  const directory = path.join(
+    options.cacheDir,
+    'account-activity-v1',
+    hash(`experiments:${kind}:${reference}`)
+  );
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+  const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
+  const issues = { failed: 0 };
+  const statFiles = (
+    list: string[],
+    into: Array<{ file: string; stats: fs.Stats }>,
+    skip: Set<string>
+  ): void => {
+    for (const file of list) {
+      if (skip.has(file) || into.length >= MAX_FILES) continue;
+      skip.add(file);
+      try {
+        const stats = fs.statSync(file);
+        if (stats.mtimeMs >= options.minDate - MTIME_SKIP_MARGIN_MS) into.push({ file, stats });
+      } catch {
+        issues.failed++;
+      }
+    }
+  };
+  const seen = new Set<string>();
+  const experimentFiles: Array<{ file: string; stats: fs.Stats }> = [];
+  for (const root of request.experimentRoots ?? []) {
+    if (Date.now() >= deadline) {
+      issues.failed++;
+      break;
+    }
+    const scope = kind === 'claude' ? EXPERIMENT_CLAUDE_ROOT_DEPTH : undefined;
+    statFiles(
+      filesUnder(root, kind, issues, deadline, options.traversalLimits, scope),
+      experimentFiles,
+      seen
+    );
+  }
+  const referenceFiles: Array<{ file: string; stats: fs.Stats }> = [];
+  let referenceComplete = true;
+  if (fs.existsSync(reference)) {
+    const referenceIssues = { failed: 0 };
+    const listed = filesUnder(reference, kind, referenceIssues, deadline, options.traversalLimits);
+    if (referenceIssues.failed) referenceComplete = false;
+    if (kind === 'claude') statFiles(listed, referenceFiles, seen);
+    else {
+      // Codex/Muse: an experiment log that is a byte prefix of the default log it copies holds
+      // nothing new; only same-named logs are compared.
+      const byKey = new Map<string, string[]>();
+      for (const file of listed) {
+        const key = experimentCopyKey(kind, file);
+        byKey.set(key, [...(byKey.get(key) ?? []), file]);
+      }
+      for (let index = experimentFiles.length - 1; index >= 0; index--) {
+        const item = experimentFiles[index];
+        for (const candidate of byKey.get(experimentCopyKey(kind, item.file)) ?? []) {
+          try {
+            const large = { file: candidate, stats: fs.statSync(candidate) };
+            if (isPrefixCopy(item, large)) {
+              experimentFiles.splice(index, 1);
+              break;
+            }
+          } catch {
+            /* A vanished default log copies nothing. */
+          }
+        }
+      }
+    }
+  }
+  const scanned = dropExactDuplicateFiles(experimentFiles);
+  scanned.sort(
+    (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
+  );
+  let completed = 0;
+  let skippedLines = 0;
+  let failed = issues.failed;
+  let readBytes = 0;
+  let unfinishedFiles = 0;
+  const referenceKeys = new Set<string>();
+  const keyedByFile: Array<{ file: string; entries: KeyedEntry[] }> = [];
+  const visit = (
+    item: { file: string; stats: fs.Stats },
+    mode: ReadMode
+  ): Checkpoint | undefined => {
+    const cache = path.join(directory, `${hash(`${mode}:${item.file}`)}.json`);
+    try {
+      const value = loadCheckpoint(cache, item.file, item.stats, options.minDate, kind, mode);
+      const before = value.offset;
+      if (Date.now() < deadline) {
+        readBatch(item.file, value, item.stats, kind, options, deadline, undefined, mode);
+        if (value.offset !== before || !fs.existsSync(cache))
+          saveCheckpoint(cache, item.file, value, item.stats);
+      }
+      readBytes += Math.max(0, value.offset - before);
+      if (value.unfinishedTail) unfinishedFiles++;
+      return value;
+    } catch {
+      failed++;
+      return undefined;
+    }
+  };
+  for (const item of referenceFiles) {
+    const value = visit(item, 'keys');
+    if (!value || !value.complete) referenceComplete = false;
+    if (!value) continue;
+    for (const key of value.keys ?? []) referenceKeys.add(key);
+    // The open response is a response too: its copies must not count either.
+    if (value.pendingClaude)
+      referenceKeys.add(experimentRecordKey(kind, value.pendingClaude.entry));
+  }
+  for (const item of scanned) {
+    const value = visit(item, 'keyed');
+    if (!value) continue;
+    if (value.complete) completed++;
+    skippedLines += value.skippedLines;
+    const entries = [...(value.keyed ?? [])];
+    // Report the open response without storing it, as the default reader does (R2-1).
+    if (value.pendingClaude && Date.parse(value.pendingClaude.entry.timestamp) >= options.minDate)
+      entries.push({
+        k: experimentRecordKey(kind, value.pendingClaude.entry),
+        e: keyedEntry(value.pendingClaude.entry),
+      });
+    keyedByFile.push({ file: item.file, entries });
+  }
+  const scan = (complete: boolean) => ({
+    complete,
+    completedFiles: completed,
+    totalFiles: scanned.length,
+    skippedLines,
+    failedFiles: failed,
+    readBytes,
+    unfinishedFiles,
+  });
+  const source =
+    kind === 'codex' ? 'codex-native' : kind === 'muse' ? 'muse-native' : 'custom-parser';
+  if (kind === 'claude' && !referenceComplete) {
+    // Without every default-root key a copy cannot be told from new usage: report nothing yet.
+    return { daily: [], monthly: [], hourly: [], session: [], eventCount: 0, scan: scan(false) };
+  }
+  // One copy per record: the default root's keys first, then experiment files in path order,
+  // the larger output winning between experiment copies.
+  const chosen = new Map<string, RawUsageEntry>();
+  keyedByFile.sort((left, right) => left.file.localeCompare(right.file));
+  for (const { entries } of keyedByFile) {
+    for (const { k, e } of entries) {
+      if (referenceKeys.has(k)) continue;
+      const prior = chosen.get(k);
+      if (!prior || e.outputTokens > prior.outputTokens) chosen.set(k, e);
+    }
+  }
+  const rowMap = new Map<string, CompactEntry>();
+  let capped = 0;
+  for (const entry of chosen.values()) if (!addEntry(rowMap, entry, options.minDate)) capped++;
+  const rows = [...rowMap.values()].slice(0, MAX_TOTAL_ROWS);
+  if (capped || rowMap.size > MAX_TOTAL_ROWS) failed++;
+  const { hourly, session } = aggregateRows(rows, source, kind);
+  return {
+    daily: [],
+    monthly: [],
+    hourly,
+    session,
+    eventCount: chosen.size,
+    scan: scan(
+      completed === scanned.length &&
+        experimentFiles.length < MAX_FILES &&
+        !skippedLines &&
+        !failed &&
+        referenceComplete
+    ),
+  };
+}
+
 /** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
 export async function collectAccountActivity(
   request: Extract<UsageWorkerRequest, { kind: ActivityKind }>,
-  options: AccountActivityScanOptions
+  options: AccountActivityScanOptions,
+  deps?: CollectAccountActivityDeps
 ): Promise<UsageWorkerResult> {
+  if (
+    (request.kind === 'claude' || request.kind === 'codex' || request.kind === 'muse') &&
+    request.experimentRoots
+  )
+    return collectExperimentActivity(request, options);
   const roots =
     request.kind === 'claude'
       ? [request.projectsDir]
@@ -1146,7 +1882,15 @@ export async function collectAccountActivity(
   fs.chmodSync(directory, 0o700);
   const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
   if (request.kind === 'zcode')
-    return collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
+    return request.experimentDbs
+      ? collectZcodeAccountActivity(
+          request.experimentDbs,
+          options,
+          directory,
+          deadline,
+          `experiments:${request.dbPath}`
+        )
+      : collectZcodeAccountActivity([request.dbPath], options, directory, deadline);
   const issues = { failed: 0 };
   const files: Array<{ file: string; stats: fs.Stats }> = [];
   // Whether traversal saw any candidate file at all, before the mtime pre-filter
@@ -1187,51 +1931,65 @@ export async function collectAccountActivity(
   let failed = issues.failed;
   let readBytes = 0;
   let unfinishedFiles = 0;
-  for (const { file, stats } of scanned) {
-    const cache = path.join(directory, `${hash(file)}.json`);
-    try {
-      const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
-      const before = value.offset;
-      if (Date.now() < deadline) {
-        readBatch(
-          file,
-          value,
-          stats,
-          request.kind,
-          options,
-          deadline,
-          request.kind === 'jsonl' ? request.mapping : undefined
-        );
-        if (value.offset !== before || !fs.existsSync(cache))
-          saveCheckpoint(cache, file, value, stats);
+  if (request.kind === 'codex') {
+    // Codex alone fans out across partition readers above the unread threshold
+    // (N14); below it this reads inline, exactly like the loop below.
+    // (Experiment-roots requests return from collectExperimentActivity above,
+    // so they never reach the fan-out.)
+    const codex = await readCodexFiles(request, options, directory, deadline, scanned, deps);
+    rows.push(...codex.rows);
+    completed = codex.completed;
+    skippedLines += codex.skippedLines;
+    failed += codex.failed;
+    readBytes = codex.readBytes;
+    unfinishedFiles = codex.unfinishedFiles;
+  } else {
+    for (const { file, stats } of scanned) {
+      const cache = path.join(directory, `${hash(file)}.json`);
+      try {
+        const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
+        const before = value.offset;
+        if (Date.now() < deadline) {
+          readBatch(
+            file,
+            value,
+            stats,
+            request.kind,
+            options,
+            deadline,
+            request.kind === 'jsonl' ? request.mapping : undefined
+          );
+          if (value.offset !== before || !fs.existsSync(cache))
+            saveCheckpoint(cache, file, value, stats);
+        }
+        readBytes += Math.max(0, value.offset - before);
+        if (value.complete) completed++;
+        if (value.unfinishedTail) unfinishedFiles++;
+        skippedLines += value.skippedLines;
+        const available = MAX_TOTAL_ROWS - rows.length;
+        if (request.kind === 'claude' && value.pendingClaude) {
+          // Report the open response without storing it (R2-1): merging it
+          // into a copy of this file's rows shows exactly what committing
+          // would, while the checkpoint keeps it pending for the next scan.
+          // The rows are cloned (not just re-keyed) so the merge can never
+          // mutate checkpoint-held objects no matter when the save runs.
+          // A cap miss here is transient (retried every scan), never stored.
+          const fileRows = new Map(
+            value.rows.map((row) => [rowKey(row), { entry: { ...row.entry }, events: row.events }])
+          );
+          if (!addEntry(fileRows, value.pendingClaude.entry, options.minDate)) skippedLines++;
+          rows.push(...[...fileRows.values()].slice(0, Math.max(0, available)));
+          if (fileRows.size > available) failed++;
+        } else {
+          rows.push(...value.rows.slice(0, Math.max(0, available)));
+          if (value.rows.length > available) failed++;
+        }
+      } catch {
+        failed++;
       }
-      readBytes += Math.max(0, value.offset - before);
-      if (value.complete) completed++;
-      if (value.unfinishedTail) unfinishedFiles++;
-      skippedLines += value.skippedLines;
-      const available = MAX_TOTAL_ROWS - rows.length;
-      if (request.kind === 'claude' && value.pendingClaude) {
-        // Report the open response without storing it (R2-1): merging it
-        // into a copy of this file's rows shows exactly what committing
-        // would, while the checkpoint keeps it pending for the next scan.
-        // The rows are cloned (not just re-keyed) so the merge can never
-        // mutate checkpoint-held objects no matter when the save runs.
-        // A cap miss here is transient (retried every scan), never stored.
-        const fileRows = new Map(
-          value.rows.map((row) => [rowKey(row), { entry: { ...row.entry }, events: row.events }])
-        );
-        if (!addEntry(fileRows, value.pendingClaude.entry, options.minDate)) skippedLines++;
-        rows.push(...[...fileRows.values()].slice(0, Math.max(0, available)));
-        if (fileRows.size > available) failed++;
-      } else {
-        rows.push(...value.rows.slice(0, Math.max(0, available)));
-        if (value.rows.length > available) failed++;
-      }
-    } catch {
-      failed++;
+      // Keep already-checkpointed records available even after the scan budget.
+      // Loading every remaining small cache is bounded by MAX_FILES/MAX_TOTAL_ROWS.
     }
-    // Keep already-checkpointed records available even after the scan budget.
-    // Loading every remaining small cache is bounded by MAX_FILES/MAX_TOTAL_ROWS.
   }
   const source =
     request.kind === 'codex'

@@ -3,7 +3,10 @@ import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { CCSError } from '../../errors/error-types';
 import type { DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
-import type { AccountActivityScanOptions } from './account-activity-collector';
+import type {
+  AccountActivityScanOptions,
+  CodexPartitionFileResult,
+} from './account-activity-collector';
 
 /**
  * Dot paths into a generic JSONL record (`usage.input_tokens`), from a saved
@@ -18,19 +21,62 @@ export interface JsonlFieldMapping {
   cost?: string;
 }
 
+/**
+ * One shard of a fanned-out codex scan (N14): the parent worker discovered,
+ * mtime-filtered, deduped and sorted every rollout file, then split the list
+ * into disjoint contiguous chunks. A partition reader parses only its own
+ * files — exactly one reader per file — against the shared checkpoint
+ * directory, stopping new reads at `deadline` (the parent's own scan
+ * deadline, so a fanned-out pass never outruns the worker's time bound).
+ */
+export interface CodexPartitionSpec {
+  files: string[];
+  checkpointDir: string;
+  deadline: number;
+}
+
 export type UsageWorkerRequest =
-  | { kind: 'claude'; projectsDir: string; activity?: AccountActivityScanOptions }
-  | { kind: 'codex'; codexHome: string; cacheDir: string; activity?: AccountActivityScanOptions }
+  /**
+   * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) make a separate request that
+   * reads only those roots, deduplicated record by record; the default root then serves only as
+   * the reference copies are checked against (see collectExperimentActivity).
+   */
+  | {
+      kind: 'claude';
+      projectsDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+    }
+  | {
+      kind: 'codex';
+      codexHome: string;
+      cacheDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+      partition?: CodexPartitionSpec;
+    }
   | { kind: 'omp'; roots: string[]; activity?: AccountActivityScanOptions }
-  | { kind: 'muse'; sessionsDir: string; activity?: AccountActivityScanOptions }
-  | { kind: 'zcode'; dbPath: string; activity?: AccountActivityScanOptions }
+  | {
+      kind: 'muse';
+      sessionsDir: string;
+      experimentRoots?: string[];
+      activity?: AccountActivityScanOptions;
+    }
+  | {
+      kind: 'zcode';
+      dbPath: string;
+      experimentDbs?: string[];
+      activity?: AccountActivityScanOptions;
+    }
   | {
       kind: 'jsonl';
       roots: string[];
       mapping: JsonlFieldMapping;
       activity?: AccountActivityScanOptions;
     }
-  | { kind: 'droid'; homeDir: string };
+  | { kind: 'droid'; homeDir: string }
+  /** One slice of the experiment-root walk (experiment-usage-roots.ts); returns no usage. */
+  | { kind: 'experiment-roots'; cacheDir: string };
 
 export interface UsageWorkerResult {
   daily: DailyUsage[];
@@ -38,6 +84,11 @@ export interface UsageWorkerResult {
   monthly: MonthlyUsage[];
   session: SessionUsage[];
   eventCount: number;
+  /**
+   * Set only by a codex partition reader: per-file outcomes for the merge.
+   * Every other field is empty there; only the parent reads this field.
+   */
+  partitionFiles?: CodexPartitionFileResult[];
   /** Internal bounded-scan progress; never claims partial history is complete. */
   scan?: {
     complete: boolean;
@@ -57,6 +108,64 @@ export type UsageWorkerResponse =
 function getUsageWorkerPath(): string {
   // Bun runs source tests directly; installed Node runs the emitted neighbor.
   return path.join(__dirname, `native-usage-worker${path.extname(__filename)}`);
+}
+
+/** A codex partition reader failed or overran its time bound; `timedOut` tells which. */
+export class CodexPartitionError extends CCSError {
+  readonly timedOut: boolean;
+
+  constructor(timedOut: boolean) {
+    super(
+      timedOut
+        ? 'Codex partition reader timed out.'
+        : 'Codex partition reader could not return its files.'
+    );
+    this.timedOut = timedOut;
+  }
+}
+
+/**
+ * Read one codex partition in a nested worker thread and return its per-file
+ * outcomes. Like the top-level collectors, the reader runs at a low thread
+ * priority (the worker entry lowers it) and settles only once its thread has
+ * stopped, so a reader cut off by its time bound is never still writing a
+ * checkpoint when the next collection reads the same files.
+ */
+export function spawnCodexPartitionReader(
+  request: Extract<UsageWorkerRequest, { kind: 'codex' }>,
+  options: AccountActivityScanOptions,
+  partition: CodexPartitionSpec,
+  timeoutMs: number,
+  workerPath = getUsageWorkerPath()
+): Promise<CodexPartitionFileResult[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerPath, {
+      workerData: { ...request, activity: options, partition },
+      env: { ...process.env, CCS_DIR: getCcsDir() },
+      resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 },
+    });
+    let settled = false;
+    const finish = (files?: CodexPartitionFileResult[], timedOut = false): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.removeAllListeners();
+      void worker
+        .terminate()
+        .catch(() => 0)
+        .then(() => {
+          if (files) resolve(files);
+          else reject(new CodexPartitionError(timedOut));
+        });
+    };
+    const timer = setTimeout(() => finish(undefined, true), Math.max(1, timeoutMs));
+    worker.once('message', (response: UsageWorkerResponse) => {
+      const files = response?.ok === true ? response.data?.partitionFiles : undefined;
+      finish(Array.isArray(files) ? files : undefined);
+    });
+    worker.once('error', () => finish());
+    worker.once('exit', () => finish());
+  });
 }
 
 /** One-shot workers leave refresh coalescing and cache ownership in the caller. */
