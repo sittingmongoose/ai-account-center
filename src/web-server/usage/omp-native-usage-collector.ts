@@ -8,7 +8,7 @@ export const OMP_TARGET = 'omp';
 /** Bounded marker scan under ~/PM-Experiments for custom --session-dir roots. */
 export const OMP_SCAN_MAX_DEPTH = 6;
 export const OMP_SCAN_MAX_DIRS = 5000;
-export const OMP_SCAN_MAX_ROOTS = 128;
+export const OMP_SCAN_MAX_ROOTS = 512;
 export const OMP_SCAN_CACHE_TTL_MS = 6 * 3_600_000;
 const SESSION_TS = /^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}/;
 
@@ -229,7 +229,41 @@ async function scanSessionRoots(
         continue;
       }
     }
-    if (current.depth >= maxDepth) continue;
+    if (current.depth >= maxDepth) {
+      // One level past the depth cap, still examine session-container
+      // children: experiment runners nest per-job session dirs one level
+      // deeper than the cap (`runs/<run>/jobs/<job>/sessions`), and the usage
+      // inside is real. Only `*sessions*`-named children are examined, inline
+      // and never descended, so the extra work stays bounded by that small
+      // set. Anything deeper (or not session-named) stays out of reach; those
+      // locations need explicit extra usage-log sources.
+      if (current.depth === maxDepth) {
+        for (const entry of entries) {
+          if (Date.now() >= deadline || found.length >= OMP_SCAN_MAX_ROOTS) break;
+          if (!entry.isDirectory() || !entry.name.includes('sessions')) continue;
+          const child = path.join(current.directory, entry.name);
+          let childEntries: fs.Dirent[];
+          try {
+            childEntries = await fs.promises.readdir(child, { withFileTypes: true });
+          } catch {
+            continue;
+          }
+          examined += childEntries.length + 1;
+          if (examined > maxEntries) break;
+          if (entry.name === 'sessions') {
+            if (await sessionsDirHasMarker(child)) found.push(child);
+          } else if (
+            childEntries.some(
+              (childEntry) => childEntry.isFile() && isOmpSessionFilename(childEntry.name)
+            )
+          ) {
+            found.push(child);
+          }
+        }
+        if (examined > maxEntries) break;
+      }
+      continue;
+    }
     for (const entry of entries) {
       if (entry.name === 'node_modules' || entry.name === '.git') continue;
       if (entry.isDirectory())

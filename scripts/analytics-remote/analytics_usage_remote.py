@@ -73,7 +73,7 @@ SCAN_MAX_DEPTH = 6
 SCAN_MAX_DIRS = 100000
 SCAN_MAX_ENTRIES = 2000000
 SCAN_BUDGET_SHARE = 0.4
-SCAN_MAX_ROOTS = 128
+SCAN_MAX_ROOTS = 512
 SCAN_SKIP_DIRS = frozenset(["node_modules", ".git"])
 SESSION_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}")
 MODEL_MAX_LEN = 160
@@ -485,6 +485,41 @@ def _scan_session_roots(base, collector):
                 found.append(directory)
                 continue
         if depth >= SCAN_MAX_DEPTH:
+            # One level past the depth cap, still examine session-container
+            # children: experiment runners nest per-job session dirs one level
+            # deeper than the cap (`runs/<run>/jobs/<job>/sessions`), and the
+            # usage inside is real. Only `*sessions*`-named children are
+            # examined, inline and never descended, so the extra work stays
+            # bounded by that small set. Mirrors the TypeScript fix.
+            if depth == SCAN_MAX_DEPTH:
+                for entry in entries:
+                    if (
+                        len(found) >= SCAN_MAX_ROOTS
+                        or examined > SCAN_MAX_ENTRIES
+                        or time.monotonic() >= deadline
+                    ):
+                        break
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if not is_dir or "sessions" not in entry.name:
+                        continue
+                    try:
+                        with os.scandir(entry.path) as iterator:
+                            child_entries = list(iterator)
+                    except OSError:
+                        continue
+                    examined += len(child_entries) + 1
+                    if entry.name == "sessions":
+                        if _sessions_dir_has_marker(entry.path):
+                            found.append(entry.path)
+                    elif any(
+                        child.is_file(follow_symlinks=False)
+                        and _is_session_filename(child.name)
+                        for child in child_entries
+                    ):
+                        found.append(entry.path)
             continue
         for entry in entries:
             if entry.name in SCAN_SKIP_DIRS:

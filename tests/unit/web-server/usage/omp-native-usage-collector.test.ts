@@ -238,6 +238,57 @@ describe('omp session roots', () => {
     expect(roots).toContain(profile);
   });
 
+  it('examines a sessions dir one level past the depth cap', async () => {
+    // Experiment runners nest per-job session dirs one level deeper than the
+    // scan's depth cap (`runs/<run>/jobs/<job>/sessions` is depth 7); the walk examines
+    // session-container children of a max-depth dir inline, without
+    // descending further. Use a tiny maxDepth so the fixture stays small.
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      'exp',
+      'runs',
+      'r1',
+      'stage',
+      'jobs',
+      'j1',
+      'sessions'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      scanBounds: { maxDepth: 6 },
+    });
+    expect(roots).toContain(deep);
+  });
+
+  it('does not examine a non-sessions dir past the depth cap', async () => {
+    // The one-level-past-the-cap exception is only for session containers:
+    // an `evidence/` dir holding a session file one level too deep stays out
+    // of reach (explicit extra usage-log sources cover those).
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      'exp',
+      'runs',
+      'r1',
+      'stage',
+      'jobs',
+      'j1',
+      'evidence'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const roots = await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      scanBounds: { maxDepth: 6 },
+    });
+    expect(roots).not.toContain(deep);
+  });
+
   it('rescans a truncated marker scan on a short TTL and unions roots', async () => {
     const cacheDir = path.join(home, 'cache');
     const dirA = path.join(home, 'PM-Experiments', 'a-sessions');
