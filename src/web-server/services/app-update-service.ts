@@ -17,6 +17,8 @@ import {
   isUpdateAppId,
   normalizeAppUpdateResults,
   normalizeAppUpdateRow,
+  messageFor,
+  type MessageCode,
   type UpdateAppId,
   type UpdatePlatform,
   type AppUpdateResult,
@@ -472,9 +474,14 @@ export class AppUpdateService {
           !PLATFORMS.includes(row.platform as UpdatePlatform)
         )
           continue;
+        // Saved rows keep only their words; map them back through messageFor so a
+        // row whose words name the app ("Quit Codex Desktop to finish its update")
+        // restores as itself instead of as helper_invalid.
+        const appId = row.appId as UpdateAppId;
         const code =
-          Object.entries(MESSAGES).find(([, message]) => message === row.message)?.[0] ??
-          'helper_invalid';
+          (Object.keys(MESSAGES) as MessageCode[]).find(
+            (candidate) => messageFor(candidate, appId) === row.message
+          ) ?? 'helper_invalid';
         const restored = normalizeAppUpdateResults(
           JSON.stringify({ results: [{ ...row, messageCode: code }] }),
           row.platform as UpdatePlatform

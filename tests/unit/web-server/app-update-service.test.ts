@@ -166,9 +166,9 @@ describe('fixed app update service', () => {
       { ...rows[0], status: 'current', messageCode: 'held_for_review' },
       { ...rows[0], status: 'current', messageCode: 'updated_unreviewed' },
     ])
-      expect(normalizeAppUpdateResults(JSON.stringify({ results: [bad] }), 'windows')[0].status).toBe(
-        'failed'
-      );
+      expect(
+        normalizeAppUpdateResults(JSON.stringify({ results: [bad] }), 'windows')[0].status
+      ).toBe('failed');
     const hostile = normalizeAppUpdateResults(
       JSON.stringify({ results: [{ ...rows[0], heldVersion: '1.3.0; id' }] }),
       'ubuntu'
@@ -208,6 +208,32 @@ describe('fixed app update service', () => {
     const held = restored.getStatus().job!.results.filter((row) => row.status === 'held');
     expect(held).toHaveLength(3);
     expect(held.every((row) => row.heldVersion === '1.3.0')).toBe(true);
+  });
+  it('restores a quit-first desktop row from disk with its own words', async () => {
+    const root = directory();
+    const rows = JSON.parse(payload()).results;
+    const index = rows.findIndex((row: { appId: string }) => row.appId === 'codex-desktop');
+    rows[index] = {
+      ...rows[index],
+      status: 'action_required',
+      messageCode: 'quit_first',
+      updateAttempted: false,
+    };
+    const service = new AppUpdateService({
+      ccsDir: root,
+      runHost: async () => JSON.stringify({ results: rows }),
+    });
+    service.start();
+    await finish(service);
+    const restored = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
+    const quit = restored.getStatus().job!.results.filter((row) => row.appId === 'codex-desktop');
+    expect(quit).toHaveLength(3);
+    for (const row of quit) {
+      expect(row.status).toBe('action_required');
+      expect(row.message).toBe(
+        'Quit Codex Desktop to finish its update, then run Update apps again.'
+      );
+    }
   });
   it('normalizes only safe whitelist metadata and never full helper responses', () => {
     const rows = JSON.parse(payload()).results;
