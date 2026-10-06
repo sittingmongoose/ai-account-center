@@ -28,7 +28,9 @@ async function finish(service: AppUpdateService) {
 }
 
 describe('cancellable app updates', () => {
-  it('cancel during the first app finishes it and skips the rest', async () => {
+  it('a cancel right after start lets Ubuntu finish and skips hosts still syncing', async () => {
+    // Hosts run side by side; Mac and Windows sync their helpers first, so a
+    // cancel that lands before they start keeps their helpers from running.
     const calls: UpdatePlatform[] = [];
     let release!: (value: string) => void;
     const blocked = new Promise<string>((resolve) => {

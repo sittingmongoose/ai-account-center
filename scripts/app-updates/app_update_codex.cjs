@@ -16,6 +16,11 @@ const flags = Object.fromEntries(process.argv.slice(2).reduce((pairs, arg, index
 }, []));
 const operation = flags['--operation'] === 'desktop' ? 'desktop' : 'cli';
 const seconds = /^\d+$/.test(flags['--timeout-seconds'] || '') ? Math.max(30, Math.min(900, Number(flags['--timeout-seconds']))) : 900;
+// Shared Codex work is often busy for hours (long goals, other projects'
+// stdio servers). Waiting longer than this for idle only stalls Update apps;
+// a busy Codex becomes an honest "Codex is busy" row instead.
+const IDLE_WAIT_SECONDS = 60;
+const LOCK_WAIT_SECONDS = 30;
 const output = { appId: operation === 'desktop' ? 'codex-desktop' : 'codex-cli', platform: 'ubuntu',
   status: 'failed', previousVersion: null, version: null, manager: operation === 'desktop' ? 'apt' : 'native',
   messageCode: 'update_failed', updateAttempted: false, restartedProcesses: 0, forcedStops: 0 };
@@ -63,8 +68,9 @@ function markPending() {
   fs.renameSync(temporary, markerFile());
 }
 async function execute(deps) {
-  const deadline = deps.now() + seconds * 1000;
-  let runtime, stopped = false;
+  const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
+  const deadline = deps.now() + idle * 1000;
+  let runtime, stopped = false, busy = false;
   try {
     output.previousVersion = output.version = version(await deps.readVersion());
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
@@ -82,7 +88,8 @@ async function execute(deps) {
     while (true) {
       try { await runtime.stop(); stopped = true; break; }
       catch (error) {
-        if (error.code !== 'busy' || deps.now() >= deadline) throw error;
+        if (error.code !== 'busy') throw error;
+        if (deps.now() >= deadline) { busy = true; throw error; }
         await deps.sleep(Math.min(5000, deadline - deps.now()));
       }
     }
@@ -99,8 +106,15 @@ async function execute(deps) {
     deps.clear(); output.status = 'updated'; output.messageCode = 'updated';
   } catch {
     if (stopped) { try { await runtime.start(); } catch { /* A later explicit click retries using the private marker. */ } }
-    output.status = output.version !== output.previousVersion || deps.pending(output.version) ? 'restart_failed' : 'failed';
-    output.messageCode = output.status === 'restart_failed' ? 'restart_failed' : 'update_failed';
+    if (busy) {
+      // Nothing was stopped. The CLI package may already be new (the pending
+      // marker stays, so the next click restarts the daemon once Codex is idle);
+      // the desktop package was not touched.
+      output.status = 'action_required'; output.messageCode = 'codex_busy';
+    } else {
+      output.status = output.version !== output.previousVersion || deps.pending(output.version) ? 'restart_failed' : 'failed';
+      output.messageCode = output.status === 'restart_failed' ? 'restart_failed' : 'update_failed';
+    }
   } finally { await runtime?.dispose?.(); }
   return output;
 }
@@ -113,8 +127,11 @@ async function main() {
   try {
     release = await lockfile.lock(path.join(home, '.codex'), { realpath: false,
       lockfilePath: path.join(home, '.codex/.ccs-activation.lock'), stale: 120000, update: 5000,
-      retries: { retries: Math.max(1, Math.floor(seconds / 5)), factor: 1, minTimeout: 5000, maxTimeout: 5000 } });
-  } catch { output.messageCode = 'busy'; return output; }
+      retries: { retries: Math.max(1, Math.floor(Math.min(seconds, LOCK_WAIT_SECONDS) / 5)), factor: 1, minTimeout: 5000, maxTimeout: 5000 } });
+  } catch {
+    // An account switch holds the Codex lock; come back when it is done.
+    output.status = 'action_required'; output.messageCode = 'codex_busy'; return output;
+  }
   try {
   const { createCodexActivationRuntime } = require(selected);
   const initial = privateScan();
