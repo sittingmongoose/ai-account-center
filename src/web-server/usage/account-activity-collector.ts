@@ -23,6 +23,13 @@ import {
   type ZcodeHelperSessionRow,
   type ZcodeRecord,
 } from './zcode-native-usage-collector';
+import {
+  ANTIGRAVITY_TARGET,
+  queryLocalAntigravityUsage,
+  type AntigravityFingerprint,
+  type AntigravityHelperRow,
+  type AntigravityHelperSessionRow,
+} from './antigravity-native-usage-collector';
 import { analyticsSessionKey } from './analytics-session-key';
 import { EXPERIMENT_CLAUDE_ROOT_DEPTH } from './experiment-usage-roots';
 import { filesUnderT3Root } from './t3-usage-roots';
@@ -135,7 +142,7 @@ function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl';
+type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl' | 'antigravity';
 /**
  * Checkpoints of these kinds hold rows from an older parser and are read
  * again from the start: OMP rows now keep the routing provider and never mix
@@ -1179,6 +1186,163 @@ interface ZcodeExperimentCache {
   /** Each experiment database's in-window rows, by its file key. */
   records: Record<string, ZcodeRecord[]>;
 }
+interface AntigravityCache {
+  version: 1;
+  minDate: number;
+  /** The helper's store print (every database and write-ahead log); empty means read again. */
+  fingerprints: Record<string, AntigravityFingerprint>;
+  rows: AntigravityHelperRow[];
+  sessions: AntigravityHelperSessionRow[];
+}
+
+function loadAntigravityCache(cache: string, minDate: number): AntigravityCache {
+  const blank: AntigravityCache = { version: 1, minDate, fingerprints: {}, rows: [], sessions: [] };
+  try {
+    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return blank;
+    const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as AntigravityCache;
+    if (
+      value.version !== 1 ||
+      !Number.isFinite(value.minDate) ||
+      value.minDate > minDate ||
+      !value.fingerprints ||
+      typeof value.fingerprints !== 'object' ||
+      !Array.isArray(value.rows) ||
+      value.rows.length > MAX_TOTAL_ROWS ||
+      !Array.isArray(value.sessions) ||
+      value.sessions.length > MAX_TOTAL_ROWS
+    )
+      return blank;
+    value.rows = value.rows.filter(
+      (row) => Date.parse(`${String(row.h).replace(' ', 'T')}:00Z`) >= minDate
+    );
+    value.sessions = value.sessions.filter((row) => typeof row.z === 'number' && row.z >= minDate);
+    return value;
+  } catch {
+    return blank;
+  }
+}
+
+function sameAntigravityPrint(
+  left: AntigravityFingerprint | undefined,
+  right: AntigravityFingerprint | undefined
+): boolean {
+  return (
+    !!left &&
+    !!right &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.head === right.head &&
+    left.tail === right.tail
+  );
+}
+
+/**
+ * Antigravity on this host, through the packaged helper (antigravity-native-usage-collector.ts). The helper
+ * counts each record once across every database, so it reads the store as a whole: an unchanged store print
+ * returns no rows and the cached ones stand; a changed one replaces them all. A read the deadline cut short
+ * keeps the cached rows and says partial; a database that could not be read leaves the store print unsaved,
+ * so the next scan reads again, and says partial meanwhile.
+ */
+async function collectAntigravityAccountActivity(
+  options: AccountActivityScanOptions,
+  directory: string,
+  deadline: number
+): Promise<UsageWorkerResult> {
+  const cache = path.join(directory, 'antigravity-store.json');
+  const cached = loadAntigravityCache(cache, options.minDate);
+  let failed = 0;
+  let truncated = false;
+  if (Date.now() < deadline) {
+    try {
+      const fresh = queryLocalAntigravityUsage(options.minDate, cached.fingerprints, {
+        timeoutMs: Math.max(1000, deadline - Date.now()),
+      });
+      if (fresh.state === 'error') failed++;
+      else if (fresh.truncated) truncated = true;
+      else {
+        if (fresh.unreadable) failed++;
+        const keys = Object.keys(fresh.fingerprints);
+        const unchanged =
+          keys.length > 0 &&
+          keys.every((key) =>
+            sameAntigravityPrint(cached.fingerprints[key], fresh.fingerprints[key])
+          ) &&
+          !fresh.rows.length &&
+          !fresh.sessions.length;
+        if (!unchanged) {
+          cached.rows = fresh.rows.slice(0, MAX_TOTAL_ROWS);
+          cached.sessions = fresh.sessions.slice(0, MAX_TOTAL_ROWS);
+        }
+        cached.fingerprints = fresh.fingerprints;
+        cached.minDate = options.minDate;
+        const body = JSON.stringify(cached);
+        if (Buffer.byteLength(body) > MAX_CACHE_BYTES)
+          throw new CCSError('Native checkpoint exceeds limit');
+        const temporary = `${cache}.${process.pid}.tmp`;
+        fs.writeFileSync(temporary, body, { mode: 0o600 });
+        fs.renameSync(temporary, cache);
+        fs.chmodSync(cache, 0o600);
+      }
+    } catch {
+      failed++;
+    }
+  }
+  if (!cached.rows.length && failed > 0) throw new CCSError('Native log sources could not be read');
+  const { hourly } = aggregateRows(
+    cached.rows.map((row) => ({
+      entry: {
+        inputTokens: Math.floor(row.i),
+        outputTokens: Math.floor(row.o),
+        cacheCreationTokens: Math.floor(row.cw),
+        cacheReadTokens: Math.floor(row.cr),
+        model: row.m,
+        sessionId: '',
+        timestamp: `${row.h.replace(' ', 'T')}:00Z`,
+        projectPath: '',
+        target: ANTIGRAVITY_TARGET,
+        // Antigravity logs no route: rates are looked up by model name alone.
+        provider: '',
+      },
+      events: Math.floor(row.n),
+    })),
+    'antigravity-native',
+    'antigravity'
+  );
+  // Sessions aggregate from the session rows alone; the hourly rows already carry the same tokens.
+  const { session } = aggregateSessionAggregates(
+    cached.sessions.map((row) => ({
+      sessionId: row.s,
+      model: row.m,
+      provider: '',
+      target: ANTIGRAVITY_TARGET,
+      firstMs: Math.floor(row.a),
+      lastMs: Math.floor(row.z),
+      inputTokens: Math.floor(row.i),
+      outputTokens: Math.floor(row.o),
+      cacheCreationTokens: Math.floor(row.cw),
+      cacheReadTokens: Math.floor(row.cr),
+      events: Math.floor(row.n),
+    })),
+    'antigravity-native'
+  );
+  return {
+    daily: [],
+    monthly: [],
+    hourly,
+    session,
+    eventCount: cached.rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
+    scan: {
+      complete: !truncated && failed === 0,
+      completedFiles: failed === 0 && !truncated ? 1 : 0,
+      totalFiles: 1,
+      skippedLines: 0,
+      failedFiles: failed,
+      readBytes: 0,
+      unfinishedFiles: truncated ? 1 : 0,
+    },
+  };
+}
+
 /** Experiment zcode rows plus default-database keys stay well under this (about 2 MB today). */
 const MAX_ZCODE_EXPERIMENT_CACHE_BYTES = 32 * 1024 * 1024;
 
@@ -2165,6 +2329,8 @@ export async function collectAccountActivity(
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
   const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
+  if (request.kind === 'antigravity')
+    return collectAntigravityAccountActivity(options, directory, deadline);
   if (request.kind === 'zcode')
     return request.experimentDbs
       ? collectZcodeExperimentActivity(

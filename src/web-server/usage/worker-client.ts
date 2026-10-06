@@ -84,6 +84,11 @@ export type UsageWorkerRequest =
       mapping: JsonlFieldMapping;
       activity?: AccountActivityScanOptions;
     }
+  /**
+   * Antigravity's conversation databases, read by the packaged helper on this host
+   * (antigravity-native-usage-collector.ts), which finds the roots itself.
+   */
+  | { kind: 'antigravity'; activity?: AccountActivityScanOptions }
   | { kind: 'droid'; homeDir: string }
   /** One slice of the experiment-root walk (experiment-usage-roots.ts); returns no usage. */
   | { kind: 'experiment-roots'; cacheDir: string };

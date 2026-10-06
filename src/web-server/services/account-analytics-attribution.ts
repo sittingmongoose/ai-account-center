@@ -31,12 +31,13 @@ export const USAGE_ROUTE_PROVIDERS: Readonly<Record<string, DashboardProvider>> 
 });
 
 /**
- * The tools whose logs are one provider's usage by construction: Claude Code (Anthropic), Codex (OpenAI) and the
- * Muse Code CLI (Muse Code). OMP and zcode log a route per call instead.
+ * The tools whose logs are one provider's usage by construction: Claude Code (Anthropic), Codex (OpenAI), the
+ * Muse Code CLI (Muse Code) and Antigravity, whose Gemini and Claude models are all served by the Antigravity
+ * subscription. OMP and zcode log a route per call instead.
  */
 const TOOL_PROVIDERS: Readonly<
   Partial<Record<AccountAnalyticsActivityProvider, DashboardProvider>>
-> = Object.freeze({ claude: 'claude', codex: 'codex', muse: 'muse' });
+> = Object.freeze({ claude: 'claude', codex: 'codex', muse: 'muse', antigravity: 'antigravity' });
 
 /** The provider order of the dashboard (Claude, Codex, then the additional providers), then "other". */
 export const USAGE_PROVIDER_ORDER: readonly AccountAnalyticsUsageProvider[] = [
@@ -64,8 +65,8 @@ export function routeProvider(route: string | null | undefined): DashboardProvid
 }
 
 /**
- * The provider one model breakdown counts under: the tool's own provider for Claude Code, Codex and the Muse Code
- * CLI; otherwise the logged route; with no route, the model id's provider prefix ("zai/glm-5"); else "other".
+ * The provider one model breakdown counts under: the tool's own provider for Claude Code, Codex, the Muse Code
+ * CLI and Antigravity; otherwise the logged route; with no route, the model id's provider prefix ("zai/glm-5"); else "other".
  */
 export function usageProviderFor(
   tool: AccountAnalyticsActivityProvider,

@@ -1164,9 +1164,13 @@ describe('native local analytics activity', () => {
     // Every scanned tool on every host says scanning from the first byte, so the
     // loading page can show per-host progress; the fixed entries ride along.
     const scanning = cold.sources.filter((source) => source.state === 'scanning');
-    expect(scanning).toHaveLength(15);
+    expect(scanning).toHaveLength(18);
     expect(scanning.every((source) => source.detail === 'the first scan is running')).toBe(true);
-    expect(cold.sources.filter((source) => source.tool === 'antigravity')).toHaveLength(3);
+    // Antigravity is scanned on every host now; Cursor stays a fixed no-local-log entry.
+    expect(
+      cold.sources.filter((source) => source.tool === 'antigravity' && source.state === 'scanning')
+    ).toHaveLength(3);
+    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(3);
     gate.resolve([]);
     remote.resolve({ results: [], states: [] });
     await settled(service);

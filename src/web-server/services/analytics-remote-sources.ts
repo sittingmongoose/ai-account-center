@@ -23,7 +23,7 @@ import {
 import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
 
-export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
+export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'antigravity';
 export type AnalyticsSourceState =
   | 'ok'
   | 'cached'
@@ -60,13 +60,14 @@ export interface AnalyticsRemoteSourceDeps {
 }
 
 /**
- * Remote coverage: Claude Code, Codex, OMP, Muse and zcode on the Mac and
- * Windows. Muse and zcode report `not_installed` on Windows until they are;
- * the states are measured by the scan, never assumed.
+ * Remote coverage: Claude Code, Codex, OMP, Muse, zcode and Antigravity (T3 Code's
+ * Antigravity instances included) on the Mac and Windows. Muse and zcode report
+ * `not_installed` on Windows until they are; the states are measured by the
+ * scan, never assumed.
  */
 const REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
-  mac: ['claude', 'codex', 'omp', 'muse', 'zcode'],
-  windows: ['claude', 'codex', 'omp', 'muse', 'zcode'],
+  mac: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
+  windows: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
 };
 
 /** The kinds scanned on one remote host, for states when no scan answered. */
@@ -371,7 +372,7 @@ export function remoteExtraRoots(
 const yieldTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 /** Helper calls one host runs at once: one per kind, so every kind at once. */
-const REMOTE_KIND_CONCURRENCY = 5;
+const REMOTE_KIND_CONCURRENCY = 6;
 
 type RemoteHelper = NonNullable<AnalyticsRemoteSourceDeps['runHelper']>;
 
@@ -652,11 +653,13 @@ export async function loadAnalyticsRemoteSources(
                 ? 'the search for custom OMP session folders hit its bounds; folders it did not reach are not read'
                 : tool === 'zcode' && response.kinds.zcode?.walUnread === true
                   ? "zcode's newest usage waits in its write-ahead log, which a read-only open here cannot read; it appears once zcode checkpoints it"
-                  : kept
-                    ? null
-                    : Object.keys(freshPrints[tool] ?? {}).length > 0
-                      ? 'usage logs found but no usage in the last 31 days'
-                      : 'no usage recorded in the last 31 days',
+                  : tool === 'antigravity' && response.kinds.antigravity?.unreadable === true
+                    ? 'some Antigravity conversation databases could not be read (busy or damaged); the rest are counted and the next scan reads them again'
+                    : kept
+                      ? null
+                      : Object.keys(freshPrints[tool] ?? {}).length > 0
+                        ? 'usage logs found but no usage in the last 31 days'
+                        : 'no usage recorded in the last 31 days',
           });
         }
         onHostScan?.(host, 'done');

@@ -264,6 +264,7 @@ describe('analytics remote sources', () => {
     // Both hosts are asked about every kind; a tool that is not installed there
     // answers not_installed from the host itself, never from a fixed claim here.
     expect(states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)).toEqual([
+      'antigravity',
       'claude',
       'codex',
       'muse',
@@ -271,6 +272,7 @@ describe('analytics remote sources', () => {
       'zcode',
     ]);
     expect(states.filter((entry) => entry.host === 'mac').map((entry) => entry.tool)).toEqual([
+      'antigravity',
       'claude',
       'codex',
       'muse',
@@ -641,7 +643,7 @@ describe('analytics remote sources', () => {
 
 describe('analytics remote scans per kind', () => {
   const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias' });
-  const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode'];
+  const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
   const FILE_2 = 'a2'.repeat(32);
   /** A clean answer for exactly the kinds asked, with an OMP row when OMP is asked. */
   const answer = (kinds: string[], extra: Record<string, unknown> = {}) =>
@@ -739,7 +741,7 @@ describe('analytics remote scans per kind', () => {
     seen.length = 0;
     prints.length = 0;
     await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
-    expect(seen).toHaveLength(5);
+    expect(seen).toHaveLength(6);
     // Each call carries only its own kind's fingerprints.
     seen.forEach((kinds, index) => expect(prints[index]).toEqual(kinds));
   });

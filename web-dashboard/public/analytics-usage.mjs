@@ -4,7 +4,7 @@
 // and the page state; every chart geometry is computed here and drawn by ui/pages/analytics/*.slint.
 //
 // Truthfulness: activity is the CLI usage logs the server reads (activity.sources says which tools on which
-// computers). Only Claude Code and Codex are providers on this page; OMP, Muse Code, zcode and generic JSONL logs
+// computers). Only Claude Code and Codex are providers on this page; OMP, Muse Code, zcode, Antigravity and generic JSONL logs
 // merge into the model views and the totals and never become a filter, legend, row or header. The Tokens by tool line, the
 // trend readout and a model's detail say how much each tool logged and where a model's usage came from; models
 // stay the only division, and every model with usage is listed. Cost is an estimated API equivalent, not a bill; a cost that is neither logged nor priced at a listed rate is "not logged", never zero,
@@ -164,8 +164,8 @@ export const TYPES = [
 /**
  * The dashboard providers, in the dashboard's order, with its labels (the response's provider table overrides a
  * label). Every activity row (activity.providers[] / byHour[] / models[] `provider`) is the provider that served
- * the usage: the server groups each log under its route (Claude Code, Codex and the Muse Code CLI are their own
- * provider; OMP and zcode record a route per call). "other" is a route no provider claims, never a guess.
+ * the usage: the server groups each log under its route (Claude Code, Codex, the Muse Code CLI and Antigravity are
+ * their own provider; OMP and zcode record a route per call). "other" is a route no provider claims, never a guess.
  */
 export const PROVIDER_ORDER = ['claude', 'codex', 'antigravity', 'muse', 'cursor', 'kimi-code', 'qwen', 'zai', 'opencode-go', 'other'];
 export const PROVIDER_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', muse: 'Muse Code', cursor: 'Cursor', 'kimi-code': 'Kimi Code', qwen: 'Qwen token plan', zai: 'Z.ai coding plan', 'opencode-go': 'OpenCode Go', other: 'Other' };
@@ -178,8 +178,8 @@ const ownSeries = p => p === 'claude' || p === 'codex';
 /** A provider mark exists for every dashboard provider; "other" has none. */
 const markOf = p => p === 'other' ? '' : p;
 /** The tools whose logs the server reads. Their names say where a model's usage came from, never a division. */
-export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'];
-export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL' };
+export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity'];
+export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL', antigravity: 'Antigravity' };
 const toolNames = tools => andList(TOOLS.filter(t => tools.has(t)).map(t => TOOL_LABEL[t]));
 /** Add v to o[k] (per-provider sums over providers that are only known from the data). */
 const bump = (o, k, v) => { o[k] = (o[k] || 0) + v; };
@@ -1048,8 +1048,8 @@ const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
 /**
  * The "Included usage" disclosure: one sentence naming the tools and computers whose logs were read, a plain note
  * for the tools that keep no local usage log, and a tool x computer grid of each source's state and last scan.
- * Tools with no local log on any host (Antigravity, Cursor) get the note only, never a grid row of "No usage log"
- * cells. It describes where the numbers come from; it never divides them (models stay the only division).
+ * Tools with no local log on any host (Cursor; Antigravity from a server older than its reader) get the note only,
+ * never a grid row of "No usage log" cells. It describes where the numbers come from; it never divides them (models stay the only division).
  * States: ok, no_usage, cached (with its age), scanning (a scan is working on the tool or has not reached it
  * yet), not_installed, unavailable (a real failure, with its reason in the tip).
  * tone: ok | cached | unavailable | scanning | quiet.
@@ -1064,10 +1064,13 @@ export function includedView(payload, now = Date.now()) {
   const included = tools.filter(([t]) => list.some(r => r.tool === t && read(r))).map(([, l]) => l);
   const hosts = SOURCE_HOSTS.filter(([h]) => list.some(r => r.host === h && read(r))).map(([, l]) => l);
   const nolog = tools.filter(([t]) => list.filter(r => r.tool === t).every(noLocalLog));
-  const quietPair = nolog.length === 2 && nolog.some(([t]) => t === 'antigravity') && nolog.some(([t]) => t === 'cursor');
+  // Cursor (and Antigravity, from a server older than its reader) keep no local log; their quota still shows on Home.
+  const quietOnly = nolog.length > 0 && nolog.every(([t]) => t === 'antigravity' || t === 'cursor');
   const nologNames = nolog.map(([, l]) => l);
-  const nologLine = !nolog.length ? '' : quietPair
-    ? `Antigravity and Cursor don't keep local usage logs; their quota readings still show on Home.`
+  const nologLine = !nolog.length ? '' : quietOnly
+    ? nolog.length === 1
+      ? `${nologNames[0]} doesn't keep a local usage log; its quota readings still show on Home.`
+      : `${andList(nologNames)} don't keep local usage logs; their quota readings still show on Home.`
     : `${andList(nologNames)} keep${nolog.length === 1 ? 's' : ''} no local usage log of ${nolog.length === 1 ? 'its' : 'their'} own; usage another tool routes through ${nolog.length === 1 ? 'it' : 'them'} still counts under ${nolog.length === 1 ? 'it' : 'them'}.`;
   const line = [
     included.length ? `Includes ${andList(included)}${hosts.length ? ` on ${andList(hosts)}` : ''}.` : 'No usage log could be read yet.',
@@ -1100,11 +1103,11 @@ export function includedView(payload, now = Date.now()) {
 }
 
 // ---------------------------------------------------------------- loading and convergence progress
-/** The five tools every computer is scanned for; the progress counts only these. */
-const PROGRESS_TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode'];
+/** The six tools every computer is scanned for; the progress counts only these. */
+const PROGRESS_TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
 /**
  * Per-host scan progress for the loading screen and the header pill, derived from the same sources
- * grid the disclosure shows: how many of the five tools have settled (read, no usage in range, not
+ * grid the disclosure shows: how many of the six tools have settled (read, no usage in range, not
  * installed, cached or failed) and how many a scan is still working on. A host with no grid row yet
  * counts as fully scanning only while a collection is actually running, so a settled page never
  * claims progress it does not have.
@@ -1267,7 +1270,7 @@ export function usageView(payload, state, opts = {}) {
     loading: { hosts: progress.map(p => ({ name: p.name, detail: p.detail })) },
     head: headOf(A, R, state, now, zone, progress),
     scope: [
-      { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, grouped by the provider that served it: Claude Code, Codex and Muse Code are their own provider, OMP and zcode record the route of every call, and generic JSONL logs count under the provider their model names, else Other. A route no provider claims is under Other. Tokens by provider, under the totals, says how much each served; pick one to see its usage by model.' },
+      { icon: 'terminal', text: 'Usage from the CLI logs listed under Included usage, grouped by the provider that served it: Claude Code, Codex, Muse Code and Antigravity are their own provider, OMP and zcode record the route of every call, and generic JSONL logs count under the provider their model names, else Other. A route no provider claims is under Other. Tokens by provider, under the totals, says how much each served; pick one to see its usage by model.' },
       { icon: 'wallet', text: 'Cost is an estimated API equivalent at the rates CCS prices each model at, or the cost the log recorded; it is not a bill. Cost with neither shows as not logged, and totals without it say partial.' },
       { icon: 'users', text: 'Activity covers all accounts together; it cannot be attributed to one account.' },
       { icon: 'layers', text: unrec.length || noRate ? [

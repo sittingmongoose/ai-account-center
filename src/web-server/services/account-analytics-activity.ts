@@ -17,6 +17,7 @@ import { USAGE_PROVIDER_ORDER } from './account-analytics-attribution';
 import { resolveOmpSessionRoots } from '../usage/omp-native-usage-collector';
 import { resolveMuseSessionsDir } from '../usage/muse-native-usage-collector';
 import { resolveZcodeDbPath } from '../usage/zcode-native-usage-collector';
+import { antigravityUsagePresent } from '../usage/antigravity-native-usage-collector';
 import {
   EXPERIMENT_ROOTS_TTL_MS,
   emptyRootSet,
@@ -97,26 +98,16 @@ type RemoteAnswer = {
 };
 
 /**
- * Fixed entries for tools with no local usage log, on every host. Antigravity
- * keeps token counts only inside sqlite protobuf BLOBs mixed with conversation
- * content (per-conversation databases under the Gemini CLI state directory,
- * with no integer token columns); Cursor usage is server-side (the local
- * chat store holds blobs and metadata only, with no token-usage columns).
- * The page uses these to say why they are missing. Every other tool is
- * scanned on every host, so its state is measured, never fixed.
+ * Fixed entries for tools with no local usage log, on every host. Cursor usage
+ * is server-side (the local chat store holds blobs and metadata only, with no
+ * token-usage columns). The page uses these to say why it is missing. Every
+ * other tool is scanned on every host, so its state is measured, never fixed;
+ * Antigravity's usage metadata is read from its conversation databases by the
+ * analytics helper (antigravity-native-usage-collector.ts).
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
   for (const host of ['ubuntu', 'mac', 'windows'] as const) {
-    entries.push({
-      tool: 'antigravity',
-      host,
-      state: 'unavailable',
-      lastScanAt: null,
-      rowCount: 0,
-      detail:
-        'no local usage log: token counts exist only inside sqlite protobuf BLOBs mixed with conversation content',
-    });
     entries.push({
       tool: 'cursor',
       host,
@@ -160,7 +151,7 @@ export function coldScanningSourceStates(): AccountAnalyticsSource[] {
   for (const host of ['ubuntu', 'mac', 'windows'] as const) {
     const tools =
       host === 'ubuntu'
-        ? (['claude', 'codex', 'omp', 'muse', 'zcode'] as const)
+        ? (['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'] as const)
         : analyticsRemoteTargets(host);
     for (const tool of tools)
       entries.push({
@@ -299,7 +290,11 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
   if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
   for (const source of snap.sources as Array<Record<string, unknown>>) {
     if (!source || typeof source !== 'object') return false;
-    if (!['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'].includes(source.provider as string))
+    if (
+      !['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity'].includes(
+        source.provider as string
+      )
+    )
       return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
@@ -408,7 +403,7 @@ async function isDirectory(directory: string): Promise<boolean> {
 /**
  * The local log roots to read, in two parts so the collectors start at once instead of waiting
  * for the slowest discovery step. `ready` holds the roots a few stats find (Claude Code, Codex,
- * Muse Code, zcode). `later` resolves once the OMP marker scan has run (it awaits every directory
+ * Muse Code, zcode, Antigravity). `later` resolves once the OMP marker scan has run (it awaits every directory
  * read, so it never blocks the event loop, and it is bounded at 30 s) together with the saved
  * extras, which must know every built-in root so the same logs are never read twice. Together
  * they also say which tools are installed. `later` never rejects.
@@ -483,6 +478,14 @@ function localRequestPlan(): {
       }
       requests.push({ provider: 'zcode', request: { kind: 'zcode', dbPath, activity } });
     }
+  } catch {
+    /* Absent history is not an error or measured zero. */
+  }
+  // Antigravity (and T3 Code's Antigravity instances): the helper finds and reads the databases; a few
+  // stats here only say whether any of its roots exists.
+  try {
+    if (antigravityUsagePresent())
+      requests.push({ provider: 'antigravity', request: { kind: 'antigravity', activity } });
   } catch {
     /* Absent history is not an error or measured zero. */
   }
@@ -805,7 +808,7 @@ export function extraActivityRequests(
  * Whether each tool's Ubuntu logs exist, for `not_installed` states: the
  * tools that have a local request (a Claude Code projects folder, Codex
  * sessions, an OMP session root, Muse sessions, the zcode database, a generic
- * JSONL root). Generic JSONL has no built-in root: presence means a saved
+ * JSONL root, an Antigravity store). Generic JSONL has no built-in root: presence means a saved
  * `jsonl` extra for this host resolved to a readable directory.
  */
 function localSourcePresence(
@@ -818,6 +821,7 @@ function localSourcePresence(
     muse: false,
     zcode: false,
     jsonl: false,
+    antigravity: false,
   };
   for (const entry of requests) presence[entry.provider] = true;
   return presence;
@@ -1070,7 +1074,15 @@ export class AccountAnalyticsActivityService {
     const now = (this.deps.now ?? Date.now)();
     const fetchedAt = new Date(now).toISOString();
     const updated: SourceData[] = [];
-    for (const provider of ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'] as const) {
+    for (const provider of [
+      'claude',
+      'codex',
+      'omp',
+      'muse',
+      'zcode',
+      'jsonl',
+      'antigravity',
+    ] as const) {
       const data = merged.get(provider);
       if (data) updated.push({ provider, data, fetchedAt });
       else {
@@ -1116,7 +1128,15 @@ export class AccountAnalyticsActivityService {
     const previous = new Map(
       state.sourceStates.map((entry) => [`${entry.tool}\0${entry.host}`, entry])
     );
-    for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl'] as const) {
+    for (const tool of [
+      'claude',
+      'codex',
+      'omp',
+      'muse',
+      'zcode',
+      'jsonl',
+      'antigravity',
+    ] as const) {
       const key = `${tool}\0ubuntu`;
       const old = previous.get(key);
       if (succeeded.has(tool)) {
