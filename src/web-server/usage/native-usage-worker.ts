@@ -37,7 +37,8 @@ async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerRes
       request.kind === 'omp' ||
       request.kind === 'muse' ||
       request.kind === 'zcode' ||
-      request.kind === 'jsonl') &&
+      request.kind === 'jsonl' ||
+      request.kind === 'antigravity') &&
     request.activity
   )
     return { ok: true, data: await collectAccountActivity(request, request.activity) };

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate Claude Code, Codex, OMP, Muse and zcode usage into per-model, per-hour rows.
+"""Aggregate Claude Code, Codex, OMP, Muse, zcode and Antigravity usage into per-model, per-hour rows.
 
 Reads one JSON request on stdin, scans the fixed default roots resolved on
 this host, T3 Code's account homes (Claude config dirs and Codex homes found
@@ -12,7 +12,7 @@ per session aggregate leave the host; paths, session ids, prompts, tool output
 and every other conversation content stay here.
 
 Request (all fields validated, unknown fields rejected):
-  {"kinds": ["claude", "codex", "omp", "muse", "zcode"], "minDateMs": 123,
+  {"kinds": ["claude", "codex", "omp", "muse", "zcode", "antigravity"], "minDateMs": 123,
    "immutableSqlite": true,
    "extraRoots": {"claude": ["/abs/projects"], "codex": ["/abs/.codex"],
                   "omp": ["/abs/sessions"], "muse": [...], "zcode": [...]},
@@ -47,6 +47,15 @@ characters: the same key the server derives from its own local readers, so one
 session groups across hosts and the id itself never leaves this one. A kind
 whose records carry no session id contributes no session aggregate.
 
+"antigravity" reads every conversation database T3 Code's usage reader reads
+(_agy_dirs: ~/.gemini stores, ~/.config/antigravity, T3's Antigravity instance
+folders) whatever immutableSqlite says: mode=ro for a live database, immutable
+only for a WAL database closed cleanly, so no -wal or -shm file is created. A
+record counts once across databases and copies, so the kind has one store
+fingerprint over all of them: any change re-reads them together, and its rows
+and session rows carry the store key. "unreadable": true says a database or
+folder could not be read; the store is read again on the next call.
+
 "truncated" means a file, row or deadline cap stopped the scan, so some files
 were not read; "discoveryTruncated" means only that the search for custom OMP
 session roots hit its bounds, so roots it did not reach were not read. A row
@@ -68,6 +77,7 @@ import re
 import sqlite3
 import sys
 import time
+import urllib.parse
 
 VERSION = 1
 # Same ceilings the server collector uses where they apply.
@@ -298,6 +308,8 @@ class Collector(object):
         # set, records whose key it holds are not counted.
         self.capture = None
         self.skip = None
+        # Antigravity databases (or folders) that could not be read this scan.
+        self.agy_unreadable = 0
 
     def keep_record(self, key):
         """False when the record is captured as a key or is a known copy."""
@@ -1919,6 +1931,635 @@ def _collect_zcode(collector, home, env, immutable, extra=()):
     return "ok"
 
 
+# Antigravity: a port of T3 Code's reader (apps/server/src/usage/
+# antigravityUsageReader.ts, tag v0.0.46-nightly.20261006.2735). Each
+# conversation is one SQLite database; its usage is protobuf in
+# gen_metadata.data and steps.metadata, apart from the conversation text.
+# Only model ids and names, token counts, record ids and timestamps are taken
+# from those blobs; nothing else is kept, and nothing but the totals leaves.
+AGY_DIRS = ("antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup")
+AGY_MAX_DBS = 2000
+AGY_MAX_CANDIDATES = 200000
+AGY_MAX_DEPTH = 32
+# A database past this size is not read (and the kind says some could not be),
+# so one huge database cannot hold up the other tools sharing the helper call.
+AGY_MAX_DB_BYTES = 1024 * 1024 * 1024
+AGY_SAFE_INTEGER = 2 ** 53 - 1
+AGY_MODEL_IDS = {
+    246: "gemini-2.5-pro", 312: "gemini-2.5-flash", 313: "gemini-2.5-flash-thinking",
+    329: "gemini-2.5-flash-thinking", 330: "gemini-2.5-flash-lite", 281: "claude-sonnet-4",
+    282: "claude-sonnet-4", 290: "claude-opus-4", 291: "claude-opus-4",
+    333: "claude-sonnet-4-5", 334: "claude-sonnet-4-5", 340: "claude-haiku-4-5",
+    341: "claude-haiku-4-5", 1026: "claude-opus-4-6", 1035: "claude-sonnet-4-6",
+    1016: "gemini-3.1-pro", 1036: "gemini-3.1-pro", 1037: "gemini-3.1-pro",
+    1018: "gemini-3-flash-preview", 1084: "gemini-3-flash-preview",
+    1047: "gemini-3-flash-preview",
+}
+# String.prototype.trim()'s whitespace, so a name or id reads as T3 reads it.
+AGY_TRIM = (
+    "\t\n\x0b\x0c\r \xa0        "
+    "        　﻿"
+)
+AGY_SUFFIX = re.compile("[%s]*\\([^)]*\\)[%s]*\\Z" % (AGY_TRIM, AGY_TRIM))
+AGY_CLAUDE = re.compile(r"^claude-(4(?:\.[0-9]+)?)-(sonnet|opus|haiku)")
+AGY_UNKNOWN = "antigravity-unknown"
+
+
+class _AgyError(Exception):
+    """A database T3's reader refuses as a whole: it contributes nothing."""
+
+
+class _AgyNotConversation(Exception):
+    """A valid SQLite database without Antigravity's usage tables: skipped quietly."""
+
+
+class _AgyRetry(Exception):
+    """A writer opened a cleanly closed database during an immutable read: read it next scan."""
+
+
+class _AgyDeadline(Exception):
+    """The helper's deadline passed in the middle of one database."""
+
+
+class _AgyBig(int):
+    """A varint past 2**53 - 1: T3 holds it as a bigint, which no read takes as a number."""
+
+
+def _agy_varint(data, offset):
+    value = 0
+    shift = 0
+    while shift < 70:
+        if offset >= len(data):
+            raise _AgyError("truncated varint")
+        byte = data[offset]
+        offset += 1
+        if shift == 63 and byte > 1:
+            raise _AgyError("invalid varint")
+        value |= (byte & 127) << shift
+        if byte < 128:
+            return (_AgyBig(value) if value > AGY_SAFE_INTEGER else value), offset
+        shift += 7
+    raise _AgyError("invalid varint")
+
+
+def _agy_fields(data):
+    """Field number -> values of one message; fixed32/64 fields are skipped, as in T3."""
+    result = {}
+    offset = 0
+    while offset < len(data):
+        tag, offset = _agy_varint(data, offset)
+        if type(tag) is not int or tag // 8 == 0:
+            raise _AgyError("invalid field")
+        number, wire = tag // 8, tag % 8
+        if wire == 0:
+            value, offset = _agy_varint(data, offset)
+        elif wire in (1, 2, 5):
+            if wire == 2:
+                length, offset = _agy_varint(data, offset)
+                if type(length) is not int:
+                    raise _AgyError("invalid length")
+            else:
+                length = 8 if wire == 1 else 4
+            if length > len(data) - offset:
+                raise _AgyError("truncated field")
+            value = data[offset:offset + length]
+            offset += length
+            if wire != 2:
+                continue
+        else:
+            raise _AgyError("unsupported wire type")
+        result.setdefault(number, []).append(value)
+    return result
+
+
+def _agy_first(fields, key):
+    values = fields.get(key)
+    return values[0] if values else None
+
+
+def _agy_number(fields, key):
+    value = _agy_first(fields, key)
+    return value if type(value) is int else 0
+
+
+def _agy_bytes(fields, key):
+    value = _agy_first(fields, key)
+    return value if isinstance(value, memoryview) else None
+
+
+def _agy_nested(fields, key):
+    data = _agy_bytes(fields, key)
+    return {} if data is None else _agy_fields(data)
+
+
+def _agy_text(fields, key):
+    data = _agy_bytes(fields, key)
+    if data is None:
+        return ""
+    try:
+        return data.tobytes().decode("utf-8").strip(AGY_TRIM)
+    except UnicodeDecodeError:
+        raise _AgyError("invalid text")
+
+
+def _agy_timestamp(fields):
+    seconds = _agy_number(fields, 1)
+    return seconds * 1000 + _agy_number(fields, 2) // 1000000 if seconds > 0 else None
+
+
+def _agy_model_name(name, model_id):
+    if name:
+        normalized = AGY_SUFFIX.sub("", name.lower(), count=1).replace(" ", "-")
+        if normalized.startswith("claude-"):
+            return AGY_CLAUDE.sub(r"claude-\2-\1", normalized, count=1).replace(".", "-")
+        return normalized
+    if model_id in AGY_MODEL_IDS:
+        return AGY_MODEL_IDS[model_id]
+    return "antigravity-model-%d" % model_id if model_id > 0 else ""
+
+
+def _agy_metadata(blob, step):
+    """(model, model id, named, timestamp ms, usages) of one step or generation."""
+    root = _agy_fields(blob)
+    if not step and _agy_bytes(root, 1) is None:
+        raise _AgyError("missing generation metadata")
+    data = root if step else _agy_nested(root, 1)
+    model = _agy_nested(data, 24) if step else data
+    usage = _agy_bytes(data, 9 if step else 4)
+    usages = [] if usage is None else [_agy_fields(usage)]
+    for retry in data.get(28 if step else 17, ()):
+        if not isinstance(retry, memoryview):
+            raise _AgyError("invalid retry metadata")
+        retry_usage = _agy_bytes(_agy_fields(retry), 2)
+        if retry_usage is not None:
+            usages.append(_agy_fields(retry_usage))
+    name = _agy_text(model, 12 if step else 19) or _agy_text(model, 8 if step else 21)
+    model_id = _agy_number(model, 1 if step else 3)
+    if step:
+        stamp = _agy_timestamp(_agy_nested(data, 8))
+        if stamp is None:
+            stamp = _agy_timestamp(_agy_nested(data, 1))
+    else:
+        stamp = _agy_timestamp(_agy_nested(_agy_nested(data, 9), 4))
+    return _agy_model_name(name, model_id), model_id, bool(name), stamp, usages
+
+
+def _agy_blob(value):
+    if not isinstance(value, bytes):
+        raise _AgyError("invalid metadata blob")
+    return memoryview(value)
+
+
+def _agy_uri(path, immutable=False):
+    text = os.path.abspath(path).replace("\\", "/")
+    if not text.startswith("/"):
+        text = "/" + text
+    return "file://%s?mode=ro%s" % (
+        urllib.parse.quote(text, safe="/:"),
+        "&immutable=1" if immutable else "",
+    )
+
+
+def _agy_identity(path):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+
+
+def _agy_closed_wal(path):
+    """A WAL-mode database (header bytes 18-19 are 2) with no -wal file: closed
+    cleanly, so nothing waits in a log. A mode=ro open would create -wal and
+    -shm files next to it; an immutable open reads the same rows and creates none."""
+    if os.path.exists(path + "-wal"):
+        return False
+    try:
+        with open(path, "rb") as handle:
+            header = handle.read(20)
+    except OSError:
+        return False
+    return len(header) == 20 and header[:16] == b"SQLite format 3\x00" and header[18:20] == b"\x02\x02"
+
+
+def _agy_read_db(path, fallback_ms, expired=lambda: False):
+    """T3's readDatabase: the usage candidates of one conversation database.
+
+    One short read transaction with a 100 ms busy wait; it never writes the
+    database or its log and never checkpoints. A live database opens mode=ro,
+    never immutable=1, which can misread a live write-ahead log; like every WAL
+    reader it updates its read marks in the existing -shm. A WAL database closed
+    cleanly (no -wal) opens immutable, so the read creates no -wal or -shm file;
+    if a writer opened it meanwhile (a -wal appeared, or the file changed), the
+    read is dropped and the next scan reads it mode=ro.
+    """
+    closed = _agy_closed_wal(path)
+    before = _agy_identity(path) if closed else None
+    connection = sqlite3.connect(
+        _agy_uri(path, immutable=closed), uri=True, timeout=0.1, isolation_level=None
+    )
+    try:
+        # The deadline also bounds a single database: the query aborts once it passes.
+        connection.set_progress_handler(lambda: 1 if expired() else 0, 20000)
+        connection.execute("PRAGMA busy_timeout = 100")
+        connection.execute("BEGIN")
+        tables = set(
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        )
+        if "gen_metadata" not in tables and "steps" not in tables:
+            raise _AgyNotConversation("missing usage tables")
+        # The metadata columns only, fetched in one snapshot; parsing waits until
+        # the connection is closed, so no lock is held longer than the reads.
+        raw_generations = raw_trajectory = raw_steps = ()
+        if "gen_metadata" in tables:
+            raw_generations = connection.execute(
+                "SELECT idx, data FROM gen_metadata ORDER BY idx"
+            ).fetchall()
+        if "trajectory_metadata_blob" in tables:
+            raw_trajectory = connection.execute(
+                "SELECT data FROM trajectory_metadata_blob"
+            ).fetchall()
+        if "steps" in tables:
+            raw_steps = connection.execute(
+                "SELECT idx, metadata FROM steps WHERE metadata IS NOT NULL ORDER BY idx"
+            ).fetchall()
+    finally:
+        connection.close()
+    if closed and (os.path.exists(path + "-wal") or _agy_identity(path) != before):
+        raise _AgyRetry("a writer opened the database during the read")
+
+    def entries(rows, step):
+        found = []
+        for index, (idx, blob) in enumerate(rows):
+            if index % 256 == 255 and expired():
+                raise _AgyDeadline("deadline")
+            if isinstance(idx, bool) or not isinstance(idx, (int, float)):
+                raise _AgyError("invalid metadata index")
+            found.append((idx, _agy_metadata(_agy_blob(blob), step)))
+        return found
+
+    generations = entries(raw_generations, False)
+    trajectory = None
+    for (data,) in raw_trajectory:
+        if trajectory is None:
+            trajectory = _agy_timestamp(_agy_nested(_agy_fields(_agy_blob(data)), 2))
+    steps = entries(raw_steps, True)
+    names = []
+    for _, (model, model_id, named, _, _) in steps + generations:
+        if named and model_id > 0:
+            names.append((model_id, model))
+    positional = dict((idx, entry[0]) for idx, entry in generations)
+    candidates = []
+    for source, listed in (("step", steps), ("generation", generations)):
+        for idx, (model, model_id, named, stamp, usages) in listed:
+            for usage in usages:
+                output = max(_agy_number(usage, 3), _agy_number(usage, 9) + _agy_number(usage, 10))
+                tokens = [
+                    _agy_number(usage, 2),
+                    _agy_number(usage, 5),
+                    _agy_number(usage, 4),
+                    output,
+                ]
+                if sum(tokens) == 0:
+                    continue
+                keys = []
+                for key in (11, 12, 7):
+                    text = _agy_text(usage, key)
+                    if text:
+                        keys.append("antigravity:%d:%s" % (key, text))
+                usage_id = _agy_number(usage, 1)
+                t3_model = (
+                    AGY_MODEL_IDS.get(usage_id)
+                    or model
+                    or (positional.get(idx) if source == "step" else "")
+                    or _agy_model_name("", usage_id)
+                    or AGY_UNKNOWN
+                )
+                candidates.append(
+                    {
+                        "keys": keys,
+                        "stamp": stamp if stamp is not None else (
+                            trajectory if trajectory is not None else fallback_ms
+                        ),
+                        "quality": 2 if stamp is not None else (1 if trajectory is not None else 0),
+                        "tokens": tokens,
+                        "t3_model": t3_model,
+                        "static": AGY_MODEL_IDS.get(usage_id) or (model if named else ""),
+                        "ids": (usage_id, model_id),
+                    }
+                )
+    return candidates, names
+
+
+def _agy_model(candidate, learned):
+    """T3's model, except that a numeric id another record names (gen_metadata
+    names id 1318 "gemini-3.8-flash" where steps carry only the id) takes that
+    name instead of T3's guess by position, so one model is one row. Tokens and
+    the set of unknown-model records are unchanged."""
+    if candidate["static"]:
+        return candidate["static"]
+    usage_id, entry_id = candidate["ids"]
+    if usage_id > 0 and usage_id in learned:
+        return learned[usage_id]
+    if entry_id in AGY_MODEL_IDS:
+        return AGY_MODEL_IDS[entry_id]
+    if entry_id > 0 and entry_id in learned:
+        return learned[entry_id]
+    return candidate["t3_model"]
+
+
+def _agy_excluded(path, home):
+    """A network mount, a UNC path or ~/PM-Experiments: never entered."""
+    text = os.path.abspath(path)
+    if text.startswith("\\\\") or text.startswith("//"):
+        return True
+    return _same_or_inside(
+        text, ["/mnt", "/media", "/Volumes", "/net", os.path.join(home, "PM-Experiments")]
+    )
+
+
+def _agy_real_dir(path, home):
+    """The real path of a root, resolved one component at a time: every link's
+    target is checked as written before it is followed, so a link into a
+    network mount (a stat there can block) or ~/PM-Experiments is never touched."""
+    drive, rest = os.path.splitdrive(os.path.abspath(path))
+    pieces = [piece for piece in re.split(r"[\\/]+", rest) if piece]
+    current = drive + os.sep
+    hops = 0
+    while pieces:
+        piece = pieces.pop(0)
+        if piece == ".":
+            continue
+        if piece == "..":
+            current = os.path.dirname(current)
+            continue
+        candidate = os.path.join(current, piece)
+        if _agy_excluded(candidate, home):
+            return None
+        if not _is_link(candidate):
+            current = candidate
+            continue
+        hops += 1
+        try:
+            written = os.readlink(candidate)
+        except (OSError, ValueError, AttributeError, NotImplementedError):
+            return None
+        if hops > 40 or written.startswith("\\\\?\\UNC\\"):
+            return None
+        if written.startswith("\\\\?\\"):
+            written = written[4:]
+        target = os.path.normpath(os.path.join(current, written))
+        if _agy_excluded(target, home):
+            return None
+        drive, rest = os.path.splitdrive(target)
+        pieces = [piece for piece in re.split(r"[\\/]+", rest) if piece] + pieces
+        current = drive + os.sep
+    return None if _agy_excluded(current, home) else current
+
+
+def _agy_dirs(home, env):
+    """UsageService.ts:626-661: $ANTIGRAVITY_DATA_DIR (comma-separated), else the
+    ~/.gemini stores and ~/.config/antigravity; then every T3 Code instance's
+    <stateDir>/providers/antigravity/<sha256(id)>/antigravity-acp. A root with a
+    `conversations` folder is read there only. Each real folder once."""
+    listed = [part.strip() for part in (env.get("ANTIGRAVITY_DATA_DIR") or "").split(",")]
+    # A relative entry is ignored (the server's presence check ignores it too).
+    listed = [os.path.expanduser(part) for part in listed if part]
+    listed = [part for part in listed if os.path.isabs(part) or re.match(r"^[A-Za-z]:[\\/]", part)]
+    if not listed:
+        listed = [os.path.join(home, ".gemini", name) for name in AGY_DIRS]
+        listed.append(os.path.join(home, ".config", "antigravity"))
+    instances = os.path.join(home, ".t3", "userdata", "providers", "antigravity")
+    listed.extend(os.path.join(profile, "antigravity-acp") for profile in _t3_child_dirs(instances))
+    dirs = []
+    present = False
+    for root in listed:
+        real = _agy_real_dir(root, home)
+        if real is None or not os.path.isdir(real):
+            continue
+        present = True
+        nested = _agy_real_dir(os.path.join(real, "conversations"), home)
+        chosen = nested if nested is not None and os.path.isdir(nested) else real
+        if chosen not in dirs:
+            dirs.append(chosen)
+    return dirs, present
+
+
+def _agy_walk(collector, directory, start, depth, state):
+    """T3's walk (names in order, depth first) for `.db` files, each real file
+    once. Links are followed only to a target inside the root; `secrets` folders
+    and every other file (acp_token.json included) are never opened."""
+    try:
+        stat = os.stat(directory)
+        if (stat.st_dev, stat.st_ino) in state["dirs"]:
+            return True
+        state["dirs"].add((stat.st_dev, stat.st_ino))
+        names = sorted(os.listdir(directory))
+    except FileNotFoundError:
+        return True
+    except OSError:
+        state["unreadable"] += 1
+        return True
+    for name in names:
+        if collector.expired() or len(state["dirs"]) > WALK_MAX_DIRS:
+            collector.truncated = True
+            return False
+        path = os.path.join(directory, name)
+        try:
+            real = _t3_link_inside(path, start) if _is_link(path) else path
+            if real is None:
+                continue
+            if os.path.isdir(real):
+                if name == "secrets":
+                    continue
+                if depth >= AGY_MAX_DEPTH:
+                    collector.truncated = True
+                    continue
+                if not _agy_walk(collector, real, start, depth + 1, state):
+                    return False
+            elif name.endswith(".db") and os.path.isfile(real):
+                canonical = os.path.realpath(real)
+                if canonical in state["seen"]:
+                    continue
+                state["seen"].add(canonical)
+                if len(state["files"]) >= AGY_MAX_DBS:
+                    collector.truncated = True
+                    return False
+                state["files"].append((real, name[:-3] if len(name) > 3 else name))
+        except (OSError, ValueError):
+            continue
+    return True
+
+
+def _agy_store_print(files):
+    """One fingerprint for every database and write-ahead log: a record counts
+    once across databases, so any change re-reads them all together."""
+    digest = hashlib.sha256()
+    size = 0
+    newest = 0
+    for path, _ in files:
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        wal = (0, 0)
+        try:
+            wal_stat = os.stat(path + "-wal")
+            wal = (wal_stat.st_size, wal_stat.st_mtime_ns)
+        except OSError:
+            pass
+        size += stat.st_size
+        newest = max(newest, int(stat.st_mtime * 1000), wal[1] // 1000000)
+        digest.update(
+            ("%s\0%d\0%d\0%d\0%d\n" % (
+                _filekey("antigravity", path), stat.st_size, stat.st_mtime_ns, wal[0], wal[1]
+            )).encode("utf-8")
+        )
+    head = digest.hexdigest()
+    return {"size": size, "mtimeMs": newest, "head": head, "tail": head}
+
+
+def _collect_antigravity(collector, home, env):
+    dirs, present = _agy_dirs(home, env)
+    if not present:
+        return "not_installed"
+    state = {"dirs": set(), "seen": set(), "files": [], "unreadable": 0}
+    for directory in dirs:
+        if not _agy_walk(collector, directory, directory, 0, state):
+            return "ok"
+    files = state["files"]
+    if not files:
+        return "error" if state["unreadable"] else "ok"
+    storekey = _filekey("antigravity", home)
+    current = _agy_store_print(files)
+    collector.pending.setdefault("antigravity", {})[storekey] = current
+    if _same_fingerprint(collector.prior.get("antigravity", {}).get(storekey), current):
+        collector.confirm_file("antigravity", storekey)
+        return "ok"
+    read = []
+    named = collections.Counter()
+    total = 0
+    for path, session in files:
+        if collector.expired():
+            collector.truncated = True
+            return "ok"
+        try:
+            stat = os.stat(path)
+            if stat.st_size > AGY_MAX_DB_BYTES:
+                state["unreadable"] += 1
+                continue
+            candidates, names = _agy_read_db(path, stat.st_mtime * 1000.0, collector.expired)
+        except _AgyNotConversation:
+            # Another app's database in a walked folder holds no usage (T3 flags it; totals agree).
+            continue
+        except Exception:
+            if collector.expired():
+                collector.truncated = True
+                return "ok"
+            # Busy past the wait, damaged, or opened by a writer mid-read: T3
+            # drops the whole database too, and the next scan reads it again.
+            # One deleted since the walk is gone.
+            if os.path.exists(path):
+                state["unreadable"] += 1
+            continue
+        total += len(candidates)
+        if total > AGY_MAX_CANDIDATES:
+            collector.truncated = True
+            return "ok"
+        named.update(names)
+        read.append((session[:SESSION_MAX_LEN], candidates))
+    learned = {}
+    for (model_id, model), _ in sorted(named.items(), key=lambda item: (-item[1], item[0])):
+        learned.setdefault(model_id, model)
+    # T3's alias merge (union-find over every record id, across databases): a
+    # merged record keeps the earliest owner, the best timestamp and the
+    # largest count of each token kind.
+    groups = []
+    identities = {}
+
+    def find(index):
+        root = index
+        while groups[root]["parent"] != root:
+            root = groups[root]["parent"]
+        while index != root:
+            parent = groups[index]["parent"]
+            groups[index]["parent"] = root
+            index = parent
+        return root
+
+    def merge(left, right):
+        a, b = find(left), find(right)
+        if a == b:
+            return
+        if groups[a]["size"] < groups[b]["size"]:
+            a, b = b, a
+        target, source = groups[a], groups[b]
+        first = target if target["owner"] < source["owner"] else source
+        best = source if (
+            source["quality"] > target["quality"]
+            or (source["quality"] == target["quality"] and source["stamp"] < target["stamp"])
+        ) else target
+        model = first["model"]
+        if model == AGY_UNKNOWN:
+            model = source["model"] if first is target else target["model"]
+        target["tokens"] = [max(x, y) for x, y in zip(target["tokens"], source["tokens"])]
+        target["model"] = model
+        target["session"] = first["session"]
+        target["stamp"] = best["stamp"]
+        target["quality"] = best["quality"]
+        target["owner"] = first["owner"]
+        target["size"] += source["size"]
+        source["parent"] = a
+
+    for session, candidates in read:
+        for candidate in candidates:
+            index = len(groups)
+            groups.append(
+                {
+                    "parent": index,
+                    "size": 1,
+                    "owner": index,
+                    "session": session,
+                    "model": _agy_model(candidate, learned),
+                    "stamp": candidate["stamp"],
+                    "quality": candidate["quality"],
+                    "tokens": candidate["tokens"],
+                }
+            )
+            for key in candidate["keys"]:
+                existing = identities.get(key)
+                if existing is not None:
+                    merge(index, existing)
+                identities[key] = index
+    for index, group in enumerate(groups):
+        if group["parent"] != index or group["stamp"] < collector.min_date_ms:
+            continue
+        epoch_ms = int(group["stamp"])
+        hour = _hour_label(epoch_ms, collector.now_ms)
+        if hour is None:
+            continue
+        model = _clean_model(group["model"]) or AGY_UNKNOWN
+        uncached, cached, written, output = group["tokens"]
+        tokens = (uncached, output, cached, written)
+        collector.add("antigravity", storekey, model, None, hour, tokens, 0.0)
+        collector.sadd(
+            "antigravity",
+            storekey,
+            _session_key("antigravity", group["session"]),
+            model,
+            None,
+            epoch_ms,
+            tokens,
+            0.0,
+        )
+    collector.agy_unreadable = state["unreadable"]
+    if not read:
+        return "error"
+    if not state["unreadable"]:
+        collector.confirm_file("antigravity", storekey)
+    return "ok"
+
+
 def _valid_extra_root(candidate):
     """A saved extra root: an absolute path with no parent escape."""
     if not isinstance(candidate, str) or not candidate or len(candidate) > 1024:
@@ -1947,9 +2588,11 @@ def _read_request():
     if (
         not isinstance(kinds, list)
         or not kinds
-        or any(kind not in ("claude", "codex", "omp", "muse", "zcode") for kind in kinds)
+        or any(
+            kind not in ("claude", "codex", "omp", "muse", "zcode", "antigravity") for kind in kinds
+        )
     ):
-        _fail("request.kinds must list claude, codex, omp, muse and/or zcode")
+        _fail("request.kinds must list claude, codex, omp, muse, zcode and/or antigravity")
     min_date_ms = request.get("minDateMs")
     if (
         isinstance(min_date_ms, bool)
@@ -2065,6 +2708,9 @@ def main():
             states[kind] = _collect_zcode(
                 collector, home, env, immutable, extra_roots.get("zcode", ())
             )
+        elif kind == "antigravity":
+            # Its own open modes, whatever immutableSqlite says (see _agy_read_db).
+            states[kind] = _collect_antigravity(collector, home, env)
         # A cap that outlives the kind that hit it (row_cap) cuts every later kind
         # short too, and a kind that ends past the deadline never flipped the flag
         # itself: mark partial where the data stops, not only where the flag flips.
@@ -2100,6 +2746,8 @@ def main():
             entry["partial"] = True
         if kind == "zcode" and collector.wal_unread:
             entry["walUnread"] = True
+        if kind == "antigravity" and collector.agy_unreadable:
+            entry["unreadable"] = True
         kind_entries[kind] = entry
     response = {
         "version": VERSION,

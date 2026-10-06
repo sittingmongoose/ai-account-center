@@ -40,10 +40,10 @@ range with hashed keys and whole-session totals, and the original CCS anomaly
 rules. The provider filter is validated against the server's provider table;
 errors carry a stable `code`.
 
-Usage activity covers Claude Code, Codex, OMP, Muse and zcode
+Usage activity covers Claude Code, Codex, OMP, Muse, zcode and Antigravity
 (`scope: 'multi-host-cli'`), grouped under the dashboard provider that served
 each call ([attribution](../../src/web-server/services/account-analytics-attribution.ts)):
-Claude Code, Codex and the Muse CLI are their own provider, OMP and zcode
+Claude Code, Codex, the Muse CLI and Antigravity are their own provider, OMP and zcode
 record a route per call (Qwen, Z.ai, Kimi Code, OpenCode Go, Cursor, Muse Code,
 Antigravity), and a route no provider claims is `other`. Every model with usage
 is published. Ubuntu logs are parsed in bounded worker
@@ -62,8 +62,16 @@ cache reads. A resumed OMP session copied into a second root counts once. A
 remote scan that does not answer keeps the last remote aggregates in the
 totals. `activity.sources` lists each tool and host as `ok`, `cached`,
 `unavailable` or `not_installed`, each measured by that host's own scan; only
-Antigravity and Cursor are fixed "no local usage log" entries, being the two
-tools that keep no local usage log on any host.
+Cursor is a fixed "no local usage log" entry, being the one tool that keeps no
+local usage log on any host. Antigravity is read by the same packaged helper on
+every host, the VM included ([reader](../../src/web-server/usage/antigravity-native-usage-collector.ts)):
+a port of T3 Code's reader over the conversation databases under `~/.gemini`,
+`~/.config/antigravity` and T3 Code's Antigravity instance folders, usage
+fields only, each record once across databases and copies. A live database
+opens `mode=ro` (a WAL reader updates its read marks in the existing `-shm`,
+nothing else); a WAL database closed cleanly, with no `-wal` file, opens
+immutable, so the read never creates `-wal` or `-shm` files, and a read that a
+writer overlapped is dropped and done again on the next scan.
 
 [Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts),
 [guarded activation/rollback](../../src/codex-auth/activate-codex-profile.ts) and idle-only

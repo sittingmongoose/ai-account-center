@@ -215,9 +215,12 @@ describe('analytics activity across sources', () => {
     expect(sources.get('codex:ubuntu')?.state).toBe('not_installed');
     expect(sources.get('omp:mac')).toMatchObject({ state: 'ok', rowCount: 3 });
     expect(sources.get('omp:windows')?.state).toBe('unavailable');
-    const antigravity = sources.get('antigravity:mac');
-    expect(antigravity?.state).toBe('unavailable');
-    expect(antigravity?.detail).toContain('no local usage log');
+    // Antigravity's conversation databases are read now: never a fixed no-local-log entry.
+    expect(
+      activity.sources.some(
+        (row) => row.tool === 'antigravity' && /no local usage log/.test(row.detail ?? '')
+      )
+    ).toBe(false);
     expect(sources.get('cursor:windows')?.detail).toContain('no local usage log');
     // Windows Muse and zcode are measured by that host's own scan, not fixed here.
     expect(sources.get('muse:windows')?.state).toBe('not_installed');

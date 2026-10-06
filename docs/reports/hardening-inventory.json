@@ -1,14 +1,14 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1208,
-    "filesAffected": 120,
-    "hotpathOccurrences": 575,
-    "hotpathFilesAffected": 69,
+    "totalOccurrences": 1218,
+    "filesAffected": 121,
+    "hotpathOccurrences": 585,
+    "hotpathFilesAffected": 70,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 49,
+        "count": 54,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -215,7 +215,7 @@
       },
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 49,
+        "count": 54,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -522,16 +522,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 662,
-      "typedThrows": 160,
+      "totalThrows": 668,
+      "typedThrows": 166,
       "plainThrows": 72,
       "otherThrows": 430,
-      "adoptionRatio": 0.2417,
+      "adoptionRatio": 0.2485,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 306,
-          "typed": 98,
+          "count": 312,
+          "typed": 104,
           "plain": 10
         },
         {
@@ -604,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 37,
-      "totalSourceFiles": 405,
-      "coverageRatio": 0.0914,
+      "totalSourceFiles": 406,
+      "coverageRatio": 0.0911,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 150,
+          "count": 151,
           "withLogger": 21
         },
         {
@@ -756,11 +756,11 @@
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 2306
+          "loc": 2472
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1432
+          "loc": 1452
         },
         {
           "file": "src/web-server/model-pricing.ts",
@@ -804,11 +804,11 @@
         },
         {
           "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 708
+          "loc": 710
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 669
+          "loc": 672
         },
         {
           "file": "src/web-server/services/codex-auto-switch-service.ts",

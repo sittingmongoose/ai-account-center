@@ -29,6 +29,7 @@ const TOOLS: readonly AccountAnalyticsActivityProvider[] = [
   'muse',
   'zcode',
   'jsonl',
+  'antigravity',
 ];
 
 /** The dashboard's provider labels; "other" is usage on a route no provider claims. */
@@ -89,6 +90,7 @@ const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([
   'omp',
   'muse',
   'zcode',
+  'antigravity',
 ]);
 const MAX_SESSION_SAMPLE = 50;
 const MAX_NAMED_DAY_MODELS = 12;

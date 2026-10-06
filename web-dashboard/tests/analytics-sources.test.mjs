@@ -214,21 +214,21 @@ test('Included usage names the tools and computers read, and how usage is groupe
 });
 
 test('a tool a scan has not reached says Scanning, and the page holds until the first useful view', () => {
-  const five = host => ['claude', 'codex', 'omp', 'muse', 'zcode'].map(tool => ({ tool, host, state: 'scanning', lastScanAt: null, rowCount: 0, detail: 'the scan ran out of time before it reached this tool; the next scan continues' }));
-  const scanning = [...SOURCES.filter(r => r.host === 'ubuntu' || r.tool === 'antigravity' || r.tool === 'cursor'), ...five('mac'), ...five('windows')];
+  const six = host => ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map(tool => ({ tool, host, state: 'scanning', lastScanAt: null, rowCount: 0, detail: 'the scan ran out of time before it reached this tool; the next scan continues' }));
+  const scanning = [...SOURCES.filter(r => r.host === 'ubuntu' || r.tool === 'cursor'), ...six('mac'), ...six('windows')];
   const inc = includedView(payload({ sources: scanning }), now);
   const cell = inc.rows.find(r => r.tool === 'OMP').cells[1];
   assert.deepEqual([cell.text, cell.tone, cell.id], ['Scanning…', 'scanning', 'mac']);
   assert.match(cell.tip, /The scan ran out of time before it reached this tool; the next scan continues\./);
   // scanning cells are flagged in the label, and never counted as failures
-  assert.equal(inc.label, 'Included usage · 10 scanning');
+  assert.equal(inc.label, 'Included usage · 12 scanning');
   // a cold answer with no numbers yet stays behind the loading screen, with per-host progress
   const cold = usageView(payload({ status: 'loading', totals: null, byHour: [], models: [], providers: [], refreshing: true, refreshingRemote: ['mac', 'windows'], sources: scanning }), state(), { now });
   assert.equal(cold.ready, false);
   assert.deepEqual(cold.loading.hosts, [
     { name: 'Ubuntu', detail: 'read' },
-    { name: 'Mac', detail: '0 of 5 tools · scanning now' },
-    { name: 'Windows', detail: '0 of 5 tools · scanning now' },
+    { name: 'Mac', detail: '0 of 6 tools · scanning now' },
+    { name: 'Windows', detail: '0 of 6 tools · scanning now' },
   ]);
   assert.equal(cold.head.updating, true);
   // the same cells with numbers in hand draw the page and update calmly
@@ -239,7 +239,7 @@ test('a tool a scan has not reached says Scanning, and the page holds until the 
   const between = usageView(payload({ sources: scanning }), state(), { now });
   assert.equal(between.ready, true);
   assert.equal(between.head.updating, true);
-  assert.equal(between.head.updateNote, 'Updating · Mac 0 of 5 tools, Windows 0 of 5 tools · continues shortly');
+  assert.equal(between.head.updateNote, 'Updating · Mac 0 of 6 tools, Windows 0 of 6 tools · continues shortly');
   // a settled failure is shown honestly, never held behind the skeleton forever
   const dead = usageView(payload({ status: 'unavailable', totals: null, byHour: [], models: [], providers: [], sources: [] }), state(), { now });
   assert.equal(dead.ready, true);
@@ -264,17 +264,35 @@ test('no usage in range and not installed read as themselves, never unavailable'
 });
 
 test('hostProgress never calls a host whose every tool failed "read"', () => {
-  const failed = ['claude', 'codex', 'omp', 'muse', 'zcode'].map(tool => ({ tool, host: 'windows', state: 'unavailable', lastScanAt: null, rowCount: 0, detail: 'remote scan failed' }));
-  const mac = ['claude', 'codex', 'omp', 'muse', 'zcode'].map((tool, i) => ({ tool, host: 'mac', state: i < 2 ? 'ok' : 'scanning', lastScanAt: at(1), rowCount: i < 2 ? 5 : 0, detail: i < 2 ? null : 'the first scan is running' }));
+  const failed = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map(tool => ({ tool, host: 'windows', state: 'unavailable', lastScanAt: null, rowCount: 0, detail: 'remote scan failed' }));
+  const mac = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map((tool, i) => ({ tool, host: 'mac', state: i < 2 ? 'ok' : 'scanning', lastScanAt: at(1), rowCount: i < 2 ? 5 : 0, detail: i < 2 ? null : 'the first scan is running' }));
   const p = hostProgress(payload({ status: 'loading', refreshing: true, refreshingRemote: ['mac'], sources: [...failed, ...mac] }));
   const by = Object.fromEntries(p.map(h => [h.key, h]));
   assert.equal(by.windows.detail, 'unavailable');
-  assert.deepEqual([by.mac.done, by.mac.total, by.mac.detail], [2, 5, '2 of 5 tools · scanning now']);
+  assert.deepEqual([by.mac.done, by.mac.total, by.mac.detail], [2, 6, '2 of 6 tools · scanning now']);
   // no grid rows yet while the first collection runs: honestly queued, never "read"
-  assert.deepEqual([by.ubuntu.done, by.ubuntu.detail], [0, '0 of 5 tools · scanning now']);
+  assert.deepEqual([by.ubuntu.done, by.ubuntu.detail], [0, '0 of 6 tools · scanning now']);
   // the fixed no-local-log tools never count as failures of a host
   const fixed = payload({ sources: [...failed.map(r => ({ ...r, detail: 'no local usage log: kept server-side' }))] });
   assert.equal(hostProgress(fixed).find(h => h.key === 'windows').detail, 'read');
+});
+
+test('Antigravity read on every computer is a grid row; Cursor alone keeps no local log', () => {
+  const sources = [
+    ...SOURCES.filter(r => r.tool !== 'antigravity'),
+    { tool: 'antigravity', host: 'ubuntu', state: 'ok', lastScanAt: at(1), rowCount: 2018, detail: null },
+    { tool: 'antigravity', host: 'mac', state: 'no_usage', lastScanAt: at(1), rowCount: 0, detail: 'usage logs found but no usage in the last 31 days' },
+    { tool: 'antigravity', host: 'windows', state: 'ok', lastScanAt: at(1), rowCount: 40, detail: 'some Antigravity conversation databases could not be read (busy or damaged); the rest are counted and the next scan reads them again' },
+  ];
+  const inc = includedView(payload({ sources }), now);
+  assert.deepEqual(inc.rows.map(r => r.tool), ['Claude Code', 'Codex', 'OMP', 'Muse Code', 'zcode', 'Antigravity']);
+  assert.equal(inc.line, "Includes Claude Code, Codex, OMP, Muse Code, zcode and Antigravity on Ubuntu, Mac and Windows. Cursor doesn't keep a local usage log; its quota readings still show on Home.");
+  const cells = inc.rows.find(r => r.tool === 'Antigravity').cells;
+  assert.deepEqual(cells.map(c => c.text), ['Read 1h 0m ago', 'No usage in range', 'Read 1h 0m ago']);
+  assert.match(cells[0].tip, /2,018 usage events kept/);
+  // the six tools count in each computer's progress
+  const by = Object.fromEntries(hostProgress(payload({ sources })).map(h => [h.key, h]));
+  assert.equal(by.ubuntu.total, 6);
 });
 
 test('Included usage lists generic JSONL sources with the other tools', () => {

@@ -7,7 +7,11 @@ import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 
 export type AnalyticsRemoteHost = 'mac' | 'windows';
-export type AnalyticsRemoteKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode';
+export type AnalyticsRemoteKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'antigravity';
+
+/** Every kind the packaged helper reads. */
+const REMOTE_KIND_LIST = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
+const REMOTE_KINDS: ReadonlySet<string> = new Set(REMOTE_KIND_LIST);
 
 export class AnalyticsRemoteTransportError extends NetworkError {
   readonly timedOut: boolean;
@@ -28,7 +32,7 @@ const MAX_ROWS = 100_000;
  * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
-  '317b94e0cfb65d827c5f4515c06ff1af0e3422fb6ff19354d7e7628419ee888c';
+  'da65d7d1a771d7cd63f82d090a797dce3bc6aa41c2acbdc5ab7317493125e9a6';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -85,6 +89,8 @@ export interface AnalyticsRemoteKindResult {
   fingerprints: Record<string, AnalyticsRemoteFingerprint>;
   /** zcode: an immutable open cannot read rows still in the write-ahead log. */
   walUnread?: boolean;
+  /** Antigravity: a conversation database or folder could not be read (busy, damaged); the rest count. */
+  unreadable?: boolean;
 }
 
 export interface AnalyticsRemoteResponse {
@@ -141,6 +147,7 @@ function isValidExtraRoots(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.entries(value as Record<string, unknown>).every(
     ([kind, roots]) =>
+      // Antigravity takes no saved extra roots: the helper reads ANTIGRAVITY_DATA_DIR itself.
       (kind === 'claude' ||
         kind === 'codex' ||
         kind === 'omp' ||
@@ -172,11 +179,8 @@ function validRow(value: unknown): value is AnalyticsRemoteRow {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   return (
-    (row.k === 'claude' ||
-      row.k === 'codex' ||
-      row.k === 'omp' ||
-      row.k === 'muse' ||
-      row.k === 'zcode') &&
+    typeof row.k === 'string' &&
+    REMOTE_KINDS.has(row.k) &&
     typeof row.f === 'string' &&
     SHA256_HEX.test(row.f) &&
     cleanText(row.m, 160) &&
@@ -196,11 +200,8 @@ function validSessionRow(value: unknown): value is AnalyticsRemoteSessionRow {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   return (
-    (row.k === 'claude' ||
-      row.k === 'codex' ||
-      row.k === 'omp' ||
-      row.k === 'muse' ||
-      row.k === 'zcode') &&
+    typeof row.k === 'string' &&
+    REMOTE_KINDS.has(row.k) &&
     typeof row.f === 'string' &&
     SHA256_HEX.test(row.f) &&
     typeof row.s === 'string' &&
@@ -265,19 +266,13 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     throw new AnalyticsRemoteTransportError();
   const parsed: AnalyticsRemoteResponse['kinds'] = {} as AnalyticsRemoteResponse['kinds'];
   for (const [kind, value] of Object.entries(kinds)) {
-    if (
-      kind !== 'claude' &&
-      kind !== 'codex' &&
-      kind !== 'omp' &&
-      kind !== 'muse' &&
-      kind !== 'zcode'
-    )
-      throw new AnalyticsRemoteTransportError();
+    if (!REMOTE_KINDS.has(kind)) throw new AnalyticsRemoteTransportError();
     const entry = value as {
       state?: unknown;
       partial?: unknown;
       fingerprints?: unknown;
       walUnread?: unknown;
+      unreadable?: unknown;
     };
     if (
       entry.state !== 'ok' &&
@@ -291,6 +286,8 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       throw new AnalyticsRemoteTransportError();
     if (entry.walUnread !== undefined && typeof entry.walUnread !== 'boolean')
       throw new AnalyticsRemoteTransportError();
+    if (entry.unreadable !== undefined && typeof entry.unreadable !== 'boolean')
+      throw new AnalyticsRemoteTransportError();
     const prints = entry.fingerprints as Record<string, unknown> | undefined;
     if (!prints || typeof prints !== 'object' || Array.isArray(prints))
       throw new AnalyticsRemoteTransportError();
@@ -300,7 +297,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       !entries.every(([key, print]) => SHA256_HEX.test(key) && validFingerprint(print))
     )
       throw new AnalyticsRemoteTransportError();
-    parsed[kind] = {
+    parsed[kind as AnalyticsRemoteKind] = {
       state:
         entry.state === 'not_installed'
           ? 'not_installed'
@@ -312,6 +309,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       ...(entry.partial === true ? { partial: true } : {}),
       fingerprints: prints as Record<string, AnalyticsRemoteFingerprint>,
       ...(entry.walUnread === true ? { walUnread: true } : {}),
+      ...(entry.unreadable === true ? { unreadable: true } : {}),
     };
   }
   return {
@@ -371,14 +369,7 @@ export async function runAnalyticsRemoteHelper(
   if (
     !Array.isArray(request.kinds) ||
     request.kinds.length === 0 ||
-    request.kinds.some(
-      (kind) =>
-        kind !== 'claude' &&
-        kind !== 'codex' &&
-        kind !== 'omp' &&
-        kind !== 'muse' &&
-        kind !== 'zcode'
-    ) ||
+    request.kinds.some((kind) => !REMOTE_KINDS.has(kind)) ||
     !Number.isFinite(request.minDateMs) ||
     request.minDateMs < 0 ||
     !isValidExtraRoots(request.extraRoots)

@@ -100,7 +100,8 @@ export type AccountAnalyticsActivityProvider =
   | 'omp'
   | 'muse'
   | 'zcode'
-  | 'jsonl';
+  | 'jsonl'
+  | 'antigravity';
 
 /**
  * The dashboard provider that served a usage row: the tool's own provider for Claude Code, Codex and the Muse
@@ -120,7 +121,7 @@ export type AccountAnalyticsSourceState =
   | 'no_usage';
 
 export interface AccountAnalyticsSource {
-  tool: AccountAnalyticsActivityProvider | 'antigravity' | 'cursor';
+  tool: AccountAnalyticsActivityProvider | 'cursor';
   host: 'ubuntu' | 'mac' | 'windows';
   state: AccountAnalyticsSourceState;
   /** Last successful scan, null when never scanned. */

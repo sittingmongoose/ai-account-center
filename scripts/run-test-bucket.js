@@ -28,6 +28,7 @@ const slowTests = [
   'tests/unit/antigravity/signin-driver.test.ts',
   'tests/unit/web-server/dashboard-auth-runtime.test.ts',
   'tests/unit/web-server/analytics-remote-helper.test.ts',
+  'tests/unit/web-server/antigravity-usage-helper.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are

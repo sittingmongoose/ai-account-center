@@ -478,10 +478,13 @@ issues and screenshots. See [Security](SECURITY.md) for reporting boundaries.
 
 ## Known limits
 
-- Antigravity and Cursor usage are not available locally: Antigravity usage
-  lives only inside its conversation-database blobs, and Cursor usage is
-  server-side only. Both read as fixed "no local usage log" entries in
-  Included usage.
+- Cursor usage is not available locally: it is server-side only, and reads as
+  a fixed "no local usage log" entry in Included usage.
+- Antigravity usage (T3 Code's Antigravity instances included) is read from
+  its conversation databases on every computer, but only as far back as those
+  databases keep it, and its model names are what Antigravity stored: a model
+  with no listed rate (for example one known only by a numeric id) shows
+  "Not logged" for cost, never a guessed price.
 - Update apps Cancel granularity is one computer's batch: the running
   computer's apps finish and the queued computers are skipped.
 - Claude add, remove and restore read "coming" while the server's Claude host
