@@ -120,7 +120,7 @@ class NativeStatusService:
 
     def _new(self, session, value):
         key = self._key(session)
-        context = OwnedStatusContext(key[0], session.conversation, session.cwd, '1.2.16', '0' * 64, key[2])
+        context = OwnedStatusContext(key[0], session.conversation, session.cwd, '1.3.0', '0' * 64, key[2])
         record = {'key': key, 'session': session}
         record['inbox'] = ConditionalOriginBoundStatusInbox(context, expected_email=value['email'],
             runtime_observer=lambda: self._observe(session, record), inspector=self.inspector,
@@ -180,7 +180,7 @@ class NativeStatusService:
                 return False
             value = captured.projection
             if (value['email'] != expected.get('email') or value['conversation_id'] != session.conversation or
-                    value['cwd'] != session.cwd or value['version'] != '1.2.16' or value['agent_state'] != 'idle' or
+                    value['cwd'] != session.cwd or value['version'] != '1.3.0' or value['agent_state'] != 'idle' or
                     any(name in value and value[name] != 0 for name in ('pending_input_count', 'task_count')) or
                     ('tool_confirmation_pending' in value and value['tool_confirmation_pending'] is not False)):
                 return False

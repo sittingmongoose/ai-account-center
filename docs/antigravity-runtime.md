@@ -292,8 +292,8 @@ after each step.
 
 1. Read-only preflight. Stop if any check fails.
    - `sha256sum ~/.local/bin/agy` prints
-     `a759ce7c7a235d9b6c281a25ead97cbbf2e92314a3ffd224e2f9144f3fae7a86` (agy
-     1.2.16, the version the runtime was reviewed against).
+     `19be6af38f7beeaa0db415df9297e314ab3d33fdd6f853434d49f88819bc68e4` (agy
+     1.3.0, the current pin; 1.2.14 and 1.2.16 stay in the reviewed set).
    - `pgrep -u "$USER" -x agy` prints nothing.
    - `python3 -I "$PKG/scripts/antigravity/install_runtime.py" --plan` prints
      `"nativeActivationReleased": false` and `"installed": false`.
@@ -349,8 +349,8 @@ after each step.
 An official update invalidates the pin on purpose: activation answers
 `unsupported-runtime-probe`, and status and the dashboard say
 `Antigravity updated to X; switching paused until reviewed` instead of failing.
-Releases follow the same review the 1.2.16 receipt records
-(`status/AGY-RELEASE-RECEIPT-1.2.16.md`): binary identity and ownership,
+Releases follow the same review the 1.2.16 and 1.3.0 receipts record
+(`status/AGY-RELEASE-RECEIPT-1.2.16.md`, `status/AGY-RELEASE-RECEIPT-1.3.0.md`): binary identity and ownership,
 changelog, storage layout and permissions, token format and lifecycle, process
 names, status vocabulary and credential backend, all with read-only probes and
 no secrets printed. If the new build is compatible, the release commit appends
@@ -375,7 +375,31 @@ build stays paused. `ai-account-center antigravity runtime refresh` runs the
 same refresh explicitly: it re-verifies the installed CLI against the reviewed
 set with the adoption proofs (owned descriptor, bundle gate, exact paths) and
 reports `current`, `refreshed`, or the paused state. It runs only as the user
-that owns this computer's Antigravity state.
+that owns this computer's Antigravity state. The previous descriptor is kept as
+`descriptor-backups/<old pin>.json`; when an earlier generation already keeps
+different bytes under that name (a bundle rebuild keeps the pin), this one is
+kept beside it as `<old pin>-<sha16>.json`, the name the rebuild uses. Existing
+backups are never overwritten.
+
+### Update all holds unreviewed builds
+
+The dashboard's Update all never installs an Antigravity CLI build that is not
+in the reviewed set, on any of the three computers. The helper reads the
+official release manifest first; when its newest version is not reviewed, the
+row reads "Update held: Antigravity X is waiting for a switching review" and
+the installed build stays. When the review list or the manifest cannot be read,
+nothing is installed either. A version check is the right gate here: the
+manifest names a version and a hash of the download archive, not the hash of
+the installed binary the review pins, and the official updater cannot install a
+chosen version, so the only safe choices are "update to a reviewed version" or
+"hold". The switching gate itself
+stays hash-based: a held or skipped update changes nothing, and a binary that
+somehow differs from its reviewed hash still pauses switching. No automatic
+compatibility check replaces the review: several reviewed surfaces (token
+renewal, the signed-in header, live status frames) need a real login, which an
+unattended updater must not exercise. The CLI's own background self-update
+during ordinary runs is outside Update all and still pauses switching until a
+review (`scripts/app-updates/README.md`).
 
 ### Rollback
 

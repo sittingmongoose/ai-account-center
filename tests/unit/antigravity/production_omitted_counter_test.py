@@ -15,7 +15,7 @@ from native_status_omitted_counters import (
 class ConditionalOmissionCandidateTests(unittest.TestCase):
     def setUp(self):
         self.frame = {'email': 'fixture@example.invalid', 'conversation_id': 'fixture-conversation',
-                      'cwd': '/disposable/project', 'version': '1.2.16', 'agent_state': 'idle'}
+                      'cwd': '/disposable/project', 'version': '1.3.0', 'agent_state': 'idle'}
         self.binding = PublisherBinding(NATIVE_SHA256, PRODUCER_CONTRACT_SHA256,
                                         self.frame['email'], self.frame['conversation_id'], self.frame['cwd'], 1000.0,
                                         True, True, True, True, True, True, True)

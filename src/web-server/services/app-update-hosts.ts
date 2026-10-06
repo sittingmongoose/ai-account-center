@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
+import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
 
 /**
  * How the dashboard reaches each computer's fixed update helper: the local
@@ -13,15 +14,41 @@ import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 /** Total progress output accepted from one host; a runaway helper is stopped. */
 const MAX_STREAM = 1024 * 1024;
 
-export function appUpdateInvocation(platform: UpdatePlatform): { binary: string; args: string[] } {
+/**
+ * The Antigravity CLI versions that passed a switching review, comma-joined
+ * for the helper's --agy-reviewed (it holds any newer build). Empty when the
+ * packaged release file is unusable: the helper then holds the update.
+ * Versions are strictly validated (digits, dots, one -tag), so they are inert
+ * on every command line below.
+ */
+export function antigravityReviewedArgument(releaseFile = defaultNativeReleaseFile()): string {
+  return readNativeRelease(releaseFile)
+    .reviewed.map((entry) => entry.version)
+    .join(',');
+}
+
+export function appUpdateInvocation(
+  platform: UpdatePlatform,
+  reviewed = antigravityReviewedArgument()
+): { binary: string; args: string[] } {
   const local = path.resolve(__dirname, '../../../scripts/app-updates/app_updates.py');
+  const review = /^[0-9A-Za-z_.,-]{1,4096}$/.test(reviewed) ? reviewed : '';
   if (platform === 'ubuntu')
-    return { binary: '/usr/bin/python3', args: [local, '--apply', '--platform', 'ubuntu'] };
+    return {
+      binary: '/usr/bin/python3',
+      args: [
+        local,
+        '--apply',
+        '--platform',
+        'ubuntu',
+        ...(review ? ['--agy-reviewed', review] : []),
+      ],
+    };
   const host = platform === 'mac' ? 'jared-mac' : 'jared-windows';
+  const reviewArgument = review ? ` --agy-reviewed '${review}'` : '';
   // AAC_UPDATE_PROGRESS asks the helper for line-by-line progress; a helper
   // that predates it ignores the variable and prints one final document.
-  let command =
-    'AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform mac';
+  let command = `AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform mac${reviewArgument}`;
   if (platform === 'windows') {
     const script = [
       "$ErrorActionPreference='Stop'",
@@ -29,7 +56,7 @@ export function appUpdateInvocation(platform: UpdatePlatform): { binary: string;
       "$env:PYTHONIOENCODING='utf-8'",
       "$env:AAC_UPDATE_PROGRESS='1'",
       "$helper=[IO.Path]::Combine($HOME,'.ccs','app-updates','app_updates.py')",
-      '& python.exe $helper --apply --platform windows',
+      `& python.exe $helper --apply --platform windows${reviewArgument}`,
       'exit $LASTEXITCODE',
     ].join('; ');
     command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;

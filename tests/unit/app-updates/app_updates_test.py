@@ -181,7 +181,7 @@ class UpdaterTests(unittest.TestCase):
             return ('failed', 'unsupported') if install.app_id == 'muse-code' else None
         def cli(install, deadline):
             return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'antigravity_hold', return_value=None):
             value = updater.run_apply('ubuntu')
         rows = {item['appId']: item for item in value['results']}
         self.assertEqual(len(value['results']), 7)
@@ -763,7 +763,8 @@ class BoundedUpdateTests(unittest.TestCase):
                 mock.patch.object(updater, 'detect', return_value=installations), \
                 mock.patch.object(updater, 'check_readiness', return_value=None), \
                 mock.patch.object(updater, 'update_desktop') as desktop_update, \
-                mock.patch.object(updater, 'update_cli', side_effect=cli) as update:
+                mock.patch.object(updater, 'update_cli', side_effect=cli) as update, \
+                mock.patch.object(updater, 'antigravity_hold', return_value=None):
             value = updater.run_apply('ubuntu', cancelled=lambda: state['cancelled'])
         self.assertEqual(update.call_count, 1)
         desktop_update.assert_not_called()
@@ -863,5 +864,185 @@ class BoundedUpdateTests(unittest.TestCase):
         self.assertLessEqual(int(argv[argv.index('--timeout-seconds') + 1]), updater.CODEX_BRIDGE_SECONDS)
         self.assertLessEqual(timeout, updater.CODEX_BRIDGE_SECONDS + 15)
 
+
+class _Manifest:
+    """A fixture HTTP response for the official Antigravity manifest."""
+    def __init__(self, body, url=None):
+        self.body, self.url = body, url or updater.AGY_MANIFEST_BASE + 'linux_amd64.json'
+    def __enter__(self): return self
+    def __exit__(self, *args): return False
+    def geturl(self): return self.url
+    def read(self, limit=-1): return self.body[:limit] if limit >= 0 else self.body
+
+
+class AntigravityReviewHoldTests(unittest.TestCase):
+    """Update all never installs an Antigravity CLI build without a switching review."""
+
+    REVIEWED = frozenset({'1.2.14', '1.2.16'})
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='ccs-agy-hold-')
+        self.root = pathlib.Path(self.directory.name)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def install(self, version='1.2.16', platform='ubuntu'):
+        return common.Install('antigravity-cli', platform, pathlib.Path('/fixture/agy'), version)
+
+    def test_reviewed_list_is_strict(self):
+        self.assertEqual(updater.parse_reviewed_versions('1.2.14,1.2.16,1.3.0'), frozenset({'1.2.14', '1.2.16', '1.3.0'}))
+        self.assertEqual(updater.parse_reviewed_versions('1.3.0-rc.1'), frozenset({'1.3.0-rc.1'}))
+        for hostile in ('', '1.2', '1.2.16,', '1.2.16;id', "1.2.16' ; rm -rf /", '1.2.16,1.2.16', ','.join('1.0.%d' % n for n in range(17)), 'v1.2.16', None):
+            self.assertIsNone(updater.parse_reviewed_versions(hostile), hostile)
+
+    def test_release_file_is_read_like_the_dashboard_reads_it(self):
+        self.assertIn('1.3.0', updater.read_release_versions())
+        release = self.root / 'release.json'
+        entry = lambda version, digit: {'nativeVersion': version, 'nativeSha256': digit * 64}
+        release.write_text(json.dumps({'reviewedNatives': [entry('1.2.14', 'a'), entry('1.2.16', 'b')]}))
+        self.assertEqual(updater.read_release_versions(release), self.REVIEWED)
+        release.write_text(json.dumps({'nativeVersion': '1.2.16', 'nativeSha256': 'b' * 64}))
+        self.assertEqual(updater.read_release_versions(release), frozenset({'1.2.16'}))
+        for broken in ({'reviewedNatives': [entry('1.2.16', 'b'), entry('1.2.16', 'c')]},
+                       {'reviewedNatives': [entry('1.2.14', 'b'), entry('1.2.16', 'b')]},
+                       {'reviewedNatives': [{**entry('1.2.16', 'b'), 'extra': 1}]},
+                       {'reviewedNatives': []}, {'reviewedNatives': 'x'}, [], {'nativeVersion': '1.2'}):
+            release.write_text(json.dumps(broken))
+            self.assertIsNone(updater.read_release_versions(release), broken)
+        self.assertIsNone(updater.read_release_versions(self.root / 'missing.json'))
+
+    def test_manifest_names_match_the_official_installers(self):
+        self.assertEqual(updater.agy_manifest_key('ubuntu', 'x86_64'), 'linux_amd64')
+        self.assertEqual(updater.agy_manifest_key('ubuntu', 'aarch64'), 'linux_arm64')
+        self.assertEqual(updater.agy_manifest_key('mac', 'arm64'), 'darwin_arm64')
+        self.assertEqual(updater.agy_manifest_key('mac', 'x86_64'), 'darwin_amd64')
+        self.assertEqual(updater.agy_manifest_key('windows', 'AMD64'), 'windows_amd64')
+        self.assertIsNone(updater.agy_manifest_key('windows', 'i686'))
+
+    def test_latest_version_reads_only_a_bounded_official_manifest(self):
+        body = json.dumps({'version': '1.3.0', 'url': 'https://fixture.invalid/agy.tgz', 'sha512': 'f' * 128}).encode()
+        with mock.patch('urllib.request.urlopen', return_value=_Manifest(body)) as opened, mock.patch('platform.machine', return_value='x86_64'):
+            self.assertEqual(updater.latest_agy_version('ubuntu'), '1.3.0')
+        self.assertEqual(opened.call_args.args[0].full_url, updater.AGY_MANIFEST_BASE + 'linux_amd64.json')
+        for response in (_Manifest(body, 'https://elsewhere.invalid/manifests/linux_amd64.json'),
+                         _Manifest(b'{"version": "1.3.0", "pad": "' + b'x' * 20000 + b'"}'),
+                         _Manifest(b'{"version": "1.3.0; id"}'), _Manifest(b'not json'), _Manifest(b'[]')):
+            with mock.patch('urllib.request.urlopen', return_value=response), mock.patch('platform.machine', return_value='x86_64'):
+                self.assertIsNone(updater.latest_agy_version('ubuntu'))
+        with mock.patch('urllib.request.urlopen', side_effect=urllib.error.URLError('offline')):
+            self.assertIsNone(updater.latest_agy_version('mac'))
+
+    def test_unreviewed_newest_build_is_held_and_named(self):
+        row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: '1.3.0')
+        self.assertEqual((row['status'], row['messageCode'], row['heldVersion']), ('held', 'held_for_review', '1.3.0'))
+        self.assertEqual((row['previousVersion'], row['version'], row['updateAttempted']), ('1.2.16', '1.2.16', False))
+
+    def test_reviewed_newest_build_may_update_and_current_never_runs_the_updater(self):
+        self.assertIsNone(updater.antigravity_hold(self.install('1.2.14'), self.REVIEWED, latest=lambda platform: '1.2.16'))
+        row = updater.antigravity_hold(self.install('1.3.0'), self.REVIEWED, latest=lambda platform: '1.3.0')
+        self.assertEqual((row['status'], row['messageCode'], row['updateAttempted']), ('current', 'current', False))
+
+    def test_unknown_review_or_manifest_holds_without_installing(self):
+        probe = mock.Mock(return_value='1.2.16')
+        row = updater.antigravity_hold(self.install(), None, latest=probe)
+        self.assertEqual((row['status'], row['messageCode'], row['heldVersion']), ('held', 'held_unchecked', None))
+        probe.assert_not_called()
+        row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: None)
+        self.assertEqual((row['status'], row['messageCode']), ('held', 'held_unchecked'))
+        self.assertIsNone(updater.antigravity_hold(self.install(None), self.REVIEWED, latest=probe))
+
+    def run_apply(self, install, reviewed, newest, update=None):
+        installs = {key: None for key in common.APP_LABELS}
+        installs['antigravity-cli'] = install
+        installs['omp'] = common.Install('omp', install.platform, pathlib.Path('/fixture/omp'), '1.0.0')
+        update = update or (lambda item, deadline: common.result(item.app_id, item.platform, 'current', item.version, item.version, 'native', attempted=True))
+        with mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
+                mock.patch.object(updater, 'detect', return_value=installs), \
+                mock.patch.object(updater, 'latest_agy_version', side_effect=lambda platform: newest), \
+                mock.patch.object(updater, 'check_readiness', return_value=None) as ready, \
+                mock.patch.object(updater, 'update_cli', side_effect=update) as run:
+            value = updater.run_apply(install.platform, agy_reviewed=reviewed)
+        return {row['appId']: row for row in value['results']}, ready, run
+
+    def test_run_apply_holds_antigravity_on_every_host_and_still_updates_the_rest(self):
+        for platform in ('ubuntu', 'mac', 'windows'):
+            rows, ready, run = self.run_apply(self.install(platform=platform), self.REVIEWED, '1.3.0')
+            self.assertEqual(rows['antigravity-cli']['status'], 'held', platform)
+            self.assertEqual(rows['antigravity-cli']['heldVersion'], '1.3.0')
+            self.assertEqual([call.args[0].app_id for call in run.call_args_list], ['omp'], 'agy update never ran on ' + platform)
+            self.assertEqual([call.args[0].app_id for call in ready.call_args_list], ['omp'])
+            self.assertEqual(rows['omp']['status'], 'current')
+
+    def test_run_apply_reports_an_update_that_landed_outside_the_review(self):
+        moved = lambda item, deadline: common.result(item.app_id, item.platform, 'updated', item.version, '1.3.1', 'native', attempted=True)
+        rows, _, _ = self.run_apply(self.install('1.2.14'), self.REVIEWED, '1.2.16', update=moved)
+        self.assertEqual((rows['antigravity-cli']['status'], rows['antigravity-cli']['messageCode']), ('updated', 'updated_unreviewed'))
+        reviewed = lambda item, deadline: common.result(item.app_id, item.platform, 'updated', item.version, '1.2.16', 'native', attempted=True)
+        rows, _, _ = self.run_apply(self.install('1.2.14'), self.REVIEWED, '1.2.16', update=reviewed)
+        self.assertEqual(rows['antigravity-cli']['messageCode'], 'updated')
+
+    def test_fake_cli_is_never_asked_to_update_past_the_review(self):
+        # A fixture `agy` on a fixture HOME: --version prints its version file,
+        # `update` records the call and moves to the version the manifest named.
+        home = self.root / 'home'
+        state = self.root / 'agy-version'
+        calls = self.root / 'agy-calls'
+        state.write_text('1.2.16')
+        _script(home / '.local/bin/agy', 'echo "$*" >> "%s"\nif [ "$1" = update ]; then cat "%s.next" > "%s"; exit 0; fi\ncat "%s"' % (calls, state, state, state))
+        installs = {key: None for key in common.APP_LABELS}
+        env = {'PATH': str(home / '.local/bin') + os.pathsep + '/usr/bin:/bin'}
+
+        def run(newest, reviewed):
+            pathlib.Path(str(state) + '.next').write_text(newest)
+            with mock.patch.object(pathlib.Path, 'home', return_value=home), mock.patch.dict(os.environ, env), \
+                    mock.patch.object(updater, 'detect', side_effect=lambda platform: {**installs, 'antigravity-cli': updater.detect_cli('antigravity-cli', platform)}), \
+                    mock.patch.object(updater, 'latest_agy_version', return_value=newest), \
+                    mock.patch.object(updater, 'scan', return_value=[]):
+                return updater.run_apply('ubuntu', agy_reviewed=reviewed)['results'][0]
+
+        held = run('1.3.0', self.REVIEWED)
+        self.assertEqual((held['status'], held['heldVersion'], held['version']), ('held', '1.3.0', '1.2.16'))
+        self.assertNotIn('update', calls.read_text().split())
+        self.assertEqual(state.read_text(), '1.2.16')
+        updated = run('1.3.0', self.REVIEWED | {'1.3.0'})
+        self.assertEqual((updated['status'], updated['version'], updated['messageCode']), ('updated', '1.3.0', 'updated'))
+        self.assertIn('update', calls.read_text().split())
+
+    def test_main_passes_the_dashboard_list_and_falls_back_to_the_release_file(self):
+        seen = []
+        with mock.patch.object(updater, 'run_apply', side_effect=lambda platform, emit, cancelled, reviewed: seen.append(reviewed) or {'results': []}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu', '--agy-reviewed', '1.2.16,1.3.0']):
+                updater.main()
+            with mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu', '--agy-reviewed', '1.2.16;id']):
+                updater.main()
+            with mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu']):
+                updater.main()
+        self.assertEqual(seen[0], frozenset({'1.2.16', '1.3.0'}))
+        self.assertIsNone(seen[1])
+        self.assertIn('1.3.0', seen[2])
+
+    def test_windows_task_child_receives_the_list_through_its_request_file(self):
+        app_root = self.root / '.ccs/app-updates'
+        seen = {}
+
+        def shell(script, timeout=30):
+            if 'Start-ScheduledTask' in script:
+                seen['request'] = json.loads((app_root / 'windows-task-request.json').read_text())
+                common.write_private_json(app_root / 'windows-task-result.json', {'nonce': seen['request']['nonce'], 'results': []})
+            return ''
+        with mock.patch.object(pathlib.Path, 'home', return_value=self.root), mock.patch.object(updater, 'powershell', side_effect=shell):
+            updater.windows_interactive_apply(agy_reviewed=frozenset({'1.3.0', '1.2.16'}))
+        self.assertEqual(seen['request']['agyReviewed'], ['1.2.16', '1.3.0'])
+        request = app_root / 'windows-task-request.json'
+        self.assertEqual(updater.read_task_request(request), (seen['request']['nonce'], frozenset({'1.2.16', '1.3.0'})))
+        nonce = 'a' * 32
+        for body, expected in (({'nonce': nonce}, (nonce, None)), ({'nonce': nonce, 'agyReviewed': ['1.3.0;id']}, (nonce, None)),
+                               ({'nonce': nonce, 'agyReviewed': '1.3.0'}, (nonce, None)), ({'nonce': 'x', 'agyReviewed': ['1.3.0']}, (None, None)),
+                               ([], (None, None))):
+            request.write_text(json.dumps(body))
+            self.assertEqual(updater.read_task_request(request), expected, body)
+        self.assertEqual(updater.read_task_request(self.root / 'missing.json'), (None, None))
 
 if __name__ == '__main__': unittest.main()

@@ -5,6 +5,7 @@ import path from 'path';
 import {
   AppUpdateBusyError,
   AppUpdateService,
+  antigravityReviewedArgument,
   appUpdateInvocation,
   normalizeAppUpdateResults,
   parseDeployedChecksums,
@@ -94,7 +95,7 @@ describe('fixed app update service', () => {
   it('executes only the three fixed host-local helpers', () => {
     const local = appUpdateInvocation('ubuntu');
     expect(local.binary).toBe('/usr/bin/python3');
-    expect(local.args.slice(-3)).toEqual(['--apply', '--platform', 'ubuntu']);
+    expect(local.args.slice(1, 4)).toEqual(['--apply', '--platform', 'ubuntu']);
     const mac = appUpdateInvocation('mac');
     expect(mac.binary).toBe('ssh');
     expect(mac.args.slice(-2, -1)).toEqual(['jared-mac']);
@@ -105,6 +106,108 @@ describe('fixed app update service', () => {
     const script = Buffer.from(encoded, 'base64').toString('utf16le');
     expect(script).toContain('--apply --platform windows');
     expect(script).not.toContain('Invoke-Expression');
+  });
+  it('hands every host the packaged Antigravity reviewed versions, quoted', () => {
+    const reviewed = antigravityReviewedArgument();
+    expect(reviewed.split(',')).toContain('1.3.0');
+    expect(reviewed).toMatch(/^\d+\.\d+\.\d+(,\d+\.\d+\.\d+)*$/);
+    expect(appUpdateInvocation('ubuntu').args.slice(-2)).toEqual(['--agy-reviewed', reviewed]);
+    expect(appUpdateInvocation('mac').args.at(-1)).toMatch(
+      new RegExp(`--apply --platform mac --agy-reviewed '${reviewed.replace(/\./g, '\\.')}'$`)
+    );
+    const decode = (args: string[]) =>
+      Buffer.from(args.at(-1)!.split(' ').at(-1)!, 'base64').toString('utf16le');
+    // PowerShell would split an unquoted comma list into separate arguments.
+    expect(decode(appUpdateInvocation('windows').args)).toContain(
+      `& python.exe $helper --apply --platform windows --agy-reviewed '${reviewed}'`
+    );
+    // An unusable release file sends no list: every helper then holds the update.
+    const dir = directory();
+    fs.writeFileSync(path.join(dir, 'release.json'), '{"reviewedNatives": "broken"}');
+    expect(antigravityReviewedArgument(path.join(dir, 'release.json'))).toBe('');
+    expect(appUpdateInvocation('ubuntu', '').args).not.toContain('--agy-reviewed');
+    expect(appUpdateInvocation('mac', "1.3.0'; rm -rf ~; '").args.at(-1)).not.toContain('rm -rf');
+    expect(decode(appUpdateInvocation('windows', '').args)).not.toContain('--agy-reviewed');
+  });
+  it('accepts a held Antigravity row with the build it held and keeps it after a restore', () => {
+    const rows = JSON.parse(payload()).results;
+    rows[0] = {
+      ...rows[0],
+      status: 'held',
+      messageCode: 'held_for_review',
+      previousVersion: '1.2.16',
+      version: '1.2.16',
+      heldVersion: '1.3.0',
+      updateAttempted: false,
+    };
+    rows[1] = { ...rows[1], status: 'held', messageCode: 'held_for_review', heldVersion: '1.3.0' };
+    const value = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'ubuntu');
+    expect(value[0]).toMatchObject({
+      appId: 'antigravity-cli',
+      status: 'held',
+      version: '1.2.16',
+      heldVersion: '1.3.0',
+      updateAttempted: false,
+    });
+    expect(value[0].message).toContain('waiting for a switching review');
+    // Only the Antigravity CLI is ever held.
+    expect(value[1].status).toBe('failed');
+    expect(value[1].heldVersion).toBeUndefined();
+    const unchecked = normalizeAppUpdateResults(
+      JSON.stringify({
+        results: [{ ...rows[0], messageCode: 'held_unchecked', heldVersion: '1.3.0' }],
+      }),
+      'mac'
+    )[0];
+    expect(unchecked.status).toBe('held');
+    expect(unchecked.heldVersion).toBeUndefined();
+    for (const bad of [
+      { ...rows[0], messageCode: 'current' },
+      { ...rows[0], status: 'current', messageCode: 'held_for_review' },
+      { ...rows[0], status: 'current', messageCode: 'updated_unreviewed' },
+    ])
+      expect(normalizeAppUpdateResults(JSON.stringify({ results: [bad] }), 'windows')[0].status).toBe(
+        'failed'
+      );
+    const hostile = normalizeAppUpdateResults(
+      JSON.stringify({ results: [{ ...rows[0], heldVersion: '1.3.0; id' }] }),
+      'ubuntu'
+    )[0];
+    expect(hostile.status).toBe('held');
+    expect(JSON.stringify(hostile)).not.toContain('; id');
+    const unreviewed = normalizeAppUpdateResults(
+      JSON.stringify({
+        results: [
+          {
+            ...rows[0],
+            status: 'updated',
+            messageCode: 'updated_unreviewed',
+            version: '1.3.1',
+            heldVersion: '1.3.1',
+          },
+        ],
+      }),
+      'ubuntu'
+    )[0];
+    expect(unreviewed).toMatchObject({ status: 'updated', version: '1.3.1' });
+    expect(unreviewed.message).toContain('switching is paused');
+    expect(unreviewed.heldVersion).toBeUndefined();
+  });
+  it('completes a job with a held row and restores the held build from disk', async () => {
+    const root = directory();
+    const rows = JSON.parse(payload()).results;
+    rows[0] = { ...rows[0], status: 'held', messageCode: 'held_for_review', heldVersion: '1.3.0' };
+    const service = new AppUpdateService({
+      ccsDir: root,
+      runHost: async () => JSON.stringify({ results: rows }),
+    });
+    service.start();
+    await finish(service);
+    expect(service.getStatus().job!.state).toBe('completed');
+    const restored = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
+    const held = restored.getStatus().job!.results.filter((row) => row.status === 'held');
+    expect(held).toHaveLength(3);
+    expect(held.every((row) => row.heldVersion === '1.3.0')).toBe(true);
   });
   it('normalizes only safe whitelist metadata and never full helper responses', () => {
     const rows = JSON.parse(payload()).results;

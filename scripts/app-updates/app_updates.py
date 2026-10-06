@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import shutil
 import sys
 import time
@@ -26,6 +27,126 @@ CLI_NAMES = {"antigravity-cli": "agy", "muse-code": "muse", "omp": "omp", "codex
 # The Codex bridge's whole budget: lock (30 s) + update (180 s) + idle wait
 # (60 s) + proxy restart checks. It never waits hours for a busy Codex.
 CODEX_BRIDGE_SECONDS = 420
+
+# Antigravity switching works only with native CLI builds that passed a
+# switching review (scripts/antigravity/runtime/release.json, reviewedNatives).
+# `agy update` always installs the newest build, so Update all reads the
+# official release manifest first (the same fixed URL the CLI's own updater and
+# installer use) and holds the installed build when the newest one is not
+# reviewed. Nothing here installs, stops or restarts anything.
+AGY_MANIFEST_BASE = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/"
+AGY_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[A-Za-z0-9_.-]+)?$")
+AGY_MAX_REVIEWED = 16
+AGY_RELEASE_FILE = pathlib.Path(__file__).resolve().parents[1] / "antigravity/runtime/release.json"
+
+
+def _agy_version(value):
+    return value if isinstance(value, str) and len(value) <= 128 and AGY_VERSION.match(value) else None
+
+
+def parse_reviewed_versions(value):
+    """A comma-separated reviewed list from the dashboard, or None when unusable."""
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        return None
+    items = value.split(",")
+    versions = [_agy_version(item) for item in items]
+    if len(items) > AGY_MAX_REVIEWED or None in versions or len(set(versions)) != len(versions):
+        return None
+    return frozenset(versions)
+
+
+def read_release_versions(release_file=AGY_RELEASE_FILE):
+    """Reviewed versions from the packaged release file, or None (fail closed).
+
+    Mirrors readNativeRelease: exact two-key entries, unique versions and
+    hashes, at most 16; a release without reviewedNatives is its single pin.
+    """
+    try:
+        raw = pathlib.Path(release_file).read_bytes()
+        if len(raw) > 65536:
+            return None
+        value = json.loads(raw.decode("utf-8"))
+        entries = value.get("reviewedNatives")
+        if entries is None:
+            entries = [{"nativeVersion": value.get("nativeVersion"), "nativeSha256": value.get("nativeSha256")}]
+        if not isinstance(entries, list) or not entries or len(entries) > AGY_MAX_REVIEWED:
+            return None
+        versions, hashes = [], []
+        for entry in entries:
+            if (not isinstance(entry, dict) or set(entry) != {"nativeVersion", "nativeSha256"} or
+                    not _agy_version(entry["nativeVersion"]) or not isinstance(entry["nativeSha256"], str) or
+                    not re.fullmatch(r"[a-f0-9]{64}", entry["nativeSha256"])):
+                return None
+            versions.append(entry["nativeVersion"])
+            hashes.append(entry["nativeSha256"])
+        if len(set(versions)) != len(versions) or len(set(hashes)) != len(hashes):
+            return None
+        return frozenset(versions)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+
+
+def agy_manifest_key(platform, machine=None):
+    """The official manifest name for this computer, e.g. linux_amd64; None when unknown."""
+    import platform as host
+    machine = (machine or host.machine() or "").lower()
+    arch = "arm64" if machine in ("arm64", "aarch64") else "amd64" if machine in ("x86_64", "amd64") else None
+    system = {"ubuntu": "linux", "mac": "darwin", "windows": "windows"}.get(platform)
+    return None if arch is None or system is None else system + "_" + arch
+
+
+def latest_agy_version(platform):
+    """The newest official build's version for this computer, or None. Read-only."""
+    import urllib.request
+    key = agy_manifest_key(platform)
+    if key is None:
+        return None
+    try:
+        request = urllib.request.Request(AGY_MANIFEST_BASE + key + ".json", headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            if not response.geturl().startswith(AGY_MANIFEST_BASE):
+                return None
+            raw = response.read(16 * 1024 + 1)
+        if len(raw) > 16 * 1024:
+            return None
+        value = json.loads(raw.decode("utf-8"))
+        return _agy_version(value.get("version")) if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def antigravity_hold(install, reviewed, latest=None):
+    """None when the update may run; otherwise the finished row for this app.
+
+    A newest build outside the reviewed set is never installed: the row is
+    `held` and names that build. When the reviewed set or the newest version
+    cannot be read, nothing is installed either (fail closed). An installed
+    build that already is the newest one reports current without running the
+    official updater, so no later publication can slip in.
+    """
+    before = install.version
+    if not before:
+        return None
+    newest = None if reviewed is None else (latest or latest_agy_version)(install.platform)
+    if newest is None:
+        row = result(install.app_id, install.platform, "held", before, before, install.manager, "held_unchecked")
+        row["heldVersion"] = None
+        return row
+    if newest == before:
+        return result(install.app_id, install.platform, "current", before, before, install.manager)
+    if newest in reviewed:
+        return None
+    row = result(install.app_id, install.platform, "held", before, before, install.manager, "held_for_review")
+    row["heldVersion"] = newest
+    return row
+
+
+def mark_unreviewed(row, reviewed):
+    """An update that still landed outside the reviewed set says so, never silently."""
+    if (isinstance(row, dict) and row.get("appId") == "antigravity-cli" and row.get("status") == "updated" and
+            (reviewed is None or row.get("version") not in reviewed)):
+        row["messageCode"] = "updated_unreviewed"
+    return row
 
 
 def _candidates(name, platform):
@@ -351,13 +472,14 @@ def check_readiness(install):
 HOST_DEADLINE_SECONDS = 15 * 60
 
 
-def run_apply(platform, emit=None, cancelled=None):
+def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     """Check and update every app on this computer, one installer at a time.
 
     emit(event) receives {"event": "app", ...} before each app's check and
     update, and {"event": "result", ...} as soon as its row is known, so the
     dashboard can show live progress. cancelled() is polled between apps: once
-    true, every app not yet started is reported as skipped.
+    true, every app not yet started is reported as skipped. agy_reviewed is the
+    Antigravity CLI's reviewed version set (None: unknown, so it is held).
     """
     emit = emit or (lambda event: None)
     cancelled = cancelled or (lambda: False)
@@ -388,6 +510,14 @@ def run_apply(platform, emit=None, cancelled=None):
                 report(result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout"))
             else:
                 emit({"event": "app", "appId": app_id, "phase": "checking"})
+                if app_id == "antigravity-cli" and install.manager != "unsupported":
+                    try:
+                        held = antigravity_hold(install, agy_reviewed)
+                    except Exception:
+                        held = result(app_id, platform, "held", install.version, install.version, install.manager, "held_unchecked")
+                    if held is not None:
+                        report(held)
+                        continue
                 gate = check_readiness(install)
                 if gate is not None:
                     status, code = gate
@@ -397,17 +527,20 @@ def run_apply(platform, emit=None, cancelled=None):
                 if app_id.endswith("-desktop"):
                     try: report(update_desktop(install, deadline))
                     except Exception: report(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
+                elif app_id == "antigravity-cli":
+                    report(mark_unreviewed(update_cli(install, deadline), agy_reviewed))
                 else:
                     report(update_cli(install, deadline))
     return {"results": results}
 
 
-def windows_interactive_apply(emit=None, cancelled=None):
+def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
     """The fixed separate InteractiveToken task owns GUI/terminal restarts.
 
     The task child writes its progress to a private file; this coordinator
     relays new events to emit() and forwards a cancel through a nonce-bound
-    cancel file the child polls between apps.
+    cancel file the child polls between apps. The task starts with fixed
+    arguments, so the Antigravity reviewed set travels in the request file.
     """
     emit = emit or (lambda event: None)
     cancelled = cancelled or (lambda: False)
@@ -419,7 +552,10 @@ def windows_interactive_apply(emit=None, cancelled=None):
         nonce = uuid.uuid4().hex
         for stale in (progress_path, cancel_path):
             stale.unlink(missing_ok=True)
-        write_private_json(request_path, {"nonce": nonce})
+        request = {"nonce": nonce}
+        if agy_reviewed is not None:
+            request["agyReviewed"] = sorted(agy_reviewed)
+        write_private_json(request_path, request)
         powershell("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; Start-ScheduledTask -TaskName 'CCS App Updates'", timeout=15)
         deadline = time.monotonic() + 16 * 60
         relayed, cancel_sent = 0, False
@@ -510,6 +646,25 @@ def stream_progress():
     return emit, stop.is_set
 
 
+def read_task_request(request_path):
+    """(nonce, Antigravity reviewed set) from the coordinator's request file.
+
+    The scheduled task starts with fixed arguments, so the reviewed set comes
+    only from a request carrying a valid nonce; anything else is None (held).
+    """
+    try:
+        request = json.loads(pathlib.Path(request_path).read_text(encoding="utf-8"))
+        value = request.get("nonce")
+        if not (isinstance(value, str) and len(value) == 32 and all(char in "0123456789abcdef" for char in value)):
+            return None, None
+        reviewed = request.get("agyReviewed")
+        if not isinstance(reviewed, list) or not all(isinstance(item, str) for item in reviewed):
+            return value, None
+        return value, parse_reviewed_versions(",".join(reviewed))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Inventory or explicitly update the fixed installed app set")
     mode = parser.add_mutually_exclusive_group()
@@ -517,19 +672,18 @@ def main():
     mode.add_argument("--apply", action="store_true")
     parser.add_argument("--platform", choices=("ubuntu", "mac", "windows"), required=True)
     parser.add_argument("--task-child", action="store_true")
+    # The dashboard passes the Antigravity CLI's reviewed versions (from its
+    # packaged release file); without it a packaged release file next to this
+    # helper is read, and without either the Antigravity update is held.
+    parser.add_argument("--agy-reviewed")
     args = parser.parse_args()
     native = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"
     if args.platform != native:
         parser.error("The selected platform must match this computer.")
     task_nonce = None
+    agy_reviewed = parse_reviewed_versions(args.agy_reviewed) if args.agy_reviewed is not None else read_release_versions()
     if args.task_child and args.apply and args.platform == "windows":
-        request_path = pathlib.Path.home() / ".ccs/app-updates/windows-task-request.json"
-        try:
-            value = json.loads(request_path.read_text(encoding="utf-8")).get("nonce")
-            if isinstance(value, str) and len(value) == 32 and all(char in "0123456789abcdef" for char in value):
-                task_nonce = value
-        except (OSError, ValueError):
-            pass
+        task_nonce, agy_reviewed = read_task_request(pathlib.Path.home() / ".ccs/app-updates/windows-task-request.json")
     emit = cancelled = None
     if args.apply and args.task_child and task_nonce:
         emit, cancelled = task_child_progress(task_nonce)
@@ -545,9 +699,9 @@ def main():
                 for app_id, install in installations.items()
             ]}
         elif args.platform == "windows" and not args.task_child:
-            payload = windows_interactive_apply(emit, cancelled)
+            payload = windows_interactive_apply(emit, cancelled, agy_reviewed)
         else:
-            payload = run_apply(args.platform, emit, cancelled)
+            payload = run_apply(args.platform, emit, cancelled, agy_reviewed)
     except UpdateFailure as error:
         payload = {"results": [result(app_id, args.platform, "failed", code=error.code) for app_id in APP_LABELS]}
     except Exception:

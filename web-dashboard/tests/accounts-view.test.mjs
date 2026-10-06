@@ -1194,6 +1194,53 @@ test('Update apps cancel and readiness states read as plain text', () => {
   assert.equal(done.hosts[1].items[0].tip, 'Unknown: this computer is not reachable.');
 });
 
+test('A held Antigravity update reads as a warning that names the build waiting for review', () => {
+  const row = (platform, extra = {}) => ({
+    appId: 'antigravity-cli',
+    appLabel: 'Antigravity CLI',
+    platform,
+    status: 'held',
+    previousVersion: '1.2.16',
+    version: '1.2.16',
+    message:
+      'Update held: the newest Antigravity version is waiting for a switching review; the reviewed version stays installed.',
+    ...extra,
+  });
+  const done = updateResultsView(
+    {
+      state: 'completed',
+      startedAt: at(-30),
+      finishedAt: at(-20),
+      activePlatform: null,
+      results: [
+        row('mac', { heldVersion: '1.3.0' }),
+        row('windows', { heldVersion: '1.3.0; id' }),
+        row('ubuntu', {
+          message:
+            'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
+        }),
+      ],
+    },
+    now
+  );
+  assert.equal(done.headRuns.map((r) => r.text).join(''), 'Last run 20m ago · 3 results, 3 held');
+  assert.deepEqual(
+    done.hosts.map((host) => host.items.map((i) => [i.app, i.result, i.tone])),
+    [
+      [['Antigravity CLI', 'Update held', 'warn']],
+      [['Antigravity CLI', 'Update held', 'warn']],
+      [['Antigravity CLI', 'Update held', 'warn']],
+    ]
+  );
+  assert.equal(
+    done.hosts[0].items[0].tip,
+    'Update held: Antigravity 1.3.0 is waiting for a switching review; 1.2.16 stays installed.'
+  );
+  // A held version that is not a plain version falls back to the fixed message.
+  assert.match(done.hosts[1].items[0].tip, /^Update held: the newest Antigravity version is waiting/);
+  assert.match(done.hosts[2].items[0].tip, /could not be checked/);
+});
+
 test('Update apps action-required rows read as needs-action warnings, never failures', () => {
   const result = (platform, appLabel, status, extra = {}) => ({
     appId: appLabel.toLowerCase().replace(/ /g, '-'),

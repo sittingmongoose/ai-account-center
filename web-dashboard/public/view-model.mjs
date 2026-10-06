@@ -1217,12 +1217,13 @@ export function updateViewModel(job, { done = false } = {}) {
     (row) => row.status === 'failed' || row.status === 'restart_failed'
   ).length;
   const action = results.filter((row) => row.status === 'action_required').length;
+  const held = results.filter((row) => row.status === 'held').length;
   const running = job?.state === 'running';
   const where = listWords(updateRunningHosts(job).map((id) => platformLabel(id)));
   const tip = running
     ? `Updating apps on ${where || 'your computers'} · running apps may restart`
     : job
-      ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}. Details under Accounts & Settings.`
+      ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}${held ? `, ${held} held` : ''}. Details under Accounts & Settings.`
       : 'Update the Claude and Codex apps and CLIs on Mac, Windows and Ubuntu';
   return {
     running,
@@ -1231,7 +1232,7 @@ export function updateViewModel(job, { done = false } = {}) {
     total: 21,
     tip,
     summary: job
-      ? `${results.length} results${failed ? ` · ${failed} failed` : ''}${action ? ` · ${action} need action` : ''}`
+      ? `${results.length} results${failed ? ` · ${failed} failed` : ''}${action ? ` · ${action} need action` : ''}${held ? ` · ${held} held` : ''}`
       : '',
   };
 }

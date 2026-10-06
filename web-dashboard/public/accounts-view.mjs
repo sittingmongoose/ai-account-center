@@ -736,6 +736,15 @@ const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],
   failed: ['Failed', 'crit'], restart_failed: ['Updated, restart failed', 'crit'],
   skipped: ['Skipped: cancelled', ''], action_required: ['Needs action', 'warn'],
+  held: ['Update held', 'warn'],
+};
+// A held Antigravity row names the build it did not install when the helper read it.
+const VERSION_WORD = /^\d+(?:\.[0-9A-Za-z-]+){1,5}(?:[+-][0-9A-Za-z.-]+)?$/;
+const heldTip = (row) => {
+  const held = text(row.heldVersion);
+  if (!held || held.length > 64 || !VERSION_WORD.test(held)) return text(row.message);
+  const kept = text(row.version);
+  return `Update held: Antigravity ${held} is waiting for a switching review${kept ? `; ${kept} stays installed` : ''}.`;
 };
 // An unknown row on an unreachable host names the computer; any other unknown stays a plain word.
 const unknownWord = (row, label) => {
@@ -774,6 +783,7 @@ export function updateResultsView(job, now = Date.now()) {
     const parts = [`${results.length} ${results.length === 1 ? 'result' : 'results'}`];
     if (failed) parts.push(`${failed} failed`);
     if (count('action_required')) parts.push(`${count('action_required')} need action`);
+    if (count('held')) parts.push(`${count('held')} held`);
     if (count('skipped')) parts.push(`${count('skipped')} skipped`);
     if (count('unknown')) parts.push(`${count('unknown')} unknown`);
     if (job.cancelRequested === true) parts.push('cancelled');
@@ -793,7 +803,7 @@ export function updateResultsView(job, now = Date.now()) {
       return {
         key: `${id}|${text(row.appId) || index}`, app: text(row.appLabel) || text(row.appId) || 'App',
         result: row.status === 'updated' && text(row.version) ? `Updated to ${row.version}` : word, tone, running: false,
-        tip: [text(row.message), versions].filter(Boolean).join(' · '),
+        tip: row.status === 'held' ? heldTip(row) : [text(row.message), versions].filter(Boolean).join(' · '),
       };
     });
     if (progress) {
