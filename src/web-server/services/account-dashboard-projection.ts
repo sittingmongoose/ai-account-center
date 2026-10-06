@@ -247,7 +247,7 @@ export function withClaudeSignIn(
   const live = account.status === 'ok';
   const message = live
     ? account.message
-    : `Sign-in needed on ${hosts}. Open shows the Claude sign-in window there; sign in once on that computer.`;
+    : `Sign-in needed on ${hosts}. Open shows the sign-in window.`;
   return {
     ...rest,
     signInNeeded: platforms,
