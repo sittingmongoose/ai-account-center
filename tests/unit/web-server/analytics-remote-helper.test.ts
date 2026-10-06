@@ -1057,3 +1057,199 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(response.version).toBe(1);
   });
 });
+
+describe.skipIf(!HAVE_PYTHON)('analytics remote helper: T3 Code homes', () => {
+  const filekey = (kind: string, file: string): string =>
+    createHash('sha256')
+      .update(kind, 'utf8')
+      .update(Buffer.from([0]))
+      .update(path.resolve(file), 'utf8')
+      .digest('hex');
+  const write = (relative: string, records: unknown[]): string => {
+    const file = path.join(home, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, records.map((record) => JSON.stringify(record)).join('\n') + '\n');
+    return file;
+  };
+  const link = (target: string, relative: string): void => {
+    const at = path.join(home, relative);
+    fs.mkdirSync(path.dirname(at), { recursive: true });
+    fs.symlinkSync(path.join(home, target), at);
+  };
+  const claudeLine = (mid: string, output: number, session = 's1') => ({
+    type: 'assistant',
+    uuid: `u-${mid}-${output}`,
+    requestId: `r-${mid}`,
+    sessionId: session,
+    timestamp: '2026-10-01T15:05:00Z',
+    message: {
+      id: mid,
+      model: 'claude-opus-5-5',
+      usage: { input_tokens: 10, output_tokens: output, cache_read_input_tokens: 100 },
+    },
+  });
+  const ID_A = '01a0f2a8-a754-7233-903b-569c995cf226';
+  const ID_NEW = '03c2f2a8-a754-7233-903b-569c995cf228';
+  const rollout = (id: string, input: number, output: number, at: string) => [
+    { timestamp: at, type: 'session_meta', payload: { id, model_provider: 'openai' } },
+    { timestamp: at, type: 'turn_context', payload: { model: 'gpt-6-sol' } },
+    {
+      timestamp: at,
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: { total_token_usage: { input_tokens: input, output_tokens: output } },
+      },
+    },
+  ];
+  const totals = (response: Record<string, unknown>, kind: string) => {
+    const rows = (response.rows as Array<Record<string, number | string>>).filter(
+      (row) => row.k === kind
+    );
+    return {
+      n: rows.reduce((sum, row) => sum + (row.n as number), 0),
+      i: rows.reduce((sum, row) => sum + (row.i as number), 0),
+      o: rows.reduce((sum, row) => sum + (row.o as number), 0),
+    };
+  };
+
+  it('counts each T3 Claude transcript once and re-reads a copy when its default changes', () => {
+    write('.claude/projects/p/s1.jsonl', [claudeLine('m1', 10), claudeLine('m1', 20)]);
+    const single = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    expect(totals(single, 'claude')).toEqual({ n: 1, i: 10, o: 20 });
+    // alpha: a new session plus a non-identical copy of s1; beta: a copy of alpha's session in a
+    // subagent folder; gamma: its projects folder links to the default root.
+    write('.claude-t3/alpha/projects/p/s2.jsonl', [
+      claudeLine('m2', 5, 's2'),
+      claudeLine('m2', 7, 's2'),
+    ]);
+    const copy = write('.claude-t3/alpha/projects/p/s1.jsonl', [claudeLine('m1', 20)]);
+    write('.claude-t3/beta/projects/q/x/subagents/s2.jsonl', [claudeLine('m2', 7, 's2')]);
+    fs.mkdirSync(path.join(home, '.claude-t3', 'gamma'), { recursive: true });
+    link('.claude/projects', '.claude-t3/gamma/projects');
+    // A settings home outside ~/.claude-t3.
+    write('elsewhere/claude-x/projects/r/s3.jsonl', [claudeLine('m3', 9, 's3')]);
+    fs.mkdirSync(path.join(home, '.t3', 'userdata'), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, '.t3', 'userdata', 'settings.json'),
+      JSON.stringify({
+        providerInstances: {
+          x: { driver: 'claudeAgent', config: { homePath: '~/elsewhere/claude-x' } },
+        },
+      })
+    );
+    const first = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    expect((first.kinds as Record<string, { state: string }>).claude.state).toBe('ok');
+    expect(totals(first, 'claude')).toEqual({ n: 3, i: 30, o: 36 });
+    expect(JSON.stringify(first)).not.toContain(home);
+    // A new response in the default s1 changes the T3 copy's print, so the copy is read again
+    // (and still adds nothing); unchanged T3 files are not.
+    const prints = (first.kinds as Record<string, { fingerprints: Record<string, unknown> }>).claude
+      .fingerprints;
+    fs.appendFileSync(
+      path.join(home, '.claude/projects/p/s1.jsonl'),
+      JSON.stringify(claudeLine('m4', 3)) + '\n'
+    );
+    const second = runHelper({
+      kinds: ['claude'],
+      minDateMs: MIN_DATE,
+      fingerprints: { claude: prints },
+    });
+    const rowsByFile = new Set((second.rows as Array<{ f: string }>).map((row) => row.f));
+    expect(rowsByFile.has(filekey('claude', path.join(home, '.claude/projects/p/s1.jsonl')))).toBe(
+      true
+    );
+    expect(rowsByFile.size).toBe(1);
+    const copyKey = filekey('claude', fs.realpathSync(copy));
+    const after = (second.kinds as Record<string, { fingerprints: Record<string, unknown> }>).claude
+      .fingerprints;
+    expect(after[copyKey]).toBeDefined();
+    expect(after[copyKey]).not.toEqual(prints[copyKey]);
+  });
+
+  it('adds nothing for Codex shadow homes linked to ~/.codex/sessions: totals equal the single home', () => {
+    const day = '.codex/sessions/2026/10/01';
+    write(
+      `${day}/rollout-2026-10-01T14-00-00-${ID_A}.jsonl`,
+      rollout(ID_A, 100, 10, '2026-10-01T14:00:00Z')
+    );
+    const single = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
+    expect(totals(single, 'codex')).toEqual({ n: 1, i: 100, o: 10 });
+    for (const account of ['alpha', 'beta', 'gamma'])
+      link('.codex/sessions', `.codex-t3/${account}/sessions`);
+    link('.codex/sessions', '.t3/userdata/providers/codex/codex_1/shadow/sessions');
+    const linked = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
+    expect(totals(linked, 'codex')).toEqual(totals(single, 'codex'));
+    // A real shadow folder of links, a hard link, a byte copy and a link loop, plus a new session.
+    const shadow = '.codex-t3/delta/sessions';
+    link('.codex/sessions/2026', `${shadow}/2026`);
+    const original = path.join(home, `${day}/rollout-2026-10-01T14-00-00-${ID_A}.jsonl`);
+    fs.mkdirSync(path.join(home, shadow, 'kept'), { recursive: true });
+    fs.linkSync(original, path.join(home, shadow, 'kept', path.basename(original)));
+    fs.copyFileSync(original, path.join(home, shadow, 'kept', `rollout-copy-${ID_A}.jsonl`));
+    link(shadow, `${shadow}/kept/loop`);
+    write(
+      `${shadow}/own/rollout-2026-10-01T16-00-00-${ID_NEW}.jsonl`,
+      rollout(ID_NEW, 500, 50, '2026-10-01T16:00:00Z')
+    );
+    const mixed = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
+    expect(mixed.truncated).toBe(false);
+    expect(totals(mixed, 'codex')).toEqual({ n: 2, i: 600, o: 60 });
+  });
+
+  it('never follows links outside T3 homes: a linked folder under a default root is not read', () => {
+    write('.claude/projects/p/s1.jsonl', [claudeLine('m1', 10)]);
+    write('outside/p/s9.jsonl', [claudeLine('m9', 99)]);
+    link('outside', '.claude/projects/linked-outside');
+    const response = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    expect(totals(response, 'claude')).toEqual({ n: 1, i: 10, o: 10 });
+  });
+
+  it('follows a link inside a T3 root once, and never a link out of it', () => {
+    write('.claude/projects/p/s1.jsonl', [claudeLine('m1', 10)]);
+    write('.claude-t3/alpha/projects/p/s2.jsonl', [claudeLine('m2', 5, 's2')]);
+    write('.claude-t3/alpha/projects/kept/s3.jsonl', [claudeLine('m3', 7, 's3')]);
+    // Inside: a relative and an absolute link to the same folder, a file link and a loop.
+    fs.symlinkSync('../kept', path.join(home, '.claude-t3/alpha/projects/p/kept-rel'));
+    link('.claude-t3/alpha/projects/kept', '.claude-t3/alpha/projects/kept-abs');
+    link('.claude-t3/alpha/projects/kept/s3.jsonl', '.claude-t3/alpha/projects/file-link.jsonl');
+    link('.claude-t3/alpha/projects', '.claude-t3/alpha/projects/kept/loop');
+    // Outside: a folder beside the home (like a NAS mount), ~/PM-Experiments, a sibling account,
+    // a relative link up and out, and a file link out.
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-t3-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'o.jsonl'), JSON.stringify(claudeLine('m9', 99)) + '\n');
+      fs.symlinkSync(outside, path.join(home, '.claude-t3/alpha/projects/to-mount'));
+      write('PM-Experiments/exp/sessions/x.jsonl', [claudeLine('m8', 88)]);
+      link('PM-Experiments/exp', '.claude-t3/alpha/projects/to-experiments');
+      fs.symlinkSync('../../../PM-Experiments', path.join(home, '.claude-t3/alpha/projects/up'));
+      link('PM-Experiments/exp/sessions/x.jsonl', '.claude-t3/alpha/projects/p/file-out.jsonl');
+      write('.claude-t3/beta/projects/q/t.jsonl', [claudeLine('m4', 3, 's4')]);
+      link('.claude-t3/beta/projects', '.claude-t3/alpha/projects/to-beta');
+      const response = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+      expect(response.truncated).toBe(false);
+      // s1 (default) + s2 + s3 once (alpha) + t (beta, as its own root) = 4; nothing from outside.
+      expect(totals(response, 'claude')).toEqual({ n: 4, i: 40, o: 25 });
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a deeply nested T3 settings file instead of failing every tool', () => {
+    write('.claude/projects/p/s1.jsonl', [claudeLine('m1', 10)]);
+    writeFixtures();
+    fs.mkdirSync(path.join(home, '.t3', 'userdata'), { recursive: true });
+    // About 400 KB, under the 1 MB settings cap: json.loads raises RecursionError on it.
+    const depth = 200_000;
+    fs.writeFileSync(
+      path.join(home, '.t3', 'userdata', 'settings.json'),
+      `{"providerInstances":${'['.repeat(depth)}${']'.repeat(depth)}}`
+    );
+    const response = runHelper({ kinds: ['claude', 'codex', 'omp'], minDateMs: MIN_DATE });
+    const kinds = response.kinds as Record<string, { state: string }>;
+    expect(kinds.claude.state).toBe('ok');
+    expect(kinds.codex.state).toBe('not_installed');
+    expect(kinds.omp.state).toBe('ok');
+    expect(totals(response, 'claude')).toEqual({ n: 1, i: 10, o: 10 });
+  });
+});

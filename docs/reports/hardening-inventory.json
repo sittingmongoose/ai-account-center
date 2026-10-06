@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1193,
-    "filesAffected": 119,
-    "hotpathOccurrences": 560,
-    "hotpathFilesAffected": 68,
+    "totalOccurrences": 1208,
+    "filesAffected": 120,
+    "hotpathOccurrences": 575,
+    "hotpathFilesAffected": 69,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -26,7 +26,7 @@
       },
       {
         "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 35,
+        "count": 36,
         "calls": [
           "chmodSync",
           "existsSync",
@@ -265,7 +265,7 @@
       },
       {
         "file": "src/web-server/services/account-analytics-activity.ts",
-        "count": 35,
+        "count": 36,
         "calls": [
           "chmodSync",
           "existsSync",
@@ -604,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 37,
-      "totalSourceFiles": 404,
-      "coverageRatio": 0.0916,
+      "totalSourceFiles": 405,
+      "coverageRatio": 0.0914,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 149,
+          "count": 150,
           "withLogger": 21
         },
         {
@@ -756,11 +756,11 @@
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 2269
+          "loc": 2306
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1398
+          "loc": 1432
         },
         {
           "file": "src/web-server/model-pricing.ts",

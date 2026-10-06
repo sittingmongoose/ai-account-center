@@ -209,6 +209,28 @@ describe('experiment usage root discovery', () => {
     expect(view.roots.codex).toEqual([]);
   });
 
+  it('never follows a symlink to a folder outside the home (a NAS link under PM-Experiments)', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-exp-outside-'));
+    try {
+      const rollout = path.join(outside, 'codex-home/sessions/2026/10/01/rollout-x.jsonl');
+      fs.mkdirSync(path.dirname(rollout), { recursive: true });
+      fs.writeFileSync(rollout, lines(codexMeta));
+      const claude = path.join(outside, 'jobs/J1/sessions/a.jsonl');
+      fs.mkdirSync(path.dirname(claude), { recursive: true });
+      fs.writeFileSync(claude, lines(transcript));
+      fs.symlinkSync(outside, path.join(base, 'nas-link'));
+      fs.mkdirSync(path.join(base, 'exp'), { recursive: true });
+      fs.symlinkSync(path.join(outside, 'jobs'), path.join(base, 'exp', 'jobs-link'));
+      write('exp/real/sessions/a.jsonl', lines(transcript));
+      await scanAll();
+      const view = readExperimentRoots(cacheDir, { homeDir: home });
+      expect(view.roots.claude).toEqual([path.join(base, 'exp/real/sessions')]);
+      expect(view.roots.codex).toEqual([]);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it('reads a byte-identical zcode copy once', async () => {
     const original = zcodeDb('exp/a/private/zc/cli/db/db.sqlite', 3);
     const copy = path.join(base, 'exp/a/native/zc-copy/cli/db/db.sqlite');

@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1193 |
-| Sync fs files affected (all) | 119 |
-| Sync fs occurrences (runtime hotpaths) | 560 |
-| Sync fs files affected (runtime hotpaths) | 68 |
+| Sync fs occurrences (all) | 1208 |
+| Sync fs files affected (all) | 120 |
+| Sync fs occurrences (runtime hotpaths) | 575 |
+| Sync fs files affected (runtime hotpaths) | 69 |
 | Legacy shim markers | 198 |
 | Legacy shim files affected | 75 |
 
@@ -18,7 +18,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | Sync Calls | API Names |
 |---|---:|---|
 | `src/web-server/usage/account-activity-collector.ts` | 49 | chmodSync, closeSync, existsSync, mkdirSync, opendirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync |
-| `src/web-server/services/account-analytics-activity.ts` | 35 | chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync |
+| `src/web-server/services/account-analytics-activity.ts` | 36 | chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync |
 | `src/management/shared-manager/diverged-file-adopter.ts` | 29 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/management/shared-manager/migrations.ts` | 25 | copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
@@ -57,7 +57,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 37/404 |
+| files with createLogger | 37/405 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
 | files > 400 LOC | 47 |
 | files > 600 LOC | 20 |
@@ -86,8 +86,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | LOC |
 |---|---:|
-| `src/web-server/usage/account-activity-collector.ts` | 2269 |
-| `src/web-server/services/account-analytics-activity.ts` | 1398 |
+| `src/web-server/usage/account-activity-collector.ts` | 2306 |
+| `src/web-server/services/account-analytics-activity.ts` | 1432 |
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1057 |

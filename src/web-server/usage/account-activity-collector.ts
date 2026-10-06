@@ -25,6 +25,7 @@ import {
 } from './zcode-native-usage-collector';
 import { analyticsSessionKey } from './analytics-session-key';
 import { EXPERIMENT_CLAUDE_ROOT_DEPTH } from './experiment-usage-roots';
+import { filesUnderT3Root } from './t3-usage-roots';
 import type { AccountAnalyticsActivityProvider } from '../services/account-analytics-types';
 import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
@@ -223,13 +224,7 @@ function filesUnder(
   /** Folders deeper than this are outside the root's scope: skipped without counting a failure. */
   scopeDepth?: number
 ): string[] {
-  const ceiling = (value: number | undefined, maximum: number): number =>
-    Number.isSafeInteger(value) && (value as number) >= 1
-      ? Math.min(value as number, maximum)
-      : maximum;
-  const maxDepth = ceiling(limits?.maxDepth, MAX_DEPTH);
-  const maxDirectories = ceiling(limits?.maxDirectories, MAX_DIRECTORIES);
-  const maxEntries = ceiling(limits?.maxEntries, MAX_ENTRIES);
+  const { maxDepth, maxDirectories, maxEntries } = walkCeilings(limits);
   const result: string[] = [];
   const pending = [{ directory: root, depth: 0 }];
   let visitedDirectories = 0;
@@ -276,6 +271,22 @@ function filesUnder(
     }
   }
   return result;
+}
+/** The traversal bounds of filesUnder, for the T3 home walk (filesUnderT3Root). */
+function walkCeilings(limits: AccountActivityScanOptions['traversalLimits']): {
+  maxDepth: number;
+  maxDirectories: number;
+  maxEntries: number;
+} {
+  const ceiling = (value: number | undefined, maximum: number): number =>
+    Number.isSafeInteger(value) && (value as number) >= 1
+      ? Math.min(value as number, maximum)
+      : maximum;
+  return {
+    maxDepth: ceiling(limits?.maxDepth, MAX_DEPTH),
+    maxDirectories: ceiling(limits?.maxDirectories, MAX_DIRECTORIES),
+    maxEntries: ceiling(limits?.maxEntries, MAX_ENTRIES),
+  };
 }
 function fingerprint(fd: number, start: number, length: number): string {
   const buffer = Buffer.alloc(length);
@@ -1902,6 +1913,9 @@ function saveLastResult(directory: string, result: UsageWorkerResult): void {
  *   a first run, so a copy is never counted and the totals never dip for a refresh.
  * - The per-response collapse and the open-response rule (R2-1) apply exactly as in the default
  *   reader: readBatch is shared.
+ * - T3 Code homes (`homeRoots`, t3-usage-roots.ts) join the experiment files: read in full depth,
+ *   their symlinks followed except into the default roots, and every real file (device and inode)
+ *   read once, so a Codex shadow home linked into `~/.codex` adds nothing.
  */
 async function collectExperimentActivity(
   request: Extract<UsageWorkerRequest, { kind: 'claude' | 'codex' | 'muse' }>,
@@ -1957,6 +1971,20 @@ async function collectExperimentActivity(
       seen
     );
   }
+  // T3 Code homes: full depth, following their links, never into a root of this tool already read.
+  for (const root of request.kind === 'muse' ? [] : (request.homeRoots ?? [])) {
+    if (Date.now() >= deadline) {
+      issues.failed++;
+      break;
+    }
+    const walked = filesUnderT3Root(root, (name) => wantedFile(kind, name), references, {
+      deadline,
+      ...walkCeilings(options.traversalLimits),
+      maxFiles: MAX_FILES,
+    });
+    if (walked.truncated) issues.failed++;
+    statFiles(walked.files, experimentFiles, seen);
+  }
   const referenceFiles: Array<{ file: string; stats: fs.Stats }> = [];
   let referenceComplete = true;
   const sessions =
@@ -1977,7 +2005,16 @@ async function collectExperimentActivity(
       seen
     );
   }
-  const scanned = dropExactDuplicateFiles(experimentFiles);
+  // One real file is read once: a hard link to a default log, or a second path to the same file
+  // (a T3 shadow home), is the default log or the first copy already listed.
+  const identities = new Set(referenceFiles.map((item) => `${item.stats.dev}:${item.stats.ino}`));
+  const distinct = experimentFiles.filter((item) => {
+    const identity = `${item.stats.dev}:${item.stats.ino}`;
+    if (identities.has(identity)) return false;
+    identities.add(identity);
+    return true;
+  });
+  const scanned = dropExactDuplicateFiles(distinct);
   scanned.sort(
     (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
   );
@@ -2102,7 +2139,7 @@ export async function collectAccountActivity(
 ): Promise<UsageWorkerResult> {
   if (
     (request.kind === 'claude' || request.kind === 'codex' || request.kind === 'muse') &&
-    request.experimentRoots
+    (request.experimentRoots || (request.kind !== 'muse' && request.homeRoots))
   )
     return collectExperimentActivity(request, options);
   const roots =
