@@ -164,13 +164,18 @@ export function parseJsonlMappedUsageLine(
   if (typeof cost === 'number' && Number.isFinite(cost) && cost > 0) entry.costUsd = cost;
   return entry;
 }
-async function filesUnder(
+/**
+ * The candidate log files under one root. Like the reads, the walk is synchronous on purpose: it
+ * runs on the collector's own worker thread, so several collectors walking at once never queue
+ * on the process's shared libuv pool, which the server's own file work also needs.
+ */
+function filesUnder(
   root: string,
   kind: string,
   issues: { failed: number },
   deadline: number,
   limits: AccountActivityScanOptions['traversalLimits']
-): Promise<string[]> {
+): string[] {
   const ceiling = (value: number | undefined, maximum: number): number =>
     Number.isSafeInteger(value) && (value as number) >= 1
       ? Math.min(value as number, maximum)
@@ -193,19 +198,30 @@ async function filesUnder(
     try {
       // Streaming iteration also bounds directories containing many irrelevant
       // entries; neither empty directories nor non-JSONL files evade the cap.
-      const directory = await fs.promises.opendir(current.directory);
-      for await (const item of directory) {
-        if (Date.now() >= deadline || visitedEntries >= maxEntries || result.length >= MAX_FILES) {
-          issues.failed++;
-          return result;
-        }
-        visitedEntries++;
-        const file = path.join(current.directory, item.name);
-        if (item.isDirectory()) {
-          if (current.depth >= maxDepth || pending.length + visitedDirectories >= maxDirectories) {
+      const directory = fs.opendirSync(current.directory);
+      try {
+        for (let item = directory.readSync(); item !== null; item = directory.readSync()) {
+          if (
+            Date.now() >= deadline ||
+            visitedEntries >= maxEntries ||
+            result.length >= MAX_FILES
+          ) {
             issues.failed++;
-          } else pending.push({ directory: file, depth: current.depth + 1 });
-        } else if (item.isFile() && wantedFile(kind, item.name)) result.push(file);
+            return result;
+          }
+          visitedEntries++;
+          const file = path.join(current.directory, item.name);
+          if (item.isDirectory()) {
+            if (
+              current.depth >= maxDepth ||
+              pending.length + visitedDirectories >= maxDirectories
+            ) {
+              issues.failed++;
+            } else pending.push({ directory: file, depth: current.depth + 1 });
+          } else if (item.isFile() && wantedFile(kind, item.name)) result.push(file);
+        }
+      } finally {
+        directory.closeSync();
       }
     } catch {
       issues.failed++;
@@ -1134,13 +1150,7 @@ export async function collectAccountActivity(
   // the window (a complete, empty scan), never an unavailable source.
   let sawAnyFile = false;
   for (const root of roots) {
-    for (const file of await filesUnder(
-      root,
-      request.kind,
-      issues,
-      deadline,
-      options.traversalLimits
-    )) {
+    for (const file of filesUnder(root, request.kind, issues, deadline, options.traversalLimits)) {
       sawAnyFile = true;
       if (Date.now() >= deadline) {
         issues.failed++;

@@ -364,15 +364,21 @@ export function loadAccountAnalyticsWorker(
       settled = true;
       clearTimeout(timer);
       worker.removeAllListeners();
-      void worker.terminate().catch(() => {});
-      if (
-        data &&
+      const bounded =
+        !!data &&
         [data.daily, data.hourly, data.monthly, data.session].every(
           (rows) => Array.isArray(rows) && rows.length <= MAX_ROWS
-        )
-      )
-        resolve(data);
-      else reject(new CCSError('Local analytics worker could not return bounded usage history'));
+        );
+      // Settle only once the thread has stopped: a worker cut off by its time bound must never
+      // still be writing a checkpoint when the next collection reads the same files.
+      void worker
+        .terminate()
+        .catch(() => 0)
+        .then(() => {
+          if (bounded && data) resolve(data);
+          else
+            reject(new CCSError('Local analytics worker could not return bounded usage history'));
+        });
     };
     const timer = setTimeout(() => finish(), Math.min(MAX_WORKER_TIME_MS, Math.max(1, budgetMs)));
     worker.once('message', (response: UsageWorkerResponse) =>
