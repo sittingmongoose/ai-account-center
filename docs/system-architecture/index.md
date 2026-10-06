@@ -66,8 +66,12 @@ Cursor is a fixed "no local usage log" entry, being the one tool that keeps no
 local usage log on any host. Antigravity is read by the same packaged helper on
 every host, the VM included ([reader](../../src/web-server/usage/antigravity-native-usage-collector.ts)):
 a port of T3 Code's reader over the conversation databases under `~/.gemini`,
-`~/.config/antigravity` and T3 Code's Antigravity instance folders, opened
-`mode=ro`, usage fields only, each record once across databases and copies.
+`~/.config/antigravity` and T3 Code's Antigravity instance folders, usage
+fields only, each record once across databases and copies. A live database
+opens `mode=ro` (a WAL reader updates its read marks in the existing `-shm`,
+nothing else); a WAL database closed cleanly, with no `-wal` file, opens
+immutable, so the read never creates `-wal` or `-shm` files, and a read that a
+writer overlapped is dropped and done again on the next scan.
 
 [Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts),
 [guarded activation/rollback](../../src/codex-auth/activate-codex-profile.ts) and idle-only

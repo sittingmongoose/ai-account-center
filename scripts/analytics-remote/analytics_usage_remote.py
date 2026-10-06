@@ -49,7 +49,8 @@ whose records carry no session id contributes no session aggregate.
 
 "antigravity" reads every conversation database T3 Code's usage reader reads
 (_agy_dirs: ~/.gemini stores, ~/.config/antigravity, T3's Antigravity instance
-folders) with mode=ro opens, never immutable, whatever immutableSqlite says. A
+folders) whatever immutableSqlite says: mode=ro for a live database, immutable
+only for a WAL database closed cleanly, so no -wal or -shm file is created. A
 record counts once across databases and copies, so the kind has one store
 fingerprint over all of them: any change re-reads them together, and its rows
 and session rows carry the store key. "unreadable": true says a database or
@@ -1940,6 +1941,9 @@ AGY_DIRS = ("antigravity", "antigravity-cli", "antigravity-ide", "antigravity-ba
 AGY_MAX_DBS = 2000
 AGY_MAX_CANDIDATES = 200000
 AGY_MAX_DEPTH = 32
+# A database past this size is not read (and the kind says some could not be),
+# so one huge database cannot hold up the other tools sharing the helper call.
+AGY_MAX_DB_BYTES = 1024 * 1024 * 1024
 AGY_SAFE_INTEGER = 2 ** 53 - 1
 AGY_MODEL_IDS = {
     246: "gemini-2.5-pro", 312: "gemini-2.5-flash", 313: "gemini-2.5-flash-thinking",
@@ -1963,6 +1967,18 @@ AGY_UNKNOWN = "antigravity-unknown"
 
 class _AgyError(Exception):
     """A database T3's reader refuses as a whole: it contributes nothing."""
+
+
+class _AgyNotConversation(Exception):
+    """A valid SQLite database without Antigravity's usage tables: skipped quietly."""
+
+
+class _AgyRetry(Exception):
+    """A writer opened a cleanly closed database during an immutable read: read it next scan."""
+
+
+class _AgyDeadline(Exception):
+    """The helper's deadline passed in the middle of one database."""
 
 
 class _AgyBig(int):
@@ -2094,28 +2110,64 @@ def _agy_blob(value):
     return memoryview(value)
 
 
-def _agy_uri(path):
+def _agy_uri(path, immutable=False):
     text = os.path.abspath(path).replace("\\", "/")
     if not text.startswith("/"):
         text = "/" + text
-    return "file://%s?mode=ro" % urllib.parse.quote(text, safe="/:")
+    return "file://%s?mode=ro%s" % (
+        urllib.parse.quote(text, safe="/:"),
+        "&immutable=1" if immutable else "",
+    )
 
 
-def _agy_read_db(path, fallback_ms):
+def _agy_identity(path):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+
+
+def _agy_closed_wal(path):
+    """A WAL-mode database (header bytes 18-19 are 2) with no -wal file: closed
+    cleanly, so nothing waits in a log. A mode=ro open would create -wal and
+    -shm files next to it; an immutable open reads the same rows and creates none."""
+    if os.path.exists(path + "-wal"):
+        return False
+    try:
+        with open(path, "rb") as handle:
+            header = handle.read(20)
+    except OSError:
+        return False
+    return len(header) == 20 and header[:16] == b"SQLite format 3\x00" and header[18:20] == b"\x02\x02"
+
+
+def _agy_read_db(path, fallback_ms, expired=lambda: False):
     """T3's readDatabase: the usage candidates of one conversation database.
 
-    mode=ro (never immutable=1, which can misread a live write-ahead log), one
-    short read transaction, a 100 ms busy wait, no writes and no checkpoint.
+    One short read transaction with a 100 ms busy wait; it never writes the
+    database or its log and never checkpoints. A live database opens mode=ro,
+    never immutable=1, which can misread a live write-ahead log; like every WAL
+    reader it updates its read marks in the existing -shm. A WAL database closed
+    cleanly (no -wal) opens immutable, so the read creates no -wal or -shm file;
+    if a writer opened it meanwhile (a -wal appeared, or the file changed), the
+    read is dropped and the next scan reads it mode=ro.
     """
-    connection = sqlite3.connect(_agy_uri(path), uri=True, timeout=0.1, isolation_level=None)
+    closed = _agy_closed_wal(path)
+    before = _agy_identity(path) if closed else None
+    connection = sqlite3.connect(
+        _agy_uri(path, immutable=closed), uri=True, timeout=0.1, isolation_level=None
+    )
     try:
+        # The deadline also bounds a single database: the query aborts once it passes.
+        connection.set_progress_handler(lambda: 1 if expired() else 0, 20000)
         connection.execute("PRAGMA busy_timeout = 100")
         connection.execute("BEGIN")
         tables = set(
             row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         )
         if "gen_metadata" not in tables and "steps" not in tables:
-            raise _AgyError("missing usage tables")
+            raise _AgyNotConversation("missing usage tables")
         # The metadata columns only, fetched in one snapshot; parsing waits until
         # the connection is closed, so no lock is held longer than the reads.
         raw_generations = raw_trajectory = raw_steps = ()
@@ -2133,10 +2185,14 @@ def _agy_read_db(path, fallback_ms):
             ).fetchall()
     finally:
         connection.close()
+    if closed and (os.path.exists(path + "-wal") or _agy_identity(path) != before):
+        raise _AgyRetry("a writer opened the database during the read")
 
     def entries(rows, step):
         found = []
-        for idx, blob in rows:
+        for index, (idx, blob) in enumerate(rows):
+            if index % 256 == 255 and expired():
+                raise _AgyDeadline("deadline")
             if isinstance(idx, bool) or not isinstance(idx, (int, float)):
                 raise _AgyError("invalid metadata index")
             found.append((idx, _agy_metadata(_agy_blob(blob), step)))
@@ -2267,7 +2323,9 @@ def _agy_dirs(home, env):
     <stateDir>/providers/antigravity/<sha256(id)>/antigravity-acp. A root with a
     `conversations` folder is read there only. Each real folder once."""
     listed = [part.strip() for part in (env.get("ANTIGRAVITY_DATA_DIR") or "").split(",")]
+    # A relative entry is ignored (the server's presence check ignores it too).
     listed = [os.path.expanduser(part) for part in listed if part]
+    listed = [part for part in listed if os.path.isabs(part) or re.match(r"^[A-Za-z]:[\\/]", part)]
     if not listed:
         listed = [os.path.join(home, ".gemini", name) for name in AGY_DIRS]
         listed.append(os.path.join(home, ".config", "antigravity"))
@@ -2386,10 +2444,21 @@ def _collect_antigravity(collector, home, env):
             collector.truncated = True
             return "ok"
         try:
-            candidates, names = _agy_read_db(path, os.stat(path).st_mtime * 1000.0)
+            stat = os.stat(path)
+            if stat.st_size > AGY_MAX_DB_BYTES:
+                state["unreadable"] += 1
+                continue
+            candidates, names = _agy_read_db(path, stat.st_mtime * 1000.0, collector.expired)
+        except _AgyNotConversation:
+            # Another app's database in a walked folder holds no usage (T3 flags it; totals agree).
+            continue
         except Exception:
-            # Busy past the wait, damaged, or not a conversation database: T3
-            # drops the whole database too. One deleted since the walk is gone.
+            if collector.expired():
+                collector.truncated = True
+                return "ok"
+            # Busy past the wait, damaged, or opened by a writer mid-read: T3
+            # drops the whole database too, and the next scan reads it again.
+            # One deleted since the walk is gone.
             if os.path.exists(path):
                 state["unreadable"] += 1
             continue
@@ -2640,7 +2709,7 @@ def main():
                 collector, home, env, immutable, extra_roots.get("zcode", ())
             )
         elif kind == "antigravity":
-            # Always mode=ro, whatever immutableSqlite says (see _agy_read_db).
+            # Its own open modes, whatever immutableSqlite says (see _agy_read_db).
             states[kind] = _collect_antigravity(collector, home, env)
         # A cap that outlives the kind that hit it (row_cap) cuts every later kind
         # short too, and a kind that ends past the deadline never flipped the flag

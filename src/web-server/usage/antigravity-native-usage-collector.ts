@@ -6,9 +6,10 @@
  * (`scripts/analytics-remote/analytics_usage_remote.py`, `_collect_antigravity`) ports T3 Code's reader
  * (`apps/server/src/usage/antigravityUsageReader.ts`, tag v0.0.46-nightly.20261006.2735) and reads the
  * same roots on every host: `$ANTIGRAVITY_DATA_DIR`, else the `~/.gemini` stores and `~/.config/antigravity`,
- * plus each T3 Code instance's `~/.t3/userdata/providers/antigravity/<sha256(id)>/antigravity-acp`. It opens
- * databases `mode=ro` (never immutable), reads only the usage fields, and counts a record once across
- * databases and copies by its own ids. The VM runs it locally, like zcode; the Mac and Windows run the same
+ * plus each T3 Code instance's `~/.t3/userdata/providers/antigravity/<sha256(id)>/antigravity-acp`. It never
+ * writes a database or its log: a live database opens `mode=ro` (like any WAL reader it updates read marks in the
+ * existing `-shm`), and a WAL database closed cleanly opens immutable, so no `-wal` or `-shm` file is created. It
+ * reads only the usage fields, and counts a record once across databases and copies by its own ids. The VM runs it locally, like zcode; the Mac and Windows run the same
  * bytes over ssh. Only model names, hour buckets, token sums and hashed session keys come back.
  */
 import { execFileSync } from 'child_process';

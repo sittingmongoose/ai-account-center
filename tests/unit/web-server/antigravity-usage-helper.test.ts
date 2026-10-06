@@ -131,6 +131,52 @@ function byModel(response: HelperResponse): Record<string, number[]> {
   return result;
 }
 
+/**
+ * Runs Python with the helper loaded as `helper` (its main() not run), then `code`; prints what `code` prints.
+ * Used to stand in for a writer that opens a database mid-read, or to shrink a bound.
+ */
+function runWithHelper(
+  code: string,
+  args: string[] = [],
+  env: Record<string, string> = {}
+): string {
+  const base = { ...process.env };
+  delete base.ANTIGRAVITY_DATA_DIR;
+  const driver = [
+    'import importlib.util,json,os,sys',
+    "spec=importlib.util.spec_from_file_location('helper',sys.argv[1])",
+    'helper=importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(helper)',
+    code,
+  ].join('\n');
+  return execFileSync('python3', ['-c', driver, HELPER, ...args], {
+    input: JSON.stringify({ kinds: ['antigravity'], minDateMs: 0 }),
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { ...base, HOME: home, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', ...env },
+  });
+}
+
+/** A WAL-mode database that its writer closed cleanly: no -wal or -shm file is left. */
+function closedWalConversation(relative: string, input: number): string {
+  const file = path.join(home, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new Database(file);
+  try {
+    db.run('PRAGMA journal_mode = WAL');
+    db.run('CREATE TABLE steps (idx INTEGER, metadata BLOB)');
+    db.query('INSERT INTO steps VALUES (?, ?)').run(
+      0,
+      new Uint8Array(
+        protoBytes(9, [...protoNumber(1, 246), ...protoNumber(2, input), ...protoText(11, 'c-0')])
+      )
+    );
+  } finally {
+    db.close();
+  }
+  return file;
+}
+
 const hourOf = (ms: number) => new Date(ms).toISOString().slice(0, 13).replace('T', ' ') + ':00';
 
 describe.skipIf(!HAVE_PYTHON)('Antigravity usage in the analytics helper', () => {
@@ -447,6 +493,88 @@ describe.skipIf(!HAVE_PYTHON)('Antigravity usage in the analytics helper', () =>
     } finally {
       writer.close();
     }
+  });
+
+  it('reads a cleanly closed WAL database without creating -wal or -shm files', () => {
+    const file = closedWalConversation(path.join(CONVERSATIONS, 'clean.db'), 12);
+    const listing = () => fs.readdirSync(path.dirname(file)).sort();
+    expect(listing()).toEqual(['clean.db']);
+    expect(fs.readFileSync(file).subarray(18, 20)).toEqual(Buffer.from([2, 2]));
+    const digest = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    const response = runHelper();
+    expect(byModel(response)).toEqual({ 'gemini-2.5-pro': [1, 12, 0, 0, 0] });
+    expect(response.kinds.antigravity.unreadable).toBeUndefined();
+    expect(listing()).toEqual(['clean.db']);
+    expect(createHash('sha256').update(fs.readFileSync(file)).digest('hex')).toBe(digest);
+  });
+
+  it('drops a cleanly closed database a writer opens mid-read, and reads it next scan', () => {
+    const file = closedWalConversation(path.join(CONVERSATIONS, 'race.db'), 9);
+    // Stand in for Antigravity opening the database between the check and the read: its -wal appears.
+    const raced = JSON.parse(
+      runWithHelper(
+        [
+          'real=helper.sqlite3.connect',
+          'def connect(target,*a,**k):',
+          '    if "immutable=1" in target: open(sys.argv[2]+"-wal","wb").close()',
+          '    return real(target,*a,**k)',
+          'helper.sqlite3.connect=connect',
+          'helper.main()',
+        ].join('\n'),
+        [file]
+      )
+    ) as HelperResponse;
+    expect(byModel(raced)).toEqual({});
+    expect(raced.kinds.antigravity.unreadable).toBe(true);
+    // The store print is withheld, so the next scan reads again: now mode=ro, with the -wal present.
+    expect(raced.kinds.antigravity.fingerprints).toEqual({});
+    expect(fs.existsSync(`${file}-wal`)).toBe(true);
+    expect(byModel(runHelper())).toEqual({ 'gemini-2.5-pro': [1, 9, 0, 0, 0] });
+  });
+
+  it('bounds one database by size and by the deadline, and skips databases without usage tables', () => {
+    const file = closedWalConversation(path.join('store', 'a.db'), 3);
+    const big = conversation(
+      path.join('big', 'b.db'),
+      {
+        steps: Array.from({ length: 600 }, (_, idx) =>
+          protoBytes(9, [
+            ...protoNumber(1, 246),
+            ...protoNumber(2, 1),
+            ...protoText(11, `b-${idx}`),
+          ])
+        ),
+      },
+      ['steps']
+    );
+    // A valid SQLite database of another app in a walked root holds no usage: skipped quietly.
+    const other = new Database(path.join(home, 'store', 'other.db'));
+    other.run('CREATE TABLE notes (body TEXT)');
+    other.close();
+    const env = { ANTIGRAVITY_DATA_DIR: path.join(home, 'store') };
+    const plain = runHelper({}, env);
+    expect(byModel(plain)).toEqual({ 'gemini-2.5-pro': [1, 3, 0, 0, 0] });
+    expect(plain.kinds.antigravity.unreadable).toBeUndefined();
+    // Past the size bound a database is not read, and the kind says so.
+    const capped = JSON.parse(
+      runWithHelper(['helper.AGY_MAX_DB_BYTES=1', 'helper.main()'].join('\n'), [], env)
+    ) as HelperResponse;
+    expect(byModel(capped)).toEqual({});
+    expect(capped.kinds.antigravity.unreadable).toBe(true);
+    // A deadline that passes inside one database aborts its read instead of running on.
+    const aborted = runWithHelper(
+      [
+        'try:',
+        '    helper._agy_read_db(sys.argv[2], 0, lambda: True)',
+        '    print("read")',
+        'except Exception as error:',
+        '    print(type(error).__name__)',
+      ].join('\n'),
+      [big]
+    );
+    // Either the query is interrupted, or the parse loop stops at its next check.
+    expect(['OperationalError', '_AgyDeadline']).toContain(aborted.trim());
+    expect(fs.existsSync(`${file}-wal`)).toBe(false);
   });
 
   it('says not installed without any store, and the transport accepts the kind', () => {
