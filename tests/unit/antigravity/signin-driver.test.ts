@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { spawnSync } from 'child_process';
 import {
   spawnSignInProcess,
   type SignInProcessHandle,
@@ -27,6 +28,28 @@ const FULL_URL =
   '&code_challenge_method=S256&prompt=consent' +
   '&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback' +
   '&response_type=code&scope=openid+email&state=STATExyz-9';
+const LOOKALIKE_URL = FULL_URL.replace('accounts.google.com', 'accounts.google.com.evil.test');
+
+/**
+ * The fake CLI's screen from the URL to the code prompt, one PTY write per
+ * entry. Plain terminals get the URL hard-wrapped into 120-character chunks;
+ * OSC 8 terminals get a hyperlink whose visible text is cut short.
+ */
+function plainUrlWrites(url: string): string[] {
+  const chunks: string[] = [];
+  for (let i = 0; i < url.length; i += 120) chunks.push(' ' + url.slice(i, i + 120) + '\x1b[K\r\n');
+  return [' Open the URL below in your browser:\r\n', ...chunks];
+}
+function osc8UrlWrites(url: string): string[] {
+  return [
+    ' Open the URL below in your browser:\r\n',
+    ' \x1b[34;4m\x1b]8;id=xyz;' + url + '\x07' + url.slice(0, 50) + '\x1b[m\x1b]8;;\x07\r\n',
+  ];
+}
+const PROMPT_WRITES = [
+  '\r\n After authenticating, copy the code displayed in the browser and paste it below:\r\n',
+  ' authorization code...\r\n',
+];
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -48,7 +71,12 @@ function fakeCli(tokenPath: string): string {
 import os, sys, time, tty
 TOKEN = ${JSON.stringify(tokenPath)}
 MODE = os.environ.get("FAKE_URL_MODE", "osc8")
-URL = ${JSON.stringify(FULL_URL)}
+URL_WRITES = {
+    "plain": ${JSON.stringify(plainUrlWrites(FULL_URL))},
+    "badhost": ${JSON.stringify(plainUrlWrites(LOOKALIKE_URL))},
+    "osc8": ${JSON.stringify(osc8UrlWrites(FULL_URL))},
+}
+PROMPT_WRITES = ${JSON.stringify(PROMPT_WRITES)}
 def out(s):
     sys.stdout.write(s); sys.stdout.flush()
 tty.setraw(sys.stdin.fileno())
@@ -66,19 +94,16 @@ if MODE != "nomenu":
         f.write("menu=" + repr(menu_key) + "\\n")
 if os.environ.get("FAKE_EXIT_EARLY"):
     time.sleep(0.2); sys.exit(0)
-if MODE == "plain" or MODE == "badhost":
-    text = URL.replace("accounts.google.com", "accounts.google.com.evil.test", 1) if MODE == "badhost" else URL
-    out(" Open the URL below in your browser:\\r\\n")
-    for c in [text[i:i+120] for i in range(0, len(text), 120)]:
-        out(" " + c + "\\x1b[K\\r\\n")
-    if MODE == "badhost":
-        with open(os.environ["FAKE_RECEIPT"], "a") as f:
-            f.write("url=" + MODE + "\\n")
-else:
-    out(" Open the URL below in your browser:\\r\\n")
-    out(" \\x1b[34;4m\\x1b]8;id=xyz;" + URL + "\\x07" + URL[:50] + "\\x1b[m\\x1b]8;;\\x07\\r\\n")
-out("\\r\\n After authenticating, copy the code displayed in the browser and paste it below:\\r\\n")
-out(" authorization code...\\r\\n")
+for piece in URL_WRITES.get(MODE, URL_WRITES["osc8"]):
+    out(piece)
+    # A pause after each line lets the driver's read end right there, the
+    # split that once surfaced a wrapped link without its later lines.
+    time.sleep(0.05)
+if MODE == "badhost":
+    with open(os.environ["FAKE_RECEIPT"], "a") as f:
+        f.write("url=" + MODE + "\\n")
+for piece in PROMPT_WRITES:
+    out(piece)
 if MODE == "badhost":
     with open(os.environ["FAKE_RECEIPT"], "a") as f:
         f.write("prompt=1\\n")
@@ -180,6 +205,42 @@ async function until(check: () => boolean, ms = 20_000): Promise<void> {
   }
 }
 
+/**
+ * The driver's buffer is always a prefix of what the CLI wrote, wherever the
+ * PTY happens to split the reads. Run the driver's own extract_url (its
+ * program up to the PTY fork, which only defines things) over every prefix of
+ * a screen, and report each distinct URL it would have printed.
+ */
+function urlsAtEveryPrefix(screen: string): { seen: string[]; whole: string | null } {
+  const fork = AGY_SIGNIN_DRIVER_PROGRAM.indexOf('\npid, master = pty.fork()');
+  expect(fork).toBeGreaterThan(0);
+  const harness = [
+    'import json, sys',
+    'job = json.load(sys.stdin)',
+    'sys.argv = ["driver", "/nonexistent-token", job["origin"], "--", "/bin/true"]',
+    'exec(job["prelude"])',
+    'screen = job["screen"].encode()',
+    'seen = []',
+    'for end in range(len(screen) + 1):',
+    '    url = extract_url(screen[:end])',
+    '    if url is not None and url.decode() not in seen:',
+    '        seen.append(url.decode())',
+    'whole = extract_url(screen)',
+    'print(json.dumps({"seen": seen, "whole": whole.decode() if whole else None}))',
+  ].join('\n');
+  const result = spawnSync(AGY_DRIVER_PYTHON, ['-c', harness], {
+    input: JSON.stringify({
+      origin: ORIGIN,
+      prelude: AGY_SIGNIN_DRIVER_PROGRAM.slice(0, fork),
+      screen,
+    }),
+    encoding: 'utf8',
+  });
+  expect(result.stderr).toBe('');
+  expect(result.status).toBe(0);
+  return JSON.parse(result.stdout) as { seen: string[]; whole: string | null };
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -222,6 +283,32 @@ describe('Antigravity supervised sign-in driver', () => {
     }
   });
 
+  it('never surfaces part of a plain wrapped URL, wherever the PTY splits the reads', () => {
+    // A read that ends right after a wrapped line used to surface the URL
+    // without its later lines (the parser then saw URL[:240]).
+    const { seen, whole } = urlsAtEveryPrefix(
+      [...plainUrlWrites(FULL_URL), ...PROMPT_WRITES].join('')
+    );
+    expect(seen).toEqual([FULL_URL]);
+    expect(whole).toBe(FULL_URL);
+  });
+
+  it('never surfaces part of an OSC 8 URL, wherever the PTY splits the reads', () => {
+    const { seen, whole } = urlsAtEveryPrefix(
+      [...osc8UrlWrites(FULL_URL), ...PROMPT_WRITES].join('')
+    );
+    expect(seen).toEqual([FULL_URL]);
+    expect(whole).toBe(FULL_URL);
+  });
+
+  it('never surfaces any prefix of a plain URL whose host only starts with the allowed origin', () => {
+    const { seen, whole } = urlsAtEveryPrefix(
+      [...plainUrlWrites(LOOKALIKE_URL), ...PROMPT_WRITES].join('')
+    );
+    expect(seen).toEqual([]);
+    expect(whole).toBe(null);
+  });
+
   it('surfaces the URL when the CLI skips the login-method screen', async () => {
     const s = setup('nomenu');
     const run = startDriver(s);
@@ -242,8 +329,8 @@ describe('Antigravity supervised sign-in driver', () => {
       // The fake CLI records prompt=1 only after the lookalike left for the PTY,
       // so once that is on disk the driver has certainly seen those bytes; no
       // wall-clock wait can drive an OS child, and none is needed here.
-      await until(() =>
-        fs.existsSync(s.receipt) && fs.readFileSync(s.receipt, 'utf8').includes('prompt=1')
+      await until(
+        () => fs.existsSync(s.receipt) && fs.readFileSync(s.receipt, 'utf8').includes('prompt=1')
       );
       expect(run.url()).toBe(null);
     } finally {
