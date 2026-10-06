@@ -10,6 +10,27 @@ export const OMP_SCAN_MAX_DEPTH = 6;
 export const OMP_SCAN_MAX_DIRS = 5000;
 export const OMP_SCAN_MAX_ROOTS = 512;
 export const OMP_SCAN_CACHE_TTL_MS = 6 * 3_600_000;
+/**
+ * Sandbox marker: synthetic-log generators (gen-data.mjs, sandbox.sh) write
+ * this file at their data-tree root, and the session-root scan skips any
+ * subtree whose directory holds it, so measurement fixtures never count as
+ * real usage. Explicit roots (env vars, profiles, extra sources) are exempt:
+ * configuring a path explicitly means it should count.
+ */
+export const AAC_SANDBOX_MARKER = '.aac-synthetic';
+/** Directory names the root scan never descends into (fixtures, builds). */
+const SCAN_SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'tests',
+  'test',
+  'fixtures',
+  '__fixtures__',
+  'target',
+  'dist',
+  'coverage',
+  'test-results',
+]);
 const SESSION_TS = /^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}/;
 
 function nonNegative(value: unknown): number | null {
@@ -140,11 +161,42 @@ export interface OmpScanBounds {
 }
 
 /**
- * A `sessions/` dir is an OMP root candidate when it holds a `*.jsonl` file
- * within two levels. Custom `--session-dir` layouts name files freely (the
- * observed corpus mixes `<ts>_<uuid>.jsonl`, `rollout-*.jsonl` and
- * `session.jsonl`), so the marker is presence, not naming; the OMP line
- * parser rejects every non-OMP record inside.
+ * True when the scanned directory is a synthetic sandbox tree: it holds the
+ * sandbox marker, a SANDBOX.md, or a generator MANIFEST.json with a `trees`
+ * key (the T5-recipe sandboxes predate the marker). The MANIFEST read is one
+ * bounded small file, only for dirs that hold one; anything unparseable or
+ * oversized fails open (not a sandbox) so real logs are never hidden.
+ */
+async function isSandboxTree(directory: string, entries: fs.Dirent[]): Promise<boolean> {
+  let hasManifest = false;
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (entry.name === AAC_SANDBOX_MARKER || entry.name === 'SANDBOX.md') return true;
+    if (entry.name === 'MANIFEST.json') hasManifest = true;
+  }
+  if (!hasManifest) return false;
+  try {
+    const text = await fs.promises.readFile(path.join(directory, 'MANIFEST.json'), 'utf8');
+    if (text.length > 64 * 1024) return false;
+    const parsed: unknown = JSON.parse(text);
+    return (
+      !!parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as Record<string, unknown>).trees === 'object' &&
+      (parsed as Record<string, unknown>).trees !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A `sessions/` dir is an OMP root candidate when it holds an OMP-named file
+ * within two levels, by the same filename rule the collector uses to read
+ * it. Presence alone (any `.jsonl`) accepted synthetic Muse trees
+ * (`<uuid>/session.jsonl`); the OMP line parser still rejects every non-OMP
+ * record inside an accepted root.
  */
 async function sessionsDirHasMarker(directory: string): Promise<boolean> {
   const pending: Array<{ directory: string; depth: number }> = [{ directory, depth: 0 }];
@@ -162,7 +214,7 @@ async function sessionsDirHasMarker(directory: string): Promise<boolean> {
       checked++;
       if (checked > 400) return false;
       if (entry.isFile()) {
-        if (entry.name.endsWith('.jsonl')) return true;
+        if (isOmpSessionFilename(entry.name)) return true;
       } else if (current.depth < 1 && entry.isDirectory()) {
         pending.push({
           directory: path.join(current.directory, entry.name),
@@ -211,6 +263,9 @@ async function scanSessionRoots(
     }
     examined += entries.length;
     if (examined > maxEntries) break;
+    // Synthetic sandbox trees are never roots and never descended: their
+    // fixture records would otherwise count as real usage.
+    if (await isSandboxTree(current.directory, entries)) continue;
     if (current.directory !== base) {
       if (path.basename(current.directory) === 'sessions') {
         if (await sessionsDirHasMarker(current.directory)) found.push(current.directory);
@@ -250,6 +305,7 @@ async function scanSessionRoots(
           }
           examined += childEntries.length + 1;
           if (examined > maxEntries) break;
+          if (await isSandboxTree(child, childEntries)) continue;
           if (entry.name === 'sessions') {
             if (await sessionsDirHasMarker(child)) found.push(child);
           } else if (
@@ -265,7 +321,7 @@ async function scanSessionRoots(
       continue;
     }
     for (const entry of entries) {
-      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      if (SCAN_SKIP_DIRS.has(entry.name)) continue;
       if (entry.isDirectory())
         pending.push({
           directory: path.join(current.directory, entry.name),

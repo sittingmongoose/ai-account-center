@@ -676,6 +676,74 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     );
   });
 
+  it('counts one multi-line claude response once, keeping the last usage', () => {
+    const dir = path.join(home, '.claude', 'projects', 'proj1');
+    fs.mkdirSync(dir, { recursive: true });
+    const line = (output: number) =>
+      JSON.stringify({
+        type: 'assistant',
+        uuid: `u-${output}`,
+        requestId: 'r1',
+        sessionId: 's1',
+        timestamp: '2026-10-01T15:05:00Z',
+        message: {
+          id: 'm1',
+          model: 'claude-haiku-4-5',
+          usage: { input_tokens: 100, output_tokens: output },
+        },
+      });
+    fs.writeFileSync(path.join(dir, 'sess.jsonl'), [line(10), line(20), line(30)].join('\n'));
+    const response = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    const rows = response.rows as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ o: 30, n: 1 });
+  });
+
+  it('discovers custom and depth-7 omp roots but skips marked sandbox trees', () => {
+    const record = (model: string) =>
+      JSON.stringify({
+        id: 'm1',
+        timestamp: '2026-10-01T15:05:00Z',
+        type: 'message',
+        message: {
+          role: 'assistant',
+          model,
+          usage: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      });
+    const worker = path.join(home, 'PM-Experiments', 'worktrees', 'omp', 'fw4-n4o-sessions');
+    fs.mkdirSync(worker, { recursive: true });
+    fs.writeFileSync(
+      path.join(worker, '2026-10-01T15-00_uuid.jsonl'),
+      `${record('model-worker')}\n`
+    );
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      'exp',
+      'runs',
+      'r1',
+      'stage',
+      'jobs',
+      'j1',
+      'sessions'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_uuid.jsonl'), `${record('model-deep')}\n`);
+    const data = path.join(home, 'PM-Experiments', 'worktrees', 'omp', 'fw4-t9x-run', 'data');
+    const sandbox = path.join(data, 'omp', 'sessions');
+    fs.mkdirSync(sandbox, { recursive: true });
+    fs.writeFileSync(
+      path.join(sandbox, '2026-10-01T15-00_uuid.jsonl'),
+      `${record('model-sandbox')}\n`
+    );
+    fs.writeFileSync(path.join(data, '.aac-synthetic'), 'synthetic\n');
+    const response = runHelper({ kinds: ['omp'], minDateMs: MIN_DATE });
+    const rows = response.rows as Array<Record<string, unknown>>;
+    const models = rows.map((row) => row.m).sort();
+    expect(models).toEqual(['model-deep', 'model-worker']);
+  });
+
   it('differences codex rollout counters and skips cliproxy sessions', () => {
     const dir = path.join(home, '.codex', 'sessions');
     fs.mkdirSync(dir, { recursive: true });

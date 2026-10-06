@@ -360,6 +360,83 @@ describe('bounded native account activity checkpoints', () => {
   });
 });
 
+describe('claude response collapsing', () => {
+  let seq = 0;
+  function line(mid: string | null, req: string | null, output: number) {
+    seq++;
+    return {
+      type: 'assistant',
+      uuid: `uuid-${seq}`,
+      ...(req === null ? {} : { requestId: req }),
+      sessionId: 's1',
+      timestamp: '2026-10-01T15:00:00Z',
+      message: {
+        ...(mid === null ? {} : { id: mid }),
+        model: 'claude-sonnet-4-6',
+        usage: {
+          input_tokens: 100,
+          output_tokens: output,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 5,
+        },
+      },
+    };
+  }
+  function writeClaude(lines: unknown[]) {
+    const dir = path.join(root, 'claude', 'projects', 'p');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 's.jsonl'),
+      lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
+    );
+  }
+  async function collectClaude(maxBytesPerFile?: number) {
+    return collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), maxBytesPerFile }
+    );
+  }
+  beforeEach(() => {
+    seq = 0;
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-claude-collapse-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('counts one multi-line API response once, keeping the last usage', async () => {
+    writeClaude([
+      line('m1', 'r1', 10),
+      line('m1', 'r1', 20),
+      line('m1', 'r1', 30),
+      line('m2', 'r2', 7),
+    ]);
+    const data = await collectClaude();
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(2);
+    expect(sum(data, 'outputTokens')).toBe(37);
+  });
+
+  it('counts lines without a message id solo', async () => {
+    writeClaude([line(null, 'r1', 10), line(null, 'r1', 20)]);
+    const data = await collectClaude();
+    expect(data.eventCount).toBe(2);
+    expect(sum(data, 'outputTokens')).toBe(30);
+  });
+
+  it('collapses a response split across bounded byte batches without double-counting', async () => {
+    writeClaude([line('m1', 'r1', 10), line('m1', 'r1', 20), line('m1', 'r1', 30)]);
+    let data = await collectClaude(350);
+    for (let attempt = 0; attempt < 6 && !data.scan?.complete; attempt++) {
+      data = await collectClaude(350);
+    }
+    expect(data.scan?.complete).toBe(true);
+    expect(data.eventCount).toBe(1);
+    expect(sum(data, 'outputTokens')).toBe(30);
+    const warm = await collectClaude();
+    expect(warm.scan?.readBytes).toBe(0);
+    expect(warm.eventCount).toBe(1);
+  });
+});
+
 describe('pre-aggregated session rows', () => {
   it('groups helper rows into sessions with priced model breakdowns', () => {
     const a = Date.parse('2026-10-01T15:05:00Z');

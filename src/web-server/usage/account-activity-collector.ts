@@ -50,6 +50,13 @@ interface Checkpoint {
   parser?: number;
   state: CodexNativeParserState;
   rows: CompactEntry[];
+  /**
+   * Claude's current API response: consecutive same-response lines collapse
+   * to the last (complete) usage, so the group-in-progress rides here until
+   * the next response arrives or the file ends. Survives pass cuts; a corrupt
+   * value invalidates the checkpoint like any other field.
+   */
+  pendingClaude?: { key: string; entry: RawUsageEntry };
 }
 export interface AccountActivityScanOptions {
   minDate: number;
@@ -86,9 +93,10 @@ type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl';
 /**
  * Checkpoints of these kinds hold rows from an older parser and are read
  * again from the start: OMP rows now keep the routing provider and never mix
- * logged and unlogged events; Muse input no longer includes cache reads.
+ * logged and unlogged events; Muse input no longer includes cache reads;
+ * Claude rows now count one API response, not one content block.
  */
-const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2 };
+const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2, claude: 1 };
 
 function wantedFile(kind: string, name: string): boolean {
   if (kind === 'claude') return name.endsWith('.jsonl');
@@ -253,7 +261,11 @@ function loadCheckpoint(
       typeof value.state.sessionId !== 'string' ||
       (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
       (value.skippedLines > 0 && value.largeLineParserVersion !== 3) ||
-      value.parser !== PARSER_VERSION[kind]
+      value.parser !== PARSER_VERSION[kind] ||
+      (value.pendingClaude !== undefined &&
+        (typeof value.pendingClaude.key !== 'string' ||
+          !value.pendingClaude.entry ||
+          typeof value.pendingClaude.entry !== 'object'))
     )
       return fresh(stats, minDate, kind);
     const fd = fs.openSync(file, 'r');
@@ -661,6 +673,16 @@ async function readBatch(
   });
   const fileSessionId =
     kind === 'omp' ? ompSessionIdForFile(file) : kind === 'muse' ? museSessionIdForFile(file) : '';
+  // Claude writes several assistant lines per API response (one per content
+  // block, usage repeated, last line complete). Consecutive same-response
+  // lines collapse to the last; the group-in-progress rides in the checkpoint
+  // so a pass cut mid-response resumes rather than double-counts.
+  const flushPendingClaude = (): void => {
+    const pending = value.pendingClaude;
+    if (kind !== 'claude' || !pending) return;
+    value.pendingClaude = undefined;
+    if (!addEntry(rows, pending.entry, options.minDate)) value.skippedLines++;
+  };
   const consume = (buffer: Buffer): void => {
     const line = buffer.toString('utf8');
     // Avoid parsing conversations/prompts: only actual native usage and the
@@ -668,8 +690,20 @@ async function readBatch(
     let entry: RawUsageEntry | null = null;
     if (kind === 'codex') entry = parseCodexNativeUsageLine(line, value.state);
     else if (kind === 'claude') {
-      if (/"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line))
-        entry = parseUsageEntry(line, '');
+      if (/"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line)) {
+        const parsed = parseUsageEntry(line, '');
+        if (parsed) {
+          if (parsed.responseKey === undefined) {
+            flushPendingClaude();
+            entry = parsed;
+          } else if (value.pendingClaude?.key === parsed.responseKey) {
+            value.pendingClaude.entry = parsed;
+          } else {
+            flushPendingClaude();
+            value.pendingClaude = { key: parsed.responseKey, entry: parsed };
+          }
+        }
+      }
     } else if (kind === 'omp') {
       if (/"type"\s*:\s*"message"/.test(line) && /"usage"\s*:/.test(line))
         entry = parseOmpUsageLine(line, fileSessionId);
@@ -737,6 +771,10 @@ async function readBatch(
       }
     } else if (discarding) value.offset = position;
     value.discardingLine = discarding;
+    // A clean EOF ends the last response group; a cut, discard or unfinished
+    // tail keeps it pending so the next pass continues the same response.
+    if (kind === 'claude' && value.offset === stats.size && !discarding && !value.unfinishedTail)
+      flushPendingClaude();
     value.complete = value.offset === stats.size && !discarding;
     value.rows = [...rows.values()];
   } finally {

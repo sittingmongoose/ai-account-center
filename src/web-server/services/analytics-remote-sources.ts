@@ -70,10 +70,11 @@ export function analyticsRemoteTargets(host: AnalyticsRemoteHost): AnalyticsRemo
 const MAX_CACHED_ROWS = 100_000;
 
 /**
- * 3: per-session aggregates ride with the hourly rows, so remote sessions
- * count like local ones; rows cached by version 2 are read again.
+ * 4: Claude counts one API response, not one content block; rows cached by
+ * version 3 are read again. (3: per-session aggregates ride with the hourly
+ * rows, so remote sessions count like local ones.)
  */
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 interface RemoteCache {
   version: typeof CACHE_VERSION;
