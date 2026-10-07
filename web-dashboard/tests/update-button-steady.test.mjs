@@ -12,11 +12,10 @@ import { fileURLToPath } from 'node:url';
 // pill does not clip and a plain rectangle (a scissor, no layer) just inside the border does.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const dashboard = fs.readFileSync(path.join(here, '..', 'ui', 'dashboard.slint'), 'utf8');
-const start = dashboard.indexOf('component UpdateButton inherits Rectangle {');
-const end = dashboard.indexOf('component Header inherits Rectangle {');
-const block = dashboard.slice(start, end);
+// The pill moved out of dashboard.slint into its own component (mobile phase 1); the invariants follow it.
+const block = fs.readFileSync(path.join(here, '..', 'ui', 'components', 'update-button.slint'), 'utf8');
 const lines = block.split('\n');
+const comp = lines.findIndex(l => l.startsWith('export component UpdateButton inherits Rectangle {'));
 
 /** The property lines of the element opened on `line`, at its own nesting depth only. */
 function ownProperties(openIndex) {
@@ -33,12 +32,12 @@ function ownProperties(openIndex) {
   return out;
 }
 
-test('the Update apps button is found in dashboard.slint', () => {
-  assert.ok(start > 0 && end > start, 'UpdateButton or Header is missing');
+test('the Update apps button is its own component with the steady-label rules', () => {
+  assert.ok(comp > 0, 'UpdateButton is missing');
 });
 
 test('the rounded pill never clips its content (a rounded clip is an offscreen layer per frame)', () => {
-  const root = ownProperties(0);
+  const root = ownProperties(comp);
   assert.ok(root.some(p => p.startsWith('border-radius:')), 'the pill should keep its rounded corners');
   assert.ok(!root.some(p => /^clip:\s*true/.test(p)), 'clip: true on the rounded pill re-renders the label through a layer');
 });
@@ -51,5 +50,6 @@ test('the ring and the label sit in a plain rectangular clip just inside the bor
   assert.ok(!props.some(p => p.startsWith('border-radius:')), 'a radius here brings the offscreen layer back');
   const inside = block.slice(block.indexOf('content := Rectangle {'));
   assert.match(inside, /transform-rotation: root\.mode == "run"/, 'the spinning ring lives inside the content clip');
-  assert.match(inside, /text: root\.mode == "run" \? "Updating"/, 'the label lives inside the content clip');
+  assert.match(inside, /if root\.mode == "run" && root\.show-run-word: Text \{/, 'the running label lives inside the content clip');
+  assert.match(inside, /text: "Updating";/, 'the Updating label lives inside the content clip');
 });

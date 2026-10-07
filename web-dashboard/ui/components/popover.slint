@@ -1,0 +1,80 @@
+// Anchored popovers below D (DESIGN-MOBILE.md 3.5): the designed width clamped to the gutters,
+// opened below the anchor when it fits, otherwise above, otherwise clamped into the visible band
+// with internal scrolling. The invisible full-window catcher takes the closing tap, so nothing
+// under the popover activates; a second tap on the anchor closes it the same way. The host
+// recreates the component per opening (MenuPanel's rise-and-fade plays on mount; closing is instant).
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
+import { Overlays } from "./sheet.slint";
+
+export component Popover inherits Rectangle {
+    in property <bool> open: true;
+    // The anchor rectangle in window coordinates (MobileHeader reports absolute positions).
+    in property <length> anchor-x: 0px;
+    in property <length> anchor-y: 0px;
+    in property <length> anchor-w: 0px;
+    in property <length> anchor-h: 0px;
+    in property <length> design-w: 212px;
+    // Top of the visible band: the chrome's total height (dashboard passes chrome-h).
+    in property <length> band-top: 0px;
+    callback close-requested();
+
+    // A local shadow of the global Back request: `changed` takes only a local name, so the watch
+    // property re-evaluates when bridge.js pops the top overlay and every open popover closes.
+    property <int> pop-close-watch: Overlays.pop-close;
+    changed pop-close-watch => { root.close-requested(); }
+
+    property <length> gutter: Breakpoints.gutter + Device.safe-left;
+    property <length> avail-w: max(0px, root.width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right);
+    property <length> card-w: min(root.design-w, root.avail-w);
+    property <length> band-bottom: root.height - max(Device.keyboard, Device.safe-bottom);
+    property <length> max-h: max(120px, root.band-bottom - root.band-top - 16px);
+    property <length> card-h: min(body.preferred-height, root.max-h);
+    property <length> card-x: clamp(root.anchor-x + root.anchor-w / 2 - root.card-w / 2,
+        root.gutter, max(root.gutter, root.width - Breakpoints.gutter - Device.safe-right - root.card-w));
+    property <bool> fits-below: root.anchor-y + root.anchor-h + 8px + body.preferred-height <= root.band-bottom;
+    property <bool> fits-above: root.anchor-y - 8px - root.card-h >= root.band-top;
+    property <length> card-y: root.fits-below ? root.anchor-y + root.anchor-h + 8px
+        : root.fits-above ? root.anchor-y - 8px - root.card-h
+        : clamp(root.anchor-y + root.anchor-h + 8px, root.band-top, max(root.band-top, root.band-bottom - root.card-h));
+
+    width: 100%;
+    height: 100%;
+    property <bool> shown: false;
+    init => { root.shown = true; }
+
+    // The catcher: every tap the card does not take closes the popover and is swallowed.
+    TouchArea {
+        clicked => { root.close-requested(); }
+    }
+    card := Rectangle {
+        x: root.card-x;
+        y: root.card-y + (root.shown ? 0px : 6px);
+        width: root.card-w;
+        height: root.card-h;
+        opacity: root.shown ? 1 : 0;
+        transform-scale: root.shown ? 1 : 0.97;
+        transform-origin: { x: root.card-w, y: 0px };
+        animate opacity { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        animate transform-scale { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        background: Theme.paper;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-color: Theme.shadow-pop;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 16px;
+        clip: true;
+        TouchArea { }
+        Flickable {
+            width: parent.width;
+            height: parent.height;
+            content-width: parent.width;
+            content-height: body.preferred-height;
+            body := VerticalLayout {
+                width: parent.width;
+                height: self.preferred-height;
+                @children
+            }
+        }
+    }
+}

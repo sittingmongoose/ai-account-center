@@ -5,11 +5,15 @@
 // real <form> with a submit button, laid exactly over the Slint field boxes while the login form is on screen: they
 // draw the text, placeholder and caret, the Slint boxes under them draw everything else (border, focus halo, the eye
 // button), and the Slint fields stop drawing their own text (ui/components/field.slint `covered`).
+// The first-run setup form (create sign-in) is covered the same way: the password becomes autocomplete="new-password"
+// and a confirmation and the setup code join the form, so managers generate and save on first run.
 //
 // - Geometry: the sign-in layer reports where the boxes are whenever the layout moves them (resize, DPI, the short
-//   layout, breakpoints, banners, the wrong-password shake), as the `login-overlay` action; `place` puts the inputs
-//   there in whole pixels, or hides them (display:none) whenever the form is not on screen (loading, signed in, the
-//   success look, the first-run form, the layer fading in or out).
+//   layout, breakpoints, banners, the wrong-password shake, the keyboard-up scroll), as the `login-overlay` action;
+//   `place` puts the inputs there in whole pixels, or hides them (display:none) whenever the form is not on screen
+//   (loading, signed in, the success look, the no-form setup state, the layer fading in or out). A field scrolled
+//   under the safe-top strip is reported with its `*Visible` flag false: its input gets visibility:hidden instead
+//   of being removed (removing it would break AutoFill and drop a live focus).
 // - Placement: the form is a fixed box around the fields (it lets the mouse through to Slint) and every field is
 //   position:absolute inside it. A position:fixed field has no offsetParent, and 1Password's field collector reads
 //   "no offsetParent" as "not viewable": it then fills only the field that has focus, one field per fill
@@ -18,18 +22,25 @@
 //   show the same text whenever the inputs are hidden. `mirror` sets values silently, so a Slint sign-in never loops
 //   back through `onFilled`.
 // - Keyboard: Tab goes username, password, then the Remember me checkbox and the Sign in button, which lie over the
-//   Slint controls as transparent focus targets (the mouse still reaches the Slint controls under them). Enter in
-//   either field submits the form, and a submit (Enter, a manager's auto-submit, the button) runs `onSubmit`.
+//   Slint controls as transparent focus targets (the mouse still reaches the Slint controls under them). Enter in the
+//   password submits the form (the browser's implicit submission); Enter in the username and the confirmation is
+//   "next": it moves to the password (or the setup code) instead of submitting a half-empty form — enterkeyhint
+//   only labels the key, it does not move focus. A submit (Enter, a manager's auto-submit, the button) runs
+//   `onSubmit`. In setup mode `onSubmit` receives the confirmation and code as well.
 // - Focus and hover of the inputs go back to Slint through `onPointer`, so the boxes under them answer as before.
 
 /** What the form holds. */
 export function readLoginForm(form) {
   const user = form?.querySelector?.('#aac-login-user') ?? null;
   const pass = form?.querySelector?.('#aac-login-pass') ?? null;
+  const confirm = form?.querySelector?.('#aac-login-pass2') ?? null;
+  const code = form?.querySelector?.('#aac-login-code') ?? null;
   const remember = form?.querySelector?.('#aac-login-remember') ?? null;
   return {
     username: typeof user?.value === 'string' ? user.value : '',
     password: typeof pass?.value === 'string' ? pass.value : '',
+    confirm: typeof confirm?.value === 'string' ? confirm.value : '',
+    code: typeof code?.value === 'string' ? code.value : '',
     remember: remember ? remember.checked !== false : true,
   };
 }
@@ -49,25 +60,39 @@ function edges(box) {
   return right > left && bottom > top ? { left, top, right, bottom } : null;
 }
 const boxOf = ({ left, top, right, bottom }) => ({ left, top, width: right - left, height: bottom - top });
+/** A box with the padding that puts the input's text where the Slint text area starts. */
+const padded = (box, text) => ({ ...boxOf(box), paddingLeft: Math.max(0, text.left - box.left), paddingRight: Math.max(0, box.right - text.right) + RIGHT_AIR });
 
 /**
  * Where each element of the form goes for one `login-overlay` report (lib.rs login_overlay_json), in whole CSS
- * pixels of the window. The username input covers its whole box; the password input stops at the end of its text
- * area, so the Slint eye button beside it stays clickable. Each input's padding puts its text where the Slint text
- * area starts. `frame` is the form's box around all of them (`place` positions the fields inside it).
- * `on` is false (everything hidden) unless the report says the form is on screen and both boxes are real.
+ * pixels of the window. The username input covers its whole box; the password and confirmation inputs stop where
+ * their text area ends, so the Slint eye button beside them stays clickable. `mode` is "login" (default) or
+ * "setup": in setup mode the confirmation and the setup code are placed too (absent or empty box: that input
+ * stays hidden). `on` is false (everything hidden) unless the report says the form is on screen and the login
+ * fields' boxes are real.
  */
 export function overlayLayout(overlay) {
   const o = overlay && typeof overlay === 'object' ? overlay : {};
-  const base = { on: false, enabled: false, revealed: o.revealed === true, remember: o.remember !== false };
+  const base = {
+    on: false, enabled: false, mode: o.mode === 'setup' ? 'setup' : 'login',
+    revealed: o.revealed === true, remember: o.remember !== false,
+    userVisible: o.userVisible !== false, passVisible: o.passVisible !== false,
+    confirmVisible: o.confirmVisible !== false, codeVisible: o.codeVisible !== false,
+  };
   if (o.on !== true) return base;
   const user = edges(o.user), userText = edges(o.userText), pass = edges(o.pass), passText = edges(o.passText);
   if (!user || !userText || !pass || !passText) return base;
   const passRight = Math.min(pass.right, Math.max(passText.right, pass.left + 1));
+  const confirm = o.mode === 'setup' ? edges(o.confirm) : null;
+  const confirmText = o.mode === 'setup' ? edges(o.confirmText) : null;
+  const code = o.mode === 'setup' ? edges(o.code) : null;
+  const codeText = o.mode === 'setup' ? edges(o.codeText) : null;
+  // the confirmation has the same eye button: its input stops where the text area ends
+  const confirmBox = confirm && confirmText ? { ...confirm, right: Math.min(confirm.right, Math.max(confirmText.right, confirm.left + 1)) } : null;
   const color = (value) => (typeof value === 'string' && COLOR.test(value) ? value : null);
   const check = edges(o.check), submit = edges(o.submit);
   // the form's own box: everything it places, so each field sits inside a real, positioned form
-  const parts = [user, { ...pass, right: passRight }, check, submit].filter(Boolean);
+  const parts = [user, { ...pass, right: passRight }, confirmBox, code, check, submit].filter(Boolean);
   const frame = boxOf({
     left: Math.min(...parts.map((b) => b.left)),
     top: Math.min(...parts.map((b) => b.top)),
@@ -81,6 +106,8 @@ export function overlayLayout(overlay) {
     frame,
     user: { ...boxOf(user), paddingLeft: Math.max(0, userText.left - user.left), paddingRight: Math.max(0, user.right - userText.right) + RIGHT_AIR },
     pass: { ...boxOf({ ...pass, right: passRight }), paddingLeft: Math.max(0, passText.left - pass.left), paddingRight: RIGHT_AIR },
+    confirm: confirmBox ? { ...boxOf(confirmBox), paddingLeft: Math.max(0, confirmText.left - confirmBox.left), paddingRight: RIGHT_AIR } : null,
+    code: code && codeText ? padded(code, codeText) : null,
     check: check ? boxOf(check) : null,
     submit: submit ? boxOf(submit) : null,
     vars: {
@@ -105,6 +132,8 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
   if (!form) return null;
   const user = document.getElementById('aac-login-user');
   const pass = document.getElementById('aac-login-pass');
+  const confirm = document.getElementById('aac-login-pass2');
+  const code = document.getElementById('aac-login-code');
   const remember = document.getElementById('aac-login-remember');
   const submit = document.getElementById('aac-login-submit') ?? null;
   if (!user || !pass || !remember) return null;
@@ -112,11 +141,12 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
   const read = () => ({
     username: typeof user.value === 'string' ? user.value : '',
     password: typeof pass.value === 'string' ? pass.value : '',
+    confirm: typeof confirm?.value === 'string' ? confirm.value : '',
+    code: typeof code?.value === 'string' ? code.value : '',
     remember: remember.checked !== false,
   });
   const filled = () => onFilled(read());
-  user.addEventListener('input', filled);
-  pass.addEventListener('input', filled);
+  for (const input of [user, pass, confirm, code]) input?.addEventListener?.('input', filled);
   remember.addEventListener('change', filled);
   form.addEventListener('submit', (event) => {
     if (typeof event?.preventDefault === 'function') event.preventDefault();
@@ -125,31 +155,56 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
   // form.submit() fires no submit event, so a manager that submits that way would make the browser post the
   // form itself and land on the API's JSON answer. requestSubmit() fires the event above instead.
   if (typeof form.requestSubmit === 'function') form.submit = () => form.requestSubmit();
-  // A manager's auto-submit may instead press Enter in a field with a synthetic key event, which a browser never
-  // turns into a submit (only a real Enter submits a form by itself), so an untrusted Enter submits here.
-  for (const input of [user, pass]) {
-    input.addEventListener('keydown', (event) => {
-      if (event?.key !== 'Enter' || event.isTrusted !== false || typeof form.requestSubmit !== 'function') return;
-      if (typeof event.preventDefault === 'function') event.preventDefault();
-      form.requestSubmit();
-    });
-  }
+  // Enter moves on through the form ("next") or signs in ("go"): a real Enter in the username or the setup
+  // fields must not submit a half-filled form (the browser's implicit submission would), so it is turned into
+  // the next field. A manager's auto-submit may press Enter with a synthetic key event, which a browser never
+  // turns into a submit, so an untrusted Enter submits here. The password's and code's real Enter are left to
+  // the browser's implicit submission.
+  const submitOnce = (event) => {
+    if (typeof form.requestSubmit !== 'function') return;
+    if (typeof event?.preventDefault === 'function') event.preventDefault();
+    form.requestSubmit();
+  };
+  user?.addEventListener?.('keydown', (event) => {
+    if (event?.key !== 'Enter') return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (event.isTrusted !== false) focusField('pass');
+    else submitOnce(event);
+  });
+  pass?.addEventListener?.('keydown', (event) => {
+    if (event?.key !== 'Enter' || event.isTrusted !== false) return;
+    submitOnce(event);
+  });
+  confirm?.addEventListener?.('keydown', (event) => {
+    if (event?.key !== 'Enter') return;
+    if (!codeShown && event.isTrusted !== false) return; // no code step: the browser submits the form
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (event.isTrusted !== false) focusField('code');
+    else submitOnce(event);
+  });
+  code?.addEventListener?.('keydown', (event) => {
+    if (event?.key !== 'Enter' || event.isTrusted !== false) return;
+    submitOnce(event);
+  });
 
-  // focus and hover of the two inputs, for the Slint boxes under them
+  // focus and hover of the inputs, for the Slint boxes under them
   const pointer = { focus: '', hover: '' };
   const report = () => { try { onPointer({ ...pointer }); } catch {} };
-  for (const [field, input] of [['user', user], ['pass', pass]]) {
+  for (const [field, input] of [['user', user], ['pass', pass], ['confirm', confirm], ['code', code]]) {
+    if (!input) continue;
     input.addEventListener('focus', () => { pointer.focus = field; report(); });
     input.addEventListener('blur', () => { if (pointer.focus === field) { pointer.focus = ''; report(); } });
     input.addEventListener('pointerenter', () => { pointer.hover = field; report(); });
     input.addEventListener('pointerleave', () => { if (pointer.hover === field) { pointer.hover = ''; report(); } });
   }
 
-  const parts = [user, pass, remember, ...(submit ? [submit] : [])];
+  const parts = [user, pass, confirm, code, remember, ...(submit ? [submit] : [])].filter(Boolean);
   const placed = new Map();
   let on = false;
+  let codeShown = false;
   let wanted = null;
   const apply = (element, next) => {
+    if (!element) return;
     const style = element.style;
     if (!style) return;
     const key = JSON.stringify(next);
@@ -168,7 +223,7 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
     : { display: 'none' });
   const focusIn = () => parts.includes(document.activeElement);
   const focusField = (field) => {
-    const input = field === 'pass' ? pass : field === 'user' ? user : null;
+    const input = field === 'pass' ? pass : field === 'user' ? user : field === 'confirm' ? confirm : field === 'code' ? code : null;
     try { input?.focus?.({ preventScroll: true }); } catch {}
   };
 
@@ -177,9 +232,14 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
     if (remember.checked !== layout.remember) remember.checked = layout.remember;
     const type = layout.revealed ? 'text' : 'password';
     if (pass.type !== type) pass.type = type;
+    if (confirm && confirm.type !== type) confirm.type = type;
+    // managers read autocomplete at fill time: new-password on the first-run form, current-password for sign-in
+    const fill = layout.mode === 'setup' ? 'new-password' : 'current-password';
+    if (typeof pass.setAttribute === 'function' && pass.getAttribute('autocomplete') !== fill) pass.setAttribute('autocomplete', fill);
     if (!layout.on) {
       const hadFocus = focusIn();
       on = false;
+      codeShown = false;
       for (const element of parts) show(element, null);
       frameAt(null);
       if (pointer.hover || pointer.focus) { pointer.hover = ''; pointer.focus = ''; report(); }
@@ -192,11 +252,19 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
       if (value !== null) form.style?.setProperty?.(name, value);
     }
     const readOnly = !layout.enabled;
-    if (user.readOnly !== readOnly) user.readOnly = readOnly;
-    if (pass.readOnly !== readOnly) pass.readOnly = readOnly;
+    for (const input of [user, pass, confirm, code]) {
+      if (input && input.readOnly !== readOnly) input.readOnly = readOnly;
+    }
     frameAt(layout.frame);
-    show(user, layout.user, { paddingLeft: `${layout.user.paddingLeft}px`, paddingRight: `${layout.user.paddingRight}px` });
-    show(pass, layout.pass, { paddingLeft: `${layout.pass.paddingLeft}px`, paddingRight: `${layout.pass.paddingRight}px` });
+    // a field scrolled under the safe-top strip keeps its element (AutoFill, live focus) but draws nothing:
+    // visibility:hidden, never display:none and never removal. Below-fold fields stay live, so Return-next can
+    // still reach them; they sit off screen, so nothing paints wrongly.
+    const see = (visible) => ({ visibility: visible === false ? 'hidden' : 'visible' });
+    show(user, layout.user, { ...see(layout.userVisible), paddingLeft: `${layout.user.paddingLeft}px`, paddingRight: `${layout.user.paddingRight}px` });
+    show(pass, layout.pass, { ...see(layout.passVisible), paddingLeft: `${layout.pass.paddingLeft}px`, paddingRight: `${layout.pass.paddingRight}px` });
+    codeShown = !!layout.code;
+    show(confirm, layout.confirm, { ...see(layout.confirmVisible), paddingLeft: `${layout.confirm?.paddingLeft ?? 0}px`, paddingRight: `${layout.confirm?.paddingRight ?? 0}px` });
+    show(code, layout.code, { ...see(layout.codeVisible), paddingLeft: `${layout.code?.paddingLeft ?? 0}px`, paddingRight: `${layout.code?.paddingRight ?? 0}px` });
     show(remember, layout.check);
     if (submit) show(submit, layout.submit);
     if (wanted && now() - wanted.at <= FOCUS_REQUEST_MS) focusField(wanted.field);
@@ -210,11 +278,14 @@ export function installLoginBridge({ document, canvas = null, onFilled = () => {
     shown: () => on,
     /** A click on the part of a Slint field box the input leaves free: focus the input, now or as soon as it shows. */
     focus(field) {
-      if (field !== 'user' && field !== 'pass') return;
+      if (field !== 'user' && field !== 'pass' && field !== 'confirm' && field !== 'code') return;
       if (on) focusField(field);
       else wanted = { field, at: now() };
     },
-    clearPassword() { pass.value = ''; },
+    clearPassword() {
+      pass.value = '';
+      if (confirm) confirm.value = '';
+    },
     mirror({ username = '', password = '', remember: keep = true } = {}) {
       if (user.value !== String(username)) user.value = String(username);
       if (pass.value !== String(password)) pass.value = String(password);
