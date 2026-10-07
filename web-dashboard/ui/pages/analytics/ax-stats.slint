@@ -556,6 +556,12 @@ component CacheSection inherits VerticalLayout {
     property <length> gw: Breakpoints.tier-d ? (root.narrow ? 140px : 160px) : Breakpoints.tier-p ? 120px : 140px;
     property <bool> gauge-side: Breakpoints.tier-d || root.inner-w >= 300px;
     spacing: 12px;
+    // Desktop: cap at the card's content width. A VerticalLayout never shrinks below its
+    // preferred width, so without this the unwrapped footnote (~640px) sets the section
+    // wide: the footnote stays one clipped line (main wraps two), the card comes out ~30px
+    // short, and the cache numbers rasterize on shifted subpixel phases. Below D the width
+    // stays unconstrained, exactly as before.
+    max-width: Breakpoints.tier-d ? root.inner-w : 100000px;
     Text { text: "Cache efficiency"; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
     Rectangle { height: 4px; }
     if root.gauge-side: HorizontalLayout {
@@ -766,12 +772,6 @@ component CacheSection inherits VerticalLayout {
         RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }
     }
     HorizontalLayout {
-        // Desktop: cap at the card's content width. A VerticalLayout never shrinks below its
-        // preferred width, so without this the unwrapped footnote (~640px) sets the section
-        // wide, the text stays one line, and the card comes out ~30px short of main (whose
-        // footnote is a direct stretched child and wraps to two lines). Below D the width
-        // stays unconstrained, exactly as before.
-        max-width: Breakpoints.tier-d ? root.inner-w : 100000px;
         padding-right: self.padding-left;
         Text {
             text: "Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.";
