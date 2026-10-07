@@ -745,7 +745,7 @@ component TouchCard inherits Rectangle {
             clip: true;
             background: root.signed-in ? Theme.calm
                 : self.off ? Theme.paper-3
-                : sb-ta.has-hover && root.can-submit ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
+                : sb-ta.has-hover && Device.hover && root.can-submit ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
             animate background { duration: Motion.tint(Motion.med); easing: cubic-bezier(0.65, 0, 0.35, 1); }
             transform-scale: sb-ta.pressed && root.can-submit ? 0.97 : 1;
             animate transform-scale { duration: 120ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -1771,7 +1771,7 @@ export component SignInLayer inherits Rectangle {
                             clip: true;
                             background: root.signed-in ? Theme.calm
                                 : self.off ? Theme.paper-3
-                                : sb-ta.has-hover && root.can-submit ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
+                                : sb-ta.has-hover && Device.hover && root.can-submit ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
                             animate background { duration: Motion.tint(Motion.med); easing: cubic-bezier(0.65, 0, 0.35, 1); }
                             transform-scale: sb-ta.pressed && root.can-submit ? 0.97 : 1;
                             animate transform-scale { duration: 120ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }

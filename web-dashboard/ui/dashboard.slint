@@ -118,8 +118,8 @@ component Header inherits Rectangle {
                     alignment: center;
                     AppLogo {
                         size: 26px;
-                        transform-rotation: brand-ta.has-hover ? -8deg : 0deg;
-                        transform-scale: brand-ta.has-hover ? 1.06 : 1;
+                        transform-rotation: brand-ta.has-hover && Device.hover ? -8deg : 0deg;
+                        transform-scale: brand-ta.has-hover && Device.hover ? 1.06 : 1;
                         animate transform-rotation, transform-scale { duration: Motion.med; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                     }
                 }
@@ -181,7 +181,7 @@ component Header inherits Rectangle {
                 }
                 TouchArea {
                     changed has-hover => {
-                        if self.has-hover {
+                        if self.has-hover && Device.hover {
                             Hover.tip("status", self.absolute-position, self.width, self.height, root.chrome.status-tip);
                         } else {
                             Hover.leave("status");
@@ -319,12 +319,12 @@ component PageScroll inherits Rectangle {
         width: 8px;
         height: self.thumb-h;
         Rectangle {
-            x: drag.has-hover || drag.pressed ? 1px : 3px;
-            width: drag.has-hover || drag.pressed ? 6px : 4px;
+            x: (drag.has-hover && Device.hover) || drag.pressed ? 1px : 3px;
+            width: (drag.has-hover && Device.hover) || drag.pressed ? 6px : 4px;
             height: parent.height;
             border-radius: 3px;
             background: drag.pressed ? Theme.ink-3 : Theme.rule-strong;
-            opacity: drag.has-hover || drag.pressed ? 1 : 0.7;
+            opacity: (drag.has-hover && Device.hover) || drag.pressed ? 1 : 0.7;
             animate x, width, opacity { duration: Motion.fast; }
         }
         drag := TouchArea {

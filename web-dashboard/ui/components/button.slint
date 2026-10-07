@@ -43,7 +43,7 @@ export component Button inherits Rectangle {
         }
     }
 
-    out property <bool> hovered: ta.has-hover && root.enabled;
+    out property <bool> hovered: ta.has-hover && Device.hover && root.enabled;
     out property <length> pad-left: root.kind == "danger-text" ? 6px : root.kind == "ghost" ? 9px : root.small ? 10px : 13px;
     out property <length> icon-size: root.small ? 15px : 16px;
     out property <length> icon-gap: 7px;
