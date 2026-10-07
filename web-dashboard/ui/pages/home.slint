@@ -26,6 +26,7 @@ import { Plate, Card } from "../components/card.slint";
 import { Reveal } from "../components/reveal.slint";
 import { Hover } from "../components/hover-card.slint";
 import { MenuPanel } from "../components/menu.slint";
+import { Sheet } from "../components/sheet.slint";
 import { InfoIcon, InlineTip } from "../components/info-tip.slint";
 
 // A line that mixes weights ("**4** accounts · desktop profiles"). The "good" tone is the active
@@ -942,7 +943,9 @@ component Legend inherits VerticalLayout {
     Rectangle { height: 1px; background: Theme.rule-2; }
     Rectangle { height: 9px; }
     Text {
-        text: "Hover a meter for its reset time, sample time and source.";
+        // Touch has no hover: the row opens Details with the exact times (4.4).
+        text: Device.hover ? "Hover a meter for its reset time, sample time and source."
+            : "Tap an account for its reset time, sample time and source.";
         font-size: Type.small;
         color: Theme.ink-3;
         wrap: word-wrap;
@@ -1241,14 +1244,30 @@ export component AccountSection inherits Plate {
                 legend-anchor := Rectangle {
                     width: Breakpoints.tier-d ? 28px : 40px;
                     property <length> pop-w: min(372px, max(240px, Breakpoints.tier-width - 2 * Breakpoints.gutter));
+                    // P (not short) opens the sheet below instead of the popover (3.5). The bool,
+                    // not the popup's is-open, drives the Sheet: a child binding to its own
+                    // popup's builtins trips the compiler.
+                    property <bool> sheet-open: false;
                     legend-btn := IconButton {
                         y: (parent.height - self.height) / 2;
                         icon: "help";
                         small: Breakpoints.tier-d;
                         bare: true;
                         hint: "How to read the meters";
-                        pressed-look: legend-pop.is-open;
-                        clicked => { legend-pop.show(); }
+                        pressed-look: legend-pop.is-open || legend-anchor.sheet-open;
+                        clicked => {
+                            if Breakpoints.tier-p && !Breakpoints.short {
+                                if legend-anchor.sheet-open {
+                                    legend-anchor.sheet-open = false;
+                                    legend-sheet-pop.close();
+                                } else {
+                                    legend-sheet-pop.show();
+                                    legend-anchor.sheet-open = true;
+                                }
+                            } else {
+                                legend-pop.show();
+                            }
+                        }
                     }
                     // The meter legend popover, width clamped inside the gutters below D (3.5).
                     legend-pop := PopupWindow {
@@ -1258,6 +1277,31 @@ export component AccountSection inherits Plate {
                         close-policy: close-on-click-outside;
                         MenuPanel {
                             width: legend-anchor.pop-w;
+                            Legend { }
+                        }
+                    }
+                    // P (not short): the legend is a bottom sheet (3.5). The full-window popup
+                    // gives the shared Sheet its window geometry, so the scrim covers the tab bar
+                    // too; the sheet's own open curve plays on show (closing is instant, as with
+                    // the shell's account sheet). Back does not reach page popups: it falls
+                    // through to the page, which destroys the open legend with Home itself.
+                    legend-sheet-pop := PopupWindow {
+                        width: Breakpoints.width;
+                        height: Breakpoints.height;
+                        // The anchor (not the centred button) is the popup's origin.
+                        x: -legend-anchor.absolute-position.x;
+                        y: -legend-anchor.absolute-position.y;
+                        // Full-window: an outside tap cannot happen; the scrim closes instead.
+                        close-policy: close-on-click-outside;
+                        Sheet {
+                            width: 100%;
+                            height: 100%;
+                            open: legend-anchor.sheet-open;
+                            probe: "legend-sheet";
+                            close-requested => {
+                                legend-anchor.sheet-open = false;
+                                legend-sheet-pop.close();
+                            }
                             Legend { }
                         }
                     }
