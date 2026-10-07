@@ -13,7 +13,16 @@ export interface ActiveDeviceRecord {
   installId: string | null;
   appVersion: string | null;
   tokenSha256: string;
+  /**
+   * The current token crossed the network in plain text: it was handed out,
+   * or presented, over plain HTTP (the trusted local network included). The
+   * LAN HTTPS proxy refuses such a token. A record from before this field
+   * counts as plain.
+   */
+  tokenPlain: boolean;
   prevTokenSha256: string | null;
+  /** The same for the previous token of a rotation. */
+  prevTokenPlain: boolean;
   prevTokenValidUntil: string | null;
   pairedAt: string;
   rotatedAt: string | null;
@@ -90,7 +99,10 @@ function parseRecord(value: unknown): DeviceRecord | null {
     installId: (record.installId as string | null | undefined) ?? null,
     appVersion: (record.appVersion as string | null | undefined) ?? null,
     tokenSha256: record.tokenSha256,
+    // Only an explicit false is trusted: an older record counts as plain.
+    tokenPlain: record.tokenPlain !== false,
     prevTokenSha256: isHash(record.prevTokenSha256) ? record.prevTokenSha256 : null,
+    prevTokenPlain: record.prevTokenPlain !== false,
     prevTokenValidUntil: (record.prevTokenValidUntil as string | null | undefined) ?? null,
     pairedAt: record.pairedAt,
     rotatedAt: (record.rotatedAt as string | null | undefined) ?? null,

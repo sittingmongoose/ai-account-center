@@ -222,6 +222,9 @@ describe('configuration-backed runtime service gate', () => {
     ['dashboard', 'usage-hub'],
     ['dashboard', 'usage-hub', '--help'],
     ['dashboard', 'usage-hub', 'generate', '--help'],
+    ['dashboard', 'proxy'],
+    ['dashboard', 'proxy', '--help'],
+    ['dashboard', 'proxy', 'set', '--help'],
   ])(
     'keeps metadata and retired invocations outside configuration logging: %j',
     async (...args) => {
@@ -239,6 +242,17 @@ describe('configuration-backed runtime service gate', () => {
     ['bar', 'status'],
     ['dashboard', 'usage-hub', 'status'],
     ['config', 'usage-hub', 'generate', '--stdout'],
+    ['dashboard', 'proxy', 'status'],
+    [
+      'dashboard',
+      'proxy',
+      'set',
+      '--address',
+      '192.168.1.20',
+      '--origin',
+      'https://aac.example.test',
+    ],
+    ['dashboard', 'proxy', 'off'],
   ])('preserves runtime service setup for account operations: %j', async (...args) => {
     expect(await requiresRuntimeServices(args)).toBe(true);
   });

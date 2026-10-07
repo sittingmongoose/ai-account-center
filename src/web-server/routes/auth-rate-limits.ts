@@ -1,12 +1,14 @@
 import { createHash } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
-import rateLimit, { ipKeyGenerator, MemoryStore } from 'express-rate-limit';
+import rateLimit, { MemoryStore } from 'express-rate-limit';
 import { isDashboardAuthEnabled } from '../../config/config-loader-facade';
 import {
   credentialsWereRejected,
   retryAfterSeconds,
   type RateLimitProperty,
 } from '../middleware/auth-middleware';
+import { rateLimitClientKey } from '../middleware/rate-limit-keys';
+import { isForwardedThroughTrustedProxy } from '../middleware/secure-transport';
 import { dashboardAuthState, sendAuthError } from './auth-route-helpers';
 
 /**
@@ -20,10 +22,17 @@ import { dashboardAuthState, sendAuthError } from './auth-route-helpers';
  *   whole server, whatever the address.
  * - `signInServerLimiter`: 30 refused sign-ins (password, pairing or setup
  *   code) per hour, shared by every request whose address came from
- *   `X-Forwarded-For`. Behind a trusted local TLS proxy any process on the VM
- *   can choose that header, so a per-IP key alone does not hold there. A
- *   request whose address is its real peer keeps only its per-IP budget, so
- *   nobody on the LAN can lock out the person at the VM.
+ *   `X-Forwarded-For` through a trusted proxy hop. Anything on the proxy's
+ *   computer (any process on the VM for a local proxy; the NAS and every
+ *   container on it for the LAN HTTPS proxy) can choose that header, so a
+ *   per-client key alone does not hold there.
+ *
+ * Nobody on the LAN can lock out the person at the VM: a request whose address
+ * is its real peer is keyed by that peer and never meets the server-wide sign-in
+ * budget, and a forwarded request is keyed `proxy:<client>`
+ * (middleware/rate-limit-keys.ts), so even a forwarded `127.0.0.1` or a
+ * forwarded LAN address spends only a `proxy:` budget, never the one of the
+ * browser on the dashboard computer or of a LAN computer.
  * - `sessionRotationLimiter`: 10 "sign out other browsers" per 15 minutes per
  *   IP and account.
  *
@@ -46,22 +55,11 @@ const stores = {
   sessionRotation: new MemoryStore(),
 };
 
-/** The client address the limiters use (behind a trusted proxy, the forwarded one). */
-function clientAddress(req: Request): string {
-  return ipKeyGenerator(req.ip ?? req.socket?.remoteAddress ?? 'unknown');
-}
-
-/** Express took the address from `X-Forwarded-For` (`trust proxy` is on only for a loopback peer). */
-function addressWasForwarded(req: Request): boolean {
-  const peer = req.socket?.remoteAddress;
-  return typeof req.ip === 'string' && typeof peer === 'string' && req.ip !== peer;
-}
-
-/** IP plus a hash of the signed-in account name; independent of the session id. */
+/** Client key plus a hash of the signed-in account name; independent of the session id. */
 function clientAccountKey(req: Request): string {
   const username = req.session?.username ?? dashboardAuthState().username;
   const account = createHash('sha256').update(username, 'utf8').digest('hex').slice(0, 32);
-  return `${clientAddress(req)}|${account}`;
+  return `${rateLimitClientKey(req)}|${account}`;
 }
 
 function limitedResponse(
@@ -120,7 +118,7 @@ export const signInServerLimiter = rateLimit({
   requestWasSuccessful: (_req, res) => !credentialsWereRejected(res),
   standardHeaders: false,
   legacyHeaders: false,
-  skip: (req) => !isDashboardAuthEnabled() || !addressWasForwarded(req),
+  skip: (req) => !isDashboardAuthEnabled() || !isForwardedThroughTrustedProxy(req),
   keyGenerator: () => SERVER_KEY,
   handler: limitedResponse(TOO_MANY_SIGN_INS, 'serverRateLimit'),
 });

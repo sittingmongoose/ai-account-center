@@ -12,7 +12,7 @@ let loads = 0;
  * Loads a fresh copy of bridge.js. `server(method, path, body)` answers each request with { status, payload }
  * (or a Promise of it). Returns the dispatcher, every sign-in view handed to Slint, every toast and every request.
  */
-async function loadBridge(server, { hostname = '192.168.50.179', pathname = '/accounts', login = null } = {}) {
+async function loadBridge(server, { hostname = '192.168.10.179', pathname = '/accounts', login = null } = {}) {
   const base = new URL('../public/', import.meta.url);
   let source = await readFile(new URL('bridge.js', base), 'utf8');
   const first = source.split('\n')[0];
@@ -96,14 +96,14 @@ async function settle(done, ms = 3000) {
 /** A dashboard server with a session, local network trust and the routes the Accounts page reads. */
 function fixtureServer(over = {}) {
   const s = { trust: true, signedIn: true, revoked: false, ...over };
-  const view = () => ({ trustLocalNetwork: s.trust, trustedNetworks: ['192.168.0.0/16'], connection: { peer: '192.168.50.20', trusted: s.trust }, canTurnOn: false });
+  const view = () => ({ trustLocalNetwork: s.trust, trustedNetworks: ['192.168.0.0/16'], connection: { peer: '192.168.10.20', trusted: s.trust }, canTurnOn: false });
   const accounts = [
     { id: 'codex:one', provider: 'codex', email: 'one@example.test', isActive: true, status: 'ok', windows: [], capabilities: { codexProfile: 'one' } },
     { id: 'codex:other', provider: 'codex', email: 'other@example.test', isActive: false, status: 'ok', windows: [], capabilities: { codexProfile: 'other' } },
   ];
   const routes = {
     'GET /api/auth/setup': () => ({ payload: { sessionTimeoutHours: 24, configured: true } }),
-    'GET /api/auth/check': () => ({ payload: { authenticated: s.signedIn, authRequired: true, accessMode: 'login', username: s.signedIn ? 'owner' : null, signedOutReason: null, secureTransport: s.trust, trustedLocalNetwork: s.trust, connection: { peer: '192.168.50.20', trusted: s.trust } } }),
+    'GET /api/auth/check': () => ({ payload: { authenticated: s.signedIn, authRequired: true, accessMode: 'login', username: s.signedIn ? 'owner' : null, signedOutReason: null, secureTransport: s.trust, trustedLocalNetwork: s.trust, connection: { peer: '192.168.10.20', trusted: s.trust } } }),
     'GET /api/accounts/settings': () => ({ payload: { refreshIntervalSeconds: 60 } }),
     'GET /api/claude/desktop-profiles': () => ({ payload: { profiles: [] } }),
     'GET /api/antigravity/profiles': () => ({ status: 404, payload: { code: 'not_found' } }),

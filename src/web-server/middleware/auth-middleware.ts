@@ -6,7 +6,7 @@
 import type { IncomingMessage } from 'http';
 import type { NextFunction, Request, Response } from 'express';
 import session from 'express-session';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { MemoryStore } from 'express-rate-limit';
 
 import crypto from 'crypto';
 import * as net from 'net';
@@ -19,7 +19,9 @@ import {
 } from '../../config/config-loader-facade';
 import { effectiveSessionLifetimeDays } from '../../config/schemas/auth';
 import { bearerToken, guardApiRequest } from './api-request-guard';
+import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
+import { credentialAllowedOnRequest, isLanProxyPeer, isSecureTransport } from './secure-transport';
 import { isSessionEpochCurrent } from '../services/dashboard-auth-state';
 
 // Extend Express Request with session
@@ -167,15 +169,22 @@ export function credentialsWereRejected(res: Response): boolean {
   return res.locals.credentialsRejected === true;
 }
 
+const loginStore = new MemoryStore();
+
 /**
- * Rate limiter for login attempts: 5 failed attempts per 15 minutes per IP;
- * successful requests are not counted (CONTRACT-auth-devices section 10).
- * Pairing and a LAN setup code share this key and budget. A request whose
+ * Rate limiter for login attempts: 5 failed attempts per 15 minutes per
+ * client; successful requests are not counted (CONTRACT-auth-devices section
+ * 10). Pairing and a LAN setup code share this key and budget. A request whose
  * credentials matched counts as successful, whatever it answers afterwards.
+ * The key is the socket peer, or `proxy:<client>` behind a trusted proxy hop
+ * (rate-limit-keys.ts), so a forwarded request never spends a direct
+ * client's budget.
  */
 export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts
+  store: loginStore,
+  keyGenerator: rateLimitClientKey,
   skipSuccessfulRequests: true,
   requestWasSuccessful: (_req, res) => res.statusCode < 400 || credentialsWereAccepted(res),
   standardHeaders: true,
@@ -193,6 +202,42 @@ export const loginRateLimiter = rateLimit({
   },
 });
 
+/** Tests only: forget every login count. */
+export function resetLoginRateLimitForTests(): Promise<void> {
+  return Promise.resolve(loginStore.resetAll());
+}
+
+/**
+ * Through the LAN HTTPS proxy, `X-Forwarded-Proto` stands only when the
+ * request is secure by rule 3 (exactly `https`, and the rightmost
+ * `X-Forwarded-For` entry an IP address). Otherwise it is dropped before the
+ * session runs, so Express `req.secure` (which picks the cookie's `Secure`
+ * flag) always agrees with isSecureTransport.
+ */
+function dropUnprovenForwardedProto(req: Request): void {
+  if (req.headers['x-forwarded-proto'] === undefined) return;
+  if (isLanProxyPeer(req) && !isSecureTransport(req)) delete req.headers['x-forwarded-proto'];
+}
+
+/**
+ * Through the LAN HTTPS proxy, a signed-in session that was not signed in over
+ * an encrypted transport or on the dashboard computer itself (a cookie minted
+ * over plain HTTP on the LAN, or before this rule) is set aside for this
+ * request: the request carries no session at all. The stored session is
+ * neither changed, extended nor re-sent (express-session skips a request
+ * without one), so the browser on the LAN keeps it, and a copied cookie does
+ * not work from the internet. A sign-in on such a request starts a fresh
+ * session (auth-route-helpers.ts) and leaves the stored one alone.
+ */
+function setAsidePlainSessionBehindProxy(req: Request): void {
+  const current = req.session as Request['session'] | undefined;
+  if (!current || current.authenticated !== true) return;
+  if (credentialAllowedOnRequest(req, current.signedInOver)) return;
+  const unset = req as unknown as { session?: unknown; sessionID?: unknown };
+  unset.session = undefined;
+  unset.sessionID = undefined;
+}
+
 /**
  * Create session middleware configured for CCS dashboard.
  */
@@ -204,7 +249,7 @@ export function createSessionMiddleware(): (
   const authConfig = getDashboardAuthConfig();
   const maxAge = effectiveSessionLifetimeDays(authConfig) * 24 * 60 * 60 * 1000;
 
-  return session({
+  const middleware = session({
     secret: getSessionSecret(),
     resave: false,
     saveUninitialized: false,
@@ -213,13 +258,20 @@ export function createSessionMiddleware(): (
     rolling: true,
     cookie: {
       // Secure whenever the request arrived over TLS (in-process, or a trusted
-      // loopback proxy once `trust proxy` is set); plain HTTP keeps working.
+      // proxy hop once `trust proxy` is set); plain HTTP keeps working.
       secure: 'auto',
       httpOnly: true,
       maxAge,
       sameSite: 'strict',
     },
   });
+  return (req, res, next) => {
+    dropUnprovenForwardedProto(req);
+    middleware(req, res, (error?: unknown) => {
+      if (!error) setAsidePlainSessionBehindProxy(req);
+      next(error as Parameters<NextFunction>[0]);
+    });
+  };
 }
 
 /**

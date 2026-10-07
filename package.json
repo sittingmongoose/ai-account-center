@@ -95,6 +95,7 @@
     "format:check": "prettier --check src/",
     "validate": "bun run typecheck && bun run lint && bun run format:check && bun run test:fast",
     "validate:ci-parity": "bash scripts/ci-parity-gate.sh",
+    "check:personal": "node scripts/personal-detail-guard.js",
     "verify:bundle": "node scripts/verify-bundle.js",
     "test": "bun run build && bun run test:all",
     "test:ci": "bun run test:all",

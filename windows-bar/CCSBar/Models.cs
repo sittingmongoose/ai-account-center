@@ -167,7 +167,7 @@ public sealed class AccountDashboard
 
     /// <summary>The accounts this tray shows: an account hidden in the trays (accounts[].trayHidden, its own "Show in
     /// tray" or its provider's) is left out. The dashboard's per-account switch (accounts[].hidden) is never read: the
-    /// two are independent (Jared, 2026-10-02).</summary>
+    /// two are independent (owner decision, 2026-10-02).</summary>
     [JsonIgnore] public IEnumerable<DashboardAccount> ShownAccounts => Accounts.Where(account => !account.HiddenInTray);
 
     /// <summary>Accounts hidden in the trays one by one (their provider is still shown), for Settings' facts.</summary>

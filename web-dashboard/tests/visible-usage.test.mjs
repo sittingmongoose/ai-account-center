@@ -9,7 +9,7 @@ test('Codex Pro has no invented five-hour cell and real Plus zero-percent remain
     { key: 'extra_additional_1', label: 'Chat pass · weekly', usedPercent: 0 },
     { key: 'extra_additional_3', label: 'Chat pass · 5 hours', usedPercent: 0, windowMinutes: 300 },
   ] };
-  const plus = { id: 'codex:lexxmariah', provider: 'codex', plan: 'plus', windows: [{ key: 'five_hour', label: '5h', windowMinutes: 300, usedPercent: 0 }] };
+  const plus = { id: 'codex:lime', provider: 'codex', plan: 'plus', windows: [{ key: 'five_hour', label: '5h', windowMinutes: 300, usedPercent: 0 }] };
   const data = { accounts: [pro, plus] };
   const view = dashboardView(data);
   assert.equal(view.codex[0].five.hasPercent, false);

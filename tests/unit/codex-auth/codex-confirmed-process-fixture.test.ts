@@ -14,8 +14,12 @@ describe('confirmed switch with disposable real process families', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-confirmed-process-'));
     const codexHome = path.join(directory, '.codex');
     fs.mkdirSync(codexHome);
+    // The runtime recognises Codex by the program's file name, so the fixture family needs a
+    // real program called `codex`. Copy the JavaScript runtime running this test (it runs the
+    // fixture script just as well). Never a fixed system path: GitHub's Ubuntu runners have
+    // no /usr/bin/node (their Node lives under /usr/local and the tool cache).
     const executable = path.join(directory, 'codex');
-    fs.copyFileSync('/usr/bin/node', executable);
+    fs.copyFileSync(process.execPath, executable);
     fs.chmodSync(executable, 0o700);
     const script = path.join(directory, 'fixture.js');
     fs.writeFileSync(

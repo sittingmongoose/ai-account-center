@@ -103,4 +103,17 @@ describe('resolveDashboardAccessState', () => {
       accessMode: 'setup',
     });
   });
+
+  it('never reports local access for a request through the LAN HTTPS proxy', () => {
+    const auth = {
+      enabled: true,
+      username: 'admin',
+      password_hash: '$2b$10$123456789012345678901u4cPFsKnzGWxZmfq6OnpZnN0UiM6Qf7e',
+      session_timeout_hours: 24,
+    };
+    expect(resolveDashboardAccessState(auth, '127.0.0.1', true).isLocalAccess).toBe(false);
+    expect(resolveDashboardAccessState(auth, '192.168.1.20', true).isLocalAccess).toBe(false);
+    expect(resolveDashboardAccessState(auth, '127.0.0.1', false).isLocalAccess).toBe(true);
+    expect(resolveDashboardAccessState(auth, '127.0.0.1').isLocalAccess).toBe(true);
+  });
 });

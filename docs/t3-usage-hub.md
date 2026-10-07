@@ -67,7 +67,8 @@ in pingdotgg/t3code (tag `v0.0.46-nightly.20261006.2735`); see
   Requests that carry proxy headers never count as local network peers.
   Anything else gets 403 `secure_transport_required`. So loopback always
   works, and other computers on the LAN work only when the owner trusts the
-  local network.
+  local network. A request that came through a `lan-https-proxy` is answered
+  404 before any of this, so the hub never faces the internet.
 - **Separate from dashboard sign-in.** The key opens only these read-only
   routes. Dashboard passwords, sessions and device tokens never open them, and
   the key opens nothing else.

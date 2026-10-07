@@ -253,8 +253,8 @@ describe('POST /api/auth/devices/pair', () => {
       { origin: 'https://evil.example' }
     );
     expect([foreign.status, foreign.body.code]).toEqual([403, 'origin_required']);
-    const trimmed = await pairTray(harness, { deviceName: '  Jared’s Mac  ' });
-    expect(trimmed.body.name).toBe('Jared’s Mac');
+    const trimmed = await pairTray(harness, { deviceName: '  Owner’s Mac  ' });
+    expect(trimmed.body.name).toBe('Owner’s Mac');
   });
 });
 

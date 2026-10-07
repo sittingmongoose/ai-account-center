@@ -60,7 +60,7 @@ describe('dashboard_network', () => {
         'dashboard_network:',
         '  trust_local_network: true',
         '  trusted_networks:',
-        '    - 192.168.50.0/24',
+        '    - 192.168.10.0/24',
         '    - 10.6.0.0/24',
         '    - not-a-range',
         '',
@@ -69,7 +69,7 @@ describe('dashboard_network', () => {
     invalidateConfigCache();
     expect(getDashboardNetworkSettings()).toMatchObject({
       trustLocalNetwork: true,
-      trustedNetworks: ['192.168.50.0/24', '10.6.0.0/24'],
+      trustedNetworks: ['192.168.10.0/24', '10.6.0.0/24'],
       rejectedEntries: 1,
     });
   });

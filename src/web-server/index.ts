@@ -121,7 +121,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   app.set('case sensitive routing', true);
   // The stack's name and version in every answer help no legitimate client.
   app.disable('x-powered-by');
-  // Trusted local TLS proxy (off unless dashboard_tls.trusted_proxy is set).
+  // Trusted TLS proxy hop (off unless dashboard_tls.trusted_proxy is set).
   configureDashboardTransport(app);
   const server = http.createServer(app);
   const wss = new WebSocketServer({

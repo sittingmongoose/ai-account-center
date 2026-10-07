@@ -19,7 +19,7 @@ public static class WindowsClaudeLauncherOfflineTests
     // Fixture account set: the same shape as the generated file, with an added
     // fifth ID proving new manifest IDs work without source changes.
     static readonly ClaudeAccountSet Accounts = new ClaudeAccountSet(
-        new[] { "gmail", "platyr", "party", "me", "added-profile" }, "gmail");
+        new[] { "gmail", "plum", "party", "me", "added-profile" }, "gmail");
     static ClaudeRegisteredPackage P(string version, string path)
     { return new ClaudeRegisteredPackage("Claude_" + version + "_x64__pzs8sxrjxfjjc", path); }
     static void Check(string name, bool result)
@@ -30,7 +30,7 @@ public static class WindowsClaudeLauncherOfflineTests
     { try { run(); return false; } catch (ArgumentException) { return true; } }
     public static int Main()
     {
-        foreach (string id in new[] { "platyr", "party", "me", "added-profile" })
+        foreach (string id in new[] { "plum", "party", "me", "added-profile" })
         {
             string expectedProfile = Path.Combine(Roaming, "Claude-" + id);
             Catalog original = new Catalog { Packages = new[] { P("2.16120.0.0", Old) } };
@@ -108,7 +108,7 @@ public static class WindowsClaudeLauncherOfflineTests
         }
         Catalog ambiguous = new Catalog { Packages = new[] { P("2.19675.0.0", Current), P("2.19675.0.0", Current + "-other") } };
         Check("equal-version ambiguous registered paths refuse",
-            Throws(() => ClaudeProfileLaunchPlanner.Create("ccs-claude://launch/platyr", @"C:\Windows",
+            Throws(() => ClaudeProfileLaunchPlanner.Create("ccs-claude://launch/plum", @"C:\Windows",
                 Roaming, ambiguous, path => true, path => true, Accounts)));
         Catalog semantic = new Catalog { Packages = new[] { P("2.9.0.0", Old), P("2.10.0.0", Current) } };
         ClaudeLaunchPlan semanticPlan = ClaudeProfileLaunchPlanner.Create("ccs-claude://launch/me", @"C:\Windows",
@@ -121,7 +121,7 @@ public static class WindowsClaudeLauncherOfflineTests
         try
         {
             File.WriteAllText(Path.Combine(temp, ClaudeProfileLaunchPlanner.AccountsFileName),
-                "# generated account list\n\ngmail\nplatyr\nadded-profile\n");
+                "# generated account list\n\ngmail\nplum\nadded-profile\n");
             ClaudeAccountSet loaded = ClaudeProfileLaunchPlanner.LoadAccounts(temp);
             Check("account file loads IDs with first as default",
                 loaded.Allowed.Count == 3 && loaded.Default == "gmail" &&

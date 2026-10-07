@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { createLogger, withRequestContext } from '../../services/logging';
+import { isForwardedThroughTrustedProxy, requestClientAddress } from './secure-transport';
 
 const logger = createLogger('web-server:http');
 
@@ -53,7 +54,9 @@ export function requestLoggingMiddleware(req: Request, res: Response, next: Next
         path: scrubLoggedUrl(req.originalUrl),
         statusCode: res.statusCode,
         durationMs: Date.now() - startTime,
-        remoteAddress: req.socket.remoteAddress || null,
+        // The client behind a trusted proxy hop (then `via` names the hop), else the peer.
+        remoteAddress: requestClientAddress(req) || null,
+        ...(isForwardedThroughTrustedProxy(req) ? { via: req.socket.remoteAddress || null } : {}),
         userAgent: req.headers['user-agent'] || null,
       });
     });
