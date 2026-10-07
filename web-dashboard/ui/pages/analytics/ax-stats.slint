@@ -847,15 +847,15 @@ export component AxTokensCacheCard inherits AxCard {
         TokSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
         CacheSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
     }
-    // below D the cache note (task 9 A3): unconditional, empty and zero-padded on D. Data-bound
-    // text re-measures when the response arrives.
+    // below D the cache note (task 9 A3): the wrapper stays unconditional (a conditional layout here
+    // is never measured), so on D it must be truly empty: zero padding and no child at all.
     VerticalLayout {
         padding-left: Breakpoints.tier-d ? 0px : root.pad;
         padding-right: Breakpoints.tier-d ? 0px : root.pad;
         padding-top: Breakpoints.tier-d ? 0px : 12px;
         padding-bottom: Breakpoints.tier-d ? 0px : 18px;
-        Text {
-            text: Breakpoints.tier-d ? "" : AxData.cache.note;
+        if Breakpoints.below-d: Text {
+            text: AxData.cache.note;
             font-size: Type.small;
             color: Theme.ink-3;
             wrap: word-wrap;
