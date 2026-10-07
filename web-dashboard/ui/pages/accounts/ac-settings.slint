@@ -1492,11 +1492,11 @@ component AboutGroup inherits SetGroup {
     }
 }
 
-// The settings groups (DESIGN-MOBILE.md 4.3.7): every group is shown at every width. `two-col` is the
-// F >= 760 and T arrangement (the page computes it): the left column holds Sign-in & connection, Update
-// apps and About; the right one Settings, History snapshots and Usage log sources. Each column flows
-// independently. One column (P, F < 760) stacks everything; the desktop settings column beside the
-// providers is unchanged.
+// The settings groups (DESIGN-MOBILE.md 4.3.7): every group is shown at every width. Two columns (left:
+// Sign-in & connection, Update apps and About; right: Settings, History snapshots and Usage log sources,
+// each flowing independently) when the page hints F >= 760 or T and the settings area's own content width
+// reaches 760 (1.5); one column (P, F below that) stacks everything; the desktop settings column beside
+// the providers is unchanged.
 export component SettingsColumn inherits VerticalLayout {
     in property <bool> two-col: false;
     in property <string> theme-value;
@@ -1505,13 +1505,18 @@ export component SettingsColumn inherits VerticalLayout {
     callback act(string, string);
     spacing: 16px;
     alignment: start;
+    // the settings area's own content width decides the split (DESIGN-MOBILE.md 1.5), not the tier
+    // alone: the page's F >= 760 hint alone would still split the F band whose content (the window
+    // less the two gutters) is under 760
+    property <bool> content-fits: Breakpoints.tier-width - 2 * Breakpoints.gutter >= 760px;
+    property <bool> col-split: root.two-col && root.content-fits;
     // one settings column's inner width, for the controls that must decide their layout ahead of it
     // (the group cards inset their content by 16 px on P and 20 px on F/T)
     property <length> col-half: (Breakpoints.tier-width - 2 * Breakpoints.gutter - 16px) / 2;
-    property <length> col-inner: root.two-col ? root.col-half - 80px
+    property <length> col-inner: root.col-split ? root.col-half - 80px
         : Breakpoints.at-least-regular ? (Breakpoints.wide ? 420px : Breakpoints.ultra ? 440px : 380px)
         : Breakpoints.tier-width - 2 * Breakpoints.gutter - (Breakpoints.tier-p ? 32px : 40px);
-    if !root.two-col: VerticalLayout {
+    if !root.col-split: VerticalLayout {
         spacing: 16px;
         alignment: start;
         SigninGroup { busy: root.busy; col-w: root.col-inner; act(k, v) => { root.act(k, v); } }
@@ -1535,7 +1540,7 @@ export component SettingsColumn inherits VerticalLayout {
         }
         AboutGroup { }
     }
-    if root.two-col: HorizontalLayout {
+    if root.col-split: HorizontalLayout {
         spacing: 16px;
         alignment: stretch;
         VerticalLayout {
