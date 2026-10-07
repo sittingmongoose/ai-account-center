@@ -99,6 +99,43 @@ function verifyPrecompressed(uiDir, manifest) {
   }
 }
 
+/** The installable shell: a stamped worker, a valid manifest and every icon it names. */
+function verifyPwaShell(uiDir, buildId) {
+  for (const file of ['sw.js', 'sw-route.js']) {
+    if (!fs.existsSync(path.join(uiDir, file))) throw new Error(`Missing browser asset: ${file}.`);
+  }
+  const sw = fs.readFileSync(path.join(uiDir, 'sw.js'), 'utf8');
+  if (countLiteral(sw, `'${buildId}'`) !== 1 || sw.includes('__AAC_BUILD_ID__')) {
+    throw new Error('The packaged sw.js must carry the stamped build id.');
+  }
+  let webmanifest;
+  try {
+    webmanifest = JSON.parse(fs.readFileSync(path.join(uiDir, 'manifest.webmanifest'), 'utf8'));
+  } catch {
+    throw new Error('The packaged manifest.webmanifest is not installable.');
+  }
+  const icons = webmanifest?.icons;
+  if (
+    webmanifest?.name !== 'AI Account Center' ||
+    webmanifest?.short_name !== 'AAC' ||
+    webmanifest?.start_url !== '/' ||
+    webmanifest?.display !== 'standalone' ||
+    !Array.isArray(icons) ||
+    icons.length < 1
+  ) {
+    throw new Error('The packaged manifest.webmanifest is not installable.');
+  }
+  for (const icon of icons) {
+    const relative = typeof icon?.src === 'string' ? icon.src.replace(/^\/+/, '') : '';
+    if (!icon?.sizes || !isSafeRelativePath(relative)) {
+      throw new Error('The packaged manifest.webmanifest names an icon that is not served.');
+    }
+    if (!fs.existsSync(path.join(uiDir, relative))) {
+      throw new Error(`Missing browser asset: ${icon.src}.`);
+    }
+  }
+}
+
 /** Packaged folders are 0755 and files 0644, whatever the builder's umask was. */
 function verifyModes(dir) {
   if (process.platform === 'win32') return;
@@ -154,6 +191,7 @@ function verifyBundle(uiDir = UI_DIR) {
   ) {
     throw new Error('The packaged bridge.js must import the versioned WebAssembly runtime.');
   }
+  verifyPwaShell(uiDir, buildId);
   verifyPrecompressed(uiDir, manifest);
   verifyModes(uiDir);
   const totalSize = walkDir(uiDir);

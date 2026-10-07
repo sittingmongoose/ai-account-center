@@ -48,6 +48,9 @@ const CONTENT_TYPES = new Map<string, string>([
   ['.svg', 'image/svg+xml'],
   ['.json', 'application/json; charset=utf-8'],
   ['.txt', 'text/plain; charset=utf-8'],
+  // PWA: the install manifest and the install icons (sw.js is .js above).
+  ['.webmanifest', 'application/manifest+json'],
+  ['.png', 'image/png'],
 ]);
 /** Build facts for the build scripts only; the UI never fetches it, so it is not served. */
 const UNSERVED = new Set(['ui-build-manifest.json']);
