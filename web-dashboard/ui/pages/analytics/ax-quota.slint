@@ -344,13 +344,14 @@ component FocusPanel inherits VerticalLayout {
             alignment: start;
             for l in root.qr.focus.legend: FocusLegend { name: l.name; kind: l.kind; provider: root.qr.focus.provider; shade: l.shade; dash: l.dash; lw: l.width; }
         }
-        if !Breakpoints.tier-p || Breakpoints.tier-width >= 360px: HorizontalLayout {
+        // P always stacks: a long compare label squeezes Details out of a shared row
+        if !Breakpoints.tier-p: HorizontalLayout {
             spacing: 12px;
             alignment: start;
             if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
             VerticalLayout { alignment: center; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
         }
-        if Breakpoints.tier-p && Breakpoints.tier-width < 360px: VerticalLayout {
+        if Breakpoints.tier-p: VerticalLayout {
             spacing: 4px;
             alignment: start;
             if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
