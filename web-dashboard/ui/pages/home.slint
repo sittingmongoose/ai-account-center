@@ -557,6 +557,11 @@ export component AccountRow inherits Rectangle {
     // stacked (4.1.3): a row whose account reports no windows shows the identity line only
     property <bool> has-cells: !root.table && root.cell-key(0) + root.cell-key(1) + root.cell-key(2)
         + root.cell-key(3) + root.cell-key(4) + root.cell-key(5) + root.cell-key(6) + root.cell-key(7) != "";
+    // stacked meter cells under 100 px wide stack "used" under the number (4.1.2): derived from
+    // the tier-fed grid width (not self.width), like the table/stacked switch, to stay out of the
+    // layout's width cycle. The 260 px switchable cap never binds here (it is above 100).
+    property <bool> narrow-cells: !root.table
+        && (root.grid-w - 2 * root.pad-x - 12px * max(0, root.account.cells.length - 1)) / max(1, root.account.cells.length) < 100px;
     public pure function cell-key(at: int) -> string {
         return at < root.account.cells.length ? root.account.cells[at].key : "";
     }
@@ -836,6 +841,7 @@ export component AccountRow inherits Rectangle {
                                 height: self.preferred-height;
                                 visible: cell.key != "";
                                 cell: true;
+                                stack-used: root.narrow-cells;
                                 data: cell;
                                 played: root.played;
                                 delay: root.delay + c * 16ms;

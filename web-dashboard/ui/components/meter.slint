@@ -176,6 +176,10 @@ export component Meter inherits Rectangle {
     // The value line's box, as the concept's .meter-top measures with its line-height 1 numbers and
     // baseline-aligned words (Slint Text has no line-height, so the 1.22 em font box would add 2-3 px a meter).
     property <length> top-h: root.cell ? 24px : root.compact ? 17.5px : root.inline ? 19.2px : 20.7px;
+    // Narrow cells stack "used" under the number on line 1 instead of beside it. The caller
+    // passes this (cells under 100 px: four-window grids on P, three-column grids below ~385 px):
+    // reading root.width here would close a binding loop through the grid.
+    in property <bool> stack-used: false;
     // A reset that passed while the reading predates it ("Reset at 9:29 PM" in 600 ink, 4.1.2).
     property <bool> pending-look: !root.data.has-value && root.data.na-sub != "";
     // the detail line under the bar, on one or two lines (word-wrap with a fixed box elides its last line)
@@ -221,13 +225,13 @@ export component Meter inherits Rectangle {
                 horizontal-stretch: 0;
                 Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
             }
-            // cell line 1 (4.1.2): the number and "used" lay out as flex units, so a long
-            // over-reading drops "used" under the number instead of clipping it, while the number
-            // itself never elides. The overage stays visible as the segment past 100%.
-            if root.cell && root.data.has-value: FlexboxLayout {
+            // cell line 1 (4.1.2): the number and "used" sit side by side, or stacked in
+            // narrow cells (root.stack-used: a second flex line never measures its height, so
+            // it used to paint over the bar). The number itself never elides. The overage stays
+            // visible as the segment past 100%.
+            if root.cell && root.data.has-value && !root.stack-used: HorizontalLayout {
                 horizontal-stretch: 1;
-                spacing-horizontal: 4px;
-                spacing-vertical: 2px;
+                spacing: 4px;
                 alignment: start;
                 ValueUnit {
                     box-h: root.top-h;
@@ -241,6 +245,19 @@ export component Meter inherits Rectangle {
                     padding-bottom: 3px;
                     Text { text: "used"; font-size: Type.small; color: Theme.ink-3; }
                 }
+            }
+            if root.cell && root.data.has-value && root.stack-used: VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: start;
+                ValueUnit {
+                    box-h: root.top-h;
+                    value: root.number;
+                    size: root.value-size;
+                    ink: Theme.sev-text(root.sev);
+                    animate ink { duration: Motion.tint(root.swept ? 400ms : 0ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                }
+                Text { text: "used"; font-size: Type.small; color: Theme.ink-3; }
             }
             // ... or the pending / unavailable state in its place ("Reset at 9:29 PM", small 600 ink)
             if root.cell && !root.data.has-value: VerticalLayout {
