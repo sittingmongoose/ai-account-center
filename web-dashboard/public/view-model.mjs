@@ -4,7 +4,16 @@
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
 import { visibleUsageWindows } from './visible-usage.mjs';
-import { antigravityView } from './antigravity-data.mjs';
+import {
+  antigravityView,
+  antigravityColumns,
+  antigravityWindowLabel,
+  antigravityMissingWindow,
+  antigravityNoQuota,
+  antigravityPlanFacts,
+  antigravityPlanNote,
+  antigravityCreditsHint,
+} from './antigravity-data.mjs';
 import { lazyFormat } from './time-format.mjs';
 
 export const VIEW_MODEL_VERSION = 2;
@@ -205,8 +214,7 @@ const PERIOD_LABEL = { '5h': '5-hour', week: 'Weekly', month: 'Monthly' };
 export function windowLabel(provider, w) {
   if (isFable(w)) return 'Fable';
   const p = period(w);
-  if (provider === 'antigravity')
-    return `${/^gemini/i.test(text(w.key)) ? 'Gemini' : 'Claude and GPT'} ${p === '5h' ? '5-hour' : 'weekly'}`;
+  if (provider === 'antigravity') return antigravityWindowLabel(w);
   if (provider === 'cursor')
     return (
       {
@@ -247,6 +255,7 @@ export function shortWindowLabel(provider, w) {
 }
 export function fullWindowLabel(provider, w) {
   if (isFable(w)) return 'Fable weekly';
+  if (provider === 'antigravity' && w.key === 'google-ai-credits') return antigravityWindowLabel(w);
   if (provider === 'codex')
     return (
       { week: 'Weekly', '5h': '5-hour' }[text(w.label)] || text(w.label) || windowLabel(provider, w)
@@ -452,10 +461,16 @@ export function amountView(account, w, now = Date.now(), { noExpiry = false } = 
   }
   return {
     key: `${account.id}|${text(w.key)}`,
-    label: label || 'Balance',
+    label:
+      account.provider === 'antigravity' && w.key === 'google-ai-credits'
+        ? antigravityWindowLabel(w)
+        : label || 'Balance',
     value,
     unit: suffix,
-    sub,
+    sub:
+      account.provider === 'antigravity' && w.key === 'google-ai-credits'
+        ? [sub, antigravityCreditsHint(account)].filter(Boolean).join(' · ')
+        : sub,
     icon,
     spent,
   };
@@ -867,15 +882,18 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
   const native = antigravityView(data, inventory, autoStatus, now);
   const bound = new Map(native.antigravityAccounts.map((row) => [row.id, row]));
   const status = native.antigravityAutoKnown ? autoStatus : null;
-  // Columns: every reported Antigravity rate-limit window, Gemini before Claude and GPT, 5-hour before weekly.
-  const keys = [];
-  for (const account of accounts)
-    for (const w of visibleMeters(account))
-      if (usedPercent(w) !== null && !keys.some((k) => k.key === w.key))
-        keys.push({ key: w.key, w });
-  const order = (w) => (/^gemini/i.test(text(w.key)) ? 0 : 2) + (period(w) === '5h' ? 0 : 1);
-  keys.sort((a, b) => order(a.w) - order(b.w) || a.key.localeCompare(b.key));
-  const columns = keys.map(({ key, w }) => ({ key, label: windowLabel('antigravity', w), shortLabel: shortWindowLabel('antigravity', w) }));
+  // Columns come from the canonical provider buckets; the short single-line heads ride
+  // along, fed by each column's representative window (H3).
+  const columns = antigravityColumns(accounts).map((col) => ({
+    ...col,
+    shortLabel: shortWindowLabel(
+      'antigravity',
+      accounts.flatMap((row) => visibleMeters(row)).find((w) => w.key === col.key) || {
+        key: col.key,
+        label: col.label,
+      }
+    ),
+  }));
   const rows = accounts.map((account) => {
     const nativeRow = bound.get(account.id);
     const active = nativeRow?.selected === true;
@@ -893,16 +911,21 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
     const peak = poolUse.length ? Math.max(...poolUse) : null;
     const above = !!status && !active && peak !== null && peak >= status.thresholdUsedPercent;
     const cr = above ? confirmRuns(peak, status.thresholdUsedPercent, status.enabled === true) : [];
-    const cells = keys.map(({ key }) => {
-      const w = visibleMeters(account).find((row) => row.key === key);
-      const cell = meterView(account, w, {
-        now,
-        notch: w ? notchFor(w) : null,
-        notchFaint: !active,
-      });
-      if (!w) cell.key = `${account.id}|${key}`;
-      return cell;
-    });
+    const noQuota = antigravityNoQuota(account) ? 'No Antigravity quota on this plan' : '';
+    const cells = noQuota
+      ? columns.map(({ key }) => emptyCell(account, key))
+      : columns.map(({ key, label }) => {
+          const w = visibleMeters(account).find((row) => row.key === key);
+          const cell = meterView(account, w, {
+            now,
+            notch: w ? notchFor(w) : null,
+            notchFaint: !active,
+            label,
+            naText: w ? 'Unavailable' : antigravityMissingWindow(account, key),
+          });
+          if (!w) cell.key = `${account.id}|${key}`;
+          return cell;
+        });
     return {
       id: account.id,
       provider: 'antigravity',
@@ -936,8 +959,8 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
           'Ubuntu activation needs a verified login and runtime',
       canMac: false,
       canWindows: false,
-      amountsLine: '',
-      amountsRuns: [],
+      amountsLine: noQuota,
+      amountsRuns: noQuota ? [run(noQuota)] : [],
       confirm: above,
       confirmRuns: cr,
       confirmWords: wordsOf(cr),
@@ -1191,6 +1214,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     account.capabilities?.antigravityProfileId ||
     '';
   const facts = [
+    ...antigravityPlanFacts(account),
     { label: 'Status', value: statusWord(account), mono: false },
     {
       label: 'Sampled',
@@ -1243,6 +1267,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     canMac: !!row?.canMac,
     canWindows: !!row?.canWindows,
     note: [
+      antigravityPlanNote(account),
       opening,
       missingFable
         ? 'Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.'

@@ -303,8 +303,9 @@ rollback.
 
 **Update apps** (the header button, with results in Accounts & Settings)
 starts one allowlisted, asynchronous job for the installed provider apps:
-Antigravity CLI, Muse Code, OMP, Codex CLI, Claude Code, Codex Desktop and
-Claude Desktop. Ubuntu runs locally; the remote targets are the existing
+Antigravity CLI, Muse Code, OMP, Codex CLI, Claude Code, Codex Desktop,
+Claude Desktop and T3 Code with its installed server runtime. Ubuntu runs
+locally; the remote targets are the existing
 fixed Mac and Windows SSH aliases in `APP_UPDATE_SSH_HOSTS`. Helper deployment and the
 existing Windows interactive task are required for remote updates. Absent
 apps are skipped; per-app readiness checks tell unknown from failure, and an

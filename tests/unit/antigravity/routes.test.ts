@@ -455,12 +455,31 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
       claudePlatforms: ['mac'],
     });
     Object.assign(value.windows[0], { raw: PRIVATE, token: PRIVATE, resetPath: PRIVATE });
+    value.antigravityPlan = { class: 'pro', summary: PRIVATE, models: [PRIVATE] };
     value.status = 'cached';
     deps.getAccounts = async () => [value];
     const response = await request('/profiles/quotas');
     expect(response.status).toBe(200);
     expect(response.body.accounts[0]).toEqual({
       ...account(),
+      antigravityPlan: {
+        class: 'pro',
+        quotaPolicy: 'five-hour-weekly',
+        summary: 'Refreshes every 5 hours up to a weekly limit.',
+        models: [
+          'Gemini 3.8 Flash',
+          'Gemini 3.7 Flash',
+          'Gemini 3.6 Flash',
+          'Gemini 3.1 Pro',
+          'Claude Sonnet 5.5',
+          'Claude Opus 5.5',
+          'Claude Sonnet 4.6',
+          'Claude Opus 4.6',
+          'GPT-OSS-120B',
+        ],
+        thirdPartyModels: true,
+        creditsOverage: true,
+      },
       status: 'cached',
       message: 'Showing the last successful Antigravity usage reading.',
     });

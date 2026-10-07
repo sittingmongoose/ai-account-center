@@ -99,6 +99,9 @@ struct MeterView: View {
   /// meter then shows no number, no fill and no notch, never 0%: "Reset at 10:15 AM · new reading pending".
   var pendingReset: Date? = nil
   var labelText: String? = nil
+  /// A second line under `labelText` (Details splits a pool label into pool name and period), so a
+  /// long pool name never truncates.
+  var labelSubtitle: String? = nil
   var notch: Double? = nil
   var notchOpacity: Double = 1
   var showAmount = false
@@ -135,11 +138,23 @@ struct MeterView: View {
     }
   }
 
+  @ViewBuilder private func title(_ palette: TrayPalette) -> some View {
+    if let labelSubtitle {
+      // Details: the pool name as the title, the period under it, so the name is never truncated.
+      VStack(alignment: .leading, spacing: 1) {
+        Text(labelText ?? "").font(.system(size: 11.5, weight: .medium)).foregroundStyle(palette.label2).lineLimit(1)
+        Text(labelSubtitle).font(.system(size: 11)).foregroundStyle(palette.label2).lineLimit(1)
+      }
+    } else {
+      Text(labelText ?? "").font(.system(size: 11.5, weight: .medium)).foregroundStyle(palette.label2)
+        .lineLimit(1).truncationMode(.tail)
+    }
+  }
+
   @ViewBuilder private func top(_ palette: TrayPalette, _ severity: MeterSeverity) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 5) {
-      if let labelText {
-        Text(labelText).font(.system(size: 11.5, weight: .medium)).foregroundStyle(palette.label2)
-          .lineLimit(1).truncationMode(.tail)
+      if labelText != nil {
+        title(palette)
         Spacer(minLength: 4)
         value(palette, severity, size: 14)
       } else if let reset = pendingReset {
@@ -150,7 +165,7 @@ struct MeterView: View {
         Spacer(minLength: 4)
         if let window { ResetLabel(iso: window.resetAt) }
       }
-    }.frame(height: 17)
+    }.frame(height: labelSubtitle == nil ? 17 : nil)
   }
 
   @ViewBuilder private func value(_ palette: TrayPalette, _ severity: MeterSeverity, size: CGFloat) -> some View {
@@ -242,8 +257,9 @@ struct PendingResetText: View {
   }
 }
 
-/// "6d 20h" or "8:15 PM" with a clock glyph; quiet text, emphasised when under two hours. In a tight
-/// column the glyph gives way before the text is shortened.
+/// "6d 20h" or "8:15 PM" with a clock glyph; quiet text, emphasised when under two hours. A reset
+/// label never truncates: when value and reset share a tight cell the glyph gives way first, then the
+/// countdown's largest unit stands alone ("6d", "5h", "47m"). The tooltip keeps the full reset.
 struct ResetLabel: View {
   let iso: String?
   var body: some View {
@@ -251,11 +267,13 @@ struct ResetLabel: View {
       if let text = TrayFormat.shortReset(iso) {
         let soon = TrayFormat.isSoon(iso)
         let label = Text(text).font(.system(size: 11.5, weight: soon ? .medium : .regular)).monospacedDigit().lineLimit(1)
+        let short = Text(TrayFormat.shortestReset(iso) ?? text)
+          .font(.system(size: 11.5, weight: soon ? .medium : .regular)).monospacedDigit().lineLimit(1)
         let clock = Image(systemName: "clock").font(.system(size: 10.5, weight: .medium))
         ViewThatFits(in: .horizontal) {
           HStack(spacing: 4) { clock; label }.fixedSize()
           label.fixedSize()
-          HStack(spacing: 4) { clock; label.minimumScaleFactor(0.8) }
+          short.fixedSize()
         }
         .foregroundStyle(soon ? palette.label : palette.label2)
         .trayHelp(TrayFormat.longReset(iso))

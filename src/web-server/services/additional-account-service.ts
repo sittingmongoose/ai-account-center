@@ -1,6 +1,11 @@
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
+import {
+  antigravityPlanDisplay,
+  cloneAntigravityPlan,
+  type AntigravityReportedPlan,
+} from '../../antigravity/plan';
 import { parseSourceManifest, readSourceManifestFile } from './account-usage-manifest';
 import {
   readAccountRegistry,
@@ -33,8 +38,10 @@ const LABELS: Record<AdditionalProvider, string> = {
 const PLATFORM_LABELS = { ubuntu: 'Ubuntu', mac: 'Mac', windows: 'Windows' };
 const MUSE_CACHED_MESSAGES = new Set([
   'Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically.',
-  'Showing the last successful Muse usage reading. Usage refreshes automatically.',
 ]);
+/** Sent by helpers synced before the home stopped showing it; the cached status and sample time already say so. */
+const MUSE_LEGACY_CACHED_MESSAGE =
+  'Showing the last successful Muse usage reading. Usage refreshes automatically.';
 const MUSE_TRANSIENT_FAILURES = new Set(['rate_limited', 'provider_error', 'network_error']);
 
 export interface AdditionalAccountDeps {
@@ -234,20 +241,40 @@ function normalize(
   if (source.provider === 'muse' && (!account.email || !account.plan)) invalidIdentity = true;
   account.fetchedAt = timestamp(result.fetchedAt);
   account.sampledAt = timestamp(result.sampledAt);
+  if (source.provider === 'antigravity')
+    Object.assign(
+      account,
+      antigravityPlanDisplay(
+        displayText(result.plan, 80),
+        account.sampledAt ?? account.fetchedAt,
+        record(result.reportedPlan) ? (result.reportedPlan as AntigravityReportedPlan) : undefined
+      )
+    );
   if (status === 'ok' || status === 'cached') {
     account.windows = Array.isArray(result.windows)
       ? result.windows
           .slice(0, MAX_USAGE_WINDOWS)
-          .map(usageWindow)
+          .map((window, index) =>
+            usageWindow(
+              source.provider === 'antigravity' &&
+                record(window) &&
+                window.key === 'google-ai-credits'
+                ? { ...window, label: 'AI credits (overage)' }
+                : window,
+              index
+            )
+          )
           .filter((window): window is DashboardAccountWindow => window !== null)
       : [];
     account.message =
       source.provider === 'muse' && status === 'cached'
-        ? typeof result.message === 'string' && MUSE_CACHED_MESSAGES.has(result.message)
-          ? result.message
-          : 'Showing the last saved Muse usage sample.'
+        ? typeof result.message === 'string' && result.message !== MUSE_LEGACY_CACHED_MESSAGE
+          ? MUSE_CACHED_MESSAGES.has(result.message)
+            ? result.message
+            : 'Showing the last saved Muse usage sample.'
+          : null
         : null;
-    if (account.windows.length === 0) {
+    if (account.windows.length === 0 && account.antigravityPlan?.quotaPolicy !== 'none') {
       account.status = 'error';
       account.message = 'Account usage is temporarily unavailable.';
     }
@@ -270,6 +297,11 @@ function normalize(
 function copy(account: DashboardAccount, cached = false): DashboardAccount {
   return {
     ...account,
+    ...(account.antigravityPlan
+      ? {
+          antigravityPlan: cloneAntigravityPlan(account.antigravityPlan),
+        }
+      : {}),
     status: cached && account.status === 'ok' ? 'cached' : account.status,
     windows: account.windows.map((window) => ({ ...window })),
     capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
@@ -450,7 +482,7 @@ export class AdditionalAccountService {
         status: 'cached',
         message:
           source.provider === 'muse'
-            ? 'Showing the last successful Muse usage reading. Usage refreshes automatically.'
+            ? null
             : 'Live account usage is temporarily unavailable; showing the last saved sample.',
       };
     }

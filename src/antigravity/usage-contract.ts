@@ -4,6 +4,7 @@ import type {
 } from '../web-server/services/account-dashboard-types';
 import type { ActivateRequest, ActivationResult } from './types';
 import type { AntigravityRecoveryResult } from './switch-service';
+import type { AntigravityReportedPlan } from './plan';
 
 /** Host scope is deliberately fixed: desktop controls target the Ubuntu CLI. */
 export type AntigravityHostId = 'ubuntu';
@@ -34,6 +35,7 @@ export interface AntigravityUsageSample {
   sampledAt: string | null;
   windows: unknown[];
   retryAfterSeconds?: number;
+  reportedPlan?: AntigravityReportedPlan;
 }
 
 export interface AntigravityPoolWindow extends DashboardAccountWindow {

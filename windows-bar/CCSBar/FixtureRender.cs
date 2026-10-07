@@ -124,6 +124,55 @@ public static class FixtureRender
             report.Checks[$"{name}_antigravity_switching_survives_tray_hiding"] = FindUid(window.ContentPanel, "row:antigravity:example-2") is null
                 && agRow is not null && FindUid(agRow, "mutation:activate") is not null && agSection is not null && FindUid(agSection, "mutation:toggle") is not null;
 
+            // Antigravity plan display (ANTIGRAVITY-SPEC): the fixture's three plans on the four columns — the Pro
+            // account shows all four meters, the Free account's missing 5-hour cells read "Weekly only" and "Not on
+            // plan", and the Workspace row says it has no quota. Then the expanded details: pools ordered Gemini
+            // 5-hour first, whole pool titles, the AI credits (overage) row with its hint.
+            window.ApplyDashboardSample(Clone(fixture));
+            await Settle(window);
+            SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-plans.png"));
+            var planSection = FindUid(window.ContentPanel, "section:antigravity");
+            report.Checks[$"{name}_antigravity_four_columns_and_plans"] = planSection is not null
+                && FindUid(planSection, "row:antigravity:example-3") is not null && FindUid(planSection, "row:antigravity:example-4") is not null;
+            var planMeters = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.IsVisible).ToArray();
+            var weeklyOnly = planMeters.FirstOrDefault(meter => meter.Key == "antigravity:example-3|gemini-5h");
+            var weeklyOnlyThird = planMeters.FirstOrDefault(meter => meter.Key == "antigravity:example-3|3p-5h");
+            report.Checks[$"{name}_antigravity_muted_cells_are_honest"] = weeklyOnly is { DrawnUnavailable: true } && weeklyOnly.ValueShown == "Weekly only"
+                && weeklyOnlyThird is { DrawnUnavailable: true } && weeklyOnlyThird.ValueShown == "Weekly only"
+                && planMeters.Any(meter => meter.Key == "antigravity:example-3|gemini-weekly" && meter.Target is 22.5);
+            report.Checks[$"{name}_antigravity_no_quota_row_line"] = planSection is not null
+                && All(planSection).OfType<TextBlock>().Any(text => text.Text == "No Antigravity quota on this plan");
+            // Without third-party models one "Not on plan" marker spans both Claude/GPT columns (a Free account
+            // after the removal date).
+            var withoutThird = Clone(fixture);
+            var free = withoutThird.Accounts.First(account => account.Id == "antigravity:example-3");
+            free.AntigravityPlan!.ThirdPartyModels = false;
+            free.Windows.RemoveAll(window => window.Key.StartsWith("3p", StringComparison.Ordinal));
+            window.ApplyDashboardSample(withoutThird);
+            await Settle(window);
+            var notOnPlan = All(window.ContentPanel).OfType<Meter>().FirstOrDefault(meter => meter.IsVisible && meter.Key == "antigravity:example-3|3p-5h");
+            var markerRow = FindUid(window.ContentPanel, "row:antigravity:example-3");
+            var markerCell = markerRow is null ? null : All(markerRow).FirstOrDefault(element => element is Meter meter && meter.Key == "antigravity:example-3|3p-5h") as FrameworkElement;
+            report.Checks[$"{name}_antigravity_not_on_plan_cell"] = notOnPlan is { DrawnUnavailable: true } && notOnPlan.ValueShown == "Not on plan"
+                && markerCell is { } spanned && System.Windows.Controls.Grid.GetColumnSpan(spanned) == 3;
+            window.ToggleDetailsForCheck("antigravity:example-1");
+            await Settle(window);
+            var planDetails = FindUid(window.ContentPanel, "details");
+            var detailMeters = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Detail && meter.IsVisible).Select(meter => meter.Key).ToArray();
+            report.Checks[$"{name}_antigravity_details_pool_order"] = detailMeters.SequenceEqual(new[]
+            {
+                "detail:antigravity:example-1|gemini-5h", "detail:antigravity:example-1|gemini-weekly", "detail:antigravity:example-1|3p-5h", "detail:antigravity:example-1|3p-weekly",
+            });
+            var planBlocks = All(window.ContentPanel).OfType<TextBlock>().Select(text => text.Text).ToArray();
+            report.Checks[$"{name}_antigravity_details_plan_notes"] = planBlocks.Contains("Refreshes every 5 hours up to a weekly limit.")
+                && planBlocks.Any(text => text.StartsWith("Models: Gemini 3.8 Flash", StringComparison.Ordinal))
+                && planBlocks.Contains("Family members sharing this plan may share one quota pool.")
+                && planBlocks.Contains("AI credits (overage)")
+                && planBlocks.Contains("Used only after the plan quota runs out, when AI Credit Overages is on.");
+            report.Checks[$"{name}_antigravity_details_not_truncated"] = planDetails is not null && NoClippedText(planDetails);
+            SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-details.png"));
+            window.ToggleDetailsForCheck("antigravity:example-1");
+
             // Hidden providers are honoured; an unknown provider still renders, with the neutral mark.
             var hidden = Clone(fixture);
             // "Show in tray" off for Kimi Code hides it; "Show on dashboard" off for Muse does not; an account hidden in the
@@ -711,13 +760,13 @@ public static class FixtureRender
 
     private static bool SameLine(Dictionary<string, double> measures, string a, string b) => measures.TryGetValue(a, out var x) && measures.TryGetValue(b, out var y) && Math.Abs(x - y) <= 0.5;
 
-    /// <summary>Antigravity's slot (Not reported ring) starts on the Codex slot line.</summary>
+    /// <summary>Antigravity's slot ring (the "Not reported" label) starts on the Codex slot line.</summary>
     private static bool SlotLine(MainWindow window, Dictionary<string, double> measures, string name)
     {
         var section = FindUid(window.ContentPanel, "section:antigravity");
         var codexButton = All(FindUid(window.ContentPanel, "section:codex")!).OfType<Button>().FirstOrDefault(button => button.Uid == "mutation:activate");
         if (section is null || codexButton is null) return false;
-        var ring = All(section).OfType<System.Windows.Shapes.Ellipse>().FirstOrDefault();
+        var ring = FindUid(section, "slot-ring");
         if (ring is null) return false;
         measures[name + "_ag_ring"] = X(ring, window);
         return Math.Abs(X(ring, window) - X(codexButton, window)) <= 0.5;

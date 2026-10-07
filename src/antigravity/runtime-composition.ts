@@ -1,4 +1,5 @@
 import { AntigravityError } from './errors';
+import { cloneAntigravityPlan } from './plan';
 import path from 'path';
 import { isNativeVersion } from './native-version';
 import { AntigravityProfileRegistry, identityKey } from './registry';
@@ -84,6 +85,11 @@ export interface AntigravityRuntime extends AntigravityApiDependencies {
 function copyAccount(account: AntigravityDashboardAccount): AntigravityDashboardAccount {
   return {
     ...account,
+    ...(account.antigravityPlan
+      ? {
+          antigravityPlan: cloneAntigravityPlan(account.antigravityPlan),
+        }
+      : {}),
     windows: account.windows.map((window) => ({
       ...window,
       ...(window.modelIds ? { modelIds: [...window.modelIds] } : {}),

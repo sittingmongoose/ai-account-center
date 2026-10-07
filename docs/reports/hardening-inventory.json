@@ -353,8 +353,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 198,
-    "filesAffected": 75,
+    "totalMarkers": 200,
+    "filesAffected": 76,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -604,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 38,
-      "totalSourceFiles": 408,
-      "coverageRatio": 0.0931,
+      "totalSourceFiles": 409,
+      "coverageRatio": 0.0929,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -642,7 +642,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 36,
+          "count": 37,
           "withLogger": 0
         },
         {
@@ -811,8 +811,8 @@
           "loc": 672
         },
         {
-          "file": "src/web-server/services/codex-auto-switch-service.ts",
-          "loc": 667
+          "file": "src/web-server/services/additional-account-service.ts",
+          "loc": 668
         }
       ]
     }

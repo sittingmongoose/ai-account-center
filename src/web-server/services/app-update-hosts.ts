@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
 
@@ -36,7 +37,8 @@ export function antigravityReviewedArgument(releaseFile = defaultNativeReleaseFi
 
 export function appUpdateInvocation(
   platform: UpdatePlatform,
-  reviewed = antigravityReviewedArgument()
+  reviewed = antigravityReviewedArgument(),
+  stateDirectory = path.join(getCcsDir(), 'app-updates')
 ): { binary: string; args: string[] } {
   const local = path.resolve(__dirname, '../../../scripts/app-updates/app_updates.py');
   const review = /^[0-9A-Za-z_.,-]{1,4096}$/.test(reviewed) ? reviewed : '';
@@ -48,6 +50,9 @@ export function appUpdateInvocation(
         '--apply',
         '--platform',
         'ubuntu',
+        '--state-dir',
+        path.resolve(stateDirectory),
+        '--dashboard-job',
         ...(review ? ['--agy-reviewed', review] : []),
       ],
     };
@@ -94,6 +99,8 @@ export function appUpdateInvocation(
  * and a stop out. A runner that has neither (a test double) simply ignores it.
  */
 export interface HostRunControl {
+  /** Resolved directory holding this dashboard's job and exclusive lock. */
+  stateDirectory?: string;
   /** One parsed progress line ({"event": "app"|"result", ...}) from the helper. */
   onEvent(event: Record<string, unknown>): void;
   /** Registers how to forward a cancel to the running helper. */
@@ -108,7 +115,7 @@ export interface HostRunControl {
  * stdin stays open so a "cancel" line can reach the helper (over ssh too).
  */
 export function runHost(platform: UpdatePlatform, control?: HostRunControl): Promise<string> {
-  const command = appUpdateInvocation(platform);
+  const command = appUpdateInvocation(platform, undefined, control?.stateDirectory);
   return runHelperProcess(
     command.binary,
     command.args,
@@ -211,6 +218,7 @@ const HELPER_FILES = [
   'app_updates.py',
   'app_update_common.py',
   'app_update_desktop.py',
+  'app_update_t3.py',
   'app_update_processes.py',
   'app_update_terminal.py',
   'app_update_terminal_child.py',

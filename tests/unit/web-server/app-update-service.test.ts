@@ -13,6 +13,7 @@ import {
   type UpdatePlatform,
 } from '../../../src/web-server/services/app-update-service';
 import { APP_UPDATE_SSH_HOSTS } from '../../../src/web-server/services/app-update-hosts';
+import { runWithScopedCcsHome, runWithScopedConfigDir } from '../../../src/utils/config-manager';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -80,18 +81,18 @@ describe('fixed app update service', () => {
     expect([...calls].sort()).toEqual(['mac', 'ubuntu', 'windows']);
     expect(
       service.getStatus().job!.results.filter((row) => row.platform !== 'ubuntu')
-    ).toHaveLength(14);
+    ).toHaveLength(16);
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
     expect(calls).toHaveLength(3);
-    expect(job.results).toHaveLength(21);
+    expect(job.results).toHaveLength(24);
     expect(job.state).toBe('failed');
     expect(job.activePlatform).toBeNull();
     expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
     const clone = service.getStatus().job!;
     clone.results.length = 0;
-    expect(service.getStatus().job!.results).toHaveLength(21);
+    expect(service.getStatus().job!.results).toHaveLength(24);
   });
   it('executes only the three fixed host-local helpers', () => {
     const local = appUpdateInvocation('ubuntu');
@@ -107,6 +108,48 @@ describe('fixed app update service', () => {
     const script = Buffer.from(encoded, 'base64').toString('utf16le');
     expect(script).toContain('--apply --platform windows');
     expect(script).not.toContain('Invoke-Expression');
+  });
+  it('passes the resolved dashboard state directory for legacy home and custom config paths', async () => {
+    const home = directory();
+    const check = async (expected: string) => {
+      const local = appUpdateInvocation('ubuntu', '');
+      expect(local.args[local.args.indexOf('--state-dir') + 1]).toBe(expected);
+      expect(local.args).toContain('--dashboard-job');
+      const service = new AppUpdateService({
+        runHost: async (platform, control) => {
+          expect(control.stateDirectory).toBe(expected);
+          expect(fs.existsSync(path.join(expected, 'dashboard-update.lock'))).toBe(true);
+          const invocation = appUpdateInvocation(platform, '', control.stateDirectory);
+          if (platform === 'ubuntu')
+            expect(invocation.args[invocation.args.indexOf('--state-dir') + 1]).toBe(expected);
+          else expect(invocation.args.join(' ')).not.toContain(expected);
+          return payload();
+        },
+      });
+      service.start();
+      await finish(service);
+      expect(service.getStatus().job?.state).toBe('completed');
+    };
+    await runWithScopedCcsHome(home, () => check(path.join(home, '.ccs', 'app-updates')));
+    const configDir = path.join(home, 'config with spaces');
+    await runWithScopedConfigDir(configDir, () => check(path.join(configDir, 'app-updates')));
+  });
+  it('uses a service directory override instead of recomputing the helper state path', async () => {
+    const ccsDir = directory();
+    const stateDirectory = path.join(ccsDir, 'app-updates');
+    const service = new AppUpdateService({
+      ccsDir,
+      runHost: async (platform, control) => {
+        expect(control.stateDirectory).toBe(stateDirectory);
+        const invocation = appUpdateInvocation(platform, '', control.stateDirectory);
+        if (platform === 'ubuntu')
+          expect(invocation.args[invocation.args.indexOf('--state-dir') + 1]).toBe(stateDirectory);
+        return payload();
+      },
+    });
+    service.start();
+    await finish(service);
+    expect(service.getStatus().job?.state).toBe('completed');
   });
   it('hands every host the packaged Antigravity reviewed versions, quoted', () => {
     const reviewed = antigravityReviewedArgument();
@@ -270,7 +313,7 @@ describe('fixed app update service', () => {
     'returns fixed errors for malformed helper output',
     (raw) => {
       const rows = normalizeAppUpdateResults(raw, 'ubuntu');
-      expect(rows).toHaveLength(7);
+      expect(rows).toHaveLength(8);
       expect(rows.every((row) => row.status === 'failed')).toBe(true);
     }
   );
@@ -339,7 +382,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(first);
     expect(second.getStatus().job!.state).toBe('completed');
-    expect(second.getStatus().job!.results).toHaveLength(21);
+    expect(second.getStatus().job!.results).toHaveLength(24);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
   it('refuses a cancel from a process that does not own the running job', async () => {
@@ -369,7 +412,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(owner);
     expect(owner.getStatus().job!.results.filter((row) => row.status === 'skipped')).toHaveLength(
-      14
+      16
     );
   });
   it('marks an interrupted persisted job failed without replaying it', () => {

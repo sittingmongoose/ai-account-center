@@ -216,6 +216,8 @@ public sealed class DashboardAccount
     public bool? TrayHidden { get; set; }
     public List<QuotaWindow> Windows { get; set; } = new();
     public AccountCapabilities Capabilities { get; set; } = new();
+    /// <summary>Antigravity only: the plan's quota shape (optional, absent when the plan is unknown).</summary>
+    public AntigravityPlan? AntigravityPlan { get; set; }
     /// <summary>Claude only (accounts[].signInNeeded): the computers where this profile is not signed in, so the
     /// tray says so before Open. Read loosely: anything but "mac" and "windows" strings is ignored, and a missing or
     /// malformed value never fails the dashboard.</summary>
@@ -310,6 +312,26 @@ public sealed class ClaudeOpenReply
     public string? Platform { get; set; }
     public string? State { get; set; }
     public string? OperationId { get; set; }
+}
+
+/// <summary>Antigravity plan facts the dashboard reports (ANTIGRAVITY-SPEC v1). Optional on every account and
+/// absent when the plan is unknown, so cached samples and older payloads keep working: the tray only decodes,
+/// the class and quota-policy table lives in the server.</summary>
+public sealed class AntigravityPlan
+{
+    /// <summary>free, plus, pro-trial, pro, ultra, ultra-5x, ultra-20x, enterprise-*, workspace; unknown passes through.</summary>
+    public string Class { get; set; } = "";
+    /// <summary>weekly, five-hour-weekly, pooled-7d, metered or none.</summary>
+    public string QuotaPolicy { get; set; } = "";
+    /// <summary>One plain sentence for details and tooltips.</summary>
+    public string Summary { get; set; } = "";
+    public List<string> Models { get; set; } = new();
+    /// <summary>Whether the plan has any Claude/GPT model at the sample time.</summary>
+    public bool? ThirdPartyModels { get; set; }
+    /// <summary>True when purchased AI credits can serve as the overage (pro and ultra).</summary>
+    public bool? CreditsOverage { get; set; }
+
+    [JsonIgnore] public bool IsProOrUltra => Class is "pro" or "pro-trial" or "ultra" or "ultra-5x" or "ultra-20x";
 }
 
 /// <summary>Antigravity's own automatic switching (thresholdUsedPercent is % USED, unlike Codex).</summary>

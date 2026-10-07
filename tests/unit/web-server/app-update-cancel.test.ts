@@ -55,14 +55,14 @@ describe('cancellable app updates', () => {
     expect(calls).toEqual(['ubuntu']);
     const running = job.results.filter((row) => row.platform === 'ubuntu');
     const queued = job.results.filter((row) => row.platform !== 'ubuntu');
-    expect(running).toHaveLength(7);
+    expect(running).toHaveLength(8);
     expect(running.every((row) => row.status === 'current')).toBe(true);
-    expect(queued).toHaveLength(14);
+    expect(queued).toHaveLength(16);
     expect(queued.every((row) => row.status === 'skipped')).toBe(true);
     expect(queued.every((row) => row.message === MESSAGES.skipped_cancelled)).toBe(true);
     expect(queued.every((row) => row.updateAttempted === false)).toBe(true);
-    expect(job.results).toHaveLength(21);
-    expect(job.expectedResults).toBe(21);
+    expect(job.results).toHaveLength(24);
+    expect(job.expectedResults).toBe(24);
     expect(job.state).toBe('completed');
     expect(job.cancelRequested).toBe(true);
     expect(job.activePlatform).toBeNull();
@@ -100,8 +100,8 @@ describe('cancellable app updates', () => {
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(21);
-    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength(14);
+    expect(job.results).toHaveLength(24);
+    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength(16);
   });
 
   it('cancel with no job is a no-op', () => {
@@ -134,7 +134,7 @@ describe('cancellable app updates', () => {
     await finish(service);
     const job = service.getStatus().job!;
     const windows = job.results.filter((row) => row.platform === 'windows');
-    expect(windows).toHaveLength(7);
+    expect(windows).toHaveLength(8);
     expect(windows.every((row) => row.status === 'unknown')).toBe(true);
     expect(windows.every((row) => row.message === MESSAGES.host_unknown)).toBe(true);
     expect(windows.every((row) => row.updateAttempted === false)).toBe(true);
