@@ -181,8 +181,8 @@ export component AxSessionsCard inherits AxCard {
         spacing: 14px;
         vertical-stretch: 1;
         // the stats spread across the card at the top under the subtitle, as the concept draws them; the
-        // table below keeps its own shared grid. Below D the three columns are exactly equal (zero
-        // preferred widths), so the figures never overlap in a narrow card.
+        // table below keeps its own shared grid. Below D the three columns are exact thirds of the row,
+        // so the figures never overlap in a narrow card.
         if Breakpoints.tier-d: HorizontalLayout {
             spacing: 12px;
             vertical-stretch: 0;
@@ -212,7 +212,10 @@ export component AxSessionsCard inherits AxCard {
             for s[i] in AxData.sess-stats: VerticalLayout {
                 horizontal-stretch: 1;
                 min-width: 0px;
-                preferred-width: 0px;
+                // exact thirds of the card's allotted width (task 9 O5): preferred-width 0 measured the
+                // wrapped labels at width 0 (a line per char), whose preferred height stretched the card
+                // ~450 px past its content. cell-w is window-derived, so this cannot loop.
+                preferred-width: (root.cell-w - 2 * root.pad - 24px) / 3;
                 spacing: 3px;
                 AxNum {
                     num: s.num;
