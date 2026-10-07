@@ -15,6 +15,9 @@ const WASM_NAME = 'ccs_account_dashboard';
 /** The one import of the wasm-bindgen glue that the packaged bridge.js rewrites. */
 const BRIDGE_IMPORT = `'./pkg/${WASM_NAME}.js'`;
 const BRIDGE_IMPORT_ERROR = `bridge.js must import ./pkg/${WASM_NAME}.js exactly once.`;
+/** The service worker's build placeholder, stamped with the content build id. */
+const SW_BUILD_ID = '__AAC_BUILD_ID__';
+const SW_BUILD_ID_ERROR = 'sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.';
 const PRECOMPRESSED_EXTENSIONS = new Set([
   '.wasm',
   '.js',
@@ -138,6 +141,12 @@ function versionedBridgeSource(source, buildId) {
   assertBridgeImport(source);
   const index = source.indexOf(BRIDGE_IMPORT);
   return `${source.slice(0, index)}'./pkg/${buildId}/${WASM_NAME}.js'${source.slice(index + BRIDGE_IMPORT.length)}`;
+}
+
+/** Stamp the content build id into the packaged sw.js only; the source keeps the placeholder. */
+function stampedSwSource(source, buildId) {
+  if (countLiteral(source, SW_BUILD_ID) !== 1) throw new Error(SW_BUILD_ID_ERROR);
+  return source.replace(SW_BUILD_ID, buildId);
 }
 
 /** Relative POSIX paths of every file below a directory, sorted for reproducible output. */
@@ -290,10 +299,16 @@ function buildUi(options = {}) {
     fs.readFileSync(path.join(publicDir, 'bridge.js'), 'utf8'),
     buildId
   );
+  // The service worker is stamped the same way; fixtures without one are left alone.
+  const swPath = path.join(publicDir, 'sw.js');
+  const sw = fs.existsSync(swPath)
+    ? stampedSwSource(fs.readFileSync(swPath, 'utf8'), buildId)
+    : null;
   fs.rmSync(packagedUi, { recursive: true, force: true });
   fs.mkdirSync(packagedUi, { recursive: true });
   fs.cpSync(publicDir, packagedUi, { recursive: true });
   fs.writeFileSync(path.join(packagedUi, 'bridge.js'), bridge);
+  if (sw !== null) fs.writeFileSync(path.join(packagedUi, 'sw.js'), sw);
   // wasm-pack's generated '*' ignore rule would hide the runtime from npm pack.
   fs.cpSync(pkg, path.join(packagedUi, 'pkg', buildId), {
     recursive: true,
@@ -347,10 +362,12 @@ module.exports = {
   assertLockedSlint,
   assertBridgeImport,
   versionedBridgeSource,
+  stampedSwSource,
   sourceFingerprint,
   commandRunner,
   toolPath,
   BRIDGE_IMPORT_ERROR,
+  SW_BUILD_ID_ERROR,
   PRECOMPRESSED_EXTENSIONS,
   WASM_NAME,
 };
