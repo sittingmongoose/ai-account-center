@@ -142,6 +142,44 @@ public struct CodexAutoSwitch: Decodable, Sendable {
   public let usingCredits: Bool?
 }
 
+/// The dashboard's normalized Antigravity plan facts (ANTIGRAVITY-SPEC 2026-10-07, backend contract 2).
+/// Absent when the plan is unknown; every field inside is optional and read loosely, so older dashboards
+/// and cached samples decode unchanged and a malformed entry never fails the account.
+public struct AntigravityPlan: Decodable, Sendable, Equatable {
+  /// The plan class string, exactly as reported ("free", "pro", "ultra-5x", "workspace", ...). Unknown
+  /// values pass through unread rather than failing: the display rules below key off the known ones only.
+  public let planClass: String?
+  /// "weekly | five-hour-weekly | pooled-7d | metered | none".
+  public let quotaPolicy: String?
+  /// One plain sentence for details and tooltips.
+  public let summary: String?
+  /// Short model names at the sample time.
+  public let models: [String]
+  public let thirdPartyModels: Bool?
+  public let creditsOverage: Bool?
+
+  private enum CodingKeys: String, CodingKey {
+    case planClass = "class", quotaPolicy, summary, models, thirdPartyModels, creditsOverage
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    planClass = (try? container.decodeIfPresent(String.self, forKey: .planClass)) ?? nil
+    quotaPolicy = (try? container.decodeIfPresent(String.self, forKey: .quotaPolicy)) ?? nil
+    summary = (try? container.decodeIfPresent(String.self, forKey: .summary)) ?? nil
+    models = ((try? container.decodeIfPresent(LenientStringList.self, forKey: .models)) ?? nil)?.values ?? []
+    thirdPartyModels = (try? container.decodeIfPresent(Bool.self, forKey: .thirdPartyModels)) ?? nil
+    creditsOverage = (try? container.decodeIfPresent(Bool.self, forKey: .creditsOverage)) ?? nil
+  }
+
+  /// The family-sharing note's classes: the paid Pro and Ultra plans (ANTIGRAVITY-SPEC display rules).
+  public var sharesFamilyPool: Bool { ["pro", "ultra", "ultra-5x", "ultra-20x"].contains(planClass ?? "") }
+  /// Free and AI Plus: a weekly quota with no 5-hour refresh.
+  public var weeklyOnly: Bool { quotaPolicy == "weekly" }
+  /// Workspace and the no-entitlement enterprise classes: no bundled Antigravity quota.
+  public var noQuota: Bool { quotaPolicy == "none" }
+}
+
 public struct DashboardAccount: Decodable, Identifiable, Sendable {
   public let id: String
   public let provider: String
@@ -164,6 +202,38 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   /// Claude only (`accounts[].signInNeeded`): the computers where this profile is not signed in, so the tray can say
   /// so before Open. Read loosely: anything but strings is skipped, and a malformed value never fails the dashboard.
   public let signInNeeded: LenientStringList?
+  /// Antigravity only (`accounts[].antigravityPlan`): the normalized plan facts. Absent means unknown; a
+  /// malformed object reads as absent rather than failing the account.
+  public let antigravityPlan: AntigravityPlan?
+
+  private enum CodingKeys: String, CodingKey {
+    case id, provider, providerLabel, label, email, plan, platform, source, status, message
+    case fetchedAt, sampledAt, isActive, windows, capabilities, trayHidden, signInNeeded, antigravityPlan
+  }
+
+  // A hand-written init (the struct was synthesized before `antigravityPlan`) so the new object can be
+  // read with try?: a malformed plan must not fail the account, the way a malformed policy is ignored.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    provider = try container.decode(String.self, forKey: .provider)
+    providerLabel = try container.decode(String.self, forKey: .providerLabel)
+    label = try container.decode(String.self, forKey: .label)
+    email = try container.decodeIfPresent(String.self, forKey: .email)
+    plan = try container.decodeIfPresent(String.self, forKey: .plan)
+    platform = try container.decode(String.self, forKey: .platform)
+    source = try container.decode(String.self, forKey: .source)
+    status = try container.decode(String.self, forKey: .status)
+    message = try container.decodeIfPresent(String.self, forKey: .message)
+    fetchedAt = try container.decodeIfPresent(String.self, forKey: .fetchedAt)
+    sampledAt = try container.decodeIfPresent(String.self, forKey: .sampledAt)
+    isActive = try container.decode(Bool.self, forKey: .isActive)
+    windows = try container.decode([AccountQuotaWindow].self, forKey: .windows)
+    capabilities = try container.decode(AccountCapabilities.self, forKey: .capabilities)
+    trayHidden = try container.decodeIfPresent(Bool.self, forKey: .trayHidden)
+    signInNeeded = try container.decodeIfPresent(LenientStringList.self, forKey: .signInNeeded)
+    antigravityPlan = (try? container.decodeIfPresent(AntigravityPlan.self, forKey: .antigravityPlan)) ?? nil
+  }
 
   public var identity: String { email ?? label }
   /// The computers that need a sign-in before Open, in Mac, Windows order, limited to where this profile opens.

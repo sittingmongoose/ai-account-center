@@ -481,10 +481,8 @@ def matches(state, email, plan, team, access):
 
 def state_sample(state, cached):
     message = None
-    if cached:
-        message = ("Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically."
-                   if state["lastError"] == "rate_limited" else
-                   "Showing the last successful Muse usage reading. Usage refreshes automatically.")
+    if cached and state["lastError"] == "rate_limited":
+        message = "Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically."
     return {"teamId": state["teamId"], "quota": state["quota"], "sampledAt": state["sampledAt"],
             "cached": cached, "message": message}
 

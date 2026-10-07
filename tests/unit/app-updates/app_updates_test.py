@@ -151,7 +151,7 @@ class UpdaterTests(unittest.TestCase):
     def test_absent_apps_never_install(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value={key: None for key in common.APP_LABELS}), mock.patch.object(updater, 'perform_cli_update') as update:
             value = updater.run_apply('ubuntu')
-        self.assertEqual(len(value['results']), 7)
+        self.assertEqual(len(value['results']), len(common.APP_LABELS))
         self.assertTrue(all(item['status'] == 'not_installed' for item in value['results']))
         update.assert_not_called()
 
@@ -183,16 +183,16 @@ class UpdaterTests(unittest.TestCase):
             return ('failed', 'unsupported') if install.app_id == 'muse-code' else None
         def cli(install, deadline, phase=None):
             return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'antigravity_hold', return_value=None):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'update_t3', side_effect=cli) as t3_update, mock.patch.object(updater, 'antigravity_hold', return_value=None):
             value = updater.run_apply('ubuntu')
         rows = {item['appId']: item for item in value['results']}
-        self.assertEqual(len(value['results']), 7)
+        self.assertEqual(len(value['results']), len(common.APP_LABELS))
         self.assertEqual(rows['muse-code']['status'], 'failed')
         self.assertEqual(rows['muse-code']['messageCode'], 'unsupported')
         self.assertFalse(rows['muse-code']['updateAttempted'])
-        attempted = {call.args[0].app_id for call in update.call_args_list} | {call.args[0].app_id for call in desktop_update.call_args_list}
+        attempted = {call.args[0].app_id for call in update.call_args_list} | {call.args[0].app_id for call in desktop_update.call_args_list} | {call.args[0].app_id for call in t3_update.call_args_list}
         self.assertNotIn('muse-code', attempted)
-        self.assertEqual(len(attempted), 6)
+        self.assertEqual(len(attempted), len(common.APP_LABELS) - 1)
 
     def test_muse_installer_runs_under_bash_not_posix_sh(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)):
@@ -566,7 +566,7 @@ class BoundedUpdateTests(unittest.TestCase):
         self.assertEqual(rows[0]['status'], 'current')
         self.assertEqual({row['status'] for row in rows[1:]}, {'skipped'})
         self.assertEqual({row['messageCode'] for row in rows[1:]}, {'skipped_cancelled'})
-        self.assertEqual(len(rows), 7)
+        self.assertEqual(len(rows), len(common.APP_LABELS))
 
     def test_progress_streams_json_lines_and_hears_cancel_on_stdin(self):
         output = io.StringIO()
@@ -595,7 +595,7 @@ class BoundedUpdateTests(unittest.TestCase):
             updater.main()
         lines = output.getvalue().splitlines()
         self.assertEqual(len(lines), 1)
-        self.assertEqual(len(json.loads(lines[0])['results']), 7)
+        self.assertEqual(len(json.loads(lines[0])['results']), len(common.APP_LABELS))
         output = io.StringIO()
         devnull = open(os.devnull, 'rb')
         self.addCleanup(devnull.close)
@@ -604,8 +604,8 @@ class BoundedUpdateTests(unittest.TestCase):
                 mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu']), contextlib.redirect_stdout(output):
             updater.main()
         lines = [json.loads(line) for line in output.getvalue().splitlines()]
-        self.assertEqual([line.get('event') for line in lines[:-1]], ['app'] + ['result'] * 7)
-        self.assertEqual(len(lines[-1]['results']), 7)
+        self.assertEqual([line.get('event') for line in lines[:-1]], ['app'] + ['result'] * len(common.APP_LABELS))
+        self.assertEqual(len(lines[-1]['results']), len(common.APP_LABELS))
 
     def test_windows_coordinator_relays_task_progress_and_forwards_cancel(self):
         import threading

@@ -130,17 +130,22 @@ public static class Ui
     }
 
     /// <summary>The section column grid: mark | identity | meters | action slot | tail. The first meter starts on the
-    /// same x in every section (14 px after the identity, as in the concept); sections with three meters use 12 px
-    /// between meters (two use 14) so values and resets fit, and the tail takes up the difference, so every action
-    /// slot ends on the same line.</summary>
-    public static Grid SectionGrid(int meters, double acts, double identity = 186, double mark = 22)
+    /// same x in every section (14 px after the identity, as in the concept), the tracks stay uniform, and the two- and
+    /// four-meter sections share their trailing shape, so the action slot starts on one line. With four meters
+    /// (Antigravity) the gap before the last column widens so the widest caption ("Claude/GPT 5-hour") fits above it.</summary>
+    public static Grid SectionGrid(int meters, double acts, double identity = 162, double mark = 22)
     {
         var grid = new Grid();
         void Add(GridLength length) => grid.ColumnDefinitions.Add(new ColumnDefinition { Width = length });
         var gap = meters >= 3 ? 12 : 14;
         Add(new GridLength(mark)); Add(new GridLength(14)); Add(new GridLength(identity));
-        for (int i = 0; i < meters; i++) { Add(new GridLength(i == 0 ? 14 : gap)); Add(new GridLength(1, GridUnitType.Star)); }
-        Add(new GridLength(gap)); Add(new GridLength(acts)); Add(new GridLength(gap)); Add(new GridLength(28 - gap));
+        for (int i = 0; i < meters; i++)
+        {
+            Add(new GridLength(i == 0 ? 14 : meters == 4 && i == 3 ? 31 : gap));
+            Add(new GridLength(1, GridUnitType.Star));
+        }
+        Add(new GridLength(meters is 2 or 4 ? 14 : gap)); Add(new GridLength(acts));
+        Add(new GridLength(meters is 2 or 4 ? 14 : gap)); Add(new GridLength(meters is 2 or 4 ? 14 : 28 - gap));
         return grid;
     }
     public static int MeterColumn(int index) => 4 + 2 * index;
@@ -174,6 +179,7 @@ public sealed class Meter : Grid
     private readonly TextBlock label = Ui.Text("", 12, "Ink2", FontWeights.Medium, trim: true);
     private readonly DockPanel reset = new() { LastChildFill = true, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock resetText = Ui.Text("", 11.5, "Ink3");
+    private readonly FrameworkElement clockGlyph;
     /// <summary>The reset text on screen, and whether it is clipped (render checks).</summary>
     internal string ResetShown => resetText.Text;
     internal bool ResetClipped => resetText.IsVisible && new FormattedText(resetText.Text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
@@ -208,6 +214,8 @@ public sealed class Meter : Grid
     {
         Key = key; Kind = kind;
         VerticalAlignment = VerticalAlignment.Center;
+        // Details name whole pools ("Claude and GPT models · Weekly"): the title wraps instead of trimming.
+        if (kind == MeterKind.Detail) { label.TextTrimming = TextTrimming.None; label.TextWrapping = TextWrapping.Wrap; }
         Margin = new Thickness(0, 0, 8, 0); // the 8 px overage gutter: every track keeps one length
         RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -227,6 +235,7 @@ public sealed class Meter : Grid
         track.SizeChanged += (_, _) => Paint();
         var clock = Icons.Icon("clock", 12, Theme.Brush("Ink3"));
         clock.Margin = new Thickness(0, 1, 3, 0);
+        clockGlyph = clock;
         reset.Children.Add(clock); reset.Children.Add(resetText);
         top = new Grid { Height = kind == MeterKind.Compact ? 17 : 16 };
         if (kind == MeterKind.Compact)
@@ -337,8 +346,18 @@ public sealed class Meter : Grid
         double Width(string text, TextBlock style) => new FormattedText(text, System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
             new Typeface(style.FontFamily, style.FontStyle, style.FontWeight, style.FontStretch), style.FontSize, Brushes.Black, dpi).WidthIncludingTrailingWhitespace;
         var shownValue = Target is double target ? Formatting.PercentWith(target, decimals) : spec.NaText;
-        var available = top.ActualWidth - Width(shownValue, value) - reset.Margin.Left - 15; // the clock glyph and its gap
-        resetText.Text = forms.FirstOrDefault(form => Width(form, resetText) <= available + 0.5) ?? forms[^1];
+        // First beside the clock glyph and its gap, then without it: a narrow four-meter cell drops the clock before
+        // the reset could trim, and the countdown's last form is its largest unit. The value never shrinks and the
+        // tooltip keeps the full time.
+        foreach (var withClock in new[] { true, false })
+        {
+            var available = top.ActualWidth - Width(shownValue, value) - reset.Margin.Left - (withClock ? 15 : 0);
+            var fit = forms.FirstOrDefault(form => Width(form, resetText) <= available + 0.5);
+            if (fit is null && withClock) continue;
+            clockGlyph.Visibility = withClock ? Visibility.Visible : Visibility.Collapsed;
+            resetText.Text = fit ?? forms[^1];
+            return;
+        }
     }
 
     /// <summary>Compact meters with no number: the longest of NaText and its shorter forms that fits the cell, so a
@@ -417,6 +436,7 @@ public sealed class ToggleSwitch : Grid
     }
 
     public bool IsOn => on;
+    internal bool EnabledForCheck => enabled;
 
     public void SetOn(bool value, bool animate = true)
     {

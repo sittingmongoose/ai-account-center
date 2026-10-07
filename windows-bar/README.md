@@ -12,7 +12,10 @@ The panel is 760 logical pixels wide (850 tall), clamped to the monitor's work a
   then "Pairing", "Securing this tray" or "Signed out".
 - **Claude, Codex, Antigravity:** one card each with column captions over the meters. Claude shows 5-hour, Weekly and,
   for Max plans only, Fable (`seven_day_fable`; "Not reported yet" when a Max account has no Fable window; Pro accounts
-  get no Fable cell). Each Claude row ends with the Open on Mac / Open on Windows pair.
+  get no Fable cell). Each Claude row ends with the Open on Mac / Open on Windows pair. Antigravity shows four columns
+  when the dashboard reports them — Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly; a window a plan
+  does not have is a muted cell ("Weekly only", "Not on plan"), a plan with no bundled quota says so on its row, and the
+  expanded details add the plan summary, its models and the "AI credits (overage)" row.
 - **Selected row:** the active Codex or Antigravity account's row is a softly accent-tinted surface with a hairline
   accent outline, and its address turns semibold. Its action slot shows a filled check and "Active" with "on Ubuntu"
   under it, as plain text with no box. The check sits in the Activate button's 24 px leading space and "Active" starts
@@ -25,7 +28,8 @@ The panel is 760 logical pixels wide (850 tall), clamped to the monitor's work a
   info popover sit in the Codex section header, above its accounts, styled like Antigravity's.
 
 Click any row to expand its details (every window, balance, expiry and the account's actions); nested buttons keep
-their own action. Hover tints a row, brightens its tracks and shows a chevron.
+their own action, and a click on a row's action slot — a resting button or the gaps around one — never expands or
+collapses the row. Hover tints a row, brightens its tracks and shows a chevron.
 
 ## Data rules
 
