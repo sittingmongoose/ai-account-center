@@ -38,7 +38,7 @@ export component Sheet inherits Rectangle {
 
     property <length> win-w: root.width;
     property <length> win-h: root.height - Device.keyboard;
-    property <length> body-w: min(640px, root.win-w);
+    property <length> body-w: min(root.tall ? 500px : 640px, root.win-w);
     property <length> chrome-h: 24px + (root.title != "" ? 56px : 0px);
     property <length> max-h: root.tall || Breakpoints.short ? root.win-h - root.win-h * 0.06 : root.win-h * 0.46;
     property <length> want-h: root.chrome-h + inner.preferred-height + Device.safe-bottom + (root.title != "" ? 16px : 0px);
@@ -280,12 +280,14 @@ export component SidePanel inherits Rectangle {
         drop-shadow-offset-x: -8px;
         clip: true;
         @children
-        // The drag handle: the leading 20 px (Details keeps it as padding).
+        // The drag handle: starts on the panel header (DESIGN-MOBILE 3.5), leaving room
+        // on the right for the Close button (56px) so taps to Close are not blocked,
+        // and keeping child content below the header free of touch interception (X30).
         drag := TouchArea {
             x: 0px;
             y: 0px;
-            width: 20px;
-            height: parent.height;
+            width: parent.width - 56px;
+            height: 64px;
             moved => { root.raw = max(0px, self.mouse-x - self.pressed-x); }
         }
         ProbeMark { id: root.probe; }
