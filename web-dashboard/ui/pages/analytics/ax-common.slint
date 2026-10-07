@@ -340,6 +340,10 @@ export component AxLegendEntry inherits HorizontalLayout {
     in property <string> label;
     in property <string> note;
     spacing: 7px;
+    // Label and note sit inline: with the default stretch alignment a full-width entry shares
+    // its spare room equally between swatch, label and note, pushing the note to the card edge
+    // (task 9 O4). Desktop entries are content-sized, so this changes nothing there.
+    alignment: start;
     horizontal-stretch: 0;
     VerticalLayout { alignment: center; AxSwatch { c: root.c; c2: root.c2; shape: root.shape; } }
     Text { text: root.label; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-2; vertical-alignment: center; min-height: 18px; }
