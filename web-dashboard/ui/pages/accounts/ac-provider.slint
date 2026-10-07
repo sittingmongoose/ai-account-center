@@ -942,7 +942,8 @@ component SectionFootMob inherits Rectangle {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
         padding-top: 12px;
-        padding-bottom: 12px;
+        // 16 to the card's bottom edge below every action (DESIGN-MOBILE.md 4.3.4, ISSUES-9 C3)
+        padding-bottom: 16px;
         spacing: 0px;
         IconNote {
             icon: root.provider.needs ? "alert" : "info";
@@ -951,7 +952,7 @@ component SectionFootMob inherits Rectangle {
             size: Type.small;
             text: root.provider.how;
         }
-        Rectangle { height: 8px; }
+        Rectangle { height: 12px; }
         // a dimmed (coming) button keeps its natural width and gains the caption; F/T right-align the row
         if root.any-coming: HorizontalLayout {
             spacing: 8px;
@@ -971,8 +972,11 @@ component SectionFootMob inherits Rectangle {
             }
             VerticalLayout { alignment: center; ComingWord { } }
         }
-        // one live button: full width, 48 tall
+        // one live button: full width, 48 tall. The slot keeps an explicit height: a plain Rectangle
+        // reserves none in a layout (its 48 px child does not grow it), so the card sized its bottom
+        // without the button and the button rendered over the card's rounded edge (ISSUES-9 C2).
         if !root.any-coming && Breakpoints.tier-p && root.provider.foot.length == 1: Rectangle {
+            height: 48px;
             for f[i] in root.provider.foot: ActionControl {
                 stretch: true;
                 tall: true;
