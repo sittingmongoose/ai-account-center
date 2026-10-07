@@ -28,6 +28,7 @@ import { Hover } from "../components/hover-card.slint";
 import { MenuPanel } from "../components/menu.slint";
 import { Sheet } from "../components/sheet.slint";
 import { InfoIcon, InlineTip } from "../components/info-tip.slint";
+import { ProbeMark } from "../components/probe.slint";
 
 // A line that mixes weights ("**4** accounts · desktop profiles"). The "good" tone is the active
 // account's name; "warn" is a warning figure.
@@ -1248,6 +1249,8 @@ export component AccountSection inherits Plate {
                     // not the popup's is-open, drives the Sheet: a child binding to its own
                     // popup's builtins trips the compiler.
                     property <bool> sheet-open: false;
+                    // e2e: the harness clicks the button's centre through this (?e2e only).
+                    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "home-legend"; }
                     legend-btn := IconButton {
                         y: (parent.height - self.height) / 2;
                         icon: "help";
