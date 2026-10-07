@@ -424,7 +424,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Ends a request: spinner off, status and tooltip refreshed. Switch and Action hand their sample to it
-    /// to render; Refresh renders in its own paths, so it passes render: false and the list is never rebuilt twice (N6).</summary>
+    /// to render; Refresh renders in its own paths, so it passes render: false and the list is never rebuilt twice (N6).
+    /// A visible refresh's single pass rendered while still busy, so its tree was born disabled: the closing walk wakes
+    /// it without a rebuild. A pending deferred render rebuilds on the open instead.</summary>
     private void FinishRequest(bool render = true)
     {
         busy = false; SetRefreshing(false);
@@ -433,6 +435,7 @@ public partial class MainWindow : Window
             if (dashboard is not null) PaintSample();
             else UpdateStatus();
         }
+        else if (!renderDirty) EnableMutations();
         SampleChanged?.Invoke();
     }
 
@@ -624,13 +627,14 @@ public partial class MainWindow : Window
         }
         if (provider == "codex")
             return new() { new("5h", "5-hour", a => Formatting.CodexPrimaryWindows(a).FirstOrDefault(w => w.Key == "five_hour")), new("week", "Weekly", a => Formatting.CodexPrimaryWindows(a).FirstOrDefault(w => w.Key == "seven_day")) };
-        // Antigravity: Gemini 5-hour, Gemini weekly and Claude and GPT weekly when reported; otherwise the first windows.
-        var known = new[] { ("gemini-5h", "Gemini 5-hour"), ("gemini-weekly", "Gemini weekly"), ("3p-weekly", "Claude and GPT weekly") };
+        // Antigravity: Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour and Claude/GPT weekly when reported
+        // (ANTIGRAVITY-SPEC); unknown extra windows still fall back to the generic path, capped at four.
+        var known = new[] { ("gemini-5h", "Gemini 5-hour"), ("gemini-weekly", "Gemini weekly"), ("3p-5h", "Claude/GPT 5-hour"), ("3p-weekly", "Claude/GPT weekly") };
         var keys = accounts.SelectMany(Meters).Select(window => window.Key).Distinct(StringComparer.Ordinal).ToList();
         var result = known.Where(item => keys.Contains(item.Item1)).Select(item => new Column(item.Item1, item.Item2, a => Meters(a).FirstOrDefault(w => w.Key == item.Item1))).ToList();
         foreach (var key in keys)
         {
-            if (result.Count >= 3) break;
+            if (result.Count >= 4) break;
             if (result.Any(column => column.Key == key)) continue;
             var sample = accounts.SelectMany(Meters).First(window => window.Key == key);
             result.Add(new Column(key, ShortLabel(provider, sample), a => Meters(a).FirstOrDefault(w => w.Key == key)));
@@ -784,6 +788,13 @@ public partial class MainWindow : Window
             quiet.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
         }
+        else if (provider == "antigravity" && account.AntigravityPlan is { QuotaPolicy: "none" } && !Meters(account).Any())
+        {
+            // A plan without a bundled Antigravity quota: one honest line instead of meters (ANTIGRAVITY-SPEC).
+            var quiet = Ui.Text("No Antigravity quota on this plan", 12, "Ink3", trim: true);
+            quiet.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
+        }
         else for (int i = 0; i < columns.Count; i++)
         {
             var cell = Cell(provider, account, columns[i]);
@@ -791,7 +802,7 @@ public partial class MainWindow : Window
             Grid.SetColumn(cell, Ui.MeterColumn(i)); grid.Children.Add(cell);
         }
         var slot = ActionSlot(provider, account, accounts);
-        if (slot is not null) { Grid.SetColumn(slot, Ui.ActsColumn(columns.Count)); grid.Children.Add(slot); }
+        if (slot is not null) { var surface = SlotSurface(slot); Grid.SetColumn(surface, Ui.ActsColumn(columns.Count)); grid.Children.Add(surface); }
         return RowShell(grid, account.Id, separator, active, () => ToggleDetails(account.Id), "View every usage window, balance and reset for " + (account.Email ?? account.Label), columns.Count);
     }
 
@@ -823,7 +834,14 @@ public partial class MainWindow : Window
             return ShowMeter(key, MeterKind.Compact, CompactSpec(account, fable, null, 1));
         }
         var window = column.Pick(account);
-        if (window is null) return null; // no reported window, no cell
+        if (window is null)
+        {
+            // A window a plan does not have gets an honest muted cell, never a fake 0% (ANTIGRAVITY-SPEC); the plan
+            // summary is the tooltip. Accounts without antigravityPlan render as before: no reported window, no cell.
+            if (provider == "antigravity" && account.AntigravityPlan is { } plan && MutedCell(plan, column.Key) is { } muted)
+                return ShowMeter(key, MeterKind.Compact, new MeterSpec(null, plan.Summary, NaText: muted));
+            return null; // no reported window, no cell
+        }
         double? notch = null; double notchOpacity = 1;
         if (provider == "codex" && dashboard is not null)
         {
@@ -837,6 +855,12 @@ public partial class MainWindow : Window
         }
         return ShowMeter(key, MeterKind.Compact, CompactSpec(account, window, notch, notchOpacity));
     }
+
+    /// <summary>The muted text for a window a plan does not have: the 5-hour cells read "Weekly only" on a
+    /// weekly-only plan, the Claude/GPT cells read "Not on plan" without third-party models; null otherwise.</summary>
+    private static string? MutedCell(AntigravityPlan plan, string key) => key.StartsWith("gemini", StringComparison.Ordinal)
+        ? plan.QuotaPolicy == "weekly" ? "Weekly only" : null
+        : plan.ThirdPartyModels == false ? "Not on plan" : null;
 
     private static MeterSpec CompactSpec(DashboardAccount account, QuotaWindow window, double? notch, double notchOpacity)
     {
@@ -903,7 +927,7 @@ public partial class MainWindow : Window
                 // Sign-in needed on this computer: the glyph takes the warning colour and the tip says Open shows the
                 // sign-in window. Open stays allowed.
                 var signIn = account.SignInNeededPlatforms.Contains(platform);
-                var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush(signIn ? "WarnText" : "Ink2")), ToolTip = Ui.Tip(OpenTip(account, platform)), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation", IsEnabled = !openRunning };
+                var button = new Button { Style = (Style)FindResource("IconButton"), Content = Icons.PlatformGlyph(platform, 16, Theme.Brush(signIn ? "WarnText" : "Ink2")), ToolTip = Ui.Tip(OpenTip(account, platform)), Margin = new Thickness(pair.Children.Count > 0 ? 6 : 0, 0, 0, 0), Uid = "mutation", IsEnabled = !openRunning, Tag = (Func<bool>)(() => !OpenRunning(account.Id)) };
                 System.Windows.Automation.AutomationProperties.SetName(button, signIn ? "Open on " + name + ", sign-in needed" : "Open on " + name);
                 button.Click += async (_, _) => await OpenClaude(account, platform);
                 pair.Children.Add(button);
@@ -914,12 +938,14 @@ public partial class MainWindow : Window
         if (provider == "codex")
         {
             if (!Formatting.IsSafeProfile(account.Capabilities.CodexProfile)) return null;
-            return ActivateButton(account, () => ActivateCodex(account), dashboard?.CodexAutoSwitch.ActivationInProgress == true);
+            return ActivateButton(account, () => ActivateCodex(account), dashboard?.CodexAutoSwitch.ActivationInProgress == true,
+                () => dashboard?.CodexAutoSwitch.ActivationInProgress != true);
         }
         // Antigravity
         var switchable = AntigravitySwitchable(AllAntigravity(dashboard, accounts));
         if (switchable && account.Capabilities.AntigravityCanActivate && Formatting.IsSafeId(account.Capabilities.AntigravityProfileId))
-            return ActivateButton(account, () => ActivateAntigravity(account), dashboard?.AntigravityAutoSwitch?.ActivationInProgress == true);
+            return ActivateButton(account, () => ActivateAntigravity(account), dashboard?.AntigravityAutoSwitch?.ActivationInProgress == true,
+                () => dashboard?.AntigravityAutoSwitch?.ActivationInProgress != true);
         if (accounts.Any(other => other.IsActive)) return null;
         return NotReportedLabel();
     }
@@ -933,9 +959,9 @@ public partial class MainWindow : Window
             : "Open " + (account.Email ?? account.Label) + " in Claude on " + name;
     }
 
-    private Button ActivateButton(DashboardAccount account, Func<Task> activate, bool inProgress)
+    private Button ActivateButton(DashboardAccount account, Func<Task> activate, bool inProgress, Func<bool>? gate = null)
     {
-        var button = new Button { Style = (Style)FindResource("AccentLineButton"), Content = new TextBlock { Text = "Activate" }, Padding = new Thickness(24, 0, 24, 0), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Left, IsEnabled = !inProgress, Uid = "mutation:activate" };
+        var button = new Button { Style = (Style)FindResource("AccentLineButton"), Content = new TextBlock { Text = "Activate" }, Padding = new Thickness(24, 0, 24, 0), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Left, IsEnabled = !inProgress, Uid = "mutation:activate", Tag = gate };
         button.ToolTip = Ui.Tip("Make " + (account.Email ?? account.Label) + " the active " + Formatting.ProviderName(account.Provider) + " account");
         button.Click += async (_, _) => await activate();
         return button;
@@ -966,6 +992,18 @@ public partial class MainWindow : Window
         row.Children.Add(words);
         row.ToolTip = Ui.Tip("The dashboard has not reported which Antigravity account is active");
         return row;
+    }
+
+    /// <summary>The row's action slot never toggles the row. The surface fills the slot cell and swallows a press on
+    /// a resting button or on the gaps around it (a disabled control is not hit, so the click would otherwise fall
+    /// through to the row), while an enabled control handles its own click first and this handler never runs.</summary>
+    private static FrameworkElement SlotSurface(FrameworkElement slot)
+    {
+        var surface = new Grid { Background = Brushes.Transparent, Uid = "slot", VerticalAlignment = VerticalAlignment.Center };
+        surface.MouseLeftButtonDown += (_, e) => e.Handled = true;
+        surface.MouseLeftButtonUp += (_, e) => e.Handled = true;
+        surface.Children.Add(slot);
+        return surface;
     }
 
     /// <summary>Full-row click target with a hover tint (140 ms), a press tint, the track lift and the chevron.
@@ -1278,6 +1316,7 @@ public partial class MainWindow : Window
     {
         var panel = new StackPanel();
         panel.Children.Add(DetailWindows(account));
+        AddAntigravityPlanDetails(panel, account);
         AddDetailFooter(panel, account);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
         if (provider == "claude" && Formatting.IsSafeClaudeProfile(account.Capabilities.ClaudeProfileId))
@@ -1287,7 +1326,7 @@ public partial class MainWindow : Window
                 var signIn = account.SignInNeededPlatforms.Contains(platform);
                 var button = Ui.Button(signIn ? "Open on " + name + " to sign in" : "Open on " + name, icon: Icons.PlatformGlyph(platform, 14, Theme.Brush(signIn ? "WarnText" : "Ink2")));
                 button.ToolTip = Ui.Tip(OpenTip(account, platform));
-                button.Margin = new Thickness(0, 0, 8, 0); button.Uid = "mutation"; button.IsEnabled = !OpenRunning(account.Id);
+                button.Margin = new Thickness(0, 0, 8, 0); button.Uid = "mutation"; button.IsEnabled = !OpenRunning(account.Id); button.Tag = (Func<bool>)(() => !OpenRunning(account.Id));
                 button.Click += async (_, _) => await OpenClaude(account, platform);
                 actions.Children.Add(button);
             }
@@ -1324,6 +1363,8 @@ public partial class MainWindow : Window
     {
         var all = Formatting.VisibleWindows(account).Where(window => account.Provider != "qwen" || !Formatting.IsQwenDuplicateMetadata(window)).ToArray();
         var meterWindows = all.Where(window => window.Kind is not ("balance" or "extra_usage" or "spend") && !(account.Provider == "qwen" && window.Key.StartsWith("addon-", StringComparison.Ordinal))).ToArray();
+        // Antigravity: each pool's 5-hour before its weekly, Gemini pool first, as the row columns order them.
+        if (account.Provider == "antigravity") meterWindows = meterWindows.OrderBy(AntigravityWindowOrder).ToArray();
         var amounts = all.Except(meterWindows).ToArray();
         var panel = new StackPanel();
         if (meterWindows.Length > 0)
@@ -1364,9 +1405,13 @@ public partial class MainWindow : Window
                 row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 var icon = Icons.Icon(window.Kind == "balance" && window.Key.Contains("pack", StringComparison.OrdinalIgnoreCase) ? "pack" : "wallet", 14, Theme.Brush("Ink3"));
                 row.Children.Add(icon);
-                var label = Ui.Text(Formatting.WindowLabel(account, window), 12.5, "Ink2", trim: true); Grid.SetColumn(label, 2); row.Children.Add(label);
+                // The plan's credits row reads "AI credits (overage)", with what the credits are for under it.
+                var agPlan = account.AntigravityPlan;
+                var credits = agPlan is not null && window.Key == "google-ai-credits";
+                var label = Ui.Text(credits ? "AI credits (overage)" : Formatting.WindowLabel(account, window), 12.5, "Ink2", trim: true); Grid.SetColumn(label, 2); row.Children.Add(label);
                 var value = Ui.Text(AmountValue(window), 12.5, "Ink", FontWeights.SemiBold); Grid.SetColumn(value, 3); row.Children.Add(value);
                 var subParts = new List<string>();
+                if (credits) subParts.Add(agPlan!.CreditsOverage == false ? "Not usable for Antigravity on this plan." : "Used only after the plan quota runs out, when AI Credit Overages is on.");
                 if (window.ExpiresAt is not null || window.Kind is "balance") subParts.Add(Formatting.Expiration(window.ExpiresAt));
                 if (window.Status == "cached") subParts.Add("Cached · " + Formatting.WindowSample(window.SampledAt));
                 if (subParts.Count > 0) { var sub = Ui.Text(string.Join(" · ", subParts), 11.5, "Ink3", trim: true); Grid.SetRow(sub, 1); Grid.SetColumn(sub, 2); Grid.SetColumnSpan(sub, 2); row.Children.Add(sub); }
@@ -1376,6 +1421,36 @@ public partial class MainWindow : Window
             panel.Children.Add(list);
         }
         return panel;
+    }
+
+    /// <summary>Details order the Antigravity windows per pool (Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour,
+    /// Claude/GPT weekly); other windows keep the reported order.</summary>
+    private static int AntigravityWindowOrder(QuotaWindow window) => window.Key switch
+    {
+        "gemini-5h" => 0, "gemini-weekly" => 1, "3p-5h" => 2, "3p-weekly" => 3, _ => 4
+    };
+
+    /// <summary>The expanded Antigravity details' plan block (ANTIGRAVITY-SPEC): the plan summary, the models on
+    /// the plan, and the family-pool note on pro and ultra. Accounts without antigravityPlan render as before.</summary>
+    private static void AddAntigravityPlanDetails(StackPanel panel, DashboardAccount account)
+    {
+        var plan = account.AntigravityPlan;
+        if (plan is null) return;
+        if (!string.IsNullOrWhiteSpace(plan.Summary))
+        {
+            var summary = Ui.Text(plan.Summary, 12, "Ink2", wrap: true); summary.Margin = new Thickness(0, 10, 0, 0);
+            panel.Children.Add(summary);
+        }
+        if (plan.Models.Count > 0)
+        {
+            var models = Ui.Text("Models: " + string.Join(", ", plan.Models), 12, "Ink3", wrap: true); models.Margin = new Thickness(0, 4, 0, 0);
+            panel.Children.Add(models);
+        }
+        if (plan.IsProOrUltra)
+        {
+            var family = Ui.Text("Family members sharing this plan may share one quota pool.", 12, "Ink3", wrap: true); family.Margin = new Thickness(0, 4, 0, 0);
+            panel.Children.Add(family);
+        }
     }
 
     private static string AmountValue(QuotaWindow window)
@@ -1435,10 +1510,11 @@ public partial class MainWindow : Window
         var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         var toggle = new ToggleSwitch(status.Enabled, "Auto-switch", "Automatically switch Codex accounts when usage reaches the threshold and Codex is idle. Claude stays manual.") { Uid = "mutation:toggle" };
         toggle.SetEnabled(!status.ActivationInProgress && !busy && !staleSample);
+        toggle.Tag = (Func<bool>)(() => !status.ActivationInProgress);
         toggle.Toggled += async requested => await Action(async () => { if (client is not null) await client.SetAutoSwitch(requested); }, requested ? "Codex auto-switch is on." : "Codex auto-switch is off.");
         row.Children.Add(toggle);
         var currentUsed = 100 - (int)Math.Round(status.ThresholdPercent);
-        var drop = ThresholdDrop(currentUsed, "Codex switch threshold", used => Action(async () => { if (client is not null) await client.SetAutoSwitch(status.Enabled, 100 - used); }, "Codex switch threshold updated."));
+        var drop = ThresholdDrop(currentUsed, "Codex switch threshold", used => Action(async () => { if (client is not null) await client.SetAutoSwitch(status.Enabled, 100 - used); }, "Codex switch threshold updated."), () => !status.ActivationInProgress);
         drop.Margin = new Thickness(10, 0, 4, 0); drop.IsEnabled = !status.ActivationInProgress && !busy && !staleSample;
         row.Children.Add(drop);
         var info = Ui.IconButton("info", "How Codex auto-switch works", 28, "BareIconButton", 16);
@@ -1455,7 +1531,7 @@ public partial class MainWindow : Window
         return row;
     }
 
-    private Button ThresholdDrop(int currentUsed, string name, Func<int, Task> choose)
+    private Button ThresholdDrop(int currentUsed, string name, Func<int, Task> choose, Func<bool>? gate = null)
     {
         var content = new StackPanel { Orientation = Orientation.Horizontal };
         content.Children.Add(Ui.Text("at ", 12.5, "Ink3"));
@@ -1463,7 +1539,7 @@ public partial class MainWindow : Window
         content.Children.Add(value);
         var chevron = Icons.Icon("chevDown", 13, Theme.Brush("Ink3")); chevron.Margin = new Thickness(5, 0, 0, 0); chevron.RenderTransformOrigin = new Point(0.5, 0.5); chevron.RenderTransform = new RotateTransform();
         content.Children.Add(chevron);
-        var drop = new Button { Style = (Style)FindResource("AtlasButton"), Content = content, Padding = new Thickness(9, 0, 7, 0), Uid = "mutation:drop" };
+        var drop = new Button { Style = (Style)FindResource("AtlasButton"), Content = content, Padding = new Thickness(9, 0, 7, 0), Uid = "mutation:drop", Tag = gate };
         System.Windows.Automation.AutomationProperties.SetName(drop, name);
         drop.Click += (_, _) =>
         {
@@ -1502,10 +1578,11 @@ public partial class MainWindow : Window
         }
         var toggle = new ToggleSwitch(status.Enabled, "Auto-switch", "Automatically switch Antigravity accounts at the threshold once Antigravity is idle.") { Uid = "mutation:toggle" };
         toggle.SetEnabled(!status.ActivationInProgress && !busy && !staleSample);
+        toggle.Tag = (Func<bool>)(() => !status.ActivationInProgress);
         toggle.Toggled += async requested => await Action(async () => { if (client is not null) await client.SetAntigravityAutoSwitch(enabled: requested); }, requested ? "Antigravity auto-switch is on." : "Antigravity auto-switch is off.");
         row.Children.Add(toggle);
         var used = (int)Math.Round(status.ThresholdUsedPercent);
-        var drop = ThresholdDrop(used, "Antigravity switch threshold", value => Action(async () => { if (client is not null) await client.SetAntigravityAutoSwitch(thresholdUsedPercent: value); }, "Antigravity switch threshold updated."));
+        var drop = ThresholdDrop(used, "Antigravity switch threshold", value => Action(async () => { if (client is not null) await client.SetAntigravityAutoSwitch(thresholdUsedPercent: value); }, "Antigravity switch threshold updated."), () => !status.ActivationInProgress);
         drop.Margin = new Thickness(10, 0, 0, 0); drop.IsEnabled = !status.ActivationInProgress && !busy && !staleSample;
         row.Children.Add(drop);
         return row;
@@ -1677,6 +1754,22 @@ public partial class MainWindow : Window
         {
             if (element is Button button && button.Uid.StartsWith("mutation", StringComparison.Ordinal)) button.IsEnabled = false;
             if (element is ToggleSwitch toggle) toggle.SetEnabled(false);
+        }
+    }
+
+    /// <summary>Wakes the mutation controls a request disabled, without a rebuild (the closing half of a visible
+    /// refresh's single pass, N6). Each control's own rule decides, so the states a rest must keep stay resting:
+    /// an Open in progress keeps its buttons off, an activation in progress keeps Activate, the auto-switch toggle
+    /// and the threshold drop off, and a stale sample keeps everything off until a fresh read. Controls built
+    /// without a gate (the tools shown before a second account exists) stay off, as they were built.</summary>
+    private void EnableMutations()
+    {
+        if (busy || staleSample) return;
+        foreach (var element in Descendants(ContentPanel).Concat(Descendants(AutoSwitchPanel)))
+        {
+            if (element is Button { Tag: Func<bool> gate, IsEnabled: false } button
+                && button.Uid.StartsWith("mutation", StringComparison.Ordinal) && gate()) button.IsEnabled = true;
+            else if (element is ToggleSwitch { Tag: Func<bool> toggleGate } toggle && toggleGate()) toggle.SetEnabled(true);
         }
     }
 
