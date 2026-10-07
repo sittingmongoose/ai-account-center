@@ -12,6 +12,7 @@ import {
   intervalLabel,
   parseIntervalLabel,
   valueText,
+  wordsOf,
 } from '../public/view-model.mjs';
 
 const now = Date.parse('2026-10-01T15:16:00Z');
@@ -642,6 +643,9 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
     runs: [
       { text: 'The active Codex account has enough remaining quota.', strong: false, tone: '' },
     ],
+    words: ['The', 'active', 'Codex', 'account', 'has', 'enough', 'remaining', 'quota.'].map(
+      (text) => ({ text, strong: false, tone: '' })
+    ),
     when: 'Checked 1m ago · every 1 min',
   });
   // activating an account past the switch point asks first, with its real figure; below it, it does not
@@ -726,7 +730,7 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
   assert.equal(ag.auto.shown, false);
   assert.equal(runs(ag.auto.offRuns), 'Auto-switch *off* · needs a second account');
   assert.equal(runs(ag.metaRuns), 'Google Antigravity CLI · *1* account');
-  assert.deepEqual(ag.foot, { shown: false, warn: false, runs: [], when: '' });
+  assert.deepEqual(ag.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
   const paused = section(
     dashboardViewModel(
       data([
@@ -1118,4 +1122,39 @@ test('Home Claude rows say which computer needs a sign-in before Open (fake prof
     section(plain, 'claude').rows.find((x) => x.id === 'claude:fake-three').meta,
     /Sign-in/
   );
+});
+
+test('wordsOf splits runs into wrap units for the touch layouts, keeping weight and tone', () => {
+  assert.deepEqual(wordsOf([]), []);
+  assert.deepEqual(wordsOf(null), []);
+  assert.deepEqual(wordsOf([{ text: '4', strong: true, tone: '' }]), [
+    { text: '4', strong: true, tone: '' },
+  ]);
+  assert.deepEqual(
+    wordsOf([
+      { text: '99% used', strong: true, tone: 'warn' },
+      { text: ', above the 95% switch point.  Activate anyway?' },
+    ]),
+    [
+      { text: '99%', strong: true, tone: 'warn' },
+      { text: 'used', strong: true, tone: 'warn' },
+      { text: ',', strong: false, tone: '' },
+      { text: 'above', strong: false, tone: '' },
+      { text: 'the', strong: false, tone: '' },
+      { text: '95%', strong: false, tone: '' },
+      { text: 'switch', strong: false, tone: '' },
+      { text: 'point.', strong: false, tone: '' },
+      { text: 'Activate', strong: false, tone: '' },
+      { text: 'anyway?', strong: false, tone: '' },
+    ]
+  );
+});
+
+test('sections carry words next to runs for the touch layouts', () => {
+  const vm = dashboardViewModel(data([claude('fake-one', 'max', [window()])]), { now });
+  const claudeSection = section(vm, 'claude');
+  assert.deepEqual(claudeSection.metaWords, wordsOf(claudeSection.metaRuns));
+  assert.ok(claudeSection.metaWords.length > claudeSection.metaRuns.length);
+  assert.deepEqual(claudeSection.foot.words, []);
+  assert.deepEqual(claudeSection.rows[0].confirmWords, []);
 });

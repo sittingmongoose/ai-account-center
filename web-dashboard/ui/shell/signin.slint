@@ -3,18 +3,49 @@
 // jump: the message slot keeps its height), limited (rate limited, with a countdown and a draining bar),
 // expired (the session ended), setup (first run: the form when the server can create the sign-in, otherwise
 // the command that does it on the server), success (the button turns into a check and the page cross-fades
-// into the dashboard load-in). Every word comes from bridge.js (public/auth-view.mjs).
+// into the dashboard load-in), offline (DESIGN-MOBILE.md 4.6: /api was unreachable at launch). Every word
+// comes from bridge.js (public/auth-view.mjs).
+//
+// Tiers (DESIGN-MOBILE.md 4.5.1): on T and D the card sits beside the atlas motif as before (T with 48 px
+// inputs). On P and F the page is one scrolled column: brand row, the card (max 440, centred, with a 4 px
+// scale bar that carries the connecting, rate-limited and success states), then the footer lines; the motif
+// is hidden. Short (landscape phones, Duo outer landscape): two columns, brand/title/host/note on the left
+// and a 360 px card on the right, scrolling when they do not fit. A strip of the page background is painted
+// over the safe-top inset on every tier, so scrolled content never runs under the status bar text.
+//
+// Keyboard (4.5.2, 2.5): while a field has the keyboard, the page scrolls so the Sign in button's bottom
+// sits 12 px above the keyboard, never pushing the focused field's top above safe-top + 8; it never scrolls
+// back on blur. The HTML inputs follow their Slint boxes on every frame (login-bridge.mjs), and a box
+// scrolled under the strip or off screen reports its input hidden (visibility, not removal).
 //
 // The atlas motif: contour lines of one summit with the Apex mark at the top and a map scale bar; the rings
 // grow from the summit on entry, the scale bar sweeps while connecting and fills on success, and the rings dim
 // while sign-in is paused. Only opacity, scale and one clip width move; nothing loops while idle.
-import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { AuthView, StrengthView, LoginBox, LoginOverlay } from "../models.slint";
 import { Icon } from "../components/icon.slint";
 import { AppLogo } from "../components/logo.slint";
 import { Field } from "../components/field.slint";
 import { Reveal } from "../components/reveal.slint";
 import { ProbeMark } from "../components/probe.slint";
+
+// The first-run form's confirmation and setup code (public/login-bridge.mjs place): the HTML inputs hold
+// them while they are on screen, lib.rs set_login_setup copies them here, and the Slint fields mirror them
+// whenever the inputs are hidden.
+export global LoginExtra {
+    in-out property <string> confirm;
+    in-out property <string> code;
+}
+
+// File-internal seam between the sign-in layer and its scrolled hosts: the last overlay report (window
+// geometry), the live scroll offset of the page's Flickable, its scrollable range, and whether the card's
+// load-in has settled. The layer computes the keyboard scroll (4.5.2) from these.
+global SigninScroll {
+    in-out property <LoginOverlay> report;
+    in-out property <length> current: 0px;
+    in-out property <length> max-scroll: 0px;
+    in-out property <bool> ready: false;
+}
 
 struct Ring { d: string, idx: bool, label: string, lx: float, ly: float }
 
@@ -238,6 +269,803 @@ export component StrengthMeter inherits VerticalLayout {
     }
 }
 
+// The in-card scale bar of the mobile tiers (4.5.1): 4 px of track that carries the states the motif's map
+// bar carries on the desktop - it sweeps while connecting, drains while sign-in is paused, and fills with the
+// Apex ramp on success.
+component CardScale inherits Rectangle {
+    in property <bool> connecting;
+    in property <bool> signed-in;
+    in property <bool> paused;
+    in property <int> left;
+    in property <int> total;
+    height: 4px;
+    border-radius: 2px;
+    background: Theme.track;
+    clip: true;
+    property <color> apex-a: #2F6BFF;
+    property <color> apex-b: #1FC6EE;
+    property <bool> sweeping: false;
+    property <duration> sweep-end: 0ms;
+    property <float> sweep-t: !Motion.on ? 0.6 : root.connecting ? mod(animation-tick() / 1100ms, 1) : mod(root.sweep-end / 1100ms, 1);
+    changed connecting => {
+        if root.connecting { root.sweeping = true; }
+        else if root.sweeping { root.sweep-end = animation-tick(); sweep-hold.running = true; }
+    }
+    sweep-hold := Timer {
+        interval: 320ms;
+        running: false;
+        triggered => { self.running = false; root.sweeping = false; }
+    }
+    // rate limited: the bar drains with the countdown
+    Rectangle {
+        x: 0px;
+        width: root.paused ? parent.width * clamp(root.left / max(1, root.total), 0, 1) : 0px;
+        border-radius: 2px;
+        background: @linear-gradient(90deg, Theme.warn-a 0%, Theme.warn 100%);
+        animate width { duration: Motion.on ? 1000ms : 0ms; easing: linear; }
+    }
+    // success: the Apex ramp fills the bar
+    Rectangle {
+        x: 0px;
+        width: root.signed-in ? parent.width : 0px;
+        animate width { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        background: @linear-gradient(90deg, root.apex-a 0%, root.apex-b 100%);
+    }
+    // connecting: one bright segment travels along the bar, then freezes and fades where it ended
+    Rectangle {
+        x: 0px;
+        width: parent.width;
+        clip: true;
+        opacity: root.connecting ? 1 : 0;
+        animate opacity { duration: Motion.on ? Motion.med : 0ms; }
+        if root.sweeping: Rectangle {
+            x: (root.sweep-t - 0.22) * parent.width;
+            width: parent.width * 0.28;
+            background: @linear-gradient(90deg, root.apex-a.with-alpha(0) 0%, root.apex-a.with-alpha(0.85) 60%, root.apex-b 100%);
+        }
+    }
+}
+
+// The sign-in card of the phone and foldable tiers (4.5.1) and of the short two-column layout: the banner,
+// the fields, the message slot, Remember me, the submit button and the scale bar. The login fields are the
+// real HTML inputs' hosts (index.html #aac-login): their geometry goes out through `login-overlay-report`
+// whenever the layout moves them, so the inputs follow on every frame.
+component TouchCard inherits Rectangle {
+    in property <AuthView> auth;
+    in property <StrengthView> strength;
+    in property <bool> busy;
+    in property <bool> signed-in;
+    in property <bool> connecting;
+    in property <bool> can-submit;
+    in property <bool> form;
+    in property <bool> setup;
+    in property <bool> limited;
+    in property <bool> wrong;
+    in property <bool> expired;
+    in property <bool> has-banner;
+    in property <bool> overlay-on;
+    in property <string> login-focus;
+    in property <string> login-hover;
+    in property <length> band-top: 0px;
+    in property <length> login-size: 17px;
+    in property <bool> with-title: true;
+    in property <bool> with-note: true;
+    in property <bool> leaving: false;
+    in property <int> left: 0;
+    in property <int> limit-total: 1;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <bool> remember-me: true;
+    callback login-overlay-report(LoginOverlay);
+    callback fire-submit(string, string, bool);
+    callback fire-create(string, string, string, string);
+    callback fire-recheck();
+    callback fire-focus(string);
+
+    property <string> state: root.auth.state;
+    property <bool> can-type: root.can-submit || root.wrong;
+    property <int> nonce: root.auth.nonce;
+    property <bool> shaking: false;
+    property <duration> shake-start: 0ms;
+    changed nonce => {
+        if Motion.on {
+            root.shake-start = animation-tick();
+            root.shaking = true;
+            shake-end.running = true;
+        }
+    }
+    shake-end := Timer { interval: 460ms; running: false; triggered => { self.running = false; root.shaking = false; } }
+    property <float> shake-p: root.shaking ? clamp((animation-tick() - root.shake-start) / 440ms, 0, 1) : 1;
+    // a wrong password shakes the fields: a short decaying sideways oscillation, like the desktop page
+    property <length> shake-x: root.shaking ? 7px * pow(1 - root.shake-p, 2) * sin(root.shake-p * 4 * 360deg) : 0px;
+
+    // the fields' boxes, copied out of the conditional form below whenever the layout moves them (the
+    // keyboard scroll, a resize, a banner opening, the wrong-password shake)
+    property <LoginBox> user-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> user-text-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> pass-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> pass-text-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> confirm-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> confirm-text-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> code-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> code-text-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+    property <LoginBox> check-box: { x: 0px, y: 0px, width: 0px, height: 0px };
+
+    // the HTML inputs' geometry, published on every layout change (login-bridge.mjs place)
+    property <bool> inputs-on: root.overlay-on && root.form;
+    property <LoginOverlay> report: {
+        on: root.inputs-on,
+        enabled: root.can-type,
+        mode: root.setup ? "setup" : "login",
+        revealed: pass-plain,
+        remember: root.remember-me,
+        user-visible: self.box-in-band(root.user-box),
+        pass-visible: self.box-in-band(root.pass-box),
+        confirm-visible: self.box-in-band(root.confirm-box),
+        code-visible: self.box-in-band(root.code-box),
+        user: root.user-box,
+        user-text: root.user-text-box,
+        pass: root.pass-box,
+        pass-text: root.pass-text-box,
+        confirm: root.confirm-box,
+        confirm-text: root.confirm-text-box,
+        code: root.code-box,
+        code-text: root.code-text-box,
+        check: root.check-box,
+        submit: { x: submit-btn.absolute-position.x, y: submit-btn.absolute-position.y, width: submit-btn.width, height: submit-btn.height },
+        font-size: root.login-size,
+        ink: Theme.ink.with-alpha(root.can-type ? 1 : 0.72),
+        placeholder: Theme.ink-4,
+        selection: Theme.accent.with-alpha(0.25),
+        accent: Theme.accent,
+    };
+    property <bool> pass-plain: false;
+    changed report => { root.login-overlay-report(self.report); }
+    init => { root.login-overlay-report(self.report); }
+    // A field whose box starts under the safe-top strip hides its HTML input (visibility, not removal):
+    // the strip would paint over the box but the input floats above the canvas. Fields further down the page
+    // stay live even below the fold or under the keyboard, so Return-next can reach them and the keyboard
+    // scroll then brings them into view; they sit off screen, so nothing paints wrongly.
+    pure function box-in-band(box: LoginBox) -> bool {
+        return box.height <= 0px || box.y >= root.band-top - 0.5px;
+    }
+
+    function go() {
+        if !root.can-submit { return; }
+        if root.setup {
+            root.fire-create(root.username, root.password, LoginExtra.confirm, LoginExtra.code);
+        } else {
+            root.fire-submit(root.username, root.password, root.remember-me);
+        }
+    }
+
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.rule;
+    background: Theme.paper;
+    drop-shadow-color: Theme.shadow-2;
+    drop-shadow-blur: 28px;
+    drop-shadow-offset-y: 12px;
+    transform-scale: root.leaving ? 0.99 : 1;
+    animate transform-scale { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+    body := VerticalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-top: 20px;
+        padding-bottom: 20px;
+        spacing: 0px;
+        if root.with-title: Text {
+            text: root.signed-in ? "Signed in" : root.setup ? "Set up sign-in" : root.expired ? "Sign in again" : "Sign in";
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.6px;
+            color: Theme.ink;
+        }
+        if root.with-title: Rectangle { height: 4px; }
+        if root.with-title: HorizontalLayout {
+            spacing: 0px;
+            alignment: start;
+            Text { text: root.signed-in ? "Opening your dashboard." : root.auth.host == "" ? "Your accounts and subscription usage" : "Dashboard on "; font-size: 14px; color: Theme.ink-3; }
+            if root.auth.host != "" && !root.signed-in: Text { text: root.auth.host; font-family: Type.tab; font-size: 14px; font-weight: 580; color: Theme.ink-2; overflow: elide; }
+        }
+        if root.with-title: Rectangle { height: 12px; }
+
+        // the scale bar keeps its states on the tiers without the motif (4.5.1)
+        CardScale {
+            connecting: root.connecting;
+            signed-in: root.signed-in;
+            paused: root.limited;
+            left: root.left;
+            total: root.limit-total;
+        }
+        Rectangle { height: 16px; }
+
+        // the banner: session ended, rate limited, or set up on the server (no tinted box, no side bar)
+        banner-box := Rectangle {
+            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.has-banner ? "signin-banner" : ""; }
+            property <length> natural: banner.preferred-height;
+            height: root.has-banner ? self.natural : 0px;
+            animate height { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            clip: true;
+            banner := VerticalLayout {
+                y: 0px;
+                height: banner-box.natural;
+                spacing: 0px;
+                opacity: root.has-banner ? 1 : 0;
+                animate opacity { duration: Motion.on ? Motion.med : 0ms; delay: Motion.on && root.has-banner ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                HorizontalLayout {
+                    spacing: 12px;
+                    padding-top: 2px;
+                    VerticalLayout {
+                        alignment: start;
+                        padding-top: 1px;
+                        horizontal-stretch: 0;
+                        Icon {
+                            name: root.limited ? "timer" : root.setup ? "terminal" : "logout";
+                            tint: root.limited ? Theme.warn-text : Theme.accent-text;
+                            width: 18px;
+                            height: 18px;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text { text: root.auth.banner-title; font-size: 14px; font-weight: 640; color: Theme.ink; wrap: word-wrap; }
+                        StyledText {
+                            text: root.auth.banner-strong != ""
+                                ? @markdown("\{root.auth.banner-body} **\{root.auth.banner-strong}**.")
+                                : @markdown("\{root.auth.banner-body}");
+                            default-color: Theme.ink-2;
+                            default-font-size: 13px;
+                            default-font-family: Type.tab;
+                        }
+                    }
+                    // the desktop banner's countdown column and drain bar are dropped below D: the countdown
+                    // sits under the button and the scale bar drains (4.5.4)
+                }
+                Rectangle { height: 16px; }
+            }
+        }
+
+        // the fields (hidden while the server has to set sign-in up itself)
+        if root.form: Rectangle {
+          min-height: fields.preferred-height;
+          preferred-height: fields.preferred-height;
+          // the login fields' boxes, handed to the root for the HTML inputs laid over them
+          property <LoginBox> user-at: { x: user.box-x, y: user.box-y, width: user.box-width, height: user.box-h };
+          property <LoginBox> user-text-at: { x: user.text-x, y: user.text-y, width: user.text-width, height: user.text-height };
+          property <LoginBox> pass-at: { x: pass.box-x, y: pass.box-y, width: pass.box-width, height: pass.box-h };
+          property <LoginBox> pass-text-at: { x: pass.text-x, y: pass.text-y, width: pass.text-width, height: pass.text-height };
+          property <bool> usable: user.enabled;
+          property <bool> plain: pass.plain;
+          function publish() {
+              root.user-box = self.user-at;
+              root.user-text-box = self.user-text-at;
+              root.pass-box = self.pass-at;
+              root.pass-text-box = self.pass-text-at;
+              root.pass-plain = self.plain;
+          }
+          init => { self.publish(); }
+          changed user-at => { self.publish(); }
+          changed user-text-at => { self.publish(); }
+          changed pass-at => { self.publish(); }
+          changed pass-text-at => { self.publish(); }
+          changed usable => { self.publish(); }
+          changed plain => { self.publish(); }
+          fields := VerticalLayout {
+            x: root.shake-x;
+            width: parent.width;
+            height: parent.height;
+            spacing: 12px;
+            Rectangle {
+                min-height: user.preferred-height;
+                user := Field {
+                    width: parent.width;
+                    label: "Username";
+                    aside: root.setup ? "letters, numbers, - and _" : "";
+                    text <=> root.username;
+                    enabled: root.can-type;
+                    bad: root.setup && root.auth.field == "user";
+                    box-height: 52px;
+                    mirror: true;
+                    covered: root.overlay-on;
+                    text-size: root.login-size;
+                    ext-focus: root.overlay-on && root.login-focus == "user";
+                    ext-hover: root.overlay-on && root.login-hover == "user";
+                    focus-request => { root.fire-focus("user"); }
+                }
+                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-user"; }
+            }
+            Rectangle {
+                min-height: pass.preferred-height;
+                pass := Field {
+                    width: parent.width;
+                    label: "Password";
+                    password: true;
+                    text <=> root.password;
+                    enabled: root.can-type;
+                    bad: root.wrong || (root.setup && root.auth.field == "pass");
+                    box-height: 52px;
+                    mirror: true;
+                    covered: root.overlay-on;
+                    text-size: root.login-size;
+                    ext-focus: root.overlay-on && root.login-focus == "pass";
+                    ext-hover: root.overlay-on && root.login-hover == "pass";
+                    focus-request => { root.fire-focus("pass"); }
+                }
+                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-pass"; }
+            }
+            if root.setup: StrengthMeter { data: root.strength; }
+            if root.setup: Rectangle {
+              min-height: confirm-field.preferred-height;
+              property <LoginBox> confirm-at: { x: confirm-field.box-x, y: confirm-field.box-y, width: confirm-field.box-width, height: confirm-field.box-h };
+              property <LoginBox> confirm-text-at: { x: confirm-field.text-x, y: confirm-field.text-y, width: confirm-field.text-width, height: confirm-field.text-height };
+              init => { root.confirm-box = self.confirm-at; root.confirm-text-box = self.confirm-text-at; }
+              changed confirm-at => { root.confirm-box = self.confirm-at; root.confirm-text-box = self.confirm-text-at; }
+              changed confirm-text-at => { root.confirm-box = self.confirm-at; root.confirm-text-box = self.confirm-text-at; }
+              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-confirm"; }
+              confirm-field := Field {
+                width: parent.width;
+                label: "Confirm password";
+                password: true;
+                aside: root.strength.matches ? "Matches" : "";
+                aside-good: root.strength.matches;
+                ok: root.strength.matches;
+                text <=> LoginExtra.confirm;
+                enabled: root.can-submit;
+                bad: root.auth.field == "confirm";
+                box-height: 52px;
+                mirror: true;
+                covered: root.overlay-on;
+                text-size: root.login-size;
+                ext-focus: root.overlay-on && root.login-focus == "confirm";
+                ext-hover: root.overlay-on && root.login-hover == "confirm";
+                focus-request => { root.fire-focus("confirm"); }
+              }
+            }
+            if root.setup && root.auth.code-required: Rectangle {
+              min-height: code-field.preferred-height;
+              property <LoginBox> code-at: { x: code-field.box-x, y: code-field.box-y, width: code-field.box-width, height: code-field.box-h };
+              property <LoginBox> code-text-at: { x: code-field.text-x, y: code-field.text-y, width: code-field.text-width, height: code-field.text-height };
+              init => { root.code-box = self.code-at; root.code-text-box = self.code-text-at; }
+              changed code-at => { root.code-box = self.code-at; root.code-text-box = self.code-text-at; }
+              changed code-text-at => { root.code-box = self.code-at; root.code-text-box = self.code-text-at; }
+              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-code"; }
+              code-field := Field {
+                width: parent.width;
+                label: "Setup code";
+                aside: "printed in the server's terminal";
+                placeholder: "e.g. EXAM-PLE0";
+                text <=> LoginExtra.code;
+                enabled: root.can-submit;
+                bad: root.auth.field == "code";
+                box-height: 52px;
+                mirror: true;
+                covered: root.overlay-on;
+                text-size: root.login-size;
+                ext-focus: root.overlay-on && root.login-focus == "code";
+                ext-hover: root.overlay-on && root.login-hover == "code";
+                focus-request => { root.fire-focus("code"); }
+              }
+            }
+            if root.setup && root.auth.code-required: Text {
+                text: "Also saved on the server in ~/.ccs/auth/setup-code";
+                font-size: Type.small;
+                color: Theme.ink-3;
+            }
+          }
+        }
+        // the message slot keeps its height, so an error never moves the button
+        if root.form: Rectangle { height: 10px; }
+        if root.form: msg := Rectangle {
+            property <bool> on: root.auth.message != "" || root.connecting;
+            property <bool> info: root.connecting || root.auth.notice;
+            min-height: max(38px, msg-row.preferred-height);
+            ProbeMark { x: 0px; y: 0px; width: parent.width; height: msg.height; id: msg.on ? "signin-message" : ""; }
+            msg-row := HorizontalLayout {
+                y: msg.on ? 0px : -3px;
+                height: self.preferred-height;
+                opacity: msg.on ? 1 : 0;
+                animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                animate y { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                spacing: 8px;
+                alignment: start;
+                VerticalLayout {
+                    alignment: start;
+                    padding-top: 1px;
+                    horizontal-stretch: 0;
+                    Icon {
+                        name: root.connecting ? "server" : msg.info ? "info" : "alert-circle";
+                        tint: msg.info ? Theme.accent-text : Theme.crit-text;
+                        width: 15px;
+                        height: 15px;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 0px;
+                    Text {
+                        text: root.connecting ? (root.setup ? "Creating the sign-in on the server." : "Checking with the server.") : root.auth.message;
+                        font-size: Type.small;
+                        font-weight: msg.info ? 400 : 640;
+                        color: msg.info ? Theme.ink-2 : Theme.crit-text;
+                        wrap: word-wrap;
+                    }
+                    if root.auth.message-sub != "" && !root.connecting: Text {
+                        text: root.auth.message-sub;
+                        font-size: Type.small;
+                        color: Theme.ink-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+        if root.form: Rectangle { height: 10px; }
+
+        // Remember me (login only): off gives a browser-session cookie, on the configured session
+        // lifetime. The HTML form's checkbox (public/login-bridge.mjs) lies over the box as its keyboard
+        // focus target and stays in step with it.
+        if root.form && !root.setup: Rectangle {
+            min-height: max(44px, remember-row.preferred-height);
+            property <LoginBox> where: { x: check.absolute-position.x, y: check.absolute-position.y, width: check.width, height: check.height };
+            init => { root.check-box = self.where; }
+            changed where => { root.check-box = self.where; }
+            remember-row := HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                VerticalLayout {
+                    alignment: center;
+                    check := Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: root.remember-me ? Theme.accent : Theme.rule-strong;
+                        background: root.remember-me ? Theme.accent : Theme.paper;
+                        Icon { x: 2px; y: 2px; width: 18px; height: 18px; name: "check"; tint: Theme.accent-ink; opacity: root.remember-me ? 1 : 0; }
+                    }
+                }
+                Text { text: "Remember me"; font-size: Type.body; color: Theme.ink; vertical-alignment: center; }
+                Text { text: root.remember-me ? "stays signed in" : "signs out with the browser"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+            }
+            ProbeMark { x: 0px; y: 0px; width: 22px; height: parent.height; id: "signin-remember"; }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.remember-me = !root.remember-me; }
+            }
+        }
+        if root.form && !root.setup: Rectangle { height: 8px; }
+
+        // submit: the label, a spinner and a check cross-fade in one button
+        submit-btn := Rectangle {
+            property <bool> off: (root.limited || root.state == "loading") && !root.signed-in;
+            height: 52px;
+            border-radius: 10px;
+            clip: true;
+            background: root.signed-in ? Theme.calm
+                : self.off ? Theme.paper-3
+                : sb-ta.has-hover && root.can-submit ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
+            animate background { duration: Motion.tint(Motion.med); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            transform-scale: sb-ta.pressed && root.can-submit ? 0.97 : 1;
+            animate transform-scale { duration: 120ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            property <color> fg: root.signed-in ? Theme.paper : self.off ? Theme.ink-3 : Theme.accent-ink;
+            property <string> label: root.setup && !root.auth.setup-form ? "Check again" : root.setup ? "Create sign-in" : "Sign in";
+            // idle label
+            Text {
+                y: (parent.height - self.preferred-height) / 2 + (root.connecting || root.signed-in ? -10px : 0px);
+                opacity: root.connecting || root.signed-in ? 0 : 1;
+                animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                text: submit-btn.label;
+                font-size: 15px;
+                font-weight: 620;
+                color: submit-btn.fg;
+            }
+            // busy
+            HorizontalLayout {
+                y: (parent.height - 18px) / 2 + (root.connecting ? 0px : 10px);
+                height: 18px;
+                opacity: root.connecting ? 1 : 0;
+                animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                alignment: center;
+                spacing: 9px;
+                Rectangle {
+                    width: 17px;
+                    height: 17px;
+                    transform-rotation: root.connecting ? mod(animation-tick() / 800ms, 1) * 360deg : 0deg;
+                    Path {
+                        width: 17px; height: 17px; viewbox-width: 24; viewbox-height: 24;
+                        commands: "M12 3 A9 9 0 1 1 11.99 3";
+                        stroke: Theme.accent-ink.with-alpha(0.28); stroke-width: 2.2px; fill: transparent;
+                    }
+                    Path {
+                        width: 17px; height: 17px; viewbox-width: 24; viewbox-height: 24;
+                        commands: "M21 12 A9 9 0 0 0 12 3";
+                        stroke: Theme.accent-ink; stroke-width: 2.2px; stroke-line-cap: round; fill: transparent;
+                    }
+                }
+                Text {
+                    text: root.setup ? "Creating sign-in" : "Signing in";
+                    font-size: 15px;
+                    font-weight: 620;
+                    color: Theme.accent-ink;
+                    vertical-alignment: center;
+                }
+            }
+            // done
+            HorizontalLayout {
+                y: (parent.height - 18px) / 2 + (root.signed-in ? 0px : 10px);
+                height: 18px;
+                opacity: root.signed-in ? 1 : 0;
+                animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                alignment: center;
+                spacing: 9px;
+                VerticalLayout { alignment: center; Icon { name: "check"; tint: Theme.paper; width: 18px; height: 18px; } }
+                Text { text: "Signed in"; font-size: 15px; font-weight: 620; color: Theme.paper; vertical-alignment: center; }
+            }
+            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-submit"; }
+            sb-ta := TouchArea {
+                mouse-cursor: root.can-submit ? pointer : root.connecting ? progress : default;
+                clicked => {
+                    if root.setup && !root.auth.setup-form {
+                        if !root.busy { root.fire-recheck(); }
+                    } else {
+                        root.go();
+                    }
+                }
+            }
+        }
+
+        // rate limited below D: the countdown sits under the button (4.5.4); the scale bar drains
+        if root.limited && root.auth.retry-seconds > 0: Rectangle { height: 10px; }
+        if root.limited && root.auth.retry-seconds > 0: countdown-row := HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            property <string> mmss: floor(root.left / 60) + ":" + (mod(root.left, 60) < 10 ? "0" : "") + mod(root.left, 60);
+            VerticalLayout { alignment: center; Icon { name: "timer"; tint: Theme.warn-text; width: 15px; height: 15px; } }
+            Text { text: countdown-row.mmss; font-family: Type.tab; font-size: 15px; font-weight: 640; color: Theme.warn-text; vertical-alignment: center; }
+            Text { text: "left"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+        }
+
+        // the network note
+        if root.with-note: Rectangle { height: 16px; }
+        if root.with-note: Rectangle { height: 1px; background: Theme.rule-2; }
+        if root.with-note: Rectangle { height: 12px; }
+        if root.with-note: Rectangle {
+            min-height: note.preferred-height;
+            preferred-height: note.preferred-height;
+            note := VerticalLayout {
+                padding-left: 24px;
+                Text { text: root.auth.transport-note; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+            }
+            Icon { x: 0px; y: 1px; name: "lock"; tint: Theme.ink-3; width: 15px; height: 15px; }
+            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-note"; }
+        }
+    }
+}
+// The offline card (4.6): at launch, when /api cannot be reached, the sign-in layout carries this card
+// instead of the form. No readings exist and none are invented; the words come from auth-view.mjs.
+component OfflineCard inherits Rectangle {
+    in property <AuthView> auth;
+    in property <bool> busy;
+    callback try-again();
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.rule;
+    background: Theme.paper;
+    drop-shadow-color: Theme.shadow-2;
+    drop-shadow-blur: 28px;
+    drop-shadow-offset-y: 12px;
+    form := VerticalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-top: 20px;
+        padding-bottom: 20px;
+        spacing: 0px;
+        Text {
+            text: root.auth.offline-title != "" ? root.auth.offline-title : "Can't reach the dashboard";
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.6px;
+            color: Theme.ink;
+        }
+        Rectangle { height: 6px; }
+        StyledText {
+            text: @markdown("**\{root.auth.offline-strong}** \{root.auth.offline-body}");
+            default-color: Theme.ink-2;
+            default-font-size: Type.body;
+        }
+        Rectangle { height: 16px; }
+        Rectangle {
+            height: 48px;
+            border-radius: 10px;
+            clip: true;
+            background: root.busy ? Theme.accent.mix(Theme.ink, 0.88) : Theme.accent;
+            animate background { duration: Motion.tint(Motion.med); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            transform-scale: retry-ta.pressed && !root.busy ? 0.97 : 1;
+            animate transform-scale { duration: 120ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 9px;
+                opacity: root.busy ? 1 : 0;
+                animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+                Rectangle {
+                    width: 17px;
+                    height: 17px;
+                    transform-rotation: root.busy ? mod(animation-tick() / 800ms, 1) * 360deg : 0deg;
+                    Path {
+                        width: 17px; height: 17px; viewbox-width: 24; viewbox-height: 24;
+                        commands: "M12 3 A9 9 0 1 1 11.99 3";
+                        stroke: Theme.accent-ink.with-alpha(0.28); stroke-width: 2.2px; fill: transparent;
+                    }
+                    Path {
+                        width: 17px; height: 17px; viewbox-width: 24; viewbox-height: 24;
+                        commands: "M21 12 A9 9 0 0 0 12 3";
+                        stroke: Theme.accent-ink; stroke-width: 2.2px; stroke-line-cap: round; fill: transparent;
+                    }
+                }
+            }
+            Text {
+                text: "Try again";
+                font-size: 15px;
+                font-weight: 620;
+                color: Theme.accent-ink;
+                opacity: root.busy ? 0 : 1;
+                animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
+            }
+            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-offline-try"; }
+            retry-ta := TouchArea {
+                mouse-cursor: root.busy ? progress : pointer;
+                clicked => { if !root.busy { root.try-again(); } }
+            }
+        }
+        Rectangle { height: 12px; }
+        Text {
+            text: root.auth.offline-meta;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// The brand row of the scrolled sign-in pages (4.5.1): 56 tall, the Apex mark and the name.
+component BrandRow inherits HorizontalLayout {
+    height: 56px;
+    spacing: 10px;
+    alignment: start;
+    VerticalLayout { alignment: center; AppLogo { size: 28px; } }
+    Text { text: "AI Account Center"; font-size: 16px; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+}
+
+// One footer line of the scrolled sign-in pages (4.5.1): a small icon and a wrapping small text.
+component FootLine inherits HorizontalLayout {
+    in property <string> icon;
+    in property <string> text;
+    spacing: 8px;
+    alignment: start;
+    VerticalLayout { alignment: start; padding-top: 2px; horizontal-stretch: 0; Icon { name: root.icon; tint: Theme.ink-4; width: 14px; height: 14px; } }
+    Text { text: root.text; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; horizontal-stretch: 1; }
+}
+
+// A vertical Flickable page under the safe-top strip; its scroll offset is bound to SigninScroll.current,
+// which the layer drives for the keyboard (4.5.2). The card slots in through @children.
+component ScrolledHost inherits Rectangle {
+    in property <AuthView> auth;
+    in property <bool> brand: true;
+    in property <bool> footer: true;
+    in property <bool> f-gap: false;
+    in property <length> card-max: 440px;
+    flick := Flickable {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        content-width: self.width;
+        content-height: max(self.height, Device.safe-top + content.preferred-height);
+        content-y <=> SigninScroll.current;
+        changed content-height => { SigninScroll.max-scroll = max(0px, self.content-height - self.height); }
+        changed height => { SigninScroll.max-scroll = max(0px, self.content-height - self.height); }
+        init => { SigninScroll.max-scroll = max(0px, self.content-height - self.height); }
+        content := Rectangle {
+            y: Device.safe-top;
+            width: flick.width;
+            height: col.preferred-height;
+            col := VerticalLayout {
+                width: 100%;
+                padding-left: 16px + Device.safe-left;
+                padding-right: 16px + Device.safe-right;
+                if root.brand: BrandRow { }
+                if root.brand: Rectangle { height: 16px; }
+                // F: the card's top sits at max(safe-top + 72, 16 % of the height) (4.5.1)
+                if root.f-gap: Rectangle { height: max(0px, root.height * 0.16 - Device.safe-top - 72px); }
+                slot := HorizontalLayout {
+                    alignment: center;
+                    @children
+                }
+                if root.footer: Rectangle { height: 20px; }
+                if root.footer: VerticalLayout {
+                    spacing: 8px;
+                    FootLine { icon: "clock"; text: "Sessions last " + (root.auth.session-hours > 0 ? root.auth.session-hours : 24) + " hours"; }
+                    FootLine { icon: "link"; text: "The Mac and Windows trays stay signed in with their own device tokens"; }
+                }
+                Rectangle { height: 16px + Device.safe-bottom; }
+            }
+        }
+    }
+}
+
+// The short two-column page (4.5.1): brand, title, host line, network note and footer lines on the left,
+// the 360 px card on the right; it all scrolls when it does not fit.
+component ShortHost inherits Rectangle {
+    in property <AuthView> auth;
+    in property <bool> footer: true;
+    flick := Flickable {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        content-width: self.width;
+        content-height: max(self.height, Device.safe-top + content.preferred-height);
+        content-y <=> SigninScroll.current;
+        changed content-height => { SigninScroll.max-scroll = max(0px, self.content-height - self.height); }
+        changed height => { SigninScroll.max-scroll = max(0px, self.content-height - self.height); }
+        init => { SigninScroll.max-scroll = max(0px, self.content-height - self.height); }
+        content := Rectangle {
+            y: Device.safe-top;
+            width: flick.width;
+            height: rowcol.preferred-height;
+            rowcol := HorizontalLayout {
+                width: 100%;
+                padding-left: Breakpoints.gutter + Device.safe-left;
+                padding-right: Breakpoints.gutter + Device.safe-right;
+                padding-top: 24px;
+                padding-bottom: 24px + Device.safe-bottom;
+                spacing: 24px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 0px;
+                    BrandRow { }
+                    Rectangle { height: 12px; }
+                    Text {
+                        text: root.auth.state == "setup" ? "Set up sign-in" : root.auth.state == "expired" ? "Sign in again" : "Sign in";
+                        font-size: 24px;
+                        font-weight: 700;
+                        letter-spacing: -0.6px;
+                        color: Theme.ink;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { height: 4px; }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        alignment: start;
+                        Text { text: root.auth.host == "" ? "Your accounts and subscription usage" : "Dashboard on "; font-size: 14px; color: Theme.ink-3; }
+                        if root.auth.host != "": Text { text: root.auth.host; font-family: Type.tab; font-size: 14px; font-weight: 580; color: Theme.ink-2; overflow: elide; }
+                    }
+                    Rectangle { height: 12px; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        VerticalLayout { alignment: start; padding-top: 2px; horizontal-stretch: 0; Icon { name: "lock"; tint: Theme.ink-3; width: 15px; height: 15px; } }
+                        Text { text: root.auth.transport-note; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; horizontal-stretch: 1; }
+                    }
+                    if root.footer: Rectangle { height: 16px; }
+                    if root.footer: VerticalLayout {
+                        spacing: 8px;
+                        FootLine { icon: "clock"; text: "Sessions last " + (root.auth.session-hours > 0 ? root.auth.session-hours : 24) + " hours"; }
+                        FootLine { icon: "link"; text: "The Mac and Windows trays stay signed in with their own device tokens"; }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    @children
+                }
+            }
+        }
+    }
+}
+
 export component SignInLayer inherits Rectangle {
     in property <AuthView> auth;
     in property <StrengthView> strength;
@@ -281,22 +1109,36 @@ export component SignInLayer inherits Rectangle {
     property <bool> limited: root.state == "limited";
     property <bool> wrong: root.state == "wrong";
     property <bool> expired: root.state == "expired";
+    // the offline screen (4.6): /api was unreachable at launch (the shell came from the service-worker cache)
+    property <bool> offline: root.state == "offline";
     property <bool> can-submit: !root.busy && !root.loading && !root.limited && !root.signed-in && !root.connecting && root.form;
     property <bool> has-banner: root.expired || root.limited || (root.setup && !root.auth.setup-form);
-    property <bool> short: root.height < 760px;
-    property <string> confirm-text;
-    property <string> code-text;
     property <bool> entered: false;
     init => { root.entered = true; }
 
-    // The HTML inputs are on screen only while the login form is on screen and still: the layer fully faded in and
-    // asked for, the card's load-in finished, and the page neither loading, nor setting up (the first-run form keeps
-    // its Slint fields), nor signed in (the success look and the fade into the dashboard). In every other moment they
-    // are hidden and the Slint fields draw the same text themselves, so the text never doubles and never vanishes.
-    property <bool> overlay-on: root.visible && root.shown && root.opacity > 0.999 && card-reveal.level > 0.999
-        && root.form && !root.setup && !root.signed-in && !root.loading;
-    // where the fields are, copied out of the conditional form below whenever the layout moves them (a resize, the
-    // short layout, a breakpoint, a banner opening, the wrong-password shake)
+    // tiers (DESIGN-MOBILE.md 4.5.1): the motif layout on T and D, the scrolled column on P and F, the
+    // two-column short page in landscape. The desktop compact look stays height < 760 on D only.
+    property <bool> mobile: Breakpoints.below-d;
+    // short heights take the two-column page even on P/F widths (never both pages at once)
+    property <bool> stacked: root.mobile && !Breakpoints.tier-t && !Breakpoints.short;
+    property <bool> mshort: root.mobile && Breakpoints.short;
+    property <bool> dshort: !root.mobile && root.height < 760px;
+    property <bool> scrollable: root.stacked || root.mshort;
+    // the real HTML inputs draw 17 px below D so iOS never zooms on focus; the Slint mirror text matches.
+    // On D with touch (iPad 13 landscape) they draw 16 px for the same reason (2.1); mouse desktops keep today.
+    property <length> login-size: root.mobile ? 17px : Device.coarse ? 16px : Type.body;
+    // the safe-top strip's bottom edge: boxes starting above it hide their HTML input (TouchCard box-in-band)
+    property <length> band-top: Device.safe-top;
+
+    // The HTML inputs are on screen only while the login form is on screen and still: the layer fully faded in
+    // and asked for, the card's load-in finished (SigninScroll.ready), and the page neither loading, nor signed
+    // in (the success look and the fade into the dashboard), nor on the offline card. The first-run form is
+    // covered like the login one (mode "setup"). In every other moment the inputs are hidden and the Slint
+    // fields draw the same text themselves.
+    property <bool> overlay-on: root.visible && root.shown && root.opacity > 0.999 && SigninScroll.ready
+        && root.form && !root.signed-in && !root.loading && !root.offline;
+    // where the fields are on the desktop layout, copied out of the conditional form below whenever the layout
+    // moves them (a resize, the short layout, a breakpoint, a banner opening, the wrong-password shake)
     property <LoginBox> user-box;
     property <LoginBox> user-text-box;
     property <LoginBox> pass-box;
@@ -309,25 +1151,37 @@ export component SignInLayer inherits Rectangle {
     property <LoginOverlay> overlay-live: {
         on: true,
         enabled: root.fields-enabled,
+        mode: "login",
         revealed: root.pass-plain,
         remember: root.remember-me,
+        // the desktop page never scrolls: its fields are always out in the open
+        user-visible: true,
+        pass-visible: true,
+        confirm-visible: true,
+        code-visible: true,
         user: root.user-box,
         user-text: root.user-text-box,
         pass: root.pass-box,
         pass-text: root.pass-text-box,
         check: root.check-box,
         submit: { x: submit-btn.absolute-position.x, y: submit-btn.absolute-position.y, width: submit-btn.width, height: submit-btn.height },
-        font-size: Type.body,
+        font-size: root.login-size,
         // a disabled field fades its box to 0.72, text included
         ink: Theme.ink.with-alpha(root.fields-enabled ? 1 : 0.72),
         placeholder: Theme.ink-4,
         selection: Theme.accent.with-alpha(0.25),
         accent: Theme.accent,
     };
-    property <LoginOverlay> overlay: root.overlay-on ? root.overlay-live : root.overlay-off;
+    property <LoginOverlay> overlay: !root.scrollable && root.overlay-on ? root.overlay-live : root.overlay-off;
     changed overlay => { root.login-overlay(self.overlay); }
-    // a paused sign-in forgets the typed password, as the concept does
-    changed state => { if root.limited { root.password = ""; } }
+    // the scrolled tiers report through their TouchCard; the layer only remembers it for the keyboard scroll
+    changed login-focus => { root.retarget(); }
+    // a paused sign-in forgets the typed password, as the concept does; a wrong one takes the keyboard back
+    changed state => {
+        if root.limited { root.password = ""; }
+        if root.wrong { root.login-focus-request("pass"); }
+        if root.offline { root.login-overlay(root.overlay-off); }
+    }
 
     // rate limited: the countdown runs from the server's Retry-After, a second at a time
     property <int> left: root.auth.retry-seconds;
@@ -346,7 +1200,8 @@ export component SignInLayer inherits Rectangle {
         return floor(s / 60) + ":" + (mod(s, 60) < 10 ? "0" : "") + mod(s, 60);
     }
 
-    // a wrong password or a refused first-run field shakes the fields: a short decaying sideways oscillation
+    // a wrong password or a refused first-run field shakes the desktop fields: a short decaying sideways
+    // oscillation (the scrolled tiers' TouchCard shakes itself)
     property <int> nonce: root.auth.nonce;
     property <duration> shake-start: 0ms;
     property <bool> shaking: false;
@@ -361,10 +1216,56 @@ export component SignInLayer inherits Rectangle {
     property <float> shake-p: root.shaking ? clamp((animation-tick() - root.shake-start) / 440ms, 0, 1) : 1;
     property <length> shake-x: root.shaking ? 7px * pow(1 - root.shake-p, 2) * sin(root.shake-p * 4 * 360deg) : 0px;
 
+    // ---- keyboard scroll (4.5.2, 2.5): bring the Sign in button 12 px above the keyboard without pushing
+    // the focused field's top above safe-top + 8; never scroll back on blur ----
+    property <length> kbd-h: Device.keyboard;
+    changed kbd-h => { root.retarget(); }
+    changed height => { root.retarget(); }
+    pure function focused-y() -> length {
+        if root.login-focus == "pass" { return SigninScroll.report.pass.y; }
+        if root.login-focus == "confirm" { return SigninScroll.report.confirm.y; }
+        if root.login-focus == "code" { return SigninScroll.report.code.y; }
+        return SigninScroll.report.user.y;
+    }
+    // the boxes' content coordinates are stable while the scroll animates: box and offset move together
+    pure function scroll-target() -> length {
+        return max(
+            min(max(min(0px, root.height - max(Device.keyboard, Device.safe-bottom) - 12px
+                - SigninScroll.report.submit.height - (SigninScroll.report.submit.y - SigninScroll.current)),
+                Device.safe-top + 8px - (self.focused-y() - SigninScroll.current)), 0px),
+            -SigninScroll.max-scroll);
+    }
+    function retarget() {
+        if !root.scrollable || Device.keyboard <= 0px || !SigninScroll.report.on { return; }
+        self.scroll-to(self.scroll-target());
+    }
+    property <length> tween-from: 0px;
+    property <length> tween-to: 0px;
+    property <duration> tween-t0: 0ms;
+    function scroll-to(target: length) {
+        if !Motion.on || target == SigninScroll.current {
+            SigninScroll.current = target;
+            return;
+        }
+        root.tween-from = SigninScroll.current;
+        root.tween-to = target;
+        root.tween-t0 = animation-tick();
+        tween-timer.running = true;
+    }
+    tween-timer := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => {
+            SigninScroll.current = root.tween-from + (root.tween-to - root.tween-from)
+                * (1 - pow(1 - clamp((animation-tick() - root.tween-t0) / 200ms, 0, 1), 3));
+            if (animation-tick() - root.tween-t0) / 200ms >= 1 { self.running = false; }
+        }
+    }
+
     function go() {
         if !root.can-submit { return; }
         if root.setup {
-            root.create(root.username, root.password, root.confirm-text, root.code-text);
+            root.create(root.username, root.password, LoginExtra.confirm, LoginExtra.code);
         } else {
             root.submit(root.username, root.password, root.remember-me);
         }
@@ -389,9 +1290,118 @@ export component SignInLayer inherits Rectangle {
         background: @radial-gradient(circle, Theme.accent.with-alpha(Theme.dark ? 0.09 : 0.07) 0%, Theme.accent.with-alpha(0) 68%);
     }
 
+    // ---- the scrolled pages: P and F column, short two-column (4.5.1) ----
+    if root.stacked: ScrolledHost {
+        width: root.width;
+        height: root.height;
+        auth: root.auth;
+        f-gap: Breakpoints.tier-f;
+        brand: !root.offline;
+        footer: !root.offline;
+        stack-reveal := Reveal {
+            delay: 124ms;
+            // from the window, never from the parent: parent.width loops back through the slot's
+            // content size and the card came out 32 px too wide, overflowing the right edge on P
+            width: min(440px, root.width - 32px - Device.safe-left - Device.safe-right);
+            changed level => { SigninScroll.ready = self.level > 0.999; }
+            init => { SigninScroll.ready = self.level > 0.999; }
+            if root.offline: OfflineCard {
+                width: parent.width;
+                auth: root.auth;
+                busy: root.busy;
+                try-again => { root.recheck(); }
+            }
+            if !root.offline: TouchCard {
+                width: parent.width;
+                auth: root.auth;
+                strength: root.strength;
+                busy: root.busy;
+                signed-in: root.signed-in;
+                connecting: root.connecting;
+                can-submit: root.can-submit;
+                form: root.form;
+                setup: root.setup;
+                limited: root.limited;
+                wrong: root.wrong;
+                expired: root.expired;
+                has-banner: root.has-banner;
+                overlay-on: root.overlay-on;
+                login-focus: root.login-focus;
+                login-hover: root.login-hover;
+                band-top: root.band-top;
+                login-size: root.login-size;
+                leaving: root.signed-in && !root.shown;
+                left: root.left;
+                limit-total: root.limit-total;
+                username <=> root.username;
+                password <=> root.password;
+                remember-me <=> root.remember-me;
+                login-overlay-report(report) => { SigninScroll.report = report; root.login-overlay(report); }
+                fire-submit(user, pass, remember) => { root.submit(user, pass, remember); }
+                fire-create(user, pass, confirm, code) => { root.create(user, pass, confirm, code); }
+                fire-recheck => { root.recheck(); }
+                fire-focus(field) => { root.login-focus-request(field); }
+            }
+        }
+    }
+    if root.mshort: ShortHost {
+        width: root.width;
+        height: root.height;
+        auth: root.auth;
+        footer: !root.offline;
+        short-reveal := Reveal {
+            delay: 124ms;
+            width: 360px;
+            horizontal-stretch: 0;
+            changed level => { SigninScroll.ready = self.level > 0.999; }
+            init => { SigninScroll.ready = self.level > 0.999; }
+            if root.offline: OfflineCard {
+                width: parent.width;
+                auth: root.auth;
+                busy: root.busy;
+                try-again => { root.recheck(); }
+            }
+            if !root.offline: TouchCard {
+                width: parent.width;
+                with-title: false;
+                with-note: false;
+                auth: root.auth;
+                strength: root.strength;
+                busy: root.busy;
+                signed-in: root.signed-in;
+                connecting: root.connecting;
+                can-submit: root.can-submit;
+                form: root.form;
+                setup: root.setup;
+                limited: root.limited;
+                wrong: root.wrong;
+                expired: root.expired;
+                has-banner: root.has-banner;
+                overlay-on: root.overlay-on;
+                login-focus: root.login-focus;
+                login-hover: root.login-hover;
+                band-top: root.band-top;
+                login-size: root.login-size;
+                leaving: root.signed-in && !root.shown;
+                left: root.left;
+                limit-total: root.limit-total;
+                username <=> root.username;
+                password <=> root.password;
+                remember-me <=> root.remember-me;
+                login-overlay-report(report) => { SigninScroll.report = report; root.login-overlay(report); }
+                fire-submit(user, pass, remember) => { root.submit(user, pass, remember); }
+                fire-create(user, pass, confirm, code) => { root.create(user, pass, confirm, code); }
+                fire-recheck => { root.recheck(); }
+                fire-focus(field) => { root.login-focus-request(field); }
+            }
+        }
+    }
+
+    // ---- the desktop layout (T and D, unchanged apart from the safe top and the T sizes) ----
     top := HorizontalLayout {
+        visible: !root.scrollable;
         x: max(0px, (root.width - Breakpoints.max-content) / 2);
-        y: root.entered || !Motion.on ? 0px : -8px;
+        y: (root.entered || !Motion.on ? 0px : -8px) + Device.safe-top;
         width: min(root.width, Breakpoints.max-content);
         height: 62px;
         animate y { duration: Motion.on ? 520ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -407,22 +1417,25 @@ export component SignInLayer inherits Rectangle {
     property <length> main-pad: Breakpoints.compact ? 32px : 48px;
     property <length> card-w: Breakpoints.ultra ? 440px : Breakpoints.compact ? 384px : 404px;
     property <length> card-pad: Breakpoints.ultra ? 36px : Breakpoints.compact ? 28px : 32px;
-    property <length> foot-h: root.short ? 46px : 56px;
+    property <length> foot-h: root.dshort ? 46px : 56px;
     main := HorizontalLayout {
+        visible: !root.scrollable;
         x: max(0px, (root.width - root.main-max) / 2);
-        y: 62px;
+        y: 62px + Device.safe-top;
         width: min(root.width, root.main-max);
-        height: root.height - 62px - root.foot-h;
+        height: root.height - 62px - root.foot-h - Device.safe-top;
         padding-left: root.main-pad;
         padding-right: root.main-pad;
-        padding-top: root.short ? 0px : 12px;
-        padding-bottom: root.short ? 12px : 20px;
+        padding-top: root.dshort ? 0px : 12px;
+        padding-bottom: root.dshort ? 12px : 20px;
         spacing: Breakpoints.compact ? 44px : clamp(root.width * 0.052, 40px, 120px);
         VerticalLayout {
             alignment: center;
             width: root.card-w;
             card-reveal := Reveal {
                 delay: 124ms;
+                changed level => { if !root.scrollable { SigninScroll.ready = self.level > 0.999; } }
+                init => { if !root.scrollable { SigninScroll.ready = self.level > 0.999; } }
                 card := Rectangle {
                     min-height: form.preferred-height;
                     preferred-height: form.preferred-height;
@@ -439,38 +1452,38 @@ export component SignInLayer inherits Rectangle {
                     form := VerticalLayout {
                         padding-left: root.card-pad;
                         padding-right: root.card-pad;
-                        padding-top: root.short ? 22px : root.card-pad - 2px;
-                        padding-bottom: root.short ? 18px : 24px;
+                        padding-top: root.dshort ? 22px : root.card-pad - 2px;
+                        padding-bottom: root.dshort ? 18px : 24px;
                         spacing: 0px;
                         // title and lede
                         Text {
                             text: root.signed-in ? "Signed in" : root.setup ? "Set up sign-in" : root.expired ? "Sign in again" : "Sign in";
-                            font-size: root.short ? 24px : Breakpoints.ultra ? 30px : Breakpoints.compact ? 25px : 27px;
+                            font-size: root.dshort ? 24px : Breakpoints.ultra ? 30px : Breakpoints.compact ? 25px : 27px;
                             font-weight: 640;
                             letter-spacing: -0.6px;
                             color: Theme.ink;
                         }
-                        Rectangle { height: root.short ? 5px : 7px; }
+                        Rectangle { height: root.dshort ? 5px : 7px; }
                         if root.signed-in || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == "": Text {
                             text: root.signed-in ? "Opening your dashboard."
                                 : root.loading ? "Connecting to AI Account Center…"
                                 : root.setup ? "No sign-in is set up yet. Choose the username and password for this dashboard; each tray asks for them once."
                                 : "Your accounts and subscription usage";
-                            font-size: root.short ? 13px : 13.5px;
+                            font-size: root.dshort ? 13px : 13.5px;
                             color: Theme.ink-3;
                             wrap: word-wrap;
                         }
                         if !(root.signed-in || root.loading || (root.setup && root.auth.setup-form) || root.auth.host == ""): HorizontalLayout {
                             spacing: 0px;
                             alignment: start;
-                            Text { text: "Dashboard on "; font-size: root.short ? 13px : 13.5px; color: Theme.ink-3; }
-                            Text { text: root.auth.host; font-family: Type.tab; font-size: root.short ? 13px : 13.5px; font-weight: 580; color: Theme.ink-2; overflow: elide; }
+                            Text { text: "Dashboard on "; font-size: root.dshort ? 13px : 13.5px; color: Theme.ink-3; }
+                            Text { text: root.auth.host; font-family: Type.tab; font-size: root.dshort ? 13px : 13.5px; font-weight: 580; color: Theme.ink-2; overflow: elide; }
                         }
-                        Rectangle { height: root.short ? 14px : 20px; }
+                        Rectangle { height: root.dshort ? 14px : 20px; }
 
                         // the banner: session ended, rate limited, or set up on the server (no tinted box, no side bar)
                         banner-box := Rectangle {
-                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.has-banner ? "signin-banner" : ""; }
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable && root.has-banner ? "signin-banner" : ""; }
                             property <length> natural: banner.preferred-height;
                             height: root.has-banner ? self.natural : 0px;
                             animate height { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
@@ -526,7 +1539,7 @@ export component SignInLayer inherits Rectangle {
                                                 color: Theme.warn-text;
                                                 horizontal-alignment: right;
                                             }
-                                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-countdown"; }
+                                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable ? "signin-countdown" : ""; }
                                         }
                                         Text { text: "left"; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: right; }
                                     }
@@ -548,9 +1561,9 @@ export component SignInLayer inherits Rectangle {
                                         }
                                     }
                                 }
-                                Rectangle { height: root.short ? 14px : 18px; }
+                                Rectangle { height: root.dshort ? 14px : 18px; }
                                 Rectangle { height: 1px; background: Theme.rule-2; }
-                                Rectangle { height: root.short ? 14px : 18px; }
+                                Rectangle { height: root.dshort ? 14px : 18px; }
                             }
                         }
 
@@ -584,7 +1597,7 @@ export component SignInLayer inherits Rectangle {
                             x: root.shake-x;
                             width: parent.width;
                             height: parent.height;
-                            spacing: root.short ? 10px : 14px;
+                            spacing: root.dshort ? 10px : 14px;
                             Rectangle {
                                 min-height: user.preferred-height;
                                 user := Field {
@@ -594,15 +1607,16 @@ export component SignInLayer inherits Rectangle {
                                     text <=> root.username;
                                     enabled: root.can-submit || root.wrong;
                                     bad: root.setup && root.auth.field == "user";
-                                    box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                    box-height: Breakpoints.tier-t ? 48px : root.dshort ? 38px : Breakpoints.ultra ? 46px : 42px;
                                     mirror: !root.setup;
                                     covered: root.overlay-on;
+                                    text-size: root.login-size;
                                     ext-focus: root.overlay-on && root.login-focus == "user";
                                     ext-hover: root.overlay-on && root.login-hover == "user";
                                     focus-request => { root.login-focus-request("user"); }
                                     accepted => { pass.focus-input(); }
                                 }
-                                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-user"; }
+                                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable ? "signin-user" : ""; }
                             }
                             Rectangle {
                                 min-height: pass.preferred-height;
@@ -613,21 +1627,22 @@ export component SignInLayer inherits Rectangle {
                                     text <=> root.password;
                                     enabled: root.can-submit || root.wrong;
                                     bad: root.wrong || (root.setup && root.auth.field == "pass");
-                                    box-height: root.short ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                    box-height: Breakpoints.tier-t ? 48px : root.dshort ? 38px : Breakpoints.ultra ? 46px : 42px;
                                     mirror: !root.setup;
                                     covered: root.overlay-on;
+                                    text-size: root.login-size;
                                     ext-focus: root.overlay-on && root.login-focus == "pass";
                                     ext-hover: root.overlay-on && root.login-hover == "pass";
                                     focus-request => { root.login-focus-request("pass"); }
-                                    edited(v) => { if root.setup { root.typing(v, root.confirm-text); } }
+                                    edited(v) => { if root.setup { root.typing(v, LoginExtra.confirm); } }
                                     accepted => { if !root.setup { root.go(); } }
                                 }
-                                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-pass"; }
+                                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable ? "signin-pass" : ""; }
                             }
                             if root.setup: StrengthMeter { data: root.strength; }
                             if root.setup: Rectangle {
                               min-height: confirm-field.preferred-height;
-                              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-confirm"; }
+                              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable ? "signin-confirm" : ""; }
                               confirm-field := Field {
                                 width: parent.width;
                                 label: "Confirm password";
@@ -635,26 +1650,28 @@ export component SignInLayer inherits Rectangle {
                                 aside: root.strength.matches ? "Matches" : "";
                                 aside-good: root.strength.matches;
                                 ok: root.strength.matches;
-                                text <=> root.confirm-text;
+                                text <=> LoginExtra.confirm;
                                 enabled: root.can-submit;
                                 bad: root.auth.field == "confirm";
-                                box-height: root.short ? 38px : 42px;
+                                box-height: Breakpoints.tier-t ? 48px : root.dshort ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                text-size: root.login-size;
                                 edited(v) => { root.typing(root.password, v); }
                                 accepted => { if !root.auth.code-required { root.go(); } }
                               }
                             }
                             if root.setup && root.auth.code-required: Rectangle {
                               min-height: code-field.preferred-height;
-                              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-code"; }
+                              ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable ? "signin-code" : ""; }
                               code-field := Field {
                                 width: parent.width;
                                 label: "Setup code";
                                 aside: "printed in the server's terminal";
                                 placeholder: "e.g. EXAM-PLE0";
-                                text <=> root.code-text;
+                                text <=> LoginExtra.code;
                                 enabled: root.can-submit;
                                 bad: root.auth.field == "code";
-                                box-height: root.short ? 38px : 42px;
+                                box-height: Breakpoints.tier-t ? 48px : root.dshort ? 38px : Breakpoints.ultra ? 46px : 42px;
+                                text-size: root.login-size;
                                 accepted => { root.go(); }
                               }
                             }
@@ -666,12 +1683,12 @@ export component SignInLayer inherits Rectangle {
                           }
                         }
                         // the message slot keeps its height, so an error never moves the button
-                        if root.form: Rectangle { height: root.short ? 8px : 12px; }
+                        if root.form: Rectangle { height: root.dshort ? 8px : 12px; }
                         if root.form: msg := Rectangle {
                             property <bool> on: root.auth.message != "" || root.connecting;
                             property <bool> info: root.connecting || root.auth.notice;
-                            min-height: max(root.short ? 34px : 38px, msg-row.preferred-height);
-                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: msg.height; id: msg.on ? "signin-message" : ""; }
+                            min-height: max(root.dshort ? 34px : 38px, msg-row.preferred-height);
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: msg.height; id: !root.scrollable && msg.on ? "signin-message" : ""; }
                             msg-row := HorizontalLayout {
                                 y: msg.on ? 0px : -3px;
                                 height: self.preferred-height;
@@ -710,7 +1727,7 @@ export component SignInLayer inherits Rectangle {
                                 }
                             }
                         }
-                        if root.form: Rectangle { height: root.short ? 8px : 12px; }
+                        if root.form: Rectangle { height: root.dshort ? 8px : 12px; }
 
                         // Remember me (login only): off gives a browser-session cookie, on the
                         // configured session lifetime. The HTML form's checkbox (public/login-bridge.mjs)
@@ -726,19 +1743,19 @@ export component SignInLayer inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center;
                                     check := Rectangle {
-                                        width: 16px;
-                                        height: 16px;
+                                        width: Breakpoints.tier-t ? 20px : 16px;
+                                        height: Breakpoints.tier-t ? 20px : 16px;
                                         border-radius: 4px;
                                         border-width: 1px;
                                         border-color: root.remember-me ? Theme.accent : Theme.rule-strong;
                                         background: root.remember-me ? Theme.accent : Theme.paper;
-                                        Icon { x: 1.5px; y: 1.5px; width: 13px; height: 13px; name: "check"; tint: Theme.accent-ink; opacity: root.remember-me ? 1 : 0; }
+                                        Icon { x: 1.5px; y: 1.5px; width: parent.width - 3px; height: parent.height - 3px; name: "check"; tint: Theme.accent-ink; opacity: root.remember-me ? 1 : 0; }
                                     }
                                 }
                                 Text { text: "Remember me"; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; }
                                 Text { text: root.remember-me ? "stays signed in" : "signs out with the browser"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
                             }
-                            ProbeMark { x: 0px; y: 0px; width: 16px; height: parent.height; id: "signin-remember"; }
+                            ProbeMark { x: 0px; y: 0px; width: 16px; height: parent.height; id: !root.scrollable ? "signin-remember" : ""; }
                             TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => { root.remember-me = !root.remember-me; }
@@ -749,7 +1766,7 @@ export component SignInLayer inherits Rectangle {
                         // submit: the label, a spinner and a check cross-fade in one button
                         submit-btn := Rectangle {
                             property <bool> off: (root.limited || root.loading) && !root.signed-in;
-                            height: root.short ? 40px : Breakpoints.ultra ? 48px : 44px;
+                            height: root.dshort ? 40px : Breakpoints.tier-t || Breakpoints.ultra ? 48px : 44px;
                             border-radius: 10px;
                             clip: true;
                             background: root.signed-in ? Theme.calm
@@ -766,7 +1783,7 @@ export component SignInLayer inherits Rectangle {
                                 opacity: root.connecting || root.signed-in ? 0 : 1;
                                 animate y, opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                                 text: submit-btn.label;
-                                font-size: Breakpoints.ultra ? 15px : 14px;
+                                font-size: Breakpoints.tier-t || Breakpoints.ultra ? 15px : 14px;
                                 font-weight: 620;
                                 color: submit-btn.fg;
                             }
@@ -812,7 +1829,7 @@ export component SignInLayer inherits Rectangle {
                                 VerticalLayout { alignment: center; Icon { name: "check"; tint: Theme.paper; width: 18px; height: 18px; } }
                                 Text { text: "Signed in"; font-size: 14px; font-weight: 620; color: Theme.paper; vertical-alignment: center; }
                             }
-                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-submit"; }
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable ? "signin-submit" : ""; }
                             sb-ta := TouchArea {
                                 mouse-cursor: root.can-submit ? pointer : root.connecting ? progress : default;
                                 clicked => {
@@ -826,9 +1843,9 @@ export component SignInLayer inherits Rectangle {
                         }
 
                         // the network note
-                        Rectangle { height: root.short ? 12px : 16px; }
+                        Rectangle { height: root.dshort ? 12px : 16px; }
                         Rectangle { height: 1px; background: Theme.rule-2; }
-                        Rectangle { height: root.short ? 11px : 14px; }
+                        Rectangle { height: root.dshort ? 11px : 14px; }
                         Rectangle {
                             min-height: note.preferred-height;
                             preferred-height: note.preferred-height;
@@ -837,7 +1854,7 @@ export component SignInLayer inherits Rectangle {
                                 Text { text: root.auth.transport-note; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; }
                             }
                             Icon { x: 0px; y: 1px; name: "lock"; tint: Theme.ink-3; width: 15px; height: 15px; }
-                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "signin-note"; }
+                            ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: !root.scrollable ? "signin-note" : ""; }
                         }
                     }
                 }
@@ -856,13 +1873,14 @@ export component SignInLayer inherits Rectangle {
         }
     }
     foot := HorizontalLayout {
+        visible: !root.scrollable;
         x: max(0px, (root.width - root.main-max) / 2);
         y: root.height - root.foot-h;
         width: min(root.width, root.main-max);
         height: root.foot-h;
         padding-left: root.main-pad;
         padding-right: root.main-pad;
-        padding-bottom: root.short ? 14px : 22px;
+        padding-bottom: (root.dshort ? 14px : 22px) + Device.safe-bottom;
         spacing: 18px;
         alignment: start;
         opacity: root.entered || !Motion.on ? 1 : 0;
@@ -883,5 +1901,15 @@ export component SignInLayer inherits Rectangle {
             VerticalLayout { alignment: center; Icon { name: "link"; tint: Theme.ink-4; width: 15px; height: 15px; } }
             Text { text: "The Mac and Windows trays stay signed in with their own device tokens"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
         }
+    }
+
+    // the safe-top strip (2.4): page background over the scrolled content, so nothing runs under the
+    // status bar text; zero on desktop browsers, so the desktop look is unchanged
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: Device.safe-top;
+        background: Theme.bg;
     }
 }

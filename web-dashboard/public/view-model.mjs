@@ -165,6 +165,18 @@ export const run = (value, strong = false, tone = '') => ({
   strong: !!strong,
   tone,
 });
+/**
+ * The same runs as wrap units for the touch layouts: Slint cannot split strings, so each word
+ * becomes its own run (whitespace collapses; the layout adds the spaces back between words).
+ * Desktop keeps `runs` untouched.
+ */
+export const wordsOf = (runs) =>
+  (runs || []).flatMap((r) =>
+    String(r?.text ?? '')
+      .split(/\s+/)
+      .filter((word) => word !== '')
+      .map((word) => run(word, !!r?.strong, r?.tone || ''))
+  );
 const STALE_MS = 30 * 60_000;
 
 // ---------------------------------------------------------------- windows
@@ -486,8 +498,14 @@ function codexFoot(accounts, auto, known, threshold, now) {
   const active = accounts.find((account) => account.isActive === true);
   const checked = validDate(auto?.lastCheckedAt) ? relative(auto.lastCheckedAt, now) : 'never';
   const when = `Checked ${checked}${Number.isInteger(auto?.pollIntervalSeconds) ? ` · every ${intervalLabel(auto.pollIntervalSeconds)}` : ''}`;
-  const foot = (runs, warn = false) => ({ shown: true, warn, runs, when: known ? when : '' });
-  if (!accounts.length) return { shown: false, warn: false, runs: [], when: '' };
+  const foot = (runs, warn = false) => ({
+    shown: true,
+    warn,
+    runs,
+    words: wordsOf(runs),
+    when: known ? when : '',
+  });
+  if (!accounts.length) return { shown: false, warn: false, runs: [], words: [], when: '' };
   if (!known) return foot([run(text(auto?.message) || 'Automatic switching status unavailable')]);
   if (!active) return foot([run('No Codex account is active')], true);
   const peak = codexPeak(active, now);
@@ -558,7 +576,7 @@ function codexFoot(accounts, auto, known, threshold, now) {
     ),
   ]);
 }
-const noFoot = () => ({ shown: false, warn: false, runs: [], when: '' });
+const noFoot = () => ({ shown: false, warn: false, runs: [], words: [], when: '' });
 
 const visibleMeters = (account) =>
   visibleUsageWindows(account.provider, account.windows).filter(isMeterWindow);
@@ -659,9 +677,14 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
       amountsRuns: [],
       confirm: false,
       confirmRuns: [],
+      confirmWords: [],
       cells,
     };
   });
+  const metaRuns = [
+    run(rows.length, true),
+    run(` ${rows.length === 1 ? 'account' : 'accounts'} · desktop profiles`),
+  ];
   return {
     id: 'claude',
     kind: 'claude',
@@ -670,10 +693,8 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
     switchable: false,
     canSwitch: false,
     meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'} · desktop profiles`,
-    metaRuns: [
-      run(rows.length, true),
-      run(` ${rows.length === 1 ? 'account' : 'accounts'} · desktop profiles`),
-    ],
+    metaRuns,
+    metaWords: wordsOf(metaRuns),
     foot: noFoot(),
     activeId: '',
     activeLabel: '',
@@ -690,6 +711,7 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
       max: 99,
       pool: '',
       offRuns: [],
+      offWords: [],
       setting: '',
       message: '',
       example: false,
@@ -746,6 +768,7 @@ function codexSection(accounts, data, now, total = accounts.length) {
     const amountsRuns = codexAmountsRuns(account);
     const peak = codexPeak(account, now);
     const above = known && account.isActive !== true && peak !== null && peak >= threshold;
+    const cr = above ? confirmRuns(peak, threshold, auto?.enabled === true) : [];
     return {
       id: account.id,
       provider: 'codex',
@@ -777,10 +800,18 @@ function codexSection(accounts, data, now, total = accounts.length) {
       amountsLine: runsText(amountsRuns),
       amountsRuns,
       confirm: above,
-      confirmRuns: above ? confirmRuns(peak, threshold, auto?.enabled === true) : [],
+      confirmRuns: cr,
+      confirmWords: wordsOf(cr),
       cells,
     };
   });
+  const metaRuns = [
+    run(rows.length, true),
+    run(` ${rows.length === 1 ? 'account' : 'accounts'} · `),
+    ...(active
+      ? [run(shortIdentity(active), true, 'good'), run(' active')]
+      : [run('none active')]),
+  ];
   return {
     id: 'codex',
     kind: 'switchable',
@@ -789,13 +820,8 @@ function codexSection(accounts, data, now, total = accounts.length) {
     switchable: true,
     canSwitch: total > 1,
     meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}${active ? ` · ${shortIdentity(active)} active` : ''}`,
-    metaRuns: [
-      run(rows.length, true),
-      run(` ${rows.length === 1 ? 'account' : 'accounts'} · `),
-      ...(active
-        ? [run(shortIdentity(active), true, 'good'), run(' active')]
-        : [run('none active')]),
-    ],
+    metaRuns,
+    metaWords: wordsOf(metaRuns),
     foot: codexFoot(accounts, auto, known, threshold, now),
     activeId: active?.id || '',
     activeLabel: active ? text(active.email) || text(active.label) : '',
@@ -812,6 +838,7 @@ function codexSection(accounts, data, now, total = accounts.length) {
       max: 99,
       pool: '',
       offRuns: [],
+      offWords: [],
       setting: known
         ? `${valueText(threshold)}% used · checks every ${auto.pollIntervalSeconds}s`
         : 'Setting unavailable',
@@ -852,6 +879,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
       : [];
     const peak = poolUse.length ? Math.max(...poolUse) : null;
     const above = !!status && !active && peak !== null && peak >= status.thresholdUsedPercent;
+    const cr = above ? confirmRuns(peak, status.thresholdUsedPercent, status.enabled === true) : [];
     const cells = keys.map(({ key }) => {
       const w = visibleMeters(account).find((row) => row.key === key);
       const cell = meterView(account, w, {
@@ -898,9 +926,8 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
       amountsLine: '',
       amountsRuns: [],
       confirm: above,
-      confirmRuns: above
-        ? confirmRuns(peak, status.thresholdUsedPercent, status.enabled === true)
-        : [],
+      confirmRuns: cr,
+      confirmWords: wordsOf(cr),
       cells,
     };
   });
@@ -911,6 +938,11 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
     native.antigravityPoolLabel && native.antigravityPoolLabel !== 'Choose quota pool'
       ? native.antigravityPoolLabel
       : '';
+  const metaRuns = [
+    run('Google Antigravity CLI · '),
+    run(rows.length, true),
+    run(` ${rows.length === 1 ? 'account' : 'accounts'}`),
+  ];
   return {
     id: 'antigravity',
     kind: 'switchable',
@@ -919,11 +951,8 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
     switchable: true,
     canSwitch: policyShown,
     meta: `Google Antigravity CLI · ${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}`,
-    metaRuns: [
-      run('Google Antigravity CLI · '),
-      run(rows.length, true),
-      run(` ${rows.length === 1 ? 'account' : 'accounts'}`),
-    ],
+    metaRuns,
+    metaWords: wordsOf(metaRuns),
     // A runtime service that cannot start outranks a paused update: switching is off either way.
     foot:
       native.antigravityServiceProblem || native.antigravityUpdatePaused
@@ -931,6 +960,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
             shown: true,
             warn: true,
             runs: [run(native.antigravityServiceProblem || native.antigravityUpdatePaused)],
+            words: wordsOf([run(native.antigravityServiceProblem || native.antigravityUpdatePaused)]),
             when: '',
           }
         : noFoot(),
@@ -952,6 +982,9 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
       offRuns: policyShown
         ? []
         : [run('Auto-switch '), run('off', true), run(' · needs a second account')],
+      offWords: policyShown
+        ? []
+        : wordsOf([run('Auto-switch '), run('off', true), run(' · needs a second account')]),
       setting: native.antigravityAutoSetting,
       message:
         total < 2
@@ -1192,6 +1225,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     platform: platformLabel(account.platform),
     confirm: !!row?.confirm,
     confirmRuns: row?.confirmRuns || [],
+    confirmWords: row?.confirmWords || wordsOf(row?.confirmRuns || []),
     profile: row?.profile || profile,
     canMac: !!row?.canMac,
     canWindows: !!row?.canWindows,

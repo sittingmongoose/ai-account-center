@@ -1,0 +1,291 @@
+// Bottom sheets and side panels (DESIGN-MOBILE.md 3.4-3.5, 7). The scrim covers the whole window
+// (chrome and tab bar included); the sheet is full window width up to 640 centred. A sheet opens
+// showing its content clamped between 300 and 46% of the window height (a tall sheet such as
+// Details starts at 6% of the window height instead, as does every sheet in the short tier).
+// Dragging moves 1:1 and never above resting; past 96 px (or 24 px faster than 0.6 px/ms) it
+// closes, otherwise it springs back on the open curve. Opening runs 380 ms, closing 220 ms.
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
+import { IconButton } from "icon-button.slint";
+import { ProbeMark } from "probe.slint";
+
+// The overlay layers for the system Back button and history (DESIGN-MOBILE.md 3.9). Window
+// overlays set dialog/details/sheet; every popover bumps pops while open. `top` is the layer
+// a Back press closes (100 dialog, 90 details, 80 sheet, 70 popover); bridge.js calls the
+// pop-overlay export, which bumps pop-request, and the open overlay on the top layer closes
+// itself silently (a user tap closes through close-requested and reports overlay-close instead).
+export global Overlays {
+    in-out property <bool> dialog: false;
+    in-out property <bool> details: false;
+    in-out property <bool> sheet: false;
+    in-out property <int> pops: 0;
+    in-out property <int> pop-request: 0;
+    // Bumped when a Back pop belongs to the popover layer: every open popover/select closes itself.
+    in-out property <int> pop-close: 0;
+    out property <int> top: dialog ? 100 : details ? 90 : sheet ? 80 : pops > 0 ? 70 : 0;
+}
+
+export component Sheet inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> title: "";
+    in property <string> sub: "";
+    // Details-style full sheet: top at 6% of the window height, content fills the viewport.
+    in property <bool> tall: false;
+    in property <string> probe: "";
+    // The content viewport height, for children that size to it (DetailsPanel).
+    out property <length> content-h: root.viewport-h;
+    callback close-requested();
+    callback overshot();
+
+    property <length> win-w: root.width;
+    property <length> win-h: root.height - Device.keyboard;
+    property <length> body-w: min(640px, root.win-w);
+    property <length> chrome-h: 24px + (root.title != "" ? 56px : 0px);
+    property <length> max-h: root.tall || Breakpoints.short ? root.win-h - root.win-h * 0.06 : root.win-h * 0.46;
+    property <length> want-h: root.chrome-h + inner.preferred-height + Device.safe-bottom + (root.title != "" ? 16px : 0px);
+    // Short sheets fit their content; regular sheets clamp between 300 and 46% (never above max-h
+    // when the window is too short for the 300 floor).
+    property <length> sheet-h: root.tall ? root.max-h : Breakpoints.short ? min(root.want-h, root.max-h)
+        : max(min(root.want-h, root.max-h), min(300px, root.max-h));
+    property <length> rest-y: root.win-h - root.sheet-h;
+    property <length> viewport-h: root.sheet-h - root.chrome-h - Device.safe-bottom - (root.title != "" ? 16px : 0px);
+
+    // The slide offset from resting: 0 open, win-h closed. While dragging it tracks the finger
+    // (the 0 ms duration makes every retarget instant); otherwise it animates on the open/close
+    // curves. The binding only ever follows the taken branch, so a tall sheet never measures content.
+    property <length> raw: 0px;
+    property <length> off: root.dragging ? root.raw : root.open ? 0px : root.win-h;
+    animate off {
+        duration: Motion.on ? (root.dragging ? 0ms : root.open ? Motion.sheet-open : Motion.sheet-close) : 0ms;
+        easing: root.open ? cubic-bezier(0.32, 0.72, 0, 1) : cubic-bezier(0.32, 0, 0.67, 0);
+    }
+    property <bool> dragging: drag.pressed;
+    // Release velocity over the last ~50 ms, in px/ms.
+    property <length> vel-off: 0px;
+    vel-timer := Timer {
+        interval: 50ms;
+        running: root.dragging;
+        triggered => { root.vel-off = root.raw; }
+    }
+    changed dragging => {
+        if root.dragging {
+            root.vel-off = 0px;
+        } else if root.open {
+            // Release velocity over the last ~50 ms in px/ms, computed inline (local properties in
+            // callbacks do not parse): the drag distance since the last 50 ms sample over 50.
+            if root.raw > 96px || (root.raw > 24px && (root.raw - root.vel-off) / 1px / 50 > 0.6) {
+                root.close-requested();
+            } else {
+                if root.raw > 24px { root.overshot(); }
+                root.raw = 0px;
+            }
+        }
+    }
+    // The close animation plays out before the sheet hides (Slint animates no exit for removals).
+    property <bool> closing: false;
+    close-timer := Timer {
+        interval: Motion.on ? Motion.sheet-close : 1ms;
+        running: false;
+        triggered => { self.running = false; root.closing = false; }
+    }
+    changed open => {
+        if root.open {
+            root.closing = false;
+            close-timer.running = false;
+            root.raw = 0px;
+        } else {
+            root.closing = true;
+            close-timer.running = true;
+        }
+    }
+    visible: root.open || root.closing;
+
+    scrim := Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.sheet-scrim;
+        opacity: root.open ? 1 : 0;
+        animate opacity { duration: Motion.tint(Motion.fast); }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.close-requested(); }
+        }
+    }
+    body := Rectangle {
+        x: (root.win-w - root.body-w) / 2;
+        y: root.rest-y + root.off;
+        width: root.body-w;
+        // The body runs 20 px past the window bottom so the bottom corners stay square.
+        height: root.sheet-h + 20px;
+        background: Theme.sheet;
+        border-radius: Theme.r-sheet;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-color: Theme.shadow-pop;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: -8px;
+        clip: true;
+        // Grabber strip, then the title row when the sheet has one.
+        Rectangle {
+            x: (parent.width - 36px) / 2;
+            y: (24px - 5px) / 2;
+            width: 36px;
+            height: 5px;
+            border-radius: Theme.r-grabber;
+            background: Theme.grabber;
+        }
+        if root.title != "": HorizontalLayout {
+            y: 24px;
+            width: parent.width;
+            height: 56px;
+            padding-left: 16px;
+            padding-right: 8px;
+            spacing: 8px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: root.title;
+                    font-size: 17px;
+                    font-weight: 640;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.sub != "": Text {
+                    text: root.sub;
+                    font-size: Type.small;
+                    color: Theme.ink-3;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: "close";
+                    hint: "Close";
+                    clicked => { root.close-requested(); }
+                    ProbeMark { id: root.probe != "" ? root.probe + "-close" : ""; }
+                }
+            }
+        }
+        content := Flickable {
+            x: root.title != "" ? 16px : 0px;
+            y: root.chrome-h;
+            width: root.title != "" ? parent.width - 32px : parent.width;
+            height: root.viewport-h;
+            content-height: root.tall ? root.viewport-h : inner.preferred-height;
+            inner := VerticalLayout {
+                width: parent.width;
+                height: root.tall ? root.viewport-h : self.preferred-height;
+                @children
+            }
+        }
+        // The drag handle: the grabber strip plus the title row when the sheet has one. Without a
+        // title the band is the 24 px grabber zone only, so content (a Details head, for example)
+        // is never covered by the drag surface.
+        drag := TouchArea {
+            y: 0px;
+            width: parent.width;
+            height: root.title != "" ? 80px : 24px;
+            moved => { root.raw = max(0px, self.mouse-y - self.pressed-y); }
+        }
+        ProbeMark { id: root.probe; }
+    }
+}
+
+// The Details panel on F >= 760, T and short: right-anchored, 400 wide, safe-top to safe-bottom,
+// with the same drag physics on the x axis and the same open/close motion as a sheet.
+export component SidePanel inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> probe: "";
+    out property <length> content-h: root.panel-h;
+    out property <length> content-w: root.panel-w;
+    callback close-requested();
+    callback overshot();
+
+    property <length> win-w: root.width;
+    property <length> panel-w: min(400px, root.win-w - 64px);
+    property <length> panel-h: root.height - Device.safe-top - Device.safe-bottom - Device.keyboard;
+    property <length> rest-x: root.win-w - Device.safe-right - root.panel-w;
+
+    property <length> raw: 0px;
+    property <length> off: root.dragging ? root.raw : root.open ? 0px : root.panel-w + Device.safe-right;
+    animate off {
+        duration: Motion.on ? (root.dragging ? 0ms : root.open ? Motion.sheet-open : Motion.sheet-close) : 0ms;
+        easing: root.open ? cubic-bezier(0.32, 0.72, 0, 1) : cubic-bezier(0.32, 0, 0.67, 0);
+    }
+    property <bool> dragging: drag.pressed;
+    property <length> vel-off: 0px;
+    vel-timer := Timer {
+        interval: 50ms;
+        running: root.dragging;
+        triggered => { root.vel-off = root.raw; }
+    }
+    changed dragging => {
+        if root.dragging {
+            root.vel-off = 0px;
+        } else if root.open {
+            // Release velocity over the last ~50 ms in px/ms, computed inline (local properties in
+            // callbacks do not parse): the drag distance since the last 50 ms sample over 50.
+            if root.raw > 96px || (root.raw > 24px && (root.raw - root.vel-off) / 1px / 50 > 0.6) {
+                root.close-requested();
+            } else {
+                if root.raw > 24px { root.overshot(); }
+                root.raw = 0px;
+            }
+        }
+    }
+    property <bool> closing: false;
+    close-timer := Timer {
+        interval: Motion.on ? Motion.sheet-close : 1ms;
+        running: false;
+        triggered => { self.running = false; root.closing = false; }
+    }
+    changed open => {
+        if root.open {
+            root.closing = false;
+            close-timer.running = false;
+            root.raw = 0px;
+        } else {
+            root.closing = true;
+            close-timer.running = true;
+        }
+    }
+    visible: root.open || root.closing;
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.sheet-scrim;
+        opacity: root.open ? 1 : 0;
+        animate opacity { duration: Motion.tint(Motion.fast); }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.close-requested(); }
+        }
+    }
+    Rectangle {
+        x: root.rest-x + root.off;
+        y: Device.safe-top;
+        width: root.panel-w;
+        height: root.panel-h;
+        background: Theme.sheet;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-color: Theme.shadow-pop;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-x: -8px;
+        clip: true;
+        @children
+        // The drag handle: the leading 20 px (Details keeps it as padding).
+        drag := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: 20px;
+            height: parent.height;
+            moved => { root.raw = max(0px, self.mouse-x - self.pressed-x); }
+        }
+        ProbeMark { id: root.probe; }
+    }
+}

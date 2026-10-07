@@ -74,6 +74,8 @@ export struct AccountRowView {
     // Activating this account asks first: it is already past the section's switch point.
     confirm: bool,
     confirm-runs: [RunView],
+    // phase 2: the confirm question as wrap units for the touch layouts (Slint cannot split strings).
+    confirm-words: [RunView],
     cells: [MeterView],
 }
 
@@ -90,6 +92,8 @@ export struct AutoSwitchView {
     max: int,
     pool: string,
     off-runs: [RunView],
+    // phase 2: the off line as wrap units for the touch layouts.
+    off-words: [RunView],
     setting: string,
     message: string,
     example: bool,
@@ -101,6 +105,8 @@ export struct FootView {
     warn: bool,
     runs: [RunView],
     when: string,
+    // phase 2: the foot sentence as wrap units for the touch layouts.
+    words: [RunView],
 }
 
 // A provider section on Home: Claude (desktop profiles) or a switchable provider (Codex, Antigravity).
@@ -111,6 +117,8 @@ export struct SectionView {
     long-label: string,
     meta: string,
     meta-runs: [RunView],
+    // phase 2: the header meta as wrap units for the touch layouts.
+    meta-words: [RunView],
     count: int,
     switchable: bool,
     // More than one account it could switch between: rows show Activate.
@@ -207,6 +215,8 @@ export struct DetailsView {
     platform: string,
     confirm: bool,
     confirm-runs: [RunView],
+    // phase 2: the confirm question as wrap units for the touch layouts.
+    confirm-words: [RunView],
     profile: string,
     can-mac: bool,
     can-windows: bool,
@@ -263,6 +273,12 @@ export struct AuthView {
     session-hours: int,
     // bumped on every failed attempt, so the form shakes again
     nonce: int,
+    // phase 5, the offline screen (DESIGN-MOBILE.md 4.6; words from auth-view.mjs offlineView): the card's
+    // title, the host it names, the sentence after it, and the "Last tried … · trying again every 15 s" line
+    offline-title: string,
+    offline-strong: string,
+    offline-body: string,
+    offline-meta: string,
 }
 
 // A rectangle in window pixels (logical px, which are CSS px in the browser).
@@ -274,19 +290,32 @@ export struct LoginBox {
 }
 
 // The login form's real HTML inputs (index.html #aac-login, public/login-bridge.mjs) lie over the Slint fields so
-// password managers can see and fill them. The sign-in layer reports, whenever any of it changes, whether they are on
-// screen, where each field box and its text area are, where Remember me and Sign in are (their keyboard focus
+// password managers can see and fill them. The sign-in layer reports, whenever any of it changes, whether they are
+// on screen, where each field box and its text area are, where Remember me and Sign in are (their keyboard focus
 // targets), and the colours and size the HTML text takes so it looks like the field it covers.
 export struct LoginOverlay {
     on: bool,
     enabled: bool,
+    // phase 5: "login" (default) or "setup" (the first-run form: the confirmation and the setup code join the overlay)
+    mode: string,
     // the password's eye button shows it in plain text
     revealed: bool,
     remember: bool,
+    // phase 5: false = the field is scrolled under the safe-top strip; its input keeps its element
+    // (AutoFill, live focus) but draws nothing (visibility:hidden, login-bridge.mjs)
+    user-visible: bool,
+    pass-visible: bool,
+    confirm-visible: bool,
+    code-visible: bool,
     user: LoginBox,
     user-text: LoginBox,
     pass: LoginBox,
     pass-text: LoginBox,
+    // phase 5: the first-run form only; an empty box keeps that input hidden
+    confirm: LoginBox,
+    confirm-text: LoginBox,
+    code: LoginBox,
+    code-text: LoginBox,
     check: LoginBox,
     submit: LoginBox,
     font-size: length,

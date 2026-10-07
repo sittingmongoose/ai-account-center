@@ -1,0 +1,52 @@
+// Touch inline tips (DESIGN-MOBILE.md 5.2.1): an info icon after a label toggles a tip block
+// directly under the owning line. One inline tip is open per page (Tips.open-id, cleared by the
+// Dashboard on every page switch). Shown only on touch: a coarse pointer or the below-D tiers.
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
+import { Icon } from "icon.slint";
+
+export global Tips {
+    in-out property <string> open-id: "";
+}
+
+export component InfoIcon inherits Rectangle {
+    in property <string> tip-id;
+    out property <bool> open: root.tip-id != "" && Tips.open-id == root.tip-id;
+    visible: Device.coarse || Breakpoints.below-d;
+    width: 44px;
+    height: 44px;
+    Icon {
+        x: (parent.width - 16px) / 2;
+        y: (parent.height - 16px) / 2;
+        name: "info";
+        tint: root.open ? Theme.accent-text : Theme.ink-3;
+        width: 16px;
+        height: 16px;
+        transform-scale: ta.pressed ? 0.9 : 1;
+        animate transform-scale { duration: Motion.fast; }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Tips.open-id = root.open ? "" : root.tip-id; }
+    }
+}
+
+export component InlineTip inherits Rectangle {
+    in property <string> tip-id;
+    in property <string> text;
+    property <bool> open: root.tip-id != "" && Tips.open-id == root.tip-id;
+    // Insert eases open; removal is instant (Slint animates no exit for removed items).
+    height: root.open ? tip.preferred-height + 16px : 0px;
+    animate height { duration: Motion.on && root.open ? Motion.tip : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    clip: true;
+    opacity: root.open ? 1 : 0;
+    animate opacity { duration: Motion.on && root.open ? Motion.tip : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    tip := Text {
+        y: 8px;
+        width: parent.width;
+        height: self.preferred-height;
+        text: root.text;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+}

@@ -1,11 +1,12 @@
 // Toasts: spring up, a 2 px countdown bar, fade out in place, then the slot closes and the row is removed.
-import { Theme, Motion, Type } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 import { ToastView } from "../models.slint";
 import { Icon } from "icon.slint";
 import { IconButton } from "icon-button.slint";
 
 component ToastItem inherits Rectangle {
     in property <ToastView> data;
+    in property <length> card-w: 380px;
     callback dismissed(int);
 
     property <bool> entered: false;
@@ -36,7 +37,7 @@ component ToastItem inherits Rectangle {
         }
     }
 
-    width: 380px;
+    width: root.card-w;
     height: root.gone ? 0px : root.natural;
     animate height { duration: Motion.on ? 200ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
     clip: false;
@@ -105,18 +106,20 @@ component ToastItem inherits Rectangle {
     }
 }
 
-// Bottom-right stack; steps aside for the slide-over when it is open.
+// Bottom-right stack on D; below D the shell sizes it (P: full width above the tab bar or
+// keyboard, F/T: bottom right) and passes the width down (DESIGN-MOBILE.md 3.7).
 export component ToastStack inherits Rectangle {
     in property <[ToastView]> toasts;
-    in property <length> right-inset: 24px;
+    in property <length> card-w: 380px;
     callback dismissed(int);
-    width: 380px;
+    width: root.card-w;
     height: col.preferred-height;
     col := VerticalLayout {
         alignment: end;
-        spacing: 10px;
+        spacing: Breakpoints.below-d ? 8px : 10px;
         for t in root.toasts: ToastItem {
             data: t;
+            card-w: root.card-w;
             dismissed(id) => { root.dismissed(id); }
         }
     }

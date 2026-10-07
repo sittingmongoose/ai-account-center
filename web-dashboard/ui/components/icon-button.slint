@@ -1,8 +1,9 @@
 // Square icon button.
-import { Theme, Motion, Type } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { Icon } from "icon.slint";
 import { PlatformGlyph } from "mark.slint";
 import { ProbeMark } from "probe.slint";
+import { Hover } from "hover-card.slint";
 
 // Square icon button (34 px; 28 px small). `bare` drops the border until hover; `pressed-look` is the
 // state of a toggle such as an open menu; `chevron` adds a trailing chevron that flips while pressed.
@@ -21,11 +22,30 @@ export component IconButton inherits Rectangle {
     // drawn dimmed but still clickable (a refusal opens its reason); names the button for the e2e harness
     in property <bool> muted: false;
     in property <string> probe;
+    // Touch long-press tip (DESIGN-MOBILE.md 5.2.3): shown after a 450 ms press, which then never activates.
+    in property <string> long-tip: "";
     callback clicked();
 
+    // Long-press: touch only (a desktop press-and-hold still clicks on release).
+    property <bool> lp-armed: (Device.coarse || Breakpoints.below-d) && root.long-tip != "";
+    property <bool> lp-fired: false;
+    property <bool> lp-dead: false;
+    lp-timer := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.lp-armed && ta.pressed && !root.lp-dead {
+                root.lp-fired = true;
+                Hover.tip-now("long-press", ta.absolute-position, ta.width, ta.height, root.long-tip);
+            }
+        }
+    }
+
     property <bool> hovered: ta.has-hover && root.enabled;
-    property <length> side: root.small ? 28px : 34px;
-    property <length> glyph: root.small ? 16px : 18px;
+    // Below D every icon button is 40 visible with a 44 hit area (DESIGN-MOBILE.md 2.3).
+    property <length> side: Breakpoints.tier-d ? (root.small ? 28px : 34px) : 40px;
+    property <length> glyph: Breakpoints.tier-d ? (root.small ? 16px : 18px) : root.small ? 18px : 20px;
     property <duration> spin-start: 0ms;
     property <duration> settle-start: 0ms;
     property <angle> settle-from: 0deg;
@@ -55,7 +75,7 @@ export component IconButton inherits Rectangle {
 
     height: root.side;
     width: root.chevron ? content.preferred-width : root.side;
-    border-radius: root.small ? 7px : 9px;
+    border-radius: Breakpoints.tier-d ? (root.small ? 7px : 9px) : Theme.r-touch;
     border-width: 1px;
     background: root.pressed-look ? Theme.paper-3
         : root.bare ? (root.hovered ? Theme.paper-3 : Theme.paper.with-alpha(0))
@@ -87,8 +107,8 @@ export component IconButton inherits Rectangle {
             if root.platform != "": PlatformGlyph {
                 platform: root.platform;
                 tint: root.tint;
-                width: root.small ? 14px : 15px;
-                height: root.small ? 14px : 15px;
+                width: root.glyph - (root.small ? 2px : 3px);
+                height: root.glyph - (root.small ? 2px : 3px);
             }
         }
         if root.chevron: VerticalLayout {
@@ -103,10 +123,41 @@ export component IconButton inherits Rectangle {
             }
         }
     }
+    // Hit-slop below D: the TouchArea grows to at least 44 x 44, centred on the visual.
+    property <length> slop-x: Breakpoints.below-d ? max(0px, (44px - root.width) / 2) : 0px;
+    property <length> slop-y: Breakpoints.below-d ? max(0px, (44px - root.height) / 2) : 0px;
     ta := TouchArea {
+        x: -root.slop-x;
+        y: -root.slop-y;
+        width: root.width + 2 * root.slop-x;
+        height: root.height + 2 * root.slop-y;
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
-        clicked => { root.clicked(); }
+        changed pressed => {
+            if self.pressed {
+                root.lp-dead = false;
+                root.lp-fired = false;
+                if root.lp-armed { lp-timer.running = true; }
+            } else {
+                lp-timer.running = false;
+                Hover.leave("long-press");
+            }
+        }
+        moved => {
+            if self.pressed && (self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px) {
+                root.lp-dead = true;
+                lp-timer.running = false;
+                if root.lp-fired { root.lp-fired = false; Hover.leave("long-press"); }
+            }
+        }
+        clicked => {
+            if root.lp-fired {
+                root.lp-fired = false;
+                Hover.leave("long-press");
+            } else {
+                root.clicked();
+            }
+        }
     }
     ProbeMark { x: 0px; y: 0px; id: root.probe; width: root.width; height: root.height; }
 }

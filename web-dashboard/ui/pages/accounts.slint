@@ -1,16 +1,19 @@
 // Accounts & Settings, built like the concept (c-daylight-atlas/app-accounts.js, the Dashboard sign-in block of
-// app-auth.js, styles.css and auth.css). No page title (the nav names the page), no provider shortcut row.
-// One section per provider from the registry with its accounts and fixed, aligned action slots; then the
-// settings column: Sign-in & connection, Settings, Update apps and About with AboutSlint.
+// app-auth.js, styles.css and auth.css). One section per provider from the registry with its accounts and fixed,
+// aligned action slots; then the settings column: Sign-in & connection, Settings, History snapshots, Usage log
+// sources, Update apps and About with AboutSlint.
 //
-// Widths (the concept's named sizes): below 1280 px the providers fill the page and the settings sit below them
-// in two columns; from 1280 the settings column stands beside the providers (380 px, 420 from 1600, 440 from
-// 2200) and from 1280 to 1439 the source column folds into the identity line; from 2200 the providers split into
-// two columns, the ones with their own sign-in flows first. Every value comes from the AcData global
-// (public/accounts-view.mjs); intent goes out through action(kind, value).
+// Widths: below 1280 px the providers fill the page and the settings sit below them — one column on P and F
+// under 760, two columns (Sign-in & connection, Update apps, About | Settings, History snapshots, Usage log
+// sources) on F from 760 and T (DESIGN-MOBILE.md 4.3.7); from 1280 the settings column stands beside the
+// providers (380 px, 420 from 1600, 440 from 2200) and from 1280 to 1439 the source column folds into the
+// identity line; from 2200 the providers split into two columns, the ones with their own sign-in flows first.
+// P and F get the page title with the Settings jump button (4.3.1); T and D keep the desktop arrangement.
+// Every value comes from the AcData global (public/accounts-view.mjs); intent goes out through action(kind, value).
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { Icon } from "../components/icon.slint";
 import { Reveal } from "../components/reveal.slint";
-import { AcData, AcProvider } from "accounts/ac-data.slint";
+import { AcData, AcProvider, AcUi } from "accounts/ac-data.slint";
 import { ProviderSection } from "accounts/ac-provider.slint";
 import { SettingsColumn } from "accounts/ac-settings.slint";
 
@@ -50,12 +53,55 @@ export component AccountsPage inherits Rectangle {
     property <duration> base: root.first ? 180ms : 40ms;
     property <bool> show-src: Breakpoints.width < 1280px || Breakpoints.width >= 1440px;
     property <length> settings-w: Breakpoints.ultra ? 440px : Breakpoints.wide ? 420px : 380px;
+    // the P/F page header (4.3.1); T and D keep the desktop arrangement without a title
+    property <bool> page-head: Breakpoints.tier-p || Breakpoints.tier-f;
+    // the settings' two columns on F from 760 and T (4.3.7)
+    property <bool> settings-two-col: Breakpoints.tier-t || (Breakpoints.tier-f && Breakpoints.tier-width >= 760px);
 
     min-height: page.preferred-height;
     preferred-height: page.preferred-height;
 
     page := VerticalLayout {
         alignment: start;
+        spacing: root.page-head ? 12px : 0px;
+        if AcData.ready && root.page-head: HorizontalLayout {
+            padding-left: Breakpoints.gutter;
+            padding-right: Breakpoints.gutter;
+            padding-top: Breakpoints.tier-p ? 2px : 4px;
+            spacing: 12px;
+            Text {
+                text: "Accounts & Settings";
+                font-size: Type.page-title;
+                font-weight: 700;
+                color: Theme.ink;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                overflow: elide;
+            }
+            // the Settings jump (Q2: kept): scrolls the page to the top of the Settings area; the page
+            // scroller in the shell watches AcUi.settings-jump. Local text button (mockup: icon 16 + label,
+            // 0 4 padding, 44 hit) so the long page title keeps its full width at 390.
+            Rectangle {
+                min-height: 44px;
+                min-width: jump.preferred-width + 8px;
+                accessible-role: button;
+                accessible-label: "Settings";
+                jump-ta := TouchArea {
+                    clicked => { AcUi.settings-jump += 1; }
+                }
+                jump := HorizontalLayout {
+                    alignment: center;
+                    padding-left: 4px;
+                    padding-right: 4px;
+                    spacing: 4px;
+                    VerticalLayout { alignment: center; Icon { name: "arrow-down"; tint: Theme.ink-2; width: 16px; height: 16px; } }
+                    VerticalLayout { alignment: center; Text { text: "Settings"; font-size: Type.control; font-weight: 560; color: Theme.ink-2; vertical-alignment: center; } }
+                }
+                animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                transform-scale: jump-ta.pressed ? 0.97 : 1.0;
+            }
+        }
         if AcData.ready && Breakpoints.compact: VerticalLayout {
             spacing: 24px;
             VerticalLayout {
@@ -83,7 +129,7 @@ export component AccountsPage inherits Rectangle {
             Reveal {
                 delay: root.base + 80ms;
                 SettingsColumn {
-                    two-col: true;
+                    two-col: root.settings-two-col;
                     theme-value: root.theme-value;
                     busy: root.busy;
                     theme-picked(v) => { root.theme-picked(v); }

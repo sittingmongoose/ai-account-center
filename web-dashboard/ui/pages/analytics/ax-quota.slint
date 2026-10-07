@@ -2,14 +2,14 @@
 // window's 7-day sparkline, current % and next reset, grouped by provider with collapsible groups. A row opens
 // its focus chart (step lines, reset markers, the active band, the auto-switch threshold, the projection to
 // the reset and a crosshair); the chart's labels were placed by bridge.js so they never overlap.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { Icon } from "../../components/icon.slint";
 import { Button } from "../../components/button.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { ProbeMark } from "../../components/probe.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
 import { AxData, AxQuotaRow, AxQuotaGroup, AxFocus, AxStop, AxShape, AxLabel } from "ax-data.slint";
-import { AxColor, AxCard, AxCardHead, AxSwitch, AxTip, AxSwatch, AxRoTime, AxRoCard } from "ax-common.slint";
+import { AxColor, AxCard, AxCardHead, AxSwitch, AxPress, AxScrub, AxSwatch, AxRoTime, AxRoCard, AxRoBar } from "ax-common.slint";
 
 export global AxQuotaCols {
     out property <bool> tight: Breakpoints.width <= 1360px;
@@ -64,7 +64,7 @@ component FocusLegend inherits HorizontalLayout {
             stroke-line-cap: root.kind == "proj" ? round : butt;
         }
     }
-    Text { text: root.name; font-size: 12.5px; color: Theme.ink-2; vertical-alignment: center; min-height: 18px; }
+    Text { text: root.name; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-2; vertical-alignment: center; min-height: 18px; }
 }
 
 component FocusChart inherits Rectangle {
@@ -157,36 +157,53 @@ component FocusChart inherits Rectangle {
         font-size: 13px;
         color: Theme.ink-3;
     }
-    // crosshair: the nearest observed sample (or forecast hour) per 4 px column
+    // crosshair: the nearest observed sample (or forecast hour) per 4 px column. Below D the
+    // reading pins by tap (or scrub) and shows in the readout row above the chart.
     property <int> idx: -1;
-    property <bool> on: ta.has-hover && root.idx >= 0;
+    in-out property <int> sel: -1;
+    in-out property <bool> pinned: false;
+    property <int> cur: Breakpoints.tier-d ? root.idx : root.sel;
+    property <bool> on: Breakpoints.tier-d ? (ta.has-hover && root.idx >= 0) : root.sel >= 0;
     property <bool> glide: false;
-    property <AxStop> st: root.idx >= 0 && root.idx < root.f.stops.length ? root.f.stops[root.idx] : { };
+    out property <AxStop> st: root.cur >= 0 && root.cur < root.f.stops.length ? root.f.stops[root.cur] : { };
     property <length> stx: root.st.x * 1px * root.sx;
+    property <length> dot-d: Breakpoints.tier-d ? 10px : 5px;
+    property <string> range: AxData.range;
+    property <string> prov: AxData.prov;
+    property <bool> cmp: root.f.compare;
+    changed range => { root.sel = -1; root.pinned = false; }
+    changed prov => { root.sel = -1; root.pinned = false; }
+    changed cmp => { root.sel = -1; root.pinned = false; }
+    function track-at(mx: length) -> int {
+        if root.f.lut.length == 0 {
+            return -1;
+        }
+        return root.f.lut[clamp(floor(mx / root.sx / 4px), 0, root.f.lut.length - 1)];
+    }
     Rectangle {
         x: root.stx;
         y: root.f.plot-t * 1px * root.sy;
         width: 1px;
         height: root.f.plot-h * 1px * root.sy;
-        background: Theme.ink-3;
+        background: Breakpoints.tier-d ? Theme.ink-3 : Theme.ink.with-alpha(0.4);
         opacity: root.on ? 1 : 0;
-        animate x { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate x { duration: Breakpoints.tier-d ? (root.glide && Motion.on ? Motion.fast : 0ms) : (ta.scrubbing || !Motion.on ? 0ms : 120ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
     }
     Rectangle {
-        x: root.stx - 5px;
-        y: root.st.dot-y * 1px * root.sy - 5px;
-        width: 10px;
-        height: 10px;
-        border-radius: 5px;
+        x: root.stx - root.dot-d / 2;
+        y: root.st.dot-y * 1px * root.sy - root.dot-d / 2;
+        width: root.dot-d;
+        height: root.dot-d;
+        border-radius: root.dot-d / 2;
         background: Theme.paper;
         border-width: 2px;
         border-color: Theme.ink;
         opacity: root.on && root.st.dot-y >= 0 ? 1 : 0;
-        animate x, y { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate x, y { duration: Breakpoints.tier-d ? (root.glide && Motion.on ? Motion.fast : 0ms) : (ta.scrubbing || !Motion.on ? 0ms : 120ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
     }
-    ro := AxRoCard {
+    if Breakpoints.tier-d: ro := AxRoCard {
         property <length> rw: max(200px, ro-body.preferred-width);
         x: max(6px, root.stx + 16px + self.rw > root.width - 6px ? root.stx - 16px - self.rw : root.stx + 16px);
         y: root.f.plot-t * 1px * root.sy + 8px;
@@ -216,29 +233,87 @@ component FocusChart inherits Rectangle {
             if root.st.proj: Text { text: "From the recent pace, not a reading"; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }
         }
     }
-    ta := TouchArea {
+    ta := AxScrub {
         mouse-cursor: default;
-        function track() {
-            if root.f.lut.length == 0 { root.idx = -1; return; }
-            let col = clamp(floor(self.mouse-x / root.sx / 4px), 0, root.f.lut.length - 1);
-            if root.idx >= 0 { root.glide = true; }
-            root.idx = root.f.lut[col];
+        tap => {
+            if Breakpoints.tier-d {
+                return;
+            }
+            let i = root.track-at(self.mouse-x);
+            if i < 0 || (root.pinned && root.sel == i) {
+                root.sel = -1;
+                root.pinned = false;
+            } else {
+                root.sel = i;
+                root.pinned = true;
+            }
         }
-        changed mouse-x => { if self.has-hover { self.track(); } }
-        changed mouse-y => { if self.has-hover { self.track(); } }
-        changed has-hover => { if !self.has-hover { root.idx = -1; root.glide = false; } }
+        scrub(mx, my) => {
+            if Breakpoints.tier-d {
+                return;
+            }
+            let i = root.track-at(mx);
+            if i >= 0 {
+                root.sel = i;
+                root.pinned = true;
+            }
+        }
+        changed mouse-x => {
+            if Breakpoints.tier-d {
+                if self.has-hover {
+                    let i = root.track-at(self.mouse-x);
+                    if i < 0 {
+                        root.idx = -1;
+                    } else {
+                        if root.idx >= 0 {
+                            root.glide = true;
+                        }
+                        root.idx = i;
+                    }
+                }
+            } else if self.has-hover && !self.pressed && !root.pinned {
+                root.sel = root.track-at(self.mouse-x);
+            }
+        }
+        changed mouse-y => {
+            if Breakpoints.tier-d {
+                if self.has-hover {
+                    let i = root.track-at(self.mouse-x);
+                    if i < 0 {
+                        root.idx = -1;
+                    } else {
+                        if root.idx >= 0 {
+                            root.glide = true;
+                        }
+                        root.idx = i;
+                    }
+                }
+            } else if self.has-hover && !self.pressed && !root.pinned {
+                root.sel = root.track-at(self.mouse-x);
+            }
+        }
+        changed has-hover => {
+            if Breakpoints.tier-d {
+                if !self.has-hover {
+                    root.idx = -1;
+                    root.glide = false;
+                }
+            } else if !self.has-hover && !root.pinned {
+                root.sel = -1;
+            }
+        }
     }
 }
 
 // The expanded part of a quota row: legend, compare switch, Details, the chart and its foot.
 component FocusPanel inherits VerticalLayout {
     in property <AxQuotaRow> qr;
-    padding-left: 48px;
-    padding-right: 20px;
+    padding-left: Breakpoints.tier-d ? 48px : Breakpoints.tier-p ? 16px : 20px;
+    padding-right: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
     padding-top: 4px;
     padding-bottom: 6px;
     spacing: 0px;
-    HorizontalLayout {
+    if Breakpoints.tier-d: HorizontalLayout {
         padding-top: 8px;
         padding-bottom: 10px;
         spacing: 12px;
@@ -254,8 +329,80 @@ component FocusPanel inherits VerticalLayout {
         }
         VerticalLayout { alignment: center; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
     }
-    FocusChart { height: Breakpoints.width >= 2200px ? 300px : 270px; f: root.qr.focus; draw: true; }
-    Text { text: root.qr.focus.foot; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; min-height: 34px; vertical-alignment: center; }
+    // below D the legend stacks on P/F; the switch and Details share a row except on narrow P
+    if Breakpoints.below-d: VerticalLayout {
+        padding-top: 8px;
+        padding-bottom: 6px;
+        spacing: 6px;
+        if Breakpoints.tier-t: HorizontalLayout {
+            spacing: 14px;
+            alignment: start;
+            for l in root.qr.focus.legend: FocusLegend { name: l.name; kind: l.kind; provider: root.qr.focus.provider; shade: l.shade; dash: l.dash; lw: l.width; }
+        }
+        if !Breakpoints.tier-t: VerticalLayout {
+            spacing: 2px;
+            alignment: start;
+            for l in root.qr.focus.legend: FocusLegend { name: l.name; kind: l.kind; provider: root.qr.focus.provider; shade: l.shade; dash: l.dash; lw: l.width; }
+        }
+        // P always stacks: a long compare label squeezes Details out of a shared row
+        if !Breakpoints.tier-p: HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
+            VerticalLayout { alignment: center; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
+        }
+        if Breakpoints.tier-p: VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+            if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
+            VerticalLayout { alignment: start; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
+        }
+    }
+    if Breakpoints.below-d: AxRoBar {
+        has-sel: chart.sel >= 0;
+        close => { chart.sel = -1; chart.pinned = false; }
+        VerticalLayout {
+            spacing: 1px;
+            HorizontalLayout {
+                spacing: 8px;
+                min-height: 17px;
+                Text { text: chart.st.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; }
+                if chart.st.rows.length > 0: HorizontalLayout {
+                    spacing: 5px;
+                    VerticalLayout { alignment: center; Rectangle { width: 14px; height: 6px; Rectangle { y: 2px; height: 2.4px; background: AxColor.series(root.qr.focus.provider, chart.st.rows[0].shade); } } }
+                    Text { text: chart.st.rows[0].name; font-size: Type.small; color: Theme.ink; vertical-alignment: center; }
+                    Text { text: chart.st.rows[0].value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                }
+            }
+            Rectangle {
+                clip: true;
+                HorizontalLayout {
+                    spacing: 10px;
+                    min-height: 17px;
+                    if chart.st.rows.length > 1: HorizontalLayout {
+                        spacing: 5px;
+                        VerticalLayout { alignment: center; Rectangle { width: 14px; height: 6px; Rectangle { y: 2px; height: 2.4px; background: AxColor.series(root.qr.focus.provider, chart.st.rows[1].shade); } } }
+                        Text { text: chart.st.rows[1].name; font-size: Type.small; color: Theme.ink; vertical-alignment: center; }
+                        Text { text: chart.st.rows[1].value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                    }
+                    if chart.st.rows.length > 2: HorizontalLayout {
+                        spacing: 5px;
+                        VerticalLayout { alignment: center; Rectangle { width: 14px; height: 6px; Rectangle { y: 2px; height: 2.4px; background: AxColor.series(root.qr.focus.provider, chart.st.rows[2].shade); } } }
+                        Text { text: chart.st.rows[2].name; font-size: Type.small; color: Theme.ink; vertical-alignment: center; }
+                        Text { text: chart.st.rows[2].value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                    }
+                    if chart.st.proj: Text { text: "From the recent pace, not a reading"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+    chart := FocusChart {
+        height: Breakpoints.tier-d ? (Breakpoints.width >= 2200px ? 300px : 270px)
+            : Breakpoints.tier-p ? 180px : Breakpoints.tier-f ? 220px : 240px;
+        f: root.qr.focus;
+        draw: true;
+    }
+    Text { text: root.qr.focus.foot; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; wrap: word-wrap; min-height: 34px; vertical-alignment: center; }
 }
 
 // ---------------------------------------------------------------- rows and groups
@@ -264,6 +411,8 @@ component QuotaRow inherits Rectangle {
     in property <bool> played;
     in property <duration> delay;
     in property <int> n;
+    // stacked under a 640 card inner width (DESIGN-MOBILE 4.2.9); the card is full-width below D
+    in property <bool> stacked: false;
     // sparkline draw-on
     property <bool> mounted: !Motion.on;
     mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
@@ -280,22 +429,24 @@ component QuotaRow inherits Rectangle {
     // the focus chart opens with an animated height
     property <length> focus-h: root.qr.open ? focus.preferred-height : 0px;
     animate focus-h { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-    min-height: 36px + root.focus-h;
+    // stacked content is 6 + 24 + 2 + 28 + 2 + 18 + 4 = 84 (DESIGN-MOBILE 4.2.9: min 72)
+    property <length> head-h: root.stacked ? 84px : 36px;
+    min-height: root.head-h + root.focus-h;
     preferred-height: self.min-height;
     head := Rectangle {
         y: 0px;
-        height: 36px;
+        height: root.head-h;
         opacity: root.shown ? 1 : 0;
         animate opacity { duration: Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-        background: root.flash ? Theme.accent-soft : root.qr.open ? Theme.paper-2 : ta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+        background: root.flash ? Theme.accent-soft : root.qr.open ? Theme.paper-2 : ta.pressed && Breakpoints.below-d ? Theme.pressed : (Device.hover && ta.has-hover) ? Theme.row-hover : Theme.row-hover.with-alpha(0);
         animate background { duration: Motion.tint(root.flash ? 0ms : Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         ta := TouchArea {
             mouse-cursor: pointer;
             clicked => { AxData.action("analytics-focus", root.qr.id); }
-            HorizontalLayout {
+            if !root.stacked: HorizontalLayout {
                 y: root.shown ? 0px : 8px;
                 animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-                padding-left: 48px;
+                padding-left: Breakpoints.tier-d ? 48px : 20px;
                 padding-right: 20px;
                 padding-top: 3px;
                 padding-bottom: 3px;
@@ -368,7 +519,7 @@ component QuotaRow inherits Rectangle {
                     color: root.qr.next != "" ? Theme.ink-2 : Theme.ink-3;
                     horizontal-alignment: right;
                     vertical-alignment: center;
-                    AxTip { tip: root.qr.next-tip; clicked => { AxData.action("analytics-focus", root.qr.id); } }
+                    AxPress { tip: root.qr.next-tip; long-tip: root.qr.next-tip; tapped => { AxData.action("analytics-focus", root.qr.id); } }
                 }
                 VerticalLayout {
                     width: AxQuotaCols.chev;
@@ -383,10 +534,92 @@ component QuotaRow inherits Rectangle {
                     }
                 }
             }
+            // stacked: mark + account + plan + used + chevron, the 28 px sparkline, then the
+            // next-reset sentence (DESIGN-MOBILE 4.2.9)
+            if root.stacked: VerticalLayout {
+                padding-left: Breakpoints.tier-p ? 16px : 20px;
+                padding-right: Breakpoints.tier-p ? 16px : 20px;
+                padding-top: 6px;
+                padding-bottom: 4px;
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 9px;
+                    min-height: 24px;
+                    VerticalLayout { alignment: center; ProviderMark { provider: root.qr.provider; size: 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qmark:" + root.qr.provider; } } }
+                    Text { text: root.qr.label; font-size: Type.body; font-weight: 600; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 40px; }
+                    if root.qr.active: Text { text: "Active"; font-size: Type.small; font-weight: 640; color: Theme.good-text; vertical-alignment: center; }
+                    if root.qr.plan != "": Text { text: root.qr.plan; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
+                    if root.qr.has-value: VerticalLayout { alignment: center; ValueUnit { value: root.qr.value-text; size: Type.body; weight: 600; ink: Theme.sev-text(root.qr.sev); unit-scale: 0.96; height: 20px; } }
+                    if !root.qr.has-value: Text { text: "Unavailable"; font-size: Type.small; font-weight: 500; color: Theme.ink-3; vertical-alignment: center; }
+                    VerticalLayout {
+                        width: 44px;
+                        alignment: center;
+                        HorizontalLayout {
+                            alignment: end;
+                            Icon {
+                                name: "chev-down";
+                                width: 16px;
+                                height: 16px;
+                                tint: ta.has-hover ? Theme.ink : Theme.ink-3;
+                                transform-rotation: root.qr.open ? 180deg : 0deg;
+                                animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                            }
+                        }
+                    }
+                }
+                spark-s := Rectangle {
+                    height: 28px;
+                    if root.qr.na != "": Text { y: (parent.height - self.preferred-height) / 2; text: root.qr.na; font-size: Type.small; color: Theme.ink-3; }
+                    if root.qr.na == "": Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width * root.clip-f;
+                        height: 28px;
+                        clip: true;
+                        for k[i] in ["calm", "warn", "crit", "over"]: Path {
+                            width: spark-s.width;
+                            height: 28px;
+                            viewbox-width: 600;
+                            viewbox-height: 24;
+                            fit: fill;
+                            commands: i == 0 ? root.qr.calm-fill : i == 1 ? root.qr.warn-fill : i == 2 ? root.qr.crit-fill : root.qr.over-fill;
+                            fill: AxColor.sev-line(i).with-alpha(i == 0 ? 0.12 : 0.16);
+                        }
+                        Path {
+                            width: spark-s.width;
+                            height: 28px;
+                            viewbox-width: 600;
+                            viewbox-height: 24;
+                            fit: fill;
+                            commands: root.qr.limit;
+                            stroke: Theme.grid-strong;
+                            stroke-width: 1px;
+                        }
+                        for k[i] in ["calm", "warn", "crit", "over"]: Path {
+                            width: spark-s.width;
+                            height: 28px;
+                            viewbox-width: 600;
+                            viewbox-height: 24;
+                            fit: fill;
+                            commands: i == 0 ? root.qr.calm-line : i == 1 ? root.qr.warn-line : i == 2 ? root.qr.crit-line : root.qr.over-line;
+                            stroke: AxColor.sev-line(i);
+                            stroke-width: 1.6px;
+                        }
+                    }
+                }
+                Text {
+                    text: root.qr.next == "" ? "No reset reported" : root.qr.next == "reset due" ? "Reset due" : "Next reset " + root.qr.next;
+                    font-size: Type.small;
+                    color: Theme.ink-3;
+                    vertical-alignment: center;
+                    min-height: 18px;
+                    AxPress { tip: root.qr.next-tip; long-tip: root.qr.next-tip; tapped => { AxData.action("analytics-focus", root.qr.id); } }
+                }
+            }
         }
     }
     focus-clip := Rectangle {
-        y: 36px;
+        y: root.head-h;
         height: root.focus-h;
         clip: true;
         background: Theme.paper-2;
@@ -406,19 +639,23 @@ component QuotaGroup inherits Rectangle {
     in property <bool> played;
     in property <duration> delay;
     in property <int> n0;
+    // stacked under a 640 card inner width (DESIGN-MOBILE 4.2.9); the card is full-width below D
+    in property <bool> stacked: false;
     property <length> rows-h: root.g.collapsed ? 0px : rows.preferred-height;
     animate rows-h { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
     property <bool> shown: !Motion.on;
     show := Timer { interval: max(1ms, root.delay + root.n0 * 22ms); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
-    min-height: 1px + 40px + root.rows-h;
+    property <length> head-h: Breakpoints.tier-d ? 40px : 48px;
+    min-height: 1px + root.head-h + root.rows-h;
     preferred-height: self.min-height;
     Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
     gh := Rectangle {
         y: 1px;
-        height: 40px;
+        height: root.head-h;
         opacity: root.shown ? 1 : 0;
         animate opacity { duration: Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-        background: gta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+        background: Breakpoints.tier-d ? (gta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0))
+            : gta.pressed ? Theme.pressed : (Device.hover && gta.has-hover) ? Theme.row-hover : Theme.row-hover.with-alpha(0);
         animate background { duration: Motion.tint(Motion.fast); }
         gta := TouchArea {
             mouse-cursor: pointer;
@@ -426,28 +663,34 @@ component QuotaGroup inherits Rectangle {
             HorizontalLayout {
                 y: root.shown ? 0px : 8px;
                 animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-                padding-left: 20px;
-                padding-right: 20px;
+                padding-left: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
+                padding-right: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
+                padding-top: Breakpoints.tier-d ? 0px : 4px;
+                padding-bottom: Breakpoints.tier-d ? 0px : 4px;
                 spacing: 10px;
                 VerticalLayout {
                     alignment: center;
-                    Icon {
-                        name: "chev-down";
-                        width: 15px;
-                        height: 15px;
-                        tint: Theme.ink-3;
-                        transform-rotation: root.g.collapsed ? -90deg : 0deg;
-                        animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                    HorizontalLayout {
+                        alignment: center;
+                        min-width: Breakpoints.tier-d ? 15px : 44px;
+                        Icon {
+                            name: "chev-down";
+                            width: Breakpoints.tier-d ? 15px : 16px;
+                            height: Breakpoints.tier-d ? 15px : 16px;
+                            tint: Theme.ink-3;
+                            transform-rotation: root.g.collapsed ? -90deg : 0deg;
+                            animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                        }
                     }
                 }
-                VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: 20px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qgroup:" + root.g.provider; } } }
-                Text { text: root.g.label; font-size: 13.5px; font-weight: 640; color: Theme.ink; vertical-alignment: center; }
-                Text { text: root.g.meta; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; }
+                VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: Breakpoints.tier-d ? 20px : 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qgroup:" + root.g.provider; } } }
+                Text { text: root.g.label; font-size: Breakpoints.tier-d ? 13.5px : Type.body; font-weight: Breakpoints.tier-d ? 640 : 600; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+                Text { text: root.g.meta; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; wrap: Breakpoints.tier-d ? no-wrap : word-wrap; overflow: Breakpoints.tier-d ? elide : clip; }
             }
         }
     }
     Rectangle {
-        y: 41px;
+        y: 1px + root.head-h;
         height: root.rows-h;
         clip: true;
         rows := VerticalLayout {
@@ -457,7 +700,7 @@ component QuotaGroup inherits Rectangle {
             padding-bottom: 6px;
             opacity: root.g.collapsed ? 0 : 1;
             animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-            for r[i] in root.g.rows: QuotaRow { qr: r; played: root.played; delay: root.delay; n: root.n0 + 1 + i; }
+            for r[i] in root.g.rows: QuotaRow { qr: r; played: root.played; delay: root.delay; n: root.n0 + 1 + i; stacked: root.stacked; }
         }
     }
 }
@@ -466,8 +709,11 @@ export component AxQuotaCard inherits AxCard {
     cached: false;
     in property <bool> played;
     in property <duration> delay;
+    in property <length> cell-w: 100000px;
+    property <length> pad: Breakpoints.tier-p ? 16px : 20px;
+    property <bool> stacked: Breakpoints.below-d && root.cell-w - 2 * root.pad < 640px;
     AxCardHead { title: "Quota history"; sub: AxData.quota-sub; }
-    axis := HorizontalLayout {
+    if !root.stacked: axis := HorizontalLayout {
         padding-left: 48px;
         padding-right: 20px;
         padding-bottom: 6px;
@@ -493,7 +739,29 @@ export component AxQuotaCard inherits AxCard {
         Caps { text: "NEXT RESET"; width: AxQuotaCols.next; horizontal-alignment: right; vertical-alignment: top; }
         Rectangle { width: AxQuotaCols.chev; }
     }
-    for g[i] in AxData.quota-groups: QuotaGroup { g: g; played: root.played; delay: root.delay; n0: i * 4; }
+    // stacked: the same axis spans the full inner width, aligned to the rows' full-width
+    // sparklines (DESIGN-MOBILE 4.2.9: the axis appears once under the card header)
+    if root.stacked: HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-bottom: 6px;
+        height: 22px;
+        ticks-s := Rectangle {
+            horizontal-stretch: 1;
+            for t in AxData.quota-ticks: Text {
+                x: t.pos * ticks-s.width - self.preferred-width / 2;
+                y: 0px;
+                height: 16px;
+                width: self.preferred-width;
+                text: t.label;
+                font-family: Type.mono;
+                font-size: 11px;
+                color: Theme.ink-3;
+            }
+            Text { x: ticks-s.width - self.preferred-width; y: 0px; height: 16px; width: self.preferred-width; text: "Now"; font-family: Type.mono; font-size: 11px; color: Theme.ink-2; }
+        }
+    }
+    for g[i] in AxData.quota-groups: QuotaGroup { g: g; played: root.played; delay: root.delay; n0: i * 4; stacked: root.stacked; }
     if AxData.quota-groups.length == 0: Text {
         text: AxData.ready ? "No account history in this range yet." : AxData.head.error != "" ? "Account history unavailable" : "Loading account history";
         font-size: 13px;

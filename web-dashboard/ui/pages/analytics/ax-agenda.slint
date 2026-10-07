@@ -1,12 +1,12 @@
 // Upcoming resets and expiries, at the very bottom: a plain agenda grouped by local day ("Today", "Tomorrow",
 // "Sat, Oct 3"), each line the time, the provider mark and account, what happens and the state now. Below
 // 1600 px it is one table; from 1600 px the days split into two balanced tables side by side.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { ProbeMark } from "../../components/probe.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
 import { AxData, AxAgendaRow } from "ax-data.slint";
-import { AxCard, AxCardHead, AxTip } from "ax-common.slint";
+import { AxCard, AxCardHead, AxPress } from "ax-common.slint";
 
 // The concept's grid sizes TIME to its widest line (max-content) and ACCOUNT to its widest, at most 300 px
 // (fit-content); every line reports its natural widths here, and the columns only grow while the page lives.
@@ -18,12 +18,15 @@ export global AxAgendaCols {
 
 component NowRuns inherits HorizontalLayout {
     in property <AxAgendaRow> ar;
-    alignment: end;
+    // stacked: the tier small face, left-aligned in the content column (DESIGN-MOBILE 4.2.10)
+    in property <bool> small: false;
+    in property <bool> left: false;
+    alignment: root.left ? start : end;
     spacing: 0px;
     for r in root.ar.now: Text {
         text: r.text;
         font-family: Type.tab;
-        font-size: r.strong ? 13px : 12.5px;
+        font-size: root.small ? Type.small : r.strong ? 13px : 12.5px;
         font-weight: r.strong ? 640 : 400;
         color: !r.strong ? Theme.ink-3 : r.tone == "over" ? Theme.over-text : r.tone == "crit" ? Theme.crit-text : r.tone == "warn" ? Theme.warn-text : Theme.ink;
         vertical-alignment: center;
@@ -34,9 +37,25 @@ component AgendaLine inherits Rectangle {
     in property <AxAgendaRow> ar;
     in property <bool> played;
     in property <duration> delay;
+    // stacked under a 560 card inner width (DESIGN-MOBILE 4.2.10); table items match desktop
+    in property <bool> stacked: false;
+    in property <length> gap: 22px;
+    in property <length> time-w: AxAgendaCols.time;
+    in property <length> who-w: AxAgendaCols.who;
+    in property <length> now-w: AxAgendaCols.now;
     property <bool> shown: !Motion.on;
     show := Timer { interval: max(1ms, root.delay + root.ar.i * 16ms); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
-    min-height: root.ar.kind == "day" ? 41px : 31px;
+    // stacked height sizer (never drawn): the what line wraps, so the item grows past its 52 min
+    size-m := VerticalLayout {
+        visible: false;
+        width: root.width - 96px;
+        spacing: 1px;
+        Text { text: "X"; font-size: Type.small; font-weight: 600; }
+        Text { text: root.ar.what; font-size: Type.small; wrap: word-wrap; }
+        Text { text: "X"; font-size: Type.small; }
+    }
+    property <length> stack-h: 2px + max(50px, 16px + size-m.preferred-height);
+    min-height: root.ar.kind == "day" ? 41px : root.stacked ? root.stack-h : 31px;
     // natural column widths, measured with the line's own fonts (never drawn)
     time-m := Text { visible: false; text: root.ar.time; font-family: Type.tab; font-size: 13px; font-weight: 620; }
     rel-m := Text { visible: false; text: root.ar.rel; font-family: Type.tab; font-size: 12px; }
@@ -62,40 +81,79 @@ component AgendaLine inherits Rectangle {
             padding-right: 10px;
             padding-top: 14px;
             padding-bottom: 5px;
-            spacing: 10px;
-            Text { text: root.ar.day; font-size: 13.5px; font-weight: 660; color: Theme.ink; vertical-alignment: bottom; horizontal-stretch: 0; }
-            Text { text: root.ar.hint; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; vertical-alignment: bottom; horizontal-stretch: 1; }
+            spacing: Breakpoints.tier-d ? 10px : 6px;
+            Text { text: root.ar.day; font-size: Breakpoints.tier-d ? 13.5px : Type.body; font-weight: Breakpoints.tier-d ? 660 : 600; color: Theme.ink; vertical-alignment: bottom; horizontal-stretch: 0; }
+            Text { text: root.ar.hint; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; vertical-alignment: bottom; horizontal-stretch: 1; }
         }
         Rectangle { y: parent.height - 1px; height: 1px; background: Theme.rule-2; }
     }
-    if root.ar.kind == "line": Rectangle {
+    if root.ar.kind == "line" && !root.stacked: Rectangle {
         y: root.shown ? 2px : 10px;
         animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         height: parent.height - 2px;
         border-radius: 7px;
-        background: ta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+        background: Breakpoints.tier-d ? (ta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0))
+            : ta.pressed ? Theme.pressed : (Device.hover && ta.has-hover) ? Theme.row-hover : Theme.row-hover.with-alpha(0);
         animate background { duration: Motion.tint(Motion.fast); }
-        ta := AxTip {
+        ta := AxPress {
             tip: root.ar.tip;
+            long-tip: root.ar.tip;
             HorizontalLayout {
                 padding-left: 10px;
                 padding-right: 10px;
-                spacing: 22px;
+                spacing: root.gap;
                 HorizontalLayout {
-                    width: AxAgendaCols.time;
+                    width: root.time-w;
                     spacing: 8px;
                     Text { text: root.ar.time; font-family: Type.tab; font-size: 13px; font-weight: 620; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
                     if root.ar.rel != "": Text { text: root.ar.rel; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
                     Rectangle { horizontal-stretch: 1; }
                 }
                 HorizontalLayout {
-                    width: AxAgendaCols.who;
+                    width: root.who-w;
                     spacing: 9px;
                     VerticalLayout { alignment: center; ProviderMark { provider: root.ar.provider; size: 18px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "amark:" + root.ar.provider; } } }
                     Text { text: root.ar.who; font-size: 13px; font-weight: 540; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                 }
                 Text { text: root.ar.what; font-size: 13px; color: Theme.ink-2; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 60px; }
-                NowRuns { ar: root.ar; width: AxAgendaCols.now; }
+                NowRuns { ar: root.ar; width: root.now-w; }
+            }
+        }
+    }
+    // stacked: a fixed 72 time column, then mark + account, the wrapping what, the now value
+    if root.ar.kind == "line" && root.stacked: Rectangle {
+        y: root.shown ? 2px : 10px;
+        animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        height: parent.height - 2px;
+        border-radius: 7px;
+        background: sta.pressed ? Theme.pressed : (Device.hover && sta.has-hover) ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+        animate background { duration: Motion.tint(Motion.fast); }
+        sta := AxPress {
+            tip: root.ar.tip;
+            long-tip: root.ar.tip;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 8px;
+                VerticalLayout {
+                    width: 72px;
+                    spacing: 1px;
+                    Text { text: root.ar.time; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; overflow: elide; }
+                    if root.ar.rel != "": Text { text: root.ar.rel; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 1px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout { alignment: center; ProviderMark { provider: root.ar.provider; size: 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "amark:" + root.ar.provider; } } }
+                        Text { text: root.ar.who; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    }
+                    Text { text: root.ar.what; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+                    NowRuns { ar: root.ar; small: true; left: true; }
+                }
             }
         }
     }
@@ -106,29 +164,40 @@ component AgendaTable inherits VerticalLayout {
     in property <bool> head: true;
     in property <bool> played;
     in property <duration> delay;
+    in property <bool> stacked: false;
+    // table inner width (window-derived, from the card): clamps the account column below D
+    in property <length> inner: 100000px;
+    property <length> gap: Breakpoints.tier-d ? 22px : 12px;
+    property <length> now-w: Breakpoints.tier-d ? AxAgendaCols.now : 160px;
+    property <length> who-w: Breakpoints.tier-d ? AxAgendaCols.who
+        : min(AxAgendaCols.who, max(120px, root.inner - AxAgendaCols.time - root.now-w - 3 * root.gap - 20px - 60px));
     spacing: 0px;
-    if root.head: Rectangle {
+    if root.head && !root.stacked: Rectangle {
         height: 27px;
         HorizontalLayout {
             padding-left: 10px;
             padding-right: 10px;
             padding-top: 4px;
             padding-bottom: 6px;
-            spacing: 22px;
+            spacing: root.gap;
             Caps { text: "TIME"; width: AxAgendaCols.time; }
-            Caps { text: "ACCOUNT"; width: AxAgendaCols.who; }
+            Caps { text: "ACCOUNT"; width: root.who-w; }
             Caps { text: "WHAT HAPPENS"; horizontal-stretch: 1; }
-            Caps { text: "NOW"; width: AxAgendaCols.now; horizontal-alignment: right; }
+            Caps { text: "NOW"; width: root.now-w; horizontal-alignment: right; }
         }
         Rectangle { y: parent.height - 1px; height: 1px; background: Theme.rule; }
     }
-    for r in root.rows: AgendaLine { ar: r; played: root.played; delay: root.delay; }
+    for r in root.rows: AgendaLine { ar: r; played: root.played; delay: root.delay; stacked: root.stacked; gap: root.gap; who-w: root.who-w; now-w: root.now-w; }
 }
 
 export component AxAgendaCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
+    in property <length> cell-w: 100000px;
+    property <length> pad: Breakpoints.tier-p ? 16px : 20px;
+    property <length> inner: root.cell-w - 2 * root.pad;
     property <bool> wide: Breakpoints.width >= 1600px;
+    property <bool> stacked: Breakpoints.below-d && root.inner < 560px;
     AxCardHead { title: "Upcoming resets and expiries"; sub: "When each limit resets to 0% used, and when credits or packs expire. Times are local."; }
     if AxData.agenda-empty: Text {
         text: AxData.ready ? "No upcoming resets or expiries reported." : AxData.head.error != "" ? "Account readings unavailable" : "Loading account readings";
@@ -148,10 +217,10 @@ export component AxAgendaCard inherits AxCard {
         if AxData.agenda-b.length == 0: Rectangle { horizontal-stretch: 1; }
     }
     if !AxData.agenda-empty && !root.wide: VerticalLayout {
-        padding-left: 20px;
-        padding-right: 20px;
+        padding-left: root.pad;
+        padding-right: root.pad;
         padding-bottom: 16px;
-        AgendaTable { rows: AxData.agenda-a; played: root.played; delay: root.delay; }
-        AgendaTable { rows: AxData.agenda-b; head: false; played: root.played; delay: root.delay; }
+        AgendaTable { rows: AxData.agenda-a; played: root.played; delay: root.delay; stacked: root.stacked; inner: root.inner; }
+        AgendaTable { rows: AxData.agenda-b; head: false; played: root.played; delay: root.delay; stacked: root.stacked; inner: root.inner; }
     }
 }

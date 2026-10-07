@@ -949,7 +949,11 @@ function heatView(A, R, state, width, height) {
   const max = Math.max(0, ...cells.flat().filter(c => c.v !== null).map(c => c.v));
   const valTxt = v => byCost ? money(v) : `${tokC(v)} tokens`;
   const hourLab = h => hourTxt(new Date(2026, 0, 1, h).getTime());
-  const wide = (width || DEFAULT_SIZES.heat.w) > 760;
+  const gridW = width || DEFAULT_SIZES.heat.w;
+  const wide = gridW > 760;
+  // below-D grids use a 32 px day column with 2 px gaps (ax-time.slint mirrors this switch);
+  // desktop grids keep the 38 px column with 3 px gaps. The dash scales to its cell either way.
+  const cellW = (gridW - (wide ? 38 + 72 : 32 + 46)) / 24;
   const out = [];
   cells.forEach((row, i) => row.forEach((c, h) => {
     const name = `${WD[i]} ${hourLab(h)}`;
@@ -961,9 +965,11 @@ function heatView(A, R, state, width, height) {
     mode: byCost ? 'cost' : 'tokens',
     sub: `${byCost ? partial ? 'Estimated cost, partial,' : 'Estimated cost' : 'Tokens without cache reads'} per hour, local time · ${dateLabel(R)}`,
     cells: out, days: WD,
-    hours: Array.from({ length: 24 }, (_, h) => h % (wide ? 3 : 6) === 0 ? hourLab(h) : ''),
+    // labels every 3 hours at every width (desktop grids were always wide, so nothing changes there);
+    // P shows every other one for the spec's every-6 row (ax-time.slint)
+    hours: Array.from({ length: 24 }, (_, h) => h % 3 === 0 ? hourLab(h) : ''),
     busiest: max ? valTxt(max) : 'none',
-    dash: heatDash(Math.max(4, ((width || DEFAULT_SIZES.heat.w) - 38 - 72) / 24), height || 24),
+    dash: heatDash(Math.max(4, cellW), height || 24),
   };
 }
 
@@ -1138,6 +1144,11 @@ export function hostProgress(payload) {
 /** Rough text widths (px) of the summary line's 13 px sans labels and tabular values, for packing its lines. */
 const LINE = { label: 160, gap: 26, mark: 21, char: 7.1, digit: 7.7, note: 92 };
 const itemWidth = it => (it.mark ? LINE.mark : 0) + it.label.length * LINE.char + 5 + it.value.length * LINE.digit;
+// Phone layout contract: AxProvLines renders the note after the last line's items below D, so a
+// packed line plus the gap and the note must fit the below-D line width. Tests pin that arithmetic.
+export const provItemWidth = itemWidth;
+export const provItemGap = LINE.gap;
+export const provNoteWidth = LINE.note;
 /**
  * "Tokens by provider": how many tokens each provider served in the range, for example "Claude 59.5B · Codex
  * 22.9B · Muse Code 2.73B · Z.ai coding plan 1.59B · Other 511M", largest first and Other last. It sums the same
@@ -1165,8 +1176,9 @@ export function providersView(A, rows, state, width) {
       tip: `${label}: ${tokX(tok)}, ${share1(all ? tok / all * 100 : 0)}% of the tokens in this range · ${tokC(o.in)} in, ${tokC(o.out)} out, ${tokC(o.cache)} cache · ${cost}.${from}${what}` };
   });
   if (!items.length) return none;
-  // pack into lines: the first after the caption, the rest under it; the note ends the last line
-  const room = Math.max(320, (width || DEFAULT_SIZES.trend.w) - LINE.label - 8);
+  // pack into lines: the first after the caption, the rest under it; the note ends the last line.
+  // Phone widths pack honestly too: the floor is one short item, never a desktop line width.
+  const room = Math.max(120, (width || DEFAULT_SIZES.trend.w) - LINE.label - 8);
   const lines = [];
   let line = [], used = 0;
   for (const it of items) {

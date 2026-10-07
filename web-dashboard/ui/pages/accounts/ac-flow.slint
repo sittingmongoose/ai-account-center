@@ -6,7 +6,13 @@
 // - the step bar's segments take the step colours; the waiting spinner turns only while a request runs.
 // The typed text stays in Slint until it is submitted: a key is sent once with the action and the field is
 // cleared at once, so the page never shows or keeps it.
-import { Theme, Motion, Type } from "../../theme.slint";
+//
+// Below D (DESIGN-MOBILE.md 4.3.5): the step bar is four-tall segments with the current step's label under it
+// (all labels on F and T when each segment is >= 120), the title and body use the tier type scale, the field is
+// 48 tall (key and its optional label stacked on P, side by side on F and T), the verification page stacks over
+// a centred 28 px code, and the buttons run two as equal halves on P, three or more stacked full width with the
+// primary first, and one right-aligned row on F and T. Desktop keeps today's panel.
+import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { Icon } from "../../components/icon.slint";
 import { Caps } from "../../components/text.slint";
 import { Field } from "../../components/field.slint";
@@ -57,42 +63,106 @@ component LeadLine inherits Rectangle {
     Icon { x: 0px; y: 1px; width: root.icon-size; height: root.icon-size; name: root.icon; tint: root.icon-ink; }
 }
 
-// The step bar: one segment per step, its caption under a 2 px rule (done: calm, current: accent).
-component Steps inherits HorizontalLayout {
+// The step bar. Desktop: one 2 px segment per step with its mono caption under it. Below D (4.3.5): equal
+// four-tall segments (radius 2, gap 4, done and current accent, upcoming track) and the current step's label
+// under the bar; on F and T every label sits under its own segment while each is at least 120 wide.
+component Steps inherits VerticalLayout {
     in property <[string]> steps;
     in property <int> cur;
+    property <bool> all-labels: Breakpoints.tier-d ? true
+        : !Breakpoints.tier-p && root.steps.length > 0 && (self.width - 4px * (root.steps.length - 1)) / root.steps.length >= 120px;
     spacing: 6px;
-    for s[i] in root.steps: VerticalLayout {
-        horizontal-stretch: 1;
+    if Breakpoints.tier-d: HorizontalLayout {
         spacing: 6px;
-        Rectangle {
-            height: 2px;
-            background: i < root.cur ? Theme.calm : i == root.cur ? Theme.accent : Theme.rule;
-            animate background { duration: Motion.tint(300ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        for s[i] in root.steps: VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 6px;
+            Rectangle {
+                height: 2px;
+                background: i < root.cur ? Theme.calm : i == root.cur ? Theme.accent : Theme.rule;
+                animate background { duration: Motion.tint(300ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            }
+            Text {
+                text: (i + 1) + "  " + s.to-uppercase();
+                font-family: Type.mono;
+                font-size: Type.caption;
+                letter-spacing: 0.5px;
+                color: i < root.cur ? Theme.ink-3 : i == root.cur ? Theme.ink : Theme.ink-4;
+                overflow: elide;
+                animate color { duration: Motion.tint(300ms); }
+            }
         }
-        Text {
-            text: (i + 1) + "  " + s.to-uppercase();
-            font-family: Type.mono;
-            font-size: Type.caption;
-            letter-spacing: 0.5px;
-            color: i < root.cur ? Theme.ink-3 : i == root.cur ? Theme.ink : Theme.ink-4;
+    }
+    if !Breakpoints.tier-d: VerticalLayout {
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 4px;
+            for s[i] in root.steps: Rectangle {
+                horizontal-stretch: 1;
+                height: 4px;
+                border-radius: 2px;
+                background: i <= root.cur ? Theme.accent : Theme.track;
+                animate background { duration: Motion.tint(300ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+            }
+        }
+        // the current step's own label; on F and T the other labels join, under their segments
+        if !root.all-labels: Text {
+            text: root.cur < root.steps.length ? root.steps[root.cur] : "";
+            font-size: Type.small;
+            font-weight: 600;
+            color: Theme.ink;
             overflow: elide;
-            animate color { duration: Motion.tint(300ms); }
+        }
+        if root.all-labels: HorizontalLayout {
+            spacing: 4px;
+            for s[i] in root.steps: Text {
+                horizontal-stretch: 1;
+                text: s;
+                font-size: Type.small;
+                font-weight: 600;
+                color: i == root.cur ? Theme.ink : i < root.cur ? Theme.ink-3 : Theme.ink-4;
+                overflow: elide;
+                animate color { duration: Motion.tint(300ms); }
+            }
         }
     }
 }
 
-// The verification page and the code (device-code and supervised sign-ins).
+// The verification page and the code (device-code and supervised sign-ins). Below D the page stacks over a
+// centred 28 px code (4.3.5); desktop keeps the two columns.
 component CodeBox inherits Rectangle {
     in property <AcFlow> flow;
     in property <string> probe;
-    min-height: lay.preferred-height;
-    preferred-height: lay.preferred-height;
+    min-height: boxlay.preferred-height;
+    preferred-height: boxlay.preferred-height;
     border-radius: 10px;
     border-width: 1px;
     border-color: Theme.rule;
     background: Theme.paper;
-    lay := HorizontalLayout {
+    boxlay := VerticalLayout {
+        if Breakpoints.below-d: VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 10px;
+        Caps { text: "VERIFICATION PAGE"; }
+        Text { text: root.flow.code-url; font-family: Type.mono; font-size: 14px; font-weight: 560; color: Theme.accent-text; wrap: char-wrap; }
+        if root.flow.code-text != "": VerticalLayout {
+            spacing: 4px;
+            Text {
+                text: root.flow.code-text;
+                font-family: Type.mono;
+                font-size: 28px;
+                font-weight: 600;
+                letter-spacing: 3.36px;
+                color: Theme.ink;
+                horizontal-alignment: center;
+            }
+        }
+        if root.flow.code-expires != "": Text { text: root.flow.code-expires; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: center; }
+        }
+        if !Breakpoints.below-d: HorizontalLayout {
         padding-left: 14px;
         padding-right: 14px;
         padding-top: 12px;
@@ -121,6 +191,7 @@ component CodeBox inherits Rectangle {
                 horizontal-alignment: right;
             }
         }
+        }
     }
     ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: root.probe; }
 }
@@ -133,6 +204,7 @@ export component FlowPanel inherits Rectangle {
     in property <bool> busy;
     callback act(string, string);
 
+    property <bool> touch: Breakpoints.below-d;
     property <string> input-text;
     property <string> label-text;
     // a new flow (its key) starts with the suggested value; a key or a code field always starts empty
@@ -203,29 +275,30 @@ export component FlowPanel inherits Rectangle {
                 x: root.pre ? 10px : 0px;
                 width: parent.width;
                 animate x { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-                if root.flow.title != "": Text { text: root.flow.title; font-size: 14px; font-weight: 640; color: Theme.ink; wrap: word-wrap; }
+                if root.flow.title != "": Text { text: root.flow.title; font-size: root.touch ? Type.title : 14px; font-weight: 640; color: Theme.ink; wrap: word-wrap; }
                 if root.flow.title != "": Rectangle { height: 4px; }
                 if root.flow.done != "": HorizontalLayout {
                     spacing: 10px;
                     VerticalLayout { alignment: center; Icon { name: "check-circle"; tint: Theme.good-text; width: 18px; height: 18px; } }
-                    Text { text: root.flow.done; font-size: 13px; font-weight: 600; color: Theme.good-text; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+                    Text { text: root.flow.done; font-size: root.touch ? Type.body : 13px; font-weight: 600; color: Theme.good-text; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
                 }
                 if root.flow.done != "": Rectangle { height: 6px; }
-                if root.flow.body != "": Text { text: root.flow.body; font-size: 12.5px; color: Theme.ink-2; wrap: word-wrap; }
+                if root.flow.body != "": Text { text: root.flow.body; font-size: root.touch ? Type.body : 12.5px; color: Theme.ink-2; wrap: word-wrap; }
                 if root.flow.body != "": Rectangle { height: 12px; }
                 if root.flow.code-shown: CodeBox { flow: root.flow; probe: "flow-code:" + root.provider; }
                 if root.flow.code-shown: Rectangle { height: 12px; }
-                if root.flow.input-kind != "": HorizontalLayout {
-                    spacing: 10px;
+                // the one field: full width (48 tall below D); the optional key label sits beside it on
+                // F and T (200 px) and stacks under it on P (4.3.5)
+                if root.flow.input-kind != "" && (!root.touch || Breakpoints.tier-p): VerticalLayout {
+                    spacing: 8px;
                     Rectangle {
-                        horizontal-stretch: 2;
                         min-height: input.preferred-height;
                         input := Field {
                             width: parent.width;
                             label: root.flow.input-label;
                             placeholder: root.flow.input-placeholder;
                             password: root.flow.input-password;
-                            box-height: 34px;
+                            box-height: root.touch ? 48px : 34px;
                             enabled: !root.busy;
                             bad: root.flow.error != "";
                             text <=> root.input-text;
@@ -234,13 +307,46 @@ export component FlowPanel inherits Rectangle {
                         ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "flow-input:" + root.provider; }
                     }
                     if root.flow.label-field: Rectangle {
-                        horizontal-stretch: 1;
                         min-height: label.preferred-height;
                         label := Field {
                             width: parent.width;
                             label: "Label (optional)";
                             placeholder: "Work";
-                            box-height: 34px;
+                            box-height: root.touch ? 48px : 34px;
+                            enabled: !root.busy;
+                            text <=> root.label-text;
+                            accepted => { root.submit(); }
+                        }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "flow-label:" + root.provider; }
+                    }
+                }
+                if root.flow.input-kind != "" && root.touch && !Breakpoints.tier-p: HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        horizontal-stretch: 2;
+                        min-height: input-wide.preferred-height;
+                        input-wide := Field {
+                            width: parent.width;
+                            label: root.flow.input-label;
+                            placeholder: root.flow.input-placeholder;
+                            password: root.flow.input-password;
+                            box-height: 48px;
+                            enabled: !root.busy;
+                            bad: root.flow.error != "";
+                            text <=> root.input-text;
+                            accepted => { root.submit(); }
+                        }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "flow-input:" + root.provider; }
+                    }
+                    if root.flow.label-field: Rectangle {
+                        width: 200px;
+                        horizontal-stretch: 0;
+                        min-height: label-wide.preferred-height;
+                        label-wide := Field {
+                            width: parent.width;
+                            label: "Label (optional)";
+                            placeholder: "Work";
+                            box-height: 48px;
                             enabled: !root.busy;
                             text <=> root.label-text;
                             accepted => { root.submit(); }
@@ -252,7 +358,7 @@ export component FlowPanel inherits Rectangle {
                 if root.flow.waiting != "": HorizontalLayout {
                     spacing: 8px;
                     VerticalLayout { alignment: center; Spinner { size: 16px; ink: Theme.ink-2; } }
-                    Text { text: root.flow.waiting; font-size: 12.5px; color: Theme.ink-2; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+                    Text { text: root.flow.waiting; font-size: root.touch ? Type.small : 12.5px; color: Theme.ink-2; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
                 }
                 if root.flow.waiting != "" && root.flow.actions.length > 0: Rectangle { height: 12px; }
                 if root.flow.error != "": LeadLine {
@@ -260,10 +366,60 @@ export component FlowPanel inherits Rectangle {
                     icon-ink: Theme.crit-text;
                     lead: root.flow.error;
                     lead-ink: Theme.crit-text;
+                    size: root.touch ? Type.small : 12.5px;
                     text: root.flow.error-body;
                 }
                 if root.flow.error != "": Rectangle { height: 12px; }
-                if root.flow.actions.length > 0: HorizontalLayout {
+                // the buttons: two as equal halves on P, three or more stacked full width with the primary
+                // first, one right-aligned row on F and T, and the desktop's left-aligned row on D
+                if root.flow.actions.length == 2 && Breakpoints.tier-p: HorizontalLayout {
+                    spacing: 8px;
+                    height: 48px;
+                    for a[i] in root.flow.actions: Rectangle {
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        ActionControl {
+                            width: parent.width;
+                            stretch: true;
+                            tall: true;
+                            height: 48px;
+                            data: a;
+                            owner: "flow:" + root.provider + ":" + i;
+                            busy: root.busy && !a.busy;
+                            act(kind, value) => { root.run(kind, value); }
+                        }
+                    }
+                }
+                if root.flow.actions.length > 2 && Breakpoints.tier-p: VerticalLayout {
+                    spacing: 8px;
+                    for a[i] in root.flow.actions: ActionControl {
+                        stretch: true;
+                        tall: true;
+                        height: 48px;
+                        data: a;
+                        owner: "flow:" + root.provider + ":" + i;
+                        busy: root.busy && !a.busy;
+                        act(kind, value) => { root.run(kind, value); }
+                    }
+                }
+                if root.flow.actions.length > 0 && root.touch && !Breakpoints.tier-p: HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    min-height: 44px;
+                    for a[i] in root.flow.actions: VerticalLayout {
+                        alignment: center;
+                        ActionControl {
+                            height: 44px;
+                            width: self.natural;
+                            align-end: false;
+                            data: a;
+                            owner: "flow:" + root.provider + ":" + i;
+                            busy: root.busy && !a.busy;
+                            act(kind, value) => { root.run(kind, value); }
+                        }
+                    }
+                }
+                if root.flow.actions.length > 0 && !root.touch: HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     for a[i] in root.flow.actions: ActionControl {
@@ -276,7 +432,7 @@ export component FlowPanel inherits Rectangle {
                     }
                 }
                 if root.flow.note != "": Rectangle { height: 10px; }
-                if root.flow.note != "": LeadLine { icon: "lock-open"; icon-size: 15px; text: root.flow.note; ink: Theme.ink-3; size: 12px; }
+                if root.flow.note != "": LeadLine { icon: "lock-open"; icon-size: 15px; text: root.flow.note; ink: Theme.ink-3; size: root.touch ? Type.small : 12px; }
               }
             }
         }
@@ -285,12 +441,14 @@ export component FlowPanel inherits Rectangle {
 
 // The line under a row (concept `.confirm-line`): a dashed rule above, a quiet tint, the icon, the sentence
 // with its lead in bold, then the buttons. It opens and closes with its height and keeps the last words while
-// it closes.
+// it closes. Below D the sentence runs at the body size and wraps; its buttons run two as equal halves on P
+// and right-aligned at natural widths on F and T (4.3.3).
 export component RowLine inherits Rectangle {
     in property <AcLine> line;
     in property <string> owner;
     in property <bool> busy;
     callback act(string, string);
+    property <bool> touch: Breakpoints.below-d;
     property <bool> open: root.line.shown;
     // keep what was shown while the line closes
     property <AcLine> held;
@@ -315,47 +473,90 @@ export component RowLine inherits Rectangle {
             background: Theme.rule;
         }
     }
-    lay := HorizontalLayout {
+    lay := VerticalLayout {
         y: 1px;
         height: self.preferred-height;
-        padding-left: 18px;
-        padding-right: 18px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        spacing: 10px;
+        padding-left: Breakpoints.tier-p ? 16px : 18px;
+        padding-right: Breakpoints.tier-p ? 16px : 18px;
+        padding-top: root.touch ? 12px : 10px;
+        padding-bottom: root.touch ? 12px : 10px;
+        spacing: root.touch ? 10px : 0px;
         opacity: root.open ? 1 : 0;
         animate opacity { duration: Motion.on ? (root.open ? Motion.med : 160ms) : 0ms; delay: Motion.on && root.open ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-        VerticalLayout {
+        HorizontalLayout {
+            spacing: 10px;
             alignment: start;
-            horizontal-stretch: 0;
-            padding-top: 1px;
-            if root.held.kind != "busy": Icon {
-                name: root.held.icon;
-                tint: root.held.kind == "refuse" ? Theme.warn-text : Theme.crit-text;
-                width: 16px;
-                height: 16px;
+            VerticalLayout {
+                alignment: start;
+                horizontal-stretch: 0;
+                padding-top: 1px;
+                if root.held.kind != "busy": Icon {
+                    name: root.held.icon;
+                    tint: root.held.kind == "refuse" ? Theme.warn-text : Theme.crit-text;
+                    width: 16px;
+                    height: 16px;
+                }
+                if root.held.kind == "busy": Spinner { size: 16px; ink: Theme.ink-2; }
             }
-            if root.held.kind == "busy": Spinner { size: 16px; ink: Theme.ink-2; }
-        }
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            StyledText {
-                text: @markdown("**\{root.held.lead}** \{root.held.text}");
-                default-color: Theme.ink-2;
-                default-font-size: 12.5px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: root.touch ? start : center;
+                min-width: 0px;
+                StyledText {
+                    text: @markdown("**\{root.held.lead}** \{root.held.text}");
+                    default-color: Theme.ink-2;
+                    default-font-size: root.touch ? Type.body : 12.5px;
+                }
+            }
+            if !root.touch: HorizontalLayout {
+                for a[i] in root.held.actions: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    ActionControl {
+                        width: self.natural;
+                        align-end: false;
+                        data: a;
+                        owner: root.owner + ":" + i;
+                        busy: root.busy;
+                        act(kind, value) => { root.act(kind, value); }
+                    }
+                }
             }
         }
-        for a[i] in root.held.actions: VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            ActionControl {
-                width: self.natural;
-                align-end: false;
-                data: a;
-                owner: root.owner + ":" + i;
-                busy: root.busy;
-                act(kind, value) => { root.act(kind, value); }
+        // the touch buttons: two as equal halves on P, otherwise right-aligned at natural widths (4.1.3)
+        if root.touch && root.held.actions.length == 2 && Breakpoints.tier-p: HorizontalLayout {
+            spacing: 8px;
+            height: 48px;
+            for a[i] in root.held.actions: Rectangle {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                ActionControl {
+                    width: parent.width;
+                    stretch: true;
+                    tall: true;
+                    height: 48px;
+                    data: a;
+                    owner: root.owner + ":" + i;
+                    busy: root.busy;
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+        }
+        if root.touch && !(root.held.actions.length == 2 && Breakpoints.tier-p) && root.held.actions.length > 0: HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            min-height: 44px;
+            for a[i] in root.held.actions: VerticalLayout {
+                alignment: center;
+                ActionControl {
+                    height: 44px;
+                    width: self.natural;
+                    align-end: false;
+                    data: a;
+                    owner: root.owner + ":" + i;
+                    busy: root.busy;
+                    act(kind, value) => { root.act(kind, value); }
+                }
             }
         }
     }

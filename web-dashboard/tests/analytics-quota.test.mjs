@@ -151,3 +151,21 @@ test('F6: a current reading from before a passed reset is no current reading in 
   assert.equal(b.windows[0].used, 4);
   assert.equal(project(a, a.windows[0], now).kind, 'na');
 });
+
+test('phone focus charts (350x180, 600x220): labels never overlap and the lookup stays valid', () => {
+  const accounts = quotaAccounts(analytics, { now, dashboard });
+  for (const [width, height] of [[350, 180], [600, 220]]) {
+    const f = focusChart(accounts.find(a => a.id === 'codex:b'), analytics, { now, width, height, thresholds: { codex: 95 }, accounts });
+    assert.equal(f.w >= 320 && f.h >= 160, true);
+    assert.ok(f.plot.w > 0 && f.plot.h > 0);
+    for (const l of f.labels) {
+      assert.ok(l.px >= -0.5 && l.px + l.pw <= f.w + 0.5 && l.py >= -0.5 && l.py + l.ph <= f.h + 0.5, `${l.text} inside ${width}x${height}`);
+    }
+    for (let i = 0; i < f.labels.length; i++) for (let j = i + 1; j < f.labels.length; j++) {
+      const a = f.labels[i], b = f.labels[j];
+      const overlap = a.px < b.px + b.pw && a.px + a.pw > b.px && a.py < b.py + b.ph && a.py + a.ph > b.py;
+      assert.equal(overlap, false, `${width}x${height}: ${a.text} / ${b.text}`);
+    }
+    assert.ok(f.stops.length > 0 && f.lut.every(i => i >= 0 && i < f.stops.length));
+  }
+});

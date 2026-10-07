@@ -1,7 +1,7 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
-import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue } from './auth-view.mjs';
+import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView } from './auth-view.mjs';
 import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
 import { copyText, signOutFailureText } from './account-actions.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
@@ -16,6 +16,7 @@ import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
+import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen } from './device.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -94,8 +95,32 @@ function toast(kind, title, body = '', ms = 4800) {
 }
 function failure(message, title = 'That did not work') { toast('err', title, message, 6400); }
 let authState = 'loading';
+// The offline screen (DESIGN-MOBILE.md 4.6): at launch, when /api cannot be reached, the sign-in page
+// shows the offline card and retries every 15 s while it is visible, on the `online` event and when the
+// app comes back to the foreground. No readings are cached on the device, so nothing else is shown.
+const OFFLINE_RETRY_MS = 15_000;
+let offlineTimer = 0;
+let sessionChecking = false;
+function goOffline() {
+  const words = offlineView(host, Date.now());
+  auth(false, 'offline', {
+    // the desktop look keeps today's sentence in the sign-in card's message slot
+    message: 'Unable to connect to AI Account Center. Try refreshing this page.',
+    offlineTitle: words.title, offlineStrong: words.strong, offlineBody: words.body, offlineMeta: words.meta,
+  });
+}
+function stopOfflineRetry() {
+  if (offlineTimer) { clearInterval(offlineTimer); offlineTimer = 0; }
+}
+function retryOffline() {
+  if (authenticated || busy || authState !== 'offline' || sessionChecking) return;
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  void checkSession();
+}
 function auth(signedIn, state, extra = {}) {
   authenticated = signedIn;
+  if (state !== 'offline') stopOfflineRetry();
+  else if (!offlineTimer) offlineTimer = setInterval(retryOffline, OFFLINE_RETRY_MS);
   authState = state;
   const view = {
     state, host, username, transportNote: transportNote(transport, authCheck), sessionHours, nonce: authNonce,
@@ -111,6 +136,7 @@ function auth(signedIn, state, extra = {}) {
   // sign-in pauses (signin.slint forgets the typed password in the limited state).
   if (signedIn || state === 'limited') { try { loginBridge?.clearPassword(); } catch {} }
   set_auth(signedIn, JSON.stringify(view));
+  syncThemeColor();
 }
 
 /** One request: { status, payload } on success; a refusal throws with its status, payload and headers. */
@@ -118,7 +144,9 @@ async function send(path, options = {}) {
   let response;
   try {
     response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+    setOnline(true);
   } catch (cause) {
+    setOnline(false);
     throw Object.assign(new Error('The dashboard did not answer.'), { network: true, status: 0, payload: null, cause });
   }
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
@@ -226,12 +254,19 @@ function renderAccounts() {
       origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
       registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin, prefs: st.prefs,
     }));
+    // Phase 6 feeds the Settings "Home screen app" row state; accounts-view.mjs does not compute it.
+    vm.install = currentInstallRow();
     if (e2e) globalThis.__aacLastAccounts = vm;
     pushModel('accounts', JSON.stringify(vm), set_accounts);
   } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
 }
 function renderChrome(isRefreshing = false) {
-  if (data || isRefreshing) pushModel('chrome', JSON.stringify(chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host })), set_chrome);
+  if (data || isRefreshing) {
+    const chrome = chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host });
+    // 4.6: the connection dropped; the readings stay on screen and the status line says so
+    if (!onlineState && !isRefreshing && chrome.statusLead === 'Updated') chrome.statusLead = 'Offline';
+    pushModel('chrome', JSON.stringify(chrome), set_chrome);
+  }
 }
 function renderDetails(id) {
   const view = data ? detailsViewModel(data, id, context({ refreshing: false })) : null;
@@ -240,8 +275,33 @@ function renderDetails(id) {
   show_details(JSON.stringify(view));
 }
 function pendingActivation() { return activationConfirmation.hasPending() || antigravityConfirmation.hasPending(); }
-/** The slide-over's left edge: SlideOver.panel-w in ui/components/slide-over.slint is clamp(30%, 420, 580) px. */
-function detailsPanelLeft() { return innerWidth - Math.min(580, Math.max(420, innerWidth * 0.3)); }
+
+// ---------------------------------------------------------------- Back button and history (3.9)
+// Every overlay (Details, a sheet, a popover, the activation dialog) pushes one entry; a popstate
+// closes the top-most overlay through pop_overlay(). Closing an overlay any other way consumes its
+// entry with history.back(); the flag marks our own consumption so the popstate handler ignores it.
+// Page switches push one entry from Home and replace otherwise, so Back from Analytics or Accounts
+// lands on Home and Back from Home leaves the app.
+let overlayDepth = 0;
+let consumingOverlayEntry = false;
+function belowD() { return innerWidth < 1280; }
+function pushOverlayEntry() {
+  if (!belowD()) return;
+  overlayDepth++;
+  try { history.pushState({ aac: 'overlay' }, ''); } catch {}
+}
+function consumeOverlayEntry() {
+  if (!belowD() || overlayDepth <= 0) return;
+  overlayDepth--;
+  consumingOverlayEntry = true;
+  try { history.back(); } catch { consumingOverlayEntry = false; }
+}
+/**
+ * The slide-over's left edge on D: SlideOver.panel-w in ui/components/slide-over.slint is
+ * clamp(30%, 420, 580) px. Below D the sheet and side panel close through their own scrims, so
+ * the outside-click probe is disabled there (a left edge of 0 never matches).
+ */
+function detailsPanelLeft() { return innerWidth >= 1280 ? innerWidth - Math.min(580, Math.max(420, innerWidth * 0.3)) : 0; }
 /**
  * Details closes on a click anywhere outside its panel (ROUND2). Slint's own background areas only see clicks
  * that nothing else takes, so a header button, a nested row action or an Analytics card would leave it open.
@@ -265,8 +325,14 @@ function closeDetailsOnOutsideClicks(canvas) {
 
 const activationConfirmation = createActivationConfirmation({
   activate: (target, body) => mutation(`/api/codex/profiles/${encodeURIComponent(target)}/activate`, body),
-  prompt: confirmation => show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` })),
-  close: close_activation_confirmation,
+  prompt: confirmation => {
+    pushOverlayEntry();
+    show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
+  },
+  close: () => {
+    consumeOverlayEntry();
+    close_activation_confirmation();
+  },
   busy: inProgress => setBusy(inProgress),
   success: async result => {
     if (data && typeof result?.name === 'string') {
@@ -283,8 +349,14 @@ const antigravityConfirmation = createAntigravityConfirmation({
   activate: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/activate`, body),
   confirm: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/confirm`, body),
   recover: () => mutation('/api/antigravity/recover', { hostId: 'ubuntu' }),
-  prompt: confirmation => show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` })),
-  close: close_activation_confirmation,
+  prompt: confirmation => {
+    pushOverlayEntry();
+    show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
+  },
+  close: () => {
+    consumeOverlayEntry();
+    close_activation_confirmation();
+  },
   busy: inProgress => setBusy(inProgress),
   success: async result => {
     // Selection/running proof comes from the next inventory, never an optimistic UI guess.
@@ -588,10 +660,16 @@ async function updateStatus() {
 }
 function navigate(page, { replace = false } = {}) {
   if (!PAGES.includes(page)) page = 'home';
+  const wasHome = currentPage === 'home';
   currentPage = page;
   set_current_page(page);
+  // phase 5 (4.5.4 Success): the last page id, so a fresh sign-in in the installed app can reopen it
+  try { globalThis.localStorage?.setItem('aac-last-page', page); } catch {}
   const url = pagePath(page);
-  try { globalThis.history?.[replace ? 'replaceState' : 'pushState']?.(null, '', url); } catch {}
+  // Back/history (3.9): Home to another page pushes one entry; between non-Home pages, and back
+  // to Home, it replaces, so Back from Analytics or Accounts goes Home and Back from Home leaves.
+  const method = replace || !wasHome || page === 'home' ? 'replaceState' : 'pushState';
+  try { globalThis.history?.[method]?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) enterAnalytics();
   if (page === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
 }
@@ -673,6 +751,8 @@ async function afterSignIn({ recheck = true } = {}) {
   if (currentPage === 'accounts') await accounts.loadAll();
 }
 async function checkSession(early = null) {
+  if (sessionChecking) return;
+  sessionChecking = true;
   try {
     if (early) await early.setup; else await loadAuthSetup();
     const status = early ? await early.check : await request('/api/auth/check');
@@ -691,7 +771,10 @@ async function checkSession(early = null) {
       const reason = endedReason(signedInAt(globalThis.localStorage), sessionHours);
       if (reason) sessionEnded(reason); else auth(false, 'default');
     }
-  } catch { auth(false, 'default', { message: 'Unable to connect to AI Account Center. Try refreshing this page.' }); }
+  } catch (error) {
+    if (error?.network) goOffline();
+    else auth(false, 'default', { message: 'Unable to connect to AI Account Center. Try refreshing this page.' });
+  } finally { sessionChecking = false; }
 }
 async function signedIn(name) {
   username = name;
@@ -702,6 +785,10 @@ async function signedIn(name) {
   await new Promise(resolve => setTimeout(resolve, motionReduced ? 120 : 650));
   auth(true, 'default');
   await enterDashboard();
+  // 4.5.4: the last page opens (a page id in localStorage, no data). A URL that names a page wins.
+  let last = '';
+  try { last = globalThis.localStorage?.getItem('aac-last-page') || ''; } catch {}
+  if (last && last !== currentPage && PAGES.includes(last) && pageFromLocation() === 'home') navigate(last);
 }
 let loginBridge = null;
 /** The Slint sign-in value ("user\npassword\n1|0", auth-view.mjs parseLoginValue) for what the HTML form holds. */
@@ -764,8 +851,15 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'accounts' || action === 'settings') { navigate('accounts'); return; }
     if (action.startsWith('analytics-')) { if (authenticated) await analyticsAction(action, value); return; }
     if (action === 'theme') { saveTheme(value); return; }
-    if (action === 'details') { detailsOpens++; renderDetails(value); return; }
-    if (action === 'details-closed') { openDetailsId = ''; return; }
+    if (action === 'install-app') { await promptInstall(); return; }
+    // One entry per Details session: a second row tapped while it is open swaps in place (D) or
+    // re-targets the sheet (below D) without stacking history entries.
+    if (action === 'details') { detailsOpens++; if (openDetailsId !== value) pushOverlayEntry(); renderDetails(value); return; }
+    if (action === 'details-closed') { openDetailsId = ''; consumeOverlayEntry(); return; }
+    // Sheets and popovers the Slint shell opened or closed (header menus, selects): the same
+    // history contract as Details (3.9). Closing after a Back pop consumes nothing (depth 0).
+    if (action === 'overlay-open') { pushOverlayEntry(); return; }
+    if (action === 'overlay-close') { consumeOverlayEntry(); return; }
     if (action === 'login') { await signIn(value); return; }
     // the sign-in layer moved, showed or hid the login form's fields: the HTML inputs follow (login-bridge.mjs)
     if (action === 'login-overlay') {
@@ -892,8 +986,146 @@ window.ccsDashboardAction = async (action, value) => {
   }
 };
 
+// ---------------------------------------------------------------- device environment
+// Safe-area insets (a probe element with env() paddings), the input profile (coarse pointer,
+// hover, standalone display), the keyboard height covering the canvas and reachability.
+// Pushed into the Device global; the tiers derive from them (DESIGN-MOBILE.md 1.1).
+let safeProbe = null;
+let keyboardFocus = false;
+let onlineState = typeof navigator !== 'undefined' && navigator.onLine === false ? false : true;
+function setOnline(value) {
+  const next = value !== false;
+  if (next === onlineState) return;
+  onlineState = next;
+  try { set_online(next); } catch {}
+  // 4.6: everything returns to normal on the next successful API call - the status line first
+  if (next && authenticated && data) renderChrome(false);
+}
+function pushSafeArea() {
+  const insets = readSafeArea(safeProbe, (element) => getComputedStyle(element));
+  try { set_safe_area(insets.top, insets.right, insets.bottom, insets.left); } catch {}
+}
+function pushInputProfile() {
+  let coarse = false, hover = true, standalone = false;
+  try {
+    if (typeof matchMedia === 'function') {
+      coarse = matchMedia('(pointer: coarse)').matches === true;
+      hover = matchMedia('(hover: hover)').matches !== false;
+      standalone = matchMedia('(display-mode: standalone)').matches === true;
+    }
+    if (typeof navigator !== 'undefined' && navigator.standalone === true) standalone = true;
+  } catch {}
+  try { set_input_profile(coarse, hover, standalone); } catch {}
+  // Standalone hides the Settings "Home screen app" row (installRow); a display-mode
+  // change (installed while open) re-renders it.
+  installStandalone = standalone;
+  renderAccounts();
+}
+function pushKeyboard() {
+  let height = 0;
+  try {
+    const viewport = typeof visualViewport !== 'undefined' ? visualViewport : null;
+    height = keyboardHeight(
+      innerHeight,
+      viewport ? { height: viewport.height, offsetTop: viewport.offsetTop ?? 0 } : null,
+      keyboardFocus
+    );
+    // The document is fixed (index.html), so iOS must not pan it while a field has focus.
+    if (keyboardFocus && viewport && viewport.offsetTop > 0) scrollTo(0, 0);
+  } catch {}
+  try { set_keyboard(height); } catch {}
+}
+function setupDevice() {
+  try {
+    safeProbe = document.createElement('div');
+    safeProbe.setAttribute('aria-hidden', 'true');
+    safeProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;visibility:hidden;padding-top:env(safe-area-inset-top);padding-right:env(safe-area-inset-right);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);';
+    document.body.appendChild(safeProbe);
+  } catch { safeProbe = null; }
+  pushSafeArea();
+  pushInputProfile();
+  pushKeyboard();
+  try { set_online(onlineState); } catch {}
+  addEventListener('resize', () => { pushSafeArea(); pushKeyboard(); });
+  addEventListener('orientationchange', () => setTimeout(() => { pushSafeArea(); pushKeyboard(); }, 60));
+  try {
+    visualViewport?.addEventListener?.('resize', () => { pushSafeArea(); pushKeyboard(); });
+    visualViewport?.addEventListener?.('scroll', pushKeyboard);
+  } catch {}
+  for (const query of ['(pointer: coarse)', '(hover: hover)', '(display-mode: standalone)']) {
+    try { matchMedia(query)?.addEventListener?.('change', pushInputProfile); } catch {}
+  }
+  // The login form's real inputs and Slint's hidden text input both live in this document.
+  try {
+    document.addEventListener('focusin', (event) => {
+      const target = event?.target;
+      keyboardFocus = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable === true);
+      pushKeyboard();
+    });
+    document.addEventListener('focusout', () => { keyboardFocus = false; pushKeyboard(); });
+  } catch {}
+  try {
+    addEventListener('online', () => { setOnline(true); retryOffline(); });
+    addEventListener('offline', () => setOnline(false));
+  } catch {}
+  try {
+    // 4.6: the offline card retries when the app comes back to the foreground
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') retryOffline(); });
+  } catch {}
+}
+
+// ---------------------------------------------------------------- installable app (PWA)
+let deferredInstallPrompt = null;
+let installStandalone = false;
+/** The Settings "Home screen app" row state (device.mjs installRow): 'chromium'|'ios'|'hidden'. */
+function currentInstallRow() {
+  let appleMobile = false;
+  try {
+    appleMobile = isAppleMobile(navigator?.userAgent, { touchPoints: navigator?.maxTouchPoints ?? 0 });
+  } catch {}
+  return installRow({ standalone: installStandalone, deferredPrompt: deferredInstallPrompt !== null, appleMobile });
+}
+/** The `install-app` action: show the captured install prompt once, then drop it. */
+async function promptInstall() {
+  const prompt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  renderAccounts();
+  if (!prompt) return;
+  try { await prompt.prompt(); } catch {}
+}
+function setupInstall() {
+  // The service worker caches the app shell for offline and fast start (sw.js); outside a
+  // secure context, or when /sw.js is missing, registration fails and the dashboard works without it.
+  try {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  } catch {}
+  try {
+    // Chromium offers the install prompt; capturing it feeds the row's Install button (6.6).
+    addEventListener('beforeinstallprompt', (event) => {
+      event.preventDefault();
+      deferredInstallPrompt = event;
+      renderAccounts();
+    });
+    addEventListener('appinstalled', () => {
+      deferredInstallPrompt = null;
+      renderAccounts();
+    });
+  } catch {}
+}
+
 // ---------------------------------------------------------------- theme and motion
 const THEMES = { auto: 0, light: 1, dark: 2 };
+let themeModeName = 'auto';
+let themeSystemDark = false;
+/** The theme-color meta follows the resolved app theme and the current screen (device.mjs). */
+function syncThemeColor() {
+  try {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', themeColor({ mode: themeModeName, systemDark: themeSystemDark, screen: themeScreen(authenticated) }));
+  } catch {}
+}
 function storedTheme() {
   let theme = null;
   try {
@@ -909,7 +1141,9 @@ function storedTheme() {
 function saveTheme(value) {
   if (!(value in THEMES)) return;
   try { localStorage.setItem('aac-theme', value); } catch {}
+  themeModeName = value;
   set_theme_mode(THEMES[value]);
+  syncThemeColor();
 }
 function watchMedia(query, apply) {
   const media = typeof matchMedia === 'function' ? matchMedia(query) : null;
@@ -934,8 +1168,20 @@ try {
     loginBridge = installLoginBridge({
       document,
       canvas: document.querySelector('#canvas'),
-      onFilled: filled => { if (!authenticated && !busy) set_login_fields(filled.username, filled.password, filled.remember); },
-      onSubmit: filled => { if (!authenticated && !busy) void signIn(loginValue(filled)); },
+      onFilled: filled => {
+        if (authenticated || busy) return;
+        set_login_fields(filled.username, filled.password, filled.remember);
+        // the first-run form is covered too: its confirmation and code mirror into Slint (set_login_setup)
+        if (authState === 'setup' && setupInfo.form) {
+          try { set_login_setup(filled.confirm ?? '', filled.code ?? ''); } catch {}
+          set_signin_strength(JSON.stringify({ ...strength(filled.password), matches: !!filled.confirm && filled.confirm === filled.password }));
+        }
+      },
+      onSubmit: filled => {
+        if (authenticated || busy) return;
+        if (authState === 'setup' && setupInfo.form) void createSignIn(`${filled.username}\n${filled.password}\n${filled.confirm ?? ''}\n${filled.code ?? ''}`);
+        else void signIn(loginValue(filled));
+      },
       onPointer: ({ focus, hover }) => { try { set_login_pointer(focus, hover); } catch {} },
     });
   } catch {}
@@ -944,13 +1190,25 @@ try {
   addEventListener('resize', resize); resize();
   closeDetailsOnOutsideClicks(document.querySelector('#canvas'));
   addEventListener('popstate', () => {
+    // Our own history.back() consuming a closed overlay's entry: nothing to answer.
+    if (consumingOverlayEntry) { consumingOverlayEntry = false; return; }
+    // A Back press over an open overlay closes the top-most one (dialog, Details, sheet, popover).
+    if (overlayDepth > 0) {
+      overlayDepth--;
+      try { pop_overlay(); } catch {}
+      return;
+    }
     currentPage = pageFromLocation(); set_current_page(currentPage);
     if (currentPage === 'analytics' && authenticated) enterAnalytics();
     if (currentPage === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
   });
-  set_theme_mode(THEMES[storedTheme()]);
+  themeModeName = storedTheme();
+  set_theme_mode(THEMES[themeModeName]);
   // Auto follows the browser: the scheme is pushed now and on every change.
-  watchMedia('(prefers-color-scheme: dark)', dark => set_system_dark(dark));
+  watchMedia('(prefers-color-scheme: dark)', dark => { themeSystemDark = dark; set_system_dark(dark); syncThemeColor(); });
+  setupDevice();
+  setupInstall();
+  syncThemeColor();
   // Headless captures settle instantly (the existing screenshot guard); ?motion keeps motion on.
   const headless = /HeadlessChrome/.test(navigator.userAgent) && !/[?&]motion\b/.test(location.search);
   watchMedia('(prefers-reduced-motion: reduce)', reduced => { motionReduced = reduced || headless; set_reduced_motion(motionReduced); });

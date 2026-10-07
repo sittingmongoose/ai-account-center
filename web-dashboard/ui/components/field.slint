@@ -1,5 +1,5 @@
 // Text and password fields for the sign-in layer and settings forms.
-import { Theme, Motion, Type } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 import { Icon } from "icon.slint";
 
 export component Field inherits VerticalLayout {
@@ -17,6 +17,13 @@ export component Field inherits VerticalLayout {
     callback accepted();
     callback edited(string);
     public function focus-input() { input.focus(); }
+
+    // Touch tiers (DESIGN-MOBILE.md 2.1): the drawn text and Slint's hidden HTML input are 16 px, and the
+    // field label reads 14/600. The sign-in page passes 17 px here for the fields the real HTML inputs
+    // cover, so the mirror text never changes size when the inputs take over.
+    in property <length> text-size: Breakpoints.below-d ? 16px : Type.body;
+    in property <length> label-size: Breakpoints.tier-p || Breakpoints.tier-f ? 14px : 12.5px;
+    in property <int> label-weight: Breakpoints.tier-p || Breakpoints.tier-f ? 600 : 560;
 
     // The sign-in page's login fields are real HTML inputs laid over this box (public/login-bridge.mjs), so password
     // managers can see and fill them. `mirror`: the text is typed there, never here; this TextInput only shows a
@@ -45,7 +52,7 @@ export component Field inherits VerticalLayout {
     property <bool> focused: input.has-focus || root.ext-focus;
     spacing: 6px;
     HorizontalLayout {
-        Text { text: root.label; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; horizontal-stretch: 1; }
+        Text { text: root.label; font-size: root.label-size; font-weight: root.label-weight; color: Theme.ink-2; horizontal-stretch: 1; }
         if root.aside != "" && root.aside-good: HorizontalLayout {
             spacing: 5px;
             horizontal-stretch: 0;
@@ -104,7 +111,7 @@ export component Field inherits VerticalLayout {
                     enabled: root.enabled && !root.mirror;
                     visible: !root.covered;
                     input-type: root.password && !root.revealed ? InputType.password : InputType.text;
-                    font-size: Type.body;
+                    font-size: root.text-size;
                     color: Theme.ink;
                     selection-background-color: Theme.accent.with-alpha(0.25);
                     selection-foreground-color: Theme.ink;
@@ -130,7 +137,7 @@ export component Field inherits VerticalLayout {
                         text: root.placeholder;
                         visible: input.text == "";
                         color: Theme.ink-4;
-                        font-size: Type.body;
+                        font-size: root.text-size;
                         vertical-alignment: center;
                     }
                 }
@@ -138,11 +145,13 @@ export component Field inherits VerticalLayout {
             if root.password: VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 7px;
+                    // touch tiers: a 44 hit around the 17 px icon, clamped inside the box (2.3)
+                    property <length> eye-size: Breakpoints.below-d ? min(44px, root.box-height - 8px) : 32px;
+                    width: self.eye-size;
+                    height: self.eye-size;
+                    border-radius: Breakpoints.below-d ? 10px : 7px;
                     background: eye.has-hover ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
-                    Icon { name: root.revealed ? "eye-off" : "eye"; tint: eye.has-hover ? Theme.ink : Theme.ink-3; width: 17px; height: 17px; x: 7.5px; y: 7.5px; }
+                    Icon { name: root.revealed ? "eye-off" : "eye"; tint: eye.has-hover ? Theme.ink : Theme.ink-3; width: 17px; height: 17px; x: (parent.width - 17px) / 2; y: (parent.height - 17px) / 2; }
                     eye := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.revealed = !root.revealed; }

@@ -272,6 +272,11 @@ export struct AxQuotaGroup { provider: string, label: string, count: int, meta: 
 // ---- resets and expiries ----
 export struct AxAgendaRow { kind: string, day: string, hint: string, time: string, rel: string, provider: string, who: string, what: string, tip: string, now: [RunView], i: int }
 
+// UI-only page state (Slint-side, never from Rust): the one open inline tip per page (DESIGN-MOBILE 5.2).
+export global AxUi {
+    in-out property <string> open-tip: "";
+}
+
 export global AxData {
     in-out property <AnalyticsHeadView> head: { loading: true };
     // true once the first analytics response has been rendered

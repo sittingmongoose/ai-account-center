@@ -1,5 +1,5 @@
 // Segmented control with one sliding indicator (spring on x, ease-out on width).
-import { Theme, Motion, Type } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 import { Icon } from "icon.slint";
 
 export struct SegItem {
@@ -15,10 +15,11 @@ component SegButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <length> pad: 13px;
     callback clicked();
-    height: 28px;
+    // Below D the track is 44 tall; the segment fills it inside the 4 px padding.
+    height: Breakpoints.tier-d ? 28px : 36px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
-    border-radius: 7px;
+    border-radius: Breakpoints.tier-d ? 7px : Theme.r-touch-inner;
     property <color> fg: root.selected || ta.has-hover ? Theme.ink : Theme.ink-3;
     transform-scale: ta.pressed ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -36,13 +37,17 @@ component SegButton inherits Rectangle {
             color: root.fg;
             animate color { duration: Motion.tint(200ms); }
             font-family: root.mono ? Type.mono : Type.sans;
-            font-size: root.mono ? 11.5px : 12.5px;
+            font-size: Breakpoints.tier-d ? (root.mono ? 11.5px : 12.5px) : Type.control;
             font-weight: 560;
             letter-spacing: root.mono ? 0.46px : 0px;
             vertical-alignment: center;
         }
     }
+    // Vertical hit-slop below D only: segments tile horizontally with no gap (2.3 rule 2).
+    property <length> slop-y: Breakpoints.below-d ? max(0px, (44px - root.height) / 2) : 0px;
     ta := TouchArea {
+        y: -root.slop-y;
+        height: root.height + 2 * root.slop-y;
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => { root.clicked(); }
@@ -62,7 +67,7 @@ export component Segmented inherits Rectangle {
     property <length> ind-w: 0px;
     property <bool> placed: false;
 
-    height: 36px;
+    height: Breakpoints.tier-d ? 36px : 44px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
     border-radius: 10px;

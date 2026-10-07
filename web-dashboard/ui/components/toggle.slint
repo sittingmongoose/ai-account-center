@@ -1,7 +1,8 @@
 // Switch with a spring thumb. A toggle that cannot act yet is drawn off and flat and says why on hover
 // (`disabled-reason`); it never shows ON for a state that is off.
-import { Theme, Motion, Type } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { ProbeMark } from "probe.slint";
+import { Hover } from "hover-card.slint";
 
 export component Toggle inherits Rectangle {
     in-out property <bool> on: false;
@@ -11,10 +12,29 @@ export component Toggle inherits Rectangle {
     in property <bool> small: false;
     // names the toggle for the end-to-end harness (components/probe.slint)
     in property <string> probe;
+    // Touch long-press tip (DESIGN-MOBILE.md 5.2.3): shown after a 450 ms press, which then never toggles.
+    in property <string> long-tip: "";
     callback toggled(bool);
 
-    property <length> track-w: root.small ? 28px : 34px;
-    property <length> track-h: root.small ? 16px : 20px;
+    // Below D the switch is 36 x 22 on T and 40 x 24 on F/P (DESIGN-MOBILE.md 2.3).
+    property <length> track-w: Breakpoints.tier-d ? (root.small ? 28px : 34px) : Breakpoints.tier-t ? 36px : 40px;
+    property <length> track-h: Breakpoints.tier-d ? (root.small ? 16px : 20px) : Breakpoints.tier-t ? 22px : 24px;
+
+    // Long-press: touch only (a desktop press-and-hold still toggles on release).
+    property <bool> lp-armed: (Device.coarse || Breakpoints.below-d) && root.long-tip != "";
+    property <bool> lp-fired: false;
+    property <bool> lp-dead: false;
+    lp-timer := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.lp-armed && ta.pressed && !root.lp-dead {
+                root.lp-fired = true;
+                Hover.tip-now("long-press", ta.absolute-position, ta.width, ta.height, root.long-tip);
+            }
+        }
+    }
     property <length> thumb: root.track-h - 4px;
     property <bool> shown-on: root.on && root.enabled;
 
@@ -57,10 +77,37 @@ export component Toggle inherits Rectangle {
         color: root.enabled ? Theme.ink : Theme.ink-3;
         font-size: Type.control;
     }
+    // Hit-slop below D: the TouchArea grows to at least 44 x 44, centred on the visual.
+    property <length> slop-x: Breakpoints.below-d ? max(0px, (44px - root.width) / 2) : 0px;
+    property <length> slop-y: Breakpoints.below-d ? max(0px, (44px - root.height) / 2) : 0px;
     ta := TouchArea {
+        x: -root.slop-x;
+        y: -root.slop-y;
+        width: root.width + 2 * root.slop-x;
+        height: root.height + 2 * root.slop-y;
         mouse-cursor: root.enabled ? pointer : not-allowed;
+        changed pressed => {
+            if self.pressed {
+                root.lp-dead = false;
+                root.lp-fired = false;
+                if root.lp-armed { lp-timer.running = true; }
+            } else {
+                lp-timer.running = false;
+                Hover.leave("long-press");
+            }
+        }
+        moved => {
+            if self.pressed && (self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px) {
+                root.lp-dead = true;
+                lp-timer.running = false;
+                if root.lp-fired { root.lp-fired = false; Hover.leave("long-press"); }
+            }
+        }
         clicked => {
-            if root.enabled {
+            if root.lp-fired {
+                root.lp-fired = false;
+                Hover.leave("long-press");
+            } else if root.enabled {
                 root.on = !root.on;
                 root.toggled(root.on);
             }

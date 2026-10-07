@@ -7,6 +7,11 @@
 // across the rows (rows report their natural widths, the section keeps the largest), so a wider status
 // ("Active on Ubuntu") never pushes the buttons beside it. A switchable provider's first slot is the Home
 // SwitchSlot (Activate with the plain Active mark on the button's own grid) and starts at the slot's left edge.
+//
+// Below D the rows reflow by the section's own inner width (DESIGN-MOBILE.md 4.3.3, 1.5): a table row (the
+// desktop row with touch sizes) when it is >= 920, stacked-wide (520 to 919, the Dashboard / Tray pair in a
+// 168 px column on the right) and stacked (< 520: name with trash, plan, status and sample, source, the
+// pair, then the action slots wrapping). The desktop (>= 1280) row is unchanged.
 import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
 import { RunView } from "../../models.slint";
 import { Icon } from "../../components/icon.slint";
@@ -21,14 +26,15 @@ import { Hover } from "../../components/hover-card.slint";
 import { SwitchSlot, ConfirmLine, Stepper, Runs } from "../home.slint";
 import { ProbeMark } from "../../components/probe.slint";
 import { AcData, AcAction, AcRow, AcProvider, AcAgPolicy, AcTrashRow } from "ac-data.slint";
-import { ComingWord, TipArea, IconNote, ActionControl } from "ac-actions.slint";
+import { ComingWord, TipArea, IconNote, ActionControl, SwitchPair, StretchSegmented, BoundToggle } from "ac-actions.slint";
 import { FlowPanel, RowLine } from "ac-flow.slint";
 export { ComingWord, TipArea, IconNote, ActionControl }
 
-// One account row: identity, status and last sample, source, then the fixed action slots.
+// One account row. mode: 2 table (desktop), 1 stacked-wide, 0 stacked; see the file head.
 export component AcRowItem inherits Rectangle {
     in property <AcRow> item;
     in property <AcProvider> provider;
+    in property <int> mode: 2;
     in property <length> w0;
     in property <length> w1;
     in property <length> w2;
@@ -45,16 +51,10 @@ export component AcRowItem inherits Rectangle {
     out property <bool> hovered: ta.has-hover;
     out property <length> line-height: line.height;
     property <bool> is-active: root.item.active && root.provider.switchable;
-    // the row's own Show on dashboard and Show in tray follow the model (a click assigns the toggle, which would
-    // end a plain binding); a save that ends, saved or refused, draws the saved state again
-    property <bool> shown-dash: root.item.shown-dash;
-    changed shown-dash => { dash-toggle.on = self.shown-dash; }
-    property <bool> shown-tray: root.item.shown-tray;
-    changed shown-tray => { tray-toggle.on = self.shown-tray; }
-    property <bool> dash-enabled: root.item.dash-enabled;
-    changed dash-enabled => { dash-toggle.on = root.item.shown-dash; }
-    property <bool> tray-enabled: root.item.tray-acct-enabled;
-    changed tray-enabled => { tray-toggle.on = root.item.shown-tray; }
+    // the remove control is always the row's last action; the stacked layouts lift it to the top line
+    property <bool> has-trash: root.item.actions.length > 0 && root.item.actions[root.item.actions.length - 1].icon == "trash";
+    // the reason line a tap on a dimmed control opens under this row (5.2.2); the next tap anywhere clears it
+    property <string> tap-reason;
 
     min-height: body.min-height;
     preferred-height: body.preferred-height;
@@ -65,10 +65,11 @@ export component AcRowItem inherits Rectangle {
         opacity: root.item.gone ? 0.35 : 1;
         animate opacity { duration: Motion.on ? 260ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
         line := Rectangle {
-            min-height: max(56px, row-layout.min-height);
-            preferred-height: max(56px, row-layout.preferred-height);
+            min-height: root.mode == 2 ? max(56px, rowbox.min-height) : rowbox.preferred-height;
+            preferred-height: self.min-height;
             background: root.is-active ? Theme.row-hover.with-alpha(0)
                 : root.selected ? Theme.row-sel
+                : Breakpoints.below-d ? (ta.pressed ? Theme.pressed : Theme.row-hover.with-alpha(0))
                 : ta.pressed ? Theme.row-hover.mix(Theme.rule, 0.7)
                 : ta.has-hover ? Theme.row-hover
                 : Theme.row-hover.with-alpha(0);
@@ -77,14 +78,20 @@ export component AcRowItem inherits Rectangle {
             Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
             ta := TouchArea {
                 mouse-cursor: pointer;
-                clicked => { root.open-details(root.item.id); }
-                // the concept's .acc-row: 11 px padding under its 1 px rule, 13.5 px and 12 px lines at
-                // line-height 1.45 with 1 px between them (a 61 px row pitch)
-                row-layout := HorizontalLayout {
-                    padding-left: 18px;
-                    padding-right: 18px;
-                    padding-top: 12px;
-                    padding-bottom: 11px;
+                clicked => {
+                    root.tap-reason = "";
+                    root.open-details(root.item.id);
+                }
+                // the desktop row (and the T table below D): the concept's .acc-row, 11 px padding under its
+                // 1 px rule, 13.5 px and 12 px lines at line-height 1.45 with 1 px between them (61 px pitch);
+                // T raises the vertical padding to the touch token (14 px)
+                rowbox := VerticalLayout {
+                spacing: 0px;
+                if root.mode == 2: tbl := HorizontalLayout {
+                    padding-left: Breakpoints.below-d ? 20px : 18px;
+                    padding-right: Breakpoints.below-d ? 20px : 18px;
+                    padding-top: Breakpoints.below-d ? 14px : 12px;
+                    padding-bottom: Breakpoints.below-d ? 13px : 11px;
                     spacing: 16px;
                     VerticalLayout {
                         alignment: center;
@@ -154,13 +161,14 @@ export component AcRowItem inherits Rectangle {
                             owner: "acct-show:" + root.item.id;
                             tip: root.item.dash-tip;
                             height: 18px;
-                            width: max(dash-toggle.preferred-width, tray-toggle.preferred-width);
-                            dash-toggle := Toggle {
+                            width: max(t-dash.preferred-width, t-tray.preferred-width);
+                            t-dash := BoundToggle {
                                 y: (parent.height - self.height) / 2;
                                 small: true;
-                                on: root.item.shown-dash;
+                                model-on: root.item.shown-dash;
                                 enabled: root.item.dash-enabled;
                                 label: "Dashboard";
+                                long-tip: root.item.dash-tip;
                                 probe: "acct-show:" + root.item.id;
                                 toggled(on) => { root.act("account-show", root.item.id + "|" + (on ? "show" : "hide")); }
                             }
@@ -169,13 +177,14 @@ export component AcRowItem inherits Rectangle {
                             owner: "acct-tray:" + root.item.id;
                             tip: root.item.tray-acct-tip;
                             height: 18px;
-                            width: max(dash-toggle.preferred-width, tray-toggle.preferred-width);
-                            tray-toggle := Toggle {
+                            width: max(t-dash.preferred-width, t-tray.preferred-width);
+                            t-tray := BoundToggle {
                                 y: (parent.height - self.height) / 2;
                                 small: true;
-                                on: root.item.shown-tray;
+                                model-on: root.item.shown-tray;
                                 enabled: root.item.tray-acct-enabled;
                                 label: "Tray";
+                                long-tip: root.item.tray-acct-tip;
                                 probe: "acct-tray:" + root.item.id;
                                 toggled(on) => { root.act("account-tray", root.item.id + "|" + (on ? "show" : "hide")); }
                             }
@@ -187,10 +196,10 @@ export component AcRowItem inherits Rectangle {
                         alignment: end;
                         for a[i] in root.item.actions: Rectangle {
                             width: i == 0 ? root.w0 : i == 1 ? root.w1 : root.w2;
-                            property <length> natural: a.kind == "switch" ? sw.natural : ctl.natural;
+                            property <length> natural: a.kind == "switch" ? tsw.natural : tctl.natural;
                             init => { root.measured(i, self.natural); }
                             changed natural => { root.measured(i, self.natural); }
-                            sw := SwitchSlot {
+                            tsw := SwitchSlot {
                                 x: 0px;
                                 y: (parent.height - self.preferred-height) / 2;
                                 width: parent.width;
@@ -214,18 +223,357 @@ export component AcRowItem inherits Rectangle {
                                     }
                                 }
                             }
-                            if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: sw.y; width: min(parent.width, sw.natural); height: sw.height; id: a.probe; }
-                            ctl := ActionControl {
+                            if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: tsw.y; width: min(parent.width, tsw.natural); height: tsw.height; id: a.probe; }
+                            tctl := ActionControl {
                                 width: parent.width;
                                 height: parent.height;
                                 visible: a.kind != "switch" && a.kind != "empty";
                                 data: a;
                                 owner: "acc:" + root.item.id + ":" + i;
                                 busy: root.busy;
-                                act(kind, value) => { root.act(kind, value); }
+                                act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
+                                reason(r) => { root.tap-reason = r; }
                             }
                         }
                     }
+                }
+                if root.mode != 2: st := VerticalLayout {
+                    height: self.preferred-height;
+                    // card side padding 16 on P, 20 on F and T (DESIGN-MOBILE.md 2.2); 12 px row padding
+                    padding-left: Breakpoints.tier-p ? 16px : 20px;
+                    padding-right: Breakpoints.tier-p ? 16px : 20px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    if root.mode == 0: stacked-col := VerticalLayout {
+                        spacing: 1px;
+                        // Line A: the name with the remove control at its right (40 visible, 44 hit)
+                        HorizontalLayout {
+                            min-height: 44px;
+                            spacing: 8px;
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                opacity: root.item.shown-dash ? 1 : 0.55;
+                                animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                                Text {
+                                    min-height: 21px;
+                                    vertical-alignment: center;
+                                    text: root.item.email;
+                                    font-size: Type.control;
+                                    font-weight: root.is-active ? 640 : 600;
+                                    color: Theme.ink;
+                                    overflow: elide;
+                                }
+                            }
+                            if root.has-trash: VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 0;
+                                trash-a := ActionControl {
+                                    height: 44px;
+                                    width: self.natural;
+                                    align-end: false;
+                                    data: root.item.actions[root.item.actions.length - 1];
+                                    owner: "acc:" + root.item.id + ":" + (root.item.actions.length - 1);
+                                    busy: root.busy;
+                                    act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
+                                    reason(r) => { root.tap-reason = r; }
+                                }
+                            }
+                        }
+                        // Line B: plan · label
+                        if root.item.meta != "": Text {
+                            min-height: 18px;
+                            vertical-alignment: center;
+                            text: root.item.meta;
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            overflow: elide;
+                        }
+                        // Line C: the status word only when exceptional, then the sample age
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+                            min-height: 18px;
+                            if root.item.status != "": Text {
+                                text: root.item.status;
+                                font-size: Type.small;
+                                font-weight: 600;
+                                color: Theme.warn-text;
+                                vertical-alignment: center;
+                            }
+                            if root.item.status != "": Text {
+                                text: "·";
+                                font-size: Type.small;
+                                color: Theme.ink-3;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: root.item.sampled;
+                                font-family: Type.tab;
+                                font-size: Type.small;
+                                color: Theme.ink-3;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                            }
+                        }
+                        // Line D: where the account was read from, wrapping
+                        Text {
+                            min-height: 18px;
+                            vertical-alignment: center;
+                            text: root.item.src + (root.item.src-sub != "" ? " · " + root.item.src-sub : "");
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { height: 8px; }
+                        // Line E: this account's Dashboard / Tray pair, each a 44 px hit area
+                        HorizontalLayout {
+                            spacing: 24px;
+                            alignment: start;
+                            min-height: 44px;
+                            dash-pair := SwitchPair {
+                                label: "Dashboard";
+                                on: root.item.shown-dash;
+                                enabled: root.item.dash-enabled;
+                                long-tip: root.item.dash-tip;
+                                probe: "acct-show:" + root.item.id;
+                                toggled(on) => { root.act("account-show", root.item.id + "|" + (on ? "show" : "hide")); }
+                                reason-tap => { root.tap-reason = root.item.dash-tip; }
+                            }
+                            tray-pair := SwitchPair {
+                                label: "Tray";
+                                on: root.item.shown-tray;
+                                enabled: root.item.tray-acct-enabled;
+                                long-tip: root.item.tray-acct-tip;
+                                probe: "acct-tray:" + root.item.id;
+                                toggled(on) => { root.act("account-tray", root.item.id + "|" + (on ? "show" : "hide")); }
+                                reason-tap => { root.tap-reason = root.item.tray-acct-tip; }
+                            }
+                        }
+                        Rectangle { height: 8px; }
+                        // Line F: the action slots wrap (the remove control lives on Line A)
+                        FlexboxLayout {
+                            spacing-horizontal: 8px;
+                            spacing-vertical: 8px;
+                            alignment: start;
+                            for a[i] in root.item.actions: Rectangle {
+                                // the Flexbox sizes each item by its content's natural width
+                                preferred-width: fl.preferred-width;
+                                fl := VerticalLayout {
+                                    if i != root.item.actions.length - 1 || !root.has-trash: VerticalLayout {
+                                        alignment: start;
+                                        if a.kind == "switch": Rectangle {
+                                            width: ssw.natural;
+                                            height: ssw.preferred-height;
+                                            ssw := SwitchSlot {
+                                                width: parent.width;
+                                                height: parent.height;
+                                                account: {
+                                                    id: root.item.id,
+                                                    active: root.item.active,
+                                                    active-label: root.item.active-label,
+                                                    can-activate: a.enabled,
+                                                    activate-hint: root.item.activate-hint,
+                                                    platform: "Ubuntu",
+                                                };
+                                                can-switch: root.provider.can-switch;
+                                                busy: root.busy;
+                                                activate => {
+                                                    if root.item.confirm {
+                                                        root.ask-confirm(root.item.id);
+                                                    } else {
+                                                        root.act(a.act, a.value);
+                                                    }
+                                                }
+                                            }
+                                            if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: a.probe; }
+                                        }
+                                        if a.kind != "switch" && a.kind != "empty": sctl := ActionControl {
+                                            height: 44px;
+                                            width: self.natural;
+                                            align-end: false;
+                                            data: a;
+                                            owner: "acc:" + root.item.id + ":" + i;
+                                            busy: root.busy;
+                                            act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
+                                            reason(r) => { root.tap-reason = r; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if root.mode == 1: wide-row := HorizontalLayout {
+                        spacing: 12px;
+                        alignment: stretch;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            spacing: 1px;
+                            // Line A: the name (the remove control sits at the top of the right column)
+                            HorizontalLayout {
+                                min-height: 44px;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    opacity: root.item.shown-dash ? 1 : 0.55;
+                                    animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                                    Text {
+                                        min-height: 21px;
+                                        vertical-alignment: center;
+                                        text: root.item.email;
+                                        font-size: Type.control;
+                                        font-weight: root.is-active ? 640 : 600;
+                                        color: Theme.ink;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                            if root.item.meta != "": Text {
+                                min-height: 18px;
+                                vertical-alignment: center;
+                                text: root.item.meta;
+                                font-size: Type.small;
+                                color: Theme.ink-3;
+                                overflow: elide;
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                min-height: 18px;
+                                if root.item.status != "": Text {
+                                    text: root.item.status;
+                                    font-size: Type.small;
+                                    font-weight: 600;
+                                    color: Theme.warn-text;
+                                    vertical-alignment: center;
+                                }
+                                if root.item.status != "": Text {
+                                    text: "·";
+                                    font-size: Type.small;
+                                    color: Theme.ink-3;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: root.item.sampled;
+                                    font-family: Type.tab;
+                                    font-size: Type.small;
+                                    color: Theme.ink-3;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                }
+                            }
+                            Text {
+                                min-height: 18px;
+                                vertical-alignment: center;
+                                text: root.item.src + (root.item.src-sub != "" ? " · " + root.item.src-sub : "");
+                                font-size: Type.small;
+                                color: Theme.ink-3;
+                                wrap: word-wrap;
+                            }
+                            Rectangle { height: 8px; }
+                            FlexboxLayout {
+                                spacing-horizontal: 8px;
+                                spacing-vertical: 8px;
+                                alignment: start;
+                                for a[i] in root.item.actions: Rectangle {
+                                    // the Flexbox sizes each item by its content's natural width
+                                    preferred-width: fw.preferred-width;
+                                    fw := VerticalLayout {
+                                        if i != root.item.actions.length - 1 || !root.has-trash: VerticalLayout {
+                                            alignment: start;
+                                            if a.kind == "switch": Rectangle {
+                                                width: wsw.natural;
+                                                height: wsw.preferred-height;
+                                                wsw := SwitchSlot {
+                                                    width: parent.width;
+                                                    height: parent.height;
+                                                    account: {
+                                                        id: root.item.id,
+                                                        active: root.item.active,
+                                                        active-label: root.item.active-label,
+                                                        can-activate: a.enabled,
+                                                        activate-hint: root.item.activate-hint,
+                                                        platform: "Ubuntu",
+                                                    };
+                                                    can-switch: root.provider.can-switch;
+                                                    busy: root.busy;
+                                                    activate => {
+                                                        if root.item.confirm {
+                                                            root.ask-confirm(root.item.id);
+                                                        } else {
+                                                            root.act(a.act, a.value);
+                                                        }
+                                                    }
+                                                }
+                                                if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: a.probe; }
+                                            }
+                                            if a.kind != "switch" && a.kind != "empty": wctl := ActionControl {
+                                                height: 44px;
+                                                width: self.natural;
+                                                align-end: false;
+                                                data: a;
+                                                owner: "acc:" + root.item.id + ":" + i;
+                                                busy: root.busy;
+                                                act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
+                                                reason(r) => { root.tap-reason = r; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // the right column: the remove control on top, then the two toggles (4.3.3 stacked-wide)
+                        VerticalLayout {
+                            width: 168px;
+                            horizontal-stretch: 0;
+                            spacing: 0px;
+                            if root.has-trash: Rectangle {
+                                min-height: 44px;
+                                trash-w := ActionControl {
+                                    x: parent.width - self.width;
+                                    y: (parent.height - self.height) / 2;
+                                    height: 44px;
+                                    width: self.natural;
+                                    align-end: false;
+                                    data: root.item.actions[root.item.actions.length - 1];
+                                    owner: "acc:" + root.item.id + ":" + (root.item.actions.length - 1);
+                                    busy: root.busy;
+                                    act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
+                                    reason(r) => { root.tap-reason = r; }
+                                }
+                            }
+                            dash-pair-wide := SwitchPair {
+                                spread: true;
+                                label: "Dashboard";
+                                on: root.item.shown-dash;
+                                enabled: root.item.dash-enabled;
+                                long-tip: root.item.dash-tip;
+                                probe: "acct-show:" + root.item.id;
+                                toggled(on) => { root.act("account-show", root.item.id + "|" + (on ? "show" : "hide")); }
+                                reason-tap => { root.tap-reason = root.item.dash-tip; }
+                            }
+                            tray-pair-wide := SwitchPair {
+                                spread: true;
+                                label: "Tray";
+                                on: root.item.shown-tray;
+                                enabled: root.item.tray-acct-enabled;
+                                long-tip: root.item.tray-acct-tip;
+                                probe: "acct-tray:" + root.item.id;
+                                toggled(on) => { root.act("account-tray", root.item.id + "|" + (on ? "show" : "hide")); }
+                                reason-tap => { root.tap-reason = root.item.tray-acct-tip; }
+                            }
+                        }
+                    }
+                }
                 }
             }
         }
@@ -242,6 +590,13 @@ export component AcRowItem inherits Rectangle {
         RowLine {
             line: root.item.line;
             owner: "line:" + root.item.id;
+            busy: root.busy;
+            act(kind, value) => { root.act(kind, value); }
+        }
+        // the reason a tap on a dimmed control opened (5.2.2), in the refusal-line style
+        if root.tap-reason != "": RowLine {
+            line: { shown: true, kind: "refuse", icon: "info", lead: "", text: root.tap-reason, actions: [] };
+            owner: "reason:" + root.item.id;
             busy: root.busy;
             act(kind, value) => { root.act(kind, value); }
         }
@@ -263,10 +618,10 @@ component TrashRowItem inherits Rectangle {
             min-height: max(52px, lay.preferred-height);
             Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
             lay := HorizontalLayout {
-                padding-left: 18px;
-                padding-right: 18px;
-                padding-top: 10px;
-                padding-bottom: 10px;
+                padding-left: Breakpoints.tier-p ? 16px : 18px;
+                padding-right: Breakpoints.tier-p ? 16px : 18px;
+                padding-top: Breakpoints.below-d ? 12px : 10px;
+                padding-bottom: Breakpoints.below-d ? 12px : 10px;
                 spacing: 12px;
                 VerticalLayout {
                     alignment: center;
@@ -279,6 +634,7 @@ component TrashRowItem inherits Rectangle {
                     alignment: center;
                     horizontal-stretch: 0;
                     ActionControl {
+                        height: Breakpoints.below-d ? 44px : 28px;
                         width: self.natural;
                         align-end: false;
                         data: a;
@@ -299,11 +655,13 @@ component TrashRowItem inherits Rectangle {
     }
 }
 
-// The Antigravity policy's controls: each a caption over its control, bottoms aligned in their row.
+// The Antigravity policy's controls: each a caption over its control, bottoms aligned in their row (or
+// start-aligned full-width rows in the stacked list below D).
 component AgParam inherits VerticalLayout {
     in property <string> caption;
     in property <bool> live;
-    alignment: end;
+    in property <bool> list: false;
+    alignment: root.list ? start : end;
     spacing: 6px;
     opacity: root.live ? 1 : 0.5;
     animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
@@ -313,11 +671,28 @@ component AgParam inherits VerticalLayout {
 component AgToggle inherits VerticalLayout {
     in property <AcAgPolicy> ag;
     in property <bool> busy;
+    in property <bool> list;
     callback act(string, string);
-    alignment: end;
-    property <bool> on: root.ag.enabled;
-    changed on => { tg.on = self.on; }
-    TipArea {
+    alignment: root.list ? start : end;
+    // the list row (4.3.6): "Auto-switch" with its state word before the switch, the whole row 44 tall
+    if root.list: HorizontalLayout {
+        min-height: 44px;
+        spacing: 8px;
+        Text { text: "Auto-switch"; font-size: Type.body; color: Theme.ink; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        if !root.ag.enabled: Text { text: "Off"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+        if root.ag.enabled: Text { text: "On"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+        VerticalLayout {
+            alignment: center;
+            ag-t-m := BoundToggle {
+                model-on: root.ag.enabled;
+                enabled: root.ag.toggle-enabled && !root.busy;
+                long-tip: root.ag.toggle-tip;
+                toggled(on) => { root.act("antigravity-automatic", on ? "true" : "false"); }
+            }
+        }
+    }
+    if !root.list: TipArea {
         owner: "ag-auto";
         tip: root.ag.toggle-tip;
         height: 32px;
@@ -326,10 +701,11 @@ component AgToggle inherits VerticalLayout {
             spacing: 10px;
             VerticalLayout {
                 alignment: center;
-                tg := Toggle {
-                    on: root.ag.enabled;
+                ag-t := BoundToggle {
+                    model-on: root.ag.enabled;
                     enabled: root.ag.toggle-enabled && !root.busy;
                     label: "Auto-switch";
+                    long-tip: root.ag.toggle-tip;
                     toggled(on) => { root.act("antigravity-automatic", on ? "true" : "false"); }
                 }
             }
@@ -352,7 +728,7 @@ component AgStep inherits AgParam {
     live: root.ag.live;
     HorizontalLayout {
         alignment: start;
-        padding-bottom: 4px;
+        padding-bottom: root.list ? 0px : 4px;
         Stepper {
             value: root.shown;
             min: root.ag.min;
@@ -369,13 +745,20 @@ component AgPool inherits AgParam {
     callback act(string, string);
     caption: "WATCH POOL";
     live: root.ag.live;
-    if root.ag.pools.length > 0: Segmented {
+    if root.ag.pools.length > 0 && !root.list: Segmented {
         items: root.ag.pools;
         value: root.ag.pool;
         enabled: root.ag.pool-enabled && !root.busy;
         changed-value(v) => { root.act("antigravity-pool", v); }
     }
-    if root.ag.pools.length == 0: Text { height: 36px; text: "No quota pool reported yet"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+    if root.ag.pools.length > 0 && root.list: StretchSegmented {
+        items: root.ag.pools;
+        value: root.ag.pool;
+        enabled: root.ag.pool-enabled && !root.busy;
+        changed-value(v) => { root.act("antigravity-pool", v); }
+    }
+    if root.ag.pools.length == 0 && !root.list: Text { height: 36px; text: "No quota pool reported yet"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+    if root.ag.pools.length == 0 && root.list: Text { text: "No quota pool reported yet"; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; vertical-alignment: center; }
 }
 component AgCool inherits AgParam {
     in property <AcAgPolicy> ag;
@@ -383,7 +766,13 @@ component AgCool inherits AgParam {
     callback act(string, string);
     caption: "COOLDOWN";
     live: root.ag.live;
-    Segmented {
+    if root.list: StretchSegmented {
+        items: root.ag.cooldowns;
+        value: root.ag.cooldown;
+        enabled: root.ag.cooldown-enabled && !root.busy;
+        changed-value(v) => { root.act("antigravity-cooldown", v); }
+    }
+    if !root.list: Segmented {
         items: root.ag.cooldowns;
         value: root.ag.cooldown;
         enabled: root.ag.cooldown-enabled && !root.busy;
@@ -393,6 +782,8 @@ component AgCool inherits AgParam {
 
 // The Antigravity policy under its rows: the toggle, the switch point, the watched pool and the cooldown. Before
 // a second account is signed in the toggle is drawn off and inert and the values are greyed, as in the concept.
+// Below D it reflows by its own inner width (DESIGN-MOBILE.md 4.3.6, 1.5): a 2 x 2 grid from 520 and a
+// full-width list under that; one row (as on desktop) from 860.
 component AgPolicyBox inherits Rectangle {
     in property <AcAgPolicy> ag;
     in property <bool> busy;
@@ -417,8 +808,11 @@ component AgPolicyBox inherits Rectangle {
         send.running = false;
         send.running = true;
     }
-    // the box is wide enough for one row of controls (the providers column at these widths, see accounts.slint)
-    property <bool> one-row: Breakpoints.compact || Breakpoints.width >= 1360px;
+    // the box is wide enough for one row of controls; derived from the window (the box's own width in
+    // its layout would loop). The section fills the page, the box sits in the section's 18 px gutters.
+    property <length> inner-w: Breakpoints.tier-width - 2 * Breakpoints.gutter - 38px;
+    property <bool> one-row: Breakpoints.tier-d ? Breakpoints.width >= 1360px : root.inner-w >= 860px;
+    property <bool> grid: !root.one-row && root.inner-w >= 520px;
 
     min-height: inner.preferred-height;
     preferred-height: inner.preferred-height;
@@ -427,17 +821,18 @@ component AgPolicyBox inherits Rectangle {
     border-color: Theme.rule;
     background: Theme.paper-2;
     inner := VerticalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: Breakpoints.tier-p ? 12px : 14px;
+        padding-right: Breakpoints.tier-p ? 12px : 14px;
         padding-top: 12px;
         padding-bottom: 12px;
         spacing: 12px;
         IconNote {
             gap: 8px;
+            size: Breakpoints.below-d ? Type.small : 12.5px;
             ink: Theme.ink-2;
             text: root.ag.note-strong != "" ? root.ag.note-strong + " " + root.ag.note : root.ag.note;
         }
-        // one row when the box is wide enough, otherwise the cooldown moves to a second row
+        // one row when the box is wide enough, otherwise the desktop's second row holds the cooldown
         if root.one-row: HorizontalLayout {
             spacing: 22px;
             alignment: start;
@@ -446,7 +841,7 @@ component AgPolicyBox inherits Rectangle {
             AgPool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
             AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
         }
-        if !root.one-row: VerticalLayout {
+        if !root.one-row && Breakpoints.tier-d: VerticalLayout {
             spacing: 12px;
             HorizontalLayout {
                 spacing: 22px;
@@ -460,12 +855,35 @@ component AgPolicyBox inherits Rectangle {
                 AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
             }
         }
+        // the 2 x 2 grid (520 to 859 below D): Auto-switch | Switch at, then Watch pool | Cooldown
+        if !root.one-row && !Breakpoints.tier-d && root.grid: GridLayout {
+            spacing: 12px;
+            Row {
+                AgToggle { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+                AgStep { ag: root.ag; busy: root.busy; shown: root.shown; step(d) => { root.step(d); } }
+            }
+            Row {
+                AgPool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+                AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            }
+        }
+        // the full-width list (under 520 below D)
+        if !root.one-row && !Breakpoints.tier-d && !root.grid: VerticalLayout {
+            spacing: 10px;
+            AgToggle { ag: root.ag; busy: root.busy; list: true; act(k, v) => { root.act(k, v); } }
+            AgStep { ag: root.ag; busy: root.busy; list: true; shown: root.shown; step(d) => { root.step(d); } }
+            AgPool { ag: root.ag; busy: root.busy; list: true; act(k, v) => { root.act(k, v); } }
+            AgCool { ag: root.ag; busy: root.busy; list: true; act(k, v) => { root.act(k, v); } }
+        }
     }
 }
 
 // The section footer: how the provider signs in, then its add or check actions (and "coming" when they wait
-// on the server).
-component SectionFoot inherits Rectangle {
+// on the server). Desktop: the concept's .prov-foot with the hint left and the buttons right. Below D
+// (4.3.4) the hint wraps above the buttons and the buttons follow the P rules: one button full width, two
+// as equal halves, a dimmed one at its natural width with the caption; F and T keep them right-aligned at
+// natural widths, as on desktop. Two components, so no layout branch ever reaches across.
+component SectionFootDesk inherits Rectangle {
     in property <AcProvider> provider;
     in property <bool> busy;
     callback act(string, string);
@@ -505,7 +923,103 @@ component SectionFoot inherits Rectangle {
             busy: root.busy;
             act(kind, value) => { root.act(kind, value); }
         }
-        if root.any-coming: ComingWord { }
+        if root.any-coming: VerticalLayout { alignment: center; ComingWord { } }
+    }
+}
+
+component SectionFootMob inherits Rectangle {
+    in property <AcProvider> provider;
+    in property <bool> busy;
+    callback act(string, string);
+    property <bool> any-coming: root.provider.foot-coming;
+    property <length> pad-x: Breakpoints.tier-p ? 16px : 20px;
+    min-height: mob.preferred-height + 1px;
+    preferred-height: self.min-height;
+    Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
+    mob := VerticalLayout {
+        y: 1px;
+        height: self.preferred-height;
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 0px;
+        IconNote {
+            icon: root.provider.needs ? "alert" : "info";
+            icon-ink: root.provider.needs ? Theme.warn-text : Theme.ink-3;
+            ink: root.provider.needs ? Theme.ink-2 : Theme.ink-3;
+            size: Type.small;
+            text: root.provider.how;
+        }
+        Rectangle { height: 8px; }
+        // a dimmed (coming) button keeps its natural width and gains the caption; F/T right-align the row
+        if root.any-coming: HorizontalLayout {
+            spacing: 8px;
+            alignment: Breakpoints.tier-p ? start : end;
+            min-height: 44px;
+            for f[i] in root.provider.foot: VerticalLayout {
+                alignment: center;
+                ActionControl {
+                    height: 44px;
+                    width: self.natural;
+                    align-end: false;
+                    data: f;
+                    owner: "foot:" + root.provider.id + ":" + i;
+                    busy: root.busy;
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+            VerticalLayout { alignment: center; ComingWord { } }
+        }
+        // one live button: full width, 48 tall
+        if !root.any-coming && Breakpoints.tier-p && root.provider.foot.length == 1: Rectangle {
+            for f[i] in root.provider.foot: ActionControl {
+                stretch: true;
+                tall: true;
+                height: 48px;
+                data: f;
+                owner: "foot:" + root.provider.id + ":" + i;
+                busy: root.busy;
+                act(kind, value) => { root.act(kind, value); }
+            }
+        }
+        // two live buttons: equal halves, 48 tall
+        if !root.any-coming && Breakpoints.tier-p && root.provider.foot.length == 2: HorizontalLayout {
+            spacing: 8px;
+            height: 48px;
+            for f[i] in root.provider.foot: Rectangle {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                ActionControl {
+                    width: parent.width;
+                    stretch: true;
+                    tall: true;
+                    height: 48px;
+                    data: f;
+                    owner: "foot:" + root.provider.id + ":" + i;
+                    busy: root.busy;
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+        }
+        // F and T (or an unexpected count): right-aligned at natural widths, as on desktop
+        if !root.any-coming && !(Breakpoints.tier-p && root.provider.foot.length >= 1): HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            min-height: 44px;
+            for f[i] in root.provider.foot: VerticalLayout {
+                alignment: center;
+                ActionControl {
+                    height: 44px;
+                    width: self.natural;
+                    align-end: false;
+                    data: f;
+                    owner: "foot:" + root.provider.id + ":" + i;
+                    busy: root.busy;
+                    act(kind, value) => { root.act(kind, value); }
+                }
+            }
+        }
     }
 }
 
@@ -524,6 +1038,11 @@ export component ProviderSection inherits Plate {
     property <length> w2: 0px;
     property <length> acts-w: max(root.provider.acts-min, root.w0 + root.w1 + root.w2 + 6px * max(0, root.provider.slots - 1));
     property <string> confirm-id;
+    // the row layout, from the page content width the section fills (DESIGN-MOBILE.md 1.5, 1.2); D keeps
+    // its table row. Derived from the window, not the section's own width: that binding loops.
+    property <length> sec-w: Breakpoints.tier-width - 2 * Breakpoints.gutter;
+    property <int> row-mode: Breakpoints.tier-d ? 2 : root.sec-w >= 920px ? 2 : root.sec-w >= 520px ? 1 : 0;
+    property <length> pad-x: Breakpoints.tier-p ? 16px : Breakpoints.below-d ? 20px : 18px;
 
     // Selected row: ONE tinted, outlined highlight per switchable section that glides between rows (translate
     // and height, ease-out, never past its target), inset 4 px top and bottom and 8 px from the sides.
@@ -543,23 +1062,97 @@ export component ProviderSection inherits Plate {
         root.hl-placed = true;
     }
 
-    // "Show on dashboard" and "Show in tray" follow the model (a click assigns the toggle, which would end a
-    // plain binding)
-    property <bool> shown: root.provider.visible;
-    changed shown => { show-toggle.on = self.shown; }
-    property <bool> tray-shown: root.provider.tray-visible;
-    changed tray-shown => { tray-toggle.on = self.tray-shown; }
-
     min-height: body.min-height;
     preferred-height: body.preferred-height;
 
     body := VerticalLayout {
         spacing: 0px;
-        // the concept's .prov-head: 15 / 13 px padding inside the plate's 1 px border, a 16 px title and a
-        // 12.5 px kind line at line-height 1.45
-        HorizontalLayout {
-            padding-left: 18px;
-            padding-right: 18px;
+        // the P head (4.3.2, under 520): the mark, the name and kind line, then the two toggles as 44 px
+        // list rows whose whole row is the hit area
+        if root.row-mode == 0: VerticalLayout {
+            padding-top: 16px;
+            HorizontalLayout {
+                padding-left: root.pad-x;
+                padding-right: root.pad-x;
+                padding-bottom: 8px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    ProviderMark { provider: root.provider.id; size: 28px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "pmark:" + root.provider.id; } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
+                    spacing: 0px;
+                    opacity: root.provider.visible ? 1 : 0.55;
+                    animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                    Text {
+                        min-height: 23px;
+                        vertical-alignment: center;
+                        text: root.provider.label;
+                        font-size: Type.title;
+                        font-weight: 640;
+                        color: Theme.ink;
+                        overflow: elide;
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        min-height: 18px;
+                        VerticalLayout { alignment: center; Icon { name: root.provider.kind-icon; tint: Theme.ink-3; width: 14px; height: 14px; } }
+                        Text {
+                            text: root.provider.kind-label + " · " + root.provider.count-text;
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    if root.provider.hidden-note != "": Text {
+                        text: root.provider.hidden-note;
+                        font-size: Type.small;
+                        color: Theme.ink-3;
+                        horizontal-alignment: left;
+                    }
+                }
+            }
+            VerticalLayout {
+                padding-left: root.pad-x;
+                padding-right: root.pad-x;
+                padding-bottom: 8px;
+                opacity: root.provider.visible ? 1 : 0.55;
+                animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                head-show-pair := SwitchPair {
+                    spread: true;
+                    label: "Show on dashboard";
+                    on: root.provider.visible;
+                    enabled: root.provider.toggle-enabled;
+                    long-tip: root.provider.toggle-tip;
+                    probe: "show:" + root.provider.id;
+                    toggled(on) => { root.act("accounts-show", root.provider.id + ":" + (on ? "show" : "hide")); }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    head-tray-pair := SwitchPair {
+                        horizontal-stretch: 1;
+                        spread: true;
+                        label: "Show in tray";
+                        on: root.provider.tray-visible;
+                        enabled: root.provider.tray-enabled;
+                        long-tip: root.provider.tray-tip;
+                        probe: "tray:" + root.provider.id;
+                        toggled(on) => { root.act("accounts-tray", root.provider.id + ":" + (on ? "show" : "hide")); }
+                    }
+                    if root.provider.tray-coming: VerticalLayout { alignment: center; ComingWord { } }
+                }
+            }
+        }
+        // the F / T / D head, as on desktop
+        if root.row-mode != 0: HorizontalLayout {
+            padding-left: root.pad-x;
+            padding-right: root.pad-x;
             padding-top: 16px;
             padding-bottom: 13px;
             spacing: 12px;
@@ -606,12 +1199,13 @@ export component ProviderSection inherits Plate {
                     owner: "show:" + root.provider.id;
                     tip: root.provider.toggle-tip;
                     height: 22px;
-                    width: max(show-toggle.preferred-width, tray-toggle.preferred-width);
-                    show-toggle := Toggle {
+                    width: max(h-show.preferred-width, h-tray.preferred-width);
+                    h-show := BoundToggle {
                         y: (parent.height - self.height) / 2;
-                        on: root.provider.visible;
+                        model-on: root.provider.visible;
                         enabled: root.provider.toggle-enabled;
                         label: "Show on dashboard";
+                        long-tip: root.provider.toggle-tip;
                         probe: "show:" + root.provider.id;
                         toggled(on) => { root.act("accounts-show", root.provider.id + ":" + (on ? "show" : "hide")); }
                     }
@@ -623,12 +1217,13 @@ export component ProviderSection inherits Plate {
                         owner: "tray:" + root.provider.id;
                         tip: root.provider.tray-tip;
                         height: 22px;
-                        width: max(show-toggle.preferred-width, tray-toggle.preferred-width);
-                        tray-toggle := Toggle {
+                        width: max(h-show.preferred-width, h-tray.preferred-width);
+                        h-tray := BoundToggle {
                             y: (parent.height - self.height) / 2;
-                            on: root.provider.tray-visible;
+                            model-on: root.provider.tray-visible;
                             enabled: root.provider.tray-enabled;
                             label: "Show in tray";
+                            long-tip: root.provider.tray-tip;
                             probe: "tray:" + root.provider.id;
                             toggled(on) => { root.act("accounts-tray", root.provider.id + ":" + (on ? "show" : "hide")); }
                         }
@@ -667,6 +1262,7 @@ export component ProviderSection inherits Plate {
                 for row[i] in root.provider.rows: AcRowItem {
                     item: row;
                     provider: root.provider;
+                    mode: root.row-mode;
                     w0: root.w0;
                     w1: root.w1;
                     w2: root.w2;
@@ -707,10 +1303,10 @@ export component ProviderSection inherits Plate {
             min-height: 46px;
             Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
             Text {
-                x: 18px;
+                x: root.pad-x;
                 y: (parent.height - self.preferred-height) / 2;
                 text: root.provider.empty;
-                font-size: 12.5px;
+                font-size: Type.small;
                 color: Theme.ink-3;
             }
         }
@@ -720,8 +1316,8 @@ export component ProviderSection inherits Plate {
                 min-height: 34px;
                 Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.rule-2; }
                 HorizontalLayout {
-                    padding-left: 18px;
-                    padding-right: 18px;
+                    padding-left: root.pad-x;
+                    padding-right: root.pad-x;
                     padding-top: 12px;
                     padding-bottom: 6px;
                     spacing: 8px;
@@ -736,8 +1332,8 @@ export component ProviderSection inherits Plate {
             }
         }
         if root.provider.ag: HorizontalLayout {
-            padding-left: 18px;
-            padding-right: 18px;
+            padding-left: root.pad-x;
+            padding-right: root.pad-x;
             padding-top: 4px;
             padding-bottom: 14px;
             AgPolicyBox {
@@ -752,7 +1348,12 @@ export component ProviderSection inherits Plate {
             busy: root.busy;
             act(kind, value) => { root.act(kind, value); }
         }
-        SectionFoot {
+        if Breakpoints.below-d: SectionFootMob {
+            provider: root.provider;
+            busy: root.busy;
+            act(kind, value) => { root.act(kind, value); }
+        }
+        if !Breakpoints.below-d: SectionFootDesk {
             provider: root.provider;
             busy: root.busy;
             act(kind, value) => { root.act(kind, value); }

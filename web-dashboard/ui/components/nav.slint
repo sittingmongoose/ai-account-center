@@ -1,5 +1,8 @@
 // Primary navigation (appears exactly once): Home, Analytics, Accounts & Settings. The active state is
 // one ink Rectangle that glides between items (spring on x, ease-out on width), never a side bar.
+// Desktop keeps today's 34 px tabs in a 44 px track; the touch tiers use 40 px tabs in a 44 px track
+// (DESIGN-MOBILE.md 3.2-3.3) and the short header's compact NavBar is a 40 px track with 36 px tabs
+// whose hit areas fill the row (3.4).
 import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 import { Icon } from "icon.slint";
 
@@ -7,22 +10,25 @@ component NavItem inherits Rectangle {
     in property <string> icon;
     in property <string> text;
     in property <bool> selected;
+    // compact: the short header's 36 px tabs; on P they are icon-only with accessible names.
+    in property <bool> compact: false;
     callback clicked();
-    height: 34px;
+    height: root.compact ? 36px : Breakpoints.tier-d ? 34px : 40px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
     border-radius: 8px;
     property <color> fg: root.selected ? Theme.nav-active-fg : ta.has-hover ? Theme.ink : Theme.ink-2;
     transform-scale: ta.pressed ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <bool> show-icon: Breakpoints.tier-d ? !Breakpoints.compact : !(root.compact && Breakpoints.tier-p);
     accessible-role: tab;
     accessible-label: root.text;
     accessible-action-default => { root.clicked(); }
     row := HorizontalLayout {
-        padding-left: Breakpoints.compact ? 12px : 14px;
-        padding-right: Breakpoints.compact ? 12px : 14px;
+        padding-left: root.compact ? 10px : Breakpoints.tier-d ? (Breakpoints.compact ? 12px : 14px) : 14px;
+        padding-right: root.compact ? 10px : Breakpoints.tier-d ? (Breakpoints.compact ? 12px : 14px) : 14px;
         spacing: 8px;
-        if !Breakpoints.compact: VerticalLayout {
+        if root.show-icon: VerticalLayout {
             alignment: center;
             Icon {
                 name: root.icon;
@@ -31,16 +37,24 @@ component NavItem inherits Rectangle {
                 height: 16px;
             }
         }
-        Text {
+        if !root.compact || !Breakpoints.tier-p: Text {
             text: root.text;
             color: root.fg;
             animate color { duration: Motion.tint(Motion.on ? Motion.med : 0ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
-            font-size: Type.body;
+            font-size: root.compact ? Type.small : Type.body;
             font-weight: 560;
             vertical-alignment: center;
         }
     }
+    // Hit-slop: at least 44 x 44 centred on the tab; the compact tabs' hit fills the short header's row.
+    property <length> hit-h: root.compact ? 48px : max(44px, root.height);
+    property <length> slop-x: max(0px, (44px - root.width) / 2);
+    property <length> slop-y: (root.hit-h - root.height) / 2;
     ta := TouchArea {
+        x: -root.slop-x;
+        y: -root.slop-y;
+        width: root.width + 2 * root.slop-x;
+        height: root.hit-h;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
@@ -48,6 +62,8 @@ component NavItem inherits Rectangle {
 
 export component NavBar inherits Rectangle {
     in property <string> page: "home";
+    // The short header's compact track (DESIGN-MOBILE.md 3.4).
+    in property <bool> compact: false;
     callback navigate(string);
 
     property <bool> ready: false;
@@ -58,7 +74,7 @@ export component NavBar inherits Rectangle {
         triggered => { self.running = false; root.ready = true; }
     }
 
-    height: 44px;
+    height: root.compact ? 40px : 44px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
     border-radius: 11px;
@@ -80,10 +96,10 @@ export component NavBar inherits Rectangle {
         animate width { duration: root.ready && Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     }
     row := HorizontalLayout {
-        padding: 4px;
+        padding: root.compact || !Breakpoints.tier-d ? 2px : 4px;
         spacing: 2px;
-        home := NavItem { icon: "home"; text: "Home"; selected: root.page == "home"; clicked => { root.navigate("home"); } }
-        analytics := NavItem { icon: "chart"; text: "Analytics"; selected: root.page == "analytics"; clicked => { root.navigate("analytics"); } }
-        accounts := NavItem { icon: "users"; text: "Accounts & Settings"; selected: root.page == "accounts"; clicked => { root.navigate("accounts"); } }
+        home := NavItem { icon: "home"; text: "Home"; selected: root.page == "home"; compact: root.compact; clicked => { root.navigate("home"); } }
+        analytics := NavItem { icon: "chart"; text: "Analytics"; selected: root.page == "analytics"; compact: root.compact; clicked => { root.navigate("analytics"); } }
+        accounts := NavItem { icon: "users"; text: "Accounts & Settings"; selected: root.page == "accounts"; compact: root.compact; clicked => { root.navigate("accounts"); } }
     }
 }

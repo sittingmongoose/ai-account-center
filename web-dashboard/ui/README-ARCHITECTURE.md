@@ -317,7 +317,32 @@ cache-read|cost`). Helpers: `Theme.severity(has-value, used)` (-1 unavailable, 0
 critical >= 95, 3 over > 100), `sev-fill`, `sev-text`, `provider-hue`.
 
 `Breakpoints.width` is the window width; `compact < 1280 <= regular < 1600 <= wide < 2200 <= ultra`, with
-`gutter` and `max-content` (2304 px). Desktop only (1024 to 2560+); no phone layouts.
+`gutter` and `max-content` (2304 px). Below D the width tiers apply: P (phone) < 600, F (foldable/small
+tablet) 600-899, T (tablet) 900-1279, D (desktop) >= 1280 and unchanged. `tier-width` is the window minus
+the live safe-area side insets, floored at 320; `short` is height < 500 outside D (phone landscape, Duo
+outer landscape). The `Device` global (theme.slint) carries what the JS shell pushes through the
+`set-safe-area`, `set-input-profile`, `set-keyboard` and `set-online` wasm exports: the four safe insets,
+`keyboard` (the on-screen keyboard height covering the canvas, else 0), `coarse`/`hover` (pointer profile),
+`standalone` (installed PWA) and `online`.
+
+The shell below D (ui/shell/chrome.slint, ui/dashboard.slint): P gets a top bar plus a bottom tab bar (Home,
+Analytics, Accounts); F a two-row top header with tabs; T a one-row touch header (D keeps the desktop Header).
+Overlays are a sheet or side panel (ui/components/sheet.slint), a popover (ui/components/popover.slint) or the
+desktop slide-over: Details is a bottom sheet on P and on F below 760 px window width, a side panel above that;
+the Account menu is a sheet on P and a popover on F/T.
+
+The PWA (public/manifest.webmanifest, public/sw.js, public/sw-route.js, public/device.mjs, public/icons/):
+`sw-route.js` (pure, tested) routes versioned `pkg/<buildId>/` cache-first, the shell (index.html, bridge.js,
+*.mjs, fonts, icons, page routes) network-first with a 3 s navigation timeout, and never touches `/api/*`,
+`/v0/*` or `/ws`; only plain same-origin 200s without auth data are stored. bridge.js captures the `beforeinstallprompt` /
+`appinstalled` events and device.mjs `installRow()` picks the Settings "Home screen app" row
+(`install: 'chromium'|'ios'|'hidden'`); the Install button fires the `install-app` action kind.
+
+The sign-in overlay (ui/shell/signin.slint, public/login-bridge.mjs): real transparent HTML inputs sit over
+the Slint boxes so password managers fill them (17 px inputs below D, 16 px on touch desktops, so iOS never
+zooms on focus; visibility-never-removal: a scrolled-off input gets `visibility: hidden`, never removed);
+on focus the page scrolls so the Sign in button's bottom sits 12 px above the keyboard. Touch replaces hover: pressed tints instead of lifts, inline info tips, reason
+lines under dimmed controls, 450 ms long-press tips, and chart readout rows with tap-to-pin and drag-to-scrub.
 
 ## Motion
 

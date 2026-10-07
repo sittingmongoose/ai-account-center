@@ -198,6 +198,7 @@ struct FootDto {
     shown: bool,
     warn: bool,
     runs: Vec<RunDto>,
+    words: Vec<RunDto>,
     when: String,
 }
 
@@ -232,6 +233,7 @@ struct RowDto {
     amounts_runs: Vec<RunDto>,
     confirm: bool,
     confirm_runs: Vec<RunDto>,
+    confirm_words: Vec<RunDto>,
     cells: Vec<MeterDto>,
 }
 
@@ -249,12 +251,13 @@ struct AutoDto {
     max: Option<i32>,
     pool: String,
     off_runs: Vec<RunDto>,
+    off_words: Vec<RunDto>,
     setting: String,
     message: String,
     example: bool,
 }
 impl AutoDto {
-    fn into_view(self, off_runs: ModelRc<RunView>) -> AutoSwitchView {
+    fn into_view(self, off_runs: ModelRc<RunView>, off_words: ModelRc<RunView>) -> AutoSwitchView {
         AutoSwitchView {
             known: self.known,
             shown: self.shown,
@@ -267,6 +270,7 @@ impl AutoDto {
             max: self.max.unwrap_or(99),
             pool: self.pool.into(),
             off_runs,
+            off_words,
             setting: self.setting.into(),
             message: self.message.into(),
             example: self.example,
@@ -283,6 +287,7 @@ struct SectionDto {
     long_label: String,
     meta: String,
     meta_runs: Vec<RunDto>,
+    meta_words: Vec<RunDto>,
     switchable: bool,
     can_switch: bool,
     active_id: String,
@@ -404,6 +409,7 @@ struct DetailsDto {
     platform: String,
     confirm: bool,
     confirm_runs: Vec<RunDto>,
+    confirm_words: Vec<RunDto>,
     profile: String,
     can_mac: bool,
     can_windows: bool,
@@ -445,6 +451,11 @@ struct AuthDto {
     transport_note: String,
     session_hours: i32,
     nonce: i32,
+    // phase 5, the offline card's words (DESIGN-MOBILE.md 4.6, auth-view.mjs offlineView)
+    offline_title: String,
+    offline_strong: String,
+    offline_body: String,
+    offline_meta: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -532,6 +543,12 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 row.confirm_runs,
                 &mut live_runs,
             );
+            let confirm_words = sync_runs(
+                m,
+                &format!("confirm-words|{owner}"),
+                row.confirm_words,
+                &mut live_runs,
+            );
             rows.push(AccountRowView {
                 id: row.id.into(),
                 provider: row.provider.into(),
@@ -554,6 +571,7 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 amounts_runs,
                 confirm: row.confirm,
                 confirm_runs,
+                confirm_words,
                 cells,
             });
         }
@@ -579,10 +597,22 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
             section.meta_runs,
             &mut live_runs,
         );
+        let meta_words = sync_runs(
+            m,
+            &format!("meta-words|{}", section.id),
+            section.meta_words,
+            &mut live_runs,
+        );
         let foot_runs = sync_runs(
             m,
             &format!("foot|{}", section.id),
             section.foot.runs,
+            &mut live_runs,
+        );
+        let foot_words = sync_runs(
+            m,
+            &format!("foot-words|{}", section.id),
+            section.foot.words,
             &mut live_runs,
         );
         let mut auto = section.auto;
@@ -592,6 +622,12 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
             std::mem::take(&mut auto.off_runs),
             &mut live_runs,
         );
+        let off_words = sync_runs(
+            m,
+            &format!("off-words|{}", section.id),
+            std::mem::take(&mut auto.off_words),
+            &mut live_runs,
+        );
         sections.push(SectionView {
             id: section.id.into(),
             kind: section.kind.into(),
@@ -599,17 +635,19 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
             long_label: section.long_label.into(),
             meta: section.meta.into(),
             meta_runs,
+            meta_words,
             count,
             switchable: section.switchable,
             can_switch: section.can_switch,
             active_id: section.active_id.into(),
             active_label: section.active_label.into(),
             empty: section.empty.into(),
-            auto: auto.into_view(off_runs),
+            auto: auto.into_view(off_runs, off_words),
             foot: FootView {
                 shown: section.foot.shown,
                 warn: section.foot.warn,
                 runs: foot_runs,
+                words: foot_words,
                 when: section.foot.when.into(),
             },
             columns,
@@ -800,6 +838,10 @@ pub fn set_auth(authenticated: bool, json: &str) -> Result<(), JsValue> {
             transport_note: v.transport_note.into(),
             session_hours: v.session_hours.max(0),
             nonce: v.nonce,
+            offline_title: v.offline_title.into(),
+            offline_strong: v.offline_strong.into(),
+            offline_body: v.offline_body.into(),
+            offline_meta: v.offline_meta.into(),
         });
         if authenticated {
             ui.set_password(SharedString::default());
@@ -866,8 +908,24 @@ fn login_field(name: &str) -> &'static str {
     match name {
         "user" => "user",
         "pass" => "pass",
+        "confirm" => "confirm",
+        "code" => "code",
         _ => "",
     }
+}
+
+/// The first-run form's confirmation and setup code (phase 5), typed or manager-filled in the HTML
+/// inputs (login-bridge.mjs): copied into the LoginExtra global the Slint fields mirror, so they show
+/// the same text whenever the inputs are hidden.
+#[wasm_bindgen]
+pub fn set_login_setup(confirm: &str, code: &str) {
+    let confirm = confirm.to_string();
+    let code = code.to_string();
+    with_ui(move |ui| {
+        let extra = ui.global::<LoginExtra>();
+        extra.set_confirm(confirm.into());
+        extra.set_code(code.into());
+    });
 }
 
 /// Window pixels to two decimals; bridge.js snaps the inputs to whole pixels.
@@ -903,10 +961,19 @@ fn login_overlay_json(o: &LoginOverlay) -> String {
     if o.on {
         let extra = serde_json::json!({
             "enabled": o.enabled,
+            "mode": if o.mode.is_empty() { "login" } else { o.mode.as_str() },
+            "userVisible": o.user_visible,
+            "passVisible": o.pass_visible,
+            "confirmVisible": o.confirm_visible,
+            "codeVisible": o.code_visible,
             "user": login_box(&o.user),
             "userText": login_box(&o.user_text),
             "pass": login_box(&o.pass),
             "passText": login_box(&o.pass_text),
+            "confirm": login_box(&o.confirm),
+            "confirmText": login_box(&o.confirm_text),
+            "code": login_box(&o.code),
+            "codeText": login_box(&o.code_text),
             "check": login_box(&o.check),
             "submit": login_box(&o.submit),
             "fontSize": px(o.font_size),
@@ -938,6 +1005,66 @@ pub fn set_system_dark(dark: bool) {
 #[wasm_bindgen]
 pub fn set_reduced_motion(reduced: bool) {
     with_ui(|ui| ui.set_reduced_motion(reduced));
+}
+
+/// Safe-area insets in CSS px (top, right, bottom, left), read from env() by bridge.js.
+#[wasm_bindgen]
+pub fn set_safe_area(top: f32, right: f32, bottom: f32, left: f32) {
+    with_ui(|ui| {
+        let device = ui.global::<Device>();
+        device.set_safe_top(safe_px(top));
+        device.set_safe_right(safe_px(right));
+        device.set_safe_bottom(safe_px(bottom));
+        device.set_safe_left(safe_px(left));
+    });
+}
+
+fn safe_px(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0., 200.)
+    } else {
+        0.
+    }
+}
+
+/// The input profile: a coarse pointer (touch), hover support, and standalone (installed PWA) display.
+#[wasm_bindgen]
+pub fn set_input_profile(coarse: bool, hover: bool, standalone: bool) {
+    with_ui(|ui| {
+        let device = ui.global::<Device>();
+        device.set_coarse(coarse);
+        device.set_hover(hover);
+        device.set_standalone(standalone);
+    });
+}
+
+/// The height of the on-screen keyboard (plus any AutoFill bar) covering the canvas, else 0.
+#[wasm_bindgen]
+pub fn set_keyboard(height: f32) {
+    with_ui(|ui| {
+        ui.global::<Device>().set_keyboard(if height.is_finite() {
+            height.max(0.)
+        } else {
+            0.
+        });
+    });
+}
+
+/// Whether the dashboard server is reachable (navigator.onLine and the last API call).
+#[wasm_bindgen]
+pub fn set_online(online: bool) {
+    with_ui(|ui| ui.global::<Device>().set_online(online));
+}
+
+/// Android Back / history (DESIGN-MOBILE.md 3.9): bridge.js popped a history entry, so the
+/// top-most overlay (dialog, Details, sheet, popover) closes itself. The dashboard watches the
+/// counter; the layer decision lives in the Overlays global's `top`.
+#[wasm_bindgen]
+pub fn pop_overlay() {
+    with_ui(|ui| {
+        let overlays = ui.global::<Overlays>();
+        overlays.set_pop_request(overlays.get_pop_request() + 1);
+    });
 }
 
 /// kind: "ok" | "err" | "info". At most three toasts stay live.
@@ -1014,6 +1141,16 @@ pub fn show_details(json: &str) -> Result<(), JsValue> {
                     confirm: v.confirm,
                     confirm_runs: ModelRc::new(VecModel::from(
                         v.confirm_runs
+                            .into_iter()
+                            .map(|r| RunView {
+                                text: r.text.into(),
+                                strong: r.strong,
+                                tone: r.tone.into(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )),
+                    confirm_words: ModelRc::new(VecModel::from(
+                        v.confirm_words
                             .into_iter()
                             .map(|r| RunView {
                                 text: r.text.into(),
