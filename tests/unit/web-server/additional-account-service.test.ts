@@ -458,6 +458,20 @@ describe('additional account usage service', () => {
     expect(JSON.stringify(account)).not.toContain('PRIVATE_PASSWORD');
   });
 
+  it('drops the plain cached-reading sentence an older Muse helper still sends', async () => {
+    const { service } = fixture({
+      runSource: async () =>
+        payload({
+          status: 'cached',
+          message: 'Showing the last successful Muse usage reading. Usage refreshes automatically.',
+        }),
+    });
+    const account = (await service.get()).find((row) => row.provider === 'muse')!;
+    expect(account.status).toBe('cached');
+    expect(account.message).toBeNull();
+    expect(account.sampledAt).toBe('2026-10-01T02:00:00.000Z');
+  });
+
   it('serves a message-less Muse cached reading without inventing an explanation', async () => {
     const { service } = fixture({
       runSource: async () => payload({ status: 'cached', message: null }),
