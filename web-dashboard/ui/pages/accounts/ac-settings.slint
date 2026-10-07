@@ -10,12 +10,14 @@ import { AppLogo } from "../../components/logo.slint";
 import { Caps } from "../../components/text.slint";
 import { Button } from "../../components/button.slint";
 import { Toggle } from "../../components/toggle.slint";
-import { Segmented } from "../../components/segmented.slint";
+import { Segmented, SegItem } from "../../components/segmented.slint";
 import { Select } from "../../components/select.slint";
 import { Plate } from "../../components/card.slint";
 import { Stepper, Runs, DashedRule } from "../home.slint";
 import { AcData, AcPolicy, AcUpdHost, AcUpdItem, AcDevice } from "ac-data.slint";
-import { ComingWord, TipArea, IconNote } from "ac-actions.slint";
+import { ComingWord, TipArea, IconNote, ActionControl, StretchSegmented, BoundToggle } from "ac-actions.slint";
+import { InfoIcon, InlineTip } from "../../components/info-tip.slint";
+import { IconButton } from "../../components/icon-button.slint";
 import { Field } from "../../components/field.slint";
 import { ProbeMark } from "../../components/probe.slint";
 import { StrengthMeter } from "../../shell/signin.slint";
@@ -30,14 +32,14 @@ component SetGroup inherits Plate {
     col := VerticalLayout {
         spacing: 0px;
         HorizontalLayout {
-            padding-left: 18px;
-            padding-right: 18px;
+            padding-left: Breakpoints.tier-p ? 16px : Breakpoints.below-d ? 20px : 18px;
+            padding-right: Breakpoints.tier-p ? 16px : Breakpoints.below-d ? 20px : 18px;
             padding-top: 15px;
             padding-bottom: 4px;
             spacing: 10px;
-            Text { text: root.title; font-size: 16px; font-weight: 640; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+            Text { text: root.title; font-size: Breakpoints.below-d ? Type.title : 16px; font-weight: 640; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
             Rectangle { horizontal-stretch: 1; }
-            if root.note != "": Text { text: root.note; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
+            if root.note != "": Text { text: root.note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
             if root.coming: ComingWord { }
         }
         @children
@@ -50,14 +52,17 @@ component SetItem inherits VerticalLayout {
     in property <string> label;
     in property <string> aside;
     in property <bool> aside-strong: false;
-    padding-left: 18px;
-    padding-right: 18px;
+    // an inline info icon after the label (5.2.1); its body is a child InlineTip with the same tip-id
+    in property <string> info-id: "";
+    padding-left: Breakpoints.tier-p ? 16px : Breakpoints.below-d ? 20px : 18px;
+    padding-right: Breakpoints.tier-p ? 16px : Breakpoints.below-d ? 20px : 18px;
     padding-top: root.first ? 9px : 13px;
     padding-bottom: 13px;
     spacing: 9px;
     if root.label != "": HorizontalLayout {
         spacing: 10px;
         Text { text: root.label; font-size: 13.5px; font-weight: 600; color: Theme.ink; horizontal-stretch: 0; vertical-alignment: center; }
+        if root.info-id != "": VerticalLayout { alignment: center; InfoIcon { tip-id: root.info-id; } }
         Rectangle { horizontal-stretch: 1; }
         if root.aside != "": Text {
             text: root.aside;
@@ -73,6 +78,42 @@ component SetItem inherits VerticalLayout {
     @children
 }
 component Hairline inherits Rectangle { height: 1px; background: Theme.rule-2; }
+
+// A five-segment choice that wraps to rows of 3 + 2 when each segment would be under 64 px wide
+// (DESIGN-MOBILE.md 1.5); one row uses the equal-width StretchSegmented. `row-1` / `row-2` carry the
+// same items split for the wrapped rows (Slint has no model slicing).
+component WrapSegmented inherits VerticalLayout {
+    in property <[SegItem]> items;
+    in property <[SegItem]> row-1;
+    in property <[SegItem]> row-2;
+    in-out property <string> value;
+    in property <bool> enabled: true;
+    // the width the control may use (its column's inner width); the segment test needs it ahead of
+    // layout, because the wrapped branch changes the control's own height
+    in property <length> avail;
+    callback changed-value(string);
+    property <int> n: root.items.length;
+    property <bool> one-row: root.n == 0 || (root.avail - 8px - 4px * max(0, root.n - 1)) / root.n >= 64px;
+    spacing: 8px;
+    if root.one-row: StretchSegmented {
+        items: root.items;
+        value: root.value;
+        enabled: root.enabled;
+        changed-value(v) => { root.changed-value(v); }
+    }
+    if !root.one-row: StretchSegmented {
+        items: root.row-1;
+        value: root.value;
+        enabled: root.enabled;
+        changed-value(v) => { root.changed-value(v); }
+    }
+    if !root.one-row: StretchSegmented {
+        items: root.row-2;
+        value: root.value;
+        enabled: root.enabled;
+        changed-value(v) => { root.changed-value(v); }
+    }
+}
 
 // A label and its value (the concept's dl.conn / dl.aa-facts): the label in a fixed column, the value wrapping
 // beside it. The value sits directly in a VerticalLayout so its wrapped height is measured at its real width.
@@ -135,6 +176,8 @@ export component RefreshSlider inherits Rectangle {
     property <length> px: root.pos(root.shown) * root.width;
     property <bool> settle: !root.dragging;
     height: 44px;
+    // the touch thumb (DESIGN-MOBILE.md 2.3): 24 on T, 28 on F and P; the desktop keeps its 18 px thumb
+    property <length> thumb-r: Breakpoints.tier-d ? 9px : Breakpoints.tier-t ? 12px : 14px;
     opacity: root.enabled ? 1 : 0.5;
 
     Rectangle { x: 0px; y: 11px; width: root.width; height: 6px; border-radius: 3px; background: Theme.track; }
@@ -164,11 +207,11 @@ export component RefreshSlider inherits Rectangle {
         color: Theme.ink-3;
     }
     thumb := Rectangle {
-        x: root.px - 9px;
-        y: 5px;
-        width: 18px;
-        height: 18px;
-        border-radius: 9px;
+        x: root.px - root.thumb-r;
+        y: 14px - root.thumb-r;
+        width: root.thumb-r * 2;
+        height: root.thumb-r * 2;
+        border-radius: root.thumb-r;
         background: Theme.paper;
         border-width: 2px;
         border-color: Theme.accent;
@@ -220,8 +263,8 @@ component PolicyRow inherits VerticalLayout {
     property <int> shown: root.pending >= 0 ? root.pending : root.policy.threshold;
     property <int> reported: root.policy.threshold;
     changed reported => { if root.pending == root.reported { root.pending = -1; } }
-    property <bool> on: root.policy.enabled;
-    changed on => { tg.on = self.on; }
+    // below D a tap on the dimmed row's toggle opens its reason under the row (5.2.2)
+    property <bool> show-reason: false;
     send := Timer {
         interval: 600ms;
         running: false;
@@ -235,18 +278,70 @@ component PolicyRow inherits VerticalLayout {
     }
     release := Timer { interval: 5s; running: false; triggered => { self.running = false; root.pending = -1; } }
     spacing: 2px;
-    HorizontalLayout {
+    opacity: root.policy.toggle-enabled ? 1 : 0.55;
+    animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    // below D the control wraps as two whole groups: [mark name switch] and [at stepper used] (4.3.7)
+    if Breakpoints.below-d: FlexboxLayout {
+        spacing-horizontal: 8px;
+        spacing-vertical: 8px;
+        alignment: start;
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            VerticalLayout { alignment: center; ProviderMark { provider: root.policy.provider; size: 20px; } }
+            Text { min-width: 76px; text: root.policy.name; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; overflow: elide; }
+            TipArea {
+                owner: "policy:" + root.policy.provider;
+                tip: root.policy.tip;
+                width: pt.preferred-width;
+                height: 44px;
+                horizontal-stretch: 0;
+                clicked => { if !root.policy.toggle-enabled { root.show-reason = !root.show-reason; } }
+                pt := BoundToggle {
+                    y: (parent.height - self.height) / 2;
+                    model-on: root.policy.enabled;
+                    enabled: root.policy.toggle-enabled && !root.busy;
+                    toggled(on) => { root.act(root.policy.provider == "antigravity" ? "antigravity-automatic" : "automatic", on ? "true" : "false"); }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            horizontal-stretch: 0;
+            alignment: start;
+            opacity: root.policy.wait ? 0.5 : 1;
+            Text { text: "at"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+            VerticalLayout {
+                alignment: center;
+                Stepper {
+                    value: root.shown;
+                    min: root.policy.min;
+                    max: root.policy.max;
+                    known: root.policy.threshold >= 0;
+                    enabled: root.policy.step-enabled && !root.busy;
+                    step(d) => {
+                        root.pending = clamp(root.shown + d, root.policy.min, root.policy.max);
+                        release.running = false;
+                        send.running = false;
+                        send.running = true;
+                    }
+                }
+            }
+            Text { text: "used"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+        }
+    }
+    if !Breakpoints.below-d: HorizontalLayout {
         spacing: 8px;
         VerticalLayout { alignment: center; ProviderMark { provider: root.policy.provider; size: 20px; } }
         Text { min-width: 76px; text: root.policy.name; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; overflow: elide; }
         TipArea {
             owner: "policy:" + root.policy.provider;
             tip: root.policy.tip;
-            width: tg.preferred-width;
+            width: pt-d.preferred-width;
             horizontal-stretch: 0;
-            tg := Toggle {
+            pt-d := BoundToggle {
                 y: (parent.height - self.height) / 2;
-                on: root.policy.enabled;
+                model-on: root.policy.enabled;
                 enabled: root.policy.toggle-enabled && !root.busy;
                 toggled(on) => { root.act(root.policy.provider == "antigravity" ? "antigravity-automatic" : "automatic", on ? "true" : "false"); }
             }
@@ -277,6 +372,13 @@ component PolicyRow inherits VerticalLayout {
         }
         Rectangle { horizontal-stretch: 1; }
     }
+    // the reason a tap on the dimmed row opened (5.2.2), then the status sentence (no line limit)
+    if root.show-reason && !root.policy.toggle-enabled && root.policy.tip != "": Text {
+        text: root.policy.tip;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
     // under the name, after the mark and its gap
     if root.policy.sub != "": VerticalLayout {
         padding-left: 28px;
@@ -299,7 +401,21 @@ component UpdLine inherits VerticalLayout {
         owner: "upd:" + root.item.key;
         tip: root.item.tip;
         min-height: 30px;
-        HorizontalLayout {
+        // below D the app name and its result sit on their own lines, so a long result wraps
+        if Breakpoints.below-d: VerticalLayout {
+            spacing: 1px;
+            Text { text: root.item.app; font-size: Type.small; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            if root.item.result != "": Text {
+                text: root.item.result;
+                font-size: Type.small;
+                font-weight: root.item.tone == "good" ? 600 : 400;
+                color: root.item.tone == "good" ? Theme.good-text : root.item.tone == "crit" ? Theme.crit-text : root.item.tone == "run" ? Theme.accent-text : root.item.tone == "warn" ? Theme.warn-text : Theme.ink-3;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+        if !Breakpoints.below-d: HorizontalLayout {
             spacing: 10px;
             Text { text: root.item.app; font-size: 12.5px; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
             Text {
@@ -336,7 +452,9 @@ component CheckLine inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> probe;
     callback toggled(bool);
-    min-height: 22px;
+    // the touch box (DESIGN-MOBILE.md 2.3): 20 on T, 22 on F and P; desktop keeps 16
+    property <length> box: Breakpoints.tier-d ? 16px : Breakpoints.tier-t ? 20px : 22px;
+    min-height: Breakpoints.below-d ? 44px : 22px;
     preferred-width: row.preferred-width;
     // the note sits under the label (never beside it): side by side they are wider than the settings
     // column, and the column would grow past the page to fit them
@@ -346,16 +464,16 @@ component CheckLine inherits Rectangle {
         opacity: root.enabled ? 1 : 0.5;
         VerticalLayout {
             alignment: start;
-            padding-top: root.sub == "" ? 3px : 1px;
+            padding-top: root.sub == "" ? (44px - root.box) / 2 : (40px - root.box) / 2;
             Rectangle {
-                width: 16px;
-                height: 16px;
-                border-radius: 4px;
+                width: root.box;
+                height: root.box;
+                border-radius: root.box / 4;
                 border-width: 1px;
                 border-color: root.checked ? Theme.accent : Theme.rule-strong;
                 background: root.checked ? Theme.accent : Theme.paper;
                 animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
-                Icon { x: 1.5px; y: 1.5px; width: 13px; height: 13px; name: "check"; tint: Theme.accent-ink; opacity: root.checked ? 1 : 0; animate opacity { duration: Motion.on ? Motion.fast : 0ms; } }
+                Icon { x: (parent.width - 13px) / 2; y: (parent.height - 13px) / 2; width: 13px; height: 13px; name: "check"; tint: Theme.accent-ink; opacity: root.checked ? 1 : 0; animate opacity { duration: Motion.on ? Motion.fast : 0ms; } }
             }
         }
         VerticalLayout {
@@ -371,7 +489,7 @@ component CheckLine inherits Rectangle {
         mouse-cursor: root.enabled ? pointer : default;
         clicked => { root.checked = !root.checked; root.toggled(root.checked); }
     }
-    ProbeMark { x: 0px; y: 0px; width: 16px; height: root.height; id: root.probe; }
+    ProbeMark { x: 0px; y: 0px; width: root.box; height: root.height; id: root.probe; }
 }
 
 // A block that opens and closes by its height (ease-out in, in-out out); its content fades in a little after.
@@ -502,6 +620,10 @@ component SigninGroup inherits SetGroup {
     in property <bool> busy;
     callback act(string, string);
     title: "Sign-in & connection";
+    // the facts list's label column: 104 on P, 120 on F and T, 112 as on desktop (4.3.7)
+    property <length> fact-w: Breakpoints.tier-p ? 104px : Breakpoints.below-d ? 120px : 112px;
+    // the inner width of the column this group sits in (for the wrapping segmented control)
+    in property <length> col-w: 360px;
 
     // the change-password form's fields stay here until they are submitted
     property <string> pw-cur;
@@ -541,8 +663,8 @@ component SigninGroup inherits SetGroup {
 
     SetItem {
         first: true;
-        FactLine { label: "Signed in as"; value: AcData.signin.username; strong: true; }
-        FactLine { label: "Connection"; value: AcData.signin.connection; }
+        FactLine { label: "Signed in as"; value: AcData.signin.username; strong: true; label-w: root.fact-w; }
+        FactLine { label: "Connection"; value: AcData.signin.connection; label-w: root.fact-w; }
         TipArea {
             owner: "session";
             tip: AcData.signin.session-tip;
@@ -550,13 +672,14 @@ component SigninGroup inherits SetGroup {
             session-line := FactLine {
                 label: "This session";
                 value: AcData.signin.session + (AcData.signin.session-sub != "" ? " · " + AcData.signin.session-sub : "");
+                label-w: root.fact-w;
             }
         }
         // the concept's .aa-row wraps (flex-wrap): beside the providers the button sits under the status,
         // since the three do not fit the settings column on one line
         if Breakpoints.compact: HorizontalLayout {
             spacing: 12px;
-            Text { width: 112px; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+            Text { width: root.fact-w; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
             HorizontalLayout {
                 spacing: 10px;
                 alignment: start;
@@ -583,12 +706,12 @@ component SigninGroup inherits SetGroup {
             spacing: 8px;
             HorizontalLayout {
                 spacing: 12px;
-                Text { width: 112px; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
+                Text { width: root.fact-w; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
                 Text { text: AcData.signin.others-text; font-family: Type.tab; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
             }
             HorizontalLayout {
                 spacing: 12px;
-                Rectangle { width: 112px; }
+                Rectangle { width: root.fact-w; }
                 TipArea {
                     owner: "others";
                     tip: AcData.signin.others-tip;
@@ -610,13 +733,17 @@ component SigninGroup inherits SetGroup {
     SetItem {
         label: "Session lifetime";
         aside: AcData.signin.lifetime-busy ? "Saving" : "";
+        info-id: "lifetime-tip";
+        InlineTip { tip-id: "lifetime-tip"; text: AcData.signin.lifetime-tip; }
         TipArea {
             owner: "lifetime";
             tip: AcData.signin.lifetime-tip;
             min-height: lifetime-seg.preferred-height;
-            lifetime-seg := Segmented {
-                pad: 7px;
+            lifetime-seg := WrapSegmented {
+                avail: root.col-w - 36px;
                 items: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }, { value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
+                row-1: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }];
+                row-2: [{ value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
                 value: AcData.signin.lifetime-value;
                 enabled: AcData.signin.lifetime-enabled && !root.busy;
                 changed-value(v) => { root.act("session-lifetime", v); }
@@ -626,6 +753,7 @@ component SigninGroup inherits SetGroup {
     Hairline { }
     // this connection and the trusted local network (dashboard_network.trust_local_network)
     SetItem {
+        info-id: "network-tip";
         HorizontalLayout {
             spacing: 8px;
             Text { text: "Local network"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
@@ -634,26 +762,29 @@ component SigninGroup inherits SetGroup {
                 owner: "network";
                 tip: AcData.signin.network.tip;
                 width: net-btn.preferred-width;
-                height: 28px;
+                height: Breakpoints.below-d ? 44px : 28px;
                 net-btn := Button {
+                    y: (parent.height - self.height) / 2;
                     small: true;
                     kind: AcData.signin.network.on ? "default" : "accent-line";
                     text: AcData.signin.network.act-label;
                     enabled: AcData.signin.network.act-enabled && !root.busy;
                     busy: AcData.signin.network.busy;
                     probe: "network";
+                    long-tip: AcData.signin.network.tip;
                     clicked => { root.act(AcData.signin.network.act, ""); }
                 }
             }
         }
         Text { text: AcData.signin.network.line; font-family: Type.tab; font-size: 13px; color: Theme.ink; wrap: word-wrap; }
-        IconNote { icon: AcData.signin.network.on ? "lock-open" : "lock"; text: AcData.signin.network.note; }
+        if !Breakpoints.below-d: IconNote { icon: AcData.signin.network.on ? "lock-open" : "lock"; text: AcData.signin.network.note; }
+        if Breakpoints.below-d: InlineTip { tip-id: "network-tip"; text: AcData.signin.network.note; }
     }
     Hairline { }
     // the read-only connection facts (the former Connection section, merged here)
     SetItem {
         label: "Connection";
-        Facts { facts: AcData.connection; label-w: 104px; }
+        Facts { facts: AcData.connection; label-w: Breakpoints.tier-p ? 104px : Breakpoints.below-d ? 120px : 104px; }
     }
     Hairline { }
     SetItem {
@@ -666,8 +797,9 @@ component SigninGroup inherits SetGroup {
                 owner: "password";
                 tip: AcData.signin.password-can ? "" : AcData.signin.password-note;
                 width: pw-btn.preferred-width;
-                height: 28px;
+                height: Breakpoints.below-d ? 44px : 28px;
                 pw-btn := Button {
+                    y: (parent.height - self.height) / 2;
                     small: true;
                     kind: AcData.signin.password-open ? "ghost" : "default";
                     text: AcData.signin.password-open ? "Close" : "Change password";
@@ -695,7 +827,7 @@ component SigninGroup inherits SetGroup {
                             width: parent.width;
                             label: "Current password";
                             password: true;
-                            box-height: 36px;
+                            box-height: Breakpoints.below-d ? 48px : 36px;
                             text <=> root.pw-cur;
                             enabled: !AcData.signin.password-busy;
                             bad: AcData.signin.password-field == "cur";
@@ -710,7 +842,7 @@ component SigninGroup inherits SetGroup {
                             width: parent.width;
                             label: "New password";
                             password: true;
-                            box-height: 36px;
+                            box-height: Breakpoints.below-d ? 48px : 36px;
                             text <=> root.pw-new;
                             enabled: !AcData.signin.password-busy;
                             bad: AcData.signin.password-field == "new";
@@ -727,7 +859,7 @@ component SigninGroup inherits SetGroup {
                             width: parent.width;
                             label: "Confirm new password";
                             password: true;
-                            box-height: 36px;
+                            box-height: Breakpoints.below-d ? 48px : 36px;
                             aside: AcData.pw-strength.matches ? "Matches" : "";
                             aside-good: AcData.pw-strength.matches;
                             ok: AcData.pw-strength.matches;
@@ -747,7 +879,51 @@ component SigninGroup inherits SetGroup {
                         enabled: !AcData.signin.password-busy;
                         probe: "pw-others";
                     }
-                    HorizontalLayout {
+                    // the buttons (4.3.5): two equal halves on P, one right-aligned row on F and T,
+                    // the desktop's left-aligned row on D
+                    if Breakpoints.tier-p: HorizontalLayout {
+                        spacing: 8px;
+                        height: 48px;
+                        padding-top: 2px;
+                        Button {
+                            horizontal-stretch: 1;
+                            tall: true;
+                            kind: AcData.signin.password-done ? "default" : "primary";
+                            icon: AcData.signin.password-done ? "check" : "";
+                            text: AcData.signin.password-done ? "Password changed" : AcData.signin.password-busy ? "Changing" : "Change password";
+                            busy: AcData.signin.password-busy;
+                            enabled: !AcData.signin.password-done;
+                            probe: "pw-submit";
+                            clicked => { root.submit-password(); }
+                        }
+                        Button {
+                            horizontal-stretch: 1;
+                            tall: true;
+                            kind: "ghost";
+                            text: "Cancel";
+                            enabled: !AcData.signin.password-busy;
+                            probe: "pw-cancel";
+                            clicked => { root.act("pw-toggle", ""); }
+                        }
+                    }
+                    if Breakpoints.below-d && !Breakpoints.tier-p: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        min-height: 44px;
+                        padding-top: 2px;
+                        Button {
+                            small: true;
+                            kind: AcData.signin.password-done ? "default" : "primary";
+                            icon: AcData.signin.password-done ? "check" : "";
+                            text: AcData.signin.password-done ? "Password changed" : AcData.signin.password-busy ? "Changing" : "Change password";
+                            busy: AcData.signin.password-busy;
+                            enabled: !AcData.signin.password-done;
+                            probe: "pw-submit";
+                            clicked => { root.submit-password(); }
+                        }
+                        Button { small: true; kind: "ghost"; text: "Cancel"; enabled: !AcData.signin.password-busy; probe: "pw-cancel"; clicked => { root.act("pw-toggle", ""); } }
+                    }
+                    if !Breakpoints.below-d: HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         padding-top: 2px;
@@ -860,11 +1036,47 @@ component SettingsGroup inherits SetGroup {
         aside: "Auto follows the system";
         HorizontalLayout {
             alignment: start;
-            Segmented {
+            if Breakpoints.below-d: StretchSegmented {
                 items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
                 value: root.theme-value;
                 changed-value(v) => { root.theme-picked(v); }
             }
+            if !Breakpoints.below-d: Segmented {
+                items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
+                value: root.theme-value;
+                changed-value(v) => { root.theme-picked(v); }
+            }
+        }
+    }
+    Hairline { }
+    // the Home screen app row (DESIGN-MOBILE.md 6.6): the Chromium install button (the "install-app"
+    // action kind; phase 6 calls the captured install prompt), or the iOS Safari Share-menu words;
+    // hidden when already standalone or without an install path
+    if AcData.install == "chromium": SetItem {
+        label: "Home screen app";
+        Text { text: "Install AI Account Center as an app on this device."; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+        HorizontalLayout {
+            alignment: start;
+            min-height: 44px;
+            Button {
+                small: true;
+                text: "Install app";
+                probe: "install-app";
+                clicked => { root.act("install-app", ""); }
+            }
+        }
+    }
+    if AcData.install == "ios": SetItem {
+        label: "Home screen app";
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: start;
+            Text { text: "In Safari, open the Share menu"; font-size: Type.small; color: Theme.ink-3; }
+            VerticalLayout {
+                alignment: center;
+                Icon { name: "share"; tint: Theme.ink-3; width: 14px; height: 14px; }
+            }
+            Text { text: ", then choose Add to Home Screen."; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; horizontal-stretch: 1; min-width: 0px; }
         }
     }
     Hairline { }
@@ -924,14 +1136,32 @@ component LogSourceRow inherits HorizontalLayout {
     spacing: 8px;
     VerticalLayout {
         horizontal-stretch: 1;
+        min-width: 0px;
         spacing: 1px;
         Text { text: tool-label + " · " + host; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; }
-        Text { text: location; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+        Text { text: location; font-size: Breakpoints.below-d ? 13px : Type.small; font-family: Breakpoints.below-d ? Type.mono : Type.sans; color: Theme.ink-3; wrap: Breakpoints.below-d ? char-wrap : word-wrap; }
         if mapping != "": Text { text: mapping; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
     VerticalLayout {
         alignment: center;
-        Button {
+        // below D the remove control is the trash icon (40 visible, 44 hit)
+        if Breakpoints.below-d: TipArea {
+            owner: "logsource:" + root.id;
+            tip: "Stop scanning this extra location.";
+            width: 44px;
+            height: 44px;
+            ls-trash := IconButton {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                bare: true;
+                icon: "trash";
+                hint: "Remove";
+                enabled: root.enabled;
+                long-tip: "Stop scanning this extra location.";
+                clicked => { root.act("logsource-remove", root.id); }
+            }
+        }
+        if !Breakpoints.below-d: Button {
             small: true;
             text: "Remove";
             enabled: root.enabled;
@@ -944,9 +1174,14 @@ component LogSourcesGroup inherits SetGroup {
     in property <bool> busy;
     callback act(string, string);
     title: "Usage log sources";
-    // the tool id behind the tool label (Select shows strings only)
-    property <string> tool-id: tool-sel.value == "Muse Code" ? "muse" : tool-sel.value == "zcode" ? "zcode" : tool-sel.value == "Claude Code" ? "claude-code" : tool-sel.value == "Codex" ? "codex" : tool-sel.value == "Generic JSONL" ? "jsonl" : "omp";
-    property <[string]> host-options: tool-id == "omp" || tool-id == "claude-code" || tool-id == "codex" ? ["ubuntu", "mac", "windows"] : tool-id == "muse" || tool-id == "zcode" ? ["ubuntu", "mac"] : ["ubuntu"];
+    // the tool and host selects sit side by side while the group's inner width allows 300 px (4.3.7)
+    property <bool> narrow: Breakpoints.below-d && (Breakpoints.tier-width - 2 * Breakpoints.gutter - 32px) < 300px;
+    // the tool and host behind the selects (Select shows strings only); hoisted so both the side-by-side
+    // and the stacked layouts (and the submit) read one source
+    property <string> tool-choice: "OMP";
+    property <string> host-choice: "ubuntu";
+    property <string> tool-id: root.tool-choice == "Muse Code" ? "muse" : root.tool-choice == "zcode" ? "zcode" : root.tool-choice == "Claude Code" ? "claude-code" : root.tool-choice == "Codex" ? "codex" : root.tool-choice == "Generic JSONL" ? "jsonl" : "omp";
+    property <[string]> host-options: root.tool-id == "omp" || root.tool-id == "claude-code" || root.tool-id == "codex" ? ["ubuntu", "mac", "windows"] : root.tool-id == "muse" || root.tool-id == "zcode" ? ["ubuntu", "mac"] : ["ubuntu"];
     // the mapping fields live under an `if`: their text is hoisted here so the
     // submitted JSON never reads an uninstantiated element
     property <string> map-ts-text;
@@ -996,9 +1231,9 @@ component LogSourcesGroup inherits SetGroup {
                     Text { text: "Tool"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
                     tool-sel := Select {
                         options: ["OMP", "Muse Code", "zcode", "Claude Code", "Codex", "Generic JSONL"];
-                        value: "OMP";
+                        value <=> root.tool-choice;
                         enabled: form-enabled;
-                        selected(v) => { host-sel.value = "ubuntu"; }
+                        selected(v) => { root.host-choice = "ubuntu"; }
                     }
                 }
                 VerticalLayout {
@@ -1007,7 +1242,7 @@ component LogSourcesGroup inherits SetGroup {
                     Text { text: "Host"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
                     host-sel := Select {
                         options: host-options;
-                        value: "ubuntu";
+                        value <=> root.host-choice;
                         enabled: form-enabled;
                     }
                 }
@@ -1065,7 +1300,7 @@ component LogSourcesGroup inherits SetGroup {
                     enabled: form-enabled;
                     busy: AcData.log-sources-busy;
                     probe: "logsource-add";
-                    clicked => { root.act("logsource-add", tool-id + "\n" + host-sel.value + "\n" + path-field.text + "\n" + (tool-id == "jsonl" ? mapping-json : "")); }
+                    clicked => { root.act("logsource-add", root.tool-id + "\n" + root.host-choice + "\n" + path-field.text + "\n" + (root.tool-id == "jsonl" ? mapping-json : "")); }
                 }
             }
         }
@@ -1116,7 +1351,8 @@ component CleanupGroup inherits SetGroup {
 
 component UpdateGroup inherits SetGroup {
     title: "Update apps";
-    note: "Runs from Update apps in the header";
+    // P has no "header" label (its chrome is the top bar), so the note names it (4.3.7 group 5)
+    note: Breakpoints.tier-p ? "Runs from Update apps in the top bar" : "Runs from Update apps in the header";
     callback act(string, string);
     SetItem {
         first: true;
@@ -1174,15 +1410,23 @@ component AboutGroup inherits SetGroup {
                 Text { text: AcData.about-version + " · built with Slint 1.18.1"; font-size: 12.5px; color: Theme.ink-3; }
             }
         }
-        // Slint's required attribution
-        HorizontalLayout {
+        // Slint's required attribution (exactly 220 x 92, centred on P)
+        if Breakpoints.tier-p: HorizontalLayout {
+            alignment: center;
+            AboutSlint { width: 220px; height: 92px; }
+        }
+        if !Breakpoints.tier-p: HorizontalLayout {
             alignment: start;
             AboutSlint { width: 220px; height: 92px; }
         }
     }
 }
 
-// The settings groups in one column (from 1280 px, beside the providers) or two (below them, narrower).
+// The settings groups (DESIGN-MOBILE.md 4.3.7): every group is shown at every width. `two-col` is the
+// F >= 760 and T arrangement (the page computes it): the left column holds Sign-in & connection, Update
+// apps and About; the right one Settings, History snapshots and Usage log sources. Each column flows
+// independently. One column (P, F < 760) stacks everything; the desktop settings column beside the
+// providers is unchanged.
 export component SettingsColumn inherits VerticalLayout {
     in property <bool> two-col: false;
     in property <string> theme-value;
@@ -1191,9 +1435,14 @@ export component SettingsColumn inherits VerticalLayout {
     callback act(string, string);
     spacing: 16px;
     alignment: start;
-    SigninGroup { busy: root.busy; act(k, v) => { root.act(k, v); } }
+    // one settings column's inner width, for the controls that must decide their layout ahead of it
+    property <length> col-inner: root.two-col ? (Breakpoints.tier-width - 2 * Breakpoints.gutter - 32px - 16px) / 2
+        : Breakpoints.at-least-regular ? (Breakpoints.wide ? 420px : Breakpoints.ultra ? 440px : 380px)
+        : Breakpoints.tier-width - 2 * Breakpoints.gutter - 32px;
     if !root.two-col: VerticalLayout {
         spacing: 16px;
+        alignment: start;
+        SigninGroup { busy: root.busy; col-w: root.col-inner; act(k, v) => { root.act(k, v); } }
         SettingsGroup {
             theme-value: root.theme-value;
             busy: root.busy;
@@ -1220,21 +1469,32 @@ export component SettingsColumn inherits VerticalLayout {
             spacing: 16px;
             alignment: start;
             horizontal-stretch: 1;
+            min-width: 0px;
+            SigninGroup { busy: root.busy; col-w: root.col-inner; act(k, v) => { root.act(k, v); } }
+            UpdateGroup {
+                act(k, v) => { root.act(k, v); }
+            }
+            AboutGroup { }
+        }
+        VerticalLayout {
+            spacing: 16px;
+            alignment: start;
+            horizontal-stretch: 1;
+            min-width: 0px;
             SettingsGroup {
                 theme-value: root.theme-value;
                 busy: root.busy;
                 theme-picked(v) => { root.theme-picked(v); }
                 act(k, v) => { root.act(k, v); }
             }
-        }
-        VerticalLayout {
-            spacing: 16px;
-            alignment: start;
-            horizontal-stretch: 1;
-            UpdateGroup {
+            CleanupGroup {
+                busy: root.busy;
                 act(k, v) => { root.act(k, v); }
             }
-            AboutGroup { }
+            LogSourcesGroup {
+                busy: root.busy;
+                act(k, v) => { root.act(k, v); }
+            }
         }
     }
 }
