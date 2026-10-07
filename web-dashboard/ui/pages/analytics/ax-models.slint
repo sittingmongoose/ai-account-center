@@ -138,7 +138,9 @@ component CbmRow inherits Rectangle {
     in property <length> share-w;
     // stacked below a 520 px card inner width (DESIGN-MOBILE 1.5, 4.2.4)
     in property <bool> stacked: false;
-    min-height: 40px;
+    // stacked content is fixed-height (10 + 22 + 6 + 8 + 6 + 19 + 10): the row fits it exactly,
+    // so the tokens/share line never overflows onto the next row (task 9 A1)
+    min-height: root.stacked ? 81px : 40px;
     border-radius: 9px;
     background: ta.pressed && Breakpoints.below-d ? Theme.pressed : (Device.hover && ta.has-hover) || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -246,8 +248,10 @@ component CbmRow inherits Rectangle {
                 min-height: 19px;
                 Text { text: root.m.tok; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
                 if root.m.share != "" && root.m.share != "Unavailable": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                if root.m.share != "" && root.m.share != "Unavailable": VerticalLayout { alignment: center; ValueUnit { value: root.m.share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                if root.m.share != "" && root.m.share != "Unavailable": VerticalLayout { alignment: center; horizontal-stretch: 0; ValueUnit { value: root.m.share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
                 if root.m.partial: Text { text: "· partial"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                // spare width goes here, never between the runs (task 9 A1, same as O6)
+                Rectangle { horizontal-stretch: 1; }
             }
         }
     }
