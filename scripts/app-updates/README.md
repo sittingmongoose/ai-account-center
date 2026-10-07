@@ -40,18 +40,19 @@ Nothing can wait forever:
 
 The Python helper defaults to **read-only inventory**. Only `--apply` updates or
 restarts apps. It detects the active installation, skips absent apps, and returns
-one bounded, whitelist result for each of the seven fixed apps. It does not copy,
+one bounded, whitelist result for each of the eight fixed apps. It does not copy,
 modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
 | --- | --- |
 | Antigravity CLI | Active native `agy update`, only to a build in the switching review set (held otherwise, see below) |
-| Muse Code | Active user launcher, fixed Meta installer run with bash (`set -o pipefail`, `[[ ]]`) with `MUSE_UPGRADE_MODE=1` and no PATH modification |
+| Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix |
 | Claude Code | Active native `claude update` |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only; Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
+| T3 Code | One `t3-code` row per host covers its nightly desktop/bundled server and any installed standalone runtime; Ubuntu uses the native updater and a detached delayed server restart; Mac verifies SHA512, codesign and notarization before a bundle swap; Windows verifies SHA512 and the T3 Tools Inc Authenticode publisher before the silent NSIS installer |
 
 Official methods: [Antigravity installer](https://antigravity.google/cli/install.sh),
 [Meta installer](https://dev.meta.ai/install.sh),
@@ -60,6 +61,78 @@ Official methods: [Antigravity installer](https://antigravity.google/cli/install
 [Claude Code setup](https://code.claude.com/docs/en/setup),
 [OpenAI Linux package](https://learn.chatgpt.com/docs/linux/linux-app),
 [OpenAI app update management](https://learn.chatgpt.com/docs/manage-app-updates).
+
+## T3 Code nightly updates
+
+T3's desktop and server are one app ID because they ship together on the same
+nightly release. A Mac with both the desktop and a standalone runtime updates
+both under that row; neither absent desktops nor absent standalone runtimes are
+installed. The full nightly version is read from the Mac bundle, the native
+runtime's bounded `--version` probe, or Windows' bundled ASAR `package.json`.
+The Windows PE ProductVersion drops the nightly suffix and cannot identify a
+nightly accurately.
+
+Releases come only from [pingdotgg/t3code](https://github.com/pingdotgg/t3code/releases).
+The exact asset and nightly version must match its bounded `nightly-mac.yml`
+or `nightly.yml` SHA512 entry. Desktop downloads allow at most 800 MiB and ten
+minutes, bounded by the host's remaining budget. Mac additionally requires
+`com.t3tools.t3code`, signing team `ARK85ZXQ4Z`, strict/deep codesign verification
+and `spctl` assessment; it stages beside the installed app before an atomic
+rename and retains the old bundle for rollback. Windows requires a valid
+Authenticode signature from `T3 Tools Inc`, uses `/S`, and restores a private
+copy of the previous installation if installation or relaunch verification fails.
+Both desktops close only the captured T3 process family, reopen in the user's
+desktop session and check `http://127.0.0.1:3773/`. The Windows flow reuses the
+existing `CCS App Updates` InteractiveToken task and process/session guards.
+This explicit T3 close/swap/reopen flow is the exception to Codex and Claude's
+Mac/Windows quit-first behavior described below.
+
+On Ubuntu, `t3 update <version> --channel nightly` runs with empty, non-TTY stdin
+and **without `--yes`**. Its native updater verifies the runtime and rewrites the
+service definition while leaving the running server on its old version. T3 is
+the last app on each host, and Ubuntu schedules a separate transient user service
+that waits for the update helper to exit, every dashboard host to finish and the
+dashboard job lock to be released, then waits 30 seconds. It takes that same
+dashboard lock for the final check before restarting **only `t3code.service`**;
+`ccs-dashboard.service` is never stopped or restarted. A new update job delays
+the restart again. The detached worker has an 18-minute wait limit and verifies
+HTTP health after restarting.
+
+The immediate result says the server restart is **scheduled**, with zero
+synchronously restarted processes and a fixed `systemd` restart target; it
+does not claim the new server is already running. Restarting T3 disconnects its
+active agent threads and clients. A version-only pending marker remains if
+scheduling, restart or health verification fails; a later explicit click retries.
+Inspect `journalctl --user -u 'aac-t3-restart-*'` for the detached outcome.
+No status read schedules or retries anything. Separate Muse ACP and ZCode ACP
+adapters remain under their existing auto-updaters and are outside this job.
+
+Hosts still run in parallel. Installers stay sequential within each host:
+T3's replacement closes its bundled server/process family, Windows installers
+can hold executable/package files, and Codex already shares a daemon with its
+desktop. Overlapping those operations would weaken stop/restart and rollback
+guarantees.
+
+Windows Muse is detected at `%LOCALAPPDATA%\Programs\muse\muse.cmd` (including
+the extensionless `muse` shim beside it). Its `.muse-launcher.ps1 --version` is
+probed directly with auto-update disabled, retaining the full `1.4.3-R5018.1`
+build version. The old generic `.cmd` rejection reported this official install
+as unsupported before probing it. Its fixed
+[PowerShell installer](https://dev.meta.ai/install.ps1) now runs with
+`MUSE_UPGRADE_MODE=1`, `MUSE_NO_MODIFY_PATH=1` and `MUSE_INSTALL_DIR` bound to the
+detected official directory. Unrelated Muse shims remain unsupported.
+
+### Live verification after deployment
+
+Only Jared's explicitly authorized Update apps click should exercise real
+installers. Before that, read-only `--inventory --platform <host>` should show
+eight rows, full T3 nightly versions and Windows Muse's native manager/version.
+After an authorized click, confirm 24 result rows and simultaneous host progress.
+When T3 updates, verify Mac/Windows bundle versions and port 3773 health, then
+wait until the completed job's scheduled Ubuntu restart has finished; inspect
+`t3 service status`, the detached unit journal, port 3773 and that
+`ccs-dashboard.service` remained active. Do not run this live check while agent
+work that must survive a T3 restart is in progress.
 
 **Antigravity CLI review hold (all three computers).** Account switching works only
 with native builds listed in `scripts/antigravity/runtime/release.json`
@@ -93,7 +166,7 @@ validated against PID creation identity. Generic Node/Python/terminal processes
 are never selected. Desktop updates preserve existing absolute profile directory
 arguments. Mac uses verified atomic bundle replacement; Windows runs in an
 interactive task and Add-AppxPackage preserves MSIX LocalState. Desktop apps on
-Mac and Windows are **never quit, closed, restarted or killed**: the updater
+Mac and Windows for Codex and Claude are **never quit, closed, restarted or killed**: the updater
 does not even ask them to quit. A running app with a newer version reports the
 actionable `action_required`/`quit_first` row ("Quit Codex Desktop to finish
 its update") within seconds, before any package download: Windows reads only
@@ -160,13 +233,13 @@ does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
-user exactly what to do. Mac and Windows desktops that are running report
+user exactly what to do. Codex and Claude desktops on Mac and Windows that are running report
 `quit_first` (they are never asked to quit): nothing is swapped or
 deployed while anything runs, and the next click after the user quits updates
 cleanly. MSIX deployments rejected for apps that need closing also report
-`quit_first`. Desktop downloads refused by a bot challenge (HTTP 403 or a
+`quit_first`. Codex/Claude desktop downloads refused by a bot challenge (HTTP 403 or a
 challenge page) report `check_in_app` after bounded retries. Desktop downloads
-allow 2 GiB and 10-minute timeouts; Mac and Windows desktops are never
+allow 2 GiB and 10-minute timeouts; Codex/Claude Mac and Windows desktops are never
 force-stopped (Ubuntu desktops keep the previous terminate-and-relaunch flow).
 Claude's Mac update reads the publisher's own `RELEASES.json` feed on
 downloads.claude.ai and checks its version before any package download, so a
@@ -192,7 +265,7 @@ Its restart fixture verified console attachment, zero work arguments, retained
 private environment, old PID exit and preservation of an unrelated process.
 No real installed app was updated or restarted during these proofs.
 
-Bun tests in `tests/unit/app-updates` and the two app-update web-server test files
+Bun tests in `tests/unit/app-updates` and the app-update web-server test files
 cover safe normalization, fixed invocations, authentication/origin/body checks,
 async job coalescing, cross-process persistence/locks, queued Codex idle waits,
 proxy reconnect coordination and retry markers. Real package replacement and real

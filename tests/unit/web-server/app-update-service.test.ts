@@ -80,18 +80,18 @@ describe('fixed app update service', () => {
     expect([...calls].sort()).toEqual(['mac', 'ubuntu', 'windows']);
     expect(
       service.getStatus().job!.results.filter((row) => row.platform !== 'ubuntu')
-    ).toHaveLength(14);
+    ).toHaveLength(16);
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
     expect(calls).toHaveLength(3);
-    expect(job.results).toHaveLength(21);
+    expect(job.results).toHaveLength(24);
     expect(job.state).toBe('failed');
     expect(job.activePlatform).toBeNull();
     expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
     const clone = service.getStatus().job!;
     clone.results.length = 0;
-    expect(service.getStatus().job!.results).toHaveLength(21);
+    expect(service.getStatus().job!.results).toHaveLength(24);
   });
   it('executes only the three fixed host-local helpers', () => {
     const local = appUpdateInvocation('ubuntu');
@@ -270,7 +270,7 @@ describe('fixed app update service', () => {
     'returns fixed errors for malformed helper output',
     (raw) => {
       const rows = normalizeAppUpdateResults(raw, 'ubuntu');
-      expect(rows).toHaveLength(7);
+      expect(rows).toHaveLength(8);
       expect(rows.every((row) => row.status === 'failed')).toBe(true);
     }
   );
@@ -339,7 +339,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(first);
     expect(second.getStatus().job!.state).toBe('completed');
-    expect(second.getStatus().job!.results).toHaveLength(21);
+    expect(second.getStatus().job!.results).toHaveLength(24);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
   it('refuses a cancel from a process that does not own the running job', async () => {
@@ -369,7 +369,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(owner);
     expect(owner.getStatus().job!.results.filter((row) => row.status === 'skipped')).toHaveLength(
-      14
+      16
     );
   });
   it('marks an interrupted persisted job failed without replaying it', () => {

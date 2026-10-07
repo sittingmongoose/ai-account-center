@@ -8,6 +8,7 @@ export const UPDATE_APP_LABELS = {
   'codex-desktop': 'Codex Desktop',
   'claude-code': 'Claude Code',
   'claude-desktop': 'Claude Desktop',
+  't3-code': 'T3 Code',
 } as const;
 export type UpdateAppId = keyof typeof UPDATE_APP_LABELS;
 export type UpdatePlatform = 'ubuntu' | 'mac' | 'windows';
@@ -37,9 +38,11 @@ export interface AppUpdateResult {
   /** The newest build a `held` row did not install, when the helper could read it. */
   heldVersion?: string;
   restartTargets: Array<{
-    kind: 'tmux' | 'terminal' | 'windows-terminal';
+    kind: 'tmux' | 'terminal' | 'windows-terminal' | 'desktop' | 'systemd';
     server?: string;
     session?: string;
+    service?: 't3code.service';
+    delaySeconds?: 30;
   }>;
 }
 /** One computer's live progress: every computer runs at the same time. */
@@ -108,6 +111,9 @@ export const MESSAGES = {
     'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
   updated_unreviewed:
     'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
+  t3_updated: 'Updated T3 Code and its installed server runtime.',
+  t3_restart_scheduled:
+    'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows'];
@@ -271,6 +277,16 @@ export function normalizeAppUpdateRow(
     const target = record(candidate);
     if (target?.kind === 'terminal' || target?.kind === 'windows-terminal')
       targets.push({ kind: target.kind });
+    else if (target?.kind === 'desktop' && appId === 't3-code' && platform !== 'ubuntu')
+      targets.push({ kind: 'desktop' });
+    else if (
+      target?.kind === 'systemd' &&
+      appId === 't3-code' &&
+      platform === 'ubuntu' &&
+      target.service === 't3code.service' &&
+      target.delaySeconds === 30
+    )
+      targets.push({ kind: 'systemd', service: 't3code.service', delaySeconds: 30 });
     else if (
       target?.kind === 'tmux' &&
       typeof target.server === 'string' &&
@@ -292,6 +308,10 @@ export function normalizeAppUpdateRow(
   // Only the Antigravity CLI is ever held, and only with a hold message.
   const held = row.status === 'held';
   if (
+    ((code === 't3_updated' || code === 't3_restart_scheduled') &&
+      (appId !== 't3-code' || row.status !== 'updated')) ||
+    (code === 't3_restart_scheduled' &&
+      (platform !== 'ubuntu' || !targets.some((target) => target.kind === 'systemd'))) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated'))

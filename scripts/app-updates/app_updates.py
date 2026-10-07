@@ -22,6 +22,7 @@ from app_update_common import (
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, family, scan, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
+from app_update_t3 import detect_t3, update_t3
 
 CLI_NAMES = {"antigravity-cli": "agy", "muse-code": "muse", "omp": "omp", "codex-cli": "codex", "claude-code": "claude"}
 # The Codex bridge's whole budget: lock (30 s) + update (180 s) + idle wait
@@ -155,7 +156,8 @@ def _candidates(name, platform):
         local = pathlib.Path(os.environ.get("LOCALAPPDATA", str(home / "AppData/Local")))
         roaming = pathlib.Path(os.environ.get("APPDATA", str(home / "AppData/Roaming")))
         paths = [home / ".local/bin" / (name + ".exe"), local / name / "bin" / (name + ".exe"), local / name / (name + ".exe"),
-                 local / "Programs" / name / (name + ".exe"), local / "Programs" / name / (name + ".ps1"), roaming / "npm" / (name + ".cmd")]
+                 local / "Programs" / name / (name + ".exe"), local / "Programs" / name / (name + ".ps1"),
+                 local / "Programs" / name / (name + ".cmd"), roaming / "npm" / (name + ".cmd")]
     else:
         paths = [home / ".local/bin" / name, home / ".bun/bin" / name, pathlib.Path("/opt/homebrew/bin") / name, pathlib.Path("/usr/local/bin") / name]
     found = shutil.which(name)
@@ -175,6 +177,21 @@ def detect_cli(app_id, platform):
     if path is None:
         return None
     manager, root = "native", None
+    if platform == "windows" and app_id == "muse-code":
+        # Meta installs both an extensionless shell shim and muse.cmd. Probe
+        # its PowerShell launcher directly: CreateProcess cannot execute .cmd.
+        local = pathlib.Path(os.environ.get("LOCALAPPDATA", str(pathlib.Path.home() / "AppData/Local")))
+        expected = local / "Programs/muse"
+        launcher = expected / ".muse-launcher.ps1"
+        if path.parent.resolve() != expected.resolve() or path.name not in ("muse", "muse.cmd") or not launcher.is_file():
+            return Install(app_id, platform, path, manager="unsupported")
+        try:
+            output = command(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher, "--version"], timeout=20, capture=True)
+            version = version_text(output.rsplit("(", 1)[-1])
+            probe = None
+        except UpdateFailure as error:
+            version, probe = None, "timeout" if error.code == "timeout" else "failed"
+        return Install(app_id, platform, expected / "muse.cmd", version, manager, probe=probe)
     if platform == "windows" and path.suffix.lower() == ".cmd":
         if app_id != "codex-cli":
             return Install(app_id, platform, path, manager="unsupported")
@@ -200,6 +217,8 @@ def detect_cli(app_id, platform):
 
 
 def _detect_one(app_id, platform):
+    if app_id == "t3-code":
+        return detect_t3(platform)
     return detect_desktop(app_id, platform) if app_id.endswith("-desktop") else detect_cli(app_id, platform)
 
 
@@ -207,7 +226,7 @@ def detect(platform):
     """Read-only version probes for every app, side by side.
 
     Each probe has its own timeout, so the slowest one bounds the whole check
-    instead of all seven adding up. Nothing here installs or stops anything.
+    instead of all eight adding up. Nothing here installs or stops anything.
     """
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=len(APP_LABELS)) as pool:
@@ -285,12 +304,17 @@ def perform_cli_update(install, deadline=None):
         expected = pathlib.Path.home() / ".local/bin/muse"
         if install.platform != "windows" and path.resolve() != expected.resolve():
             raise UpdateFailure("unsupported")
+        if install.platform == "windows":
+            local = pathlib.Path(os.environ.get("LOCALAPPDATA", str(pathlib.Path.home() / "AppData/Local")))
+            if path.resolve() != (local / "Programs/muse/muse.cmd").resolve() or not path.with_name(".muse-launcher.ps1").is_file():
+                raise UpdateFailure("unsupported")
         shell = resolve_muse_shell(install.platform)
         with private_temporary() as temporary:
             target = temporary / ("muse-install.ps1" if install.platform == "windows" else "muse-install.sh")
             download("https://dev.meta.ai/install.ps1" if install.platform == "windows" else "https://dev.meta.ai/install.sh", target, maximum=512 * 1024, timeout=60)
             env = {"MUSE_UPGRADE_MODE": "1", "MUSE_NO_MODIFY_PATH": "1"}
             if install.platform == "windows":
+                env["MUSE_INSTALL_DIR"] = str(path.parent)
                 command(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target], timeout=_clamp(180, deadline), env=env)
             else:
                 command([shell, target], timeout=_clamp(600, deadline), env=env)
@@ -455,7 +479,7 @@ def check_readiness(install):
     try:
         if install.manager == "unsupported":
             return ("failed", "unsupported")
-        if install.app_id.endswith("-desktop"):
+        if install.app_id.endswith("-desktop") or install.app_id == "t3-code":
             # Desktop updaters verify before stopping anything; the manager
             # check above is the whole pre-flight.
             return None
@@ -493,9 +517,9 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     with execution_lock():
         emit({"event": "app", "appId": None, "phase": "checking"})
         installations = detect(platform)
-        # Update package apps first; the shared Codex daemon idle wait is last
-        # so it cannot delay unrelated already-idle updates on this computer.
-        order = [app_id for app_id in APP_LABELS if app_id != "codex-cli"] + ["codex-cli"]
+        # Update package apps first, then the shared Codex daemon idle wait.
+        # T3 is last because its desktop/server replacement interrupts threads.
+        order = [app_id for app_id in APP_LABELS if app_id not in ("codex-cli", "t3-code")] + ["codex-cli", "t3-code"]
         for app_id in order:
             install = installations[app_id]
             if cancelled():
@@ -524,12 +548,12 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                     report(result(app_id, platform, status, install.version, install.version, install.manager, code))
                     continue
                 emit({"event": "app", "appId": app_id, "phase": "updating"})
-                if app_id.endswith("-desktop"):
+                if app_id.endswith("-desktop") or app_id == "t3-code":
                     # A desktop app reports its long steps (a package download,
                     # then the install) so the page shows what it waits on.
                     def phase(name, app_id=app_id):
                         emit({"event": "app", "appId": app_id, "phase": name})
-                    try: report(update_desktop(install, deadline, phase))
+                    try: report((update_t3 if app_id == "t3-code" else update_desktop)(install, deadline, phase))
                     except Exception: report(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
                 elif app_id == "antigravity-cli":
                     report(mark_unreviewed(update_cli(install, deadline), agy_reviewed))
