@@ -783,6 +783,8 @@ function donutView(A, state, shades) {
     mode: cost ? 'cost' : 'tokens', segs: rows, lut, legend,
     centre: cost ? allNone ? NOT_LOGGED : allFree ? FREE : money(total) : tokC(total),
     centreLabel: cost ? allFree ? 'estimated cost, free models' : `estimated cost, ${partial ? 'partial' : rows.length > 1 ? 'all models' : '1 model'}` : `tokens, ${rows.length > 1 ? 'all models' : '1 model'}`,
+    // task 9 A5: the centre label that fits a small donut hole on phones
+    centreShort: cost ? 'cost' : 'tokens',
     unit: cost ? '' : ' tokens', empty: !rows.length && !allNone && !allFree,
     emptyText: allNone ? 'No model in these logs has a logged cost.' : 'No model activity in the logs.',
   };
@@ -909,6 +911,8 @@ function cacheView(A, rows, K, C, costOk) {
     reads: { tok: tokC(K.cr), tip: tokX(K.cr), share: sh(K.cr), cost: c(C.cost.cr), w: K.cr },
     writes: { tok: tokC(K.cw), tip: tokX(K.cw), share: sh(K.cw), cost: c(C.cost.cw), w: K.cw, note: tot && K.cw === 0 ? 'none logged' : '' },
     readFrac: tot > 0 ? K.cr / tot : 0,
+    // task 9 A3: the card footnote (data-bound so the layout measures it after it arrives)
+    note: 'Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.',
   };
 }
 

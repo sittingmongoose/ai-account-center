@@ -213,8 +213,8 @@ export component AxSessionsCard inherits AxCard {
         spacing: 14px;
         vertical-stretch: 1;
         // the stats spread across the card at the top under the subtitle, as the concept draws them; the
-        // table below keeps its own shared grid. Below D the three columns are exactly equal (zero
-        // preferred widths), so the figures never overlap in a narrow card.
+        // table below keeps its own shared grid. Below D the three columns are exact thirds of the row,
+        // so the figures never overlap in a narrow card.
         if Breakpoints.tier-d: HorizontalLayout {
             spacing: 12px;
             vertical-stretch: 0;
@@ -244,7 +244,10 @@ export component AxSessionsCard inherits AxCard {
             for s[i] in AxData.sess-stats: VerticalLayout {
                 horizontal-stretch: 1;
                 min-width: 0px;
-                preferred-width: 0px;
+                // exact thirds of the card's allotted width (task 9 O5): preferred-width 0 measured the
+                // wrapped labels at width 0 (a line per char), whose preferred height stretched the card
+                // ~450 px past its content. cell-w is window-derived, so this cannot loop.
+                preferred-width: (root.cell-w - 2 * root.pad - 24px) / 3;
                 spacing: 3px;
                 AxNum {
                     num: s.num;
@@ -537,11 +540,13 @@ component TokSection inherits VerticalLayout {
                 min-height: 19px;
                 Text { text: t.tok; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; AxPress { tip: t.tok-tip; long-tip: t.tok-tip; } }
                 Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                VerticalLayout { alignment: center; ValueUnit { value: t.tok-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                VerticalLayout { alignment: center; horizontal-stretch: 0; ValueUnit { value: t.tok-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
                 Text { text: "and"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
                 Text { text: t.cost; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
                 if t.cost-share != "": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                if t.cost-share != "": VerticalLayout { alignment: center; ValueUnit { value: t.cost-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                if t.cost-share != "": VerticalLayout { alignment: center; horizontal-stretch: 0; ValueUnit { value: t.cost-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                // spare width goes here, never between the runs (task 9 O6)
+                Rectangle { horizontal-stretch: 1; }
             }
         }
     }
@@ -641,11 +646,18 @@ component CacheSection inherits VerticalLayout {
                 Rectangle { horizontal-stretch: 1; }
             }
             Rectangle { height: 3px; }
-            if AxData.cache.ccost-share != "": HorizontalLayout {
+            if AxData.cache.ccost-share != "" && Breakpoints.tier-d: HorizontalLayout {
                 spacing: 0px;
                 alignment: start;
                 ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
                 Text { text: " of the estimated cost for this range"; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            }
+            // below D one wrapping line: "84.5% of the estimated cost for this range" (task 9 A7)
+            if AxData.cache.ccost-share != "" && Breakpoints.below-d: Text {
+                text: AxData.cache.ccost-share + "% of the estimated cost for this range";
+                font-size: Type.small;
+                color: Theme.ink-3;
+                wrap: word-wrap;
             }
         }
     }
@@ -723,11 +735,12 @@ component CacheSection inherits VerticalLayout {
                 Rectangle { horizontal-stretch: 1; }
             }
             Rectangle { height: 3px; }
-            if AxData.cache.ccost-share != "": HorizontalLayout {
-                spacing: 0px;
-                alignment: start;
-                ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
-                Text { text: " of the estimated cost for this range"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            // one wrapping line (task 9 A7); this branch is below-D-only (gauge-side is always true on D)
+            if AxData.cache.ccost-share != "": Text {
+                text: AxData.cache.ccost-share + "% of the estimated cost for this range";
+                font-size: Type.small;
+                color: Theme.ink-3;
+                wrap: word-wrap;
             }
         }
     }
@@ -771,10 +784,10 @@ component CacheSection inherits VerticalLayout {
         RwRow { kind: "cr"; name: "Reads"; tok: AxData.cache.r-tok; tip: AxData.cache.r-tip; share: AxData.cache.r-share; cost: AxData.cache.r-cost; narrow: root.narrow; }
         RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }
     }
-    HorizontalLayout {
+    if Breakpoints.tier-d: HorizontalLayout {
         padding-right: self.padding-left;
         Text {
-            text: "Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.";
+            text: AxData.cache.note;
             font-size: Breakpoints.tier-d ? 12px : Type.small;
             color: Theme.ink-3;
             wrap: word-wrap;
@@ -815,7 +828,7 @@ export component AxTokensCacheCard inherits AxCard {
         padding-left: root.pad;
         padding-right: root.pad;
         padding-top: 4px;
-        padding-bottom: 18px;
+        padding-bottom: Breakpoints.tier-d ? 18px : 0px;
         spacing: 12px;
         alignment: start;
         TokSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; }
@@ -827,11 +840,32 @@ export component AxTokensCacheCard inherits AxCard {
         padding-left: root.pad;
         padding-right: root.pad;
         padding-top: 4px;
-        padding-bottom: 18px;
+        // the note below carries the card's bottom inset (task 9 A3; side is below-D-only)
+        padding-bottom: 0px;
         spacing: 24px;
         alignment: start;
         TokSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
         CacheSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
+    }
+    // below D the cache note (task 9 A3): unconditional, empty and zero-padded on D. Data-bound
+    // text re-measures when the response arrives.
+    VerticalLayout {
+        padding-left: Breakpoints.tier-d ? 0px : root.pad;
+        padding-right: Breakpoints.tier-d ? 0px : root.pad;
+        padding-top: Breakpoints.tier-d ? 0px : 12px;
+        padding-bottom: Breakpoints.tier-d ? 0px : 18px;
+        Text {
+            text: Breakpoints.tier-d ? "" : AxData.cache.note;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+    // trailing conditional (task 9 A3): load-bearing Slint 1.18 quirk — the note above only measures
+    // its full wrapped height when a conditional layout with text follows it (verified by capture).
+    // A single blank: zero-width cost, paints nothing.
+    if AxData.cache.note != "" && Breakpoints.below-d: VerticalLayout {
+        Text { text: " "; font-size: Type.small; wrap: word-wrap; }
     }
 }
 

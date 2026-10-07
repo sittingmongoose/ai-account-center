@@ -234,7 +234,9 @@ component CbmRowStacked inherits Rectangle {
     in property <length> share-w;
     // stacked below a 520 px card inner width (DESIGN-MOBILE 1.5, 4.2.4)
     in property <bool> stacked: false;
-    min-height: 40px;
+    // stacked content is fixed-height (10 + 22 + 6 + 8 + 6 + 19 + 10): the row fits it exactly,
+    // so the tokens/share line never overflows onto the next row (task 9 A1)
+    min-height: root.stacked ? 81px : 40px;
     border-radius: 9px;
     background: ta.pressed && Breakpoints.below-d ? Theme.pressed : (Device.hover && ta.has-hover) || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -342,8 +344,10 @@ component CbmRowStacked inherits Rectangle {
                 min-height: 19px;
                 Text { text: root.m.tok; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
                 if root.m.share != "" && root.m.share != "Unavailable": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                if root.m.share != "" && root.m.share != "Unavailable": VerticalLayout { alignment: center; ValueUnit { value: root.m.share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                if root.m.share != "" && root.m.share != "Unavailable": VerticalLayout { alignment: center; horizontal-stretch: 0; ValueUnit { value: root.m.share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
                 if root.m.partial: Text { text: "· partial"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                // spare width goes here, never between the runs (task 9 A1, same as O6)
+                Rectangle { horizontal-stretch: 1; }
             }
         }
     }
@@ -490,11 +494,19 @@ export component AxCbmCard inherits AxCard {
             vertical-alignment: center;
         }
     }
-    if AxData.cbm.foot != "": HorizontalLayout {
+    if AxData.cbm.foot != "" && Breakpoints.tier-d: HorizontalLayout {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
         padding-bottom: 14px;
         Text { text: AxData.cbm.foot; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; wrap: word-wrap; }
+    }
+    // below D the note sits directly in a column, so the card measures its wrapped height (task 9 A2):
+    // a wrapping Text in a HorizontalLayout is measured single-line and overflows the card
+    if AxData.cbm.foot != "" && Breakpoints.below-d: VerticalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 14px;
+        Text { text: AxData.cbm.foot; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
     // A taller neighbour (the Model usage box beside it) stretches this card to the row's height.
     // Nothing else in the card body stretches, and when no child of a Slint layout has a stretch
@@ -654,8 +666,10 @@ export component AxDonutCard inherits AxCard {
         : Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
     // P: 180 centred above the list; F/T: 200 beside the list from a 480 inner width (DESIGN-MOBILE 4.2.5)
     property <bool> side: Breakpoints.below-d && !Breakpoints.tier-p && root.wrap-w >= 480px;
+    // below D the donut fills the room it has (task 9 A5b): on P nearly the card's content width (a
+    // 220-260 px ring at 402), beside the list 200 to 240 growing with the card. D is unchanged.
     property <length> size: Breakpoints.tier-d ? clamp(round(root.wrap-w * 0.68 / 1px) * 1px, 260px, 380px)
-        : Breakpoints.tier-p ? 180px : root.side ? 200px : 180px;
+        : Breakpoints.tier-p ? min(root.wrap-w - 24px, 322px) : root.side ? clamp(root.wrap-w - 360px, 200px, 240px) : 180px;
     property <float> r1: root.size / 1px / 2 - 42;
     property <float> r0: root.r1 - max(22, round(root.size / 1px * 0.11));
     // first view: the arcs sweep in (ease-in-out, never past their share); then toggles morph
@@ -682,6 +696,10 @@ export component AxDonutCard inherits AxCard {
     calm-timer := Timer { interval: Motion.slow + 40ms; running: false; triggered => { self.running = false; root.calm = true; } }
     property <AxDonutSeg> hot-seg: root.hot >= 0 && root.hot < AxData.donut-segs.length ? AxData.donut-segs[root.hot] : { };
     property <AxDonutSeg> show-seg: root.show >= 0 && root.show < AxData.donut-segs.length ? AxData.donut-segs[root.show] : { };
+    // the unpinned centre label below D: the full label when the hole fits it, else the short one (task 9 A5)
+    property <string> centre-below-d: AxData.donut.mode == "cost"
+        ? (root.r0 * 2 >= 165 ? AxData.donut.centre-label : AxData.donut.centre-short)
+        : (root.r0 * 2 >= 115 ? AxData.donut.centre-label : AxData.donut.centre-short);
 
     if Breakpoints.tier-d: AxCardHead {
         title: "Model usage";
@@ -780,7 +798,7 @@ export component AxDonutCard inherits AxCard {
                 x: (root.size - self.width) / 2;
                 alignment: center;
                 spacing: 3px;
-                if root.show < 0: Text { text: AxData.donut.centre; font-family: Type.tab; font-size: Breakpoints.tier-d ? 22px : 18px; font-weight: 640; color: Theme.ink; horizontal-alignment: center; overflow: elide; }
+                if root.show < 0: Text { text: AxData.donut.centre; font-family: Type.tab; font-size: Breakpoints.tier-d ? 22px : root.r0 * 2 >= 130 ? 18px : 16px; font-weight: 640; color: Theme.ink; horizontal-alignment: center; overflow: elide; }
                 if root.show >= 0 && Breakpoints.tier-d: HorizontalLayout { alignment: center; ValueUnit { value: root.show-seg.share; size: 22px; weight: 640; unit-scale: 0.96; } }
                 // below D the pinned arc shows its share and its value (the legend row names it)
                 if root.show >= 0 && Breakpoints.below-d: HorizontalLayout { alignment: center; ValueUnit { value: root.show-seg.share; size: 20px; weight: 640; unit-scale: 0.96; } }
@@ -792,7 +810,7 @@ export component AxDonutCard inherits AxCard {
                     wrap: word-wrap;
                 }
                 if Breakpoints.below-d: Text {
-                    text: root.show < 0 ? AxData.donut.centre-label : root.show-seg.value + AxData.donut.unit;
+                    text: root.show < 0 ? root.centre-below-d : root.show-seg.value + AxData.donut.unit;
                     font-family: Type.tab;
                     font-size: 11px;
                     color: Theme.ink-3;
