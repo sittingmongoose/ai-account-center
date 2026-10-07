@@ -798,13 +798,6 @@ public partial class MainWindow : Window
             quiet.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
         }
-        else if (provider == "antigravity" && account.AntigravityPlan is { QuotaPolicy: "none" } && !Meters(account).Any())
-        {
-            // A plan without a bundled Antigravity quota: one honest line instead of meters (ANTIGRAVITY-SPEC).
-            var quiet = Ui.Text("No Antigravity quota on this plan", 12, "Ink3", trim: true);
-            quiet.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
-        }
         else for (int i = 0; i < columns.Count; i++)
         {
             var cell = Cell(provider, account, columns[i]);
