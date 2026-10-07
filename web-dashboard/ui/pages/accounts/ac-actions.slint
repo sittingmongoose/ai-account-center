@@ -1,11 +1,15 @@
 // The small pieces every part of Accounts & Settings shares: the "coming" caption, the hover-tip area, a note
-// with its icon, and one action control (a button, an icon-only button or a quiet word).
-import { Theme, Motion, Type } from "../../theme.slint";
+// with its icon, one action control (a button, an icon-only button or a quiet word), the touch additions of
+// DESIGN-MOBILE.md sections 4.3 and 5 (a label-and-switch pair that is one 44 px hit area, a full-width
+// segmented control, and the one-open inline tip), and the reason tap for dimmed controls.
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { Icon } from "../../components/icon.slint";
 import { Button } from "../../components/button.slint";
 import { IconButton } from "../../components/icon-button.slint";
+import { Toggle } from "../../components/toggle.slint";
 import { Hover } from "../../components/hover-card.slint";
 import { ProbeMark } from "../../components/probe.slint";
+import { SegItem } from "../../components/segmented.slint";
 import { AcAction } from "ac-data.slint";
 
 // "coming": the concept's quiet mono caption (its "proposal" word), for an action the server has no route for
@@ -20,7 +24,8 @@ export component ComingWord inherits Text {
 }
 
 // A hover tip for whatever sits inside it, including a disabled control (which takes no pointer events itself).
-// A click on it is taken here, so a nested control never also opens the row's Details.
+// A click on it is taken here, so a nested control never also opens the row's Details. On touch, has-hover is
+// true only while pressed, so the tip shows under the finger (the short form of 5.2.3 for disabled controls).
 export component TipArea inherits TouchArea {
     in property <string> tip;
     in property <string> owner;
@@ -54,31 +59,48 @@ export component IconNote inherits Rectangle {
 
 // One action: a button, an icon-only button or a quiet word. A "coming" action is dimmed and says on hover what
 // it will do; a "refused" one is dimmed but clickable (its click opens the reason); a busy one shows a spinner.
+// Below D a tap on a dimmed control opens its reason (callback `reason`), which the row draws as a line under
+// itself (DESIGN-MOBILE.md 5.2.2); long-press shows the same words as a tip. `stretch` fills the control's
+// width (the P footer's full-width and half-width buttons) and `tall` raises the touch height to 48.
 export component ActionControl inherits Rectangle {
     in property <AcAction> data;
     in property <string> owner;
     in property <bool> busy;
     in property <bool> align-end: true;
+    in property <bool> stretch: false;
+    in property <bool> tall: false;
     callback act(string, string);
+    callback reason(string);
     out property <length> natural: root.data.kind == "button" ? btn.preferred-width
-        : root.data.kind == "icon" ? 28px
+        : root.data.kind == "icon" ? (Breakpoints.below-d ? 40px : 28px)
         : root.data.kind == "quiet" ? quiet.preferred-width : 0px;
+    // layouts (the wrapped action slots, the foot rows) size the control by its natural width
+    preferred-width: root.natural;
     property <bool> shown: root.data.kind == "button" || root.data.kind == "icon" || root.data.kind == "quiet";
+    // the touch hit area: 44 (48 for the tall footer buttons) below D, the desktop 28 otherwise
+    property <length> hit-h: Breakpoints.below-d ? (root.tall ? 48px : 44px) : 28px;
     min-height: 28px;
     tip := TipArea {
-        x: root.align-end ? root.width - root.natural : 0px;
-        y: (root.height - 28px) / 2;
-        width: root.natural;
-        height: 28px;
+        x: root.stretch || !root.align-end ? 0px : root.width - root.natural;
+        y: (root.height - root.hit-h) / 2;
+        width: root.stretch ? root.width : root.natural;
+        height: root.hit-h;
         visible: root.shown;
         owner: root.owner;
         tip: root.data.tip;
+        // a control that cannot act says why (5.2.2); refused controls keep routing through the row
+        clicked => {
+            if !root.data.enabled && root.data.tip != "" && root.data.act != "refuse" {
+                root.reason(root.data.tip);
+            }
+        }
         btn := Button {
             x: 0px;
             y: 0px;
-            width: self.preferred-width;
+            width: root.stretch ? parent.width : self.preferred-width;
             visible: root.data.kind == "button";
             small: true;
+            tall: root.tall;
             text: root.data.label;
             icon: root.data.icon;
             platform: root.data.platform;
@@ -87,6 +109,7 @@ export component ActionControl inherits Rectangle {
             muted: root.data.refused;
             busy: root.data.busy;
             hint: root.data.tip;
+            long-tip: root.data.tip;
             clicked => { root.act(root.data.act, root.data.value); }
         }
         IconButton {
@@ -99,6 +122,7 @@ export component ActionControl inherits Rectangle {
             enabled: root.data.enabled && !root.busy;
             muted: root.data.refused;
             hint: root.data.label;
+            long-tip: root.data.tip;
             clicked => { root.act(root.data.act, root.data.value); }
         }
         quiet := Text {
@@ -109,6 +133,172 @@ export component ActionControl inherits Rectangle {
             font-size: 12.5px;
             color: Theme.ink-3;
         }
-        if root.shown && root.data.probe != "": ProbeMark { x: 0px; y: 0px; width: root.natural; height: 28px; id: root.data.probe; }
+        if root.shown && root.data.probe != "": ProbeMark { x: 0px; y: 0px; width: tip.width; height: tip.height; id: root.data.probe; }
+    }
+}
+
+// A Toggle that follows a model value even after the user clicked it: the Toggle assigns its own `on`
+// on click, which ends a plain binding, so the model's value is re-asserted whenever it (or the
+// enabled flag, which flips when a save ends) changes.
+export component BoundToggle inherits VerticalLayout {
+    in property <bool> model-on;
+    in property <bool> enabled: true;
+    in property <string> label;
+    in property <bool> small: false;
+    in property <string> long-tip: "";
+    in property <string> probe: "";
+    callback toggled(bool);
+    alignment: center;
+    tg := Toggle {
+        small: root.small;
+        on: root.model-on;
+        enabled: root.enabled;
+        label: root.label;
+        long-tip: root.long-tip;
+        probe: root.probe;
+        toggled(on) => { root.toggled(on); }
+    }
+    init => { tg.on = self.model-on; }
+    changed model-on => { tg.on = self.model-on; }
+    changed enabled => { tg.on = self.model-on; }
+}
+
+// A label and its switch as one 44 px hit area (DESIGN-MOBILE.md 4.3.2 list rows and 4.3.3 Line E): the label
+// sits left of the switch; a tap anywhere on the pair toggles it; a disabled pair shows its reason on tap
+// (5.4 #14). `spread` pushes the switch to the pair's right edge (the P header list rows); otherwise the label
+// hugs the switch (the row's Dashboard / Tray pair).
+export component SwitchPair inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <bool> spread: false;
+    in property <string> long-tip: "";
+    in property <string> probe: "";
+    callback toggled(bool);
+    callback reason-tap();
+    min-height: 44px;
+    preferred-width: row.preferred-width;
+    // below the row, so a press on the switch keeps the Toggle's own click (its thumb moves at once)
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : not-allowed;
+        clicked => {
+            if root.enabled {
+                root.toggled(!root.on);
+            } else {
+                root.reason-tap();
+            }
+        }
+    }
+    row := HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        min-height: 44px;
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.label;
+                font-size: Type.body;
+                color: root.enabled ? Theme.ink : Theme.ink-3;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        if root.spread: Rectangle { horizontal-stretch: 1; }
+        if !root.spread: Rectangle { width: 8px; }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            tg := Toggle {
+                on: root.on;
+                enabled: root.enabled;
+                long-tip: root.long-tip;
+                probe: root.probe;
+                toggled(on) => { root.toggled(on); }
+            }
+        }
+    }
+    init => { tg.on = self.on; }
+    changed on => { tg.on = self.on; }
+    changed enabled => { tg.on = self.on; }
+    if root.probe != "": ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: root.probe; }
+}
+
+// A segmented control whose segments share the control's full width equally (DESIGN-MOBILE.md 4.3.6 cooldown
+// and 4.3.7 appearance / session lifetime below D). The look and the gliding indicator are the Segmented's.
+export component StretchSegmented inherits Rectangle {
+    in property <[SegItem]> items;
+    in-out property <string> value;
+    in property <bool> enabled: true;
+    callback changed-value(string);
+
+    property <length> ind-x: 0px;
+    property <length> ind-w: 0px;
+    property <bool> placed: false;
+
+    height: Breakpoints.tier-d ? 36px : 44px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.rule-2;
+    background: Theme.paper-3;
+    opacity: root.enabled ? 1 : 0.5;
+
+    indicator := Rectangle {
+        x: root.ind-x;
+        y: 4px;
+        width: root.ind-w;
+        height: root.height - 8px;
+        visible: root.ind-w > 0;
+        border-radius: 7px;
+        background: Theme.paper;
+        border-width: 1px;
+        border-color: Theme.rule;
+        drop-shadow-color: Theme.shadow-1;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
+        animate x { duration: root.placed && Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+        animate width { duration: root.placed && Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    }
+    row := HorizontalLayout {
+        padding: 4px;
+        for item[i] in root.items: cell := Rectangle {
+            horizontal-stretch: 1;
+            property <bool> selected: item.value == root.value;
+            min-width: 0px;
+            property <color> fg: self.selected || ta.has-hover ? Theme.ink : Theme.ink-3;
+            transform-scale: ta.pressed ? 0.97 : 1;
+            animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            init => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; } }
+            changed selected => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }
+            changed x => { if self.selected { root.ind-x = self.x; } }
+            changed width => { if self.selected { root.ind-w = self.width; } }
+            seg-row := HorizontalLayout {
+                alignment: center;
+                spacing: 6px;
+                if item.icon != "": VerticalLayout {
+                    alignment: center;
+                    Icon { name: item.icon; tint: cell.fg; width: 15px; height: 15px; }
+                }
+                Text {
+                    text: item.label;
+                    color: cell.fg;
+                    animate color { duration: Motion.tint(200ms); }
+                    font-size: Type.control;
+                    font-weight: 560;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            ta := TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: root.enabled ? pointer : default;
+                clicked => {
+                    if root.value != item.value {
+                        root.placed = true;
+                        root.value = item.value;
+                        root.changed-value(item.value);
+                    }
+                }
+            }
+        }
     }
 }

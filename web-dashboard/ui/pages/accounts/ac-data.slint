@@ -254,6 +254,16 @@ export struct AcSignin {
     network: AcNetwork,
 }
 
+// The page's local UI state that is not view-model data (mobile, DESIGN-MOBILE.md sections 3-5). No
+// readings or decisions live here; it only carries taps the shell or the page's own groups need.
+// (The one-open inline tip per page lives in the shared Tips global, components/info-tip.slint.)
+export global AcUi {
+    // The P/F "Settings" jump button (4.3.1): bumped on every tap. The page scroller that owns the
+    // scroll (ui/dashboard.slint, phase 1) watches this and scrolls the page to the top of the
+    // Settings area (ease-out 300 ms). Until that hook lands the button taps are inert.
+    in-out property <int> settings-jump: 0;
+}
+
 export global AcData {
     in-out property <bool> ready: false;
     in-out property <[AcProvider]> col-a;
@@ -283,6 +293,10 @@ export global AcData {
     in-out property <[AcUpdHost]> update-hosts;
     in-out property <AcSignin> signin;
     in-out property <[AcDevice]> devices;
+    // The Settings "Home screen app" row's mode (DESIGN-MOBILE.md 6.6): "chromium" | "ios" | "hidden".
+    // Fed by public/device.mjs installRow() through src/accounts.rs (phase 6); until then it is
+    // "hidden", which draws no row. The Install button fires the "install-app" action kind.
+    in-out property <string> install: "hidden";
     // the new password's strength while the change-password form is typed in (set on its own, per keystroke)
     in-out property <StrengthView> pw-strength;
     in-out property <[RunView]> pairing-note;

@@ -542,6 +542,9 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
         |x: &FactView| x.label.clone(),
     );
     ac.set_about_version(s(g(&v, "about"), "version"));
+    // The Settings "Home screen app" row (DESIGN-MOBILE.md 6.6): bridge.js feeds vm.install from
+    // device.mjs installRow(); anything but "chromium"/"ios" draws no row.
+    ac.set_install(s(&v, "install"));
     ac.set_ready(true);
     Ok(())
 }
