@@ -186,7 +186,7 @@ const tagOf = acc => acc.email.split('@')[0];
  */
 export function focusChart(acc, payload, ctx) {
   const now = ctx.now;
-  const W = Math.max(320, ctx.width || 1200), Hc = Math.max(200, ctx.height || 270);
+  const W = Math.max(320, ctx.width || 1200), Hc = Math.max(160, ctx.height || 270);
   const pad = FOCUS_PAD;
   const plotW = W - pad.l - pad.r, plotH = Hc - pad.t - pad.b;
   const obsW = Math.round(plotW * 0.7), gap = 18;

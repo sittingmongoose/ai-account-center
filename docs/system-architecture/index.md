@@ -112,8 +112,10 @@ Trays pair once with the password and then use a revocable
 `Authorization: Bearer`; only its SHA-256 is stored, it reaches only the tray routes
 ([allowlist](../../src/web-server/middleware/api-request-guard.ts)), rotates every 30 days
 and expires after 90 days unused. Password, setup, pairing and rotation need a secure
-transport; `dashboard_tls` in config.yaml (a trusted local TLS proxy, an in-process HTTPS
-listener and the public origin) is off by default. So is `dashboard_network`: with
+transport; `dashboard_tls` in config.yaml (a trusted TLS proxy - local on loopback, or
+`lan-https-proxy` with exact private `trusted_proxy_addresses` on another computer, set with
+`ai-account-center dashboard proxy` - an in-process HTTPS listener and the public origin) is off
+by default. So is `dashboard_network`: with
 `trust_local_network: true`, plain HTTP from a peer in `trusted_networks` (by default
 10/8, 172.16/12, 192.168/16 and fc00::/7; [ranges](../../src/web-server/middleware/trusted-networks.ts),
 IPv4-mapped addresses normalised) counts as secure when the request carries no proxy

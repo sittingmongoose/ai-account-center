@@ -3,11 +3,11 @@
   "updatedAt": "2026-10-01T04:00:00Z",
   "accounts": [
     {
-      "id": "preview-claude-platyr",
+      "id": "preview-claude-plum",
       "provider": "claude",
       "providerLabel": "Claude",
       "label": "Layout preview",
-      "email": "claude-platyr@example.test",
+      "email": "claude-plum@example.test",
       "plan": "Subscription",
       "platform": "mac",
       "source": "Preview fixture",
@@ -42,7 +42,7 @@
       ],
       "capabilities": {
         "codexProfile": null,
-        "claudeProfileId": "platyr",
+        "claudeProfileId": "plum",
         "claudePlatforms": [
           "mac",
           "windows"
@@ -279,11 +279,11 @@
       }
     },
     {
-      "id": "preview-codex-lexxmariah",
+      "id": "preview-codex-lime",
       "provider": "codex",
       "providerLabel": "Codex",
       "label": "Layout preview",
-      "email": "codex-lexxmariah@example.test",
+      "email": "codex-lime@example.test",
       "plan": "Subscription",
       "platform": "ubuntu",
       "source": "Preview fixture",
@@ -317,7 +317,7 @@
         }
       ],
       "capabilities": {
-        "codexProfile": "lexxmariah",
+        "codexProfile": "lime",
         "claudeProfileId": null,
         "claudePlatforms": []
       }

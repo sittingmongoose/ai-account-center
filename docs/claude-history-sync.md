@@ -39,7 +39,7 @@ A stop at the per-Open bound logs `claude.history.copy_budget_reached` (info). L
 ## What a copy leaves behind (and retention)
 
 **Snapshot folders on the target computer.** The pinned atomic writer (`history_index_transaction_v1.cjs`, sha256 `0b3b4cbb...`) creates one `.history-index-snapshot-<uuid>/` folder in the target profile root for every transaction and never removes it on success. The folder holds private copies of the profile's `config.json`, `ssh_configs.json` and `ssh-remote-server-state.json` (`protected-<n>.bin`) and a `snapshot-manifest.json`.
-- Each record is its own transaction, so **a copy of N records leaves N snapshot folders**: 18 for a first Gmail copy and 32 for a first Platyr copy.
+- Each record is its own transaction, so **a copy of N records leaves N snapshot folders**: 18 for a first copy of the Windows-sourced profile and 32 for a first copy of the Mac-sourced profile.
 - Claude Desktop's `config.json` can hold its encrypted sign-in token cache, so each folder is one more copy of it. The folders are private through 0700/0600 modes on the Mac and through the inherited folder ACL on Windows.
 - A test in `microbatch-sync.test.cjs` pins the count. The per-Open bound caps how many one Open can add (50).
 

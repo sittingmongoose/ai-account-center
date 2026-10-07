@@ -116,7 +116,7 @@ describe('account visibility on the real server', () => {
     const message = new Promise<string>((resolve) =>
       socket.once('message', (data) => resolve(String(data)))
     );
-    const body = { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:lexxmariah'] };
+    const body = { hiddenProviders: ['kimi-code'], hiddenAccountIds: ['codex:lime'] };
     const saved = { ...body, trayHiddenProviders: [], trayHiddenAccountIds: [] };
     const response = await fetch(`${base}/api/accounts/visibility`, {
       method: 'PUT',

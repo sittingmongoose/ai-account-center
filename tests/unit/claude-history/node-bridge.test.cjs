@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
+const {MAC_PROFILE} = require('./synthetic-history-fixtures.cjs');
 const bridge = require('../../../scripts/claude-history/history_index_node_bridge_v2.cjs');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const atomicSource = fs.readFileSync(path.join(__dirname, '../../../scripts/claude-history/history_index_transaction_v1.cjs'), 'utf8');
@@ -24,7 +25,7 @@ function fixture(count = 1) {
   const executable = path.join(base, 'python3');
   const executableBytes = Buffer.from('SYNTHETIC_INTERPRETER_NEVER_EXECUTED');
   fs.writeFileSync(executable, executableBytes, {mode:0o600});
-  const request = {schemaVersion:2, profileId:'platyr',platform:'mac',policy:{synthetic:true},
+  const request = {schemaVersion:2, profileId:MAC_PROFILE,platform:'mac',policy:{synthetic:true},
     expectedTarget:{private:'SYNTHETIC_PRIVATE_TARGET'},profileRoot,registryRoot,
     protected:[{name:'config.json',base64:protectedBytes.toString('base64')},{name:'absent.json',base64:null}],
     records:Array.from({length:count}, (_, index) => {
@@ -182,7 +183,7 @@ test('actual_spawned_python_json_guard_and_tempFS_transaction_composition',()=>w
   const source=[
     'import sys,json,base64,hashlib',
     'r=json.loads(sys.stdin.buffer.read())',
-    "good=(r.get('mode')=='protected-check' and r.get('profileId')=='platyr' and r.get('platform')=='mac' and r.get('expectedTarget')=={'private':'SYNTHETIC_PRIVATE_TARGET'})",
+    `good=(r.get('mode')=='protected-check' and r.get('profileId')==${JSON.stringify(MAC_PROFILE)} and r.get('platform')=='mac' and r.get('expectedTarget')=={'private':'SYNTHETIC_PRIVATE_TARGET'})`,
     "good=good and all(hashlib.sha256(base64.b64decode(v['base64'],validate=True)).hexdigest()==v['sha256'] for v in r['records'])",
     "sys.stdout.write(json.dumps({'unchanged':good},separators=(',',':')))",
   ].join('\n');

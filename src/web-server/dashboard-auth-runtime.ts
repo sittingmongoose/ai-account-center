@@ -5,9 +5,10 @@ import https from 'https';
 import os from 'os';
 import path from 'path';
 import { createLogger } from '../services/logging';
-import { isLoopbackRemoteAddress } from './middleware/auth-middleware';
 import {
+  isTrustedProxyHop,
   setLocalNetworkTrustResolver,
+  setTrustedProxyAddressesResolver,
   setTrustedProxyResolver,
 } from './middleware/secure-transport';
 import { dashboardAuthState, sendAuthError } from './routes/auth-route-helpers';
@@ -28,22 +29,24 @@ import { getDashboardNetworkSettings } from './services/dashboard-network-config
 const logger = createLogger('dashboard-auth');
 
 /**
- * Rule 3 of isSecureTransport, plus Express `trust proxy` for loopback peers
- * only, and only while `dashboard_tls.trusted_proxy` is set. X-Forwarded-*
- * from any other peer is never trusted. Rule 4 reads `dashboard_network`
- * (the owner's trusted local network, off by default).
+ * Rule 3 of isSecureTransport, plus Express `trust proxy` for a configured
+ * proxy hop only (isTrustedProxyHop): loopback hops while a local
+ * `dashboard_tls.trusted_proxy` kind is set, or exactly the socket peer at one
+ * of `trusted_proxy_addresses` while it is `lan-https-proxy`, so `req.ip` is
+ * then the rightmost `X-Forwarded-For` entry. X-Forwarded-* from any other
+ * peer is never trusted. Both read config.yaml on every request (cached by its
+ * size and time), so a change made with `dashboard proxy` applies at once. Rule
+ * 4 reads `dashboard_network` (the owner's trusted local network, off by
+ * default).
  */
 export function configureDashboardTransport(app: Express): void {
   setTrustedProxyResolver(() => getDashboardTlsSettings().trustedProxy);
+  setTrustedProxyAddressesResolver(() => getDashboardTlsSettings().trustedProxyAddresses);
   setLocalNetworkTrustResolver(() => {
     const settings = getDashboardNetworkSettings();
     return { enabled: settings.trustLocalNetwork, networks: settings.networks };
   });
-  app.set(
-    'trust proxy',
-    (address: string) =>
-      getDashboardTlsSettings().trustedProxy !== null && isLoopbackRemoteAddress(address)
-  );
+  app.set('trust proxy', (address: string, hop: number) => isTrustedProxyHop(address, hop));
 }
 
 /**

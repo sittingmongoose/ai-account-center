@@ -229,7 +229,7 @@ describe('identity-bound Claude Desktop live usage', () => {
   it.each([
     { schemaVersion: 2 },
     { provider: 'codex' },
-    { profileId: 'platyr' },
+    { profileId: 'plum' },
     { email: 'someone-else@example.com' },
     { platform: 'mac' },
     { status: 'cached' },

@@ -99,7 +99,7 @@ describe('local key store', () => {
 describe('remote key store', () => {
   it('sends the secret on stdin only and parses the helper reply', async () => {
     const calls: Array<{ host: string; command: string; input: string | null }> = [];
-    const store = new RemoteKeyStore('mac', 'jared-mac', async (host, command, input) => {
+    const store = new RemoteKeyStore('mac', 'mac-host', async (host, command, input) => {
       calls.push({ host, command, input });
       return input
         ? `${JSON.stringify({ ok: true, fingerprint: keyFingerprint(input), last4: keyLast4(input) })}\n`
@@ -113,13 +113,13 @@ describe('remote key store', () => {
     await store.delete('kimi-code', '0badc0de');
     expect(calls).toEqual([
       {
-        host: 'jared-mac',
+        host: 'mac-host',
         command:
           "/usr/bin/python3 \"$HOME/.ccs/account-usage/key_store.py\" put --provider 'kimi-code' --key-id '0badc0de'",
         input: SECRET,
       },
       {
-        host: 'jared-mac',
+        host: 'mac-host',
         command:
           "/usr/bin/python3 \"$HOME/.ccs/account-usage/key_store.py\" delete --provider 'kimi-code' --key-id '0badc0de'",
         input: null,
@@ -135,7 +135,7 @@ describe('remote key store', () => {
       JSON.stringify({ ok: true, fingerprint: keyFingerprint(SECRET), last4: 'x7Qa', extra: 1 }),
       JSON.stringify({ ok: true, fingerprint: keyFingerprint('other-secret'), last4: 'x7Qa' }),
     ]) {
-      const store = new RemoteKeyStore('mac', 'jared-mac', async () => reply);
+      const store = new RemoteKeyStore('mac', 'mac-host', async () => reply);
       await expect(store.put('zai', '9f2c41d0', SECRET)).rejects.toThrow();
     }
   });
@@ -153,7 +153,7 @@ describe('remote key store', () => {
     expect(keyStoreFor({ platform: 'ubuntu', sshHost: null }, { ccsDir: dir })).toBeInstanceOf(
       LocalKeyStore
     );
-    expect(keyStoreFor({ platform: 'mac', sshHost: 'jared-mac' }, { ccsDir: dir })).toBeInstanceOf(
+    expect(keyStoreFor({ platform: 'mac', sshHost: 'mac-host' }, { ccsDir: dir })).toBeInstanceOf(
       RemoteKeyStore
     );
     expect(keyStoreFor({ platform: 'mac', sshHost: null }, { ccsDir: dir })).toBeNull();

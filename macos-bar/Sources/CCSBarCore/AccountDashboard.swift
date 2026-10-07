@@ -10,7 +10,7 @@ public struct AccountDashboard: Decodable, Sendable {
   /// malformed value is ignored rather than failing the whole dashboard.
   public let antigravityAutoSwitch: AntigravityAutoSwitch?
   /// Providers hidden on the dashboard ("Show on dashboard" off). The trays only report them: the dashboard and
-  /// the trays have independent switches (Jared, 2026-10-02), so this list hides nothing here.
+  /// the trays have independent switches (owner decision, 2026-10-02), so this list hides nothing here.
   public let hiddenProviders: Set<String>
   /// Providers hidden in the trays ("Show in tray" off): `providers[].trayVisible == false`, or a provider in
   /// `settings.trayHiddenProviders`. A missing field means visible.
@@ -51,7 +51,7 @@ public struct AccountDashboard: Decodable, Sendable {
 
   /// Accounts the trays show: every account whose provider is shown in the tray (`providers[].trayVisible`) and
   /// that is not hidden in the trays itself (`accounts[].trayHidden`). The dashboard's own switches
-  /// (`providers[].visible`, `accounts[].hidden`) are never read: the two sets are independent (Jared, 2026-10-02).
+  /// (`providers[].visible`, `accounts[].hidden`) are never read: the two sets are independent (owner decision, 2026-10-02).
   public var visibleAccounts: [DashboardAccount] {
     accounts.filter { !trayHiddenProviders.contains($0.provider) && $0.trayHidden != true }
   }

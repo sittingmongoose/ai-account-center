@@ -70,7 +70,7 @@ function summary(active = 'gmail'): CodexAuthProfilesSummary {
       codexHome: '/private-live-path',
     },
     default: 'party',
-    profiles: ['gmail', 'party', 'lexxmariah'].map((name) => ({
+    profiles: ['gmail', 'party', 'lime'].map((name) => ({
       name,
       email: `${name}@example.com`,
       plan: 'pro',
@@ -115,7 +115,7 @@ function row(profile: string, overrides: Partial<BarSummaryRow> = {}): BarSummar
   };
 }
 
-const claudeProfiles: ClaudeDesktopProfile[] = ['platyr', 'gmail', 'party', 'me'].map((id) => ({
+const claudeProfiles: ClaudeDesktopProfile[] = ['plum', 'gmail', 'party', 'me'].map((id) => ({
   id,
   email: `${id}@example.com`,
   mac: {
@@ -351,15 +351,15 @@ describe('consolidated account dashboard', () => {
         getCodexRows: async () => [
           row('gmail'),
           row('party'),
-          row('lexxmariah', { quotaStatus: 'error', needsReauth: true }),
+          row('lime', { quotaStatus: 'error', needsReauth: true }),
         ],
         getClaudeUsage: async (platform) => ({
           platform,
           fetchedAt: '2026-10-01T12:00:00Z',
           profiles: [
             {
-              id: 'platyr',
-              email: 'platyr@example.com',
+              id: 'plum',
+              email: 'plum@example.com',
               status: 'needs-sign-in',
               cached: true,
               fetchedAt: '2026-10-01T12:00:00Z',
@@ -766,9 +766,9 @@ describe('consolidated account dashboard', () => {
     expect(gmail?.source).toBe('Claude Desktop live quota on Windows');
     expect(gmail?.plan).toBe('max');
     expect(gmail?.windows[0].resetAt).toBe('2026-10-02T12:00:00.000Z');
-    const platyr = result.accounts.find((account) => account.id === 'claude:platyr');
-    expect(platyr?.status).toBe('cached');
-    expect(platyr?.windows[0].usedPercent).toBe(0);
+    const plum = result.accounts.find((account) => account.id === 'claude:plum');
+    expect(plum?.status).toBe('cached');
+    expect(plum?.windows[0].usedPercent).toBe(0);
     expect(JSON.stringify(result)).not.toContain('someone-else');
   });
 

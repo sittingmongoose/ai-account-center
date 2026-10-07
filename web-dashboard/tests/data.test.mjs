@@ -144,9 +144,9 @@ test('signed balances and adjustment counters retain their actual sign', () => {
   assert.equal(usageView({ kind: 'spend', used: -1, limit: 50, unit: 'USD' }).amount, '-1 / 50 USD used');
 });
 test('Lex active state is explicit and uses reported primary percentages', () => {
-  const data = { accounts: [{ id: 'codex:lex', provider: 'codex', email: 'lexxmariah@gmail.com', plan: 'Plus', isActive: true, capabilities: { codexProfile: 'lexxmariah' }, windows: [{ key: 'five_hour', label: '5-hour', usedPercent: 5 }, { key: 'seven_day', label: 'Weekly', usedPercent: 9 }] }] };
+  const data = { accounts: [{ id: 'codex:lex', provider: 'codex', email: 'lime@example.com', plan: 'Plus', isActive: true, capabilities: { codexProfile: 'lime' }, windows: [{ key: 'five_hour', label: '5-hour', usedPercent: 5 }, { key: 'seven_day', label: 'Weekly', usedPercent: 9 }] }] };
   const view = dashboardView(data);
-  assert.equal(view.activeCodexEmail, 'lexxmariah@gmail.com');
+  assert.equal(view.activeCodexEmail, 'lime@example.com');
   assert.equal(view.codex[0].active, true);
   assert.equal(view.codex[0].status, '✓ Active on Ubuntu');
   assert.equal(view.codex[0].five.amount, '5% used');
@@ -208,7 +208,7 @@ test('Muse percentages unavailable from the provider are not fabricated from tok
 });
 
 test('three Claude Max rows show an explicit unavailable Fable slot; Pro has no slot', () => {
-  const accounts = ['platyr', 'party', 'me'].map(id => ({ id: `claude:${id}`, provider: 'claude', plan: 'max', windows: [
+  const accounts = ['plum', 'party', 'me'].map(id => ({ id: `claude:${id}`, provider: 'claude', plan: 'max', windows: [
     { key: 'five_hour', label: 'Five-hour usage', windowMinutes: 300, usedPercent: 0 },
     { key: 'seven_day', label: 'Weekly usage', windowMinutes: 10080, usedPercent: 100 },
     { key: 'seven_day_opus', label: 'Weekly Opus usage', windowMinutes: 10080, usedPercent: 75 },
@@ -248,7 +248,7 @@ test('reported Fable remains distinct from total weekly quota and displays its a
 test('cached optional windows retain their original sample time beside fresh core and Fable quotas', () => {
   const original = '2026-10-02T04:15:23.456Z';
   const refreshed = '2026-10-02T11:00:00Z';
-  const account = { id: 'claude:platyr', provider: 'claude', plan: 'max', status: 'ok', fetchedAt: refreshed, sampledAt: refreshed, windows: [
+  const account = { id: 'claude:plum', provider: 'claude', plan: 'max', status: 'ok', fetchedAt: refreshed, sampledAt: refreshed, windows: [
     { key: 'seven_day', label: 'Weekly usage', usedPercent: 12, resetAt: '2026-10-08T12:00:00Z' },
     { key: 'seven_day_fable', label: 'Weekly Fable usage', usedPercent: 0, resetAt: '2026-10-08T12:00:00Z' },
     { key: 'reset_credit_used_grant_1', label: 'Used rate-limit reset grant 1', kind: 'balance', used: 1, limit: 1, remaining: 0, unit: 'resets', expiresAt: '2026-10-22T16:00:00Z', status: 'cached', sampledAt: original },

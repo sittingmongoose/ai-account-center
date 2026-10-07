@@ -1404,7 +1404,7 @@ private func checkDashboardAdditions() throws {
   let outOfRange = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: malformed))
   try expect(outOfRange.antigravityAutoSwitch == nil, "An out-of-range Antigravity threshold must not be shown as a policy")
 
-  // "Show on dashboard" and "Show in tray" are independent (Jared, 2026-10-02): the tray follows only
+  // "Show on dashboard" and "Show in tray" are independent (owner decision, 2026-10-02): the tray follows only
   // providers[].trayVisible and settings.trayHiddenProviders, plus accounts[].trayHidden, never
   // providers[].visible or accounts[].hidden.
   var hidden = object
@@ -2283,19 +2283,19 @@ private func checkMenuBarSelection() throws {
   // string the Settings picker shows, so it names the account actually shown.
   var collisionObject = original
   collisionObject["accounts"] = [
-    account("claude-x", "claude", email: "jared@platyr.invalid", windows: [
+    account("claude-x", "claude", email: "user@plum.invalid", windows: [
       window("five_hour", "Five-hour usage", ["usedPercent": 12]),
     ]),
-    account("claude-y", "claude", email: "jared@party.invalid", windows: [
+    account("claude-y", "claude", email: "user@party.invalid", windows: [
       window("five_hour", "Five-hour usage", ["usedPercent": 34]),
     ]),
   ]
   let collision = try JSONDecoder().decode(AccountDashboard.self,
     from: JSONSerialization.data(withJSONObject: collisionObject))
   try expect(MenuBarReading.make(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-y")?.detail
-    == "Claude · jared@party.invalid · 5-hour used"
+    == "Claude · user@party.invalid · 5-hour used"
     && MenuBarReading.make(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-x")?.detail
-    == "Claude · jared@platyr.invalid · 5-hour used",
+    == "Claude · user@plum.invalid · 5-hour used",
     "When two accounts shorten to one name, the tag must name the full identity")
   // Settings > Menu bar hover tags: Show and Claude account describe their picker; Value
   // names the full identity of the account actually shown, the same string the Show preview uses.
@@ -2306,7 +2306,7 @@ private func checkMenuBarSelection() throws {
     == "Whether the menu bar shows Used or Remaining for codex-a@example.invalid.",
     "The Value hover tag must name the Codex account actually shown")
   try expect(MenuBarReading.valueHelp(dashboard: collision, provider: "claude", mode: .used, claudeAccountID: "claude-y")
-    == "Whether the menu bar shows Used or Remaining for jared@party.invalid.",
+    == "Whether the menu bar shows Used or Remaining for user@party.invalid.",
     "The Value hover tag must name the full identity when two accounts shorten alike")
   // T1: the Show preview names the FULL identity even when no two accounts shorten
   // alike, and the Value hover tag names exactly that same account.
@@ -2495,7 +2495,7 @@ private final class FakeDashboard: @unchecked Sendable {
   var accessMode = "login"
   var trustLocalNetwork = true
   var peerTrusted = true
-  var peer = "192.168.50.23"
+  var peer = "192.168.10.23"
   var supportsPairing = true
   var setupCode = "K7QF2MXD"
   var failures = 0
@@ -2684,7 +2684,7 @@ private func checkConnectionVersions() async throws {
   let directory = try pairingDirectory("versions")
   defer { try? FileManager.default.removeItem(at: directory) }
   let file = directory.appendingPathComponent("bar/accounts-connection.json")
-  let base = URL(string: "http://192.168.50.10:3000")!
+  let base = URL(string: "http://192.168.10.10:3000")!
   let install = UUID().uuidString
   let v2 = BarConnection(baseURL: base, username: "owner", deviceId: "dev_00000000000000aa", deviceToken: sampleToken,
     installId: install, pairedAt: "2026-10-02T15:00:00Z")
@@ -2713,7 +2713,7 @@ private func checkConnectionVersions() async throws {
     ["version": 2, "baseURL": base.absoluteString, "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken,
      "installId": "not-a-uuid"],
     ["version": 3, "baseURL": base.absoluteString, "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken],
-    ["version": 2, "baseURL": "http://192.168.50.10:3000/path", "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken],
+    ["version": 2, "baseURL": "http://192.168.10.10:3000/path", "username": "owner", "deviceId": "dev_00000000000000aa", "deviceToken": sampleToken],
   ]
   for object in bad {
     try ConnectionStore.writePrivately(JSONSerialization.data(withJSONObject: object), to: file)
@@ -2736,7 +2736,7 @@ private func checkBearerClient() async throws {
   let fake = FakeDashboard()
   let transport = FakeDashboardTransport(fake)
   let device = fake.pair(installId: UUID().uuidString)
-  let base = URL(string: "http://192.168.50.10:3000")!
+  let base = URL(string: "http://192.168.10.10:3000")!
   let connection = BarConnection(baseURL: base, username: "owner", deviceId: device.id, deviceToken: device.token,
     installId: UUID().uuidString, pairedAt: "2026-10-02T15:00:00Z")
   let client = AccountsClient(connection: connection, transport: transport)
@@ -2812,8 +2812,8 @@ private func checkBearerClient() async throws {
 
 /// The tray's own local-network check (nothing is sent to an outside address over plain HTTP).
 private func checkLocalNetwork() throws {
-  let local = ["10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.0.1", "192.168.50.179", "127.0.0.1",
-    "::1", "fc00::1", "fd12:3456::9", "::ffff:192.168.50.20", "::ffff:c0a8:3214", "[fd00::5]", "fe80::1%en0x"]
+  let local = ["10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.0.1", "192.168.10.179", "127.0.0.1",
+    "::1", "fc00::1", "fd12:3456::9", "::ffff:192.168.10.20", "::ffff:c0a8:0a14", "[fd00::5]", "fe80::1%en0x"]
   let outside = ["8.8.8.8", "172.15.255.255", "172.32.0.1", "192.169.0.1", "11.0.0.1", "100.64.1.2", "169.254.3.4",
     "203.0.113.5", "2001:db8::1", "fe80::1", "::", "0.0.0.0", "::ffff:8.8.8.8", "fbff::1", "fe00::1"]
   for address in local where address != "fe80::1%en0x" {
@@ -2822,15 +2822,15 @@ private func checkLocalNetwork() throws {
   for address in outside {
     try expect(!LocalNetwork.isLocal(address: address), "\(address) is not on the local network")
   }
-  try expect(LocalNetwork.verdict(host: "192.168.50.179", resolver: { _ in ["8.8.8.8"] }) == .local,
+  try expect(LocalNetwork.verdict(host: "192.168.10.179", resolver: { _ in ["8.8.8.8"] }) == .local,
     "A literal address is judged as written, never by a lookup")
-  try expect(LocalNetwork.verdict(host: "dashboard.local", resolver: { _ in ["192.168.50.179", "fd00::5"] }) == .local,
+  try expect(LocalNetwork.verdict(host: "dashboard.local", resolver: { _ in ["192.168.10.179", "fd00::5"] }) == .local,
     "A name that resolves only to local addresses is local")
-  try expect(LocalNetwork.verdict(host: "home.example.net", resolver: { _ in ["192.168.50.179", "203.0.113.9"] }) == .outside("203.0.113.9"),
+  try expect(LocalNetwork.verdict(host: "home.example.net", resolver: { _ in ["192.168.10.179", "203.0.113.9"] }) == .outside("203.0.113.9"),
     "A name with any outside address is refused")
   try expect(LocalNetwork.verdict(host: "nowhere.invalid", resolver: { _ in [] }) == .unresolved,
     "A name that does not resolve is left to the reachability check")
-  for (raw, expected) in [("192.168.50.179:3000", "http://192.168.50.179:3000"), (" http://dash.local:3000/ ", "http://dash.local:3000"),
+  for (raw, expected) in [("192.168.10.179:3000", "http://192.168.10.179:3000"), (" http://dash.local:3000/ ", "http://dash.local:3000"),
     ("https://10.0.0.5", "https://10.0.0.5"), ("[fd00::5]:3000", "http://[fd00::5]:3000")] {
     try expect(DashboardProbe.normalize(raw)?.absoluteString == expected, "\(raw) must normalize to \(expected)")
   }
@@ -2838,10 +2838,10 @@ private func checkLocalNetwork() throws {
     try expect(DashboardProbe.normalize(raw) == nil, "\(raw) is not a dashboard address")
   }
   // App Transport Security with local networking allowed: numbers, .local and one-word names only (measured on the Mac).
-  for host in ["192.168.50.10", "10.6.0.9", "[fd00::5]", "fe80::1%en0", "localhost", "dashboard", "dash.local", "Dash.Local."] {
+  for host in ["192.168.10.10", "10.6.0.9", "[fd00::5]", "fe80::1%en0", "localhost", "dashboard", "dash.local", "Dash.Local."] {
     try expect(LocalNetwork.plainHTTPReaches(host: host), "\(host) is reachable over plain HTTP from the packaged app")
   }
-  for host in ["box.home.arpa", "dash.lan", "192.168.50.179.nip.io", "vpn.example.net", "dash.local.example.net"] {
+  for host in ["box.home.arpa", "dash.lan", "192.168.10.179.nip.io", "vpn.example.net", "dash.local.example.net"] {
     try expect(!LocalNetwork.plainHTTPReaches(host: host), "\(host) is refused over plain HTTP by the Mac")
   }
   try expect(ConnectionCheckError.reason(URLError(.appTransportSecurityRequiresSecureConnection), cancelled: false) == .insecureAddress
@@ -2857,7 +2857,7 @@ private func checkLocalNetwork() throws {
   let session = ConnectionSession(fileURL: directory.appendingPathComponent("accounts-connection.json"),
     makeTransport: { FakeDashboardTransport(fake) })
   session.resolver = { host in
-    host == "home.example.net" ? ["203.0.113.9"] : ["dash.local", "box.home.arpa"].contains(host) ? ["192.168.50.179"] : []
+    host == "home.example.net" ? ["203.0.113.9"] : ["dash.local", "box.home.arpa"].contains(host) ? ["192.168.10.179"] : []
   }
   let before = fake.requests.count
   for outside in ["home.example.net:3000", "203.0.113.5:3000", "100.64.1.2:3000", "169.254.3.4:3000", "[2001:db8::1]:3000"] {
@@ -2869,20 +2869,20 @@ private func checkLocalNetwork() throws {
   try expect(answer1 == .ready(URL(string: "http://dash.local:3000")!),
     "A local name with the switch on goes to the password step")
   fake.with { $0.trustLocalNetwork = false; $0.peerTrusted = false }
-  let answer2 = await session.checkAddress("192.168.50.10:3000")
-  try expect(answer2 == .pairingOff(URL(string: "http://192.168.50.10:3000")!),
+  let answer2 = await session.checkAddress("192.168.10.10:3000")
+  try expect(answer2 == .pairingOff(URL(string: "http://192.168.10.10:3000")!),
     "Trust this local network off gives state 5, not 'not local'")
   fake.with { $0.trustLocalNetwork = true; $0.peerTrusted = false; $0.peer = "100.70.1.4" }
-  let answer3 = await session.checkAddress("192.168.50.10:3000")
-  try expect(answer3 == .notLocal(URL(string: "http://192.168.50.10:3000")!, seenAs: "100.70.1.4"),
+  let answer3 = await session.checkAddress("192.168.10.10:3000")
+  try expect(answer3 == .notLocal(URL(string: "http://192.168.10.10:3000")!, seenAs: "100.70.1.4"),
     "The dashboard refusing this connection gives state 4 with the address it saw")
   fake.with { $0.peerTrusted = true; $0.accessMode = "setup" }
-  let answer4 = await session.checkAddress("192.168.50.10:3000")
-  try expect(answer4 == .setup(URL(string: "http://192.168.50.10:3000")!, codeRequired: true),
+  let answer4 = await session.checkAddress("192.168.10.10:3000")
+  try expect(answer4 == .setup(URL(string: "http://192.168.10.10:3000")!, codeRequired: true),
     "A dashboard with no sign-in yet gives state 2 with the setup code")
   fake.with { $0.accessMode = "open" }
-  let answer5 = await session.checkAddress("192.168.50.10:3000")
-  try expect(answer5 == .signInOff(URL(string: "http://192.168.50.10:3000")!),
+  let answer5 = await session.checkAddress("192.168.10.10:3000")
+  try expect(answer5 == .signInOff(URL(string: "http://192.168.10.10:3000")!),
     "A dashboard with sign-in off has nothing to pair with")
   fake.with { $0.accessMode = "login" }
   let answer6 = await session.checkAddress("refused.local:3000")
@@ -2909,9 +2909,9 @@ private func checkLocalNetwork() throws {
   try expect(slow == .unreachable(URL(string: "http://slow.local:3000")!) && Date().timeIntervalSince(started) < 3,
     "A dashboard that never answers ends at the time limit")
   // An older dashboard without the new fields: let pairing answer.
-  let older = DashboardProbe(baseURL: URL(string: "http://192.168.50.10:3000")!)
+  let older = DashboardProbe(baseURL: URL(string: "http://192.168.10.10:3000")!)
   let olderCheck = try JSONDecoder().decode(AuthCheck.self, from: Data("{\"accessMode\":\"login\",\"authenticated\":false}".utf8))
-  try expect(older.classify(olderCheck, setup: nil) == .ready(URL(string: "http://192.168.50.10:3000")!),
+  try expect(older.classify(olderCheck, setup: nil) == .ready(URL(string: "http://192.168.10.10:3000")!),
     "An older dashboard without the trust fields goes to the password step")
   try expect(!FileManager.default.fileExists(atPath: session.fileURL.path) && session.client == nil,
     "The address step saves nothing")
@@ -2926,7 +2926,7 @@ private func checkLocalNetwork() throws {
   let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
   session.deviceName = "Fixture Mac"
   session.appVersion = "2.0.0"
-  let url = URL(string: "http://192.168.50.10:3000")!
+  let url = URL(string: "http://192.168.10.10:3000")!
 
   guard case .wrongPassword(let tries) = await session.pair(url: url, username: "owner", password: "wrong-one") else {
     throw CheckFailure(description: "A wrong password must be state 6")
@@ -2938,7 +2938,7 @@ private func checkLocalNetwork() throws {
     throw CheckFailure(description: "A 403 with the switch off must lead to state 5")
   }
   fake.with { $0.trustLocalNetwork = true; $0.peerTrusted = false }
-  guard case .refused(.notLocal(_, "192.168.50.23")) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
+  guard case .refused(.notLocal(_, "192.168.10.23")) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
     throw CheckFailure(description: "A 403 with the switch on must lead to state 4 with the peer")
   }
   fake.with { $0.peerTrusted = true }
@@ -2957,7 +2957,7 @@ private func checkLocalNetwork() throws {
     throw CheckFailure(description: "A right password must pair")
   }
   let log = Array(fake.requests.dropFirst(mark)), auths = Array(fake.auths.dropFirst(mark))
-  try expect(log == ["POST 192.168.50.10/api/auth/devices/pair 201", "GET 192.168.50.10/api/auth/devices/me 200"]
+  try expect(log == ["POST 192.168.10.10/api/auth/devices/pair 201", "GET 192.168.10.10/api/auth/devices/me 200"]
     && auths[0].isEmpty && auths[1] == "Bearer \(connection.deviceToken ?? "")",
     "Pairing sends the password once without a key, then proves the key with devices/me")
   let saved = try BarConnection.load(from: file)
@@ -3084,7 +3084,7 @@ private func checkLocalNetwork() throws {
   fake.with { $0.accessMode = "setup"; $0.username = ""; $0.password = "" }
   let file = directory.appendingPathComponent("accounts-connection.json")
   let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
-  let url = URL(string: "http://192.168.50.10:3000")!
+  let url = URL(string: "http://192.168.10.10:3000")!
   guard case .setupCode(let tries) = await session.setupAndPair(url: url, username: "owner", password: "summit-ledger-42",
     setupCode: "WRON-GCOD") else { throw CheckFailure(description: "A wrong setup code must be refused") }
   try expect(tries == 4, "A wrong setup code says the tries left")
@@ -3117,7 +3117,7 @@ private func checkLocalNetwork() throws {
   defer { try? FileManager.default.removeItem(at: directory) }
   let fake = FakeDashboard()
   let file = directory.appendingPathComponent("bar/accounts-connection.json")
-  let url = URL(string: "http://192.168.50.10:3000")!
+  let url = URL(string: "http://192.168.10.10:3000")!
   func seedV1(_ password: String = "fixture-pass-1") throws -> Data {
     try? FileManager.default.removeItem(at: directory)
     try ConnectionStore.save(BarConnection(baseURL: url, username: "owner", password: password), to: file)
@@ -3222,7 +3222,7 @@ private func checkLocalNetwork() throws {
   defer { try? FileManager.default.removeItem(at: directory) }
   let fake = FakeDashboard()
   let file = directory.appendingPathComponent("accounts-connection.json")
-  let url = URL(string: "http://192.168.50.10:3000")!
+  let url = URL(string: "http://192.168.10.10:3000")!
   let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
   guard case .paired(let connection, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
     throw CheckFailure(description: "Pairing must work for the sign-out checks")
@@ -3241,7 +3241,7 @@ private func checkLocalNetwork() throws {
   let mark = fake.requests.count
   let told = await session.disconnect()
   let gone = try BarConnection.load(from: file)
-  try expect(told && Array(fake.requests.dropFirst(mark)) == ["DELETE 192.168.50.10/api/auth/devices/me 204"]
+  try expect(told && Array(fake.requests.dropFirst(mark)) == ["DELETE 192.168.10.10/api/auth/devices/me 204"]
     && gone.isSignedOut && gone.signedOut?.reason == "disconnected" && gone.baseURL == url && session.client == nil
     && fake.deviceList.last?.revoked == "self",
     "Disconnect revokes this key on the dashboard, then forgets it and keeps the address")
@@ -3266,7 +3266,7 @@ private actor MockTransportThrowing: BarHTTPTransport {
   defer { try? FileManager.default.removeItem(at: directory) }
   let fake = FakeDashboard()
   let file = directory.appendingPathComponent("accounts-connection.json")
-  let url = URL(string: "http://192.168.50.10:3000")!
+  let url = URL(string: "http://192.168.10.10:3000")!
   let session = ConnectionSession(fileURL: file, makeTransport: { FakeDashboardTransport(fake) })
   guard case .paired(let first, _) = await session.pair(url: url, username: "owner", password: "fixture-pass-1") else {
     throw CheckFailure(description: "Pairing must work for the rotation checks")

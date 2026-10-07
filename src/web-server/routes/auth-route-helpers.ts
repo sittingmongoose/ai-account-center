@@ -12,9 +12,10 @@ import {
   SESSION_LIFETIME_DAYS,
   type SessionLifetimeDays,
 } from '../../config/schemas/auth';
+import { AuthError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
-import { isSecureTransport } from '../middleware/secure-transport';
+import { credentialTransport, isSecureTransport } from '../middleware/secure-transport';
 import { closeStaleSessionClients } from '../dashboard-events';
 import {
   ensureSessionEpoch,
@@ -319,12 +320,26 @@ async function beginSignedInSession(
 ): Promise<SignedInSession | null> {
   const epoch = await ensureSessionEpoch();
   if (credentialHash !== null && !passwordHashUnchanged(credentialHash)) return null;
-  const previous = req.sessionID;
-  await sessionCall((done) => req.session.regenerate(done));
-  forgetSession(previous);
+  if (req.session) {
+    const previous = req.sessionID;
+    await sessionCall((done) => req.session.regenerate(done));
+    forgetSession(previous);
+  } else {
+    // The session middleware set aside a plain-HTTP session behind the LAN
+    // HTTPS proxy: start a fresh one and leave the stored one alone.
+    const store = (req as Request & { sessionStore?: { generate?: (r: Request) => void } })
+      .sessionStore;
+    if (typeof store?.generate !== 'function') {
+      throw new AuthError('No session store to start a dashboard session from');
+    }
+    store.generate(req);
+  }
   req.session.authenticated = true;
   req.session.username = username;
   req.session.epoch = epoch;
+  // Through the LAN HTTPS proxy only a session signed in over an encrypted
+  // transport (or on the dashboard computer) is accepted later.
+  req.session.signedInOver = credentialTransport(req);
   if (req.session.cookie) {
     if (options.remember === false) {
       // No expiry serializes with no Expires attribute: a browser-session cookie.

@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 const { parse } = require('smol-toml');
+const { runWithUiBuildLock, wasmTargetDir } = require('./ui-build-lock');
 
 const SLINT_VERSION = '1.18.1';
 const MINIMUM_RUST_MINOR = 92;
@@ -54,9 +55,11 @@ function commandRunner(command, args, options = {}) {
     windowsHide: true,
   });
   if (result.error || result.status !== 0) {
-    throw new Error(
+    const error = new Error(
       `${path.basename(command)} failed${result.status === null ? '' : ` with exit ${result.status}`}.`
     );
+    error.status = result.status;
+    throw error;
   }
   return options.capture ? result.stdout : '';
 }
@@ -250,7 +253,13 @@ function buildUi(options = {}) {
   const repoRoot = options.repoRoot ?? path.resolve(__dirname, '..');
   const run = options.run ?? commandRunner;
   const cargoBin = path.join(os.homedir(), '.cargo', 'bin');
-  const env = { ...process.env, PATH: `${cargoBin}${path.delimiter}${process.env.PATH ?? ''}` };
+  const baseEnv = options.env ?? process.env;
+  // Every worktree shares one incremental wasm target unless the caller names its own.
+  const env = {
+    ...baseEnv,
+    PATH: `${cargoBin}${path.delimiter}${baseEnv.PATH ?? ''}`,
+    CARGO_TARGET_DIR: wasmTargetDir(baseEnv),
+  };
   const crate = path.join(repoRoot, 'web-dashboard');
   const publicDir = path.join(crate, 'public');
   const pkg = path.join(crate, 'pkg');
@@ -259,7 +268,10 @@ function buildUi(options = {}) {
   assertSlintPin(parse(fs.readFileSync(path.join(crate, 'Cargo.toml'), 'utf8')));
   assertLockedSlint(parse(fs.readFileSync(path.join(crate, 'Cargo.lock'), 'utf8')));
   assertToolchain(run, env, cargoBin);
-  run(
+  // wasm-pack writes into this worktree's own web-dashboard/pkg (--out-dir is crate-relative),
+  // even though the cargo target folder is shared.
+  // One release wasm build (a multi-GB fat-LTO link) at a time per computer.
+  runWithUiBuildLock(
     toolPath('wasm-pack', cargoBin),
     [
       'build',
@@ -274,7 +286,8 @@ function buildUi(options = {}) {
       '--',
       '--locked',
     ],
-    { cwd: repoRoot, env }
+    { cwd: repoRoot, env },
+    { env, run, ...options.lock }
   );
 
   const requiredFiles = [

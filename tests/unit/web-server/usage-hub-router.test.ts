@@ -355,6 +355,24 @@ describe('usage hub POST /v0/management/api-call', () => {
     expect((await get('/config', { authorization: `Bearer ${KEY}` })).status).toBe(404);
     expect((await get('/usage', { authorization: `Bearer ${KEY}` })).status).toBe(404);
   });
+
+  it('answers 404 to a request through the LAN HTTPS proxy, before anything else', async () => {
+    await start({ isProxied: () => true });
+    for (const response of [
+      await get('/auth-files', { authorization: `Bearer ${KEY}` }),
+      await apiCall(t3Request(codexAccount, CODEX_USAGE_URL)),
+    ]) {
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ code: 'not_found' });
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
+    expect(reads).toBe(0);
+  });
+
+  it('serves a direct request with the same key', async () => {
+    await start({ isProxied: () => false });
+    expect((await get('/auth-files', { authorization: `Bearer ${KEY}` })).status).toBe(200);
+  });
 });
 
 describe('usage hub transport rule (the dashboard isSecureTransport)', () => {
@@ -371,12 +389,12 @@ describe('usage hub transport rule (the dashboard isSecureTransport)', () => {
       })
     ).toBe(true);
     expect(
-      isSecureTransport(request('192.168.50.20', { host: '192.168.50.179:3000' }), {
+      isSecureTransport(request('192.168.10.20', { host: '192.168.10.179:3000' }), {
         localNetworkTrust: lan,
       })
     ).toBe(true);
     expect(
-      isSecureTransport(request('192.168.50.20', { host: '192.168.50.179:3000' }), {
+      isSecureTransport(request('192.168.10.20', { host: '192.168.10.179:3000' }), {
         localNetworkTrust: off,
       })
     ).toBe(false);
@@ -387,7 +405,7 @@ describe('usage hub transport rule (the dashboard isSecureTransport)', () => {
       isSecureTransport(request('203.0.113.9', { host: 'x:3000' }), { localNetworkTrust: lan })
     ).toBe(false);
     expect(
-      isSecureTransport(request('192.168.50.20', { 'x-forwarded-for': '203.0.113.9' }), {
+      isSecureTransport(request('192.168.10.20', { 'x-forwarded-for': '203.0.113.9' }), {
         localNetworkTrust: lan,
       })
     ).toBe(false);

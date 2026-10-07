@@ -2,10 +2,10 @@
 // paths are Slint Path commands generated in bridge.js (analytics-usage.mjs) in plot pixels; on a range or
 // toggle change bridge.js interpolates the point arrays each frame (the morph) and the axes cross-fade. The
 // first view draws the chart on through a clip; the crosshair glides between buckets.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { Caps } from "../../components/text.slint";
 import { AxData, AxBucket, AxYTick, AxXTick } from "ax-data.slint";
-import { AxColor, AxCard, AxCardHead, AxSwitch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard } from "ax-common.slint";
+import { AxColor, AxCard, AxCardHead, AxSwitch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard, AxRoBar, AxRoVal, AxScrub } from "ax-common.slint";
 
 export global AxTrendPad {
     out property <length> l: 62px;
@@ -292,50 +292,74 @@ component TrendChart inherits Rectangle {
     }
 
     // ---- crosshair, dots and readout: they glide between buckets ----
+    // Below D the reading is pinned by tap (or scrubbed) and shown in the readout row; a tap on
+    // the pinned bucket, Close, or a range/provider change clears it (DESIGN-MOBILE 5.3).
     property <int> idx: -1;
-    property <bool> xh-on: ta.has-hover && root.idx >= 0 && AxData.trend-buckets.length > 0;
+    in-out property <int> sel: -1;
+    in-out property <bool> pinned: false;
+    property <int> cur: Breakpoints.tier-d ? root.idx : root.sel;
+    property <bool> xh-on: Breakpoints.tier-d ? (ta.has-hover && root.idx >= 0 && AxData.trend-buckets.length > 0)
+        : (root.sel >= 0 && AxData.trend-buckets.length > 0);
     property <bool> glide: false;
-    property <AxBucket> b: root.idx >= 0 && root.idx < AxData.trend-buckets.length ? AxData.trend-buckets[root.idx] : { };
+    out property <AxBucket> b: root.cur >= 0 && root.cur < AxData.trend-buckets.length ? AxData.trend-buckets[root.cur] : { };
     property <length> bx: AxTrendPad.l + root.b.x * 1px * root.sx;
+    property <length> dot-d: Breakpoints.tier-d ? 10px : 5px;
     changed xh-on => { if !root.xh-on { root.glide = false; } }
+    // a range or provider change clears the pinned reading
+    property <string> range: AxData.range;
+    property <string> prov: AxData.prov;
+    property <int> n-buckets: AxData.trend-buckets.length;
+    changed range => { root.sel = -1; root.pinned = false; }
+    changed prov => { root.sel = -1; root.pinned = false; }
+    changed n-buckets => { if root.sel >= root.n-buckets { root.sel = -1; root.pinned = false; } }
+    function track-x(mx: length) -> int {
+        if AxData.trend-lut.length == 0 {
+            return -1;
+        }
+        let rx = mx - AxTrendPad.l;
+        if rx < -8px || rx > root.pw + 8px {
+            return -1;
+        }
+        return AxData.trend-lut[clamp(floor(rx / root.sx / 2px), 0, AxData.trend-lut.length - 1)];
+    }
     xh := Rectangle {
         x: root.bx;
         y: AxTrendPad.t;
         width: 1px;
         height: root.ph;
-        background: Theme.ink-3;
+        background: Breakpoints.tier-d ? Theme.ink-3 : Theme.ink.with-alpha(0.4);
         opacity: root.xh-on ? 1 : 0;
-        animate x { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate x { duration: Breakpoints.tier-d ? (root.glide && Motion.on ? Motion.fast : 0ms) : (ta.scrubbing || !Motion.on ? 0ms : 120ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
     }
     dot-tok := Rectangle {
-        x: root.bx - 5px;
-        y: AxTrendPad.t + root.b.y-tok * 1px * root.sy - 5px;
-        width: 10px;
-        height: 10px;
-        border-radius: 5px;
+        x: root.bx - root.dot-d / 2;
+        y: AxTrendPad.t + root.b.y-tok * 1px * root.sy - root.dot-d / 2;
+        width: root.dot-d;
+        height: root.dot-d;
+        border-radius: root.dot-d / 2;
         background: Theme.paper;
         border-width: 2px;
         border-color: AxColor.of("tok");
         opacity: root.xh-on ? 1 : 0;
-        animate x, y { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate x, y { duration: Breakpoints.tier-d ? (root.glide && Motion.on ? Motion.fast : 0ms) : (ta.scrubbing || !Motion.on ? 0ms : 120ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
     }
     if AxData.trend.cost-shown: Rectangle {
-        x: root.bx - 5px;
+        x: root.bx - root.dot-d / 2;
         // y-cost -1: no logged cost in this bucket, so no marker (never a $0 point)
-        y: AxTrendPad.t + max(0, root.b.y-cost) * 1px * root.sy - 5px;
-        width: 10px;
-        height: 10px;
-        border-radius: 5px;
+        y: AxTrendPad.t + max(0, root.b.y-cost) * 1px * root.sy - root.dot-d / 2;
+        width: root.dot-d;
+        height: root.dot-d;
+        border-radius: root.dot-d / 2;
         background: Theme.paper;
         border-width: 2px;
         border-color: AxColor.of("cost");
         opacity: root.xh-on && root.b.y-cost >= 0 ? 1 : 0;
-        animate x, y { duration: root.glide && Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate x, y { duration: Breakpoints.tier-d ? (root.glide && Motion.on ? Motion.fast : 0ms) : (ta.scrubbing || !Motion.on ? 0ms : 120ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate opacity { duration: Motion.on ? Motion.fast : 0ms; }
     }
-    ro := AxRoCard {
+    if Breakpoints.tier-d: ro := AxRoCard {
         property <length> rw: max(200px, body.preferred-width);
         x: max(6px, root.bx + 16px + self.rw > root.width - 6px ? root.bx - 16px - self.rw : root.bx + 16px);
         y: AxTrendPad.t + 4px;
@@ -366,21 +390,71 @@ component TrendChart inherits Rectangle {
             if root.b.foot2 != "": Text { text: root.b.foot2; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }
         }
     }
-    ta := TouchArea {
+    ta := AxScrub {
         mouse-cursor: default;
-        function track() {
-            let mx = self.mouse-x - AxTrendPad.l;
-            if mx < -8px || mx > root.pw + 8px || AxData.trend-lut.length == 0 {
-                root.idx = -1;
+        tap => {
+            if Breakpoints.tier-d {
                 return;
             }
-            let col = clamp(floor(mx / root.sx / 2px), 0, AxData.trend-lut.length - 1);
-            if root.idx >= 0 { root.glide = true; }
-            root.idx = AxData.trend-lut[col];
+            let i = root.track-x(self.mouse-x);
+            if i < 0 || (root.pinned && root.sel == i) {
+                root.sel = -1;
+                root.pinned = false;
+            } else {
+                root.sel = i;
+                root.pinned = true;
+            }
         }
-        changed mouse-x => { if self.has-hover { self.track(); } }
-        changed mouse-y => { if self.has-hover { self.track(); } }
-        changed has-hover => { if !self.has-hover { root.idx = -1; } }
+        scrub(mx, my) => {
+            if Breakpoints.tier-d {
+                return;
+            }
+            let i = root.track-x(mx);
+            if i >= 0 {
+                root.sel = i;
+                root.pinned = true;
+            }
+        }
+        changed mouse-x => {
+            if !Breakpoints.tier-d {
+                // a mouse below D follows the pointer until a click pins a reading
+                if self.has-hover && !self.pressed && !root.pinned {
+                    root.sel = root.track-x(self.mouse-x);
+                }
+                return;
+            }
+            if self.has-hover {
+                let i = root.track-x(self.mouse-x);
+                if root.idx >= 0 {
+                    root.glide = true;
+                }
+                root.idx = i;
+            }
+        }
+        changed mouse-y => {
+            if !Breakpoints.tier-d {
+                if self.has-hover && !self.pressed && !root.pinned {
+                    root.sel = root.track-x(self.mouse-x);
+                }
+                return;
+            }
+            if self.has-hover {
+                let i = root.track-x(self.mouse-x);
+                if root.idx >= 0 {
+                    root.glide = true;
+                }
+                root.idx = i;
+            }
+        }
+        changed has-hover => {
+            if Breakpoints.tier-d {
+                if !self.has-hover {
+                    root.idx = -1;
+                }
+            } else if !self.has-hover && !root.pinned {
+                root.sel = -1;
+            }
+        }
     }
 }
 
@@ -389,9 +463,11 @@ export component AxTrendCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
     in property <length> win-h: 900px;
-    property <length> chart-h: Breakpoints.width >= 2200px ? clamp(root.win-h * 0.34, 320px, 500px)
-        : root.win-h <= 760px ? 280px : clamp(root.win-h * 0.36, 290px, 460px);
-    AxCardHead {
+    property <length> chart-h: Breakpoints.tier-d ? (Breakpoints.width >= 2200px ? clamp(root.win-h * 0.34, 320px, 500px)
+        : root.win-h <= 760px ? 280px : clamp(root.win-h * 0.36, 290px, 460px))
+        : Breakpoints.tier-p ? 220px : Breakpoints.tier-f ? 260px : 300px;
+    property <length> pad-x: Breakpoints.tier-d ? (Breakpoints.width < 1180px ? 16px : 20px) : Breakpoints.tier-p ? 16px : 20px;
+    if Breakpoints.tier-d: AxCardHead {
         title: "Usage trends";
         sub: AxData.trend.sub;
         HorizontalLayout {
@@ -402,9 +478,9 @@ export component AxTrendCard inherits AxCard {
             VerticalLayout { alignment: start; AxSwitch { on: AxData.cache-on; label: "Cache reads"; tip: "Cache reads dwarf the other types, so they start hidden"; toggled(v) => { AxData.action("analytics-cache", v ? "true" : "false"); } } }
         }
     }
-    HorizontalLayout {
-        padding-left: Breakpoints.width < 1180px ? 16px : 20px;
-        padding-right: self.padding-left;
+    if Breakpoints.tier-d: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
         padding-bottom: 6px;
         spacing: 18px;
         alignment: start;
@@ -415,11 +491,117 @@ export component AxTrendCard inherits AxCard {
             note: item.note;
         }
     }
+    // below D the toggles sit under the legend on P and at the right of the title on F/T (4.2.3)
+    if Breakpoints.tier-p: AxCardHead { title: "Usage trends"; sub: AxData.trend.sub; }
+    if Breakpoints.tier-p: VerticalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 2px;
+        spacing: 2px;
+        alignment: start;
+        for item in AxData.trend-legend: AxLegendEntry {
+            c: AxColor.of(item.key);
+            shape: item.key == "cost" ? "line" : "box";
+            label: item.label;
+            note: item.note;
+        }
+    }
+    if Breakpoints.tier-p && Breakpoints.tier-width >= 360px: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 2px;
+        spacing: 6px;
+        alignment: start;
+        AxSwitch { on: AxData.split; label: "Token types"; tip: "Stack the tokens by type"; toggled(v) => { AxData.action("analytics-split", v ? "true" : "false"); } }
+        AxSwitch { on: AxData.cache-on; label: "Cache reads"; tip: "Cache reads dwarf the other types, so they start hidden"; toggled(v) => { AxData.action("analytics-cache", v ? "true" : "false"); } }
+    }
+    // the narrowest phones stack the two toggles (the wrapping row, DESIGN-MOBILE 4.2.3)
+    if Breakpoints.tier-p && Breakpoints.tier-width < 360px: VerticalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 2px;
+        spacing: 0px;
+        alignment: start;
+        AxSwitch { on: AxData.split; label: "Token types"; tip: "Stack the tokens by type"; toggled(v) => { AxData.action("analytics-split", v ? "true" : "false"); } }
+        AxSwitch { on: AxData.cache-on; label: "Cache reads"; tip: "Cache reads dwarf the other types, so they start hidden"; toggled(v) => { AxData.action("analytics-cache", v ? "true" : "false"); } }
+    }
+    if Breakpoints.tier-f || Breakpoints.tier-t: AxCardHead {
+        title: "Usage trends";
+        sub: AxData.trend.sub;
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: end;
+            horizontal-stretch: 0;
+            VerticalLayout { alignment: start; AxSwitch { on: AxData.split; label: "Token types"; tip: "Stack the tokens by type"; toggled(v) => { AxData.action("analytics-split", v ? "true" : "false"); } } }
+            VerticalLayout { alignment: start; AxSwitch { on: AxData.cache-on; label: "Cache reads"; tip: "Cache reads dwarf the other types, so they start hidden"; toggled(v) => { AxData.action("analytics-cache", v ? "true" : "false"); } } }
+        }
+    }
+    if Breakpoints.tier-f: VerticalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 2px;
+        spacing: 2px;
+        alignment: start;
+        for item in AxData.trend-legend: AxLegendEntry {
+            c: AxColor.of(item.key);
+            shape: item.key == "cost" ? "line" : "box";
+            label: item.label;
+            note: item.note;
+        }
+    }
+    if Breakpoints.tier-t: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 6px;
+        spacing: 18px;
+        alignment: start;
+        for item in AxData.trend-legend: AxLegendEntry {
+            c: AxColor.of(item.key);
+            shape: item.key == "cost" ? "line" : "box";
+            label: item.label;
+            note: item.note;
+        }
+    }
+    if Breakpoints.below-d: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-top: 2px;
+        bar := AxRoBar {
+            has-sel: chart.sel >= 0;
+            close => { chart.sel = -1; chart.pinned = false; }
+            VerticalLayout {
+                spacing: 1px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    min-height: 17px;
+                    Text { text: chart.b.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; }
+                    AxRoVal { c: AxColor.of("tok"); value: "All " + chart.b.all; }
+                    AxRoVal { c: AxColor.of("cost"); shape: "line"; value: chart.b.cost; }
+                }
+                if chart.b.foot == "" && chart.b.foot2 == "" && chart.b.by-provider == "": HorizontalLayout {
+                    spacing: 10px;
+                    min-height: 17px;
+                    AxRoVal { c: AxColor.of("in"); value: chart.b.vin; }
+                    AxRoVal { c: AxColor.of("out"); value: chart.b.vout; }
+                    AxRoVal { c: AxColor.of("cw"); value: chart.b.vcw; }
+                    AxRoVal { c: AxColor.of("cr"); value: chart.b.vcr; }
+                }
+                if chart.b.foot != "" || chart.b.foot2 != "" || chart.b.by-provider != "": Text {
+                    text: (chart.b.foot != "" ? chart.b.foot : chart.b.by-provider) + (chart.b.foot2 != "" ? " · " + chart.b.foot2 : "");
+                    font-size: Type.small;
+                    color: Theme.ink-3;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    min-height: 17px;
+                }
+            }
+        }
+    }
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
         padding-top: 4px;
         padding-bottom: 10px;
-        TrendChart { height: root.chart-h; played: root.played; delay: root.delay; }
+        chart := TrendChart { height: root.chart-h; played: root.played; delay: root.delay; }
     }
 }

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { premultiplySvgTextureUploads } from '../public/renderer.mjs';
 
-// Regression test for the dark-mode provider marks (MARKS-HIDPI, 2026-10-03): on Jared's machines every
+// Regression test for the dark-mode provider marks (MARKS-HIDPI, 2026-10-03): on the owner's machines every
 // SVG mark in dark mode drew with hard, stair-stepped edges, a fattened silhouette and stray saturated
 // pixels (red on Claude's tips), while light mode looked right. Slint 1.18.1 flags SVG <img> textures as
 // premultiplied, but WebGL uploads them with straight alpha (measured: a 50% #D97757 pixel reads back as
