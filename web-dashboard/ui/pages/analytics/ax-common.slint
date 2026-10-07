@@ -489,7 +489,7 @@ component AxSegButton inherits Rectangle {
     callback clicked();
     height: Breakpoints.tier-d ? (root.small ? 24px : 28px) : 36px;
     horizontal-stretch: root.fill ? 1 : 0;
-    min-width: row.preferred-width;
+    min-width: root.fill ? 0px : row.preferred-width;
     preferred-width: row.preferred-width;
     border-radius: 7px;
     property <color> fg: root.selected || ta.has-hover ? Theme.ink : Theme.ink-3;
@@ -503,6 +503,9 @@ component AxSegButton inherits Rectangle {
         if root.item.mark != "": VerticalLayout { alignment: center; ProviderMark { provider: root.item.mark; size: 16px; } }
         Text {
             text: root.item.label;
+            horizontal-stretch: 1;
+            horizontal-alignment: center;
+            overflow: elide;
             color: root.fg;
             animate color { duration: Motion.tint(Motion.med); }
             font-family: root.mono ? Type.mono : Type.sans;

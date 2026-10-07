@@ -385,7 +385,7 @@ component PickerButton inherits Rectangle {
         padding-right: 10px;
         spacing: 8px;
         if AxData.picker-mark != "": VerticalLayout { alignment: center; ProviderMark { provider: AxData.picker-mark; size: 16px; } }
-        Text { text: AxData.picker-label; font-size: Breakpoints.tier-d ? 13px : Type.control; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+        Text { text: AxData.picker-label; font-size: Breakpoints.tier-d ? 13px : Type.control; font-weight: 560; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
         VerticalLayout {
             alignment: center;
             Icon {
@@ -590,6 +590,7 @@ export component AxHeader inherits Rectangle {
                 spacing: 8px;
                 date-m := DateButton {
                     horizontal-stretch: 1;
+                    min-width: 0px;
                     label: AxData.head.date;
                     on: AxData.head.custom;
                     open: dates-m.is-open;
@@ -604,6 +605,7 @@ export component AxHeader inherits Rectangle {
                     }
                 }
                 pick-m := PickerButton {
+                    min-width: 0px;
                     max-width: (mlay.cw - 56px) * 0.45;
                     open: picks-m.is-open;
                     clicked => { picks-m.show(); }
@@ -633,6 +635,7 @@ export component AxHeader inherits Rectangle {
             spacing: 8px;
             AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } }
             date-t := DateButton {
+                min-width: 0px;
                 label: AxData.head.date;
                 on: AxData.head.custom;
                 open: dates-t.is-open;
@@ -647,6 +650,7 @@ export component AxHeader inherits Rectangle {
                 }
             }
             pick-t := PickerButton {
+                min-width: 0px;
                 open: picks-t.is-open;
                 clicked => { picks-t.show(); }
                 picks-t := PopupWindow {
