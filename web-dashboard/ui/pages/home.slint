@@ -71,8 +71,10 @@ component RunsFlow inherits FlexboxLayout {
     spacing-horizontal: 0px;
     spacing-vertical: 0px;
     alignment: start;
-    for w in root.words: Text {
-        text: w.text + " ";
+    // No trailing space after the last word below D: the phantom space wrapped
+    // single-line flows early (O3). D keeps its exact spacing.
+    for w[i] in root.words: Text {
+        text: w.text + (i < root.words.length - 1 || !Breakpoints.below-d ? " " : "");
         font-size: root.size;
         font-weight: w.strong ? root.strong-weight : 400;
         color: w.tone == "warn" ? root.warn-ink : w.tone == "good" ? root.good-ink : w.strong ? root.strong-ink : root.ink;
@@ -564,8 +566,12 @@ export component AccountRow inherits Rectangle {
     // layout's width cycle. The 260 px switchable cap never binds here (it is above 100).
     // H3: the 2x2 grid lays two cells per row, so each cell measures half the row, not a quarter.
     property <int> grid-cols: root.grid-2x2 ? 2 : max(1, root.account.cells.length);
-    property <bool> narrow-cells: !root.table
-        && (root.grid-w - 2 * root.pad-x - 12px * (root.grid-cols - 1)) / root.grid-cols < 100px;
+    // Table cells below D flex with the row: with many columns they land under 100 px too,
+    // so they stack "used" like narrow stacked cells. D never narrows.
+    property <length> table-cell-w: (root.grid-w - 2 * root.pad-x - root.ident-w - root.slot-w - root.gap * (root.account.cells.length + 1)) / max(1, root.account.cells.length);
+    property <bool> narrow-cells: root.touch && (root.table
+        ? root.account.cells.length > 0 && root.table-cell-w < 100px
+        : (root.grid-w - 2 * root.pad-x - 12px * (root.grid-cols - 1)) / root.grid-cols < 100px);
     public pure function cell-key(at: int) -> string {
         return at < root.account.cells.length ? root.account.cells[at].key : "";
     }
@@ -667,7 +673,9 @@ export component AccountRow inherits Rectangle {
                         }
                     }
                     for cell[c] in root.account.cells: Rectangle {
-                        min-width: Breakpoints.below-d ? 120px : 108px;
+                        // below D the cells flex under their 120 px preference so many-column
+                        // tables (4-window Antigravity) fit the card; D keeps its 108 px floor
+                        min-width: Breakpoints.below-d ? 0px : 108px;
                         preferred-width: Breakpoints.below-d ? 120px : 108px;
                         horizontal-stretch: 1;
                         min-height: cell.key != "" ? m.preferred-height : 0px;
@@ -681,6 +689,7 @@ export component AccountRow inherits Rectangle {
                             visible: cell.key != "";
                             // the meter cell serves the stacked and the table rows below D (4.1.2)
                             cell: Breakpoints.below-d;
+                            stack-used: root.narrow-cells;
                             data: cell;
                             played: root.played;
                             delay: root.delay + c * 16ms;
@@ -1132,11 +1141,11 @@ export component AccountSection inherits Plate {
     property <length> slot-w: max(root.slot-max, root.section.switchable ? 80px : root.touch ? 84px : 62px);
     // the stacked switchable meter grid caps each column at 260 px, extra space to the right (4.1.3)
     property <length> cell-w: max(0px, min(260px, (root.inner-w - 12px * max(0, root.section.columns.length - 1)) / max(1, root.section.columns.length)));
-    // H3: stacked switchable heads with more than two columns (Antigravity) use the short
-    // labels; when one row of them no longer fits (~116 px a column), the heads and the
-    // meter grid both become a 2x2 grid (at most 3 meters per row on P).
-    property <bool> short-heads: !root.table && root.section.switchable && root.section.columns.length > 2;
-    property <bool> grid-2x2: root.short-heads && root.cell-w < 116px;
+    // H3: switchable heads with more than two columns (Antigravity) use the short labels
+    // below D; when one stacked row of them no longer fits (~116 px a column), the heads
+    // and the meter grid both become a 2x2 grid (at most 3 meters per row on P).
+    property <bool> short-heads: root.touch && root.section.switchable && root.section.columns.length > 2;
+    property <bool> grid-2x2: !root.table && root.short-heads && root.cell-w < 116px;
 
     // the stepper's value before it is saved; -1 when nothing is pending
     property <int> pending: -1;
@@ -1590,7 +1599,7 @@ export component AccountSection inherits Plate {
                     if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
                     for col in root.section.columns: Caps {
                         min-height: 15px;
-                        min-width: root.table ? (Breakpoints.below-d ? 120px : 108px) : 0px;
+                        min-width: root.table ? (root.touch ? 0px : 108px) : 0px;
                         preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
                         horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
                         text: (root.short-heads && col.short-label != "" ? col.short-label : col.label).to-uppercase();
