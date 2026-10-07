@@ -1,0 +1,276 @@
+// Update apps: its own header button. Idle shows the arrow and "Update apps"; while a job runs the ring
+// spins and the result count rolls ("Updating 3 of 21"); on finish it morphs to a check for 2 s. The
+// header pins its group to the right, so every pixel of width the button gains moves the button's own left
+// edge and the label with it. Three rules keep the label rock-steady: the width changes only when the mode
+// changes (never on a count, so it never re-targets mid-job), it steps in whole pixels, so the text is
+// never laid out at a fractional offset, and the pill never clips with its rounded corners (see `content`
+// below), so the spinning ring cannot drag the label through an offscreen layer every frame.
+// Below D the pill is 40 tall (a touch target) and takes a 450 ms long-press tip instead of hover.
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
+import { UpdateView } from "../models.slint";
+import { Icon } from "icon.slint";
+import { ProbeMark } from "probe.slint";
+import { Hover } from "hover-card.slint";
+
+export component UpdateButton inherits Rectangle {
+    in property <UpdateView> data;
+    in property <bool> enabled: true;
+    // The phone header drops the words entirely: idle/done is the bare icon and running is
+    // "[spinner] 15 of 21" (DESIGN-MOBILE.md 3.1). F below 760 and T below 1100 drop only the
+    // idle/done label; running keeps its count.
+    in property <bool> show-label: true;
+    in property <bool> show-run-word: true;
+    // 6 px gaps and 10 px side padding in the phone pill.
+    in property <bool> phone: false;
+    callback clicked();
+
+    property <string> mode: root.data.running ? "run" : root.data.done ? "done" : "idle";
+    // The animated value is a plain number of pixels: `animate` on a length interpolates through fractional
+    // widths, and each one moved the label to a sub-pixel x (the vibration). Rounding the animated number
+    // makes the one morph between label widths step a whole pixel at a time. Ceil, never round: the pill is
+    // then never narrower than its content, so the layout never squeezes the last word.
+    property <float> w-px: row.preferred-width / 1px;
+    animate w-px { duration: Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <length> w: ceil(root.w-px) * 1px;
+    // count roll: the old count slides up and out while the new one rises in
+    property <int> shown-count: root.data.count;
+    property <int> prev-count: 0;
+    property <duration> roll-start: 0ms;
+    property <bool> rolling: false;
+    property <float> roll-t: root.rolling ? clamp((animation-tick() - root.roll-start) / 300ms, 0, 1) : 1;
+    property <float> roll-e: 1 - pow(1 - root.roll-t, 3);
+    changed shown-count => {
+        if Motion.on {
+            root.roll-start = animation-tick();
+            root.rolling = true;
+            roll-stop.running = true;
+        } else {
+            root.prev-count = root.shown-count;
+        }
+    }
+    roll-stop := Timer {
+        interval: 320ms;
+        running: false;
+        triggered => { self.running = false; root.rolling = false; root.prev-count = root.shown-count; }
+    }
+
+    height: Breakpoints.tier-d ? 34px : 40px;
+    min-width: root.w;
+    max-width: root.w;
+    border-radius: Breakpoints.tier-d ? 9px : Theme.r-touch;
+    border-width: 1px;
+    border-color: root.mode == "run" ? Theme.accent.mix(Theme.rule, 0.4) : root.mode == "done" ? Theme.calm.mix(Theme.rule, 0.45) : ta.has-hover ? Theme.rule-strong : Theme.rule;
+    background: root.mode == "run" ? Theme.accent-soft : ta.has-hover ? Theme.paper-2 : Theme.paper;
+    animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    transform-scale: ta.pressed && root.mode == "idle" ? 0.97 : 1;
+    animate transform-scale { duration: Motion.fast; }
+    property <color> fg: root.mode == "run" ? Theme.accent-text : root.mode == "done" ? Theme.good-text : Theme.ink;
+    property <length> glyph: Breakpoints.tier-d ? 18px : 20px;
+
+    // Touch long-press tip (DESIGN-MOBILE.md 5.2.3): shown after a 450 ms press, which then never activates.
+    property <bool> lp-armed: (Device.coarse || Breakpoints.below-d) && root.data.tip != "";
+    property <bool> lp-fired: false;
+    property <bool> lp-dead: false;
+    lp-timer := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.lp-armed && ta.pressed && !root.lp-dead {
+                root.lp-fired = true;
+                Hover.tip-now("update-apps", ta.absolute-position, ta.width, ta.height, root.data.tip);
+            }
+        }
+    }
+
+    // Invisible measure for the rolling count's box: `total` is the widest the count ever gets, so the box
+    // (and with it the button's width) stays put from the first result to the last. Invariant: the count is
+    // `results.length` and `total` is the size of the update matrix, both set in updateViewModel
+    // (public/view-model.mjs), so the count never has more digits than total; if the matrix ever grows past
+    // 99 results this measure has to grow with it or the box would clip the leading digit.
+    count-fit := Text {
+        visible: false;
+        text: root.data.total;
+        font-family: Type.tab;
+        font-size: Type.control;
+        font-weight: 650;
+    }
+    // The vibration seen on 13a93136: a clip with rounded corners makes the femtovg renderer draw the whole
+    // content into an offscreen layer and blend it back in, and that layer's placement follows the ring's
+    // angle (Slint 1.18.1 measures the rotated ring's bounding box with its transforms in the wrong order).
+    // So every frame of the spin moved the layer to a new fractional offset: the text, snapped to whole
+    // pixels inside the layer, landed up to a pixel off and blurred differently each frame, at 1x and 2x,
+    // while its words stood still. So the pill does not clip: this plain rectangle just inside the border
+    // does. A rectangular clip is a scissor (no layer), and the text is drawn straight to the window on the
+    // device pixel grid, pixel-identical frame after frame. The clip only matters during the one width
+    // morph, when the new words are wider than the pill for a moment; all content sits inside the border's
+    // straight sides (y 9..25 of 34 with a 9 px radius), so the square corners of the scissor never show.
+    content := Rectangle {
+        x: 1px;
+        y: 1px;
+        width: root.width - 2px;
+        height: root.height - 2px;
+        clip: true;
+        row := HorizontalLayout {
+            x: -1px;
+            y: -1px;
+            width: root.width;
+            height: root.height;
+            padding-left: 10px;
+            padding-right: root.phone ? 10px : 13px;
+            spacing: root.phone ? 6px : 8px;
+            alignment: start;
+            Rectangle {
+                width: root.glyph;
+                // three glyphs cross-fade with a scale spring
+                Icon {
+                    y: (parent.height - root.glyph) / 2;
+                    width: root.glyph;
+                    height: root.glyph;
+                    name: "arrow-down-circle";
+                    tint: Theme.ink-2;
+                    opacity: root.mode == "idle" ? 1 : 0;
+                    transform-scale: root.mode == "idle" ? 1 : 0.55;
+                    animate opacity { duration: 180ms; }
+                    animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                }
+                Rectangle {
+                    y: (parent.height - root.glyph) / 2;
+                    width: root.glyph;
+                    height: root.glyph;
+                    opacity: root.mode == "run" ? 1 : 0;
+                    animate opacity { duration: 180ms; }
+                    transform-rotation: root.mode == "run" ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
+                    Path {
+                        width: parent.width;
+                        height: parent.height;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: "M12 3 A9 9 0 1 1 11.99 3";
+                        stroke: root.fg.with-alpha(0.22);
+                        stroke-width: 1.75px;
+                        fill: transparent;
+                    }
+                    Path {
+                        width: parent.width;
+                        height: parent.height;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: "M12 3 A9 9 0 0 1 21 12";
+                        stroke: root.fg;
+                        stroke-width: 1.75px;
+                        stroke-line-cap: round;
+                        fill: transparent;
+                    }
+                }
+                Icon {
+                    y: (parent.height - root.glyph) / 2;
+                    width: root.glyph;
+                    height: root.glyph;
+                    name: "check-circle";
+                    tint: Theme.good-text;
+                    opacity: root.mode == "done" ? 1 : 0;
+                    transform-scale: root.mode == "done" ? 1 : 0.55;
+                    animate opacity { duration: 180ms; }
+                    animate transform-scale { duration: Motion.slow; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                }
+            }
+            if root.mode != "run" && root.show-label: Text {
+                text: root.mode == "done" ? "Apps updated" : "Update apps";
+                font-size: Type.control;
+                font-weight: 580;
+                color: root.fg;
+                vertical-alignment: center;
+            }
+            if root.mode == "run" && root.show-run-word: Text {
+                text: "Updating";
+                font-size: Type.control;
+                font-weight: 580;
+                color: root.fg;
+                vertical-alignment: center;
+            }
+            // The count rolls in a box that keeps ONE width for the whole job - the width of `total`, the only
+            // value the count can reach - with the digits right-aligned against "of". A box that followed the
+            // digits changed the row's preferred width on every poll (and again when the roll settled), which
+            // re-targeted the width animation above and slid the label sideways: the reported jitter.
+            if root.mode == "run": Rectangle {
+                width: count-fit.preferred-width;
+                clip: true;
+                roll-old := Text {
+                    width: parent.width;
+                    horizontal-alignment: right;
+                    y: (parent.height - self.preferred-height) / 2 - root.roll-e * parent.height * 0.85;
+                    visible: root.rolling;
+                    opacity: 1 - root.roll-e;
+                    text: root.prev-count;
+                    font-family: Type.tab;
+                    font-size: Type.control;
+                    font-weight: 650;
+                    color: root.fg;
+                }
+                roll-new := Text {
+                    width: parent.width;
+                    horizontal-alignment: right;
+                    y: (parent.height - self.preferred-height) / 2 + (1 - root.roll-e) * parent.height * 0.85;
+                    opacity: root.roll-e;
+                    text: root.shown-count;
+                    font-family: Type.tab;
+                    font-size: Type.control;
+                    font-weight: 650;
+                    color: root.fg;
+                }
+            }
+            if root.mode == "run": Text {
+                text: "of " + root.data.total;
+                font-family: Type.tab;
+                font-size: Type.control;
+                color: root.fg;
+                opacity: 0.8;
+                vertical-alignment: center;
+            }
+        }
+    }
+    // Hit-slop below D: the TouchArea grows to at least 44 x 44, centred on the visual.
+    property <length> slop-x: Breakpoints.below-d ? max(0px, (44px - root.width) / 2) : 0px;
+    property <length> slop-y: Breakpoints.below-d ? max(0px, (44px - root.height) / 2) : 0px;
+    ta := TouchArea {
+        x: -root.slop-x;
+        y: -root.slop-y;
+        width: root.width + 2 * root.slop-x;
+        height: root.height + 2 * root.slop-y;
+        enabled: root.enabled && root.mode == "idle";
+        mouse-cursor: root.mode == "idle" && root.enabled ? pointer : default;
+        changed pressed => {
+            if self.pressed {
+                root.lp-dead = false;
+                root.lp-fired = false;
+                if root.lp-armed { lp-timer.running = true; }
+            } else {
+                lp-timer.running = false;
+                Hover.leave("update-apps");
+            }
+        }
+        moved => {
+            if self.pressed && (self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px) {
+                root.lp-dead = true;
+                lp-timer.running = false;
+                if root.lp-fired { root.lp-fired = false; Hover.leave("update-apps"); }
+            }
+        }
+        clicked => {
+            if root.lp-fired {
+                root.lp-fired = false;
+                Hover.leave("update-apps");
+            } else {
+                root.clicked();
+            }
+        }
+        changed has-hover => {
+            if self.has-hover && Device.hover && !root.lp-fired {
+                Hover.tip("update-apps", self.absolute-position, self.width, self.height, root.data.tip);
+            } else {
+                Hover.leave("update-apps");
+            }
+        }
+    }
+}

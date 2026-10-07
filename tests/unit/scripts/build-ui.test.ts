@@ -12,6 +12,7 @@ const {
   assertSlintPin,
   assertLockedSlint,
   BRIDGE_IMPORT_ERROR,
+  SW_BUILD_ID_ERROR,
 } = require('../../../scripts/build-ui.js');
 const { verifyBundle } = require('../../../scripts/verify-bundle.js');
 const { validateUi } = require('../../../scripts/validate-ui.js');
@@ -59,6 +60,31 @@ function fixture(): string {
   fs.writeFileSync(
     path.join(crate, 'public', 'bridge.js'),
     "import './pkg/ccs_account_dashboard.js';"
+  );
+  // The installable shell: the worker carries the build placeholder, the
+  // manifest names one fixture icon, and the icon file exists.
+  fs.writeFileSync(
+    path.join(crate, 'public', 'sw.js'),
+    "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
+  );
+  fs.writeFileSync(path.join(crate, 'public', 'sw-route.js'), '// routing fixture\n');
+  fs.writeFileSync(
+    path.join(crate, 'public', 'manifest.webmanifest'),
+    JSON.stringify({
+      name: 'AI Account Center',
+      short_name: 'AAC',
+      start_url: '/',
+      display: 'standalone',
+      icons: [{ src: '/icons/fixture-192.png', sizes: '192x192', type: 'image/png' }],
+    })
+  );
+  fs.mkdirSync(path.join(crate, 'public', 'icons'), { recursive: true });
+  fs.writeFileSync(
+    path.join(crate, 'public', 'icons', 'fixture-192.png'),
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    )
   );
   fs.writeFileSync(
     path.join(crate, 'pkg', 'ccs_account_dashboard.js'),
@@ -187,6 +213,40 @@ describe('Slint browser build integration', () => {
     expect(fs.existsSync(path.join(output, 'pkg', buildId, '.gitignore'))).toBe(false);
     expect(fs.readFileSync(path.join(output, manifest.wasm.path)).equals(WASM)).toBe(true);
     expect(manifest).not.toHaveProperty('commit');
+  });
+
+  it('stamps the build id into the packaged sw.js and leaves the source worker unchanged', () => {
+    const root = fixture();
+    const source = path.join(root, 'web-dashboard', 'public', 'sw.js');
+    const before = fs.readFileSync(source, 'utf8');
+    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    const packaged = fs.readFileSync(path.join(root, 'dist', 'ui', 'sw.js'), 'utf8');
+    expect(packaged).toBe(
+      `importScripts('./sw-route.js');\nvar BUILD_ID = '${manifest.buildId}';\n`
+    );
+    expect(fs.readFileSync(source, 'utf8')).toBe(before);
+  });
+
+  it('fails the build on a sw.js without the placeholder and keeps the existing output', () => {
+    const root = fixture();
+    fs.writeFileSync(
+      path.join(root, 'web-dashboard', 'public', 'sw.js'),
+      "var BUILD_ID = 'already-stamped';\n"
+    );
+    const oldUi = path.join(root, 'dist', 'ui');
+    fs.mkdirSync(oldUi, { recursive: true });
+    fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
+    expect(SW_BUILD_ID_ERROR).toBe('sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.');
+    expect(() => buildUi({ repoRoot: root, run: runner([]) })).toThrow(SW_BUILD_ID_ERROR);
+    expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
+  });
+
+  it('leaves a fixture public dir without sw.js alone', () => {
+    const root = fixture();
+    fs.rmSync(path.join(root, 'web-dashboard', 'public', 'sw.js'));
+    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    expect(manifest.buildId).toMatch(/^[a-f0-9]{12}$/);
+    expect(fs.existsSync(path.join(root, 'dist', 'ui', 'sw.js'))).toBe(false);
   });
 
   it('rewrites only the packaged bridge.js import and leaves the source bridge unchanged', () => {
@@ -364,6 +424,20 @@ describe('Slint browser build integration', () => {
             "import './pkg/ccs_account_dashboard.js';"
           ),
         'versioned WebAssembly runtime',
+      ],
+      [
+        'unstamped worker',
+        (output) =>
+          fs.writeFileSync(
+            path.join(output, 'sw.js'),
+            "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
+          ),
+        'stamped build id',
+      ],
+      [
+        'manifest icon removed',
+        (output) => fs.rmSync(path.join(output, 'icons', 'fixture-192.png')),
+        'Missing browser asset',
       ],
       [
         'private file mode',

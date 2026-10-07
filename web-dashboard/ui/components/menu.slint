@@ -1,5 +1,6 @@
 // Menu surfaces for PopupWindow: the panel fades in and rises 6 px with a small spring scale.
-import { Theme, Motion, Type } from "../theme.slint";
+// Below D the items are 44 px touch rows (DESIGN-MOBILE.md 2.3); desktop keeps 36 px.
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 import { Icon } from "icon.slint";
 import { Caps } from "text.slint";
 
@@ -42,7 +43,7 @@ export component MenuItem inherits Rectangle {
     in property <bool> checked: false;
     in property <bool> busy: false;
     callback activated();
-    height: 36px;
+    height: Breakpoints.below-d ? 44px : 36px;
     border-radius: 8px;
     background: ta.has-hover ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
