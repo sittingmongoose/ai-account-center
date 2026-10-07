@@ -359,6 +359,7 @@ component FocusPanel inherits VerticalLayout {
         }
     }
     if Breakpoints.below-d: AxRoBar {
+        probe: "focus-ro";
         has-sel: chart.sel >= 0;
         close => { chart.sel = -1; chart.pinned = false; }
         VerticalLayout {

@@ -641,15 +641,27 @@ export component AxRoTime inherits Text {
 // lines) and a Close clears it. The layout never jumps.
 export component AxRoBar inherits Rectangle {
     in property <bool> has-sel;
+    // names the bar for the end-to-end harness (components/probe.slint); "" reports nothing
+    in property <string> probe: "";
     callback close();
     height: 36px;
+    // The hint sits at the bar's left (the card's content inset): an unpositioned child would
+    // centre itself in the bar, and the hidden body below would shrink the bar to its own
+    // max (an invisible layout still feeds the min-of-maxes combination), sliding the centred
+    // hint to the card edge (task 9 A6). Explicit geometry keeps both out of that combination.
     if !root.has-sel: Text {
+        x: 0px;
         text: Device.coarse ? "Tap the chart for a reading" : "Point at the chart for a reading";
         font-size: Type.small;
         color: Theme.ink-3;
         vertical-alignment: center;
+        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":hint"; }
     }
     body := HorizontalLayout {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
         visible: root.has-sel;
         spacing: 8px;
         VerticalLayout {
@@ -664,6 +676,7 @@ export component AxRoBar inherits Rectangle {
             AxPress { mouse-cursor: pointer; tapped => { root.close(); } }
         }
     }
+    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":bar"; }
 }
 
 // One swatch-and-value pair of a readout row: the value at 600 in the tabular face.

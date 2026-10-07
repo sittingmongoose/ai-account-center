@@ -567,6 +567,7 @@ export component AxTrendCard inherits AxCard {
         padding-right: root.pad-x;
         padding-top: 2px;
         bar := AxRoBar {
+            probe: "trend-ro";
             has-sel: chart.sel >= 0;
             close => { chart.sel = -1; chart.pinned = false; }
             VerticalLayout {
