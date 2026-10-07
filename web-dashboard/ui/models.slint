@@ -74,6 +74,8 @@ export struct AccountRowView {
     // Activating this account asks first: it is already past the section's switch point.
     confirm: bool,
     confirm-runs: [RunView],
+    // phase 2: the confirm question as wrap units for the touch layouts (Slint cannot split strings).
+    confirm-words: [RunView],
     cells: [MeterView],
 }
 
@@ -90,6 +92,8 @@ export struct AutoSwitchView {
     max: int,
     pool: string,
     off-runs: [RunView],
+    // phase 2: the off line as wrap units for the touch layouts.
+    off-words: [RunView],
     setting: string,
     message: string,
     example: bool,
@@ -101,6 +105,8 @@ export struct FootView {
     warn: bool,
     runs: [RunView],
     when: string,
+    // phase 2: the foot sentence as wrap units for the touch layouts.
+    words: [RunView],
 }
 
 // A provider section on Home: Claude (desktop profiles) or a switchable provider (Codex, Antigravity).
@@ -111,6 +117,8 @@ export struct SectionView {
     long-label: string,
     meta: string,
     meta-runs: [RunView],
+    // phase 2: the header meta as wrap units for the touch layouts.
+    meta-words: [RunView],
     count: int,
     switchable: bool,
     // More than one account it could switch between: rows show Activate.
@@ -207,6 +215,8 @@ export struct DetailsView {
     platform: string,
     confirm: bool,
     confirm-runs: [RunView],
+    // phase 2: the confirm question as wrap units for the touch layouts.
+    confirm-words: [RunView],
     profile: string,
     can-mac: bool,
     can-windows: bool,
