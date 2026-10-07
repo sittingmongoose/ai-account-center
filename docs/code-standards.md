@@ -53,6 +53,15 @@ need the actual [Slint build](../scripts/build-ui.js) and
 Native/bridge changes use their platform checks. Do not silently substitute
 fixtures for live provider evidence.
 
+The release wasm build ends in a multi-GB link, so the builder runs only one
+at a time per computer: it locks
+`${XDG_CACHE_HOME:-~/.cache}/ai-account-center/ui-build.lock`, waits up to
+`AAC_UI_BUILD_LOCK_WAIT_S` seconds (default 600) and then fails with "UI build
+lane busy". Unless `CARGO_TARGET_DIR` is set, it compiles into the shared
+`ai-account-center/cargo-target-wasm` folder in that cache, so a fresh worktree
+reuses earlier work; the output still lands in the worktree's own `pkg` and
+`dist/ui`.
+
 The [contributor guide](../CONTRIBUTING.md) defines current commands. Document
 what changed, why and what was verified. Packaging, provider refresh, remote
 writes and publication are distinct actions requiring the appropriate scope.
