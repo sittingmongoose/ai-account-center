@@ -136,6 +136,102 @@ component CbmRow inherits Rectangle {
     in property <length> tok-w;
     in property <length> cost-w;
     in property <length> share-w;
+    // Desktop only (used under `if Breakpoints.tier-d`): the single-line row, verbatim main.
+    // A tier-conditional layout inside the TouchArea reserves box space even when its branch
+    // is off, which grew every desktop row by 20 px; the below-D stacked row lives in
+    // CbmRowStacked instead, so this TouchArea holds one unconditional layout.
+    min-height: 40px;
+    border-radius: 9px;
+    background: ta.pressed && Breakpoints.below-d ? Theme.pressed : (Device.hover && ta.has-hover) || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    // the fill grows from zero on first view and to the new width when the data changes
+    property <bool> mounted: !Motion.on;
+    mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
+    property <bool> landed: !Motion.on;
+    land := Timer { interval: root.delay + root.m.idx * 70ms + 820ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
+    property <float> fill: root.played && root.mounted ? root.m.w : 0;
+    animate fill { duration: Motion.on ? 760ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.m.idx * 70ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <length> pop-w: Breakpoints.tier-d ? 440px : min(440px, Breakpoints.tier-width - 2 * Breakpoints.gutter);
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { pop.show(); }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: root.gap;
+            HorizontalLayout {
+                width: root.name-w;
+                spacing: 9px;
+                VerticalLayout { alignment: center; ProviderMark { provider: root.m.provider; size: 18px; } }
+                Text { text: root.m.name; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                min-width: 100px;
+                track := Rectangle {
+                    height: 14px;
+                    border-radius: 4px;
+                    background: Theme.paper-3;
+                    clip: true;
+                    Rectangle {
+                        x: 0px;
+                        width: track.width * root.fill / 100;
+                        height: 14px;
+                        border-radius: 4px;
+                        clip: true;
+                        HorizontalLayout {
+                            width: track.width * root.m.w / 100;
+                            spacing: 1px;
+                            if root.m.fin > 0: Rectangle { horizontal-stretch: root.m.fin; min-width: 0px; background: AxColor.of("in"); AxPress { tip: root.m.tip-in; long-tip: root.m.tip-in; tapped => { pop.show(); } } }
+                            if root.m.fout > 0: Rectangle { horizontal-stretch: root.m.fout; min-width: 0px; background: AxColor.of("out"); AxPress { tip: root.m.tip-out; long-tip: root.m.tip-out; tapped => { pop.show(); } } }
+                            if root.m.fcw > 0: Rectangle { horizontal-stretch: root.m.fcw; min-width: 0px; background: AxColor.of("cw"); AxPress { tip: root.m.tip-cw; long-tip: root.m.tip-cw; tapped => { pop.show(); } } }
+                            if root.m.fcr > 0: Rectangle { horizontal-stretch: root.m.fcr; min-width: 0px; background: AxColor.of("cr"); AxPress { tip: root.m.tip-cr; long-tip: root.m.tip-cr; tapped => { pop.show(); } } }
+                        }
+                    }
+                }
+            }
+            if root.tok-w > 0: Text { text: root.m.tok; width: root.tok-w; font-family: Type.tab; font-size: 13px; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; AxPress { tip: root.m.tok-tip; long-tip: root.m.tok-tip; tapped => { pop.show(); } } }
+            VerticalLayout {
+                width: root.cost-w;
+                alignment: center;
+                spacing: 0px;
+                Text { text: root.m.cost; font-family: Type.tab; font-size: root.m.cost-na ? 12px : 13px; font-weight: root.m.cost-na ? 500 : 620; color: root.m.cost-na ? Theme.ink-3 : Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+                if root.m.partial: Text { text: "partial"; font-size: 11px; color: Theme.ink-3; horizontal-alignment: right; }
+            }
+            HorizontalLayout {
+                width: root.share-w;
+                alignment: end;
+                if root.m.share == "Unavailable": Text { text: root.m.share; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+                if root.m.share != "Unavailable" && root.m.share != "": VerticalLayout { alignment: center; ValueUnit { value: root.m.share; size: 13px; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; height: 18px; } }
+            }
+        }
+    }
+    pop := PopupWindow {
+        x: Breakpoints.tier-d ? max(-root.absolute-position.x + 10px, (root.width - 440px) / 2) : max(-8px, root.width - root.pop-w);
+        y: root.height + 8px;
+        width: root.pop-w;
+        height: cbm-body.preferred-height;
+        close-policy: close-on-click-outside;
+        cbm-body := AxPopBody { width: root.pop-w; height: self.preferred-height; pad-y: 14px; ModelDetail { m: root.m; narrow: root.pop-w < 380px; close => { pop.close(); } } }
+    }
+}
+
+// ---------------------------------------------------------------- cost by model, below D
+// The stacked row (DESIGN-MOBILE 4.2.4): below-D only (used under `if Breakpoints.below-d`).
+// Its TouchArea keeps both tier branches exactly as before, so every below-D layout is
+// unchanged; desktop uses CbmRow above, whose TouchArea holds no conditional layout.
+component CbmRowStacked inherits Rectangle {
+    in property <AxModelRow> m;
+    in property <bool> played;
+    in property <duration> delay;
+    in property <length> name-w;
+    in property <length> gap;
+    in property <length> tok-w;
+    in property <length> cost-w;
+    in property <length> share-w;
     // stacked below a 520 px card inner width (DESIGN-MOBILE 1.5, 4.2.4)
     in property <bool> stacked: false;
     min-height: 40px;
@@ -358,16 +454,32 @@ export component AxCbmCard inherits AxCard {
         padding-left: 8px;
         padding-right: 8px;
         padding-bottom: 10px;
-        for m in AxData.models: CbmRow {
-            m: m;
-            played: root.played;
-            delay: root.delay;
-            name-w: root.name-w;
-            gap: root.gap;
-            tok-w: root.tok-w;
-            cost-w: root.cost-w;
-            share-w: root.share-w;
-            stacked: root.stacked;
+        if Breakpoints.tier-d: VerticalLayout {
+            spacing: 0px;
+            for m in AxData.models: CbmRow {
+                m: m;
+                played: root.played;
+                delay: root.delay;
+                name-w: root.name-w;
+                gap: root.gap;
+                tok-w: root.tok-w;
+                cost-w: root.cost-w;
+                share-w: root.share-w;
+            }
+        }
+        if Breakpoints.below-d: VerticalLayout {
+            spacing: 0px;
+            for m in AxData.models: CbmRowStacked {
+                m: m;
+                played: root.played;
+                delay: root.delay;
+                name-w: root.name-w;
+                gap: root.gap;
+                tok-w: root.tok-w;
+                cost-w: root.cost-w;
+                share-w: root.share-w;
+                stacked: root.stacked;
+            }
         }
         if AxData.models.length == 0: Text {
             text: AxData.ready ? AxData.cbm.empty : AxData.head.error != "" ? "Model activity unavailable" : "Loading model activity";

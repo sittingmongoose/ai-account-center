@@ -30,7 +30,28 @@ global SessCols {
     out property <length> when: 92px;
 }
 
-component SessRow inherits Rectangle {
+component SessRow inherits HorizontalLayout {
+    in property <AxSessRecent> r;
+    // "" reports nothing; the first row of each box names its cells for the e2e harness (see SessList)
+    in property <string> probe: "";
+    // Desktop only (used under `if Breakpoints.tier-d`): the single-line row, verbatim main.
+    // A tier-conditional layout inside a TouchArea reserves box space even when its branch
+    // is off, which grew Cost-by-model desktop rows by 20 px; the below-D expandable row
+    // lives in SessRowStacked instead, so this row holds one unconditional layout.
+    min-height: 31px;
+    spacing: SessCols.gap;
+    VerticalLayout { alignment: center; width: SessCols.prov; horizontal-stretch: 0; HorizontalLayout { alignment: start; ProviderMark { provider: root.r.tool; size: 16px; } } }
+    Text { text: root.r.models; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 0px; AxTip { tip: root.r.tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":models"; } }
+    Text { text: root.r.tokens; width: SessCols.tok; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":tokens"; } }
+    Text { text: root.r.cost; width: SessCols.cost; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":cost"; } }
+    Text { text: root.r.when; width: SessCols.when; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":when"; } }
+}
+
+// ---------------------------------------------------------------- the session table, below D
+// The expandable row (DESIGN-MOBILE 4.2.6): below-D only (used under `if Breakpoints.below-d`).
+// Its TouchArea keeps both tier branches exactly as before, so every below-D layout is
+// unchanged; desktop uses SessRow above, whose layout holds no conditional branch.
+component SessRowStacked inherits Rectangle {
     in property <AxSessRecent> r;
     // "" reports nothing; the first row of each box names its cells for the e2e harness (see SessList)
     in property <string> probe: "";
@@ -122,10 +143,21 @@ component SessList inherits VerticalLayout {
         Caps { text: "COST"; width: SessCols.cost; horizontal-stretch: 0; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:cost"; } }
         Caps { text: "LAST ACTIVE"; width: SessCols.when; horizontal-stretch: 0; horizontal-alignment: right; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:when"; } }
     }
-    for r[i] in root.rows: VerticalLayout {
+    if Breakpoints.tier-d: VerticalLayout {
         spacing: 0px;
-        Rectangle { height: 1px; background: Theme.rule-2; }
-        SessRow { r: r; probe: root.probe == "" || i > 0 ? "" : root.probe + "-c"; stacked: root.stacked; }
+        for r[i] in root.rows: VerticalLayout {
+            spacing: 0px;
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            SessRow { r: r; probe: root.probe == "" || i > 0 ? "" : root.probe + "-c"; }
+        }
+    }
+    if Breakpoints.below-d: VerticalLayout {
+        spacing: 0px;
+        for r[i] in root.rows: VerticalLayout {
+            spacing: 0px;
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            SessRowStacked { r: r; probe: root.probe == "" || i > 0 ? "" : root.probe + "-c"; stacked: root.stacked; }
+        }
     }
     if root.rows.length == 0: Text {
         text: root.empty-text;
@@ -524,6 +556,12 @@ component CacheSection inherits VerticalLayout {
     property <length> gw: Breakpoints.tier-d ? (root.narrow ? 140px : 160px) : Breakpoints.tier-p ? 120px : 140px;
     property <bool> gauge-side: Breakpoints.tier-d || root.inner-w >= 300px;
     spacing: 12px;
+    // Desktop: cap at the card's content width. A VerticalLayout never shrinks below its
+    // preferred width, so without this the unwrapped footnote (~640px) sets the section
+    // wide: the footnote stays one clipped line (main wraps two), the card comes out ~30px
+    // short, and the cache numbers rasterize on shifted subpixel phases. Below D the width
+    // stays unconstrained, exactly as before.
+    max-width: Breakpoints.tier-d ? root.inner-w : 100000px;
     Text { text: "Cache efficiency"; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
     Rectangle { height: 4px; }
     if root.gauge-side: HorizontalLayout {
