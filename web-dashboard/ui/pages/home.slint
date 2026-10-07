@@ -803,8 +803,9 @@ export component AccountRow inherits Rectangle {
                                     clicked => { root.launch(root.account.profile, "windows"); }
                                 }
                             }
-                            SwitchSlot {
-                                visible: root.section.switchable;
+                            // Mode-conditioned, not `visible:`: an invisible slot still stacks its
+                            // ~44 px into Line A below D, pushing the identity down (H1, H5).
+                            if root.section.switchable: SwitchSlot {
                                 touch: true;
                                 account: root.account;
                                 can-switch: root.section.can-switch;
@@ -1646,6 +1647,22 @@ export component AccountSection inherits Plate {
             min-height: foot.min-height;
             preferred-height: foot.preferred-height;
             Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
+            // Measurers for fits-inline (never drawn, never hit-tested): direct children of
+            // this box, never of `foot`, so they take no layout space on any tier. `visible:
+            // false` only clips in Slint 1.18; inside `foot` they stretched the footer by two
+            // text lines plus spacing below D (O2). preferred-* still report natural widths.
+            when-probe := Text {
+                visible: false;
+                text: root.section.foot.when;
+                font-family: Type.tab;
+                font-size: root.touch ? Type.small : 12.5px;
+            }
+            runs-fit := Runs {
+                visible: false;
+                runs: root.section.foot.runs;
+                size: root.touch ? Type.small : 12.5px;
+                strong-weight: 640;
+            }
             // the concept's .plate-foot: 12 px padding under its 1 px rule around a 12.5 px line at 1.45.
             // Below D the sentence wraps with no line limit and the "Checked" line drops to its own line
             // when the sentence does not leave it room (4.1.3).
@@ -1658,26 +1675,6 @@ export component AccountSection inherits Plate {
                 min-height: 13px + 18px + 12px;
                 property <bool> fits-inline: Breakpoints.tier-d
                     || runs-fit.preferred-width + 16px + 8px + when-probe.preferred-width <= Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
-                // Measurers (never drawn, never hit-tested): `visible: false` only clips in Slint 1.18
-                // and would still stretch the footer by two text lines, squeezing the rows above it. On D
-                // they are zero-sized; below D they keep natural size (approved P/F/T layouts).
-                // preferred-width still reports the natural widths below D.
-                when-probe := Text {
-                    visible: false;
-                    width: Breakpoints.tier-d ? 0px : self.preferred-width;
-                    height: Breakpoints.tier-d ? 0px : self.preferred-height;
-                    text: root.section.foot.when;
-                    font-family: Type.tab;
-                    font-size: root.touch ? Type.small : 12.5px;
-                }
-                runs-fit := Runs {
-                    visible: false;
-                    width: Breakpoints.tier-d ? 0px : self.preferred-width;
-                    height: Breakpoints.tier-d ? 0px : self.preferred-height;
-                    runs: root.section.foot.runs;
-                    size: root.touch ? Type.small : 12.5px;
-                    strong-weight: 640;
-                }
                 foot-line := HorizontalLayout {
                     spacing: 9px;
                     foot-icon := VerticalLayout {
