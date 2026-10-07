@@ -8,7 +8,13 @@ import {
 import { authenticateDeviceToken, hashDeviceToken } from '../services/dashboard-device-store';
 import { getDashboardTlsSettings } from '../services/dashboard-tls-config';
 import type { DeviceRequestAuth } from './request-auth';
-import { isSecureTransport } from './secure-transport';
+import {
+  credentialAllowedOnRequest,
+  credentialTransport,
+  isLanProxyPeer,
+  isSecureTransport,
+  requestClientAddress,
+} from './secure-transport';
 
 /**
  * The /api guard when dashboard auth is on (CONTRACT-auth-devices sections 2,
@@ -139,6 +145,8 @@ const DEVICE_ERRORS: Record<string, string> = {
   device_revoked: 'This device was signed out from the dashboard.',
   device_expired: 'This device token expired after 90 days without use.',
   invalid_token: 'The device token is not valid.',
+  plain_http_token:
+    'This device key was used over plain HTTP on the local network, so it does not work through the HTTPS proxy. Pair the tray again through the secure address.',
 };
 
 function auditRejected(reason: string, deviceId: string | null): void {
@@ -179,15 +187,25 @@ function authenticateBearer(
   token: string,
   apiPath: string | null
 ): boolean {
-  // req.ip is the client behind a trusted local TLS proxy, else the peer address.
-  const result = authenticateDeviceToken(token, req.ip ?? req.socket?.remoteAddress ?? null);
+  // The client behind a trusted proxy hop, else the peer address. Through the
+  // LAN HTTPS proxy a key that ever crossed the network in plain text is refused.
+  const result = authenticateDeviceToken(token, {
+    address: requestClientAddress(req),
+    transport: credentialTransport(req),
+    requireNeverPlain: isLanProxyPeer(req),
+  });
   if (!result.ok) {
     if (result.code === 'store_unavailable') {
       reject(res, 503, 'auth_store_unavailable', 'Paired devices cannot be checked right now.');
       return false;
     }
     auditRejected(result.code, result.deviceId);
-    reject(res, 401, result.code, DEVICE_ERRORS[result.code]);
+    reject(
+      res,
+      result.code === 'plain_http_token' ? 403 : 401,
+      result.code,
+      DEVICE_ERRORS[result.code]
+    );
     return false;
   }
   if (apiPath === null || !isDeviceScopeRoute(req.method, apiPath)) {
@@ -214,6 +232,10 @@ function authenticateBearer(
 export function settleSessionEpoch(req: Request): boolean {
   const session = req.session;
   if (!session || session.authenticated !== true) return false;
+  // Through the LAN HTTPS proxy a session signed in over plain HTTP is not
+  // this request's (the session middleware already set it aside; this holds
+  // even without it). Nothing about the stored session changes.
+  if (!credentialAllowedOnRequest(req, session.signedInOver)) return false;
   if (!isSessionEpochCurrent(session.epoch)) {
     forgetSession(req.sessionID);
     session.authenticated = false;

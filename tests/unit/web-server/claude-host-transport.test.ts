@@ -51,12 +51,12 @@ const support = (home: string) => path.join(home, 'Library', 'Application Suppor
 describe('Mac host program', () => {
   it('creates a data folder and launcher, and refuses to create them twice', async () => {
     const { home, calls, transport } = macHome();
-    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'jared-mac' });
+    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'mac-host' });
     expect(launcher).toEqual({
       launcherName: 'Claude (work2)',
       launcherPath: path.join(home, 'Applications', 'Claude (work2).app'),
       profilePath: path.join(support(home), 'Claude-work2'),
-      sshHost: 'jared-mac',
+      sshHost: 'mac-host',
     });
     expect(fs.statSync(launcher.profilePath).mode & 0o777).toBe(0o700);
     const script = fs.readFileSync(
@@ -72,7 +72,7 @@ describe('Mac host program', () => {
     );
     expect(plist).toContain('com.aac.claudeprofile.work2');
     await expect(
-      transport.create('mac', { profileId: 'work2', sshHost: 'jared-mac' })
+      transport.create('mac', { profileId: 'work2', sshHost: 'mac-host' })
     ).rejects.toThrow();
     // The command line holds only the fixed bootstrap; the request travels on stdin.
     expect(calls[0].command.startsWith('/usr/bin/python3 -c "import sys,json;')).toBe(true);
@@ -82,7 +82,7 @@ describe('Mac host program', () => {
 
   it('trashes on the same volume, restores, purges, and keeps a used folder on undo', async () => {
     const { home, transport } = macHome();
-    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'jared-mac' });
+    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'mac-host' });
     fs.writeFileSync(path.join(launcher.profilePath, 'Local State'), 'signed in');
     const trashName = 'work2-20261002T080000Z';
     expect(await transport.trash('mac', { profileId: 'work2', launcher, trashName })).toBe('moved');
@@ -99,11 +99,11 @@ describe('Mac host program', () => {
     ).toBe(true);
     expect(fs.existsSync(trashed)).toBe(false);
     await transport.trash('mac', { profileId: 'work2', launcher, trashName });
-    await transport.purge('mac', { sshHost: 'jared-mac', trashName });
+    await transport.purge('mac', { sshHost: 'mac-host', trashName });
     expect(fs.existsSync(trashed)).toBe(false);
     expect(fs.readdirSync(path.join(home, '.ccs', 'trash', 'claude'))).toEqual([]);
     // Undo removes the launcher, and the data folder only while it is empty.
-    const second = await transport.create('mac', { profileId: 'work3', sshHost: 'jared-mac' });
+    const second = await transport.create('mac', { profileId: 'work3', sshHost: 'mac-host' });
     fs.writeFileSync(path.join(second.profilePath, 'keep'), 'x');
     await transport.undoCreate('mac', { profileId: 'work3', launcher: second });
     expect(fs.existsSync(second.launcherPath as string)).toBe(false);
@@ -112,7 +112,7 @@ describe('Mac host program', () => {
 
   it('reports whether the profile app runs', async () => {
     const { home, transport } = macHome();
-    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'jared-mac' });
+    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'mac-host' });
     expect(await transport.appState('mac', { launcher })).toBe('stopped');
     const child = spawn('/usr/bin/python3', [
       '-c',
@@ -131,7 +131,7 @@ describe('Mac host program', () => {
 
   it('reports the sign-in marker without decrypting or printing any token', async () => {
     const { transport } = macHome();
-    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'jared-mac' });
+    const launcher = await transport.create('mac', { profileId: 'work2', sshHost: 'mac-host' });
     const config = path.join(launcher.profilePath, 'config.json');
     // Fresh profile: no session file at all.
     expect(await transport.sessionState('mac', { launcher })).toBe('signed-out');
@@ -164,19 +164,19 @@ describe('Mac host program', () => {
         launcherName: 'x',
         launcherPath: path.join(home, 'Applications', 'Claude (x).app'),
         profilePath: outside,
-        sshHost: 'jared-mac',
+        sshHost: 'mac-host',
       },
       {
         launcherName: 'x',
         launcherPath: path.join(home, 'Applications', 'Claude (x).app'),
         profilePath: path.join(support(home), '..', 'outside'),
-        sshHost: 'jared-mac',
+        sshHost: 'mac-host',
       },
       {
         launcherName: 'x',
         launcherPath: outside,
         profilePath: path.join(support(home), 'Claude-x'),
-        sshHost: 'jared-mac',
+        sshHost: 'mac-host',
       },
     ];
     for (const launcher of bad) {
@@ -189,7 +189,7 @@ describe('Mac host program', () => {
       ).rejects.toThrow();
     }
     await expect(
-      transport.purge('mac', { sshHost: 'jared-mac', trashName: '../../outside' })
+      transport.purge('mac', { sshHost: 'mac-host', trashName: '../../outside' })
     ).rejects.toThrow();
     expect(fs.readFileSync(path.join(outside, 'precious'), 'utf8')).toBe('x');
   });
@@ -202,7 +202,7 @@ describe('Windows host script', () => {
     startMenuPath:
       'C:\\Users\\x\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Claude (party).lnk',
     profilePath: 'C:\\Users\\x\\AppData\\Roaming\\Claude-party',
-    sshHost: 'jared-windows',
+    sshHost: 'windows-host',
   };
 
   it('embeds only validated values and checks them again on the host', () => {

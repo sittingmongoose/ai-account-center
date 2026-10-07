@@ -2,7 +2,7 @@
 
 This is the map for the agents who build the pages on top of the W1 foundations. The approved design is
 `~/PM-Experiments/ccs-accounts-20260930/redesign-concepts-20261001/c-daylight-atlas/` (index.html, styles.css,
-analytics.css, app*.js). Jared's rules are in that folder's `BRIEF.md`, `ROUND2.md` (later sections win),
+analytics.css, app*.js). The owner's rules are in that folder's `BRIEF.md`, `ROUND2.md` (later sections win),
 `TRAYS-AND-SIGNIN.md` and `ACCEPTANCE.md`.
 
 ## Layers

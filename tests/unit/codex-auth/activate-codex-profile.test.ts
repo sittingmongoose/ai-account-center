@@ -108,7 +108,7 @@ beforeEach(() => {
   fs.mkdirSync(codexHome, { recursive: true });
   registry = new CodexProfileRegistry();
   writeProfile('gmail', fixture('gmail'));
-  writeProfile('platyr', fixture('platyr'));
+  writeProfile('plum', fixture('plum'));
   fs.writeFileSync(path.join(codexHome, 'auth.json'), fixture('gmail'), { mode: 0o600 });
   invalidateCodexAuthProfilesCache();
 });
@@ -127,8 +127,8 @@ afterEach(() => {
 describe('activateCodexProfile', () => {
   it('stops writers, saves final live tokens by identity, installs atomically and starts once', async () => {
     const events: string[] = [];
-    // A stale launch default must not cause the live login to be saved to platyr.
-    registry.setDefault('platyr');
+    // A stale launch default must not cause the live login to be saved to plum.
+    registry.setDefault('plum');
     fs.writeFileSync(path.join(codexHome, 'config.toml'), 'preserved');
     fs.mkdirSync(path.join(codexHome, 'sessions'));
     fs.writeFileSync(path.join(codexHome, 'sessions', 'keep.jsonl'), 'preserved');
@@ -144,28 +144,28 @@ describe('activateCodexProfile', () => {
       async start() {
         expect(fs.readFileSync(auth('gmail'))).toEqual(refreshed);
         expect(decodeAccountIdentity(path.join(codexHome, 'auth.json')).email).toBe(
-          'platyr@example.test'
+          'plum@example.test'
         );
         events.push('start');
       },
     };
-    const result = await activateCodexProfile('platyr', { codexHome, registry, runtime: stub });
+    const result = await activateCodexProfile('plum', { codexHome, registry, runtime: stub });
     expect(events).toEqual(['stop', 'start']);
     expect(result).toEqual({
-      name: 'platyr',
-      email: 'platyr@example.test',
+      name: 'plum',
+      email: 'plum@example.test',
       plan: 'pro',
       codexHome,
       previousEmail: 'gmail@example.test',
     });
     expect(fs.statSync(path.join(codexHome, 'auth.json')).mode & 0o777).toBe(0o600);
-    expect(fs.readFileSync(auth('platyr'))).toEqual(fixture('platyr'));
+    expect(fs.readFileSync(auth('plum'))).toEqual(fixture('plum'));
     expect(fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8')).toBe('preserved');
     expect(fs.readFileSync(path.join(codexHome, 'sessions', 'keep.jsonl'), 'utf8')).toBe(
       'preserved'
     );
     expect(fs.readdirSync(codexHome).some((name) => name.includes('.tmp.'))).toBe(false);
-    expect(registry.getProfile('platyr').last_used).toBeTruthy();
+    expect(registry.getProfile('plum').last_used).toBeTruthy();
   });
 
   it('rereads a same-identity target after saving the refreshed live login', async () => {
@@ -189,7 +189,7 @@ describe('activateCodexProfile', () => {
       if (++starts === 1) throw new Error('fixture startup failed');
     };
     await expect(
-      activateCodexProfile('platyr', { codexHome, registry, runtime: stub })
+      activateCodexProfile('plum', { codexHome, registry, runtime: stub })
     ).rejects.toThrow('Could not stop or restart Codex safely.');
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
     expect(events).toEqual(['stop', 'start', 'stop', 'start']);
@@ -205,7 +205,7 @@ describe('activateCodexProfile', () => {
       if (++starts === 1) fs.writeFileSync(path.join(codexHome, 'auth.json'), fixture('gmail'));
     };
     await expect(
-      activateCodexProfile('platyr', { codexHome, registry, runtime: stub })
+      activateCodexProfile('plum', { codexHome, registry, runtime: stub })
     ).rejects.toThrow('did not keep the requested account');
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
     expect(events).toEqual(['stop', 'start', 'stop', 'start']);
@@ -219,7 +219,7 @@ describe('activateCodexProfile', () => {
       throw new CodexActivationError('busy', 'Codex work is still active.');
     };
     await expect(
-      activateCodexProfile('platyr', { codexHome, registry, runtime: stub })
+      activateCodexProfile('plum', { codexHome, registry, runtime: stub })
     ).rejects.toThrow('Codex work is still active.');
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
     expect(events).toEqual(['stop']);
@@ -252,7 +252,7 @@ describe('activateCodexProfile', () => {
         events.push('second-start');
       },
     };
-    const firstActivation = activateCodexProfile('platyr', { codexHome, registry, runtime: first });
+    const firstActivation = activateCodexProfile('plum', { codexHome, registry, runtime: first });
     // Stop runs only under the lock, so the first activation holds it from here on.
     await firstStopping.promise;
     const lockWatch = watchActivationLock({
@@ -288,10 +288,10 @@ describe('activateCodexProfile', () => {
   });
 
   it('rejects a per-profile CODEX_HOME before stopping anything', async () => {
-    process.env.CODEX_HOME = resolveCodexProfileDir('platyr');
+    process.env.CODEX_HOME = resolveCodexProfileDir('plum');
     const events: string[] = [];
     await expect(
-      activateCodexProfile('platyr', { codexHome, registry, runtime: runtime(events) })
+      activateCodexProfile('plum', { codexHome, registry, runtime: runtime(events) })
     ).rejects.toThrow('Unset the per-profile CODEX_HOME');
     expect(events).toEqual([]);
   });
@@ -311,17 +311,17 @@ describe('activateCodexProfile', () => {
     fs.writeFileSync(path.join(codexHome, 'auth.json'), live);
     const events: string[] = [];
     await expect(
-      activateCodexProfile('platyr', { codexHome, registry, runtime: runtime(events) })
+      activateCodexProfile('plum', { codexHome, registry, runtime: runtime(events) })
     ).rejects.toThrow('no saved profile');
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(live);
     expect(events).toEqual(['stop', 'start']);
   });
 
   it('does not reveal token material from malformed target JSON', async () => {
-    fs.writeFileSync(auth('platyr'), '{"tokens":{"id_token":"secret-fixture-fragment');
+    fs.writeFileSync(auth('plum'), '{"tokens":{"id_token":"secret-fixture-fragment');
     let error: unknown;
     try {
-      await activateCodexProfile('platyr', { codexHome, registry, runtime: runtime([]) });
+      await activateCodexProfile('plum', { codexHome, registry, runtime: runtime([]) });
     } catch (caught) {
       error = caught;
     }
@@ -331,13 +331,13 @@ describe('activateCodexProfile', () => {
   });
 
   it('rejects an identity-only target before stopping writers', async () => {
-    const incomplete = JSON.parse(fixture('platyr').toString());
+    const incomplete = JSON.parse(fixture('plum').toString());
     delete incomplete.tokens.access_token;
     delete incomplete.tokens.refresh_token;
-    fs.writeFileSync(auth('platyr'), JSON.stringify(incomplete));
+    fs.writeFileSync(auth('plum'), JSON.stringify(incomplete));
     const events: string[] = [];
     await expect(
-      activateCodexProfile('platyr', { codexHome, registry, runtime: runtime(events) })
+      activateCodexProfile('plum', { codexHome, registry, runtime: runtime(events) })
     ).rejects.toThrow('needs access and refresh tokens');
     expect(events).toEqual([]);
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
@@ -353,7 +353,7 @@ describe('confirmed activation transactions', () => {
 
   async function issue(): Promise<CodexActivationConfirmation> {
     try {
-      await activateCodexProfile('platyr', {
+      await activateCodexProfile('plum', {
         codexHome,
         registry,
         runtime: {
@@ -384,16 +384,16 @@ describe('confirmed activation transactions', () => {
       expect(approval).toEqual(plan);
       events.push('approved-stop');
     };
-    const result = await activateCodexProfile('platyr', {
+    const result = await activateCodexProfile('plum', {
       codexHome,
       registry,
       runtime: stub,
       confirmationToken: offer.token,
     });
-    expect(result.email).toBe('platyr@example.test');
+    expect(result.email).toBe('plum@example.test');
     expect(events).toEqual(['approved-stop', 'start']);
     await expect(
-      activateCodexProfile('platyr', {
+      activateCodexProfile('plum', {
         codexHome,
         registry,
         runtime: runtime([]),
@@ -410,7 +410,7 @@ describe('confirmed activation transactions', () => {
     fs.writeFileSync(path.join(codexHome, 'auth.json'), refreshed);
     const events: string[] = [];
     await expect(
-      activateCodexProfile('platyr', {
+      activateCodexProfile('plum', {
         codexHome,
         registry,
         runtime: runtime(events),
@@ -438,21 +438,21 @@ describe('confirmed activation transactions', () => {
     const offer = await issue();
     const release = await acquireCodexActivationLock(codexHome);
     const events: string[] = [];
-    const pending = activateCodexProfile('platyr', {
+    const pending = activateCodexProfile('plum', {
       codexHome,
       registry,
       runtime: runtime(events),
       confirmationToken: offer.token,
     });
     const refreshed = Buffer.from(
-      fixture('platyr').toString().replace('fake-access-platyr', 'new-fake-access-platyr')
+      fixture('plum').toString().replace('fake-access-plum', 'new-fake-access-plum')
     );
-    fs.writeFileSync(auth('platyr'), refreshed);
+    fs.writeFileSync(auth('plum'), refreshed);
     await release();
     await expect(pending).rejects.toMatchObject({ code: 'confirmation_stale' });
     expect(events).toEqual([]);
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
-    expect(fs.readFileSync(auth('platyr'))).toEqual(refreshed);
+    expect(fs.readFileSync(auth('plum'))).toEqual(refreshed);
   });
 
   it('restores original auth and restarts after a confirmed startup fails, without creating a new capability', async () => {
@@ -465,7 +465,7 @@ describe('confirmed activation transactions', () => {
       if (++starts === 1) throw new CodexActivationRuntimeError('failed restart');
     };
     await expect(
-      activateCodexProfile('platyr', {
+      activateCodexProfile('plum', {
         codexHome,
         registry,
         runtime: stub,
@@ -479,10 +479,10 @@ describe('confirmed activation transactions', () => {
 
   it('rejects a changed saved target login before stopping any program', async () => {
     const offer = await issue();
-    fs.writeFileSync(auth('platyr'), fixture('gmail'));
+    fs.writeFileSync(auth('plum'), fixture('gmail'));
     const events: string[] = [];
     await expect(
-      activateCodexProfile('platyr', {
+      activateCodexProfile('plum', {
         codexHome,
         registry,
         runtime: runtime(events),
@@ -503,9 +503,9 @@ describe('activation CLI and live dashboard identity', () => {
       return true;
     }) as typeof process.stdout.write;
     try {
-      const code = await runCodexAuth(['activate', 'platyr'], { codexHome, runtime: runtime([]) });
+      const code = await runCodexAuth(['activate', 'plum'], { codexHome, runtime: runtime([]) });
       expect(code).toBe(0);
-      expect(chunks.join('')).toContain('platyr@example.test');
+      expect(chunks.join('')).toContain('plum@example.test');
       expect(chunks.join('')).not.toContain('fake-access');
       expect(chunks.join('')).not.toContain('fake-refresh');
     } finally {
@@ -522,7 +522,7 @@ describe('activation CLI and live dashboard identity', () => {
     }) as typeof process.stderr.write;
     try {
       expect(await runCodexAuth(['activate'])).toBe(1);
-      expect(await runCodexAuth(['activate', 'platyr', '--force'])).toBe(1);
+      expect(await runCodexAuth(['activate', 'plum', '--force'])).toBe(1);
       expect(chunks.join('')).toContain('ccs codex-auth activate <name>');
     } finally {
       process.stderr.write = oldWrite;
@@ -530,14 +530,14 @@ describe('activation CLI and live dashboard identity', () => {
   });
 
   it('reports shared live identity separately from launch default and follows external swaps', async () => {
-    registry.setDefault('platyr');
+    registry.setDefault('plum');
     let summary = await getCodexAuthProfilesSummary(codexHome);
-    expect(summary.active?.name).toBe('platyr');
+    expect(summary.active?.name).toBe('plum');
     expect(summary.activated?.name).toBe('gmail');
-    fs.writeFileSync(path.join(codexHome, 'auth.json'), fixture('platyr'));
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), fixture('plum'));
     summary = await getCodexAuthProfilesSummary(codexHome);
-    expect(summary.activated?.name).toBe('platyr');
-    expect(summary.activated?.email).toBe('platyr@example.test');
+    expect(summary.activated?.name).toBe('plum');
+    expect(summary.activated?.email).toBe('plum@example.test');
     expect(JSON.stringify(summary)).not.toContain('fake-access');
     expect(JSON.stringify(summary)).not.toContain('fake-refresh');
   });
@@ -550,14 +550,14 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     );
     const release = await acquireCodexActivationLock(codexHome);
     const events: string[] = [];
-    const pending = activateCodexProfile('platyr', {
+    const pending = activateCodexProfile('plum', {
       codexHome,
       registry,
       runtime: runtime(events),
     });
-    registry.removeProfile('platyr');
+    registry.removeProfile('plum');
     await release();
-    await expect(pending).rejects.toThrow("Codex profile 'platyr' does not exist.");
+    await expect(pending).rejects.toThrow("Codex profile 'plum' does not exist.");
     expect(events).toEqual([]);
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('gmail'));
     expect(fs.existsSync(path.join(codexHome, '.ccs-activation.lock'))).toBe(false);
@@ -569,12 +569,12 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     );
     const release = await acquireCodexActivationLock(codexHome);
     const events: string[] = [];
-    const pending = activateCodexProfile('platyr', {
+    const pending = activateCodexProfile('plum', {
       codexHome,
       registry,
       runtime: runtime(events),
     });
-    fs.rmSync(auth('platyr'));
+    fs.rmSync(auth('plum'));
     await release();
     await expect(pending).rejects.toThrow('Could not read Target profile auth.json.');
     expect(events).toEqual([]);
@@ -587,12 +587,12 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     );
     const release = await acquireCodexActivationLock(codexHome);
     const events: string[] = [];
-    const pending = activateCodexProfile('platyr', {
+    const pending = activateCodexProfile('plum', {
       codexHome,
       registry,
       runtime: runtime(events),
     });
-    fs.writeFileSync(auth('platyr'), fixture('gmail'));
+    fs.writeFileSync(auth('plum'), fixture('gmail'));
     await release();
     await expect(pending).rejects.toThrow('changed account before activation');
     expect(events).toEqual([]);
@@ -605,7 +605,7 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     const allowStop = deferred();
     const removalWaiting = deferred();
     const events: string[] = [];
-    const pendingActivation = activateCodexProfile('platyr', {
+    const pendingActivation = activateCodexProfile('plum', {
       codexHome,
       registry,
       runtime: {
@@ -636,7 +636,7 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     try {
       const pendingRemoval = handleRemoveCodex(
         { registry, version: 'test' },
-        ['platyr', '--yes', '--force'],
+        ['plum', '--yes', '--force'],
         { codexHome }
       ).catch((error: unknown) => {
         if (!(error instanceof Error) || error.message !== 'fixture exit') throw error;
@@ -645,8 +645,8 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
       // (Without the lock it would finish instead, and the checks below report that.)
       await Promise.race([removalWaiting.promise, pendingRemoval]);
       expect(await activationLockHeld()).toBe(true);
-      expect(fs.existsSync(auth('platyr'))).toBe(true);
-      expect(registry.hasProfile('platyr')).toBe(true);
+      expect(fs.existsSync(auth('plum'))).toBe(true);
+      expect(registry.hasProfile('plum')).toBe(true);
       allowStop.resolve();
       await pendingActivation;
       await pendingRemoval;
@@ -660,8 +660,8 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     // Removal got the lock, and so made its locked rereads, only after the activation
     // released it; the denial shows those rereads saw the newly activated profile.
     expect(events).toEqual(['stop', 'start', 'removal-locked']);
-    expect(registry.hasProfile('platyr')).toBe(true);
-    expect(fs.readFileSync(auth('platyr'))).toEqual(fixture('platyr'));
-    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('platyr'));
+    expect(registry.hasProfile('plum')).toBe(true);
+    expect(fs.readFileSync(auth('plum'))).toEqual(fixture('plum'));
+    expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('plum'));
   });
 });

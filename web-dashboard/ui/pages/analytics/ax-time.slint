@@ -1,7 +1,8 @@
 // "When you use the CLIs": the weekday x hour heatmap in local time, and the daily (or hourly) cost by provider.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
+import { Hover } from "../../components/hover-card.slint";
 import { AxData, AxBar } from "ax-data.slint";
-import { AxColor, AxCard, AxCardHead, AxSeg, AxTip, AxSwatch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard } from "ax-common.slint";
+import { AxColor, AxCard, AxCardHead, AxSeg, AxTip, AxPress, AxScrub, AxSwatch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard, AxRoBar, AxRoVal } from "ax-common.slint";
 
 // ---------------------------------------------------------------- heatmap
 component HeatCell inherits Rectangle {
@@ -11,6 +12,8 @@ component HeatCell inherits Rectangle {
     in property <bool> played;
     in property <duration> delay;
     in property <string> dash;
+    // below D the tapped cell gets a 2 px ink outline (DESIGN-MOBILE 5.3)
+    in property <bool> selected: false;
     property <bool> shown: !Motion.on;
     show := Timer { interval: max(1ms, root.delay); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
     opacity: root.shown ? 1 : 0;
@@ -32,7 +35,13 @@ component HeatCell inherits Rectangle {
             stroke: Theme.grid-strong;
             stroke-width: 1px;
         }
+        if root.selected: Rectangle {
+            border-radius: 4px;
+            border-width: 2px;
+            border-color: Theme.ink;
+        }
     }
+    // desktop hover tips; below D the grid overlay handles taps and the long-press tip
     ta := AxTip { tip: root.tip; }
 }
 
@@ -41,9 +50,24 @@ export component AxHeatCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
     in property <length> win-h: 900px;
-    property <bool> narrow: Breakpoints.width < 1180px;
-    property <length> ch: root.win-h <= 760px ? 18px : clamp(root.win-h * 0.024, 18px, 28px);
-    AxCardHead {
+    property <bool> narrow: Breakpoints.tier-d ? Breakpoints.width < 1180px : Breakpoints.tier-p;
+    property <length> pad: root.narrow ? 16px : 20px;
+    property <length> ch: Breakpoints.tier-d ? (root.win-h <= 760px ? 18px : clamp(root.win-h * 0.024, 18px, 28px)) : 22px;
+    // the grid geometry: a 38 px day column with 3 px gaps on D, 32/2 below (DESIGN-MOBILE 4.2.7)
+    property <length> lab: Breakpoints.tier-d ? 38px : 32px;
+    property <length> cgap: Breakpoints.tier-d ? 3px : 2px;
+    // the pinned cell (a tap, a scrub, or a click); a second tap, Close, or a range/provider/mode
+    // change clears it. A mouse below D follows the pointer until a click pins it.
+    property <int> sel: -1;
+    property <bool> pinned: false;
+    property <string> range: AxData.range;
+    property <string> prov: AxData.prov;
+    property <string> heat-mode: AxData.heat-mode;
+    changed range => { root.sel = -1; root.pinned = false; }
+    changed prov => { root.sel = -1; root.pinned = false; }
+    changed heat-mode => { root.sel = -1; root.pinned = false; }
+    property <string> sel-tip: root.sel >= 0 && root.sel < AxData.heat-cells.length ? AxData.heat-cells[root.sel].tip : "";
+    if Breakpoints.tier-d: AxCardHead {
         title: "When you use the CLIs";
         sub: AxData.heat.sub;
         VerticalLayout {
@@ -57,20 +81,60 @@ export component AxHeatCard inherits AxCard {
             }
         }
     }
+    if Breakpoints.below-d && !Breakpoints.tier-p: AxCardHead {
+        title: "When you use the CLIs";
+        sub: AxData.heat.sub;
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            AxSeg {
+                small: true;
+                items: [{ value: "cost", label: "Cost" }, { value: "tokens", label: "Tokens" }];
+                value: AxData.heat-mode;
+                picked(v) => { AxData.action("analytics-heat", v); }
+            }
+        }
+    }
+    if Breakpoints.tier-p: AxCardHead { title: "When you use the CLIs"; sub: AxData.heat.sub; }
+    if Breakpoints.tier-p: HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-bottom: 4px;
+        alignment: start;
+        AxSeg {
+            small: true;
+            items: [{ value: "cost", label: "Cost" }, { value: "tokens", label: "Tokens" }];
+            value: AxData.heat-mode;
+            picked(v) => { AxData.action("analytics-heat", v); }
+        }
+    }
+    if Breakpoints.below-d: HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-top: 2px;
+        AxRoBar {
+            has-sel: root.sel >= 0;
+            close => { root.sel = -1; root.pinned = false; }
+            Text { text: root.sel-tip; font-size: Type.small; color: Theme.ink-2; wrap: word-wrap; vertical-alignment: center; }
+        }
+    }
     VerticalLayout {
-        padding-left: root.narrow ? 16px : 20px;
-        padding-right: self.padding-left;
+        padding-left: root.pad;
+        padding-right: root.pad;
         padding-top: 2px;
         padding-bottom: 16px;
         alignment: center;
         vertical-stretch: 1;
         grid := Rectangle {
-            property <length> cw: max(4px, (self.width - 38px - 24 * 3px) / 24);
-            height: 16px + 3px + 7 * (root.ch + 3px);
+            property <length> cw: Breakpoints.tier-d ? max(4px, (self.width - 38px - 24 * 3px) / 24)
+                : min(24px, max(4px, floor((self.width - 32px - 46px) / 24 / 1px) * 1px));
+            height: 16px + 3px + 7 * (root.ch + root.cgap);
             changed width => { AxData.layout("heat", self.width, root.ch); }
             init => { AxData.layout("heat", self.width, root.ch); }
             for h[i] in AxData.heat-hours: Text {
-                x: 38px + 3px + i * (grid.cw + 3px);
+                // P thins the every-3 labels to every 6
+                visible: h != "" && (Breakpoints.tier-d || !Breakpoints.tier-p || mod(i, 6) == 0);
+                x: root.lab + root.cgap + i * (grid.cw + root.cgap);
                 y: 0px;
                 height: 16px;
                 text: h;
@@ -81,8 +145,8 @@ export component AxHeatCard inherits AxCard {
             }
             for d[j] in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]: Text {
                 x: 0px;
-                y: 19px + j * (root.ch + 3px);
-                width: 38px;
+                y: 19px + j * (root.ch + root.cgap);
+                width: root.lab;
                 height: root.ch;
                 text: d;
                 font-size: 12px;
@@ -91,8 +155,8 @@ export component AxHeatCard inherits AxCard {
                 vertical-alignment: center;
             }
             for c[n] in AxData.heat-cells: HeatCell {
-                x: 38px + 3px + mod(n, 24) * (grid.cw + 3px);
-                y: 19px + floor(n / 24) * (root.ch + 3px);
+                x: root.lab + root.cgap + mod(n, 24) * (grid.cw + root.cgap);
+                y: 19px + floor(n / 24) * (root.ch + root.cgap);
                 width: grid.cw;
                 height: root.ch;
                 state: c.state;
@@ -101,9 +165,142 @@ export component AxHeatCard inherits AxCard {
                 played: root.played;
                 delay: root.delay + (mod(n, 24) + floor(n / 24) * 2) * 9ms;
                 dash: AxData.heat.dash;
+                selected: Breakpoints.below-d && root.sel == n;
+            }
+            // one overlay for the whole grid: taps pin a cell, horizontal drags scrub across cells,
+            // vertical drags stay with the page scroll, and a 450 ms hold shows the cell's tip (5.3)
+            if Breakpoints.below-d: ov := TouchArea {
+                x: 0px;
+                y: 0px;
+                width: grid.width;
+                height: grid.height;
+                mouse-cursor: default;
+                property <bool> decided: false;
+                property <bool> h-scrub: false;
+                property <bool> lp-fired: false;
+                property <bool> lp-dead: false;
+                function track(mx: length, my: length) -> int {
+                    let col = floor((mx - root.lab - root.cgap) / (grid.cw + root.cgap));
+                    let row = floor((my - 19px) / (root.ch + root.cgap));
+                    if mx < root.lab + root.cgap || col < 0 || col > 23 || my < 19px || row < 0 || row > 6 {
+                        return -1;
+                    }
+                    let n = row * 24 + col;
+                    if n < 0 || n >= AxData.heat-cells.length {
+                        return -1;
+                    }
+                    return n;
+                }
+                lp := Timer {
+                    interval: 450ms;
+                    running: false;
+                    triggered => {
+                        self.running = false;
+                        if ov.touch && ov.pressed && !ov.lp-dead {
+                            let n = ov.track(ov.pressed-x, ov.pressed-y);
+                            if n >= 0 {
+                                ov.lp-fired = true;
+                                Hover.tip-now("long-press",
+                                    { x: ov.absolute-position.x + root.lab + root.cgap + mod(n, 24) * (grid.cw + root.cgap), y: ov.absolute-position.y + 19px + floor(n / 24) * (root.ch + root.cgap) },
+                                    grid.cw, root.ch, AxData.heat-cells[n].tip);
+                            }
+                        }
+                    }
+                }
+                property <bool> touch: Device.coarse;
+                changed pressed => {
+                    if self.pressed {
+                        ov.decided = false;
+                        ov.h-scrub = false;
+                        ov.lp-fired = false;
+                        ov.lp-dead = false;
+                        if ov.touch {
+                            lp.running = true;
+                        }
+                    } else {
+                        lp.running = false;
+                        Hover.leave("long-press");
+                    }
+                }
+                moved => {
+                    if !self.pressed {
+                        return;
+                    }
+                    if self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y - 8px || self.mouse-y < self.pressed-y - 8px {
+                        ov.lp-dead = true;
+                        lp.running = false;
+                        if ov.lp-fired {
+                            ov.lp-fired = false;
+                            Hover.leave("long-press");
+                        }
+                    }
+                    if !ov.decided {
+                        if self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px {
+                            ov.decided = true;
+                            if self.mouse-x > self.pressed-x {
+                                if self.mouse-y > self.pressed-y {
+                                    ov.h-scrub = self.mouse-x - self.pressed-x > self.mouse-y - self.pressed-y;
+                                } else {
+                                    ov.h-scrub = self.mouse-x - self.pressed-x > self.pressed-y - self.mouse-y;
+                                }
+                            } else {
+                                if self.mouse-y > self.pressed-y {
+                                    ov.h-scrub = self.pressed-x - self.mouse-x > self.mouse-y - self.pressed-y;
+                                } else {
+                                    ov.h-scrub = self.pressed-x - self.mouse-x > self.pressed-y - self.mouse-y;
+                                }
+                            }
+                            if ov.h-scrub {
+                                let n = ov.track(self.mouse-x, self.mouse-y);
+                                if n >= 0 {
+                                    root.sel = n;
+                                    root.pinned = true;
+                                }
+                            }
+                        }
+                    } else if ov.h-scrub {
+                        let n = ov.track(self.mouse-x, self.mouse-y);
+                        if n >= 0 {
+                            root.sel = n;
+                            root.pinned = true;
+                        }
+                    }
+                }
+                clicked => {
+                    if ov.lp-fired {
+                        ov.lp-fired = false;
+                        Hover.leave("long-press");
+                    } else if !ov.decided && self.mouse-x <= self.pressed-x + 8px && self.mouse-x >= self.pressed-x - 8px && self.mouse-y <= self.pressed-y + 8px && self.mouse-y >= self.pressed-y - 8px {
+                        let n = ov.track(self.mouse-x, self.mouse-y);
+                        if n < 0 || (root.pinned && root.sel == n) {
+                            root.sel = -1;
+                            root.pinned = false;
+                        } else {
+                            root.sel = n;
+                            root.pinned = true;
+                        }
+                    }
+                    ov.decided = false;
+                    ov.h-scrub = false;
+                }
+                changed mouse-x => {
+                    if self.has-hover && !self.pressed && !root.pinned {
+                        root.sel = ov.track(self.mouse-x, self.mouse-y);
+                    }
+                }
+                changed mouse-y => {
+                    if self.has-hover && !self.pressed && !root.pinned {
+                        root.sel = ov.track(self.mouse-x, self.mouse-y);
+                    }
+                }
+                changed has-hover => {
+                    if !self.has-hover && !root.pinned {
+                        root.sel = -1;
+                    }
+                }
             }
         }
-        HorizontalLayout {
+        if Breakpoints.tier-d: HorizontalLayout {
             padding-top: 12px;
             spacing: 10px;
             Text { text: "Less"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
@@ -144,6 +341,53 @@ export component AxHeatCard inherits AxCard {
                 Text { text: "Outside the logs"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
             }
         }
+        // below D the legend wraps: Less/scale/More, the busiest hour, then the two swatches (4.2.7)
+        if Breakpoints.below-d: VerticalLayout {
+            padding-top: 12px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "Less"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
+                HorizontalLayout {
+                    spacing: 3px;
+                    horizontal-stretch: 0;
+                    for t in [0.055, 0.447, 0.632, 0.775, 0.894, 1.0]: VerticalLayout { alignment: center; Rectangle { width: 16px; height: 10px; border-radius: 3px; background: AxColor.heat(t); } }
+                }
+                Text { text: "More"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                Text { text: "Busiest hour"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                Text { text: AxData.heat.busiest; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink-2; vertical-alignment: center; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 7px;
+                    horizontal-stretch: 0;
+                    VerticalLayout { alignment: center; Rectangle { width: 16px; height: 10px; border-radius: 3px; background: AxColor.heat-zero; } }
+                    Text { text: "Nothing logged"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                }
+                HorizontalLayout {
+                    spacing: 7px;
+                    horizontal-stretch: 0;
+                    VerticalLayout {
+                        alignment: center;
+                        Path {
+                            width: 16px;
+                            height: 10px;
+                            viewbox-width: 16;
+                            viewbox-height: 10;
+                            commands: "M0.5 3V0.5H3.5M6.5 0.5H9.5M12.5 0.5H15.5V3.5M15.5 6.5V9.5H12.5M9.5 9.5H6.5M3.5 9.5H0.5V6.5";
+                            stroke: Theme.grid-strong;
+                            stroke-width: 1px;
+                        }
+                    }
+                    Text { text: "Outside the logs"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                }
+            }
+        }
     }
 }
 
@@ -165,7 +409,9 @@ component BarColumn inherits Rectangle {
     in property <duration> delay;
     in property <bool> hot;
     in property <bool> dimmed;
-    property <length> bw: clamp(root.slot * 0.62, 4px, 64px);
+    // below D the bar is the slot minus its 1 px gutters (DESIGN-MOBILE 4.2.8)
+    property <length> bw: Breakpoints.tier-d ? clamp(root.slot * 0.62, 4px, 64px)
+        : max(4px, floor(root.slot / 1px) * 1px - 2px);
     property <bool> mounted: !Motion.on;
     mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
     property <bool> landed: !Motion.on;
@@ -222,8 +468,19 @@ export component AxDailyCard inherits AxCard {
     in property <duration> delay;
     in property <length> win-h: 900px;
     in property <bool> spans: false;
-    property <length> chart-h: root.spans ? 240px : clamp(root.win-h * 0.28, 220px, 320px);
-    AxCardHead {
+    property <length> chart-h: Breakpoints.tier-d ? (root.spans ? 240px : clamp(root.win-h * 0.28, 220px, 320px))
+        : Breakpoints.tier-p ? 200px : Breakpoints.tier-f ? 220px : 240px;
+    property <length> pad-x: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
+    // the pinned bar (a tap, a scrub, or a click); a second tap, Close, or a range/provider change
+    // clears it. A mouse below D follows the pointer until a click pins it.
+    property <int> sel: -1;
+    property <bool> pinned: false;
+    property <string> range: AxData.range;
+    property <string> prov: AxData.prov;
+    changed range => { root.sel = -1; root.pinned = false; }
+    changed prov => { root.sel = -1; root.pinned = false; }
+    property <AxBar> sb: root.sel >= 0 && root.sel < AxData.daily-bars.length ? AxData.daily-bars[root.sel] : { };
+    if Breakpoints.tier-d: AxCardHead {
         title: AxData.daily.title;
         sub: AxData.daily.sub;
         HorizontalLayout {
@@ -233,6 +490,58 @@ export component AxDailyCard inherits AxCard {
             if AxData.daily.show-claude: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("claude"); label: AxData.daily.claude-label; } }
             if AxData.daily.show-codex: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxColor.of("codex"); label: AxData.daily.codex-label; } }
             if AxData.daily.show-other: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model; label: AxData.daily.other-label; } }
+        }
+    }
+    if Breakpoints.below-d: AxCardHead { title: AxData.daily.title; sub: AxData.daily.sub; }
+    if Breakpoints.tier-p: VerticalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 2px;
+        spacing: 2px;
+        alignment: start;
+        if AxData.daily.show-claude: AxLegendEntry { c: AxColor.of("claude"); label: AxData.daily.claude-label; }
+        if AxData.daily.show-codex: AxLegendEntry { c: AxColor.of("codex"); label: AxData.daily.codex-label; }
+        if AxData.daily.show-other: AxLegendEntry { c: AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model; label: AxData.daily.other-label; }
+    }
+    if Breakpoints.tier-f || Breakpoints.tier-t: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 6px;
+        spacing: 18px;
+        alignment: start;
+        if AxData.daily.show-claude: AxLegendEntry { c: AxColor.of("claude"); label: AxData.daily.claude-label; }
+        if AxData.daily.show-codex: AxLegendEntry { c: AxColor.of("codex"); label: AxData.daily.codex-label; }
+        if AxData.daily.show-other: AxLegendEntry { c: AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model; label: AxData.daily.other-label; }
+    }
+    if Breakpoints.below-d: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-top: 2px;
+        AxRoBar {
+            has-sel: root.sel >= 0;
+            close => { root.sel = -1; root.pinned = false; }
+            VerticalLayout {
+                spacing: 1px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    min-height: 17px;
+                    Text { text: root.sb.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; }
+                    AxRoVal { c: AxColor.of("cost"); shape: "line"; value: "Total " + root.sb.total; }
+                }
+                Rectangle {
+                    clip: true;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        min-height: 17px;
+                        for r in root.sb.rows: HorizontalLayout {
+                            spacing: 5px;
+                            VerticalLayout { alignment: center; AxSwatch { c: r.p == "other" ? AxColor.of("other-hue") : AxColor.of(r.p); } }
+                            Text { text: r.label; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                            Text { text: r.value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
         }
     }
     HorizontalLayout {
@@ -289,8 +598,8 @@ export component AxDailyCard inherits AxCard {
                 ph: box.ph;
                 played: root.played;
                 delay: root.delay + 40ms;
-                hot: box.hot == i;
-                dimmed: box.hot >= 0 && box.hot != i;
+                hot: Breakpoints.tier-d ? box.hot == i : root.sel == i;
+                dimmed: Breakpoints.tier-d ? (box.hot >= 0 && box.hot != i) : (root.sel >= 0 && root.sel != i);
             }
             if AxData.daily.empty: Text {
                 width: box.width;
@@ -305,7 +614,7 @@ export component AxDailyCard inherits AxCard {
             property <AxBar> hb: self.hot >= 0 && self.hot < AxData.daily-bars.length ? AxData.daily-bars[self.hot] : { };
             property <length> hx: AxDailyPad.l + self.slot * (self.hot + 0.5) + clamp(self.slot * 0.62, 4px, 64px) / 2 - 8px;
             property <bool> glide: false;
-            ro := AxRoCard {
+            if Breakpoints.tier-d: ro := AxRoCard {
                 property <length> rw: max(200px, ro-body.preferred-width);
                 x: max(6px, box.hx + 16px + self.rw > box.width - 6px ? box.hx - 16px - self.rw : box.hx + 16px);
                 y: AxDailyPad.t + 2px;
@@ -332,18 +641,65 @@ export component AxDailyCard inherits AxCard {
                     if box.hb.foot != "": Text { text: box.hb.foot; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; min-height: 22px; vertical-alignment: bottom; }
                 }
             }
-            ta := TouchArea {
+            ta := AxScrub {
                 mouse-cursor: default;
-                function track() {
-                    let mx = self.mouse-x - AxDailyPad.l;
-                    if mx < 0 || mx > box.pw || self.mouse-y < AxDailyPad.t || self.mouse-y > AxDailyPad.t + box.ph || AxData.daily-bars.length == 0 { box.hot = -1; box.glide = false; return; }
-                    let i = clamp(floor(mx / box.slot), 0, AxData.daily-bars.length - 1);
-                    if box.hot >= 0 { box.glide = true; }
-                    box.hot = i;
+                function track-at(mx: length, my: length) -> int {
+                    let rx = mx - AxDailyPad.l;
+                    if rx < 0 || rx > box.pw || my < AxDailyPad.t || my > AxDailyPad.t + box.ph || AxData.daily-bars.length == 0 {
+                        return -1;
+                    }
+                    return clamp(floor(rx / box.slot), 0, AxData.daily-bars.length - 1);
                 }
-                changed mouse-x => { if self.has-hover { self.track(); } }
-                changed mouse-y => { if self.has-hover { self.track(); } }
-                changed has-hover => { if !self.has-hover { box.hot = -1; box.glide = false; } }
+                tap => {
+                    if Breakpoints.tier-d {
+                        return;
+                    }
+                    let i = self.track-at(self.mouse-x, self.mouse-y);
+                    if i < 0 || (root.pinned && root.sel == i) {
+                        root.sel = -1;
+                        root.pinned = false;
+                    } else {
+                        root.sel = i;
+                        root.pinned = true;
+                    }
+                }
+                scrub(mx, my) => {
+                    if Breakpoints.tier-d {
+                        return;
+                    }
+                    let i = self.track-at(mx, my);
+                    if i >= 0 {
+                        root.sel = i;
+                        root.pinned = true;
+                    }
+                }
+                changed mouse-x => {
+                    if Breakpoints.tier-d {
+                        if self.has-hover {
+                            let i = self.track-at(self.mouse-x, self.mouse-y);
+                            if i < 0 { box.hot = -1; box.glide = false; } else { if box.hot >= 0 { box.glide = true; } box.hot = i; }
+                        }
+                    } else if self.has-hover && !self.pressed && !root.pinned {
+                        root.sel = self.track-at(self.mouse-x, self.mouse-y);
+                    }
+                }
+                changed mouse-y => {
+                    if Breakpoints.tier-d {
+                        if self.has-hover {
+                            let i = self.track-at(self.mouse-x, self.mouse-y);
+                            if i < 0 { box.hot = -1; box.glide = false; } else { if box.hot >= 0 { box.glide = true; } box.hot = i; }
+                        }
+                    } else if self.has-hover && !self.pressed && !root.pinned {
+                        root.sel = self.track-at(self.mouse-x, self.mouse-y);
+                    }
+                }
+                changed has-hover => {
+                    if Breakpoints.tier-d {
+                        if !self.has-hover { box.hot = -1; box.glide = false; }
+                    } else if !self.has-hover && !root.pinned {
+                        root.sel = -1;
+                    }
+                }
             }
         }
     }

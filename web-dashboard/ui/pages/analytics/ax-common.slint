@@ -1,6 +1,6 @@
 // Analytics building blocks: chart colours, count-up numbers, the card shell and head, swatches, the
 // switch, the segmented control with marks, readout rows, tips and the first-view reveal.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { HoverShadow } from "../../components/card.slint";
 import { ProbeMark } from "../../components/probe.slint";
 import { Icon } from "../../components/icon.slint";
@@ -198,6 +198,125 @@ export component AxTip inherits TouchArea {
     }
 }
 
+// Press target with the mobile long-press rule (DESIGN-MOBILE 2.3.5, 5.2.3): on touch tiers a
+// press held 450 ms or longer shows `long-tip` above the finger and its release never activates.
+// Desktop (and fine pointers below D) keep the AxTip hover behaviour and plain `tapped`.
+export component AxPress inherits TouchArea {
+    in property <string> tip;
+    in property <string> long-tip: "";
+    callback tapped();
+    property <bool> touch: Device.coarse && Breakpoints.below-d;
+    changed has-hover => {
+        if root.touch {
+            return;
+        }
+        if self.has-hover && root.tip != "" {
+            Hover.tip(root.tip, self.absolute-position, self.width, self.height, root.tip);
+        } else {
+            Hover.leave(root.tip);
+        }
+    }
+    property <bool> lp-fired: false;
+    property <bool> lp-dead: false;
+    lp-timer := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.touch && root.long-tip != "" && root.pressed && !root.lp-dead {
+                root.lp-fired = true;
+                Hover.tip-now("long-press", root.absolute-position, root.width, root.height, root.long-tip);
+            }
+        }
+    }
+    changed pressed => {
+        if self.pressed {
+            root.lp-dead = false;
+            root.lp-fired = false;
+            if root.touch && root.long-tip != "" {
+                lp-timer.running = true;
+            }
+        } else {
+            lp-timer.running = false;
+            Hover.leave("long-press");
+        }
+    }
+    moved => {
+        if self.pressed && (self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px) {
+            root.lp-dead = true;
+            lp-timer.running = false;
+            if root.lp-fired {
+                root.lp-fired = false;
+                Hover.leave("long-press");
+            }
+        }
+    }
+    clicked => {
+        if root.lp-fired {
+            root.lp-fired = false;
+            Hover.leave("long-press");
+        } else {
+            root.tapped();
+        }
+    }
+}
+
+// Chart gesture area (DESIGN-MOBILE 5.3): a tap (under 8 px) reports `tap`; a drag past 8 px that
+// is clearly horizontal (|dx| > |dy|) reports `scrub` with the finger position and keeps reporting
+// while it stays down. A vertical drag is left for the page Flickable, which claims it as a scroll.
+export component AxScrub inherits TouchArea {
+    callback tap();
+    callback scrub(length, length);
+    out property <bool> scrubbing: false;
+    property <bool> decided: false;
+    property <bool> h-scrub: false;
+    changed pressed => {
+        if self.pressed {
+            root.decided = false;
+            root.h-scrub = false;
+            root.scrubbing = false;
+        }
+    }
+    moved => {
+        if !self.pressed {
+            return;
+        }
+        if !root.decided {
+            if self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px {
+                root.decided = true;
+                // |dx| > |dy| through quadrant comparisons (lengths have no abs())
+                if self.mouse-x > self.pressed-x {
+                    if self.mouse-y > self.pressed-y {
+                        root.h-scrub = self.mouse-x - self.pressed-x > self.mouse-y - self.pressed-y;
+                    } else {
+                        root.h-scrub = self.mouse-x - self.pressed-x > self.pressed-y - self.mouse-y;
+                    }
+                } else {
+                    if self.mouse-y > self.pressed-y {
+                        root.h-scrub = self.pressed-x - self.mouse-x > self.mouse-y - self.pressed-y;
+                    } else {
+                        root.h-scrub = self.pressed-x - self.mouse-x > self.pressed-y - self.mouse-y;
+                    }
+                }
+                root.scrubbing = root.h-scrub;
+                if root.h-scrub {
+                    root.scrub(self.mouse-x, self.mouse-y);
+                }
+            }
+        } else if root.h-scrub {
+            root.scrub(self.mouse-x, self.mouse-y);
+        }
+    }
+    clicked => {
+        if !root.decided && self.mouse-x <= self.pressed-x + 8px && self.mouse-x >= self.pressed-x - 8px && self.mouse-y <= self.pressed-y + 8px && self.mouse-y >= self.pressed-y - 8px {
+            root.tap();
+        }
+        root.decided = false;
+        root.h-scrub = false;
+        root.scrubbing = false;
+    }
+}
+
 // ---------------------------------------------------------------- swatches (legend keys, not decoration)
 // shape: box (10 x 10), line (14 x 3), half (two 6 px halves), bar-t / bar-c (14 x 6 share bars)
 export component AxSwatch inherits Rectangle {
@@ -223,8 +342,8 @@ export component AxLegendEntry inherits HorizontalLayout {
     spacing: 7px;
     horizontal-stretch: 0;
     VerticalLayout { alignment: center; AxSwatch { c: root.c; c2: root.c2; shape: root.shape; } }
-    Text { text: root.label; font-size: 12.5px; color: Theme.ink-2; vertical-alignment: center; min-height: 18px; }
-    if root.note != "": Text { text: root.note; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+    Text { text: root.label; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-2; vertical-alignment: center; min-height: 18px; }
+    if root.note != "": Text { text: root.note; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; vertical-alignment: center; }
 }
 
 // ---------------------------------------------------------------- the card
@@ -234,7 +353,8 @@ export component AxCard inherits Rectangle {
     // Off for cards whose hover readout moves with the pointer: the readout's shadow changes the layer's bounds,
     // and a resized layer costs a new texture and a GPU sync every frame (the trend card caches its plot itself).
     in property <bool> cached: true;
-    out property <bool> hovered: hover-ta.has-hover;
+    // hover lift and shadow only with a real hover pointer (DESIGN-MOBILE 5.1); touch shows no lift
+    out property <bool> hovered: Device.hover && hover-ta.has-hover;
     min-height: body.min-height;
     preferred-height: body.preferred-height;
     min-width: body.min-width;
@@ -277,20 +397,20 @@ export component AxCardHead inherits HorizontalLayout {
     in property <string> title;
     in property <string> sub;
     in property <string> note;
-    in property <length> pad: Breakpoints.width < 1180px ? 16px : 20px;
+    in property <length> pad: Breakpoints.tier-d ? (Breakpoints.width < 1180px ? 16px : 20px) : Breakpoints.tier-p ? 16px : 20px;
     // names the head for the end-to-end harness (components/probe.slint); "" reports nothing
     in property <string> probe: "";
     padding-left: root.pad;
     padding-right: root.pad;
-    padding-top: Breakpoints.width < 1180px ? 14px : 16px;
-    padding-bottom: Breakpoints.width < 1180px ? 8px : 10px;
+    padding-top: Breakpoints.tier-d ? (Breakpoints.width < 1180px ? 14px : 16px) : 14px;
+    padding-bottom: Breakpoints.tier-d ? (Breakpoints.width < 1180px ? 8px : 10px) : 8px;
     spacing: 16px;
     VerticalLayout {
         spacing: 3px;
         horizontal-stretch: 1;
         alignment: start;
-        Text { text: root.title; font-size: 16px; font-weight: 640; color: Theme.ink; letter-spacing: -0.16px; min-height: 21px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":title"; } }
-        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
+        Text { text: root.title; font-size: Breakpoints.tier-d ? 16px : Breakpoints.tier-p ? 17px : 18px; font-weight: 640; color: Theme.ink; letter-spacing: -0.16px; min-height: 21px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":title"; } }
+        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
         // the wrapped note sits directly in the column so its height is measured at the column's width
         if root.note != "": VerticalLayout {
             padding-top: 3px;
@@ -306,12 +426,15 @@ export component AxCardHead inherits HorizontalLayout {
 
 // ---------------------------------------------------------------- controls
 // The concept's own switch: a 30 x 18 track, a spring thumb and its label; the whole thing is the target.
+// Below D the row is 44 tall with a 40 x 24 (T 36 x 22) track (DESIGN-MOBILE 2.3).
 export component AxSwitch inherits Rectangle {
     in property <bool> on;
     in property <string> label;
     in property <string> tip;
     callback toggled(bool);
-    height: 26px;
+    property <length> track-w: Breakpoints.tier-d ? 30px : Breakpoints.tier-t ? 36px : 40px;
+    property <length> track-h: Breakpoints.tier-d ? 18px : Breakpoints.tier-t ? 22px : 24px;
+    height: Breakpoints.tier-d ? 26px : 44px;
     min-width: row.preferred-width;
     preferred-width: row.preferred-width;
     border-radius: 8px;
@@ -324,19 +447,19 @@ export component AxSwitch inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Rectangle {
-                width: 30px;
-                height: 18px;
-                border-radius: 9px;
+                width: root.track-w;
+                height: root.track-h;
+                border-radius: root.track-h / 2;
                 background: root.on ? Theme.accent : Theme.rule-strong;
                 animate background { duration: Motion.tint(Motion.med); easing: cubic-bezier(0.65, 0, 0.35, 1); }
                 transform-scale: ta.pressed ? 0.95 : 1;
                 animate transform-scale { duration: Motion.fast; }
                 Rectangle {
-                    x: root.on ? 14px : 2px;
+                    x: root.on ? root.track-w - root.track-h + 2px : 2px;
                     y: 2px;
-                    width: 14px;
-                    height: 14px;
-                    border-radius: 7px;
+                    width: root.track-h - 4px;
+                    height: root.track-h - 4px;
+                    border-radius: (root.track-h - 4px) / 2;
                     background: Theme.paper;
                     drop-shadow-color: #00000040;
                     drop-shadow-blur: 2px;
@@ -345,12 +468,13 @@ export component AxSwitch inherits Rectangle {
                 }
             }
         }
-        Text { text: root.label; font-size: 12.5px; font-weight: 540; color: ta.has-hover ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
+        Text { text: root.label; font-size: Breakpoints.tier-d ? 12.5px : Type.control; font-weight: 540; color: ta.has-hover ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
     }
-    ta := AxTip {
+    ta := AxPress {
         tip: root.tip;
+        long-tip: root.tip;
         mouse-cursor: pointer;
-        clicked => { root.toggled(!root.on); }
+        tapped => { root.toggled(!root.on); }
     }
 }
 
@@ -361,8 +485,10 @@ component AxSegButton inherits Rectangle {
     in property <bool> selected;
     in property <bool> mono;
     in property <bool> small;
+    in property <bool> fill;
     callback clicked();
-    height: root.small ? 24px : 28px;
+    height: Breakpoints.tier-d ? (root.small ? 24px : 28px) : 36px;
+    horizontal-stretch: root.fill ? 1 : 0;
     min-width: row.preferred-width;
     preferred-width: row.preferred-width;
     border-radius: 7px;
@@ -380,26 +506,34 @@ component AxSegButton inherits Rectangle {
             color: root.fg;
             animate color { duration: Motion.tint(Motion.med); }
             font-family: root.mono ? Type.mono : Type.sans;
-            font-size: root.mono ? 11.5px : root.small ? 12px : 12.5px;
+            font-size: Breakpoints.tier-d ? (root.mono ? 11.5px : root.small ? 12px : 12.5px) : Type.control;
             font-weight: 560;
             letter-spacing: root.mono ? 0.46px : 0px;
             vertical-alignment: center;
         }
     }
-    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    // below D the hit area fills the 44 px track (the visible segment stays 36)
+    ta := TouchArea {
+        y: Breakpoints.tier-d ? 0px : -4px;
+        height: Breakpoints.tier-d ? root.height : 44px;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 }
 
 // Segmented control with one sliding indicator (spring); items may carry a provider mark.
+// Below D the track is 44 tall; `fill` spreads the segments over the full width.
 export component AxSeg inherits Rectangle {
     in property <[AxSegItem]> items;
     in property <string> value;
     in property <bool> mono: false;
     in property <bool> small: false;
+    in property <bool> fill: false;
     callback picked(string);
     property <length> ind-x: 0px;
     property <length> ind-w: 0px;
     property <bool> placed: false;
-    height: root.small ? 32px : 36px;
+    height: Breakpoints.tier-d ? (root.small ? 32px : 36px) : 44px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
     border-radius: 10px;
@@ -429,6 +563,7 @@ export component AxSeg inherits Rectangle {
             item: item;
             mono: root.mono;
             small: root.small;
+            fill: root.fill;
             selected: item.value == root.value;
             init => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; } }
             changed selected => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }
@@ -444,22 +579,23 @@ export component AxSeg inherits Rectangle {
     }
 }
 
-// A small square info button (24 px) that opens a popover or shows a tip.
+// A small square info button (24 px; 44 px on touch tiers, DESIGN-MOBILE 2.3) that opens a popover or shows a tip.
 export component AxInfo inherits Rectangle {
     in property <bool> open;
     in property <string> tip;
-    in property <length> side: 24px;
+    in property <length> side: Breakpoints.tier-d ? 24px : 44px;
     in property <length> glyph: 16px;
     callback clicked();
-    width: root.side;
-    height: root.side;
+    // below D the info icon is always 16 visible in a 44 hit area, whatever `side` says
+    width: Breakpoints.tier-d ? root.side : 44px;
+    height: Breakpoints.tier-d ? root.side : 44px;
     border-radius: 6px;
     background: ta.has-hover || root.open ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); }
     transform-scale: ta.pressed ? 0.94 : 1;
     animate transform-scale { duration: Motion.fast; }
-    Icon { x: (root.width - self.width) / 2; y: (root.height - self.height) / 2; name: "info"; width: root.glyph; height: root.glyph; tint: ta.has-hover || root.open ? Theme.ink : Theme.ink-3; }
-    ta := AxTip { tip: root.tip; mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
+    Icon { x: (root.width - self.width) / 2; y: (root.height - self.height) / 2; name: "info"; width: Breakpoints.tier-d ? root.glyph : 16px; height: Breakpoints.tier-d ? root.glyph : 16px; tint: ta.has-hover || root.open ? Theme.ink : Theme.ink-3; }
+    ta := AxPress { tip: root.tip; long-tip: root.tip; mouse-cursor: pointer; tapped => { Hover.clear(); root.clicked(); } }
 }
 
 // ---------------------------------------------------------------- readout card rows
@@ -495,6 +631,46 @@ export component AxRoTime inherits Text {
     color: Theme.ink-3;
     letter-spacing: 0.44px;
     min-height: 17px;
+}
+
+// The readout row (DESIGN-MOBILE 5.3): below D every chart reserves 36 px between its header and
+// the plot. Empty it names the gesture; with a reading the chart draws its content (at most two
+// lines) and a Close clears it. The layout never jumps.
+export component AxRoBar inherits Rectangle {
+    in property <bool> has-sel;
+    callback close();
+    height: 36px;
+    if !root.has-sel: Text {
+        text: Device.coarse ? "Tap the chart for a reading" : "Point at the chart for a reading";
+        font-size: Type.small;
+        color: Theme.ink-3;
+        vertical-alignment: center;
+    }
+    body := HorizontalLayout {
+        visible: root.has-sel;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            @children
+        }
+        close-hit := Rectangle {
+            width: 44px;
+            min-height: 36px;
+            Icon { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; name: "close"; width: 16px; height: 16px; tint: Theme.ink-3; }
+            AxPress { mouse-cursor: pointer; tapped => { root.close(); } }
+        }
+    }
+}
+
+// One swatch-and-value pair of a readout row: the value at 600 in the tabular face.
+export component AxRoVal inherits HorizontalLayout {
+    in property <color> c;
+    in property <string> shape: "box";
+    in property <string> value;
+    spacing: 5px;
+    VerticalLayout { alignment: center; AxSwatch { c: root.c; shape: root.shape; } }
+    Text { text: root.value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
 }
 
 // The readout card shell (crosshair readouts): a paper card with the popover shadow.

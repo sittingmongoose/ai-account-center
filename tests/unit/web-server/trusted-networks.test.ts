@@ -25,7 +25,7 @@ import { parseDashboardNetworkSettings } from '../../../src/web-server/services/
 function request(
   address: string | undefined,
   headers: Record<string, string> = {},
-  host = '192.168.50.10:3000'
+  host = '192.168.10.10:3000'
 ): IncomingMessage {
   return {
     socket: { remoteAddress: address, encrypted: false },
@@ -56,7 +56,7 @@ describe('trusted ranges', () => {
       ['172.15.255.255', false],
       ['172.32.0.0', false],
       ['192.168.0.0', true],
-      ['192.168.50.1', true],
+      ['192.168.10.1', true],
       ['192.168.255.255', true],
       ['192.167.255.255', false],
       ['192.169.0.0', false],
@@ -100,23 +100,23 @@ describe('trusted ranges', () => {
 
   it('normalises IPv4-mapped IPv6 peers in either spelling before matching', () => {
     const on = trust();
-    expect(isTrustedLocalNetworkPeer(request('::ffff:192.168.50.20'), on)).toBe(true);
-    expect(isTrustedLocalNetworkPeer(request('::FFFF:c0a8:3214'), on)).toBe(true);
+    expect(isTrustedLocalNetworkPeer(request('::ffff:192.168.10.20'), on)).toBe(true);
+    expect(isTrustedLocalNetworkPeer(request('::FFFF:c0a8:0a14'), on)).toBe(true);
     expect(isTrustedLocalNetworkPeer(request('[::ffff:10.6.0.2]'), on)).toBe(true);
     expect(isTrustedLocalNetworkPeer(request('::ffff:8.8.8.8'), on)).toBe(false);
     expect(isTrustedLocalNetworkPeer(request('::ffff:100.64.0.1'), on)).toBe(false);
-    expect(normalizePeerAddress('::ffff:192.168.50.20')).toBe('192.168.50.20');
-    expect(normalizePeerAddress('::ffff:c0a8:3214')).toBe('192.168.50.20');
+    expect(normalizePeerAddress('::ffff:192.168.10.20')).toBe('192.168.10.20');
+    expect(normalizePeerAddress('::ffff:c0a8:0a14')).toBe('192.168.10.20');
     expect(normalizePeerAddress('FD12:0:0:0:0:0:0:42')).toBe('fd12::42');
     expect(normalizePeerAddress('fe80::1%eth0')).toBe('fe80::1');
     expect(normalizePeerAddress('nonsense')).toBeNull();
   });
 
   it('trusts a CGNAT or other VPN subnet only when the list names it', () => {
-    const vpn = trust(['192.168.50.0/24', '100.64.0.0/10', '10.6.0.0/24']);
+    const vpn = trust(['192.168.10.0/24', '100.64.0.0/10', '10.6.0.0/24']);
     expect(isTrustedLocalNetworkPeer(request('100.100.1.2'), vpn)).toBe(true);
     expect(isTrustedLocalNetworkPeer(request('10.6.0.9'), vpn)).toBe(true);
-    expect(isTrustedLocalNetworkPeer(request('192.168.50.7'), vpn)).toBe(true);
+    expect(isTrustedLocalNetworkPeer(request('192.168.10.7'), vpn)).toBe(true);
     // The list replaces the defaults: other private ranges are no longer trusted.
     expect(isTrustedLocalNetworkPeer(request('10.7.0.9'), vpn)).toBe(false);
     expect(isTrustedLocalNetworkPeer(request('192.168.1.7'), vpn)).toBe(false);
@@ -124,7 +124,7 @@ describe('trusted ranges', () => {
   });
 
   it('parses ranges strictly: host bits cleared, nothing wider than /8 or /48, no zones', () => {
-    expect(parseTrustedNetwork('192.168.50.1/24')?.cidr).toBe('192.168.50.0/24');
+    expect(parseTrustedNetwork('192.168.10.1/24')?.cidr).toBe('192.168.10.0/24');
     expect(parseTrustedNetwork('10.6.0.5')?.cidr).toBe('10.6.0.5/32');
     expect(parseTrustedNetwork('fd00::1/8')?.cidr).toBe('fd00::/8');
     expect(parseTrustedNetwork('::ffff:10.0.0.0/104')?.cidr).toBe('10.0.0.0/8');
@@ -173,8 +173,8 @@ describe('trusted ranges', () => {
     ]) {
       expect([loopback, parseTrustedNetwork(loopback)]).toEqual([loopback, null]);
     }
-    const listed = parseTrustedNetworks(['192.168.50.0/24', '127.0.0.0/8', '::1/128']);
-    expect(listed.networks.map((network) => network.cidr)).toEqual(['192.168.50.0/24']);
+    const listed = parseTrustedNetworks(['192.168.10.0/24', '127.0.0.0/8', '::1/128']);
+    expect(listed.networks.map((network) => network.cidr)).toEqual(['192.168.10.0/24']);
     expect(listed.rejected).toBe(2);
   });
 
@@ -197,9 +197,9 @@ describe('trusted ranges', () => {
 describe('isSecureTransport rule 4', () => {
   it('is off by default: a private LAN peer over plain HTTP is not secure', () => {
     expect(localNetworkTrust().enabled).toBe(false);
-    expect(isSecureTransport(request('192.168.50.20'))).toBe(false);
-    expect(describeConnection(request('::ffff:192.168.50.20'))).toEqual({
-      peer: '192.168.50.20',
+    expect(isSecureTransport(request('192.168.10.20'))).toBe(false);
+    expect(describeConnection(request('::ffff:192.168.10.20'))).toEqual({
+      peer: '192.168.10.20',
       trusted: false,
     });
     expect(parseDashboardNetworkSettings(undefined)).toMatchObject({
@@ -216,25 +216,25 @@ describe('isSecureTransport rule 4', () => {
 
   it('makes a private peer secure once the owner turns it on, and only a private one', () => {
     setLocalNetworkTrustResolver(() => trust());
-    expect(isSecureTransport(request('192.168.50.20'))).toBe(true);
+    expect(isSecureTransport(request('192.168.10.20'))).toBe(true);
     expect(isSecureTransport(request('::ffff:10.6.0.2'))).toBe(true);
     expect(isSecureTransport(request('fd00::20'))).toBe(true);
     expect(isSecureTransport(request('203.0.113.9'))).toBe(false);
     expect(isSecureTransport(request('100.64.0.1'))).toBe(false);
     expect(isSecureTransport(request('169.254.1.1'))).toBe(false);
-    expect(describeConnection(request('192.168.50.20'))).toEqual({
-      peer: '192.168.50.20',
+    expect(describeConnection(request('192.168.10.20'))).toEqual({
+      peer: '192.168.10.20',
       trusted: true,
     });
     expect(describeConnection(request(undefined))).toEqual({ peer: 'unknown', trusted: false });
     setLocalNetworkTrustResolver(() => trust(undefined, false));
-    expect(isSecureTransport(request('192.168.50.20'))).toBe(false);
+    expect(isSecureTransport(request('192.168.10.20'))).toBe(false);
   });
 
   it('decides by the socket address only: forwarded headers never name the peer', () => {
     setLocalNetworkTrustResolver(() => trust());
     // A public socket cannot claim a private address.
-    expect(isSecureTransport(request('203.0.113.9', { 'x-forwarded-for': '192.168.50.20' }))).toBe(
+    expect(isSecureTransport(request('203.0.113.9', { 'x-forwarded-for': '192.168.10.20' }))).toBe(
       false
     );
     // A local proxy on loopback forwards someone unknown: rule 4 does not apply to it.
@@ -246,7 +246,7 @@ describe('isSecureTransport rule 4', () => {
   it('never trusts a request a proxy forwarded, whatever address the proxy has', () => {
     setLocalNetworkTrustResolver(() => trust());
     // A reverse proxy on a NAS or router would pass its trust to everyone behind it.
-    expect(isSecureTransport(request('192.168.50.2'))).toBe(true);
+    expect(isSecureTransport(request('192.168.10.2'))).toBe(true);
     for (const header of [
       'forwarded',
       'via',
@@ -263,7 +263,7 @@ describe('isSecureTransport rule 4', () => {
       'true-client-ip',
       'fastly-client-ip',
     ]) {
-      const proxied = request('192.168.50.2', { [header]: '203.0.113.9' });
+      const proxied = request('192.168.10.2', { [header]: '203.0.113.9' });
       expect([header, isSecureTransport(proxied), describeConnection(proxied).trusted]).toEqual([
         header,
         false,
@@ -279,7 +279,7 @@ describe('isSecureTransport rule 4', () => {
     // A raw TCP forward onto 127.0.0.1 (ssh -R, socat, frp) adds no headers and keeps the
     // remote Host; a DNS-rebinding page names its own host. Neither is secure.
     for (const peer of ['127.0.0.1', '127.8.9.10', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1']) {
-      for (const host of ['192.168.50.10:3000', 'attacker.example', 'attacker.example:3000']) {
+      for (const host of ['192.168.10.10:3000', 'attacker.example', 'attacker.example:3000']) {
         expect([peer, host, isSecureTransport(request(peer, {}, host))]).toEqual([
           peer,
           host,
@@ -318,6 +318,6 @@ describe('isSecureTransport rule 4', () => {
       throw new Error('config unreadable');
     });
     expect(localNetworkTrust().enabled).toBe(false);
-    expect(isSecureTransport(request('192.168.50.20'))).toBe(false);
+    expect(isSecureTransport(request('192.168.10.20'))).toBe(false);
   });
 });

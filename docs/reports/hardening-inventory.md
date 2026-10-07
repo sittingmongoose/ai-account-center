@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1218 |
-| Sync fs files affected (all) | 121 |
-| Sync fs occurrences (runtime hotpaths) | 585 |
-| Sync fs files affected (runtime hotpaths) | 70 |
+| Sync fs occurrences (all) | 1221 |
+| Sync fs files affected (all) | 122 |
+| Sync fs occurrences (runtime hotpaths) | 588 |
+| Sync fs files affected (runtime hotpaths) | 71 |
 | Legacy shim markers | 198 |
 | Legacy shim files affected | 75 |
 
@@ -53,13 +53,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 24.9% (166/668) |
+| typed-error adoption (typed/total throws) | 25.1% (168/670) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 37/406 |
+| files with createLogger | 38/408 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 47 |
+| files > 400 LOC | 48 |
 | files > 600 LOC | 20 |
 
 ### Top Hotpath console.error/warn Files

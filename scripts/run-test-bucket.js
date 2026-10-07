@@ -208,8 +208,55 @@ function ensureBuildForSlowBucket() {
   return build.status ?? 1;
 }
 
-function runBunTest(run) {
-  const result = spawnSync('bun', run.bunArgs, {
+// Write `text` and wait until Node has handed all of it to the operating system.
+// On Linux, Node writes to a pipe (which is what CI gives us) asynchronously: one
+// write call gets at most the pipe's 64 KB into the kernel and queues the rest.
+// The queue only drains while the event loop runs, and `spawnSync` for the next
+// Bun run blocks it, so every run's output is flushed before the next one starts.
+function writeAndFlush(stream, text) {
+  if (!text) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    stream.write(text, () => resolve());
+  });
+}
+
+async function writeRunOutput(result) {
+  await writeAndFlush(process.stdout, result.stdout);
+  await writeAndFlush(process.stderr, result.stderr);
+}
+
+// Bun prints each failed test twice (where it ran and in its closing recap); list it once.
+function listFailedTests(output) {
+  const lines = stripAnsi(output)
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('(fail) '));
+  return [...new Set(lines)];
+}
+
+// Describe why a Bun run failed, in one line. A run that a signal stopped has a
+// null exit status; say so instead of reporting a bare exit code 1.
+function describeRunFailure(run, result, exitCode) {
+  const what =
+    run.selected.length === 1 ? run.selected[0] : `${run.label} (${run.selected.length} files)`;
+
+  if (result.error) {
+    return `[X] Bun run '${what}' could not run: ${result.error.message}`;
+  }
+
+  if (result.signal) {
+    return `[X] Bun run '${what}' was stopped by signal ${result.signal} before it finished.`;
+  }
+
+  return `[X] Bun run '${what}' failed with exit code ${exitCode}.`;
+}
+
+async function runBunTest(run, deps = {}) {
+  const spawn = deps.spawnSync ?? spawnSync;
+  const report = deps.report ?? (() => {});
+  const result = spawn('bun', run.bunArgs, {
     cwd: rootDir,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -217,47 +264,40 @@ function runBunTest(run) {
   });
 
   const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-  const writeOutput = () => {
-    if (result.stdout) {
-      process.stdout.write(result.stdout);
-    }
-    if (result.stderr) {
-      process.stderr.write(result.stderr);
-    }
+  const fail = async (exitCode, message = describeRunFailure(run, result, exitCode)) => {
+    await writeRunOutput(result);
+    await writeAndFlush(process.stderr, `${message}\n`);
+    report({ summary: message, failedTests: listFailedTests(output) });
+    return exitCode;
   };
 
   if (result.error) {
-    writeOutput();
-    console.error(`[X] Failed to run bun test: ${result.error.message}`);
-    return 1;
+    return fail(1);
   }
 
   const exitCode = result.status ?? 1;
   if (exitCode !== 0) {
-    writeOutput();
-    return exitCode;
+    return fail(exitCode);
   }
 
   if (shouldVerifyRunFileCount(run)) {
     const countCheck = verifyReportedFileCount(run.selected.length, output);
     if (!countCheck.ok) {
-      writeOutput();
-      console.error(countCheck.message);
-      return 1;
+      return fail(1, countCheck.message);
     }
   }
 
   if (run.quietOnPass) {
-    console.log(`[OK] ${run.label}`);
+    await writeAndFlush(process.stdout, `[OK] ${run.label}\n`);
   } else {
-    writeOutput();
+    await writeRunOutput(result);
   }
 
   return 0;
 }
 
-function runBucket(name) {
-  const selected = selectBucket(name);
+async function runBucket(name, deps = {}) {
+  const selected = (deps.selectBucket ?? selectBucket)(name);
 
   if (selected.length === 0) {
     console.error(`[X] No tests matched the '${name}' bucket.`);
@@ -274,25 +314,45 @@ function runBucket(name) {
   const runs = getBunRuns(name, selected);
   const isolatedCount = runs.filter((run) => run.quietOnPass).length;
   if (isolatedCount > 0) {
-    console.log(`[i] Running ${isolatedCount} test file(s) in isolated Bun processes.`);
+    await writeAndFlush(
+      process.stdout,
+      `[i] Running ${isolatedCount} test file(s) in isolated Bun processes.\n`
+    );
   }
 
+  const failures = [];
   let exitCode = 0;
   for (const run of runs) {
-    const status = runBunTest(run);
+    const status = await runBunTest(run, {
+      ...deps,
+      report: (failure) => failures.push(failure),
+    });
     if (status !== 0) {
       exitCode = status;
     }
   }
 
   if (exitCode === 0) {
-    console.log(`[OK] Bucket '${name}' ran ${selected.length} selected test files.`);
+    await writeAndFlush(
+      process.stdout,
+      `[OK] Bucket '${name}' ran ${selected.length} selected test files.\n`
+    );
+  } else {
+    // Repeat every failure at the very end, so it is the last thing in a long CI log.
+    const lines = [`[X] Bucket '${name}' failed:`];
+    for (const failure of failures) {
+      lines.push(`    ${failure.summary}`);
+      for (const failedTest of failure.failedTests) {
+        lines.push(`      ${failedTest}`);
+      }
+    }
+    await writeAndFlush(process.stderr, `${lines.join('\n')}\n`);
   }
 
   return exitCode;
 }
 
-function main(args = process.argv.slice(2)) {
+async function main(args = process.argv.slice(2), deps = {}) {
   const bucket = args[0];
 
   if (!['fast', 'slow', 'all'].includes(bucket)) {
@@ -304,7 +364,7 @@ function main(args = process.argv.slice(2)) {
     let exitCode = 0;
 
     for (const name of ['fast', 'slow']) {
-      const status = runBucket(name);
+      const status = await runBucket(name, deps);
       if (status !== 0) {
         exitCode = status;
       }
@@ -313,11 +373,24 @@ function main(args = process.argv.slice(2)) {
     return exitCode;
   }
 
-  return runBucket(bucket);
+  return runBucket(bucket, deps);
+}
+
+// Never end with `process.exit()`: it drops output Node has not yet handed to a
+// pipe. GitHub Actions lost everything past the first 64 KB of Bun's output that
+// way, including the failing test. Setting `process.exitCode` lets Node finish
+// writing first.
+async function cli(args = process.argv.slice(2), deps = {}) {
+  const exitCode = await main(args, deps);
+  process.exitCode = exitCode;
+  return exitCode;
 }
 
 if (require.main === module) {
-  process.exit(main());
+  cli().catch((error) => {
+    console.error(`[X] ${error && error.stack ? error.stack : error}`);
+    process.exitCode = 1;
+  });
 }
 
 module.exports = {
@@ -337,5 +410,8 @@ module.exports = {
   parseBunFileCount,
   verifyReportedFileCount,
   shouldVerifyRunFileCount,
+  describeRunFailure,
+  listFailedTests,
   main,
+  cli,
 };

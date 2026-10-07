@@ -276,7 +276,7 @@ async function scanSessionRoots(
       }
       // Custom `--session-dir` roots are named freely (`<branch>-sessions`,
       // `rev-<id>-sessions`, `<task>-run-sessions`, ...), so a literal
-      // `sessions` name check missed them: Jared's wave-4 workers wrote 25 such
+      // `sessions` name check missed them: the wave-4 workers wrote 25 such
       // dirs (75 files, 125 MB) that never became roots. Accept any non-base
       // directory that directly holds an OMP session file, by the same filename
       // rule the collector uses to read it. Accepted roots are not descended

@@ -108,6 +108,9 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine('  usage-hub generate --stdout   Create the T3 usage hub key (shown once)');
   writeLine('  usage-hub rotate --stdout     Replace the T3 usage hub key');
   writeLine('  usage-hub off      Turn the T3 usage hub off');
+  writeLine('  proxy status       Show whether the LAN HTTPS reverse proxy is trusted');
+  writeLine('  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy');
+  writeLine('  proxy off          Stop trusting the LAN HTTPS proxy');
   writeLine('');
   writeLine('Options:');
   writeLine('  --port, -p PORT    Server port (default: auto-detect)');

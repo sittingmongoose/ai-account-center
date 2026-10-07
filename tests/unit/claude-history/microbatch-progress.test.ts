@@ -12,19 +12,20 @@ import { listClaudeDesktopProfiles } from '../../../src/web-server/services/clau
 // Synthetic offline fixtures only: the transport, launchers and remote helper
 // are mocked, and every path is a disposable temporary CCS directory.
 const fx = require('./synthetic-history-fixtures.cjs');
+const { MAC_PROFILE } = fx;
 const core = require('../../../scripts/claude-history/history-index-sync.cjs');
 const seed = fx.bindings('M');
 const privateCanary = 'SYNTHETIC_PRIVATE_LOST_REPLY';
 
 type Platform = 'mac' | 'windows';
 interface Scenario {
-  id: 'gmail' | 'platyr';
+  id: string;
   source: Platform;
   target: Platform;
 }
-// The two accepted guarded directions: Gmail Windows to Mac, Platyr Mac to Windows.
+// The two accepted guarded directions: Gmail Windows to Mac, the Mac-sourced profile Mac to Windows.
 const GMAIL: Scenario = { id: 'gmail', source: 'windows', target: 'mac' };
-const PLATYR: Scenario = { id: 'platyr', source: 'mac', target: 'windows' };
+const MAC_SOURCED: Scenario = { id: MAC_PROFILE, source: 'mac', target: 'windows' };
 
 let directory: string, priorDir: string | undefined;
 let scenario: Scenario = GMAIL;
@@ -301,8 +302,8 @@ for (const size of [18, 32])
     expect(core.pendingMarkerState(directory, 'gmail', 'mac').held).toBe(false);
   });
 
-test('Platyr Mac to Windows fixed-task profile copies in microbatches with progress', async () => {
-  scenario = PLATYR;
+test('Mac-sourced profile Mac to Windows fixed-task profile copies in microbatches with progress', async () => {
+  scenario = MAC_SOURCED;
   writeManifest();
   count = 5;
   const { outcome, final } = await runOpen();
@@ -317,8 +318,8 @@ test('Platyr Mac to Windows fixed-task profile copies in microbatches with progr
     totalCount: 5,
   });
   expect(markerNames()).toHaveLength(1);
-  expect(markerNames()[0]).toStartWith('platyr-windows-');
-  expect(core.pendingMarkerState(directory, 'platyr', 'windows').held).toBe(false);
+  expect(markerNames()[0]).toStartWith(`${MAC_PROFILE}-windows-`);
+  expect(core.pendingMarkerState(directory, MAC_PROFILE, 'windows').held).toBe(false);
 });
 
 test('a full copy sequence fits in the last free marker slot', async () => {

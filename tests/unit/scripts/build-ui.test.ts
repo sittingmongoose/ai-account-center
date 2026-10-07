@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -12,6 +12,7 @@ const {
   assertSlintPin,
   assertLockedSlint,
   BRIDGE_IMPORT_ERROR,
+  SW_BUILD_ID_ERROR,
 } = require('../../../scripts/build-ui.js');
 const { verifyBundle } = require('../../../scripts/verify-bundle.js');
 const { validateUi } = require('../../../scripts/validate-ui.js');
@@ -60,6 +61,31 @@ function fixture(): string {
     path.join(crate, 'public', 'bridge.js'),
     "import './pkg/ccs_account_dashboard.js';"
   );
+  // The installable shell: the worker carries the build placeholder, the
+  // manifest names one fixture icon, and the icon file exists.
+  fs.writeFileSync(
+    path.join(crate, 'public', 'sw.js'),
+    "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
+  );
+  fs.writeFileSync(path.join(crate, 'public', 'sw-route.js'), '// routing fixture\n');
+  fs.writeFileSync(
+    path.join(crate, 'public', 'manifest.webmanifest'),
+    JSON.stringify({
+      name: 'AI Account Center',
+      short_name: 'AAC',
+      start_url: '/',
+      display: 'standalone',
+      icons: [{ src: '/icons/fixture-192.png', sizes: '192x192', type: 'image/png' }],
+    })
+  );
+  fs.mkdirSync(path.join(crate, 'public', 'icons'), { recursive: true });
+  fs.writeFileSync(
+    path.join(crate, 'public', 'icons', 'fixture-192.png'),
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    )
+  );
   fs.writeFileSync(
     path.join(crate, 'pkg', 'ccs_account_dashboard.js'),
     `export default async function init() {}\n${'// wasm-bindgen glue fixture\n'.repeat(80)}`
@@ -77,6 +103,25 @@ function runner(calls: Array<[string, string[]]>, rust = 'rustc 1.98.0 (fixture)
     return '';
   };
 }
+
+// The build's computer-wide lock and shared cargo target live under a private cache here.
+const savedCache = process.env.XDG_CACHE_HOME;
+const savedTarget = process.env.CARGO_TARGET_DIR;
+let cacheHome = '';
+beforeAll(() => {
+  cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-slint-cache-'));
+  process.env.XDG_CACHE_HOME = cacheHome;
+  delete process.env.CARGO_TARGET_DIR;
+});
+afterAll(() => {
+  if (savedCache === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = savedCache;
+  if (savedTarget !== undefined) process.env.CARGO_TARGET_DIR = savedTarget;
+  fs.rmSync(cacheHome, { recursive: true, force: true });
+});
+/** The owner-file lock runs wasm-pack directly, so the recorded calls match on every platform. */
+const build = (options: Record<string, unknown>) =>
+  buildUi({ lock: { useFlock: false }, ...options });
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -96,7 +141,7 @@ describe('Slint browser build integration', () => {
   it('builds locked browser output directly into the packaged dashboard', () => {
     const root = fixture();
     const calls: Array<[string, string[]]> = [];
-    const manifest = buildUi({ repoRoot: root, run: runner(calls) });
+    const manifest = build({ repoRoot: root, run: runner(calls) });
     expect(manifest.version).toBe('1.18.1');
     expect(calls.at(-1)?.[1]).toEqual([
       'build',
@@ -124,7 +169,7 @@ describe('Slint browser build integration', () => {
     const oldUi = path.join(root, 'dist', 'ui');
     fs.mkdirSync(oldUi, { recursive: true });
     fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
-    expect(() => buildUi({ repoRoot: root, run: runner(calls, 'rustc 1.91.0 (fixture)') })).toThrow(
+    expect(() => build({ repoRoot: root, run: runner(calls, 'rustc 1.91.0 (fixture)') })).toThrow(
       '1.92'
     );
     expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
@@ -133,7 +178,7 @@ describe('Slint browser build integration', () => {
   it('detects a mismatched packaged Wasm binary', () => {
     const root = fixture();
     const calls: Array<[string, string[]]> = [];
-    const manifest = buildUi({ repoRoot: root, run: runner(calls) });
+    const manifest = build({ repoRoot: root, run: runner(calls) });
     const output = path.join(root, 'dist', 'ui');
     fs.appendFileSync(path.join(output, manifest.wasm.path), Buffer.from([1]));
     expect(() => verifyBundle(output)).toThrow('does not match');
@@ -142,7 +187,7 @@ describe('Slint browser build integration', () => {
   it('validates current Slint inputs, fixtures and artifacts without rebuilding', () => {
     const root = fixture();
     const calls: Array<[string, string[]]> = [];
-    const manifest = buildUi({ repoRoot: root, run: runner(calls) });
+    const manifest = build({ repoRoot: root, run: runner(calls) });
     calls.length = 0;
     expect(validateUi({ repoRoot: root, run: runner(calls) })).toEqual(manifest.source);
     expect(calls).toHaveLength(3);
@@ -165,14 +210,14 @@ describe('Slint browser build integration', () => {
   it('rejects a stale browser bridge after source changes even when Wasm is valid', () => {
     const root = fixture();
     const calls: Array<[string, string[]]> = [];
-    buildUi({ repoRoot: root, run: runner(calls) });
+    build({ repoRoot: root, run: runner(calls) });
     fs.appendFileSync(path.join(root, 'web-dashboard', 'public', 'bridge.js'), '\n// changed');
     expect(() => validateUi({ repoRoot: root, run: runner(calls) })).toThrow('source changed');
   });
 
   it('puts the wasm-pack output only in pkg/<buildId>/, named after the wasm hash', () => {
     const root = fixture();
-    const manifest = buildUi({ repoRoot: root, run: runner([]), readCommit: () => null });
+    const manifest = build({ repoRoot: root, run: runner([]), readCommit: () => null });
     const output = path.join(root, 'dist', 'ui');
     const buildId = sha256(WASM).slice(0, 12);
     expect(manifest.buildId).toBe(buildId);
@@ -189,11 +234,45 @@ describe('Slint browser build integration', () => {
     expect(manifest).not.toHaveProperty('commit');
   });
 
+  it('stamps the build id into the packaged sw.js and leaves the source worker unchanged', () => {
+    const root = fixture();
+    const source = path.join(root, 'web-dashboard', 'public', 'sw.js');
+    const before = fs.readFileSync(source, 'utf8');
+    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    const packaged = fs.readFileSync(path.join(root, 'dist', 'ui', 'sw.js'), 'utf8');
+    expect(packaged).toBe(
+      `importScripts('./sw-route.js');\nvar BUILD_ID = '${manifest.buildId}';\n`
+    );
+    expect(fs.readFileSync(source, 'utf8')).toBe(before);
+  });
+
+  it('fails the build on a sw.js without the placeholder and keeps the existing output', () => {
+    const root = fixture();
+    fs.writeFileSync(
+      path.join(root, 'web-dashboard', 'public', 'sw.js'),
+      "var BUILD_ID = 'already-stamped';\n"
+    );
+    const oldUi = path.join(root, 'dist', 'ui');
+    fs.mkdirSync(oldUi, { recursive: true });
+    fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
+    expect(SW_BUILD_ID_ERROR).toBe('sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.');
+    expect(() => buildUi({ repoRoot: root, run: runner([]) })).toThrow(SW_BUILD_ID_ERROR);
+    expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
+  });
+
+  it('leaves a fixture public dir without sw.js alone', () => {
+    const root = fixture();
+    fs.rmSync(path.join(root, 'web-dashboard', 'public', 'sw.js'));
+    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    expect(manifest.buildId).toMatch(/^[a-f0-9]{12}$/);
+    expect(fs.existsSync(path.join(root, 'dist', 'ui', 'sw.js'))).toBe(false);
+  });
+
   it('rewrites only the packaged bridge.js import and leaves the source bridge unchanged', () => {
     const root = fixture();
     const source = path.join(root, 'web-dashboard', 'public', 'bridge.js');
     const before = fs.readFileSync(source, 'utf8');
-    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    const manifest = build({ repoRoot: root, run: runner([]) });
     const packaged = fs.readFileSync(path.join(root, 'dist', 'ui', 'bridge.js'), 'utf8');
     expect(packaged).toBe(`import './pkg/${manifest.buildId}/ccs_account_dashboard.js';`);
     expect(fs.readFileSync(source, 'utf8')).toBe(before);
@@ -215,7 +294,7 @@ describe('Slint browser build integration', () => {
     expect(BRIDGE_IMPORT_ERROR).toBe(
       'bridge.js must import ./pkg/ccs_account_dashboard.js exactly once.'
     );
-    expect(() => buildUi({ repoRoot: root, run: runner([]) })).toThrow(BRIDGE_IMPORT_ERROR);
+    expect(() => build({ repoRoot: root, run: runner([]) })).toThrow(BRIDGE_IMPORT_ERROR);
     expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
   });
 
@@ -227,7 +306,7 @@ describe('Slint browser build integration', () => {
     fs.writeFileSync(path.join(publicDir, 'small.css'), 'body{margin:0}');
     fs.writeFileSync(path.join(publicDir, 'noise.json'), crypto.randomBytes(4096));
     fs.writeFileSync(path.join(publicDir, 'image.png'), Buffer.alloc(4096));
-    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    const manifest = build({ repoRoot: root, run: runner([]) });
     const output = path.join(root, 'dist', 'ui');
     const wasmPath = manifest.wasm.path;
     const gluePath = `pkg/${manifest.buildId}/ccs_account_dashboard.js`;
@@ -260,7 +339,7 @@ describe('Slint browser build integration', () => {
     const firstGz = fs.readFileSync(path.join(output, `${wasmPath}.gz`));
     expect(firstGz.readUInt32LE(4)).toBe(0);
     const firstBr = fs.readFileSync(path.join(output, `${wasmPath}.br`));
-    const second = buildUi({ repoRoot: root, run: runner([]) });
+    const second = build({ repoRoot: root, run: runner([]) });
     expect(fs.readFileSync(path.join(output, `${wasmPath}.gz`)).equals(firstGz)).toBe(true);
     expect(fs.readFileSync(path.join(output, `${wasmPath}.br`)).equals(firstBr)).toBe(true);
     expect(second.precompressed).toEqual(manifest.precompressed);
@@ -278,7 +357,7 @@ describe('Slint browser build integration', () => {
     fs.chmodSync(path.join(publicDir, 'assets', 'mark.svg'), 0o600);
     fs.chmodSync(path.join(publicDir, 'assets'), 0o700);
     fs.chmodSync(path.join(root, 'web-dashboard', 'pkg', 'ccs_account_dashboard.js'), 0o600);
-    buildUi({ repoRoot: root, run: runner([]) });
+    build({ repoRoot: root, run: runner([]) });
     const output = path.join(root, 'dist', 'ui');
     const entries = filesBelow(output);
     expect(entries).toContain('assets/mark.svg');
@@ -294,12 +373,12 @@ describe('Slint browser build integration', () => {
 
   it('records a valid build commit and omits anything else', () => {
     const root = fixture();
-    expect(buildUi({ repoRoot: root, run: runner([]), readCommit: () => '8fb5e3de' }).commit).toBe(
+    expect(build({ repoRoot: root, run: runner([]), readCommit: () => '8fb5e3de' }).commit).toBe(
       '8fb5e3de'
     );
     for (const value of ['', 'HEAD', '8FB5E3DE', '8fb5e3de\n--x', null]) {
       expect(
-        buildUi({ repoRoot: root, run: runner([]), readCommit: () => value })
+        build({ repoRoot: root, run: runner([]), readCommit: () => value })
       ).not.toHaveProperty('commit');
     }
   });
@@ -366,6 +445,20 @@ describe('Slint browser build integration', () => {
         'versioned WebAssembly runtime',
       ],
       [
+        'unstamped worker',
+        (output) =>
+          fs.writeFileSync(
+            path.join(output, 'sw.js'),
+            "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
+          ),
+        'stamped build id',
+      ],
+      [
+        'manifest icon removed',
+        (output) => fs.rmSync(path.join(output, 'icons', 'fixture-192.png')),
+        'Missing browser asset',
+      ],
+      [
         'private file mode',
         (output) =>
           process.platform === 'win32'
@@ -376,7 +469,7 @@ describe('Slint browser build integration', () => {
     ];
     for (const [, damage, message] of cases) {
       const root = fixture();
-      const manifest = buildUi({ repoRoot: root, run: runner([]) });
+      const manifest = build({ repoRoot: root, run: runner([]) });
       const output = path.join(root, 'dist', 'ui');
       expect(() => verifyBundle(output)).not.toThrow();
       damage(output, manifest);

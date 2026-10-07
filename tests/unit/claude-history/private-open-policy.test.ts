@@ -2,6 +2,7 @@ import { beforeEach, afterEach, test, expect, mock, spyOn } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+const { MAC_PROFILE } = require('./synthetic-history-fixtures.cjs');
 const base = path.resolve(import.meta.dir, '../../..');
 let opened = 0, helperCalls = 0;
 const privateCanary = 'SYNTHETIC_PRIVATE_TRANSPORT_ERROR';
@@ -21,9 +22,9 @@ const policy = () => ({version: 1, enabled: true, sourcePlatform: 'mac',
   identity: {accountUuid: '00000000-0000-4000-8000-000000000011', organizationUuid: '00000000-0000-4000-8000-000000000012'},
   project: {cwd: '/mnt/Cursor/PuppetMaster', originCwd: '/mnt/Cursor/PuppetMaster', transcriptRoot: '/synthetic/.claude/projects'},
   ssh: {mac: {alias: 'synthetic-mac', hostname: 'synthetic-vm', username: 'synthetic', port: 22}, windows: {alias: 'synthetic-windows', hostname: 'synthetic-vm', username: 'synthetic', port: 22}}});
-const profile = (historySync: unknown = policy()) => ({id: 'platyr', email: 'synthetic@example.com',
-  mac: {launcherName: 'Synthetic.app', launcherPath: '/Users/synthetic/Applications/Synthetic.app', profilePath: '/Users/synthetic/Library/Application Support/Claude-platyr', sshHost: 'synthetic-mac'},
-  windows: {launcherName: 'Synthetic.lnk', launcherPath: 'C:\\Users\\synthetic\\Synthetic.lnk', profilePath: 'C:\\Users\\synthetic\\AppData\\Roaming\\Claude-platyr', sshHost: 'synthetic-windows'}, historySync});
+const profile = (historySync: unknown = policy()) => ({id: MAC_PROFILE, email: 'synthetic@example.com',
+  mac: {launcherName: 'Synthetic.app', launcherPath: '/Users/synthetic/Applications/Synthetic.app', profilePath: `/Users/synthetic/Library/Application Support/Claude-${MAC_PROFILE}`, sshHost: 'synthetic-mac'},
+  windows: {launcherName: 'Synthetic.lnk', launcherPath: 'C:\\Users\\synthetic\\Synthetic.lnk', profilePath: `C:\\Users\\synthetic\\AppData\\Roaming\\Claude-${MAC_PROFILE}`, sshHost: 'synthetic-windows'}, historySync});
 const filename = () => path.join(directory, 'claude-desktop-profiles.json');
 const write = (entries: unknown[] = [profile()], mode = 0o600) => fs.writeFileSync(filename(), JSON.stringify({version: 1, profiles: entries}), {mode});
 beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-history-hook-')); oldDir = process.env.CCS_DIR; process.env.CCS_DIR = directory; opened = helperCalls = 0;
@@ -59,22 +60,22 @@ test('Windows fixed-task profile with absent launcherPath retains private policy
   const parsed = (await listClaudeDesktopProfiles())[0];
   expect(parsed.windows).not.toHaveProperty('launcherPath');
   expect(await loadClaudeHistoryPolicy(parsed)).toEqual(policy());
-  await openClaudeDesktopProfile('platyr', 'windows');
+  await openClaudeDesktopProfile(MAC_PROFILE, 'windows');
   expect(helperCalls).toBe(1); expect(opened).toBe(1);
   expect(fs.readFileSync(filename())).toEqual(before);
 });
 test('absent policy preserves the existing Open with no private helper attempt', async () => {
   const row = profile(); delete (row as any).historySync; write([row]); const before = fs.readFileSync(filename());
-  await openClaudeDesktopProfile('platyr', 'windows');
+  await openClaudeDesktopProfile(MAC_PROFILE, 'windows');
   expect(opened).toBe(1); expect(helperCalls).toBe(0); expect(fs.readFileSync(filename())).toEqual(before);
 });
 test('invalid policy skips copy but ordinary Open still runs exactly once', async () => {
   write([profile({...policy(), identity: {...policy().identity, organizationUuid: 'invalid'}})]);
-  await openClaudeDesktopProfile('platyr', 'windows'); expect(opened).toBe(1); expect(helperCalls).toBe(0);
+  await openClaudeDesktopProfile(MAC_PROFILE, 'windows'); expect(opened).toBe(1); expect(helperCalls).toBe(0);
 });
 test('helper failure cannot expose a private error or block one coalesced Open', async () => {
   write(); const before = fs.readFileSync(filename());
-  await Promise.all([openClaudeDesktopProfile('platyr', 'windows'), openClaudeDesktopProfile('platyr', 'windows'), openClaudeDesktopProfile('platyr', 'windows')]);
+  await Promise.all([openClaudeDesktopProfile(MAC_PROFILE, 'windows'), openClaudeDesktopProfile(MAC_PROFILE, 'windows'), openClaudeDesktopProfile(MAC_PROFILE, 'windows')]);
   expect(opened).toBe(1); expect(helperCalls).toBe(1); expect(fs.readFileSync(filename())).toEqual(before);
   const result = await synchronizeClaudeHistoryBeforeOpen(profile(), 'windows');
   expect(result.status).toBe('skipped'); expect(JSON.stringify(result)).not.toContain(privateCanary);

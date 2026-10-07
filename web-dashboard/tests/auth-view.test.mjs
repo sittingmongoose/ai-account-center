@@ -20,7 +20,7 @@ test('password strength is a hint with the concept levels', () => {
 });
 
 test('the first-run form checks the username, password, confirmation and code', () => {
-  const ok = { username: 'jared', password: 'summit-ledger-42', confirm: 'summit-ledger-42', code: 'K7QF-2MXD' };
+  const ok = { username: 'operator', password: 'summit-ledger-42', confirm: 'summit-ledger-42', code: 'K7QF-2MXD' };
   assert.equal(validateSetup(ok), null);
   assert.equal(validateSetup(ok, { codeRequired: true }), null);
   assert.equal(validateSetup({ ...ok, username: '1x' })[0], 'user');
@@ -110,4 +110,15 @@ test('the Slint sign-in value carries Remember me; two parts remember', async ()
   assert.deepEqual(parseLoginValue('owner\ns3cret\n0'), { username: 'owner', password: 's3cret', remember: false });
   assert.deepEqual(parseLoginValue('  owner  \npass'), { username: 'owner', password: 'pass', remember: true });
   assert.deepEqual(parseLoginValue(''), { username: '', password: '', remember: true });
+});
+
+test('the offline card names the host and the last try, and retries every 15 s', async () => {
+  const { offlineView, OFFLINE_RETRY_SECONDS } = await import('../public/auth-view.mjs');
+  assert.equal(OFFLINE_RETRY_SECONDS, 15);
+  const words = offlineView('dashboard.example.test:8443', new Date('2026-10-06T21:41:00').getTime());
+  assert.equal(words.title, "Can't reach the dashboard");
+  assert.equal(words.strong, 'dashboard.example.test:8443');
+  assert.match(words.body, /did not answer/);
+  assert.match(words.meta, /Last tried .* · trying again every 15 s/);
+  assert.equal(offlineView('', Date.now()).strong, '');
 });

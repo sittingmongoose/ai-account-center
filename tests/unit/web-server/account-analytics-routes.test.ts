@@ -62,12 +62,12 @@ describe('account analytics route', () => {
   });
   it('accepts exact bounded provider/account filters and same-origin requests', async () => {
     const response = await request(
-      '?platform=windows&range=24h&provider=codex&account=codex%3Alexxmariah',
+      '?platform=windows&range=24h&provider=codex&account=codex%3Alime',
       { 'x-test-session': 'true', origin: baseUrl }
     );
     expect(response.status).toBe(200);
     expect(calls).toEqual([
-      { platform: 'windows', range: '24h', provider: 'codex', account: 'codex:lexxmariah' },
+      { platform: 'windows', range: '24h', provider: 'codex', account: 'codex:lime' },
     ]);
   });
   it.each(['true', 'false'])(

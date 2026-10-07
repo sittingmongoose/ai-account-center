@@ -278,7 +278,7 @@ struct SettingsPanelView: View {
     }
   }
 
-  /// "This connection: 192.168.50.23, trusted local network", read when Settings opens.
+  /// "This connection: 192.168.10.23, trusted local network", read when Settings opens.
   private var thisConnection: String {
     guard let check = model.connectionCheck else {
       return model.checkingConnectionInfo ? "This connection: checking" : "This connection: unavailable"

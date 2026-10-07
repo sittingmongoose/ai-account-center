@@ -19,8 +19,10 @@ import { getDashboardAuthConfig } from '../../config/config-loader-facade';
 import {
   describeConnection,
   isDirectLoopbackRequest,
+  isLanProxyPeer,
   isSecureTransport,
   localNetworkTrust,
+  requestClientAddress,
 } from '../middleware/secure-transport';
 import { forgetSession } from '../services/dashboard-auth-state';
 import { createApiRouter } from './api-router';
@@ -35,6 +37,7 @@ import {
   MAX_USERNAME_LENGTH,
   noStore,
   passwordMatches,
+  requireSecureTransport,
   secureOrigin,
   startSessionForPassword,
   timingSafeStringEqual,
@@ -59,9 +62,11 @@ export interface DashboardAccessState {
 
 export function resolveDashboardAccessState(
   authConfig: DashboardAuthConfig,
-  remoteAddress: string | undefined
+  remoteAddress: string | undefined,
+  /** True when the request came through the LAN HTTPS proxy: never the dashboard computer. */
+  isProxied = false
 ): DashboardAccessState {
-  const isLocalAccess = isLoopbackRemoteAddress(remoteAddress);
+  const isLocalAccess = !isProxied && isLoopbackRemoteAddress(remoteAddress);
   const authConfigured = Boolean(authConfig.username && authConfig.password_hash);
 
   if (!authConfig.enabled) {
@@ -101,8 +106,9 @@ function setupCodeRequired(req: Request, configured: boolean): boolean {
 function invalidCredentials(req: Request, res: Response): void {
   markCredentialsRejected(res);
   // The submitted username is never logged: people type passwords into it.
+  // The client behind a trusted proxy hop, else the peer address.
   audit('auth.login.failed', 'Dashboard sign-in failed', {
-    remoteAddress: req.socket.remoteAddress ?? null,
+    remoteAddress: requestClientAddress(req),
     reason: 'invalid_credentials',
   });
   res.status(401).json({
@@ -138,6 +144,8 @@ async function login(req: Request, res: Response): Promise<void> {
     return;
   }
   const remember = rememberMe !== false;
+  // Through the LAN HTTPS proxy a password is taken only over its HTTPS side.
+  if (isLanProxyPeer(req) && !requireSecureTransport(req, res)) return;
 
   const authConfig = getDashboardAuthConfig();
 
@@ -208,9 +216,22 @@ router.post('/logout', (req: Request, res: Response) => {
  * GET /api/auth/check
  * Check if user is authenticated and if auth is required.
  */
+/**
+ * Through the LAN HTTPS proxy, a visitor who is not signed in is not told the
+ * owner's settings (local network trust, session lifetime, where the sign-in
+ * is managed); the sign-in page needs none of them over HTTPS.
+ */
+function hidesOwnerSettings(req: Request): boolean {
+  return isLanProxyPeer(req) && req.session?.authenticated !== true;
+}
+
 router.get('/check', (req: Request, res: Response) => {
   const authConfig = getDashboardAuthConfig();
-  const accessState = resolveDashboardAccessState(authConfig, req.socket.remoteAddress);
+  const accessState = resolveDashboardAccessState(
+    authConfig,
+    req.socket.remoteAddress,
+    isLanProxyPeer(req)
+  );
 
   res.json({
     ...accessState,
@@ -222,7 +243,7 @@ router.get('/check', (req: Request, res: Response) => {
     secureTransport: isSecureTransport(req),
     secureOrigin: secureOrigin(),
     // Section 2a rule 4 (amended 2026-10-02): the owner's switch, and this connection.
-    trustedLocalNetwork: localNetworkTrust().enabled,
+    ...(hidesOwnerSettings(req) ? {} : { trustedLocalNetwork: localNetworkTrust().enabled }),
     connection: describeConnection(req),
   });
 });
@@ -235,17 +256,22 @@ router.get('/setup', (req: Request, res: Response) => {
   const authConfig = getDashboardAuthConfig();
   const configured = !!(authConfig.username && authConfig.password_hash);
 
+  const hidden = hidesOwnerSettings(req);
   res.json({
     enabled: authConfig.enabled,
     configured,
-    sessionTimeoutHours: dashboardAuthState().sessionTimeoutHours,
-    sessionLifetimeDays: dashboardAuthState().sessionLifetimeDays,
+    ...(hidden
+      ? {}
+      : {
+          sessionTimeoutHours: dashboardAuthState().sessionTimeoutHours,
+          sessionLifetimeDays: dashboardAuthState().sessionLifetimeDays,
+        }),
     // CONTRACT-auth-devices sections 2a and 4 (additive); the code itself is never returned.
     setupCodeRequired: setupCodeRequired(req, configured),
-    managedBy: credentialSource(),
+    ...(hidden ? {} : { managedBy: credentialSource() }),
     secureTransport: isSecureTransport(req),
     secureOrigin: secureOrigin(),
-    trustedLocalNetwork: localNetworkTrust().enabled,
+    ...(hidden ? {} : { trustedLocalNetwork: localNetworkTrust().enabled }),
     connection: describeConnection(req),
   });
 });

@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { createLogger } from '../../services/logging';
+import type { CredentialTransport } from '../middleware/secure-transport';
 import {
   authFile,
   authFileStamp,
@@ -140,6 +141,7 @@ function compact(document: DevicesDocument, now: number): void {
       }
       if (record.prevTokenValidUntil && !(now < Date.parse(record.prevTokenValidUntil))) {
         record.prevTokenSha256 = null;
+        record.prevTokenPlain = true;
         record.prevTokenValidUntil = null;
       }
       return record;
@@ -199,6 +201,8 @@ export interface PairInput {
   installId: string | null;
   appVersion: string | null;
   address: string | null;
+  /** How the pairing request (and so the new token) reached the dashboard. */
+  transport: CredentialTransport;
 }
 
 export interface PairResult {
@@ -225,7 +229,9 @@ export async function pairDevice(input: PairInput): Promise<PairResult> {
     installId: input.installId,
     appVersion: input.appVersion,
     tokenSha256: hashDeviceToken(token),
+    tokenPlain: input.transport === 'plain',
     prevTokenSha256: null,
+    prevTokenPlain: true,
     prevTokenValidUntil: null,
     pairedAt: isoTime(now),
     rotatedAt: null,
@@ -265,9 +271,23 @@ export type DeviceAuthResult =
   | { ok: true; device: ActiveDeviceRecord; viaPreviousToken: boolean }
   | {
       ok: false;
-      code: 'device_revoked' | 'device_expired' | 'invalid_token' | 'store_unavailable';
+      code:
+        | 'device_revoked'
+        | 'device_expired'
+        | 'invalid_token'
+        | 'store_unavailable'
+        | 'plain_http_token';
       deviceId: string | null;
     };
+
+export interface DeviceAuthContext {
+  /** The client address, stamped as "last seen". */
+  address: string | null;
+  /** How this request reached the dashboard; `plain` marks the token as plain from now on. */
+  transport?: CredentialTransport;
+  /** True through the LAN HTTPS proxy: a token that ever crossed the network in plain text is refused. */
+  requireNeverPlain?: boolean;
+}
 
 function sameHash(left: string | null, right: Buffer): boolean {
   if (!left) return false;
@@ -277,9 +297,15 @@ function sameHash(left: string | null, right: Buffer): boolean {
 
 /**
  * Check a bearer token. A valid token stamps `lastSeenAt` at most once a
- * minute; the first use of a rotated token ends the previous one.
+ * minute; the first use of a rotated token ends the previous one. A token
+ * presented over plain HTTP is marked plain for good, and with
+ * `requireNeverPlain` (the LAN HTTPS proxy) a plain token is refused
+ * (`plain_http_token`) before it is stamped as seen or ends a previous token.
  */
-export function authenticateDeviceToken(token: string, address: string | null): DeviceAuthResult {
+export function authenticateDeviceToken(
+  token: string,
+  { address, transport, requireNeverPlain }: DeviceAuthContext
+): DeviceAuthResult {
   if (!DEVICE_TOKEN_PATTERN.test(token)) {
     return { ok: false, code: 'invalid_token', deviceId: null };
   }
@@ -307,8 +333,20 @@ export function authenticateDeviceToken(token: string, address: string | null): 
     return { ok: false, code: 'invalid_token', deviceId: record.id };
   }
   let changed = false;
+  const plainNow = transport === 'plain';
+  const wasPlain = previous ? record.prevTokenPlain : record.tokenPlain;
+  if (plainNow && !wasPlain) {
+    if (previous) record.prevTokenPlain = true;
+    else record.tokenPlain = true;
+    changed = true;
+  }
+  if (requireNeverPlain === true && (wasPlain || plainNow)) {
+    if (changed) persistInBackground(file, entry);
+    return { ok: false, code: 'plain_http_token', deviceId: record.id };
+  }
   if (!previous && record.prevTokenSha256) {
     record.prevTokenSha256 = null;
+    record.prevTokenPlain = true;
     record.prevTokenValidUntil = null;
     changed = true;
   }
@@ -358,7 +396,8 @@ export async function revokeAllDevices(): Promise<number> {
  */
 export async function rotateDeviceToken(
   id: string,
-  presentedTokenSha256: string
+  presentedTokenSha256: string,
+  transport: CredentialTransport = 'plain'
 ): Promise<{ token: string; device: ActiveDeviceRecord }> {
   const { file, entry } = writable();
   const device = activeDevices().find((record) => record.id === id);
@@ -366,9 +405,19 @@ export async function rotateDeviceToken(
   const now = authNow();
   const token = newToken();
   const before = { ...device };
+  // The presented token keeps what is known about it; it was just sent over `transport`.
+  const presentedPlain =
+    transport === 'plain' ||
+    (presentedTokenSha256 === device.tokenSha256
+      ? device.tokenPlain
+      : presentedTokenSha256 === device.prevTokenSha256
+        ? device.prevTokenPlain
+        : true);
   device.prevTokenSha256 = presentedTokenSha256;
+  device.prevTokenPlain = presentedPlain;
   device.prevTokenValidUntil = isoTime(now + PREVIOUS_TOKEN_GRACE_MS);
   device.tokenSha256 = hashDeviceToken(token);
+  device.tokenPlain = transport === 'plain';
   device.rotatedAt = isoTime(now);
   try {
     await persist(file, entry);
