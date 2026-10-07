@@ -16,7 +16,7 @@ import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
-import { readSafeArea, keyboardHeight, themeColor, themeScreen } from './device.mjs';
+import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen } from './device.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -230,6 +230,8 @@ function renderAccounts() {
       origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
       registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin, prefs: st.prefs,
     }));
+    // Phase 6 feeds the Settings "Home screen app" row state; accounts-view.mjs does not compute it.
+    vm.install = currentInstallRow();
     if (e2e) globalThis.__aacLastAccounts = vm;
     pushModel('accounts', JSON.stringify(vm), set_accounts);
   } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
@@ -768,6 +770,7 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'accounts' || action === 'settings') { navigate('accounts'); return; }
     if (action.startsWith('analytics-')) { if (authenticated) await analyticsAction(action, value); return; }
     if (action === 'theme') { saveTheme(value); return; }
+    if (action === 'install-app') { await promptInstall(); return; }
     if (action === 'details') { detailsOpens++; renderDetails(value); return; }
     if (action === 'details-closed') { openDetailsId = ''; return; }
     if (action === 'login') { await signIn(value); return; }
@@ -924,6 +927,10 @@ function pushInputProfile() {
     if (typeof navigator !== 'undefined' && navigator.standalone === true) standalone = true;
   } catch {}
   try { set_input_profile(coarse, hover, standalone); } catch {}
+  // Standalone hides the Settings "Home screen app" row (installRow); a display-mode
+  // change (installed while open) re-renders it.
+  installStandalone = standalone;
+  renderAccounts();
 }
 function pushKeyboard() {
   let height = 0;
@@ -971,6 +978,47 @@ function setupDevice() {
   try {
     addEventListener('online', () => setOnline(true));
     addEventListener('offline', () => setOnline(false));
+  } catch {}
+}
+
+// ---------------------------------------------------------------- installable app (PWA)
+let deferredInstallPrompt = null;
+let installStandalone = false;
+/** The Settings "Home screen app" row state (device.mjs installRow): 'chromium'|'ios'|'hidden'. */
+function currentInstallRow() {
+  let appleMobile = false;
+  try {
+    appleMobile = isAppleMobile(navigator?.userAgent, { touchPoints: navigator?.maxTouchPoints ?? 0 });
+  } catch {}
+  return installRow({ standalone: installStandalone, deferredPrompt: deferredInstallPrompt !== null, appleMobile });
+}
+/** The `install-app` action: show the captured install prompt once, then drop it. */
+async function promptInstall() {
+  const prompt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  renderAccounts();
+  if (!prompt) return;
+  try { await prompt.prompt(); } catch {}
+}
+function setupInstall() {
+  // The service worker caches the app shell for offline and fast start (sw.js); outside a
+  // secure context, or when /sw.js is missing, registration fails and the dashboard works without it.
+  try {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  } catch {}
+  try {
+    // Chromium offers the install prompt; capturing it feeds the row's Install button (6.6).
+    addEventListener('beforeinstallprompt', (event) => {
+      event.preventDefault();
+      deferredInstallPrompt = event;
+      renderAccounts();
+    });
+    addEventListener('appinstalled', () => {
+      deferredInstallPrompt = null;
+      renderAccounts();
+    });
   } catch {}
 }
 
@@ -1046,6 +1094,7 @@ try {
   // Auto follows the browser: the scheme is pushed now and on every change.
   watchMedia('(prefers-color-scheme: dark)', dark => { themeSystemDark = dark; set_system_dark(dark); syncThemeColor(); });
   setupDevice();
+  setupInstall();
   syncThemeColor();
   // Headless captures settle instantly (the existing screenshot guard); ?motion keeps motion on.
   const headless = /HeadlessChrome/.test(navigator.userAgent) && !/[?&]motion\b/.test(location.search);
