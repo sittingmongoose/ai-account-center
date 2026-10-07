@@ -19,22 +19,23 @@ import { SwitchSlot, CheckMark, ConfirmBox, AmountLine } from "home.slint";
 component Stagger inherits Rectangle {
     in property <int> index;
     in property <bool> run;
-    property <bool> shown: !Motion.on;
     min-height: inner.preferred-height;
     preferred-height: inner.preferred-height;
-    t := Timer {
-        interval: max(1ms, (160 + root.index * 45) * 1ms);
-        running: root.run && !root.shown && Motion.on;
-        triggered => { self.running = false; root.shown = true; }
-    }
-    changed run => { if !root.run && Motion.on { root.shown = false; } }
     Rectangle {
-        x: root.shown ? 0px : 18px;
+        x: (root.run || !Motion.on) ? 0px : 18px;
         width: root.width;
         height: root.height;
-        opacity: root.shown ? 1 : 0;
-        animate x { duration: Motion.on ? 460ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-        animate opacity { duration: Motion.on ? 340ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        opacity: (root.run || !Motion.on) ? 1.0 : 0.0;
+        animate x {
+            duration: Motion.on ? 460ms : 0ms;
+            delay: Motion.on && root.run ? (160 + root.index * 45) * 1ms : 0ms;
+            easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        animate opacity {
+            duration: Motion.on ? 340ms : 0ms;
+            delay: Motion.on && root.run ? (160 + root.index * 45) * 1ms : 0ms;
+            easing: cubic-bezier(0.65, 0, 0.35, 1);
+        }
         inner := VerticalLayout { @children }
     }
 }
