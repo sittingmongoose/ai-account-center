@@ -240,6 +240,19 @@ export function windowLabel(provider, w) {
     return PERIOD_LABEL[p] || text(w.label) || 'Usage';
   return text(w.label) || 'Usage';
 }
+/**
+ * H3: single-line column heads for the stacked Antigravity grid. Only Antigravity
+ * has its own shorts; every other provider keeps its full window label.
+ */
+export function shortWindowLabel(provider, w) {
+  if (provider !== 'antigravity') return windowLabel(provider, w);
+  // space, not +: crowded table heads wrap between the words, never mid-word
+  const family = /^gemini/i.test(text(w?.key)) ? 'Gemini' : 'Claude GPT';
+  const p = period(w);
+  if (p === '5h') return `${family} 5hr`;
+  if (p === 'week') return `${family} wk`;
+  return windowLabel(provider, w);
+}
 export function fullWindowLabel(provider, w) {
   if (isFable(w)) return 'Fable weekly';
   if (provider === 'antigravity' && w.key === 'google-ai-credits') return antigravityWindowLabel(w);
@@ -869,7 +882,18 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
   const native = antigravityView(data, inventory, autoStatus, now);
   const bound = new Map(native.antigravityAccounts.map((row) => [row.id, row]));
   const status = native.antigravityAutoKnown ? autoStatus : null;
-  const columns = antigravityColumns(accounts);
+  // Columns come from the canonical provider buckets; the short single-line heads ride
+  // along, fed by each column's representative window (H3).
+  const columns = antigravityColumns(accounts).map((col) => ({
+    ...col,
+    shortLabel: shortWindowLabel(
+      'antigravity',
+      accounts.flatMap((row) => visibleMeters(row)).find((w) => w.key === col.key) || {
+        key: col.key,
+        label: col.label,
+      }
+    ),
+  }));
   const rows = accounts.map((account) => {
     const nativeRow = bound.get(account.id);
     const active = nativeRow?.selected === true;

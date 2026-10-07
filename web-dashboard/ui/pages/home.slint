@@ -71,8 +71,10 @@ component RunsFlow inherits FlexboxLayout {
     spacing-horizontal: 0px;
     spacing-vertical: 0px;
     alignment: start;
-    for w in root.words: Text {
-        text: w.text + " ";
+    // No trailing space after the last word below D: the phantom space wrapped
+    // single-line flows early (O3). D keeps its exact spacing.
+    for w[i] in root.words: Text {
+        text: w.text + (i < root.words.length - 1 || !Breakpoints.below-d ? " " : "");
         font-size: root.size;
         font-weight: w.strong ? root.strong-weight : 400;
         color: w.tone == "warn" ? root.warn-ink : w.tone == "good" ? root.good-ink : w.strong ? root.strong-ink : root.ink;
@@ -495,6 +497,8 @@ export component AccountRow inherits Rectangle {
     in property <AccountRowView> account;
     in property <SectionView> section;
     in property <bool> table: true;
+    // H3: the section's 2x2 call, so heads and rows never disagree
+    in property <bool> grid-2x2: false;
     in property <length> ident-w;
     in property <length> slot-w;
     in property <length> gap: 20px;
@@ -560,8 +564,14 @@ export component AccountRow inherits Rectangle {
     // stacked meter cells under 100 px wide stack "used" under the number (4.1.2): derived from
     // the tier-fed grid width (not self.width), like the table/stacked switch, to stay out of the
     // layout's width cycle. The 260 px switchable cap never binds here (it is above 100).
-    property <bool> narrow-cells: !root.table
-        && (root.grid-w - 2 * root.pad-x - 12px * max(0, root.account.cells.length - 1)) / max(1, root.account.cells.length) < 100px;
+    // H3: the 2x2 grid lays two cells per row, so each cell measures half the row, not a quarter.
+    property <int> grid-cols: root.grid-2x2 ? 2 : max(1, root.account.cells.length);
+    // Table cells below D flex with the row: with many columns they land under 100 px too,
+    // so they stack "used" like narrow stacked cells. D never narrows.
+    property <length> table-cell-w: (root.grid-w - 2 * root.pad-x - root.ident-w - root.slot-w - root.gap * (root.account.cells.length + 1)) / max(1, root.account.cells.length);
+    property <bool> narrow-cells: root.touch && (root.table
+        ? root.account.cells.length > 0 && root.table-cell-w < 100px
+        : (root.grid-w - 2 * root.pad-x - 12px * (root.grid-cols - 1)) / root.grid-cols < 100px);
     public pure function cell-key(at: int) -> string {
         return at < root.account.cells.length ? root.account.cells[at].key : "";
     }
@@ -663,7 +673,9 @@ export component AccountRow inherits Rectangle {
                         }
                     }
                     for cell[c] in root.account.cells: Rectangle {
-                        min-width: Breakpoints.below-d ? 120px : 108px;
+                        // below D the cells flex under their 120 px preference so many-column
+                        // tables (4-window Antigravity) fit the card; D keeps its 108 px floor
+                        min-width: Breakpoints.below-d ? 0px : 108px;
                         preferred-width: Breakpoints.below-d ? 120px : 108px;
                         horizontal-stretch: 1;
                         min-height: cell.key != "" ? m.preferred-height : 0px;
@@ -677,6 +689,7 @@ export component AccountRow inherits Rectangle {
                             visible: cell.key != "";
                             // the meter cell serves the stacked and the table rows below D (4.1.2)
                             cell: Breakpoints.below-d;
+                            stack-used: root.narrow-cells;
                             data: cell;
                             played: root.played;
                             delay: root.delay + c * 16ms;
@@ -803,8 +816,9 @@ export component AccountRow inherits Rectangle {
                                     clicked => { root.launch(root.account.profile, "windows"); }
                                 }
                             }
-                            SwitchSlot {
-                                visible: root.section.switchable;
+                            // Mode-conditioned, not `visible:`: an invisible slot still stacks its
+                            // ~44 px into Line A below D, pushing the identity down (H1, H5).
+                            if root.section.switchable: SwitchSlot {
                                 touch: true;
                                 account: root.account;
                                 can-switch: root.section.can-switch;
@@ -823,7 +837,7 @@ export component AccountRow inherits Rectangle {
                     // the meter grid: N equal columns (Claude) or two capped columns (switchable),
                     // gap 12; an account without a window keeps its empty cell
                     if root.has-cells: Rectangle { height: 10px; }
-                    if root.has-cells: HorizontalLayout {
+                    if root.has-cells && !root.grid-2x2: HorizontalLayout {
                         padding-left: root.pad-x;
                         padding-right: root.pad-x;
                         spacing: 12px;
@@ -836,6 +850,37 @@ export component AccountRow inherits Rectangle {
                             min-height: cell.key != "" ? sm.preferred-height : 0px;
                             preferred-height: self.min-height;
                             sm := Meter {
+                                y: 0px;
+                                width: parent.width;
+                                height: self.preferred-height;
+                                visible: cell.key != "";
+                                cell: true;
+                                stack-used: root.narrow-cells;
+                                data: cell;
+                                played: root.played;
+                                delay: root.delay + c * 16ms;
+                                hot: root.hovered && Device.hover;
+                                notch-override: root.notch-at;
+                                owner-label: root.section.label + " · " + root.account.email;
+                                clicked => { root.open-details(root.account.id); }
+                                value-changed => { root.flash(); }
+                            }
+                        }
+                    }
+                    // H3: two cells per row (mirrors the 2x2 heads: same columns, same gaps)
+                    if root.has-cells && root.grid-2x2: GridLayout {
+                        padding-left: root.pad-x;
+                        padding-right: root.pad-x;
+                        spacing-horizontal: 12px;
+                        spacing-vertical: 12px;
+                        for cell[c] in root.account.cells: Rectangle {
+                            row: floor(c / 2);
+                            col: mod(c, 2);
+                            preferred-width: (root.grid-w - 2 * root.pad-x - 12px) / 2;
+                            horizontal-stretch: 1;
+                            min-height: cell.key != "" ? sm2.preferred-height : 0px;
+                            preferred-height: self.min-height;
+                            sm2 := Meter {
                                 y: 0px;
                                 width: parent.width;
                                 height: self.preferred-height;
@@ -866,6 +911,9 @@ export component AccountRow inherits Rectangle {
                             root.activate(root.account.activate-kind, root.account.profile);
                         }
                     }
+                    // 12 px under the grid: the sub-line clears the divider (H2) and the
+                    // highlight box (H4, O1). Line A and the open confirm box self-pad.
+                    if root.has-cells && !root.confirming: Rectangle { height: 12px; }
                 }
                 }
             }
@@ -1093,6 +1141,11 @@ export component AccountSection inherits Plate {
     property <length> slot-w: max(root.slot-max, root.section.switchable ? 80px : root.touch ? 84px : 62px);
     // the stacked switchable meter grid caps each column at 260 px, extra space to the right (4.1.3)
     property <length> cell-w: max(0px, min(260px, (root.inner-w - 12px * max(0, root.section.columns.length - 1)) / max(1, root.section.columns.length)));
+    // H3: switchable heads with more than two columns (Antigravity) use the short labels
+    // below D; when one stacked row of them no longer fits (~116 px a column), the heads
+    // and the meter grid both become a 2x2 grid (at most 3 meters per row on P).
+    property <bool> short-heads: root.touch && root.section.switchable && root.section.columns.length > 2;
+    property <bool> grid-2x2: !root.table && root.short-heads && root.cell-w < 116px;
 
     // the stepper's value before it is saved; -1 when nothing is pending
     property <int> pending: -1;
@@ -1125,20 +1178,24 @@ export component AccountSection inherits Plate {
     // the one inline confirmation open in this section
     property <string> confirm-id;
 
-    // The full History label needs mark + title + legend + button; at the 320 floor even the bare
-    // title leaves no room, so History keeps its icon and accessible name but drops its label there
-    // (nothing clips, A3). Everywhere else the label stays.
+    // History keeps its icon and accessible name but drops its label whenever the full head
+    // (mark + meta + legend + button) does not fit: the meta, not the title, is what needs room
+    // (O3). The probes are absolute and invisible, so they measure without laying out; the rule
+    // reads probes only, never the rendered button, so it cannot oscillate.
     property <bool> hist-short: root.touch && root.section.kind == "claude"
-        && 28px + 10px + title-probe.preferred-width + 16px + 40px + 8px + hist-probe.preferred-width > root.inner-w;
-    title-probe := Text {
+        && 28px + 10px + meta-probe.preferred-width + 8px + 40px + 4px + hist-probe.preferred-width > root.inner-w;
+    // A single-line Runs, not the wrapping flow: its preferred width is the meta's true
+    // one-line need (a flex layout never reports max-content).
+    meta-probe := Runs {
         visible: false;
-        text: root.section.label;
-        font-size: Type.title;
-        font-weight: 630;
+        runs: root.section.meta-runs;
+        size: Type.small;
+        strong-weight: 600;
     }
     hist-probe := Button {
         visible: false;
         kind: "ghost";
+        small: Breakpoints.tier-d;
         icon: "chart";
         text: "History";
     }
@@ -1199,7 +1256,8 @@ export component AccountSection inherits Plate {
             padding-right: root.pad-x;
             padding-top: 14px;
             padding-bottom: Breakpoints.tier-d ? 13px : root.section.switchable && !root.table ? 8px : 14px;
-            spacing: 16px;
+            // O3: 8 below D (the bare ? keeps 19 px of visible gap); D keeps 16
+            spacing: root.touch ? 8px : 16px;
             min-height: 70px;
             HorizontalLayout {
                 spacing: root.touch ? 10px : 12px;
@@ -1209,9 +1267,11 @@ export component AccountSection inherits Plate {
                     horizontal-stretch: 0;
                     ProviderMark { provider: root.section.id; size: 28px; }
                 }
+                // O3: fills the title group below D, so no dead space wraps the meta early
                 VerticalLayout {
                     alignment: center;
                     spacing: 1px;
+                    horizontal-stretch: root.touch ? 1 : 0;
                     Text {
                         min-height: 26px;
                         vertical-alignment: center;
@@ -1243,10 +1303,13 @@ export component AccountSection inherits Plate {
                     }
                 }
             }
-            Rectangle { horizontal-stretch: 1; }
+            // O3: below D the title group already stretches, so a second stretch-1
+            // spacer would halve its width and wrap the meta early
+            if !root.touch: Rectangle { horizontal-stretch: 1; }
             // Claude: the meter legend and History
             if root.section.kind == "claude": HorizontalLayout {
-                spacing: 8px;
+                // O3: 4 below D (the bare ? keeps 15 px of visible gap); D keeps 8
+                spacing: root.touch ? 4px : 8px;
                 horizontal-stretch: 0;
                 legend-anchor := Rectangle {
                     width: Breakpoints.tier-d ? 28px : 40px;
@@ -1528,24 +1591,51 @@ export component AccountSection inherits Plate {
             Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.rule; }
             // the concept's .colhead: 8 px padding inside its two hairlines and an 11 px line at line-height 1.35.
             // Table: ACCOUNT over the account column. Stacked (4.1.2): one head per meter grid column.
-            colhead := HorizontalLayout {
-                padding-left: root.pad-x;
-                padding-right: root.pad-x;
-                padding-top: 9px;
-                padding-bottom: 9px;
-                spacing: root.col-gap;
-                if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
-                for col in root.section.columns: Caps {
-                    min-height: 15px;
-                    min-width: root.table ? (Breakpoints.below-d ? 120px : 108px) : 0px;
-                    preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
-                    horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
-                    text: col.label.to-uppercase();
-                    wrap: word-wrap;
-                    overflow: clip;
-                    vertical-alignment: bottom;
+            // The wrapper keeps the band's height source while the one-row and 2x2 heads swap (H3).
+            colhead := VerticalLayout {
+                spacing: 0px;
+                if !root.grid-2x2: HorizontalLayout {
+                    padding-left: root.pad-x;
+                    padding-right: root.pad-x;
+                    padding-top: 9px;
+                    padding-bottom: 9px;
+                    spacing: root.col-gap;
+                    if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
+                    for col in root.section.columns: Caps {
+                        // crowded below-D table heads grow to two lines at most (shorts break
+                        // cleanly); D and the stacked heads size naturally, exactly as before
+                        min-height: 15px;
+                        max-height: root.table && root.touch ? 30px : 1000000px;
+                        min-width: root.table ? (root.touch ? 0px : 108px) : 0px;
+                        preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
+                        horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
+                        text: (root.short-heads && col.short-label != "" ? col.short-label : col.label).to-uppercase();
+                        wrap: word-wrap;
+                        overflow: root.table && root.touch ? elide : clip;
+                        vertical-alignment: bottom;
+                    }
+                    if root.table: Rectangle { width: root.slot-w; }
                 }
-                if root.table: Rectangle { width: root.slot-w; }
+                // H3: the 2x2 heads mirror the 2x2 meter grid (same two columns, same gap)
+                if root.grid-2x2: GridLayout {
+                    padding-left: root.pad-x;
+                    padding-right: root.pad-x;
+                    padding-top: 9px;
+                    padding-bottom: 9px;
+                    spacing-horizontal: 12px;
+                    spacing-vertical: 4px;
+                    for col[i] in root.section.columns: Caps {
+                        row: floor(i / 2);
+                        col: mod(i, 2);
+                        min-height: 15px;
+                        preferred-width: (root.inner-w - 12px) / 2;
+                        horizontal-stretch: 1;
+                        text: (col.short-label != "" ? col.short-label : col.label).to-uppercase();
+                        wrap: word-wrap;
+                        overflow: clip;
+                        vertical-alignment: bottom;
+                    }
+                }
             }
         }
         rows-box := Rectangle {
@@ -1575,6 +1665,7 @@ export component AccountSection inherits Plate {
                     account: row;
                     section: root.section;
                     table: root.table;
+                    grid-2x2: root.grid-2x2;
                     ident-w: root.ident-w;
                     slot-w: root.slot-w;
                     gap: root.col-gap;
@@ -1646,6 +1737,22 @@ export component AccountSection inherits Plate {
             min-height: foot.min-height;
             preferred-height: foot.preferred-height;
             Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
+            // Measurers for fits-inline (never drawn, never hit-tested): direct children of
+            // this box, never of `foot`, so they take no layout space on any tier. `visible:
+            // false` only clips in Slint 1.18; inside `foot` they stretched the footer by two
+            // text lines plus spacing below D (O2). preferred-* still report natural widths.
+            when-probe := Text {
+                visible: false;
+                text: root.section.foot.when;
+                font-family: Type.tab;
+                font-size: root.touch ? Type.small : 12.5px;
+            }
+            runs-fit := Runs {
+                visible: false;
+                runs: root.section.foot.runs;
+                size: root.touch ? Type.small : 12.5px;
+                strong-weight: 640;
+            }
             // the concept's .plate-foot: 12 px padding under its 1 px rule around a 12.5 px line at 1.45.
             // Below D the sentence wraps with no line limit and the "Checked" line drops to its own line
             // when the sentence does not leave it room (4.1.3).
@@ -1658,26 +1765,6 @@ export component AccountSection inherits Plate {
                 min-height: 13px + 18px + 12px;
                 property <bool> fits-inline: Breakpoints.tier-d
                     || runs-fit.preferred-width + 16px + 8px + when-probe.preferred-width <= Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
-                // Measurers (never drawn, never hit-tested): `visible: false` only clips in Slint 1.18
-                // and would still stretch the footer by two text lines, squeezing the rows above it. On D
-                // they are zero-sized; below D they keep natural size (approved P/F/T layouts).
-                // preferred-width still reports the natural widths below D.
-                when-probe := Text {
-                    visible: false;
-                    width: Breakpoints.tier-d ? 0px : self.preferred-width;
-                    height: Breakpoints.tier-d ? 0px : self.preferred-height;
-                    text: root.section.foot.when;
-                    font-family: Type.tab;
-                    font-size: root.touch ? Type.small : 12.5px;
-                }
-                runs-fit := Runs {
-                    visible: false;
-                    width: Breakpoints.tier-d ? 0px : self.preferred-width;
-                    height: Breakpoints.tier-d ? 0px : self.preferred-height;
-                    runs: root.section.foot.runs;
-                    size: root.touch ? Type.small : 12.5px;
-                    strong-weight: 640;
-                }
                 foot-line := HorizontalLayout {
                     spacing: 9px;
                     foot-icon := VerticalLayout {
