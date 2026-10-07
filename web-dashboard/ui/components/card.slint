@@ -1,7 +1,8 @@
 // Surfaces. Plate: a section on a page (radius 14, hairline border, the small shadow). Card: a provider
 // card that lifts 2 px on hover with a larger shadow (one drop shadow per rectangle). Both keep their
-// layout slot fixed and move an inner surface, so hover never reflows neighbours.
-import { Theme, Motion } from "../theme.slint";
+// layout slot fixed and move an inner surface, so hover never reflows neighbours. Touch (5.1): the lift
+// and the hover shadow stay pointer-only, and a press shows the pressed tint fading out over 160 ms.
+import { Theme, Motion, Breakpoints, Device } from "../theme.slint";
 
 export component Plate inherits Rectangle {
     in property <bool> flash: false;
@@ -52,6 +53,8 @@ export component Card inherits Rectangle {
     in property <length> pad-top: root.pad;
     in property <length> pad-bottom: root.pad;
     out property <bool> hovered: ta.has-hover;
+    // touch: a coarse pointer or any tier below D; the pressed tint replaces the hover lift there
+    property <bool> touch: Device.coarse || Breakpoints.below-d;
     callback clicked();
 
     // body already carries the paddings: adding them again made every card 28 px taller than its content and
@@ -66,20 +69,21 @@ export component Card inherits Rectangle {
         width: root.width;
         height: root.height;
         radius: Theme.r-card;
-        on: root.hovered && root.clickable;
+        on: root.hovered && root.clickable && Device.hover;
     }
     surface := Rectangle {
         x: 0px;
-        y: root.hovered && root.clickable ? -2px : 0px;
+        y: root.hovered && root.clickable && Device.hover ? -2px : 0px;
         width: root.width;
         height: root.height;
         animate y { duration: Motion.on ? 220ms : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
         border-radius: Theme.r-card;
         border-width: 1px;
-        border-color: root.selected ? Theme.sel-line : root.hovered && root.clickable ? Theme.rule-strong : Theme.rule;
-        background: root.flash ? Theme.flash : root.selected ? Theme.sel-fill : Theme.paper;
-        // a flash lands at once and fades back over 620 ms
-        animate background { duration: Motion.tint(root.flash ? 0ms : 620ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        border-color: root.selected ? Theme.sel-line : root.hovered && root.clickable && Device.hover ? Theme.rule-strong : Theme.rule;
+        background: root.flash ? Theme.flash : root.selected ? Theme.sel-fill
+            : root.touch && ta.pressed ? Theme.pressed : Theme.paper;
+        // a flash lands at once and fades back over 620 ms; a press lands at once and fades out in 160 ms
+        animate background { duration: Motion.tint(root.flash ? 0ms : root.touch ? (ta.pressed ? 0ms : 160ms) : 620ms); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         animate border-color { duration: Motion.tint(Motion.fast); }
         drop-shadow-color: Theme.shadow-1;
         drop-shadow-blur: 3px;

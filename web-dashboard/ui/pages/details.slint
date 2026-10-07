@@ -1,13 +1,19 @@
 // Details: the content of the right-hand slide-over for one account. Every visible window as a meter,
 // balances as amounts, and where the reading came from. Sections stagger in when it opens.
-import { Theme, Motion, Type } from "../theme.slint";
+//
+// Below D (DESIGN-MOBILE.md 4.4): the header is a fixed 64 px row (mark, title and sub-lead, Close) and
+// the scroll content carries everything the meter hover card shows on desktop — the exact reset, sample
+// and source lines under each window plus the severity sentence — so touch reaches every exact time. The
+// amounts are label/value rows, the facts keep a 104 px (P) or 110 px label column, and on P the buttons
+// stack full width at 48 px.
+import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
 import { DetailsView, MeterView, AmountView, FactView, AccountRowView } from "../models.slint";
 import { Icon } from "../components/icon.slint";
 import { ProviderMark } from "../components/mark.slint";
-import { Caps } from "../components/text.slint";
+import { Caps, ValueUnit } from "../components/text.slint";
 import { Button } from "../components/button.slint";
 import { IconButton } from "../components/icon-button.slint";
-import { Meter } from "../components/meter.slint";
+import { Meter, MeterBar } from "../components/meter.slint";
 import { SwitchSlot, CheckMark, ConfirmBox, AmountLine } from "home.slint";
 
 component Stagger inherits Rectangle {
@@ -33,6 +39,140 @@ component Stagger inherits Rectangle {
     }
 }
 
+// One usage window in the below-D content (4.4): the caption, the 24 px number with the reset text on
+// its right, the 8 px bar with its ticks, notch and overage, then the exact-time lines the desktop
+// hover card shows. A pending reading ("Reset at 9:29 PM · new reading pending") takes the number's
+// place; unavailable keeps its honest "Unavailable" / "Not reported yet".
+component WindowBlock inherits VerticalLayout {
+    in property <MeterView> m;
+    spacing: 0px;
+    Caps { min-height: 16px; text: (m.full-label != "" ? m.full-label : m.label).to-uppercase(); }
+    Rectangle { height: 4px; }
+    HorizontalLayout {
+        spacing: 4px;
+        min-height: 30px;
+        if m.has-value: ValueUnit {
+            horizontal-stretch: 0;
+            box-h: 30px;
+            value: m.value-text;
+            size: 24px;
+            weight: 620;
+            ink: Theme.sev-text(Theme.severity(m.has-value, m.value));
+        }
+        if m.has-value: VerticalLayout {
+            alignment: end;
+            padding-bottom: 5px;
+            horizontal-stretch: 0;
+            Text { text: "used"; font-size: Type.small; color: Theme.ink-3; }
+        }
+        if !m.has-value: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: m.na-text != "" ? m.na-text : "Unavailable";
+                font-size: Type.small;
+                font-weight: 600;
+                color: m.na-sub != "" ? Theme.ink : Theme.ink-3;
+                overflow: elide;
+            }
+        }
+        if m.has-value: Rectangle { horizontal-stretch: 1; }
+        if m.has-value: VerticalLayout {
+            alignment: end;
+            padding-bottom: 5px;
+            horizontal-stretch: 0;
+            Text {
+                text: m.reset;
+                font-family: Type.tab;
+                font-size: Type.small;
+                color: Theme.ink-3;
+                overflow: elide;
+            }
+        }
+    }
+    Rectangle { height: 6px; }
+    MeterBar {
+        has-value: m.has-value;
+        shown: m.value;
+        target: m.has-value ? m.value : 0;
+        notch: m.notch;
+        notch-faint: m.notch-faint;
+        notch-off: m.notch-off;
+        sev: Theme.severity(m.has-value, m.value);
+        bar-height: 8px;
+    }
+    Rectangle { height: 6px; }
+    // the pending sub-line (when the exact reset line does not already carry it), then the exact
+    // times (4.4: everything the meter hover card shows)
+    if m.na-sub != "" && m.reset-exact == "": Text {
+        min-height: 18px;
+        text: m.na-sub;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+    if m.reset-exact != "": Text {
+        min-height: 18px;
+        text: m.reset-exact;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+    if m.sampled != "": Text {
+        min-height: 18px;
+        text: m.sampled;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+    if m.source != "": Text {
+        min-height: 18px;
+        text: m.source;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+}
+
+// An amount as a label/value row (4.4): label small and muted on the left, value at body 600 on the
+// right, the sub-line wrapping under them.
+component DetailAmount inherits VerticalLayout {
+    in property <AmountView> amount;
+    spacing: 0px;
+    HorizontalLayout {
+        spacing: 8px;
+        min-height: 21px;
+        Text {
+            text: root.amount.label;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            overflow: elide;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.amount.value;
+            font-family: Type.tab;
+            font-size: Type.body;
+            font-weight: 600;
+            color: root.amount.spent ? Theme.crit-text : Theme.ink;
+            vertical-alignment: center;
+            horizontal-stretch: 0;
+        }
+        if root.amount.unit != "": VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Text { text: root.amount.unit; font-size: Type.small; color: Theme.ink-3; }
+        }
+    }
+    if root.amount.sub != "": Text {
+        text: root.amount.sub;
+        font-size: Type.small;
+        color: Theme.ink-3;
+        wrap: word-wrap;
+    }
+}
+
 export component DetailsPanel inherits Rectangle {
     in property <DetailsView> data;
     in property <bool> open;
@@ -42,35 +182,49 @@ export component DetailsPanel inherits Rectangle {
     callback activate(string, string);
     callback go-accounts();
 
+    // below D (4.4): 16 px content padding on P and 20 px otherwise
+    property <bool> touch: Breakpoints.below-d;
+    property <length> pad: Breakpoints.tier-p ? 16px : Breakpoints.tier-d ? 22px : 20px;
+
     // the inline confirmation before activating an account past its switch point
     property <bool> confirming: false;
     property <string> shown-id: root.data.id;
     changed shown-id => { root.confirming = false; }
     changed open => { if !root.open { root.confirming = false; } }
 
+    // does any window carry the auto-switch notch (it names the severity line)
+    property <bool> any-notch: root.notched(0) || root.notched(1) || root.notched(2) || root.notched(3)
+        || root.notched(4) || root.notched(5) || root.notched(6) || root.notched(7);
+    public pure function notched(at: int) -> bool {
+        return at < root.data.meters.length && root.data.meters[at].notch >= 0;
+    }
+
     head := Rectangle {
         x: 0px;
         y: 0px;
         width: root.width;
-        height: head-row.preferred-height;
+        height: root.touch ? 64px : head-row.preferred-height;
         head-row := HorizontalLayout {
-            padding-left: 22px;
-            padding-right: 22px;
-            padding-top: 20px;
-            padding-bottom: 16px;
-            spacing: 14px;
+            padding-left: root.pad;
+            padding-right: root.pad;
+            padding-top: root.touch ? 8px : 20px;
+            padding-bottom: root.touch ? 8px : 16px;
+            spacing: root.touch ? 12px : 14px;
             VerticalLayout {
-                alignment: start;
-                padding-top: 2px;
+                alignment: root.touch ? center : start;
+                padding-top: root.touch ? 0px : 2px;
+                horizontal-stretch: 0;
                 ProviderMark { provider: root.data.provider; size: 32px; }
             }
             VerticalLayout {
+                alignment: root.touch ? center : stretch;
                 horizontal-stretch: 1;
                 spacing: 3px;
                 // the concept's .so-head lines: 18 px and 12.5 px at line-height 1.45
-                Text { min-height: 26px; vertical-alignment: center; text: root.data.title; font-size: 18px; font-weight: 640; letter-spacing: -0.18px; color: Theme.ink; overflow: elide; }
-                // "Codex · Pro · Active on Ubuntu", the active state with the same check-circle the rows use
-                HorizontalLayout {
+                Text { min-height: 26px; vertical-alignment: center; text: root.data.title; font-size: root.touch ? Type.title : 18px; font-weight: 640; letter-spacing: -0.18px; color: Theme.ink; overflow: elide; }
+                // "Codex · Pro · Active on Ubuntu", the active state with the same check-circle the rows use.
+                // Below D the action slot at the top of the content carries the state (4.4).
+                if !root.touch: HorizontalLayout {
                     spacing: 0px;
                     alignment: start;
                     min-height: 18px;
@@ -102,9 +256,18 @@ export component DetailsPanel inherits Rectangle {
                         vertical-alignment: center;
                     }
                 }
+                if root.touch: Text {
+                    min-height: 18px;
+                    text: root.data.sub-lead;
+                    font-size: Type.small;
+                    color: Theme.ink-3;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
             }
             VerticalLayout {
-                alignment: start;
+                alignment: root.touch ? center : start;
+                horizontal-stretch: 0;
                 IconButton { icon: "close"; hint: "Close"; clicked => { root.close(); } }
             }
         }
@@ -118,21 +281,58 @@ export component DetailsPanel inherits Rectangle {
         content-height: body.preferred-height;
         body := VerticalLayout {
             width: scroll.width;
-            padding-left: 22px;
-            padding-right: 22px;
+            padding-left: root.pad;
+            padding-right: root.pad;
             padding-top: 8px;
             padding-bottom: 30px;
             spacing: 0px;
+            // below D the row's action slot opens the content at full width, with its inline
+            // confirmation under it (4.4); on D both stay with the buttons at the bottom
+            if root.touch && root.data.switchable && (root.data.can-switch || root.data.active): VerticalLayout {
+                padding-top: 20px;
+                SwitchSlot {
+                    full: Breakpoints.tier-p;
+                    touch: true;
+                    account: {
+                        id: root.data.id,
+                        active: root.data.active,
+                        active-label: root.data.active-label,
+                        platform: root.data.platform,
+                        can-activate: root.data.can-activate,
+                        activate-hint: root.data.activate-hint,
+                    };
+                    can-switch: root.data.can-switch;
+                    busy: root.busy;
+                    activate => {
+                        if root.data.confirm {
+                            root.confirming = true;
+                        } else {
+                            root.activate(root.data.activate-kind, root.data.profile);
+                        }
+                    }
+                }
+            }
+            if root.touch && root.data.confirm: ConfirmBox {
+                runs: root.data.confirm-runs;
+                open: root.confirming;
+                busy: root.busy;
+                keep => { root.confirming = false; }
+                confirm => {
+                    root.confirming = false;
+                    root.activate(root.data.activate-kind, root.data.profile);
+                }
+            }
             Stagger {
                 index: 0;
                 run: root.open;
                 VerticalLayout {
-                    padding-top: 16px;
-                    padding-bottom: 16px;
-                    spacing: 12px;
-                    // the concept's .so-sec: an 11 px caption line at 1.45, 12 px under it, meters 18 px apart
-                    Caps { min-height: 16px; text: "USAGE WINDOWS · " + root.data.meter-count; }
-                    if root.data.meter-count > 0: VerticalLayout {
+                    padding-top: root.touch ? 20px : 16px;
+                    padding-bottom: root.touch ? 20px : 16px;
+                    spacing: root.touch ? 20px : 12px;
+                    // the concept's .so-sec: an 11 px caption line at 1.45, 12 px under it, meters 18 px apart.
+                    // Below D the windows open the content with no group caption (4.4).
+                    if !root.touch: Caps { min-height: 16px; text: "USAGE WINDOWS · " + root.data.meter-count; }
+                    if root.data.meter-count > 0 && !root.touch: VerticalLayout {
                         spacing: 18px;
                         for m[i] in root.data.meters: Meter {
                             data: m;
@@ -140,6 +340,21 @@ export component DetailsPanel inherits Rectangle {
                             played: root.open;
                             delay: (240 + i * 40) * 1ms;
                             owner-label: root.data.title;
+                        }
+                    }
+                    if root.data.meter-count > 0 && root.touch: VerticalLayout {
+                        spacing: 14px;
+                        for m in root.data.meters: WindowBlock {
+                            m: m;
+                        }
+                        // the severity line, once under the windows (4.4)
+                        Text {
+                            text: root.any-notch
+                                ? "Warning from 80%, critical from 95%; the notch is the auto-switch point"
+                                : "Warning from 80%, critical from 95%";
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            wrap: word-wrap;
                         }
                     }
                     if root.data.meter-count == 0: Text {
@@ -159,12 +374,19 @@ export component DetailsPanel inherits Rectangle {
                 index: 1;
                 run: root.open;
                 VerticalLayout {
-                    padding-top: 16px;
-                    padding-bottom: 16px;
+                    padding-top: root.touch ? 20px : 16px;
+                    padding-bottom: root.touch ? 20px : 16px;
                     spacing: 0px;
-                    Caps { min-height: 16px; text: "BALANCES, PACKS AND CREDITS · " + root.data.amount-count; }
-                    Rectangle { height: 12px; }
-                    for a[k] in root.data.amounts: AmountLine { amount: a; rule-above: k > 0; }
+                    if !root.touch: Caps { min-height: 16px; text: "BALANCES, PACKS AND CREDITS · " + root.data.amount-count; }
+                    if !root.touch: Rectangle { height: 12px; }
+                    if !root.touch: VerticalLayout {
+                        spacing: 0px;
+                        for a[k] in root.data.amounts: AmountLine { amount: a; rule-above: k > 0; }
+                    }
+                    if root.touch: VerticalLayout {
+                        spacing: 10px;
+                        for a in root.data.amounts: DetailAmount { amount: a; }
+                    }
                 }
             }
             Rectangle { height: 1px; background: Theme.rule-2; }
@@ -172,20 +394,20 @@ export component DetailsPanel inherits Rectangle {
                 index: 2;
                 run: root.open;
                 VerticalLayout {
-                    padding-top: 16px;
-                    padding-bottom: 16px;
+                    padding-top: root.touch ? 20px : 16px;
+                    padding-bottom: root.touch ? 20px : 16px;
                     spacing: 12px;
-                    Caps { min-height: 16px; text: "READING"; }
+                    if !root.touch: Caps { min-height: 16px; text: "READING"; }
                     VerticalLayout {
                         spacing: 8px;
                         for f in root.data.facts: HorizontalLayout {
                             spacing: 12px;
-                            Text { text: f.label; width: 110px; min-height: 19px; font-size: 13px; color: Theme.ink-3; }
+                            Text { text: f.label; width: root.touch && Breakpoints.tier-p ? 104px : 110px; min-height: 19px; font-size: root.touch ? Type.small : 13px; color: Theme.ink-3; }
                             Text {
                                 min-height: 19px;
                                 text: f.value;
                                 font-family: f.mono ? Type.mono : Type.tab;
-                                font-size: f.mono ? 12px : 13px;
+                                font-size: f.mono ? 12px : root.touch ? Type.small : 13px;
                                 color: Theme.ink;
                                 wrap: word-wrap;
                                 horizontal-stretch: 1;
@@ -198,51 +420,104 @@ export component DetailsPanel inherits Rectangle {
             Stagger {
                 index: 3;
                 run: root.open;
-                // the actions wrap onto a second line instead of eliding their labels
-                FlexboxLayout {
-                    padding-top: 16px;
-                    spacing-horizontal: 8px;
-                    spacing-vertical: 8px;
-                    alignment: start;
-                    if root.data.provider == "claude": Button {
-                        small: true;
-                        platform: "apple";
-                        text: "Open on Mac";
-                        enabled: root.data.can-mac && !root.busy;
-                        clicked => { root.launch(root.data.profile, "mac"); }
-                    }
-                    if root.data.provider == "claude": Button {
-                        small: true;
-                        platform: "windows";
-                        text: "Open on Windows";
-                        enabled: root.data.can-windows && !root.busy;
-                        clicked => { root.launch(root.data.profile, "windows"); }
-                    }
-                    // the row's action slot: Activate with the plain "Active" mark stacked on it, so a switch
-                    // while Details is open crossfades in place and the check draws in
-                    if root.data.switchable && (root.data.can-switch || root.data.active): SwitchSlot {
-                        account: {
-                            id: root.data.id,
-                            active: root.data.active,
-                            active-label: root.data.active-label,
-                            platform: root.data.platform,
-                            can-activate: root.data.can-activate,
-                            activate-hint: root.data.activate-hint,
-                        };
-                        can-switch: root.data.can-switch;
-                        busy: root.busy;
-                        activate => {
-                            if root.data.confirm {
-                                root.confirming = true;
-                            } else {
-                                root.activate(root.data.activate-kind, root.data.profile);
+                // the actions wrap onto a second line instead of eliding their labels. Below D the
+                // slot has moved to the top and the buttons stack full width at 48 on P or wrap at
+                // their natural width at 44 on F/T (4.4).
+                VerticalLayout {
+                    padding-top: root.touch ? 20px : 16px;
+                    spacing: 0px;
+                    if !root.touch: FlexboxLayout {
+                        spacing-horizontal: 8px;
+                        spacing-vertical: 8px;
+                        alignment: start;
+                        if root.data.provider == "claude": Button {
+                            small: true;
+                            platform: "apple";
+                            text: "Open on Mac";
+                            enabled: root.data.can-mac && !root.busy;
+                            clicked => { root.launch(root.data.profile, "mac"); }
+                        }
+                        if root.data.provider == "claude": Button {
+                            small: true;
+                            platform: "windows";
+                            text: "Open on Windows";
+                            enabled: root.data.can-windows && !root.busy;
+                            clicked => { root.launch(root.data.profile, "windows"); }
+                        }
+                        // the row's action slot: Activate with the plain "Active" mark stacked on it, so a switch
+                        // while Details is open crossfades in place and the check draws in
+                        if root.data.switchable && (root.data.can-switch || root.data.active): SwitchSlot {
+                            account: {
+                                id: root.data.id,
+                                active: root.data.active,
+                                active-label: root.data.active-label,
+                                platform: root.data.platform,
+                                can-activate: root.data.can-activate,
+                                activate-hint: root.data.activate-hint,
+                            };
+                            can-switch: root.data.can-switch;
+                            busy: root.busy;
+                            activate => {
+                                if root.data.confirm {
+                                    root.confirming = true;
+                                } else {
+                                    root.activate(root.data.activate-kind, root.data.profile);
+                                }
                             }
                         }
+                        Button { small: true; kind: "ghost"; text: "Manage in Accounts & Settings"; clicked => { root.go-accounts(); } }
                     }
-                    Button { small: true; kind: "ghost"; text: "Manage in Accounts & Settings"; clicked => { root.go-accounts(); } }
+                    if root.touch && Breakpoints.tier-p: VerticalLayout {
+                        spacing: 8px;
+                        if root.data.provider == "claude": Button {
+                            tall: true;
+                            platform: "apple";
+                            text: "Open on Mac";
+                            enabled: root.data.can-mac && !root.busy;
+                            clicked => { root.launch(root.data.profile, "mac"); }
+                        }
+                        if root.data.provider == "claude": Button {
+                            tall: true;
+                            platform: "windows";
+                            text: "Open on Windows";
+                            enabled: root.data.can-windows && !root.busy;
+                            clicked => { root.launch(root.data.profile, "windows"); }
+                        }
+                        Button {
+                            tall: true;
+                            kind: "ghost";
+                            text: "Manage in Accounts & Settings";
+                            clicked => { root.go-accounts(); }
+                        }
+                    }
+                    if root.touch && !Breakpoints.tier-p: FlexboxLayout {
+                        spacing-horizontal: 8px;
+                        spacing-vertical: 8px;
+                        alignment: start;
+                        if root.data.provider == "claude": Button {
+                            tall: Breakpoints.tier-t;
+                            platform: "apple";
+                            text: "Open on Mac";
+                            enabled: root.data.can-mac && !root.busy;
+                            clicked => { root.launch(root.data.profile, "mac"); }
+                        }
+                        if root.data.provider == "claude": Button {
+                            tall: Breakpoints.tier-t;
+                            platform: "windows";
+                            text: "Open on Windows";
+                            enabled: root.data.can-windows && !root.busy;
+                            clicked => { root.launch(root.data.profile, "windows"); }
+                        }
+                        Button {
+                            tall: Breakpoints.tier-t;
+                            kind: "ghost";
+                            text: "Manage in Accounts & Settings";
+                            clicked => { root.go-accounts(); }
+                        }
+                    }
                 }
             }
-            if root.data.confirm: ConfirmBox {
+            if !root.touch && root.data.confirm: ConfirmBox {
                 runs: root.data.confirm-runs;
                 open: root.confirming;
                 busy: root.busy;

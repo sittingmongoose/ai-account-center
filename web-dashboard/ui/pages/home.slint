@@ -7,7 +7,13 @@
 // its bold active weight, the meta line, the credits line) clamped to 150-320 px, the actions column as
 // wide as its widest actions, and the meter columns share the rest equally. Every row reports its
 // natural widths and the section keeps the largest.
-import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+//
+// Below D (DESIGN-MOBILE.md 4.1): the sections stack full width. Each section picks its row layout from
+// its own inner width (1.5): the desktop table with touch sizes from 680 px inner for Claude and 600 px
+// for the switchable providers, the stacked layout below that — identity line, then a meter grid of
+// equal cells (4.1.2/4.1.3), the auto-switch control wrapping under the title, the inline confirmation
+// with two equal 44 px buttons and a footer sentence that wraps without a line limit.
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { SectionView, AccountRowView, ProviderCardView, MeterView, ColumnView, RunView, AmountView } from "../models.slint";
 import { Icon } from "../components/icon.slint";
 import { ProviderMark } from "../components/mark.slint";
@@ -20,6 +26,7 @@ import { Plate, Card } from "../components/card.slint";
 import { Reveal } from "../components/reveal.slint";
 import { Hover } from "../components/hover-card.slint";
 import { MenuPanel } from "../components/menu.slint";
+import { InfoIcon, InlineTip } from "../components/info-tip.slint";
 
 // A line that mixes weights ("**4** accounts · desktop profiles"). The "good" tone is the active
 // account's name; "warn" is a warning figure.
@@ -42,6 +49,41 @@ export component Runs inherits HorizontalLayout {
         vertical-alignment: center;
         horizontal-stretch: 0;
     }
+}
+
+// The same runs as one wrapping paragraph, for the places below D where the sentence must wrap with no
+// line limit (the section footer, the inline confirmation). Markdown gives the weights and tones; the
+// words are the view model's, untouched.
+export component RunsText inherits StyledText {
+    in property <[RunView]> runs;
+    in property <length> size: 13px;
+    in property <color> ink: Theme.ink-3;
+    in property <color> strong-ink: Theme.ink;
+    in property <color> warn-ink: Theme.warn-text;
+    in property <color> good-ink: Theme.good-text;
+    default-color: root.ink;
+    default-font-size: root.size;
+    // StyledText wraps on its own when its width is constrained; every use below sits in a layout.
+    // The words are the view model's; markdown gives the runs their bold figures and the line's tone
+    // (a warning footer, a plain confirm) is the caller's base colour, as the mockup draws it. A strong
+    // lead with the warn tone (the confirm question's figure) keeps its warning colour, and the active
+    // account's name keeps its good tone. Covered shapes: 1 and 2 runs (plain or a strong lead), the
+    // 3-run off line (strong middle), the 3-run meta (strong lead), and the 4-run "moves to <next>" and
+    // meta sentences (strong first and third); anything else falls back to its plain words. Fully plain
+    // branches still wrap in a font tag: bare words report a one-line height while rendering wrapped,
+    // which would overlap whatever follows them.
+    property <color> lead-ink: root.runs.length > 0 && root.runs[0].tone == "warn" ? root.warn-ink : root.strong-ink;
+    property <color> mid-ink: root.runs.length > 2 && root.runs[2].tone == "good" ? root.good-ink : root.strong-ink;
+    text: root.runs.length == 0 ? @markdown("")
+        : root.runs.length == 1 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}</font>")
+        : root.runs.length == 2 && root.runs[0].strong ? @markdown("<font color='\{root.lead-ink}'>**\{root.runs[0].text}**</font>\{root.runs[1].text}")
+        : root.runs.length == 2 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}</font>")
+        : root.runs.length == 3 && root.runs[1].strong ? @markdown("\{root.runs[0].text}<font color='\{root.strong-ink}'>**\{root.runs[1].text}**</font>\{root.runs[2].text}")
+        : root.runs.length == 3 && root.runs[0].strong ? @markdown("<font color='\{root.lead-ink}'>**\{root.runs[0].text}**</font>\{root.runs[1].text}\{root.runs[2].text}")
+        : root.runs.length == 3 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}\{root.runs[2].text}</font>")
+        : root.runs.length == 4 && root.runs[0].strong && root.runs[2].strong ? @markdown("<font color='\{root.lead-ink}'>**\{root.runs[0].text}**</font>\{root.runs[1].text}<font color='\{root.mid-ink}'>**\{root.runs[2].text}**</font>\{root.runs[3].text}")
+        : root.runs.length == 4 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}\{root.runs[2].text}\{root.runs[3].text}</font>")
+        : @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}\{root.runs[2].text}\{root.runs[3].text}</font>");
 }
 
 // The filled check-circle. On a switch the disc grows from 60% and the check is revealed left to right
@@ -95,12 +137,15 @@ export component CheckMark inherits Rectangle {
 // No border, fill or button shape. It is laid out on the Activate button's own grid: the check is
 // inset by the button's left padding and takes the button icon's size, and the word starts after the
 // button's icon gap, so the check lands on the button icon's x and "Active" on the label's x.
+// Touch (below D, 4.1.3): the check is 18 and the word in control size.
 export component ActiveMark inherits Rectangle {
     in property <string> where;
     in property <bool> on;
     in property <length> inset: 10px;
     in property <length> icon: 15px;
     in property <length> gap: 7px;
+    in property <bool> touch: false;
+    property <length> word-size: root.touch ? Type.control : 13px;
     property <length> text-x: root.inset + root.icon + root.gap;
     preferred-width: root.text-x + max(word.preferred-width, sub.preferred-width);
     min-width: self.preferred-width;
@@ -121,7 +166,7 @@ export component ActiveMark inherits Rectangle {
             x: root.text-x;
             y: 0px;
             text: "Active";
-            font-size: 13px;
+            font-size: root.word-size;
             font-weight: 640;
             color: Theme.accent-text;
         }
@@ -137,24 +182,28 @@ export component ActiveMark inherits Rectangle {
 
 // The fixed action slot of a switchable row: the Activate button and the Active mark stacked in one
 // cell on its start edge. They cross-fade (the button fades back in after the mark leaves), so the slot
-// never changes width on a switch.
+// never changes width on a switch. `full` spans the given width (Details on P, 4.4): a full-width button
+// or, for the active account, one full-width selected-style line with the check, "Active" and the platform.
 export component SwitchSlot inherits Rectangle {
     in property <AccountRowView> account;
     in property <bool> can-switch;
     in property <bool> busy;
+    in property <bool> touch: false;
+    in property <bool> full: false;
     callback activate();
     callback finish-setup();
     property <bool> show-button: root.can-switch && !root.account.active && !root.account.setup;
+    property <bool> show-mark: root.account.active && !root.account.setup;
     out property <length> natural: max(root.can-switch ? btn.preferred-width : 0px, mark.preferred-width, root.account.setup ? setup-btn.preferred-width : 0px);
     preferred-width: root.natural;
     min-width: root.natural;
-    preferred-height: max(28px, mark.preferred-height);
+    preferred-height: root.full ? 48px : max(28px, mark.preferred-height);
     min-height: self.preferred-height;
 
     btn-wrap := Rectangle {
         x: 0px;
         y: (parent.height - btn.height) / 2;
-        width: btn.preferred-width;
+        width: root.full && root.show-button ? root.width : btn.preferred-width;
         height: btn.height;
         visible: root.can-switch && !root.account.setup;
         opacity: root.show-button ? 1 : 0;
@@ -164,8 +213,10 @@ export component SwitchSlot inherits Rectangle {
         btn := Button {
             x: 0px;
             y: 0px;
-            width: self.preferred-width;
-            small: true;
+            width: root.full && root.show-button ? parent.width : self.preferred-width;
+            // the desktop slot keeps the small button; below D the slot button is the full 44 px control
+            small: !root.touch;
+            tall: root.full;
             kind: "accent-line";
             icon: "swap";
             text: "Activate";
@@ -179,18 +230,54 @@ export component SwitchSlot inherits Rectangle {
         y: (parent.height - self.preferred-height) / 2;
         width: self.preferred-width;
         height: self.preferred-height;
+        visible: !root.full;
         inset: btn.pad-left;
-        icon: btn.icon-size;
+        icon: root.touch ? 18px : btn.icon-size;
         gap: btn.icon-gap;
-        on: root.account.active && !root.account.setup;
+        touch: root.touch;
+        on: root.show-mark;
         where: root.account.active-label != "" ? root.account.active-label : "on " + root.account.platform;
+    }
+    if root.full && root.show-mark: Rectangle {
+        width: root.width;
+        height: 48px;
+        border-radius: 10px;
+        border-width: 1.5px;
+        border-color: Theme.accent;
+        background: Theme.accent.mix(Theme.paper, 0.07);
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                CheckMark { size: 18px; drawn: root.show-mark; }
+            }
+            Text {
+                text: "Active";
+                font-size: Type.control;
+                font-weight: 600;
+                color: Theme.accent-text;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+            Text {
+                text: root.account.active-label != "" ? root.account.active-label : "on " + root.account.platform;
+                font-size: Type.small;
+                color: Theme.ink-3;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+        }
     }
     setup-btn := Button {
         x: 0px;
         y: (parent.height - self.height) / 2;
-        width: self.preferred-width;
+        width: root.full ? root.width : self.preferred-width;
         visible: root.account.setup;
-        small: true;
+        small: !root.touch;
+        tall: root.full;
         kind: "accent-line";
         icon: "terminal";
         text: "Finish setup";
@@ -199,12 +286,14 @@ export component SwitchSlot inherits Rectangle {
 }
 
 // The same question in Details: a rounded box under the actions, the buttons on their own line.
+// Below D the question wraps and the two buttons become equal 44 px halves (4.1.3).
 export component ConfirmBox inherits Rectangle {
     in property <[RunView]> runs;
     in property <bool> open;
     in property <bool> busy;
     callback keep();
     callback confirm();
+    property <bool> touch: Breakpoints.below-d;
     property <length> natural: inner.preferred-height + 10px;
     height: root.open ? root.natural : 0px;
     animate height { duration: Motion.on ? (root.open ? Motion.med : 200ms) : 0ms; easing: root.open ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1); }
@@ -212,7 +301,7 @@ export component ConfirmBox inherits Rectangle {
     Rectangle {
         y: 10px;
         height: inner.preferred-height;
-        border-radius: 10px;
+        border-radius: root.touch ? Theme.r-touch : 10px;
         border-width: 1px;
         border-color: Theme.rule;
         background: Theme.warn.mix(Theme.paper, 0.07);
@@ -235,88 +324,181 @@ export component ConfirmBox inherits Rectangle {
                 HorizontalLayout {
                     horizontal-stretch: 1;
                     spacing: 0px;
-                    for r in root.runs: Text {
-                        text: r.text;
-                        font-size: 12.5px;
-                        font-weight: r.strong ? 640 : 400;
-                        color: r.tone == "warn" ? Theme.warn-text : r.strong ? Theme.ink : Theme.ink-2;
-                        wrap: r.strong ? no-wrap : word-wrap;
-                        horizontal-stretch: r.strong ? 0 : 1;
+                    if !root.touch: HorizontalLayout {
+                        spacing: 0px;
+                        for r in root.runs: Text {
+                            text: r.text;
+                            font-size: 12.5px;
+                            font-weight: r.strong ? 640 : 400;
+                            color: r.tone == "warn" ? Theme.warn-text : r.strong ? Theme.ink : Theme.ink-2;
+                            wrap: r.strong ? no-wrap : word-wrap;
+                            horizontal-stretch: r.strong ? 0 : 1;
+                        }
+                    }
+                    if root.touch: VerticalLayout {
+                        horizontal-stretch: 1;
+                        RunsText { runs: root.runs; size: Type.body; ink: Theme.ink-2; strong-ink: Theme.ink; }
                     }
                 }
             }
-            HorizontalLayout {
+            if !root.touch: HorizontalLayout {
                 alignment: end;
                 spacing: 10px;
                 Button { kind: "ghost"; small: true; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
                 Button { kind: "accent-line"; small: true; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
+            }
+            if root.touch: HorizontalLayout {
+                spacing: 8px;
+                Button { horizontal-stretch: 1; kind: "ghost"; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
+                Button { horizontal-stretch: 1; kind: "accent-line"; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
             }
         }
     }
 }
 
 // The inline question before activating an account that is already past the switch point. It opens
-// below its row with an animated height and a content fade.
+// below its row with an animated height and a content fade. On D the question and both buttons share
+// one line; below D the question wraps (no line limit) and the buttons are two equal halves on P and
+// right-aligned at their natural width otherwise (4.1.3, shared with the Accounts rows).
 export component ConfirmLine inherits Rectangle {
     in property <[RunView]> runs;
     in property <bool> open;
     in property <bool> busy;
+    in property <length> pad-x: 16px;
     callback keep();
     callback confirm();
+    property <bool> touch: Breakpoints.below-d;
     property <length> natural: line.preferred-height;
     height: root.open ? root.natural : 0px;
     animate height { duration: Motion.on ? (root.open ? Motion.med : 200ms) : 0ms; easing: root.open ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1); }
     clip: true;
     background: Theme.warn.mix(Theme.paper, 0.07);
-    line := HorizontalLayout {
+    line := VerticalLayout {
         y: 0px;
         height: root.natural;
-        padding-left: 20px;
-        padding-right: 20px;
+        padding-left: root.touch ? root.pad-x : 20px;
+        padding-right: root.touch ? root.pad-x : 20px;
         padding-top: 9px;
         padding-bottom: 9px;
-        spacing: 10px;
+        spacing: root.touch ? 8px : 0px;
         opacity: root.open ? 1 : 0;
         animate opacity { duration: Motion.on ? (root.open ? Motion.med : 160ms) : 0ms; delay: Motion.on && root.open ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Icon { name: "alert"; tint: Theme.warn-text; width: 16px; height: 16px; }
-        }
-        // The figure in bold, then the sentence, which wraps when the section is narrow.
+        // the icon, the figure in bold and the sentence, which wraps below D when the section is narrow
         HorizontalLayout {
-            horizontal-stretch: 1;
-            spacing: 0px;
-            for r[i] in root.runs: Text {
-                text: r.text;
-                font-size: 12.5px;
-                font-weight: r.strong ? 640 : 400;
-                color: r.tone == "warn" ? Theme.warn-text : r.strong ? Theme.ink : Theme.ink-2;
-                wrap: r.strong ? no-wrap : word-wrap;
-                vertical-alignment: center;
-                horizontal-stretch: r.strong ? 0 : 1;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: root.touch ? start : center;
+                horizontal-stretch: 0;
+                padding-top: root.touch ? 2px : 0px;
+                Icon { name: "alert"; tint: Theme.warn-text; width: 16px; height: 16px; }
+            }
+            if !root.touch: HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 0px;
+                for r[i] in root.runs: Text {
+                    text: r.text;
+                    font-size: 12.5px;
+                    font-weight: r.strong ? 640 : 400;
+                    color: r.tone == "warn" ? Theme.warn-text : r.strong ? Theme.ink : Theme.ink-2;
+                    wrap: r.strong ? no-wrap : word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: r.strong ? 0 : 1;
+                }
+            }
+            if root.touch: VerticalLayout {
+                horizontal-stretch: 1;
+                padding-top: 1px;
+                RunsText { runs: root.runs; size: Type.small; ink: Theme.ink-2; strong-ink: Theme.ink; }
+            }
+            if !root.touch: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Button { kind: "ghost"; small: true; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
+            }
+            if !root.touch: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Button { kind: "accent-line"; small: true; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
             }
         }
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Button { kind: "ghost"; small: true; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
+        if root.touch && Breakpoints.tier-p: HorizontalLayout {
+            spacing: 8px;
+            Button { horizontal-stretch: 1; kind: "ghost"; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
+            Button { horizontal-stretch: 1; kind: "accent-line"; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
         }
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Button { kind: "accent-line"; small: true; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
+        if root.touch && !Breakpoints.tier-p: HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { kind: "ghost"; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
+            Button { kind: "accent-line"; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
         }
     }
     Rectangle { y: root.height - 1px; height: 1px; background: Theme.rule-2; }
 }
 
+// The stacked row's inline confirmation (4.1.3): a rounded box inside the row block, inset by the
+// card padding with 8 above it, the question in body size wrapping, then two equal-width 44 px
+// buttons 8 apart.
+component ConfirmStack inherits Rectangle {
+    in property <[RunView]> runs;
+    in property <bool> open;
+    in property <bool> busy;
+    in property <length> pad-x: 16px;
+    callback keep();
+    callback confirm();
+    property <length> natural: box.preferred-height + 8px;
+    height: root.open ? root.natural : 0px;
+    animate height { duration: Motion.on ? (root.open ? Motion.med : 200ms) : 0ms; easing: root.open ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1); }
+    clip: true;
+    box := Rectangle {
+        x: root.pad-x;
+        y: 8px;
+        width: parent.width - 2 * root.pad-x;
+        height: self.preferred-height;
+        border-radius: Theme.r-touch;
+        border-width: 1px;
+        border-color: Theme.rule;
+        background: Theme.paper-2;
+        opacity: root.open ? 1 : 0;
+        animate opacity { duration: Motion.on ? (root.open ? Motion.med : 160ms) : 0ms; delay: Motion.on && root.open ? 60ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 10px;
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: start;
+                    padding-top: 2px;
+                    horizontal-stretch: 0;
+                    Icon { name: "alert"; tint: Theme.warn-text; width: 16px; height: 16px; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    RunsText { runs: root.runs; size: Type.body; ink: Theme.ink-2; strong-ink: Theme.ink; }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Button { horizontal-stretch: 1; kind: "ghost"; text: "Keep current"; enabled: !root.busy; clicked => { root.keep(); } }
+                Button { horizontal-stretch: 1; kind: "accent-line"; text: "Activate anyway"; enabled: !root.busy; clicked => { root.confirm(); } }
+            }
+        }
+    }
+}
+
 export component AccountRow inherits Rectangle {
     in property <AccountRowView> account;
     in property <SectionView> section;
+    in property <bool> table: true;
     in property <length> ident-w;
     in property <length> slot-w;
     in property <length> gap: 20px;
+    // stacked layout inputs (4.1.2/4.1.3): the card's side padding and the meter grid's width
+    in property <length> pad-x: 20px;
+    in property <length> grid-w: 0px;
     in property <bool> played;
     // load-in: the delay of this row's first meter (rows one and a half staggers apart)
     in property <duration> delay;
@@ -336,9 +518,9 @@ export component AccountRow inherits Rectangle {
     out property <bool> hovered: ta.has-hover;
     out property <length> line-height: line.height;
     // The widths this row needs: the account column (mark, gap, widest text in the active weight, slack)
-    // and the actions column.
-    out property <length> ident-natural: 22px + 12px + max(email-probe.preferred-width, meta.preferred-width, amounts.preferred-width) + 12px;
-    out property <length> slot-natural: root.section.switchable ? sw.natural : 28px + 6px + 28px;
+    // and the actions column. The probes are unconditional; the row surfaces are mode-conditioned.
+    out property <length> ident-natural: 22px + 12px + max(email-probe.preferred-width, meta-probe.preferred-width, amounts-probe.preferred-width) + 12px;
+    out property <length> slot-natural: root.section.switchable ? sw-probe.natural : root.touch ? 40px + 4px + 40px : 28px + 6px + 28px;
 
     // a soft highlight for 600 ms when a reading changed on refresh
     out property <bool> flashing: root.flash-phase == 1;
@@ -360,6 +542,23 @@ export component AccountRow inherits Rectangle {
         }
     }
 
+    // the row background: flash, selected, pressed tint, hover tint. Touch presses show the pressed
+    // token and hover tints stay pointer-only (DESIGN-MOBILE.md 5.1); D is unchanged.
+    property <bool> touch: Breakpoints.below-d;
+    property <color> row-bg: root.flash-phase == 1 ? Theme.flash
+        : root.account.active && root.section.switchable ? Theme.row-hover.with-alpha(0)
+        : root.touch && ta.pressed ? Theme.pressed
+        : !root.touch && ta.pressed ? Theme.row-hover.mix(Theme.rule, 0.7)
+        : Device.hover && ta.has-hover ? Theme.row-hover
+        : Theme.row-hover.with-alpha(0);
+
+    // stacked (4.1.3): a row whose account reports no windows shows the identity line only
+    property <bool> has-cells: !root.table && root.cell-key(0) + root.cell-key(1) + root.cell-key(2)
+        + root.cell-key(3) + root.cell-key(4) + root.cell-key(5) + root.cell-key(6) + root.cell-key(7) != "";
+    public pure function cell-key(at: int) -> string {
+        return at < root.account.cells.length ? root.account.cells[at].key : "";
+    }
+
     min-height: body.min-height;
     preferred-height: body.preferred-height;
 
@@ -369,34 +568,52 @@ export component AccountRow inherits Rectangle {
         font-size: Type.body;
         font-weight: 640;
     }
+    meta-probe := Text {
+        visible: false;
+        text: root.account.meta;
+        font-size: Type.small;
+    }
+    amounts-probe := Runs {
+        visible: false;
+        runs: root.account.amounts-runs;
+        size: Type.small;
+        strong-weight: 560;
+        tabular: true;
+    }
+    sw-probe := SwitchSlot {
+        visible: false;
+        account: root.account;
+        can-switch: root.section.can-switch;
+        touch: Breakpoints.below-d;
+    }
 
     body := VerticalLayout {
         spacing: 0px;
+        // ---- the row surface: the desktop table, or the stacked block below the table thresholds ----
+        // Table rows are at least 72 tall on D and 76 tall below D (4.1.2).
         line := Rectangle {
-            min-height: max(72px, row-layout.min-height);
-            preferred-height: max(72px, row-layout.preferred-height);
+            min-height: root.table ? max(root.touch ? 76px : 72px, innercol.min-height) : innercol.min-height;
+            preferred-height: root.table ? max(root.touch ? 76px : 72px, innercol.preferred-height) : innercol.preferred-height;
             vertical-stretch: 1;
             border-bottom-left-radius: root.round-bottom ? Theme.r-plate - 1px : 0px;
             border-bottom-right-radius: root.round-bottom ? Theme.r-plate - 1px : 0px;
-            background: root.account.active && root.section.switchable ? Theme.row-hover.with-alpha(0)
-                : root.flash-phase == 1 ? Theme.flash
-                : root.selected ? Theme.row-sel
-                : ta.pressed ? Theme.row-hover.mix(Theme.rule, 0.7)
-                : ta.has-hover ? Theme.row-hover
-                : Theme.row-hover.with-alpha(0);
+            background: root.row-bg;
             animate background {
-                duration: Motion.tint(root.flash-phase == 1 ? 0ms : root.flash-phase == 2 ? 620ms : 180ms);
+                duration: Motion.tint(root.flash-phase == 1 ? 0ms : root.flash-phase == 2 ? 620ms : root.touch ? (ta.pressed ? 0ms : 160ms) : 180ms);
                 easing: root.flash-phase == 2 ? cubic-bezier(0.2, 0.8, 0.2, 1) : cubic-bezier(0.65, 0, 0.35, 1);
             }
 
             ta := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.open-details(root.account.id); }
-                row-layout := HorizontalLayout {
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    padding-top: 14px;
-                    padding-bottom: 14px;
+                innercol := VerticalLayout {
+                    spacing: 0px;
+                // ---- the desktop table row (D, and inner >= 680/600 below D) ----
+                if root.table: row-layout := HorizontalLayout {
+                    padding-left: root.pad-x;
+                    padding-right: root.pad-x;
+                    padding-top: root.touch ? (Breakpoints.tier-t ? 14px : 12px) : 14px;
+                    padding-bottom: root.touch ? (Breakpoints.tier-t ? 14px : 12px) : 14px;
                     spacing: root.gap;
                     HorizontalLayout {
                         width: root.ident-w;
@@ -418,7 +635,7 @@ export component AccountRow inherits Rectangle {
                                 overflow: elide;
                             }
                             Rectangle { height: 1px; }
-                            meta := Text {
+                            Text {
                                 min-height: 17.5px;
                                 vertical-alignment: center;
                                 text: root.account.meta;
@@ -426,7 +643,7 @@ export component AccountRow inherits Rectangle {
                                 color: Theme.ink-3;
                                 overflow: elide;
                             }
-                            amounts := Runs {
+                            Runs {
                                 padding-top: root.account.amounts-runs.length > 0 ? 2px : 0px;
                                 min-height: root.account.amounts-runs.length > 0 ? 19.5px : 0px;
                                 runs: root.account.amounts-runs;
@@ -439,20 +656,24 @@ export component AccountRow inherits Rectangle {
                         }
                     }
                     for cell[c] in root.account.cells: Rectangle {
-                        min-width: 108px;
-                        preferred-width: 108px;
+                        min-width: Breakpoints.below-d ? 120px : 108px;
+                        preferred-width: Breakpoints.below-d ? 120px : 108px;
                         horizontal-stretch: 1;
                         min-height: cell.key != "" ? m.preferred-height : 0px;
                         preferred-height: self.min-height;
                         m := Meter {
-                            y: (parent.height - self.preferred-height) / 2;
+                            // below D the cells top-align so numbers and bars line up across columns
+                            // even when sub-lines wrap to different lengths; D keeps its centring
+                            y: Breakpoints.below-d ? 0px : (parent.height - self.preferred-height) / 2;
                             width: parent.width;
                             height: self.preferred-height;
                             visible: cell.key != "";
+                            // the meter cell serves the stacked and the table rows below D (4.1.2)
+                            cell: Breakpoints.below-d;
                             data: cell;
                             played: root.played;
                             delay: root.delay + c * 16ms;
-                            hot: root.hovered;
+                            hot: root.hovered && Device.hover;
                             notch-override: root.notch-at;
                             owner-label: root.section.label + " · " + root.account.email;
                             clicked => { root.open-details(root.account.id); }
@@ -461,10 +682,10 @@ export component AccountRow inherits Rectangle {
                     }
                     slot := Rectangle {
                         width: root.slot-w;
-                        min-height: root.section.switchable ? sw.preferred-height : 28px;
+                        min-height: root.section.switchable ? sw-preferred.preferred-height : 28px;
                         if !root.section.switchable: HorizontalLayout {
                             alignment: end;
-                            spacing: 6px;
+                            spacing: Breakpoints.below-d ? 4px : 6px;
                             VerticalLayout {
                                 alignment: center;
                                 IconButton {
@@ -486,12 +707,13 @@ export component AccountRow inherits Rectangle {
                                 }
                             }
                         }
-                        sw := SwitchSlot {
+                        sw-preferred := SwitchSlot {
                             x: 0px;
                             y: (parent.height - self.preferred-height) / 2;
                             width: parent.width;
                             height: self.preferred-height;
                             visible: root.section.switchable;
+                            touch: Breakpoints.below-d;
                             account: root.account;
                             can-switch: root.section.can-switch;
                             busy: root.busy;
@@ -506,6 +728,137 @@ export component AccountRow inherits Rectangle {
                         }
                     }
                 }
+                // ---- the stacked row (4.1.2/4.1.3, inner below the table thresholds) ----
+                if !root.table: stackcol := VerticalLayout {
+                    spacing: 0px;
+                    // Line A: mark, identity column, launch buttons or the action slot
+                    HorizontalLayout {
+                        padding-left: root.pad-x;
+                        padding-right: root.pad-x;
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        spacing: 10px;
+                        min-height: 44px;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            ProviderMark { provider: root.account.provider; size: 20px; dim: root.account.setup; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            horizontal-stretch: 1;
+                            Text {
+                                min-height: 21px;
+                                vertical-alignment: center;
+                                text: root.account.email;
+                                font-size: Type.control;
+                                font-weight: root.account.active && root.section.switchable ? 640 : 600;
+                                color: root.section.switchable && !root.account.active ? Theme.ink-2 : Theme.ink;
+                                overflow: elide;
+                            }
+                            Text {
+                                height: min(self.preferred-height, 36px);
+                                text: root.account.meta;
+                                font-size: Type.small;
+                                color: Theme.ink-3;
+                                wrap: word-wrap;
+                                overflow: elide;
+                            }
+                            if root.account.amounts-runs.length > 0: Runs {
+                                runs: root.account.amounts-runs;
+                                size: Type.small;
+                                ink: Theme.ink-3;
+                                strong-ink: Theme.ink-2;
+                                strong-weight: 600;
+                                tabular: true;
+                            }
+                        }
+                        // the launch buttons (Claude) or the action slot (switchable), centred on Line A
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            if !root.section.switchable: HorizontalLayout {
+                                alignment: end;
+                                spacing: 4px;
+                                IconButton {
+                                    platform: "apple";
+                                    small: true;
+                                    enabled: root.account.can-mac && !root.busy;
+                                    hint: root.account.can-mac ? "Open on Mac" : "Open on Mac is unavailable for this profile";
+                                    clicked => { root.launch(root.account.profile, "mac"); }
+                                }
+                                IconButton {
+                                    platform: "windows";
+                                    small: true;
+                                    enabled: root.account.can-windows && !root.busy;
+                                    hint: root.account.can-windows ? "Open on Windows" : "Open on Windows is unavailable for this profile";
+                                    clicked => { root.launch(root.account.profile, "windows"); }
+                                }
+                            }
+                            SwitchSlot {
+                                visible: root.section.switchable;
+                                touch: true;
+                                account: root.account;
+                                can-switch: root.section.can-switch;
+                                busy: root.busy;
+                                activate => {
+                                    if root.account.confirm {
+                                        root.ask-confirm(root.account.id);
+                                    } else {
+                                        root.activate(root.account.activate-kind, root.account.profile);
+                                    }
+                                }
+                                finish-setup => { root.go-accounts(); }
+                            }
+                        }
+                    }
+                    // the meter grid: N equal columns (Claude) or two capped columns (switchable),
+                    // gap 12; an account without a window keeps its empty cell
+                    if root.has-cells: Rectangle { height: 10px; }
+                    if root.has-cells: HorizontalLayout {
+                        padding-left: root.pad-x;
+                        padding-right: root.pad-x;
+                        spacing: 12px;
+                        alignment: root.section.switchable ? start : stretch;
+                        for cell[c] in root.account.cells: Rectangle {
+                            // an explicit width would pin the column (and 0 collapses it): size through
+                            // the preferred width so Claude's columns share the row equally
+                            preferred-width: root.section.switchable ? max(0px, min(260px, (root.grid-w - 2 * root.pad-x - 12px * max(0, root.account.cells.length - 1)) / max(1, root.account.cells.length))) : 0px;
+                            horizontal-stretch: root.section.switchable ? 0 : 1;
+                            min-height: cell.key != "" ? sm.preferred-height : 0px;
+                            preferred-height: self.min-height;
+                            sm := Meter {
+                                y: 0px;
+                                width: parent.width;
+                                height: self.preferred-height;
+                                visible: cell.key != "";
+                                cell: true;
+                                data: cell;
+                                played: root.played;
+                                delay: root.delay + c * 16ms;
+                                hot: root.hovered && Device.hover;
+                                notch-override: root.notch-at;
+                                owner-label: root.section.label + " · " + root.account.email;
+                                clicked => { root.open-details(root.account.id); }
+                                value-changed => { root.flash(); }
+                            }
+                        }
+                    }
+                    // the inline confirmation, inside the row block before the next divider (4.1.3)
+                    if root.account.confirm: ConfirmStack {
+                        runs: root.account.confirm-runs;
+                        open: root.confirming;
+                        busy: root.busy;
+                        pad-x: root.pad-x;
+                        keep => { root.cancel-confirm(); }
+                        confirm => {
+                            root.cancel-confirm();
+                            root.activate(root.account.activate-kind, root.account.profile);
+                        }
+                    }
+                }
+                }
             }
             // the hairline under every row but the last
             Rectangle {
@@ -517,10 +870,11 @@ export component AccountRow inherits Rectangle {
                 visible: !root.last;
             }
         }
-        if root.account.confirm: ConfirmLine {
+        if root.table && root.account.confirm: ConfirmLine {
             runs: root.account.confirm-runs;
             open: root.confirming;
             busy: root.busy;
+            pad-x: root.pad-x;
             keep => { root.cancel-confirm(); }
             confirm => {
                 root.cancel-confirm();
@@ -708,11 +1062,25 @@ export component AccountSection inherits Plate {
     callback go-accounts();
 
     property <length> gap: Breakpoints.ultra ? 26px : 20px;
+    // Below D (DESIGN-MOBILE.md 4.1): the card's side padding is 16 on P and 20 on F/T, and each
+    // section picks its row layout from its own inner width (1.5): the desktop table with touch sizes
+    // from 680 px inner for Claude and 600 px for the switchable providers, stacked below that. D is
+    // always the table (unchanged).
+    property <length> pad-x: Breakpoints.tier-p ? 16px : 20px;
+    // The section spans the page width below D, which is the tier width minus the page gutters;
+    // deriving it from the tier (not self.width) keeps the table/stacked switch out of the layout's
+    // width cycle. Table gaps are 16 below D (4.1.2) and the stacked heads match their 12 grid.
+    property <length> inner-w: Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
+    property <bool> table: Breakpoints.tier-d || root.inner-w >= (root.section.switchable ? 600px : 680px);
+    property <bool> touch: Breakpoints.below-d;
+    property <length> col-gap: root.table ? (root.touch ? 16px : root.gap) : 12px;
     // measured column widths (see the file comment); only ever grow while the section lives
     property <length> ident-max: 0px;
     property <length> slot-max: 0px;
-    property <length> ident-w: clamp(root.ident-max, 150px, 320px);
-    property <length> slot-w: max(root.slot-max, root.section.switchable ? 80px : 62px);
+    property <length> ident-w: clamp(root.ident-max, root.touch ? 180px : 150px, 320px);
+    property <length> slot-w: max(root.slot-max, root.section.switchable ? 80px : root.touch ? 84px : 62px);
+    // the stacked switchable meter grid caps each column at 260 px, extra space to the right (4.1.3)
+    property <length> cell-w: max(0px, min(260px, (root.inner-w - 12px * max(0, root.section.columns.length - 1)) / max(1, root.section.columns.length)));
 
     // the stepper's value before it is saved; -1 when nothing is pending
     property <int> pending: -1;
@@ -744,6 +1112,24 @@ export component AccountSection inherits Plate {
 
     // the one inline confirmation open in this section
     property <string> confirm-id;
+
+    // The full History label needs mark + title + legend + button; at the 320 floor even the bare
+    // title leaves no room, so History keeps its icon and accessible name but drops its label there
+    // (nothing clips, A3). Everywhere else the label stays.
+    property <bool> hist-short: root.touch && root.section.kind == "claude"
+        && 28px + 10px + title-probe.preferred-width + 16px + 40px + 8px + hist-probe.preferred-width > root.inner-w;
+    title-probe := Text {
+        visible: false;
+        text: root.section.label;
+        font-size: Type.title;
+        font-weight: 630;
+    }
+    hist-probe := Button {
+        visible: false;
+        kind: "ghost";
+        icon: "chart";
+        text: "History";
+    }
 
     // Selected row: ONE tinted, outlined highlight per section that glides between rows (translate and
     // height, ease-out, never past its target). Re-layouts place it at once; a switch glides.
@@ -797,17 +1183,18 @@ export component AccountSection inherits Plate {
     body := VerticalLayout {
         spacing: 0px;
         head := HorizontalLayout {
-            padding-left: 20px;
-            padding-right: 20px;
+            padding-left: root.pad-x;
+            padding-right: root.pad-x;
             padding-top: 14px;
-            padding-bottom: 13px;
+            padding-bottom: Breakpoints.tier-d ? 13px : root.section.switchable && !root.table ? 8px : 14px;
             spacing: 16px;
             min-height: 70px;
             HorizontalLayout {
-                spacing: 12px;
-                horizontal-stretch: 0;
+                spacing: root.touch ? 10px : 12px;
+                horizontal-stretch: root.touch ? 1 : 0;
                 VerticalLayout {
                     alignment: center;
+                    horizontal-stretch: 0;
                     ProviderMark { provider: root.section.id; size: 28px; }
                 }
                 VerticalLayout {
@@ -821,14 +1208,23 @@ export component AccountSection inherits Plate {
                         font-weight: 630;
                         letter-spacing: -0.2px;
                         color: Theme.ink;
+                        overflow: elide;
                     }
-                    Runs {
+                    // below D the meta wraps instead of pushing the header buttons out (4.1.2)
+                    if !root.touch: Runs {
                         min-height: 18px;
                         runs: root.section.meta-runs;
                         size: 12.5px;
                         ink: Theme.ink-3;
                         strong-ink: Theme.ink;
                         strong-weight: 600;
+                        opacity: root.meta-dip ? 0 : 1;
+                        animate opacity { duration: Motion.on ? (root.meta-dip ? 0ms : 150ms) : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                    }
+                    if root.touch: RunsText {
+                        runs: root.section.meta-runs;
+                        size: Type.small;
+                        strong-ink: Theme.ink;
                         opacity: root.meta-dip ? 0 : 1;
                         animate opacity { duration: Motion.on ? (root.meta-dip ? 0ms : 150ms) : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
                     }
@@ -840,53 +1236,59 @@ export component AccountSection inherits Plate {
                 spacing: 8px;
                 horizontal-stretch: 0;
                 legend-anchor := Rectangle {
-                    width: 28px;
+                    width: Breakpoints.tier-d ? 28px : 40px;
+                    property <length> pop-w: min(372px, max(240px, Breakpoints.tier-width - 2 * Breakpoints.gutter));
                     legend-btn := IconButton {
                         y: (parent.height - self.height) / 2;
                         icon: "help";
-                        small: true;
+                        small: Breakpoints.tier-d;
                         bare: true;
                         hint: "How to read the meters";
                         pressed-look: legend-pop.is-open;
                         clicked => { legend-pop.show(); }
                     }
+                    // The meter legend popover, width clamped inside the gutters below D (3.5).
                     legend-pop := PopupWindow {
-                        x: parent.width + 4px - 372px;
+                        width: legend-anchor.pop-w;
+                        x: clamp(parent.width + 4px - legend-anchor.pop-w, Breakpoints.gutter + Device.safe-left - legend-btn.absolute-position.x, max(0px, Breakpoints.width - Breakpoints.gutter - Device.safe-right - legend-anchor.pop-w - legend-btn.absolute-position.x));
                         y: (parent.height + legend-btn.height) / 2 + 8px;
-                        width: 372px;
                         close-policy: close-on-click-outside;
                         MenuPanel {
-                            width: 372px;
+                            width: legend-anchor.pop-w;
                             Legend { }
                         }
                     }
                 }
                 VerticalLayout {
                     alignment: center;
+                    horizontal-stretch: 0;
                     Button {
                         kind: "ghost";
-                        small: true;
+                        small: Breakpoints.tier-d;
                         icon: "chart";
-                        text: "History";
+                        text: root.hist-short ? "" : "History";
                         hint: "Quota history on Analytics";
                         clicked => { root.go-analytics(); }
                     }
                 }
             }
-            // Switchable: the section's own auto-switch control, or why it is off
-            if root.section.switchable && root.section.count > 0 && root.section.auto.shown: VerticalLayout {
+            // Switchable, table header: the section's own auto-switch control on the right, touch
+            // sizes below D, or why it is off
+            if root.section.switchable && root.section.count > 0 && root.section.auto.shown && root.table: VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
                 auto-ta := TouchArea {
                     changed has-hover => {
-                        if self.has-hover {
-                            Hover.tip("auto:" + root.section.id, self.absolute-position, self.width, self.height, root.section.auto.message + (root.section.auto.setting != "" ? " · " + root.section.auto.setting : ""));
-                        } else {
-                            Hover.leave("auto:" + root.section.id);
+                        if Device.hover {
+                            if self.has-hover {
+                                Hover.tip("auto:" + root.section.id, self.absolute-position, self.width, self.height, root.section.auto.message + (root.section.auto.setting != "" ? " · " + root.section.auto.setting : ""));
+                            } else {
+                                Hover.leave("auto:" + root.section.id);
+                            }
                         }
                     }
                     Rectangle {
-                        border-radius: 10px;
+                        border-radius: Breakpoints.tier-d ? 10px : Theme.r-touch;
                         border-width: 1px;
                         border-color: Theme.rule;
                         background: Theme.paper-2;
@@ -936,15 +1338,17 @@ export component AccountSection inherits Plate {
                     }
                 }
             }
-            if root.section.switchable && root.section.count > 0 && !root.section.auto.shown: VerticalLayout {
+            if root.section.switchable && root.section.count > 0 && !root.section.auto.shown && root.table: VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
                 TouchArea {
                     changed has-hover => {
-                        if self.has-hover {
-                            Hover.tip("auto-off:" + root.section.id, self.absolute-position, self.width, self.height, "Switching moves between " + root.section.label + " accounts, so it starts once a second account is signed in.");
-                        } else {
-                            Hover.leave("auto-off:" + root.section.id);
+                        if Device.hover {
+                            if self.has-hover {
+                                Hover.tip("auto-off:" + root.section.id, self.absolute-position, self.width, self.height, "Switching moves between " + root.section.label + " accounts, so it starts once a second account is signed in.");
+                            } else {
+                                Hover.leave("auto-off:" + root.section.id);
+                            }
                         }
                     }
                     HorizontalLayout {
@@ -957,7 +1361,98 @@ export component AccountSection inherits Plate {
                             alignment: center;
                             Icon { name: "swap"; tint: Theme.ink-3; width: 16px; height: 16px; }
                         }
-                        Runs { runs: root.section.auto.off-runs; size: 12.5px; ink: Theme.ink-3; strong-ink: Theme.ink-2; strong-weight: 600; }
+                        Runs { runs: root.section.auto.off-runs; size: root.touch ? Type.small : 12.5px; ink: Theme.ink-3; strong-ink: Theme.ink-2; strong-weight: 600; }
+                    }
+                }
+            }
+        }
+        // Switchable, stacked header (4.1.3): the auto-switch groups wrap as whole units under the
+        // title; the info icon opens one inline tip with the switch's and the stepper's texts.
+        if root.section.switchable && root.section.count > 0 && !root.table: VerticalLayout {
+            padding-left: root.pad-x;
+            padding-right: root.pad-x;
+            padding-bottom: 12px;
+            spacing: 0px;
+            if root.section.auto.shown: VerticalLayout {
+                spacing: 0px;
+                auto-flex := FlexboxLayout {
+                    spacing-horizontal: 12px;
+                    spacing-vertical: 4px;
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.section.auto.enabled;
+                                enabled: root.section.auto.available && (root.section.auto.enabled || root.section.auto.can-enable) && !root.busy;
+                                label: "Auto-switch";
+                                toggled(on) => { root.auto-toggled(root.section.id, on); }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            InfoIcon { tip-id: "auto:" + root.section.id; }
+                        }
+                    }
+                    if root.section.auto.known: HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            Text { text: "at"; font-size: Type.control; color: Theme.ink-2; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Stepper {
+                                value: root.threshold-shown;
+                                min: root.section.auto.min;
+                                max: root.section.auto.max;
+                                known: root.section.auto.threshold-used >= 0;
+                                enabled: root.section.auto.known && !root.busy;
+                                step(d) => {
+                                    root.pending = clamp(root.threshold-shown + d, root.section.auto.min, root.section.auto.max);
+                                    release-pending.running = false;
+                                    send-threshold.running = false;
+                                    send-threshold.running = true;
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text { text: "used"; font-size: Type.control; color: Theme.ink-2; }
+                        }
+                    }
+                    if root.section.auto.pool != "": VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.section.auto.pool;
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                // one inline tip with both texts, one per line (5.4 #3)
+                InlineTip {
+                    tip-id: "auto:" + root.section.id;
+                    text: root.section.auto.message + (root.section.auto.setting != "" ? "\n" + root.section.auto.setting : "");
+                }
+            }
+            if !root.section.auto.shown: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: start;
+                    horizontal-stretch: 0;
+                    padding-top: 1px;
+                    Icon { name: "swap"; tint: Theme.ink-3; width: 16px; height: 16px; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    RunsText {
+                        runs: root.section.auto.off-runs;
+                        size: Type.small;
+                        ink: Theme.ink-3;
+                        strong-ink: Theme.ink-2;
                     }
                 }
             }
@@ -974,25 +1469,26 @@ export component AccountSection inherits Plate {
             // strip's corners keep the box's edge continuous.
             Rectangle { x: 0px; width: 1px; height: parent.height; background: Theme.rule; }
             Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.rule; }
-            // the concept's .colhead: 8 px padding inside its two hairlines and an 11 px line at line-height 1.35
+            // the concept's .colhead: 8 px padding inside its two hairlines and an 11 px line at line-height 1.35.
+            // Table: ACCOUNT over the account column. Stacked (4.1.2): one head per meter grid column.
             colhead := HorizontalLayout {
-                padding-left: 20px;
-                padding-right: 20px;
+                padding-left: root.pad-x;
+                padding-right: root.pad-x;
                 padding-top: 9px;
                 padding-bottom: 9px;
-                spacing: root.gap;
-                Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
+                spacing: root.col-gap;
+                if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
                 for col in root.section.columns: Caps {
                     min-height: 15px;
-                    min-width: 108px;
-                    preferred-width: 108px;
-                    horizontal-stretch: 1;
+                    min-width: root.table ? (Breakpoints.below-d ? 120px : 108px) : 0px;
+                    preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
+                    horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
                     text: col.label.to-uppercase();
                     wrap: word-wrap;
                     overflow: clip;
                     vertical-alignment: bottom;
                 }
-                Rectangle { width: root.slot-w; }
+                if root.table: Rectangle { width: root.slot-w; }
             }
         }
         rows-box := Rectangle {
@@ -1000,14 +1496,14 @@ export component AccountSection inherits Plate {
             min-height: rows.min-height;
             preferred-height: rows.preferred-height;
             if root.section.switchable: Rectangle {
-                x: 8px;
+                x: root.touch ? 6px : 8px;
                 y: root.hl-y + 5px;
-                width: parent.width - 16px;
+                width: parent.width - (root.touch ? 12px : 16px);
                 height: max(0px, root.hl-h - 10px);
                 border-radius: 10px;
                 background: root.hl-flash ? Theme.flash : Theme.accent.mix(Theme.paper, root.hl-hover ? 0.11 : 0.07);
-                border-width: 1px;
-                border-color: Theme.accent.mix(Theme.paper, 0.42);
+                border-width: root.touch ? 1.5px : 1px;
+                border-color: root.touch ? Theme.accent : Theme.accent.mix(Theme.paper, 0.42);
                 opacity: root.hl-on ? 1 : 0;
                 animate y, height { duration: root.hl-glide ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
                 animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
@@ -1021,12 +1517,12 @@ export component AccountSection inherits Plate {
                 for row[i] in root.section.rows: AccountRow {
                     account: row;
                     section: root.section;
-                    index: i;
-                    last: i == root.section.count - 1;
-                    round-bottom: i == root.section.count - 1 && !root.section.foot.shown;
+                    table: root.table;
                     ident-w: root.ident-w;
                     slot-w: root.slot-w;
-                    gap: root.gap;
+                    gap: root.col-gap;
+                    pad-x: root.pad-x;
+                    grid-w: Breakpoints.tier-width - 2 * Breakpoints.gutter;
                     played: root.played;
                     delay: root.meter-delay + i * 48ms;
                     busy: root.busy;
@@ -1084,8 +1580,8 @@ export component AccountSection inherits Plate {
             }
         }
         if root.section.count == 0: HorizontalLayout {
-            padding-left: 20px;
-            padding-right: 20px;
+            padding-left: root.pad-x;
+            padding-right: root.pad-x;
             padding-bottom: 18px;
             Text { text: root.section.empty; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; }
         }
@@ -1093,46 +1589,90 @@ export component AccountSection inherits Plate {
             min-height: foot.min-height;
             preferred-height: foot.preferred-height;
             Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
-            // the concept's .plate-foot: 12 px padding under its 1 px rule around a 12.5 px line at 1.45
-            foot := HorizontalLayout {
-                padding-left: 20px;
-                padding-right: 20px;
+            // the concept's .plate-foot: 12 px padding under its 1 px rule around a 12.5 px line at 1.45.
+            // Below D the sentence wraps with no line limit and the "Checked" line drops to its own line
+            // when the sentence does not leave it room (4.1.3).
+            foot := VerticalLayout {
+                padding-left: root.pad-x;
+                padding-right: root.pad-x;
                 padding-top: 13px;
                 padding-bottom: 12px;
-                spacing: 9px;
+                spacing: Breakpoints.tier-d ? 0px : 6px;
                 min-height: 13px + 18px + 12px;
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    Icon {
-                        name: root.section.foot.warn ? "alert" : "swap";
-                        tint: root.section.foot.warn ? Theme.warn-text : Theme.ink-3;
-                        width: 16px;
-                        height: 16px;
-                    }
-                }
-                Runs {
-                    runs: root.section.foot.runs;
-                    size: 12.5px;
-                    ink: root.section.foot.warn ? Theme.warn-text : Theme.ink-2;
-                    strong-ink: root.section.foot.warn ? Theme.warn-text : Theme.ink;
-                    strong-weight: 640;
-                    opacity: root.meta-dip ? 0 : 1;
-                    animate opacity { duration: Motion.on ? (root.meta-dip ? 0ms : 150ms) : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-                }
-                Rectangle { horizontal-stretch: 1; }
-                Text {
+                property <bool> fits-inline: Breakpoints.tier-d
+                    || runs-fit.preferred-width + 16px + 8px + when-probe.preferred-width <= Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
+                when-probe := Text {
+                    visible: false;
                     text: root.section.foot.when;
                     font-family: Type.tab;
-                    font-size: 12.5px;
+                    font-size: root.touch ? Type.small : 12.5px;
+                }
+                runs-fit := Runs {
+                    visible: false;
+                    runs: root.section.foot.runs;
+                    size: root.touch ? Type.small : 12.5px;
+                    strong-weight: 640;
+                }
+                foot-line := HorizontalLayout {
+                    spacing: 9px;
+                    foot-icon := VerticalLayout {
+                        alignment: root.table ? center : start;
+                        horizontal-stretch: 0;
+                        padding-top: root.table ? 0px : 2px;
+                        Icon {
+                            name: root.section.foot.warn ? "alert" : "swap";
+                            tint: root.section.foot.warn ? Theme.warn-text : Theme.ink-3;
+                            width: 16px;
+                            height: 16px;
+                        }
+                    }
+                    HorizontalLayout {
+                        visible: Breakpoints.tier-d || foot.fits-inline;
+                        spacing: 0px;
+                        Runs {
+                            runs: root.section.foot.runs;
+                            size: root.touch ? Type.small : 12.5px;
+                            ink: root.section.foot.warn ? Theme.warn-text : Theme.ink-2;
+                            strong-ink: root.section.foot.warn ? Theme.warn-text : Theme.ink;
+                            strong-weight: 640;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Text {
+                        visible: Breakpoints.tier-d || foot.fits-inline;
+                        text: root.section.foot.when;
+                        font-family: Type.tab;
+                        font-size: root.touch ? Type.small : 12.5px;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                    }
+                    // Both branches exist from the first layout and toggle visibility: a wrapping text
+                    // created late under a distributed width keeps its first-pass one-line height and
+                    // would overlap the Checked line below.
+                    VerticalLayout {
+                        visible: Breakpoints.below-d && !foot.fits-inline;
+                        horizontal-stretch: 1;
+                        RunsText {
+                            runs: root.section.foot.runs;
+                            size: Type.small;
+                            ink: root.section.foot.warn ? Theme.warn-text : Theme.ink-2;
+                            strong-ink: root.section.foot.warn ? Theme.warn-text : Theme.ink;
+                        }
+                    }
+                }
+                Text {
+                    visible: Breakpoints.below-d && !foot.fits-inline;
+                    text: root.section.foot.when;
+                    font-family: Type.tab;
+                    font-size: Type.small;
                     color: Theme.ink-3;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
                 }
             }
         }
     }
 }
+
 
 // A dashed hairline (Slint draws no dash arrays): 3 px dashes, 3 px apart.
 export component DashedRule inherits Rectangle {
@@ -1166,7 +1706,7 @@ export component AmountLine inherits VerticalLayout {
         }
         Text {
             text: root.amount.label;
-            font-size: 12.5px;
+            font-size: Breakpoints.below-d ? Type.small : 12.5px;
             color: Theme.ink-2;
             overflow: elide;
             horizontal-stretch: 1;
@@ -1178,7 +1718,7 @@ export component AmountLine inherits VerticalLayout {
             Text {
                 text: root.amount.value;
                 font-family: Type.tab;
-                font-size: 12.5px;
+                font-size: Breakpoints.below-d ? Type.small : 12.5px;
                 font-weight: 600;
                 color: root.amount.spent ? Theme.crit-text : Theme.ink;
                 vertical-alignment: center;
@@ -1218,13 +1758,14 @@ export component ProviderCard inherits Card {
     in property <duration> delay;
     in property <string> selected-id;
     selected: root.card.account-id == root.selected-id && root.selected-id != "";
-    pad: 18px;
+    pad: Breakpoints.tier-p ? 16px : 18px;
     pad-top: 16px;
     pad-bottom: 12px;
     min-width: 240px;
-    // a wide card puts its meters side by side; a wider one its amounts in two columns
-    property <bool> wide: root.width >= 560px;
-    property <bool> amt2: root.width >= 700px;
+    // a wide card puts its meters side by side; a wider one its amounts in two columns. Below D the
+    // meters stack as full-width cells and the amounts stay one per line (4.1.4).
+    property <bool> wide: Breakpoints.tier-d && root.width >= 560px;
+    property <bool> amt2: Breakpoints.tier-d && root.width >= 700px;
     property <int> flash-phase: 0;
     flash: root.flash-phase == 1;
     flash-on := Timer {
@@ -1243,7 +1784,7 @@ export component ProviderCard inherits Card {
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
-            ProviderMark { provider: root.card.provider; size: 26px; }
+            ProviderMark { provider: root.card.provider; size: Breakpoints.below-d ? 24px : 26px; }
         }
         VerticalLayout {
             alignment: center;
@@ -1256,8 +1797,8 @@ export component ProviderCard inherits Card {
                     y: (parent.height - self.preferred-height) / 2;
                     width: min(self.preferred-width, parent.width);
                     text: root.card.label;
-                    font-size: 15px;
-                    font-weight: 630;
+                    font-size: Breakpoints.below-d ? Type.control : 15px;
+                    font-weight: Breakpoints.below-d ? 600 : 630;
                     letter-spacing: -0.075px;
                     color: Theme.ink;
                     overflow: elide;
@@ -1267,7 +1808,7 @@ export component ProviderCard inherits Card {
                     y: name.font-metrics.ascent - self.font-metrics.ascent;
                     width: max(0px, parent.width - self.x);
                     text: root.card.plan;
-                    font-size: 12.5px;
+                    font-size: Breakpoints.below-d ? Type.small : 12.5px;
                     font-weight: 450;
                     color: Theme.ink-3;
                     overflow: elide;
@@ -1288,10 +1829,11 @@ export component ProviderCard inherits Card {
             horizontal-stretch: 1;
             min-width: 100px;
             data: m;
-            inline: true;
+            cell: Breakpoints.below-d;
+            inline: Breakpoints.tier-d;
             played: root.played;
             delay: root.delay + k * 16ms;
-            hot: root.hovered;
+            hot: root.hovered && Device.hover;
             owner-label: root.card.label + " · " + root.card.identity;
             clicked => { root.clicked(); }
             value-changed => {
@@ -1369,9 +1911,9 @@ export component HomePage inherits Rectangle {
     callback go-analytics();
     callback go-accounts();
 
-    property <length> gap: Breakpoints.ultra ? 24px : 20px;
+    property <length> gap: Breakpoints.ultra ? 24px : Breakpoints.tier-d ? 20px : Breakpoints.tier-t ? 20px : Breakpoints.tier-f ? 16px : 12px;
     // wide and ultra: Claude and Codex side by side (7:5, ultra 4:3) at the same height; the rest full width
-    property <bool> pair: Breakpoints.at-least-wide && root.sections.length >= 2 && root.sections[0].id == "claude" && root.sections[1].id == "codex";
+    property <bool> pair: Breakpoints.tier-d && Breakpoints.at-least-wide && root.sections.length >= 2 && root.sections[0].id == "claude" && root.sections[1].id == "codex";
     pure function pair-w(s: int) -> length {
         if Breakpoints.ultra {
             return (root.width - root.gap) * (s == 0 ? 4 : 3) / 7;
@@ -1399,7 +1941,10 @@ export component HomePage inherits Rectangle {
     // column count is what fits at 300 px; the cards are spread over the fewest rows, the longer rows
     // first, and each row's cards share its width (a GridLayout over the rows' least common multiple).
     property <int> n: root.cards.length;
-    property <int> cmax: clamp(floor((root.width + 20px) / 320px), 1, 6);
+    // D keeps today's what-fits-at-320 formula; below D it is clamp(floor((content + 16) / 288), 1, 3)
+    // (1.5), so P gets one column, F two and T three.
+    property <int> cmax: Breakpoints.tier-d ? clamp(floor((root.width + 20px) / 320px), 1, 6)
+        : clamp(floor((root.width + 16px) / 288px), 1, 3);
     property <int> per-row: min(root.cmax, max(1, root.n));
     property <int> nrows: max(1, ceil(root.n / root.per-row));
     property <int> base: max(1, floor(root.n / root.nrows));
@@ -1481,7 +2026,7 @@ export component HomePage inherits Rectangle {
             delay: root.reveal-base + (root.sections.length + 1) * 40ms;
             armed: root.ready;
             GridLayout {
-                spacing: 20px;
+                spacing: Breakpoints.tier-p ? 12px : Breakpoints.tier-d ? 20px : 16px;
                 for card[i] in root.cards: Rectangle {
                     row: i < root.big ? floor(i / (root.base + 1)) : root.extra + floor((i - root.big) / root.base);
                     col: (i < root.big ? mod(i, root.base + 1) : mod(i - root.big, root.base)) * (root.lcm / (i < root.big ? root.base + 1 : root.base));

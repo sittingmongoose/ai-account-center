@@ -1,10 +1,14 @@
-// The meter: a 10 px track (7 px compact) with three ticks, a severity-coloured fill under a white wash,
-// a threshold notch, an overage segment past 100%, and an unavailable state drawn as a dashed outline
-// (never a zero bar). Every value-bearing animation uses the non-overshooting ease-out
+// The meter: a 10 px track (6 px below D, 7 px compact) with three ticks, a severity-coloured fill under
+// a white wash, a threshold notch, an overage segment past 100%, and an unavailable state drawn as a
+// dashed outline (never a zero bar). Every value-bearing animation uses the non-overshooting ease-out
 // cubic-bezier(0.2, 0.8, 0.2, 1): the fill never shows more than the reading, not even for a frame.
 // While the number counts up its colour climbs the ramp with the animated value (calm, warning at 80,
 // critical at 95), so a mid-sweep "24%" is never drawn red.
-import { Theme, Motion, Type } from "../theme.slint";
+//
+// Mobile cell (DESIGN-MOBILE.md 4.1.2): `cell: true` lays the meter out as the stacked row's cell —
+// number and "used" on line 1 (a pending state replaces line 1 with its small 600 ink text), the 6 px
+// bar, then a sub-line that wraps to at most two lines.
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { MeterView } from "../models.slint";
 import { Caps, ValueUnit } from "text.slint";
 import { Hover } from "hover-card.slint";
@@ -46,8 +50,10 @@ export component MeterBar inherits Rectangle {
     in property <int> sev: 0;
     // During the load-in sweep the fill colour follows the climbing value without a cross-fade.
     in property <bool> instant-color: false;
+    // An explicit track height (the Details windows' 8 px bar, 4.4); 0 picks the tier default.
+    in property <length> bar-height: 0px;
 
-    property <length> track-h: root.compact ? 7px : 10px;
+    property <length> track-h: root.bar-height > 0px ? root.bar-height : Breakpoints.below-d ? 6px : root.compact ? 7px : 10px;
     property <bool> over: root.has-value && root.target > 100;
     property <length> over-w: root.over ? min(26px, 6px + (root.target - 100) * 2px) : 0px;
     property <length> track-w: root.over ? root.width - 30px : root.width;
@@ -65,9 +71,10 @@ export component MeterBar inherits Rectangle {
         animate y { duration: 220ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         for f in [0.25, 0.5, 0.75]: Rectangle {
             x: parent.width * f;
-            y: root.compact ? 1px : 2px;
+            // the 10 px desktop track insets its ticks by 2 px; every shorter track by 1 px
+            y: root.track-h > 8px ? 2px : 1px;
             width: 1px;
-            height: parent.height - (root.compact ? 2px : 4px);
+            height: parent.height - (root.track-h > 8px ? 4px : 2px);
             background: Theme.track-tick;
         }
         fill := Rectangle {
@@ -94,11 +101,13 @@ export component MeterBar inherits Rectangle {
         border-radius: 3px;
         background: Theme.over;
     }
+    // the notch reaches past the track by 4 px on the desktop track and 3 px everywhere else
+    property <length> notch-ext: Breakpoints.tier-d ? (root.compact ? 3px : 4px) : 3px;
     if root.has-value && root.notch >= 0: Rectangle {
         x: root.track-w * clamp(root.notch, 0, 100) / 100 - 1px;
-        y: root.notch-faint ? root.track-h * 0.15 - 1px : (root.compact ? -3px : -4px);
+        y: root.notch-faint ? root.track-h * 0.15 - 1px : -root.notch-ext;
         width: 2px;
-        height: root.notch-faint ? root.track-h * 0.7 + 2px : root.track-h + (root.compact ? 6px : 8px);
+        height: root.notch-faint ? root.track-h * 0.7 + 2px : root.track-h + 2 * root.notch-ext;
         border-radius: 1px;
         background: Theme.ink;
         opacity: root.notch-off ? 0.18 : root.notch-faint ? 0.32 : 1;
@@ -120,6 +129,8 @@ export component Meter inherits Rectangle {
     in property <bool> compact: false;
     // Label and value on one line (cards, Details).
     in property <bool> inline: false;
+    // Mobile cell (DESIGN-MOBILE.md 4.1.2): number + "used" on line 1, 6 px bar, wrapping sub-line.
+    in property <bool> cell: false;
     in property <bool> show-label: false;
     in property <bool> show-reset: true;
     in property <bool> show-unit: true;
@@ -159,10 +170,16 @@ export component Meter inherits Rectangle {
     property <bool> settled: !Motion.on || abs(root.anim - root.target) < 0.005;
     property <int> sev: Theme.severity(root.data.has-value, root.anim);
     property <string> number: root.settled ? root.data.value-text : "\{round(root.anim)}";
-    property <length> value-size: root.compact ? 15px : root.inline ? 17px : 19px;
+    // Row-meter sizes: 19 px on D (today), 18 on T, 20 on P/F (DESIGN-MOBILE.md 2.1).
+    property <length> value-size: root.cell ? (Breakpoints.tier-t ? 18px : 20px)
+        : root.compact ? 15px : root.inline ? 17px : 19px;
     // The value line's box, as the concept's .meter-top measures with its line-height 1 numbers and
     // baseline-aligned words (Slint Text has no line-height, so the 1.22 em font box would add 2-3 px a meter).
-    property <length> top-h: root.compact ? 17.5px : root.inline ? 19.2px : 20.7px;
+    property <length> top-h: root.cell ? 24px : root.compact ? 17.5px : root.inline ? 19.2px : 20.7px;
+    // A reset that passed while the reading predates it ("Reset at 9:29 PM" in 600 ink, 4.1.2).
+    property <bool> pending-look: !root.data.has-value && root.data.na-sub != "";
+    // the detail line under the bar, on one or two lines (word-wrap with a fixed box elides its last line)
+    property <bool> has-sub: root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != "");
     property <bool> hovering: ta.has-hover;
     callback clicked();
 
@@ -171,7 +188,7 @@ export component Meter inherits Rectangle {
     min-width: 60px;
     col := VerticalLayout {
         spacing: 0px;
-        if root.show-label && !root.inline: Text {
+        if root.show-label && !root.inline && !root.cell: Text {
             min-height: 17.5px;
             vertical-alignment: center;
             text: root.data.label;
@@ -180,11 +197,12 @@ export component Meter inherits Rectangle {
             color: Theme.ink-2;
             overflow: elide;
         }
-        if root.show-label && !root.inline: Rectangle { height: 4px; }
-        // Inline: the label takes the free width and the value sits at the right end. Otherwise the value,
-        // "used" and any caption sit at the start and "x% over" at the right end.
+        if root.show-label && !root.inline && !root.cell: Rectangle { height: 4px; }
+        // Inline: the label takes the free width and the value sits at the right end. The mobile cell:
+        // number and "used" on line 1, or the pending/unavailable text in place of them. Otherwise the
+        // value, "used" and any caption sit at the start and "x% over" at the right end.
         top := HorizontalLayout {
-            spacing: 6px;
+            spacing: root.cell ? 4px : 6px;
             min-height: root.top-h;
             // the label sits on the value's baseline, as in the concept's baseline-aligned row
             if root.inline: VerticalLayout {
@@ -203,7 +221,41 @@ export component Meter inherits Rectangle {
                 horizontal-stretch: 0;
                 Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
             }
-            if root.data.has-value: ValueUnit {
+            // cell line 1 (4.1.2): the number and "used" lay out as flex units, so a long
+            // over-reading drops "used" under the number instead of clipping it, while the number
+            // itself never elides. The overage stays visible as the segment past 100%.
+            if root.cell && root.data.has-value: FlexboxLayout {
+                horizontal-stretch: 1;
+                spacing-horizontal: 4px;
+                spacing-vertical: 2px;
+                alignment: start;
+                ValueUnit {
+                    box-h: root.top-h;
+                    value: root.number;
+                    size: root.value-size;
+                    ink: Theme.sev-text(root.sev);
+                    animate ink { duration: Motion.tint(root.swept ? 400ms : 0ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
+                }
+                VerticalLayout {
+                    alignment: end;
+                    padding-bottom: 3px;
+                    Text { text: "used"; font-size: Type.small; color: Theme.ink-3; }
+                }
+            }
+            // ... or the pending / unavailable state in its place ("Reset at 9:29 PM", small 600 ink)
+            if root.cell && !root.data.has-value: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text {
+                    min-height: 18px;
+                    text: root.data.na-text != "" ? root.data.na-text : "Unavailable";
+                    font-size: Type.small;
+                    font-weight: root.pending-look ? 600 : 520;
+                    color: root.pending-look ? Theme.ink : Theme.ink-3;
+                    overflow: elide;
+                }
+            }
+            if !root.cell && root.data.has-value: ValueUnit {
                 horizontal-stretch: 0;
                 box-h: root.top-h;
                 value: root.number;
@@ -211,18 +263,18 @@ export component Meter inherits Rectangle {
                 ink: Theme.sev-text(root.sev);
                 animate ink { duration: Motion.tint(root.swept ? 400ms : 0ms); easing: cubic-bezier(0.65, 0, 0.35, 1); }
             }
-            if root.data.has-value && root.show-unit && !root.compact && !root.inline: VerticalLayout {
+            if !root.cell && root.data.has-value && root.show-unit && !root.compact && !root.inline: VerticalLayout {
                 alignment: end;
                 horizontal-stretch: 0;
                 Text { text: "used"; font-size: Type.small; color: Theme.ink-3; }
             }
-            if !root.inline && root.data.has-value && root.data.caption != "": VerticalLayout {
+            if !root.inline && !root.cell && root.data.has-value && root.data.caption != "": VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
                 Caps { text: root.data.caption; color: root.data.caption == "example" ? Theme.accent-text : Theme.ink-3; }
             }
             // "Unavailable", "Not reported yet" or a pending reset ("Reset at 10:15 AM"): elided in a narrow cell.
-            if !root.data.has-value: Text {
+            if !root.cell && !root.data.has-value: Text {
                 text: root.data.na-text != "" ? root.data.na-text : "Unavailable";
                 font-size: 13px;
                 font-weight: 520;
@@ -231,14 +283,14 @@ export component Meter inherits Rectangle {
                 horizontal-stretch: 0;
                 overflow: elide;
             }
-            if !root.inline: Rectangle { horizontal-stretch: 1; }
-            if root.data.has-value && root.data.over-text != "" && !root.compact && !root.inline: VerticalLayout {
+            if !root.inline && !root.cell: Rectangle { horizontal-stretch: 1; }
+            if !root.cell && root.data.has-value && root.data.over-text != "" && !root.compact && !root.inline: VerticalLayout {
                 alignment: end;
                 horizontal-stretch: 0;
                 ValueUnit { value: root.data.over-text; unit: "% over"; size: 12px; weight: 640; ink: Theme.over-text; unit-scale: 1; unit-gap: 0px; }
             }
         }
-        Rectangle { height: root.compact ? 5px : 7px; }
+        Rectangle { height: root.cell ? 6px : root.compact ? 5px : 7px; }
         bar := MeterBar {
             has-value: root.data.has-value;
             shown: root.anim;
@@ -251,8 +303,20 @@ export component Meter inherits Rectangle {
             sev: root.sev;
             instant-color: !root.swept;
         }
-        if root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): Rectangle { height: 6px; }
-        if root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): HorizontalLayout {
+        // the cell's sub-line wraps to at most two lines, then elides
+        if root.cell && root.has-sub: Rectangle { height: 6px; }
+        if root.cell && root.has-sub: Text {
+            height: min(self.preferred-height, 36px);
+            text: root.data.has-value ? root.data.reset : root.data.na-sub;
+            font-family: Type.tab;
+            font-size: Type.small;
+            font-weight: root.data.reset-soon ? 560 : 400;
+            color: root.data.reset-soon ? Theme.ink-2 : Theme.ink-3;
+            wrap: word-wrap;
+            overflow: elide;
+        }
+        if !root.cell && root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): Rectangle { height: 6px; }
+        if !root.cell && root.show-reset && (root.data.reset != "" || root.data.amount != "" || root.data.na-sub != ""): HorizontalLayout {
             spacing: 10px;
             Text {
                 min-height: 17.5px;
@@ -280,12 +344,15 @@ export component Meter inherits Rectangle {
     }
     ta := TouchArea {
         clicked => { root.clicked(); }
-        // The hover card needs the absolute rectangle of the meter.
+        // The hover card needs the absolute rectangle of the meter; touch reads it in Details instead
+        // (DESIGN-MOBILE.md 5.4 #4), so the card stays a pointer-only affordance.
         changed has-hover => {
-            if self.has-hover {
-                Hover.meter-card(root.data.key, self.absolute-position, self.width, self.height, root.data, root.owner-label);
-            } else {
-                Hover.leave(root.data.key);
+            if Device.hover {
+                if self.has-hover {
+                    Hover.meter-card(root.data.key, self.absolute-position, self.width, self.height, root.data, root.owner-label);
+                } else {
+                    Hover.leave(root.data.key);
+                }
             }
         }
     }
