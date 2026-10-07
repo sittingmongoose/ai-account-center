@@ -149,6 +149,23 @@ export function loginFailure(error) {
   return 'Sign-in failed. Try again.';
 }
 
+// The offline screen retries while it is visible (DESIGN-MOBILE.md 4.6).
+export const OFFLINE_RETRY_SECONDS = 15;
+
+/**
+ * The words of the offline card (4.6): the launch could not reach /api (the shell came from the
+ * service-worker cache), so no readings exist and nothing is invented. `meta` names the last try and
+ * the retry cadence.
+ */
+export function offlineView(host, triedAt, now = Date.now()) {
+  return {
+    title: "Can't reach the dashboard",
+    strong: String(host || ''),
+    body: 'did not answer. Check this device\'s connection, or that the dashboard computer is awake.',
+    meta: `Last tried ${clock.format(new Date(triedAt))} · trying again every ${OFFLINE_RETRY_SECONDS} s`,
+  };
+}
+
 /** The first-run form's refusals in plain words: [field, message]. */
 export function setupFailure(error, check = null) {
   const code = error?.payload?.code;
