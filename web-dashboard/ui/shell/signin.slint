@@ -1119,7 +1119,8 @@ export component SignInLayer inherits Rectangle {
     // tiers (DESIGN-MOBILE.md 4.5.1): the motif layout on T and D, the scrolled column on P and F, the
     // two-column short page in landscape. The desktop compact look stays height < 760 on D only.
     property <bool> mobile: Breakpoints.below-d;
-    property <bool> stacked: root.mobile && !Breakpoints.tier-t;
+    // short heights take the two-column page even on P/F widths (never both pages at once)
+    property <bool> stacked: root.mobile && !Breakpoints.tier-t && !Breakpoints.short;
     property <bool> mshort: root.mobile && Breakpoints.short;
     property <bool> dshort: !root.mobile && root.height < 760px;
     property <bool> scrollable: root.stacked || root.mshort;
@@ -1299,7 +1300,9 @@ export component SignInLayer inherits Rectangle {
         footer: !root.offline;
         stack-reveal := Reveal {
             delay: 124ms;
-            width: min(440px, parent.width);
+            // from the window, never from the parent: parent.width loops back through the slot's
+            // content size and the card came out 32 px too wide, overflowing the right edge on P
+            width: min(440px, root.width - 32px - Device.safe-left - Device.safe-right);
             changed level => { SigninScroll.ready = self.level > 0.999; }
             init => { SigninScroll.ready = self.level > 0.999; }
             if root.offline: OfflineCard {
