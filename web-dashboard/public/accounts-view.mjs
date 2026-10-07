@@ -737,7 +737,7 @@ function policies(data, home, ag) {
 const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows'], ['ubuntu', 'Ubuntu', 'ubuntu']];
 const UPDATE_APP_NAMES = {
   'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP', 'codex-cli': 'Codex CLI',
-  'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop',
+  'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', 't3-code': 'T3 Code',
 };
 const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],

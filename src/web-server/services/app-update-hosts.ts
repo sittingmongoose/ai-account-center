@@ -211,6 +211,7 @@ const HELPER_FILES = [
   'app_updates.py',
   'app_update_common.py',
   'app_update_desktop.py',
+  'app_update_t3.py',
   'app_update_processes.py',
   'app_update_terminal.py',
   'app_update_terminal_child.py',
