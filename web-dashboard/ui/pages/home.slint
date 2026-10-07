@@ -1178,20 +1178,22 @@ export component AccountSection inherits Plate {
     // the one inline confirmation open in this section
     property <string> confirm-id;
 
-    // The full History label needs mark + title + legend + button; at the 320 floor even the bare
-    // title leaves no room, so History keeps its icon and accessible name but drops its label there
-    // (nothing clips, A3). Everywhere else the label stays.
+    // History keeps its icon and accessible name but drops its label whenever the full head
+    // (mark + meta + legend + button) does not fit: the meta, not the title, is what needs room
+    // (O3). The probes are absolute and invisible, so they measure without laying out; the rule
+    // reads probes only, never the rendered button, so it cannot oscillate.
     property <bool> hist-short: root.touch && root.section.kind == "claude"
-        && 28px + 10px + title-probe.preferred-width + 16px + 40px + 8px + hist-probe.preferred-width > root.inner-w;
-    title-probe := Text {
+        && 28px + 10px + meta-probe.preferred-width + 8px + 40px + 4px + hist-probe.preferred-width > root.inner-w;
+    meta-probe := RunsFlow {
         visible: false;
-        text: root.section.label;
-        font-size: Type.title;
-        font-weight: 630;
+        words: root.section.meta-words;
+        size: Type.small;
+        strong-weight: 600;
     }
     hist-probe := Button {
         visible: false;
         kind: "ghost";
+        small: Breakpoints.tier-d;
         icon: "chart";
         text: "History";
     }
