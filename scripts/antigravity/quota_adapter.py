@@ -65,6 +65,16 @@ def collect_snapshot(profile: SavedProfile, deps: QuotaDependencies) -> dict:
         stamp = deps.now().astimezone(dt.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
         base.update(status='fresh', email=identity.email, plan=data.get('plan'),
                     fetchedAt=stamp, sampledAt=stamp, windows=windows, pools=data.get('pools', []))
+        if isinstance(data.get('reportedPlan'), dict):
+            reported = data['reportedPlan']
+            bounded = lambda v: isinstance(v, str) and 0 < len(v) <= 80 and not re.search(r'[\x00-\x1f\x7f]', v)
+            display = {'planType': reported['planType']} if bounded(reported.get('planType')) else {}
+            for key in ('paidTier', 'currentTier'):
+                tier = reported.get(key)
+                if isinstance(tier, dict):
+                    fields = {k: tier[k] for k in ('id', 'name') if bounded(tier.get(k))}
+                    if fields: display[key] = fields
+            if display: base['reportedPlan'] = display
     except IdentityMismatch:
         base.update(status='needs_sign_in', identityVerified=False, identityValidation='mismatch')
     except NeedsSignIn:
@@ -103,15 +113,13 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
         project = helpers.safe_text(project)
         if project is None:
             raise AuthError('Antigravity did not return a usable quota project.')
-        tier = load.get('paidTier') or load.get('currentTier')
-        info = load.get('planInfo')
-        plan = (helpers.safe_text(info.get('planType')) if isinstance(info, dict) else None) or (
-            helpers.safe_text(tier.get('name')) or helpers.safe_text(tier.get('id')) if isinstance(tier, dict) else None)
+        plan, reported = desktop.antigravity_reported_plan(load)
         summary = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuotaSummary', headers, {'project': project})
         windows = desktop.normalize_antigravity(summary)
         pools = structural_pools(desktop.agy_groups(summary), windows)
         windows += desktop.normalize_antigravity_credits(load)
-        return {'email': email, 'plan': plan, 'windows': windows, 'pools': pools}
+        return {'email': email, 'plan': plan, 'windows': windows, 'pools': pools,
+                **({'reportedPlan': reported} if reported else {})}
     return QuotaDependencies(userinfo, refresh, quota, now or (lambda: dt.datetime.now(dt.timezone.utc)))
 
 

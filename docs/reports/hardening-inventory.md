@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 122 |
 | Sync fs occurrences (runtime hotpaths) | 588 |
 | Sync fs files affected (runtime hotpaths) | 71 |
-| Legacy shim markers | 198 |
-| Legacy shim files affected | 75 |
+| Legacy shim markers | 200 |
+| Legacy shim files affected | 76 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -57,7 +57,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 38/408 |
+| files with createLogger | 38/409 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
 | files > 400 LOC | 48 |
 | files > 600 LOC | 20 |
@@ -100,5 +100,5 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-dashboard-service.ts` | 754 |
 | `src/web-server/services/account-analytics-projection.ts` | 710 |
 | `src/web-server/services/analytics-remote-sources.ts` | 672 |
-| `src/web-server/services/codex-auto-switch-service.ts` | 667 |
+| `src/web-server/services/additional-account-service.ts` | 668 |
 

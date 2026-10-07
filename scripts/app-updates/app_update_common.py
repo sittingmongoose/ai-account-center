@@ -15,7 +15,7 @@ import urllib.request
 APP_LABELS = {
     "antigravity-cli": "Antigravity CLI", "muse-code": "Muse Code", "omp": "OMP",
     "codex-cli": "Codex CLI", "codex-desktop": "Codex Desktop",
-    "claude-code": "Claude Code", "claude-desktop": "Claude Desktop",
+    "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", "t3-code": "T3 Code",
 }
 NO_AUTO_UPDATE = {
     "MUSE_NO_AUTO_UPDATE": "1", "AGY_CLI_DISABLE_AUTO_UPDATE": "true",

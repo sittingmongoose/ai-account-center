@@ -75,14 +75,21 @@ const THEME_COLORS = {
 };
 
 /**
+ * Whether the resolved app theme is dark (DESIGN-MOBILE.md 6.3): an explicit mode wins,
+ * otherwise the OS setting decides. The inline first-paint script in index.html mirrors this.
+ */
+export function isDarkTheme({ mode = 'auto', systemDark = false } = {}) {
+  return mode === 'dark' || (mode !== 'light' && systemDark === true);
+}
+
+/**
  * The theme-color for the resolved app theme and the current screen (DESIGN-MOBILE.md 6.3):
  * dashboard screens use paper so the Android status bar matches the top bar; sign-in, offline
  * and loading use the background. `screen` is 'dashboard' or anything else.
  */
 export function themeColor({ mode = 'auto', systemDark = false, screen = 'dashboard' } = {}) {
-  const dark = mode === 'dark' || (mode !== 'light' && systemDark === true);
   const table = screen === 'dashboard' ? THEME_COLORS.dashboard : THEME_COLORS.cover;
-  return dark ? table.dark : table.light;
+  return isDarkTheme({ mode, systemDark }) ? table.dark : table.light;
 }
 
 /** The app-screen bucket for theme-color: 'dashboard' once signed in, else the cover screens. */

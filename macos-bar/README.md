@@ -32,6 +32,17 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   glides to the new row after a switch (ease-out, no overshoot). Its action slot shows a filled check, "Active" and
   "on Ubuntu" with no button chrome, lined up exactly with the Activate capsules above and below (the capsule's label
   inset is the check plus its gap). `--check-native-tooltips` measures this alignment.
+- **Antigravity plan display.** When the dashboard reports the pool windows, the section shows four columns
+  in this order: Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly. The dashboard's optional
+  `antigravityPlan` object (class, quotaPolicy, summary, models, thirdPartyModels, creditsOverage) drives the
+  honest gaps: a weekly-only plan's 5-hour cell reads "Weekly only", a plan without Claude/GPT models reads
+  "Not on plan" for that pool, and a plan with no Antigravity entitlement and no readings shows one line,
+  "No Antigravity quota on this plan", instead of meters. Details adds the plan's summary sentence, a
+  "Models:" line, the family-sharing note on paid Pro and Ultra plans, and labels the credits row
+  "AI credits (overage)" with the hint for the plan's overage setting. Details lists the four windows
+  in the row's order, each titled by its full pool name with the period as a subtitle, so a long pool
+  name never truncates. Without the object the section renders
+  as before (plus the fourth column).
 - **Antigravity switching** uses the dashboard routes `POST /api/antigravity/profiles/:id/activate`,
   `POST /api/antigravity/profiles/:id/confirm` and `PUT /api/antigravity/auto-switch`. Activate is offered only when the
   dashboard reports `antigravityCanActivate` for the Ubuntu host. Running Antigravity programs produce an inline
@@ -46,7 +57,9 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   dashboard lists both.
 - **Meters** are 6 pt tracks with quarter ticks, a severity fill (calm, warning from 80 %, critical from 95 %, and an
   overage cap above 100 %) and the auto-switch notch. Widths and numbers ease out and never pass the reading.
-  Reported usage above 100 % stays in the text; only the bar is capped.
+  Reported usage above 100 % stays in the text; only the bar is capped. A reset label never truncates: when value
+  and reset share a tight cell the clock glyph drops first, then the countdown's largest unit ("6d", "5h", "47m")
+  stands alone; the tooltip keeps the full reset.
 - **Motion.** The first open of a session staggers the blocks in and sweeps every meter from zero while the numbers
   count up; later opens animate only readings that changed since the panel last closed. The menu-bar percentage rolls
   to its new value, Refresh spins while it works, the gear turns as Settings slides in, and the active check draws in
@@ -139,7 +152,8 @@ python3 Scripts/migration_check.py
 
 - `--check-native-tooltips` checks every icon control's help tag, the full-row Details targets, that nested controls
   are never the row, and the Selected-row alignment within 0.5 pt at its expected x, with every slot's content fitting
-  the slot.
+  the slot. It also checks the disclosure chevron's reserved trailing column lies fully inside every account and
+  provider row's own frame — the frame the hover highlight and the active row's platter cover.
 - `--check-meter-geometry` checks every rendered meter against its own track's laid-out width: the fill is the reading
   within 0.5 pt, ticks sit at 25/50/75, and the notch sits at the switch threshold.
 - `--check-hover-occlusion` checks which hover tag actually presents under the pointer, with the real panel hosted
@@ -176,8 +190,8 @@ python3 Scripts/migration_check.py
   the packaged app's own binary against a dotted host name for the sandbox, such as `<lan address>.nip.io`: the
   numeric-address message, before anything is sent and for a saved password connection).
 - `--render-preview` draws the panel content offscreen (`--light`, `--dark`, `--settings`, `--details=<account id or
-  provider>`, `--signin=<state>`, and `--reduce-transparency` or `--increase-contrast`, which simulate those display settings in
-  the render only). System glass is composited by the window server and never reaches an offscreen render, so previews
+  provider>`, `--signin=<state>`, `--hover=<account or provider id>` to render that row hovered, and
+  `--reduce-transparency` or `--increase-contrast`, which simulate those display settings in the render only). System glass is composited by the window server and never reaches an offscreen render, so previews
   bake a glass stand-in behind the real content and pin "now" to the fixture's capture time. Offscreen switches draw
   in their inactive grey; the knob's side shows the state.
 

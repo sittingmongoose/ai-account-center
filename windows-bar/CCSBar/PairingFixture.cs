@@ -45,6 +45,8 @@ internal sealed class PairingFixture : IDisposable
     public string DeviceMeMode { get; set; } = "200";
     /// <summary>What the dashboard read answers for a good key: 200, or "401:device_revoked", "503:auth_store_unavailable".</summary>
     public string DashboardMode { get; set; } = "200";
+    /// <summary>Replaces the built-in dashboard read's payload, for a check that needs its own accounts.</summary>
+    public object? DashboardPayload { get; set; }
     public string? RevokedReason { get; set; }
     public string? RevokedBy { get; set; }
     public string RotateMode { get; set; } = "200";
@@ -213,11 +215,17 @@ internal sealed class PairingFixture : IDisposable
                     if (device is { State: "active" } && tokens.FirstOrDefault(pair => pair.Value.State == "previous:" + bearer) is { Key: { } previous }) tokens[previous] = (tokens[previous].Id, "rotated-away");
                 }
                 else if (!cookie) { status = 401; payload = new { error = "Authentication required", code = "auth_required" }; }
+                else
+                {
+                    // A cookie session's read can be scripted down too (DashboardMode above).
+                    var rejected = path == "/api/accounts/dashboard" ? Scripted(DashboardMode) : null;
+                    if (rejected is { } no) { status = no.Item1; payload = no.Item2; }
+                }
                 if (status == 200) payload = path switch
                 {
                     "/api/accounts/settings" => new { refreshIntervalSeconds = 60 },
                     "/api/claude/desktop-profiles" => new { profiles = Array.Empty<object>() },
-                    _ => (object)new { schemaVersion = 1, updatedAt = "2026-10-02T12:00:00.000Z", accounts = new[] { new { id = "codex:fixture", provider = "codex", providerLabel = "Codex", label = "fixture", email = "fixture@example.com", platform = "ubuntu", status = "ok", isActive = true, windows = new[] { new { key = "seven_day", label = "Weekly", usedPercent = 40, windowMinutes = 10080, kind = "rate_limit" } }, capabilities = new { codexProfile = "fixture" } } }, codexAutoSwitch = new { enabled = false, thresholdPercent = 5 } },
+                    _ => (object)(DashboardPayload ?? new { schemaVersion = 1, updatedAt = "2026-10-02T12:00:00.000Z", accounts = new[] { new { id = "codex:fixture", provider = "codex", providerLabel = "Codex", label = "fixture", email = "fixture@example.com", platform = "ubuntu", status = "ok", isActive = true, windows = new[] { new { key = "seven_day", label = "Weekly", usedPercent = 40, windowMinutes = 10080, kind = "rate_limit" } }, capabilities = new { codexProfile = "fixture" } } }, codexAutoSwitch = new { enabled = false, thresholdPercent = 5 } }),
                 };
             }
             else if (method == "POST" && path.StartsWith("/api/claude/desktop-profiles/", StringComparison.Ordinal) && path.EndsWith("/open", StringComparison.Ordinal) && bearer is not null)

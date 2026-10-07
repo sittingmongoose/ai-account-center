@@ -162,7 +162,7 @@ describe('real Python Muse helper to Node cache boundary', () => {
       expect(retained.sampledAt).toBe(original.sampledAt);
       expect(retained.fetchedAt).toBe(original.fetchedAt);
       expect(retained.windows).toEqual(original.windows);
-      expect(retained.message).toContain('last successful Muse usage reading');
+      expect(retained.message).toBeNull();
       expect(retained).not.toHaveProperty('failureCode');
       expect(JSON.stringify(retained)).not.toContain('synthetic-fixture');
       const recovered = await service.read(2);
