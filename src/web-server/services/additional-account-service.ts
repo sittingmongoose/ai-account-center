@@ -33,8 +33,10 @@ const LABELS: Record<AdditionalProvider, string> = {
 const PLATFORM_LABELS = { ubuntu: 'Ubuntu', mac: 'Mac', windows: 'Windows' };
 const MUSE_CACHED_MESSAGES = new Set([
   'Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically.',
-  'Showing the last successful Muse usage reading. Usage refreshes automatically.',
 ]);
+/** Sent by helpers synced before the home stopped showing it; the cached status and sample time already say so. */
+const MUSE_LEGACY_CACHED_MESSAGE =
+  'Showing the last successful Muse usage reading. Usage refreshes automatically.';
 const MUSE_TRANSIENT_FAILURES = new Set(['rate_limited', 'provider_error', 'network_error']);
 
 export interface AdditionalAccountDeps {
@@ -243,9 +245,11 @@ function normalize(
       : [];
     account.message =
       source.provider === 'muse' && status === 'cached'
-        ? typeof result.message === 'string' && MUSE_CACHED_MESSAGES.has(result.message)
-          ? result.message
-          : 'Showing the last saved Muse usage sample.'
+        ? typeof result.message === 'string' && result.message !== MUSE_LEGACY_CACHED_MESSAGE
+          ? MUSE_CACHED_MESSAGES.has(result.message)
+            ? result.message
+            : 'Showing the last saved Muse usage sample.'
+          : null
         : null;
     if (account.windows.length === 0) {
       account.status = 'error';
@@ -450,7 +454,7 @@ export class AdditionalAccountService {
         status: 'cached',
         message:
           source.provider === 'muse'
-            ? 'Showing the last successful Muse usage reading. Usage refreshes automatically.'
+            ? null
             : 'Live account usage is temporarily unavailable; showing the last saved sample.',
       };
     }
