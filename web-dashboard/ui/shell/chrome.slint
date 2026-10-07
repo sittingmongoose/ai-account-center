@@ -15,7 +15,9 @@ import { ProbeMark } from "../components/probe.slint";
 
 // The status line as one right-hugging eliding run: "Updated 2m ago · cached readings". Three Texts
 // (lead, strong age, more) as in the desktop header: StyledText cannot elide, and a plain Text cannot
-// mix weights. When the row is narrow every part shares the shortage and elides at its own end.
+// mix weights. `max-w` is the space the row leaves the line (the use site subtracts its siblings, so
+// the line never runs past the right padding): "· more" is dropped when it does not fit, and what
+// remains elides with an ellipsis (3.2).
 component StatusLine inherits Rectangle {
     in property <ChromeView> chrome;
     in property <length> max-w: 340px;
@@ -23,8 +25,17 @@ component StatusLine inherits Rectangle {
     callback tapped(Point, length, length);
 
     height: 44px;
-    property <length> fit-w: min(root.max-w, row.preferred-width);
-    min-width: fit-w;
+    // Hidden measurers (zero-size, transparent): the intrinsic run widths. The display Texts below
+    // must keep the same family/size/weight, or the fit decision lies.
+    m-lead := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: root.chrome.status-lead; font-family: Type.tab; font-size: Type.small; }
+    m-strong := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: root.chrome.status-strong; font-family: Type.tab; font-size: Type.small; font-weight: 580; }
+    m-more := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: "· " + root.chrome.status-more; font-size: Type.small; }
+    property <length> full-w: m-lead.preferred-width + m-strong.preferred-width + m-more.preferred-width + 8px;
+    property <length> short-w: m-lead.preferred-width + m-strong.preferred-width + 4px;
+    property <bool> show-more: root.chrome.status-more != "" && root.max-w >= root.full-w;
+    property <length> fit-w: min(root.max-w, root.show-more ? root.full-w : root.short-w);
+    // min-width 0 (never preferred): the row shrinks the line instead of overflowing past the edge.
+    min-width: 0px;
     preferred-width: fit-w;
     clip: true;
     row := HorizontalLayout {
@@ -48,7 +59,7 @@ component StatusLine inherits Rectangle {
             overflow: elide;
             vertical-alignment: center;
         }
-        if root.chrome.status-more != "": Text {
+        if root.show-more: Text {
             text: "· " + root.chrome.status-more;
             font-size: Type.small;
             color: Theme.ink-3;
@@ -388,7 +399,7 @@ export component MobileHeader inherits Rectangle {
                     }
                 }
             }
-            HorizontalLayout {
+            row2 := HorizontalLayout {
                 height: 52px;
                 padding-left: 20px + Device.safe-left;
                 padding-right: 20px + Device.safe-right;
@@ -396,19 +407,21 @@ export component MobileHeader inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     horizontal-stretch: 0;
-                    NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+                    nav-f := NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 StatusLine {
                     horizontal-stretch: 0;
                     chrome: root.chrome;
+                    // What the row leaves the line: the NavBar plus paddings and gaps come off.
+                    max-w: max(0px, row2.width - nav-f.preferred-width - Device.safe-left - Device.safe-right - 64px);
                     tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
                 }
             }
         }
 
         // ---- T (3.3): one 60 px row as on desktop, with touch targets ----
-        if Breakpoints.tier-t && !Breakpoints.short: HorizontalLayout {
+        if Breakpoints.tier-t && !Breakpoints.short: trow := HorizontalLayout {
             y: Device.safe-top;
             height: 60px;
             padding-left: 24px + Device.safe-left;
@@ -443,20 +456,21 @@ export component MobileHeader inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+                nav-t := NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
             }
             Rectangle { horizontal-stretch: 1; }
             StatusLine {
                 horizontal-stretch: 0;
                 chrome: root.chrome;
-                max-w: 320px;
+                // What the row leaves the line (spec max 320): brand, tabs, buttons, pads, gaps off.
+                max-w: min(320px, max(0px, trow.width - brand-row-t.preferred-width - nav-t.preferred-width - refresh-t.preferred-width - update-t.preferred-width - theme-btn-t.preferred-width - account-btn-t.preferred-width - Device.safe-left - Device.safe-right - 118px));
                 tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
             }
             Rectangle { width: 6px; }
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                IconButton {
+                refresh-t := IconButton {
                     icon: "refresh";
                     hint: "Refresh usage now";
                     spinning: root.chrome.refreshing;
@@ -467,7 +481,7 @@ export component MobileHeader inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                UpdateButton {
+                update-t := UpdateButton {
                     data: root.update;
                     enabled: !root.busy;
                     show-label: Breakpoints.width >= 1100px;
@@ -499,7 +513,7 @@ export component MobileHeader inherits Rectangle {
         }
 
         // ---- Short (3.4): one 48 px row, NavBar compact, no bottom bar, no Appearance ----
-        if Breakpoints.short: HorizontalLayout {
+        if Breakpoints.short: srow := HorizontalLayout {
             y: Device.safe-top;
             height: 48px;
             padding-left: Breakpoints.gutter + Device.safe-left;
@@ -525,19 +539,20 @@ export component MobileHeader inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                NavBar { compact: true; page: root.page; navigate(p) => { root.navigate(p); } }
+                nav-s := NavBar { compact: true; page: root.page; navigate(p) => { root.navigate(p); } }
             }
             Rectangle { horizontal-stretch: 1; }
             StatusLine {
                 horizontal-stretch: 0;
                 chrome: root.chrome;
-                max-w: 300px;
+                // What the row leaves the line: logo, tabs, buttons, pads, gaps come off.
+                max-w: max(0px, srow.width - nav-s.preferred-width - refresh-s.preferred-width - update-s.preferred-width - account-btn-s.preferred-width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right - 76px);
                 tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
             }
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                IconButton {
+                refresh-s := IconButton {
                     icon: "refresh";
                     hint: "Refresh usage now";
                     spinning: root.chrome.refreshing;
@@ -548,7 +563,7 @@ export component MobileHeader inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                UpdateButton {
+                update-s := UpdateButton {
                     data: root.update;
                     enabled: !root.busy;
                     phone: true;
