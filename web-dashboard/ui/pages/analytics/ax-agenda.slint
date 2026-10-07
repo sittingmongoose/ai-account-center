@@ -45,9 +45,13 @@ component AgendaLine inherits Rectangle {
     in property <length> now-w: AxAgendaCols.now;
     property <bool> shown: !Motion.on;
     show := Timer { interval: max(1ms, root.delay + root.ar.i * 16ms); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
-    // stacked height sizer (never drawn): the what line wraps, so the item grows past its 52 min
+    // stacked height sizer (never drawn, never hit-tested): the what line wraps, so the item grows
+    // past its 52 min. `visible: false` only clips in Slint 1.18, so the item stays in the flow: on D
+    // it is zero-height, below D it keeps its wrapped natural height (the approved P/F/T layouts).
+    // The width stays so preferred-height still measures at the card width.
     size-m := VerticalLayout {
-        visible: false;
+        x: 0px; y: 0px; visible: false;
+        height: Breakpoints.tier-d ? 0px : self.preferred-height;
         width: root.width - 96px;
         spacing: 1px;
         Text { text: "X"; font-size: Type.small; font-weight: 600; }

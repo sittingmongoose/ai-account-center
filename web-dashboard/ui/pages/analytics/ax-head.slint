@@ -704,7 +704,11 @@ component KpiCard inherits Rectangle {
     property <length> inner-w: root.width - (Breakpoints.tier-d ? 36px : 28px);
     property <length> val-size: Breakpoints.tier-d ? (Breakpoints.width < 1600px ? 27px : 30px)
         : Breakpoints.tier-p ? 22px : Breakpoints.tier-f ? 24px : 26px;
-    measure := Text { visible: false; text: root.kpi.text; font-family: Type.tab; font-size: root.val-size; font-weight: 620; }
+    // Measurer (never drawn, never hit-tested): `visible: false` only clips in Slint 1.18, so the
+    // item stays in the flow at its natural size. On D it is zero-sized (the card widths match main);
+    // below D it keeps its natural size (the approved P/F/T layouts). preferred-width always reports
+    // the natural width for `tight` below D.
+    measure := Text { x: 0px; y: 0px; visible: false; width: Breakpoints.tier-d ? 0px : self.preferred-width; height: Breakpoints.tier-d ? 0px : self.preferred-height; text: root.kpi.text; font-family: Type.tab; font-size: root.val-size; font-weight: 620; }
     property <bool> tight: measure.preferred-width > root.inner-w;
     min-height: col.min-height;
     preferred-height: col.preferred-height;
@@ -772,11 +776,23 @@ component KpiCard inherits Rectangle {
                     Rectangle { horizontal-stretch: 1; }
                 }
                 Rectangle { height: 6px; }
-                // below D the sub-line wraps to at most two lines (DESIGN-MOBILE 4.2.2)
-                Rectangle {
-                    height: Breakpoints.tier-d ? sub.preferred-height : min(sub.preferred-height, 36px);
+                // D renders the sub-line exactly like main (natural height). Below D it wraps to at most
+                // two lines (DESIGN-MOBILE 4.2.2). Split elements (not a height ternary): a height-queried
+                // wrapper shifts the card content on D, so the D branch stays verbatim main again.
+                if Breakpoints.tier-d: StyledText {
+                    text: root.kpi.sub.length == 0 ? @markdown("")
+                        : root.kpi.sub.length == 1 ? @markdown("\{root.kpi.sub[0].text}")
+                        : root.kpi.sub.length == 2 && root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}")
+                        : root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}")
+                        : @markdown("\{root.kpi.sub[0].text}\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}");
+                    default-color: Theme.ink-3;
+                    default-font-size: 12.5px;
+                    default-font-family: Type.tab;
+                }
+                if Breakpoints.below-d: Rectangle {
+                    height: min(sub-m.preferred-height, 36px);
                     clip: true;
-                    sub := StyledText {
+                    sub-m := StyledText {
                         width: parent.width;
                         height: self.preferred-height;
                         text: root.kpi.sub.length == 0 ? @markdown("")
@@ -785,7 +801,7 @@ component KpiCard inherits Rectangle {
                             : root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}")
                             : @markdown("\{root.kpi.sub[0].text}\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}");
                         default-color: Theme.ink-3;
-                        default-font-size: Breakpoints.tier-d ? 12.5px : Type.small;
+                        default-font-size: Type.small;
                         default-font-family: Type.tab;
                     }
                 }
