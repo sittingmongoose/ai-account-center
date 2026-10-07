@@ -198,6 +198,7 @@ struct FootDto {
     shown: bool,
     warn: bool,
     runs: Vec<RunDto>,
+    words: Vec<RunDto>,
     when: String,
 }
 
@@ -232,6 +233,7 @@ struct RowDto {
     amounts_runs: Vec<RunDto>,
     confirm: bool,
     confirm_runs: Vec<RunDto>,
+    confirm_words: Vec<RunDto>,
     cells: Vec<MeterDto>,
 }
 
@@ -249,12 +251,13 @@ struct AutoDto {
     max: Option<i32>,
     pool: String,
     off_runs: Vec<RunDto>,
+    off_words: Vec<RunDto>,
     setting: String,
     message: String,
     example: bool,
 }
 impl AutoDto {
-    fn into_view(self, off_runs: ModelRc<RunView>) -> AutoSwitchView {
+    fn into_view(self, off_runs: ModelRc<RunView>, off_words: ModelRc<RunView>) -> AutoSwitchView {
         AutoSwitchView {
             known: self.known,
             shown: self.shown,
@@ -267,6 +270,7 @@ impl AutoDto {
             max: self.max.unwrap_or(99),
             pool: self.pool.into(),
             off_runs,
+            off_words,
             setting: self.setting.into(),
             message: self.message.into(),
             example: self.example,
@@ -283,6 +287,7 @@ struct SectionDto {
     long_label: String,
     meta: String,
     meta_runs: Vec<RunDto>,
+    meta_words: Vec<RunDto>,
     switchable: bool,
     can_switch: bool,
     active_id: String,
@@ -404,6 +409,7 @@ struct DetailsDto {
     platform: String,
     confirm: bool,
     confirm_runs: Vec<RunDto>,
+    confirm_words: Vec<RunDto>,
     profile: String,
     can_mac: bool,
     can_windows: bool,
@@ -532,6 +538,12 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 row.confirm_runs,
                 &mut live_runs,
             );
+            let confirm_words = sync_runs(
+                m,
+                &format!("confirm-words|{owner}"),
+                row.confirm_words,
+                &mut live_runs,
+            );
             rows.push(AccountRowView {
                 id: row.id.into(),
                 provider: row.provider.into(),
@@ -554,6 +566,7 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 amounts_runs,
                 confirm: row.confirm,
                 confirm_runs,
+                confirm_words,
                 cells,
             });
         }
@@ -579,10 +592,22 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
             section.meta_runs,
             &mut live_runs,
         );
+        let meta_words = sync_runs(
+            m,
+            &format!("meta-words|{}", section.id),
+            section.meta_words,
+            &mut live_runs,
+        );
         let foot_runs = sync_runs(
             m,
             &format!("foot|{}", section.id),
             section.foot.runs,
+            &mut live_runs,
+        );
+        let foot_words = sync_runs(
+            m,
+            &format!("foot-words|{}", section.id),
+            section.foot.words,
             &mut live_runs,
         );
         let mut auto = section.auto;
@@ -592,6 +617,12 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
             std::mem::take(&mut auto.off_runs),
             &mut live_runs,
         );
+        let off_words = sync_runs(
+            m,
+            &format!("off-words|{}", section.id),
+            std::mem::take(&mut auto.off_words),
+            &mut live_runs,
+        );
         sections.push(SectionView {
             id: section.id.into(),
             kind: section.kind.into(),
@@ -599,17 +630,19 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
             long_label: section.long_label.into(),
             meta: section.meta.into(),
             meta_runs,
+            meta_words,
             count,
             switchable: section.switchable,
             can_switch: section.can_switch,
             active_id: section.active_id.into(),
             active_label: section.active_label.into(),
             empty: section.empty.into(),
-            auto: auto.into_view(off_runs),
+            auto: auto.into_view(off_runs, off_words),
             foot: FootView {
                 shown: section.foot.shown,
                 warn: section.foot.warn,
                 runs: foot_runs,
+                words: foot_words,
                 when: section.foot.when.into(),
             },
             columns,
@@ -1063,6 +1096,16 @@ pub fn show_details(json: &str) -> Result<(), JsValue> {
                     confirm: v.confirm,
                     confirm_runs: ModelRc::new(VecModel::from(
                         v.confirm_runs
+                            .into_iter()
+                            .map(|r| RunView {
+                                text: r.text.into(),
+                                strong: r.strong,
+                                tone: r.tone.into(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )),
+                    confirm_words: ModelRc::new(VecModel::from(
+                        v.confirm_words
                             .into_iter()
                             .map(|r| RunView {
                                 text: r.text.into(),

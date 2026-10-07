@@ -54,36 +54,27 @@ export component Runs inherits HorizontalLayout {
 // The same runs as one wrapping paragraph, for the places below D where the sentence must wrap with no
 // line limit (the section footer, the inline confirmation). Markdown gives the weights and tones; the
 // words are the view model's, untouched.
-export component RunsText inherits StyledText {
-    in property <[RunView]> runs;
+// Mixed-weight sentences that wrap (section meta, footers, confirm questions below D): one real
+// Text per word in a wrapping flex row, so rows always measure their true height. (StyledText
+// reports a one-line height when created late, and Slint cannot split strings, so the view model
+// provides the words.) Each word carries its own trailing space; the layout adds no gaps.
+component RunsFlow inherits FlexboxLayout {
+    in property <[RunView]> words;
     in property <length> size: 13px;
     in property <color> ink: Theme.ink-3;
     in property <color> strong-ink: Theme.ink;
     in property <color> warn-ink: Theme.warn-text;
     in property <color> good-ink: Theme.good-text;
-    default-color: root.ink;
-    default-font-size: root.size;
-    // StyledText wraps on its own when its width is constrained; every use below sits in a layout.
-    // The words are the view model's; markdown gives the runs their bold figures and the line's tone
-    // (a warning footer, a plain confirm) is the caller's base colour, as the mockup draws it. A strong
-    // lead with the warn tone (the confirm question's figure) keeps its warning colour, and the active
-    // account's name keeps its good tone. Covered shapes: 1 and 2 runs (plain or a strong lead), the
-    // 3-run off line (strong middle), the 3-run meta (strong lead), and the 4-run "moves to <next>" and
-    // meta sentences (strong first and third); anything else falls back to its plain words. Fully plain
-    // branches still wrap in a font tag: bare words report a one-line height while rendering wrapped,
-    // which would overlap whatever follows them.
-    property <color> lead-ink: root.runs.length > 0 && root.runs[0].tone == "warn" ? root.warn-ink : root.strong-ink;
-    property <color> mid-ink: root.runs.length > 2 && root.runs[2].tone == "good" ? root.good-ink : root.strong-ink;
-    text: root.runs.length == 0 ? @markdown("")
-        : root.runs.length == 1 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}</font>")
-        : root.runs.length == 2 && root.runs[0].strong ? @markdown("<font color='\{root.lead-ink}'>**\{root.runs[0].text}**</font>\{root.runs[1].text}")
-        : root.runs.length == 2 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}</font>")
-        : root.runs.length == 3 && root.runs[1].strong ? @markdown("\{root.runs[0].text}<font color='\{root.strong-ink}'>**\{root.runs[1].text}**</font>\{root.runs[2].text}")
-        : root.runs.length == 3 && root.runs[0].strong ? @markdown("<font color='\{root.lead-ink}'>**\{root.runs[0].text}**</font>\{root.runs[1].text}\{root.runs[2].text}")
-        : root.runs.length == 3 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}\{root.runs[2].text}</font>")
-        : root.runs.length == 4 && root.runs[0].strong && root.runs[2].strong ? @markdown("<font color='\{root.lead-ink}'>**\{root.runs[0].text}**</font>\{root.runs[1].text}<font color='\{root.mid-ink}'>**\{root.runs[2].text}**</font>\{root.runs[3].text}")
-        : root.runs.length == 4 ? @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}\{root.runs[2].text}\{root.runs[3].text}</font>")
-        : @markdown("<font color='\{root.ink}'>\{root.runs[0].text}\{root.runs[1].text}\{root.runs[2].text}\{root.runs[3].text}</font>");
+    in property <int> strong-weight: 640;
+    spacing-horizontal: 0px;
+    spacing-vertical: 0px;
+    alignment: start;
+    for w in root.words: Text {
+        text: w.text + " ";
+        font-size: root.size;
+        font-weight: w.strong ? root.strong-weight : 400;
+        color: w.tone == "warn" ? root.warn-ink : w.tone == "good" ? root.good-ink : w.strong ? root.strong-ink : root.ink;
+    }
 }
 
 // The filled check-circle. On a switch the disc grows from 60% and the check is revealed left to right
@@ -289,6 +280,7 @@ export component SwitchSlot inherits Rectangle {
 // Below D the question wraps and the two buttons become equal 44 px halves (4.1.3).
 export component ConfirmBox inherits Rectangle {
     in property <[RunView]> runs;
+    in property <[RunView]> words;
     in property <bool> open;
     in property <bool> busy;
     callback keep();
@@ -337,7 +329,7 @@ export component ConfirmBox inherits Rectangle {
                     }
                     if root.touch: VerticalLayout {
                         horizontal-stretch: 1;
-                        RunsText { runs: root.runs; size: Type.body; ink: Theme.ink-2; strong-ink: Theme.ink; }
+                        RunsFlow { words: root.words; size: Type.body; ink: Theme.ink-2; strong-ink: Theme.ink; }
                     }
                 }
             }
@@ -362,6 +354,7 @@ export component ConfirmBox inherits Rectangle {
 // right-aligned at their natural width otherwise (4.1.3, shared with the Accounts rows).
 export component ConfirmLine inherits Rectangle {
     in property <[RunView]> runs;
+    in property <[RunView]> words;
     in property <bool> open;
     in property <bool> busy;
     in property <length> pad-x: 16px;
@@ -405,10 +398,16 @@ export component ConfirmLine inherits Rectangle {
                     horizontal-stretch: r.strong ? 0 : 1;
                 }
             }
-            if root.touch: VerticalLayout {
+            // rows without words (other producers) fall back to one line until they adopt wordsOf
+            if root.touch && root.words.length > 0: VerticalLayout {
                 horizontal-stretch: 1;
                 padding-top: 1px;
-                RunsText { runs: root.runs; size: Type.small; ink: Theme.ink-2; strong-ink: Theme.ink; }
+                RunsFlow { words: root.words; size: Type.small; ink: Theme.ink-2; strong-ink: Theme.ink; }
+            }
+            if root.touch && root.words.length == 0: VerticalLayout {
+                horizontal-stretch: 1;
+                padding-top: 1px;
+                Runs { runs: root.runs; size: Type.small; ink: Theme.ink-2; strong-ink: Theme.ink; strong-weight: 640; }
             }
             if !root.touch: VerticalLayout {
                 alignment: center;
@@ -441,6 +440,7 @@ export component ConfirmLine inherits Rectangle {
 // buttons 8 apart.
 component ConfirmStack inherits Rectangle {
     in property <[RunView]> runs;
+    in property <[RunView]> words;
     in property <bool> open;
     in property <bool> busy;
     in property <length> pad-x: 16px;
@@ -477,7 +477,7 @@ component ConfirmStack inherits Rectangle {
                 }
                 VerticalLayout {
                     horizontal-stretch: 1;
-                    RunsText { runs: root.runs; size: Type.body; ink: Theme.ink-2; strong-ink: Theme.ink; }
+                    RunsFlow { words: root.words; size: Type.body; ink: Theme.ink-2; strong-ink: Theme.ink; }
                 }
             }
             HorizontalLayout {
@@ -848,6 +848,7 @@ export component AccountRow inherits Rectangle {
                     // the inline confirmation, inside the row block before the next divider (4.1.3)
                     if root.account.confirm: ConfirmStack {
                         runs: root.account.confirm-runs;
+                        words: root.account.confirm-words;
                         open: root.confirming;
                         busy: root.busy;
                         pad-x: root.pad-x;
@@ -872,6 +873,7 @@ export component AccountRow inherits Rectangle {
         }
         if root.table && root.account.confirm: ConfirmLine {
             runs: root.account.confirm-runs;
+            words: root.account.confirm-words;
             open: root.confirming;
             busy: root.busy;
             pad-x: root.pad-x;
@@ -1221,10 +1223,11 @@ export component AccountSection inherits Plate {
                         opacity: root.meta-dip ? 0 : 1;
                         animate opacity { duration: Motion.on ? (root.meta-dip ? 0ms : 150ms) : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
                     }
-                    if root.touch: RunsText {
-                        runs: root.section.meta-runs;
+                    if root.touch: RunsFlow {
+                        words: root.section.meta-words;
                         size: Type.small;
                         strong-ink: Theme.ink;
+                        strong-weight: 600;
                         opacity: root.meta-dip ? 0 : 1;
                         animate opacity { duration: Motion.on ? (root.meta-dip ? 0ms : 150ms) : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
                     }
@@ -1448,11 +1451,12 @@ export component AccountSection inherits Plate {
                 }
                 VerticalLayout {
                     horizontal-stretch: 1;
-                    RunsText {
-                        runs: root.section.auto.off-runs;
+                    RunsFlow {
+                        words: root.section.auto.off-words;
                         size: Type.small;
                         ink: Theme.ink-3;
                         strong-ink: Theme.ink-2;
+                        strong-weight: 600;
                     }
                 }
             }
@@ -1626,8 +1630,7 @@ export component AccountSection inherits Plate {
                             height: 16px;
                         }
                     }
-                    HorizontalLayout {
-                        visible: Breakpoints.tier-d || foot.fits-inline;
+                    if Breakpoints.tier-d || foot.fits-inline: HorizontalLayout {
                         spacing: 0px;
                         Runs {
                             runs: root.section.foot.runs;
@@ -1638,8 +1641,7 @@ export component AccountSection inherits Plate {
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
-                    Text {
-                        visible: Breakpoints.tier-d || foot.fits-inline;
+                    if Breakpoints.tier-d || foot.fits-inline: Text {
                         text: root.section.foot.when;
                         font-family: Type.tab;
                         font-size: root.touch ? Type.small : 12.5px;
@@ -1647,22 +1649,17 @@ export component AccountSection inherits Plate {
                         vertical-alignment: center;
                         horizontal-stretch: 0;
                     }
-                    // Both branches exist from the first layout and toggle visibility: a wrapping text
-                    // created late under a distributed width keeps its first-pass one-line height and
-                    // would overlap the Checked line below.
-                    VerticalLayout {
-                        visible: Breakpoints.below-d && !foot.fits-inline;
+                    if Breakpoints.below-d && !foot.fits-inline: VerticalLayout {
                         horizontal-stretch: 1;
-                        RunsText {
-                            runs: root.section.foot.runs;
+                        RunsFlow {
+                            words: root.section.foot.words;
                             size: Type.small;
                             ink: root.section.foot.warn ? Theme.warn-text : Theme.ink-2;
                             strong-ink: root.section.foot.warn ? Theme.warn-text : Theme.ink;
                         }
                     }
                 }
-                Text {
-                    visible: Breakpoints.below-d && !foot.fits-inline;
+                if Breakpoints.below-d && !foot.fits-inline: Text {
                     text: root.section.foot.when;
                     font-family: Type.tab;
                     font-size: Type.small;

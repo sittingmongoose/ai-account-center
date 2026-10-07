@@ -314,6 +314,7 @@ export component DetailsPanel inherits Rectangle {
             }
             if root.touch && root.data.confirm: ConfirmBox {
                 runs: root.data.confirm-runs;
+                words: root.data.confirm-words;
                 open: root.confirming;
                 busy: root.busy;
                 keep => { root.confirming = false; }
@@ -519,6 +520,7 @@ export component DetailsPanel inherits Rectangle {
             }
             if !root.touch && root.data.confirm: ConfirmBox {
                 runs: root.data.confirm-runs;
+                words: root.data.confirm-words;
                 open: root.confirming;
                 busy: root.busy;
                 keep => { root.confirming = false; }
