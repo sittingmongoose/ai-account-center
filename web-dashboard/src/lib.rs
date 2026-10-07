@@ -989,6 +989,17 @@ pub fn set_online(online: bool) {
     with_ui(|ui| ui.global::<Device>().set_online(online));
 }
 
+/// Android Back / history (DESIGN-MOBILE.md 3.9): bridge.js popped a history entry, so the
+/// top-most overlay (dialog, Details, sheet, popover) closes itself. The dashboard watches the
+/// counter; the layer decision lives in the Overlays global's `top`.
+#[wasm_bindgen]
+pub fn pop_overlay() {
+    with_ui(|ui| {
+        let overlays = ui.global::<Overlays>();
+        overlays.set_pop_request(overlays.get_pop_request() + 1);
+    });
+}
+
 /// kind: "ok" | "err" | "info". At most three toasts stay live.
 #[wasm_bindgen]
 pub fn push_toast(kind: &str, title: &str, body: &str, ms: i32) {

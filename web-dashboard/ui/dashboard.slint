@@ -21,6 +21,8 @@ import { NavBar } from "components/nav.slint";
 import { MenuPanel, MenuHead, MenuItem, MenuSeparator } from "components/menu.slint";
 import { UpdateButton } from "components/update-button.slint";
 import { SlideOver } from "components/slide-over.slint";
+import { Sheet, SidePanel, Overlays } from "components/sheet.slint";
+import { Popover } from "components/popover.slint";
 import { Dialog } from "components/dialog.slint";
 import { ToastStack } from "components/toast.slint";
 import { Hover, HoverLayer } from "components/hover-card.slint";
@@ -53,6 +55,8 @@ export {
 export { Probe } from "components/probe.slint";
 // The device environment (safe areas, keyboard, input profile): Rust fills it from bridge.js.
 export { Device } from "theme.slint";
+// The overlay layers (Back/history): Rust bumps pop-request when bridge.js pops a history entry.
+export { Overlays } from "components/sheet.slint";
 export { SegItem } from "components/segmented.slint";
 
 // The faint cartographic grid behind the pages: 24 px minor and 96 px major lines.
@@ -289,10 +293,12 @@ component Header inherits Rectangle {
     }
 }
 
-// A Flickable with a thin draggable scrollbar thumb.
+// A Flickable with a thin draggable scrollbar thumb. `last-ch` publishes the content height as it
+// changes so the dashboard can keep the scroll position across a tier reflow (1.6).
 component PageScroll inherits Rectangle {
     in property <length> content-height;
     in-out property <length> content-y <=> flick.content-y;
+    in-out property <length> last-ch: 0px;
     property <length> max-scroll: max(0px, root.content-height - root.height);
     flick := Flickable {
         width: root.width;
@@ -303,6 +309,7 @@ component PageScroll inherits Rectangle {
         content-height: max(root.height, root.content-height);
         @children
     }
+    changed content-height => { root.last-ch = self.content-height; }
     if root.max-scroll > 0: thumb := Rectangle {
         property <length> thumb-h: max(40px, root.height * root.height / root.content-height);
         x: root.width - 10px;
@@ -390,8 +397,14 @@ export component Dashboard inherits Window {
         Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light;
         keys.focus();
     }
-    changed width => { Breakpoints.width = self.width; }
-    changed height => { Breakpoints.height = self.height; }
+    changed width => {
+        Breakpoints.width = self.width;
+        root.begin-reflow();
+    }
+    changed height => {
+        Breakpoints.height = self.height;
+        root.begin-reflow();
+    }
 
     // ---------- chrome geometry (DESIGN-MOBILE.md 2.4, 3.1-3.4) ----------
     // The chrome's total height: safe-top plus the tier's rows. D keeps its flat 62 px. The page
@@ -406,6 +419,103 @@ export component Dashboard inherits Window {
     // conditional and cannot be referenced from outside its `if`.
     property <bool> tab-bar-shown: Breakpoints.tier-p && !Breakpoints.short && Device.keyboard == 0px;
     property <length> tab-bar-h: tab-bar-shown ? 52px + max(Device.safe-bottom, 8px) : 0px;
+
+    // ---------- overlays below D (DESIGN-MOBILE.md 3.5-3.9) ----------
+    // `pop` is the open header popover (1 status, 2 appearance, 3 account); the account menu is a
+    // sheet on P (3.5) and Details is a bottom sheet below 760 and a side panel from 760. Every
+    // open overlay counts itself in the Overlays global so bridge.js pops the top one on Back.
+    property <int> pop: 0;
+    property <length> pop-ax: 0px;
+    property <length> pop-ay: 0px;
+    property <length> pop-aw: 0px;
+    property <length> pop-ah: 0px;
+    property <bool> account-sheet: false;
+    property <bool> details-as-sheet: Breakpoints.below-d
+        && (Breakpoints.tier-p || (Breakpoints.tier-f && Breakpoints.width < 760px));
+    // The overlay layers for Back (the Overlays global): set where the state changes. The dialog
+    // and Details flags follow the bridge-facing properties; globals cannot carry bindings from a
+    // component, so they are assigned in change handlers.
+    changed confirmation => { Overlays.dialog = self.confirmation.open; }
+    changed details-open => { Overlays.details = self.details-open && Breakpoints.below-d; }
+    changed account-sheet => { Overlays.sheet = self.account-sheet; }
+
+    function open-pop(kind: int, ax: length, ay: length, aw: length, ah: length) {
+        if root.pop != kind {
+            root.pop = 0;
+            root.pop-ax = ax;
+            root.pop-ay = ay;
+            root.pop-aw = aw;
+            root.pop-ah = ah;
+            root.pop = kind;
+            Overlays.pops += 1;
+            root.action("overlay-open", "pop");
+        }
+    }
+    function close-pop() {
+        if root.pop != 0 {
+            root.pop = 0;
+            Overlays.pops = max(0, Overlays.pops - 1);
+        }
+    }
+    function close-account-sheet() {
+        if root.account-sheet {
+            root.account-sheet = false;
+            root.action("overlay-close", "sheet");
+        }
+    }
+
+    // Back (3.9): bridge.js pops one entry and bumps pop-request; the top layer closes itself.
+    property <int> pop-request-watch: Overlays.pop-request;
+    changed pop-request-watch => {
+        if Overlays.top == 100 {
+            root.action("activation-cancel", "");
+        } else if Overlays.top == 90 && root.details-open {
+            root.close-details();
+        } else if Overlays.top == 80 && root.account-sheet {
+            root.close-account-sheet();
+        } else if Overlays.top == 70 {
+            Overlays.pop-close += 1;
+        }
+    }
+    // History consume for page-owned overlays: a select bumps Overlays.pops itself, so a change
+    // here means one opened (push an entry) or closed (consume its entry).
+    property <int> pops-watch: Overlays.pops;
+    property <int> last-pops: 0;
+    changed pops-watch => {
+        if root.pops-watch > root.last-pops && root.pop == 0 && !root.account-sheet {
+            root.action("overlay-open", "pop");
+        }
+        if root.pops-watch < root.last-pops {
+            root.action("overlay-close", "pop");
+        }
+        root.last-pops = root.pops-watch;
+    }
+
+    // ---------- live reflow (1.6): keep the read position across a fold, rotation or split ----------
+    // Before the relayout the scroll offset and the content height are captured; after it, the
+    // offset is scaled by the height ratio so the same part of the page stays in view. A popover's
+    // anchor moves, so popovers close; sheets, Details and the page itself stay as they are.
+    property <length> reflow-y: 0px;
+    property <length> reflow-ch: 0px;
+    reflow-timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if root.reflow-ch > 0px && scroller.content-height > 0px {
+                scroller.content-y = clamp(root.reflow-y * scroller.content-height / root.reflow-ch,
+                    -max(0px, scroller.content-height - scroller.height), 0px);
+            }
+        }
+    }
+    function begin-reflow() {
+        if Breakpoints.below-d && root.data-ready {
+            root.reflow-y = scroller.content-y;
+            root.reflow-ch = scroller.last-ch;
+            root.close-pop();
+            reflow-timer.running = true;
+        }
+    }
 
     // The first page of the session loads in more slowly than a page change.
     property <bool> home-seen: false;
@@ -433,6 +543,8 @@ export component Dashboard inherits Window {
     changed current-page => {
         Hover.clear();
         root.close-details();
+        root.close-pop();
+        root.close-account-sheet();
         if Motion.on {
             root.leaving = true;
             swap-page.running = true;
@@ -459,7 +571,6 @@ export component Dashboard inherits Window {
     }
     function open-details(id: string) {
         if id == "" { return; }
-        if root.details-open && id != root.details.id { overlay.swap(); }
         root.selected-id = id;
         root.action("details", id);
     }
@@ -478,6 +589,14 @@ export component Dashboard inherits Window {
             if event.text == Key.Escape {
                 if root.confirmation.open && !root.confirmation.busy {
                     root.action("activation-cancel", "");
+                    return accept;
+                }
+                if Breakpoints.below-d && root.pop != 0 {
+                    root.close-pop();
+                    return accept;
+                }
+                if Breakpoints.below-d && root.account-sheet {
+                    root.close-account-sheet();
                     return accept;
                 }
                 if root.details-open {
@@ -601,9 +720,21 @@ export component Dashboard inherits Window {
             refresh() => { root.action("refresh", ""); }
             update-apps() => { root.action("update-apps", ""); }
             logo-tapped => { scroller.content-y = 0px; }
-            status-tapped(anchor, w, h) => { }
-            theme-tapped(anchor, w, h) => { }
-            account-tapped(anchor, w, h) => { }
+            status-tapped(anchor, w, h) => {
+                if root.pop == 1 { root.close-pop(); } else { root.open-pop(1, anchor.x, anchor.y, w, h); }
+            }
+            theme-tapped(anchor, w, h) => {
+                if root.pop == 2 { root.close-pop(); } else { root.open-pop(2, anchor.x, anchor.y, w, h); }
+            }
+            account-tapped(anchor, w, h) => {
+                if Breakpoints.tier-p && !Breakpoints.short {
+                    if root.account-sheet { root.close-account-sheet(); } else { root.account-sheet = true; root.action("overlay-open", "sheet"); }
+                } else if root.pop == 3 {
+                    root.close-pop();
+                } else {
+                    root.open-pop(3, anchor.x, anchor.y, w, h);
+                }
+            }
         }
 
         // The P bottom tab bar: hidden while the keyboard is up; sheets and scrims draw above it.
@@ -615,11 +746,22 @@ export component Dashboard inherits Window {
             navigate(p) => { root.go(p); }
         }
 
-        overlay := SlideOver {
+        // ---- Details: D keeps the slide-over; below D it is a bottom sheet below 760 and a side
+        // panel from 760 and on T and short (3.5). The account stays; the container reflows with
+        // the tier on the next frame, unanimated.
+        if Breakpoints.tier-d: overlay := SlideOver {
             view-w: root.width;
             view-h: root.height;
             open: root.details-open;
             close-requested => { root.close-details(); }
+            // A click on another row swaps the content under the staying panel (the dip). The id
+            // is watched here because the element only exists on D.
+            property <string> prev-id: "";
+            property <string> id-watch: root.details.id;
+            changed id-watch => {
+                if root.details-open && self.prev-id != "" && self.id-watch != self.prev-id { self.swap(); }
+                self.prev-id = self.id-watch;
+            }
             // Fills the panel's content area (no explicit size: `parent` here would be the SlideOver).
             DetailsPanel {
                 data: root.details;
@@ -631,13 +773,183 @@ export component Dashboard inherits Window {
                 go-accounts => { root.close-details(); root.go("accounts"); }
             }
         }
+        if Breakpoints.below-d && root.details-as-sheet: Sheet {
+            tall: true;
+            open: root.details-open;
+            probe: "details-sheet";
+            close-requested => { root.close-details(); }
+            DetailsPanel {
+                width: 100%;
+                height: 100%;
+                data: root.details;
+                open: root.details-open;
+                busy: root.busy;
+                close => { root.close-details(); }
+                launch(id, target) => { root.action("launch", id + ":" + target); }
+                activate(kind, profile) => { root.action(kind, profile); }
+                go-accounts => { root.close-details(); root.go("accounts"); }
+            }
+        }
+        if Breakpoints.below-d && !root.details-as-sheet: SidePanel {
+            open: root.details-open;
+            probe: "details-panel";
+            close-requested => { root.close-details(); }
+            DetailsPanel {
+                width: 100%;
+                height: 100%;
+                data: root.details;
+                open: root.details-open;
+                busy: root.busy;
+                close => { root.close-details(); }
+                launch(id, target) => { root.action("launch", id + ":" + target); }
+                activate(kind, profile) => { root.action(kind, profile); }
+                go-accounts => { root.close-details(); root.go("accounts"); }
+            }
+        }
 
-        Dialog {
+        // ---- Header menus below D (3.5-3.6): the status detail, the Appearance menu (F/T) and the
+        // Account menu (F/T and short) as anchored popovers. On P the Account menu is a sheet. ----
+        if root.pop == 1: Popover {
+            anchor-x: root.pop-ax;
+            anchor-y: root.pop-ay;
+            anchor-w: root.pop-aw;
+            anchor-h: root.pop-ah;
+            design-w: Breakpoints.tier-p ? root.width - 24px : 340px;
+            band-top: root.chrome-h;
+            close-requested => { root.close-pop(); }
+            VerticalLayout {
+                padding: 12px;
+                Text {
+                    text: root.chrome.status-tip;
+                    font-size: Type.small;
+                    color: Theme.ink-2;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        if root.pop == 2: Popover {
+            anchor-x: root.pop-ax;
+            anchor-y: root.pop-ay;
+            anchor-w: root.pop-aw;
+            anchor-h: root.pop-ah;
+            design-w: 212px;
+            band-top: root.chrome-h;
+            close-requested => { root.close-pop(); }
+            MenuHead { text: "Appearance"; }
+            MenuItem { icon: "sun"; text: "Light"; checked: Theme.mode == 1; activated => { root.close-pop(); Theme.mode = 1; root.action("theme", "light"); } }
+            MenuItem { icon: "moon"; text: "Dark"; checked: Theme.mode == 2; activated => { root.close-pop(); Theme.mode = 2; root.action("theme", "dark"); } }
+            MenuItem { icon: "monitor"; text: "Auto, follows the system"; checked: Theme.mode == 0; activated => { root.close-pop(); Theme.mode = 0; root.action("theme", "auto"); } }
+        }
+        if root.pop == 3: Popover {
+            anchor-x: root.pop-ax;
+            anchor-y: root.pop-ay;
+            anchor-w: root.pop-aw;
+            anchor-h: root.pop-ah;
+            design-w: 260px;
+            band-top: root.chrome-h;
+            close-requested => { root.close-pop(); }
+            HorizontalLayout {
+                height: 70px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 11px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 16px;
+                        border-width: 1px;
+                        border-color: Theme.rule;
+                        Icon { x: 6px; y: 6px; name: "user"; tint: Theme.ink-2; width: 20px; height: 20px; }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text { text: root.chrome.username != "" ? root.chrome.username : "Owner"; font-size: 13.5px; font-weight: 640; color: Theme.ink; overflow: elide; }
+                    Text {
+                        text: root.chrome.host != "" ? "Signed in to this dashboard on " + root.chrome.host : "Signed in to this dashboard";
+                        font-size: Type.small;
+                        color: Theme.ink-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            MenuSeparator { }
+            MenuItem { icon: "logout"; text: "Sign out"; activated => { root.close-pop(); root.action("logout", ""); } }
+        }
+
+        // The P account sheet (3.5): the identity and Sign out only, 52 px rows. It stays a
+        // sheet until closed even if a reflow leaves P (1.6); opening is gated in account-tapped.
+        if root.account-sheet: Sheet {
+            open: true;
+            probe: "account-sheet";
+            close-requested => { root.close-account-sheet(); }
+            VerticalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 8px;
+                spacing: 0px;
+                HorizontalLayout {
+                    height: 64px;
+                    spacing: 11px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 16px;
+                            border-width: 1px;
+                            border-color: Theme.rule;
+                            Icon { x: 6px; y: 6px; name: "user"; tint: Theme.ink-2; width: 20px; height: 20px; }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        Text { text: root.chrome.username != "" ? root.chrome.username : "Owner"; font-size: Type.body; font-weight: 640; color: Theme.ink; overflow: elide; }
+                        Text {
+                            text: root.chrome.host != "" ? "Signed in to this dashboard on " + root.chrome.host : "Signed in to this dashboard";
+                            font-size: Type.small;
+                            color: Theme.ink-3;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                MenuSeparator { }
+                // One 52 px sheet row: the label in body size, the icon on the left (3.5).
+                Rectangle {
+                    height: 52px;
+                    HorizontalLayout {
+                        padding-left: 0px;
+                        padding-right: 0px;
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            Icon { name: "logout"; tint: Theme.ink-3; width: 20px; height: 20px; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text { text: "Sign out"; font-size: Type.body; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; }
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.close-account-sheet(); root.action("logout", ""); }
+                    }
+                }
+            }
+        }
+
+        dialog := Dialog {
             view-w: root.width;
             view-h: root.height;
             open: root.confirmation.open;
             dismissable: !root.confirmation.busy;
             card-w: 600px;
+            band-top: Breakpoints.below-d ? root.chrome-h : 0px;
+            band-inset: Breakpoints.below-d ? max(Device.keyboard, Device.safe-bottom) : 0px;
             close-requested => { root.action("activation-cancel", ""); }
             Text {
                 text: "Another " + root.confirmation.product + " process is running";
@@ -678,7 +990,27 @@ export component Dashboard inherits Window {
                 color: root.confirmation.error != "" && !root.confirmation.busy ? Theme.crit-text : Theme.ink-3;
                 wrap: word-wrap;
             }
-            HorizontalLayout {
+            // Buttons: side by side as today; on a card narrower than 400 they stack full width
+            // with the primary on top (3.8).
+            if Breakpoints.below-d && dialog.shown-card-w < 400px: VerticalLayout {
+                spacing: 8px;
+                Button {
+                    height: 48px;
+                    kind: "primary";
+                    text: "Yes, stop and restart";
+                    enabled: root.confirmation.valid && !root.confirmation.busy;
+                    hint: "Stop the listed processes and switch the " + root.confirmation.product + " account";
+                    clicked => { root.action("activation-confirm", ""); }
+                }
+                Button {
+                    height: 48px;
+                    text: "Cancel";
+                    enabled: !root.confirmation.busy;
+                    hint: "Keep every " + root.confirmation.product + " process and account unchanged";
+                    clicked => { root.action("activation-cancel", ""); }
+                }
+            }
+            if !(Breakpoints.below-d && dialog.shown-card-w < 400px): HorizontalLayout {
                 alignment: end;
                 spacing: 10px;
                 Button {
@@ -698,8 +1030,17 @@ export component Dashboard inherits Window {
         }
 
         ToastStack {
-            x: root.width - self.width - (root.details-open ? overlay.shown-width + 20px : 24px);
-            y: root.height - self.height - 24px;
+            // P: full width above the tab bar (or the keyboard); F/T and short: bottom right;
+            // D: exactly today's spot, stepping aside for the slide-over.
+            card-w: Breakpoints.tier-p && !Breakpoints.short ? min(480px, root.width - 24px - Device.safe-left - Device.safe-right)
+                : Breakpoints.below-d ? min(380px, root.width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right)
+                : 380px;
+            x: Breakpoints.tier-p && !Breakpoints.short ? (root.width - self.width) / 2
+                : Breakpoints.below-d ? root.width - self.width - Breakpoints.gutter - Device.safe-right
+                : root.width - self.width - (root.details-open ? min(580px, max(420px, root.width * 0.3)) + 20px : 24px);
+            y: root.height - self.height - (Breakpoints.tier-p && !Breakpoints.short ? max(root.tab-bar-h, Device.keyboard) + 8px
+                : Breakpoints.below-d ? Device.safe-bottom + 16px
+                : 24px);
             animate x { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
             toasts: root.toasts;
             dismissed(id) => { root.toast-dismissed(id); }

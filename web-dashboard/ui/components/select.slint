@@ -1,7 +1,49 @@
-// Select: a button showing the current choice and a chevron; the options open in a PopupWindow.
-import { Theme, Motion, Type } from "../theme.slint";
+// Select: a button showing the current choice and a chevron. On D the options open in a small
+// PopupWindow menu at the button. Below D (DESIGN-MOBILE.md 3.5) the options open in a window
+// overlay instead: a sheet list on P (52 px rows) and an anchored popover on F, T and short
+// (44 px rows), width clamped to the gutters, below the button when it fits and above otherwise.
+// Opening counts itself in Overlays.pops (the Back layer); a Back pop or an outside tap closes it.
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
+import { Overlays } from "./sheet.slint";
 import { Icon } from "icon.slint";
 import { MenuPanel, MenuItem } from "menu.slint";
+
+// One 52 px row of a P sheet list: the label in body size, a 20 px accent check on the selected.
+component SheetRow inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    callback picked(string);
+
+    height: 52px;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 12px;
+        Text {
+            text: root.text;
+            font-size: Type.body;
+            font-weight: root.checked ? 600 : 400;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                name: "check";
+                tint: Theme.accent-text;
+                width: 20px;
+                height: 20px;
+                opacity: root.checked ? 1 : 0;
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(root.text); }
+    }
+}
 
 export component Select inherits Rectangle {
     in property <[string]> options;
@@ -12,13 +54,22 @@ export component Select inherits Rectangle {
     in property <length> menu-width: max(root.width, 180px);
     callback selected(string);
 
+    property <bool> touch: Breakpoints.below-d;
+    property <length> avail-w: max(0px, Breakpoints.width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right);
+    // The F/T popover card: the MenuPanel's 6 px padding shows on both sides, one 44 px row per option.
+    property <length> pop-w: min(root.menu-width + 12px, root.avail-w);
+    property <length> pop-h: min(root.options.length * 44px + 12px, Breakpoints.height - max(Device.keyboard, Device.safe-bottom) - Device.safe-top - 24px);
+    property <length> pop-x: clamp(ta.absolute-position.x, Breakpoints.gutter + Device.safe-left,
+        max(Breakpoints.gutter + Device.safe-left, Breakpoints.width - Breakpoints.gutter - Device.safe-right - root.pop-w));
+    property <bool> pop-fits-below: ta.absolute-position.y + ta.height + 6px + root.pop-h <= Breakpoints.height - max(Device.keyboard, Device.safe-bottom);
+
     height: root.small ? 28px : 34px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
     border-radius: root.small ? 7px : 9px;
     border-width: 1px;
-    border-color: ta.has-hover || pop.is-open ? Theme.rule-strong : Theme.rule;
-    background: pop.is-open ? Theme.paper-3 : ta.has-hover ? Theme.paper-2 : Theme.paper;
+    border-color: ta.has-hover || pop.is-open || pop2.is-open ? Theme.rule-strong : Theme.rule;
+    background: pop.is-open || pop2.is-open ? Theme.paper-3 : ta.has-hover ? Theme.paper-2 : Theme.paper;
     opacity: root.enabled ? 1 : 0.45;
     animate background, border-color { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.65, 0, 0.35, 1); }
     transform-scale: ta.pressed ? 0.97 : 1;
@@ -49,15 +100,128 @@ export component Select inherits Rectangle {
                 tint: Theme.ink-3;
                 width: 14px;
                 height: 14px;
-                transform-rotation: pop.is-open ? 180deg : 0deg;
+                transform-rotation: pop.is-open || pop2.is-open ? 180deg : 0deg;
                 animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
             }
         }
     }
+
+    // The touch overlay: one full-window PopupWindow hosting the sheet (P) or the popover (F/T/short).
+    pop2 := PopupWindow {
+        x: -ta.absolute-position.x;
+        y: -ta.absolute-position.y;
+        width: Breakpoints.width;
+        height: Breakpoints.height;
+        close-policy: no-auto-close;
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Theme.sheet-scrim;
+            TouchArea {
+                clicked => { root.close-overlay(); }
+            }
+        }
+
+        // ---- P: bottom sheet list, grabber, 52 px rows, safe-bottom inside ----
+        if Breakpoints.tier-p: Rectangle {
+            property <bool> up: false;
+            init => { self.up = true; }
+            x: 0px;
+            width: parent.width;
+            height: min(24px + inner.preferred-height + Device.safe-bottom + 12px, parent.height - Device.safe-top - 12px) + 20px;
+            y: self.up ? parent.height - self.height + 20px : parent.height;
+            animate y { duration: Motion.on ? Motion.sheet-open : 0ms; easing: cubic-bezier(0.32, 0.72, 0, 1); }
+            background: Theme.sheet;
+            border-radius: Theme.r-sheet;
+            border-width: 1px;
+            border-color: Theme.rule;
+            clip: true;
+            Rectangle {
+                x: (parent.width - 36px) / 2;
+                y: (24px - 5px) / 2;
+                width: 36px;
+                height: 5px;
+                border-radius: Theme.r-grabber;
+                background: Theme.grabber;
+            }
+            Flickable {
+                x: 0px;
+                y: 24px;
+                width: parent.width;
+                height: parent.height - 24px - 20px;
+                content-height: inner.preferred-height;
+                inner := VerticalLayout {
+                    width: parent.width;
+                    padding-bottom: Device.safe-bottom + 12px;
+                    for option in root.options: SheetRow {
+                        text: option;
+                        checked: option == root.value;
+                        picked(t) => {
+                            root.close-overlay();
+                            if t != root.value {
+                                root.value = t;
+                                root.selected(t);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- F / T / short: anchored popover list of 44 px MenuItems ----
+        if !Breakpoints.tier-p: Rectangle {
+            x: root.pop-x;
+            y: root.pop-fits-below ? ta.absolute-position.y + ta.height + 6px
+                : max(Device.safe-top + 8px, ta.absolute-position.y - 6px - root.pop-h);
+            width: root.pop-w;
+            height: root.pop-h + 1px;
+            Flickable {
+                width: parent.width;
+                height: parent.height;
+                content-height: anchor-panel.preferred-height;
+                anchor-panel := MenuPanel {
+                    width: root.pop-w;
+                    height: self.preferred-height;
+                    for option in root.options: MenuItem {
+                        text: option;
+                        checked: option == root.value;
+                        activated => {
+                            root.close-overlay();
+                            if option != root.value {
+                                root.value = option;
+                                root.selected(option);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Back/history (DESIGN-MOBILE.md 3.5, 3.9): a Back pop closes the open overlay; a local watch
+    // is the only way to observe the global counter (`changed` takes a bare name).
+    property <int> pop-close-watch: Overlays.pop-close;
+    changed pop-close-watch => { root.close-overlay(); }
+
+    public function close-overlay() {
+        if pop2.is-open {
+            pop2.close();
+            Overlays.pops = max(0, Overlays.pops - 1);
+        }
+    }
+
     ta := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
-        clicked => { pop.show(); }
+        clicked => {
+            if root.touch {
+                Overlays.pops += 1;
+                pop2.show();
+            } else {
+                pop.show();
+            }
+        }
     }
     pop := PopupWindow {
         x: 0px;

@@ -19,6 +19,8 @@ export global Overlays {
     in-out property <bool> sheet: false;
     in-out property <int> pops: 0;
     in-out property <int> pop-request: 0;
+    // Bumped when a Back pop belongs to the popover layer: every open popover/select closes itself.
+    in-out property <int> pop-close: 0;
     out property <int> top: dialog ? 100 : details ? 90 : sheet ? 80 : pops > 0 ? 70 : 0;
 }
 
@@ -68,8 +70,9 @@ export component Sheet inherits Rectangle {
         if root.dragging {
             root.vel-off = 0px;
         } else if root.open {
-            property <float> vel: (root.raw - root.vel-off) / 1px / 50;
-            if root.raw > 96px || (root.raw > 24px && vel > 0.6) {
+            // Release velocity over the last ~50 ms in px/ms, computed inline (local properties in
+            // callbacks do not parse): the drag distance since the last 50 ms sample over 50.
+            if root.raw > 96px || (root.raw > 24px && (root.raw - root.vel-off) / 1px / 50 > 0.6) {
                 root.close-requested();
             } else {
                 if root.raw > 24px { root.overshot(); }
@@ -178,12 +181,13 @@ export component Sheet inherits Rectangle {
                 @children
             }
         }
-        // The drag handle: the grabber strip plus the title row (or 20 px of content, which the
-        // Details head keeps as padding). It sits above the content but below the Close button.
+        // The drag handle: the grabber strip plus the title row when the sheet has one. Without a
+        // title the band is the 24 px grabber zone only, so content (a Details head, for example)
+        // is never covered by the drag surface.
         drag := TouchArea {
             y: 0px;
             width: parent.width;
-            height: root.title != "" ? 80px : 44px;
+            height: root.title != "" ? 80px : 24px;
             moved => { root.raw = max(0px, self.mouse-y - self.pressed-y); }
         }
         ProbeMark { id: root.probe; }
@@ -222,8 +226,9 @@ export component SidePanel inherits Rectangle {
         if root.dragging {
             root.vel-off = 0px;
         } else if root.open {
-            property <float> vel: (root.raw - root.vel-off) / 1px / 50;
-            if root.raw > 96px || (root.raw > 24px && vel > 0.6) {
+            // Release velocity over the last ~50 ms in px/ms, computed inline (local properties in
+            // callbacks do not parse): the drag distance since the last 50 ms sample over 50.
+            if root.raw > 96px || (root.raw > 24px && (root.raw - root.vel-off) / 1px / 50 > 0.6) {
                 root.close-requested();
             } else {
                 if root.raw > 24px { root.overshot(); }

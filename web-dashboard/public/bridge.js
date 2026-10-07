@@ -1,4 +1,4 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue } from './auth-view.mjs';
@@ -244,8 +244,33 @@ function renderDetails(id) {
   show_details(JSON.stringify(view));
 }
 function pendingActivation() { return activationConfirmation.hasPending() || antigravityConfirmation.hasPending(); }
-/** The slide-over's left edge: SlideOver.panel-w in ui/components/slide-over.slint is clamp(30%, 420, 580) px. */
-function detailsPanelLeft() { return innerWidth - Math.min(580, Math.max(420, innerWidth * 0.3)); }
+
+// ---------------------------------------------------------------- Back button and history (3.9)
+// Every overlay (Details, a sheet, a popover, the activation dialog) pushes one entry; a popstate
+// closes the top-most overlay through pop_overlay(). Closing an overlay any other way consumes its
+// entry with history.back(); the flag marks our own consumption so the popstate handler ignores it.
+// Page switches push one entry from Home and replace otherwise, so Back from Analytics or Accounts
+// lands on Home and Back from Home leaves the app.
+let overlayDepth = 0;
+let consumingOverlayEntry = false;
+function belowD() { return innerWidth < 1280; }
+function pushOverlayEntry() {
+  if (!belowD()) return;
+  overlayDepth++;
+  try { history.pushState({ aac: 'overlay' }, ''); } catch {}
+}
+function consumeOverlayEntry() {
+  if (!belowD() || overlayDepth <= 0) return;
+  overlayDepth--;
+  consumingOverlayEntry = true;
+  try { history.back(); } catch { consumingOverlayEntry = false; }
+}
+/**
+ * The slide-over's left edge on D: SlideOver.panel-w in ui/components/slide-over.slint is
+ * clamp(30%, 420, 580) px. Below D the sheet and side panel close through their own scrims, so
+ * the outside-click probe is disabled there (a left edge of 0 never matches).
+ */
+function detailsPanelLeft() { return innerWidth >= 1280 ? innerWidth - Math.min(580, Math.max(420, innerWidth * 0.3)) : 0; }
 /**
  * Details closes on a click anywhere outside its panel (ROUND2). Slint's own background areas only see clicks
  * that nothing else takes, so a header button, a nested row action or an Analytics card would leave it open.
@@ -269,8 +294,14 @@ function closeDetailsOnOutsideClicks(canvas) {
 
 const activationConfirmation = createActivationConfirmation({
   activate: (target, body) => mutation(`/api/codex/profiles/${encodeURIComponent(target)}/activate`, body),
-  prompt: confirmation => show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` })),
-  close: close_activation_confirmation,
+  prompt: confirmation => {
+    pushOverlayEntry();
+    show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
+  },
+  close: () => {
+    consumeOverlayEntry();
+    close_activation_confirmation();
+  },
   busy: inProgress => setBusy(inProgress),
   success: async result => {
     if (data && typeof result?.name === 'string') {
@@ -287,8 +318,14 @@ const antigravityConfirmation = createAntigravityConfirmation({
   activate: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/activate`, body),
   confirm: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/confirm`, body),
   recover: () => mutation('/api/antigravity/recover', { hostId: 'ubuntu' }),
-  prompt: confirmation => show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` })),
-  close: close_activation_confirmation,
+  prompt: confirmation => {
+    pushOverlayEntry();
+    show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
+  },
+  close: () => {
+    consumeOverlayEntry();
+    close_activation_confirmation();
+  },
   busy: inProgress => setBusy(inProgress),
   success: async result => {
     // Selection/running proof comes from the next inventory, never an optimistic UI guess.
@@ -592,10 +629,14 @@ async function updateStatus() {
 }
 function navigate(page, { replace = false } = {}) {
   if (!PAGES.includes(page)) page = 'home';
+  const wasHome = currentPage === 'home';
   currentPage = page;
   set_current_page(page);
   const url = pagePath(page);
-  try { globalThis.history?.[replace ? 'replaceState' : 'pushState']?.(null, '', url); } catch {}
+  // Back/history (3.9): Home to another page pushes one entry; between non-Home pages, and back
+  // to Home, it replaces, so Back from Analytics or Accounts goes Home and Back from Home leaves.
+  const method = replace || !wasHome || page === 'home' ? 'replaceState' : 'pushState';
+  try { globalThis.history?.[method]?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) enterAnalytics();
   if (page === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
 }
@@ -768,8 +809,14 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'accounts' || action === 'settings') { navigate('accounts'); return; }
     if (action.startsWith('analytics-')) { if (authenticated) await analyticsAction(action, value); return; }
     if (action === 'theme') { saveTheme(value); return; }
-    if (action === 'details') { detailsOpens++; renderDetails(value); return; }
-    if (action === 'details-closed') { openDetailsId = ''; return; }
+    // One entry per Details session: a second row tapped while it is open swaps in place (D) or
+    // re-targets the sheet (below D) without stacking history entries.
+    if (action === 'details') { detailsOpens++; if (openDetailsId !== value) pushOverlayEntry(); renderDetails(value); return; }
+    if (action === 'details-closed') { openDetailsId = ''; consumeOverlayEntry(); return; }
+    // Sheets and popovers the Slint shell opened or closed (header menus, selects): the same
+    // history contract as Details (3.9). Closing after a Back pop consumes nothing (depth 0).
+    if (action === 'overlay-open') { pushOverlayEntry(); return; }
+    if (action === 'overlay-close') { consumeOverlayEntry(); return; }
     if (action === 'login') { await signIn(value); return; }
     // the sign-in layer moved, showed or hid the login form's fields: the HTML inputs follow (login-bridge.mjs)
     if (action === 'login-overlay') {
@@ -1037,6 +1084,14 @@ try {
   addEventListener('resize', resize); resize();
   closeDetailsOnOutsideClicks(document.querySelector('#canvas'));
   addEventListener('popstate', () => {
+    // Our own history.back() consuming a closed overlay's entry: nothing to answer.
+    if (consumingOverlayEntry) { consumingOverlayEntry = false; return; }
+    // A Back press over an open overlay closes the top-most one (dialog, Details, sheet, popover).
+    if (overlayDepth > 0) {
+      overlayDepth--;
+      try { pop_overlay(); } catch {}
+      return;
+    }
     currentPage = pageFromLocation(); set_current_page(currentPage);
     if (currentPage === 'analytics' && authenticated) enterAnalytics();
     if (currentPage === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
