@@ -43,13 +43,113 @@ function fromNetwork(request, timeoutMs) {
 
 function store(request, response) {
   if (!AacSwRoute.cacheable(response)) return Promise.resolve();
-  var copy = response.clone();
+  var mirror = null;
+  try {
+    var url = new URL(request.url);
+    if (
+      AacSwRoute.shouldMirrorStartUrl(
+        {
+          method: request.method,
+          sameOrigin: url.origin === self.location.origin,
+          pathname: url.pathname,
+          isNavigation: request.mode === 'navigate',
+        },
+        response
+      )
+    ) {
+      // Every page route serves the same index.html: mirror it under the
+      // start URL, so the installed app's first offline launch finds a shell.
+      mirror = new URL(AacSwRoute.START_URL_PATHNAME, url.origin).toString();
+    }
+  } catch {
+    mirror = null;
+  }
   return caches
     .open(CACHE)
     .then(function (cache) {
-      return cache.put(request, copy);
+      // A separate clone per entry; the original stays with the page.
+      var puts = [cache.put(request, response.clone())];
+      if (mirror) puts.push(cache.put(mirror, response.clone()));
+      return Promise.all(puts);
     })
     .catch(function () {});
+}
+
+// An offline navigation missed its own cache entry: walk the pure fallback
+// lookups in order (same URL ignoring the query, the start-URL shell, any
+// cached navigation shell), and only then answer the bare offline page.
+function offlineNavigation(request, url) {
+  var lookups = AacSwRoute.navigationFallbackLookups({
+    method: request.method,
+    sameOrigin: url.origin === self.location.origin,
+    pathname: url.pathname,
+  });
+  var chain = Promise.resolve(undefined);
+  lookups.forEach(function (lookup) {
+    chain = chain.then(function (cached) {
+      if (cached) return cached;
+      return matchFallback(request, url, lookup).catch(function () {
+        return undefined;
+      });
+    });
+  });
+  return chain.then(function (cached) {
+    if (cached) return cached;
+    return new Response(OFFLINE_PAGE, {
+      status: AacSwRoute.OFFLINE_STATUS,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  });
+}
+
+function matchFallback(request, url, lookup) {
+  if (!lookup) return Promise.resolve(undefined);
+  if (lookup.lookup === 'same-url-ignore-search') {
+    return caches.match(request, { ignoreSearch: true });
+  }
+  if (lookup.lookup === 'start-url') {
+    return caches.match(new URL(lookup.pathname || '/', url.origin).toString());
+  }
+  if (lookup.lookup === 'any-navigation-shell') {
+    return anyCachedShell();
+  }
+  return Promise.resolve(undefined);
+}
+
+// Any cached navigation shell: the first same-origin cached entry holding an
+// HTML document. Every page route serves the same index.html, so any one of
+// them shows the in-app Offline card; subresources never qualify.
+function anyCachedShell() {
+  return caches
+    .open(CACHE)
+    .then(function (cache) {
+      return cache.keys().then(function (keys) {
+        var documents = keys.filter(function (key) {
+          if (!key || key.method !== 'GET') return false;
+          var keyUrl;
+          try {
+            keyUrl = new URL(key.url);
+          } catch {
+            return false;
+          }
+          return keyUrl.origin === self.location.origin;
+        });
+        var chain = Promise.resolve(undefined);
+        documents.forEach(function (key) {
+          chain = chain.then(function (found) {
+            if (found) return found;
+            return cache.match(key).then(function (response) {
+              if (response && AacSwRoute.isHtmlDocument(response)) return response;
+              return undefined;
+            });
+          });
+        });
+        return chain;
+      });
+    })
+    .catch(function () {
+      return undefined;
+    });
 }
 
 // The shell (index.html, bridge.js, *.mjs, fonts, icons, page routes): the
@@ -64,10 +164,7 @@ function networkFirst(request, timeoutMs) {
       return caches.match(request).then(function (cached) {
         if (cached) return cached;
         if (request.mode === 'navigate') {
-          return new Response(OFFLINE_PAGE, {
-            status: AacSwRoute.OFFLINE_STATUS,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
-          });
+          return offlineNavigation(request, new URL(request.url));
         }
         throw new Error('The app shell is not cached yet.');
       });
