@@ -965,7 +965,9 @@ function heatView(A, R, state, width, height) {
     mode: byCost ? 'cost' : 'tokens',
     sub: `${byCost ? partial ? 'Estimated cost, partial,' : 'Estimated cost' : 'Tokens without cache reads'} per hour, local time · ${dateLabel(R)}`,
     cells: out, days: WD,
-    hours: Array.from({ length: 24 }, (_, h) => h % (wide ? 3 : 6) === 0 ? hourLab(h) : ''),
+    // labels every 3 hours at every width (desktop grids were always wide, so nothing changes there);
+    // P shows every other one for the spec's every-6 row (ax-time.slint)
+    hours: Array.from({ length: 24 }, (_, h) => h % 3 === 0 ? hourLab(h) : ''),
     busiest: max ? valTxt(max) : 'none',
     dash: heatDash(Math.max(4, cellW), height || 24),
   };

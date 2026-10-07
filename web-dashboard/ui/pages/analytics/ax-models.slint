@@ -241,12 +241,13 @@ component CbmRow inherits Rectangle {
                     }
                 }
             }
-            Text {
-                text: root.m.tok + (root.m.share != "" && root.m.share != "Unavailable" ? " · " + root.m.share : "") + (root.m.partial ? " · partial" : "");
-                font-family: Type.tab;
-                font-size: Type.small;
-                color: Theme.ink-2;
-                vertical-alignment: center;
+            HorizontalLayout {
+                spacing: 5px;
+                min-height: 19px;
+                Text { text: root.m.tok; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                if root.m.share != "" && root.m.share != "Unavailable": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
+                if root.m.share != "" && root.m.share != "Unavailable": VerticalLayout { alignment: center; ValueUnit { value: root.m.share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                if root.m.partial: Text { text: "· partial"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
             }
         }
     }

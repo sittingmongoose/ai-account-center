@@ -425,7 +425,7 @@ component RwRow inherits HorizontalLayout {
     // magnitudes elide inside the fixed column instead of shifting the grid
     property <length> tok-w: Breakpoints.tier-d ? (root.narrow ? 64px : 76px) : 64px;
     property <length> share-w: Breakpoints.tier-d ? (root.narrow ? 60px : 70px) : 64px;
-    property <length> cost-w: Breakpoints.tier-d ? (root.narrow ? 86px : 96px) : 72px;
+    property <length> cost-w: Breakpoints.tier-d ? (root.narrow ? 86px : 96px) : 76px;
     spacing: Breakpoints.tier-d ? (root.narrow ? 10px : 12px) : 8px;
     min-height: 23px;
     HorizontalLayout {
@@ -505,11 +505,11 @@ component TokSection inherits VerticalLayout {
                 min-height: 19px;
                 Text { text: t.tok; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; AxPress { tip: t.tok-tip; long-tip: t.tok-tip; } }
                 Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                Text { text: t.tok-share; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                VerticalLayout { alignment: center; ValueUnit { value: t.tok-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
                 Text { text: "and"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
                 Text { text: t.cost; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
                 if t.cost-share != "": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                if t.cost-share != "": Text { text: t.cost-share; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                if t.cost-share != "": VerticalLayout { alignment: center; ValueUnit { value: t.cost-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
             }
         }
     }
@@ -728,7 +728,7 @@ component CacheSection inherits VerticalLayout {
             Rectangle { horizontal-stretch: 1; }
             Caps { text: "TOKENS"; width: Breakpoints.tier-d ? (root.narrow ? 64px : 76px) : 64px; horizontal-alignment: right; }
             Caps { text: "SHARE"; width: Breakpoints.tier-d ? (root.narrow ? 60px : 70px) : 64px; horizontal-alignment: right; }
-            Caps { text: "EST. COST"; width: Breakpoints.tier-d ? (root.narrow ? 86px : 96px) : 72px; horizontal-alignment: right; }
+            Caps { text: "EST. COST"; width: Breakpoints.tier-d ? (root.narrow ? 86px : 96px) : 76px; horizontal-alignment: right; }
         }
         RwRow { kind: "cr"; name: "Reads"; tok: AxData.cache.r-tok; tip: AxData.cache.r-tip; share: AxData.cache.r-share; cost: AxData.cache.r-cost; narrow: root.narrow; }
         RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }

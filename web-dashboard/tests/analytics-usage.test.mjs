@@ -394,17 +394,17 @@ test('phone "tokens by provider" (360): lines fit the narrow box and keep every 
   assert.equal(p.lines.at(-1).last, true);
 });
 
-test('phone heatmap (346x22): hour labels every 6 hours, 168 cells, a dash for empty hours', () => {
+test('phone heatmap (346x22): hour labels every 3 hours, 168 cells, a dash for empty hours', () => {
   const view = usageView(payload(), state(), { now, sizes: { heat: { w: 346, h: 22 } } });
   const heat = view.heat;
   assert.equal(heat.cells.length, 168);
   const labels = heat.hours.filter(Boolean);
-  assert.equal(labels.length, 4);
+  assert.equal(labels.length, 8);
   assert.ok(labels.every(l => /^\d{1,2} (AM|PM)$/.test(l)), labels.join(','));
   assert.match(heat.dash, /^M/);
-  // a wide grid keeps every-3 labels
-  const wide = usageView(payload(), state(), { now, sizes: { heat: { w: 900, h: 24 } } }).heat;
-  assert.equal(wide.hours.filter(Boolean).length, 8);
+  // P shows every other label for its every-6 row
+  const pLabels = heat.hours.filter((l, i) => l && i % 6 === 0);
+  assert.equal(pLabels.length, 4);
 });
 
 test('phone daily cost (360x200): bars fit their slots and labels thin to the width', () => {
