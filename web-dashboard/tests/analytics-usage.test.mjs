@@ -357,3 +357,62 @@ test('the header names the remote hosts a refresh waits on', () => {
   assert.equal(usageHead(junk, state(), { now }).updateNote, 'Updating · refreshing Mac…');
   assert.equal(usageView(both, state(), { now }).head.updateNote, 'Updating · refreshing Mac and Windows…');
 });
+
+// ---------------------------------------------------------------- phone widths (P4: DESIGN-MOBILE 4.2 + 5.3)
+// Chart geometry takes its box as input; at phone widths labels must thin (never overlap),
+// the provider summary must pack into narrow lines, and lookups must stay valid.
+const monoW = s => String(s).length * 7.15;
+
+test('phone trend (340x220): thinned x labels never overlap, ticks stay in the plot', () => {
+  for (const range of ['24h', '7d', '30d']) {
+    const view = usageView(payload(), state({ range }), { now, sizes: { trend: { w: 340, h: 220 } } });
+    const t = view.trend;
+    assert.equal(t.pw, 340 - 62 - 70);
+    assert.ok(t.yTicks.length >= 3 && t.yTicks.length <= 5);
+    for (const tk of t.xTicks) assert.ok(tk.x >= 18 && tk.x <= t.pw - 18, `${range}: ${tk.label} at ${tk.x}`);
+    const sorted = [...t.xTicks].sort((a, b) => a.x - b.x);
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i].x - sorted[i - 1].x;
+      assert.ok(gap >= (monoW(sorted[i].label) + monoW(sorted[i - 1].label)) / 2, `${range}: "${sorted[i - 1].label}" / "${sorted[i].label}"`);
+    }
+    assert.ok(t.lut.length > 0 && t.lut.every(i => i >= 0 && i < t.buckets.length));
+  }
+});
+
+test('phone "tokens by provider" (360): lines fit the narrow box and keep every provider', () => {
+  const view = usageView(payload(), state(), { now, sizes: { trend: { w: 360, h: 220 } } });
+  const p = view.providers;
+  assert.equal(p.shown, true);
+  const room = 360 - 160 - 8;
+  const widthOf = it => (it.mark ? 21 : 0) + it.label.length * 7.1 + 5 + it.value.length * 7.7;
+  for (const line of p.lines) {
+    const w = line.items.reduce((s, it, i) => s + widthOf(it) + (i ? 26 : 0), 0);
+    assert.ok(w <= Math.max(120, room) + 1, `line of ${line.items.length} fits ${room}px`);
+  }
+  assert.deepEqual(p.lines.flatMap(l => l.items.map(i => i.key)).sort(), p.items.map(i => i.key).sort());
+  assert.equal(p.lines[0].first, true);
+  assert.equal(p.lines.at(-1).last, true);
+});
+
+test('phone heatmap (346x22): hour labels every 3 hours, 168 cells, a dash for empty hours', () => {
+  const view = usageView(payload(), state(), { now, sizes: { heat: { w: 346, h: 22 } } });
+  const heat = view.heat;
+  assert.equal(heat.cells.length, 168);
+  const labels = heat.hours.filter(Boolean);
+  assert.equal(labels.length, 8);
+  assert.ok(labels.every(l => /^\d{1,2} (AM|PM)$/.test(l)), labels.join(','));
+  assert.match(heat.dash, /^M/);
+  // P shows every other label for its every-6 row
+  const pLabels = heat.hours.filter((l, i) => l && i % 6 === 0);
+  assert.equal(pLabels.length, 4);
+});
+
+test('phone daily cost (360x200): bars fit their slots and labels thin to the width', () => {
+  const view = usageView(payload(), state(), { now, sizes: { daily: { w: 360, h: 200 } } });
+  const d = view.daily;
+  assert.equal(d.empty, false);
+  const slot = (360 - 58 - 14) / Math.max(1, d.bars.length);
+  assert.ok(slot > 0);
+  assert.ok(d.bars.every(b => b.h >= 0));
+  assert.ok(d.yTicks.length >= 3 && d.yTicks[0].base);
+});
