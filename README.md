@@ -244,6 +244,24 @@ signed out from another browser.
   mode Full (strict), and consider Cloudflare Access in front of the name,
   so the dashboard password is the second lock rather than the only one.
 
+## Use it on your phone
+
+The dashboard is responsive down to small phones and installs as an app:
+
+1. Open the dashboard's HTTPS address on the phone, for example
+   `https://dashboard.example.test`, and sign in with the dashboard username
+   and password. Password managers (iCloud Keychain, 1Password, Google
+   Password Manager) offer the saved login and fill both fields.
+2. Install it as an app: on iOS open the Share menu in Safari, then choose
+   Add to Home Screen; on Android Chrome use the Install app button
+   (Settings > Home screen app, or the browser menu). The installed app
+   opens full-screen and follows the same light/dark setting.
+3. The installed app on iOS keeps its own sign-in, separate from Safari, so
+   sign in once more there; Remember me keeps it signed in.
+
+No usage readings are stored on the phone: with no connection the installed
+app shows an Offline card with Try again instead of last-known numbers.
+
 ## Native trays
 
 The Mac menu bar app and the Windows tray app show the same accounts and

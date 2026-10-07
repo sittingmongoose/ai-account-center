@@ -208,6 +208,40 @@ headless Chrome with SwiftShader WebGL. Compare against the approved Daylight
 Atlas concept (`redesign-concepts-20261001/c-daylight-atlas/`) at 1024 x 700,
 1440 x 900, 1920 x 1080 and 2560 x 1440, light and dark.
 
+## Supported sizes and mobile testing
+
+The dashboard is responsive from a 320 px floor to desktop widths: P (phone,
+below 600), F (foldable and small tablet, 600-899), T (tablet, 900-1279) and D
+(desktop, 1280 and up, unchanged), plus a short-height variant below 500 px
+tall for landscape phones. Safe-area insets, the on-screen keyboard height,
+the coarse/hover pointer profile, standalone PWA mode and online state reach
+Slint through the `Device` global; see
+[ui/README-ARCHITECTURE.md](ui/README-ARCHITECTURE.md).
+
+To test below D, serve a `dist/ui` build with sanitized fixture data (never
+real account data) and drive it from a second machine:
+
+- In desktop Chrome emulation, judge layouts at device scale factor 1: at
+  scale 2-3 the canvas backing store does not follow the emulated DPR, an
+  emulation artefact (real devices render at the right size and crisp). Match
+  the tier's matchMedia profile (coarse pointer, hover, standalone display
+  mode) with matching safe-area, keyboard and online values: bridge.js
+  forwards them through the `set-safe-area`, `set-input-profile`,
+  `set-keyboard` and `set-online` wasm exports into the `Device` global. Append
+  `?e2e` so bridge.js reports every probed control's window rectangle through
+  `globalThis.__aacProbe` for scripted tap and overflow checks.
+- On iOS Simulator and the Android emulator, open the fixture preview over
+  the local network (secure context), probe DPR, viewport, canvas size and
+  safe areas from JS, and screenshot each tier in light and dark. WebDriver
+  taps are unreliable on iOS Simulator, so prefer scripted pointer events
+  there plus one manual touch pass; Android Chrome over CDP takes trusted
+  touch taps. Sign-in, install and service-worker checks need the real
+  throwaway server (temporary home, test user only): Add to Home Screen and
+  install-prompt acceptance have no CLI on either platform and are manual.
+- Desktop regression stays pixel-exact: compare 1440, 1920 and 2560 against
+  the pre-mobile screenshots with fixture data; only time-based texts may
+  differ.
+
 For automated Chromium DPI checks, launch a disposable browser with
 `--force-device-scale-factor=N` and a new context with `device_scale_factor=N`
 (test N=1 and N=2). Record CSS size, `devicePixelRatio`, ResizeObserver's
