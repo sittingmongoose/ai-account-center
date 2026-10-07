@@ -884,11 +884,11 @@ export component Dashboard inherits Window {
         // sheet until closed even if a reflow leaves P (1.6); opening is gated in account-tapped.
         if root.account-sheet: Sheet {
             open: true;
+            title: "Account";
             probe: "account-sheet";
             close-requested => { root.close-account-sheet(); }
             VerticalLayout {
-                padding-left: 16px;
-                padding-right: 16px;
+                // The titled sheet already pads its content 16 px at the sides.
                 padding-top: 8px;
                 spacing: 0px;
                 HorizontalLayout {

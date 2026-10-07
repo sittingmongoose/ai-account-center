@@ -56,9 +56,11 @@ export component Select inherits Rectangle {
 
     property <bool> touch: Breakpoints.below-d;
     property <length> avail-w: max(0px, Breakpoints.width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right);
-    // The F/T popover card: the MenuPanel's 6 px padding shows on both sides, one 44 px row per option.
+    // The F/T popover card: the MenuPanel's 6 px padding shows on both sides, one 44 px row per
+    // option, plus the panel's 1 px border on each side (the desktop's n * 36 + 14 formula at 44).
     property <length> pop-w: min(root.menu-width + 12px, root.avail-w);
-    property <length> pop-h: min(root.options.length * 44px + 12px, Breakpoints.height - max(Device.keyboard, Device.safe-bottom) - Device.safe-top - 24px);
+    property <length> content-h: root.options.length * 44px + 14px;
+    property <length> pop-h: min(root.content-h, Breakpoints.height - max(Device.keyboard, Device.safe-bottom) - Device.safe-top - 24px);
     property <length> pop-x: clamp(ta.absolute-position.x, Breakpoints.gutter + Device.safe-left,
         max(Breakpoints.gutter + Device.safe-left, Breakpoints.width - Breakpoints.gutter - Device.safe-right - root.pop-w));
     property <bool> pop-fits-below: ta.absolute-position.y + ta.height + 6px + root.pop-h <= Breakpoints.height - max(Device.keyboard, Device.safe-bottom);
@@ -175,14 +177,14 @@ export component Select inherits Rectangle {
             y: root.pop-fits-below ? ta.absolute-position.y + ta.height + 6px
                 : max(Device.safe-top + 8px, ta.absolute-position.y - 6px - root.pop-h);
             width: root.pop-w;
-            height: root.pop-h + 1px;
+            height: root.pop-h;
             Flickable {
                 width: parent.width;
                 height: parent.height;
-                content-height: anchor-panel.preferred-height;
+                content-height: root.content-h;
                 anchor-panel := MenuPanel {
                     width: root.pop-w;
-                    height: self.preferred-height;
+                    height: root.content-h;
                     for option in root.options: MenuItem {
                         text: option;
                         checked: option == root.value;
