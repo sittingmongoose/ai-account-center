@@ -696,10 +696,12 @@ component QuotaGroup inherits Rectangle {
             // Below D the meta sits on its own full-width line under the name and the
             // head grows to fit, so neither elides (task 9 O10). Unconditional with zero
             // size on D (the KpiCard measurer pattern): gh.height reads its
-            // preferred-height, which a below-D-only id could not provide. The meta
+            // preferred-height, which a below-D-only id could not provide. Hidden on D:
+            // zero size alone still paints the children over the D head. The meta
             // wrapper is cross-forced by the column (the A4 note pattern), so the Text
             // width binding measures the wrapped height at the true width.
             headcol := VerticalLayout {
+                visible: !Breakpoints.tier-d;
                 x: 0px;
                 y: Breakpoints.tier-d ? 0px : root.shown ? 4px : 12px;
                 animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
