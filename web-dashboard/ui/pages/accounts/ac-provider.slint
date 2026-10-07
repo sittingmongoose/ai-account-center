@@ -810,8 +810,11 @@ component AgPolicyBox inherits Rectangle {
     }
     // the box is wide enough for one row of controls; derived from the window (the box's own width in
     // its layout would loop). The section fills the page, the box sits in the section's 18 px gutters.
+    // The one-row gate is the row's real natural width (toggle + stepper + both segmented controls,
+    // ~930 px with the longest labels), not the concept's 860: between the two the row overflowed the
+    // box and the card (measured at 1000 px), so those widths get the 2 x 2 grid, which compresses.
     property <length> inner-w: Breakpoints.tier-width - 2 * Breakpoints.gutter - 38px;
-    property <bool> one-row: Breakpoints.tier-d ? Breakpoints.width >= 1360px : root.inner-w >= 860px;
+    property <bool> one-row: Breakpoints.tier-d ? Breakpoints.width >= 1360px : root.inner-w >= 940px;
     property <bool> grid: !root.one-row && root.inner-w >= 520px;
 
     min-height: inner.preferred-height;
@@ -832,14 +835,19 @@ component AgPolicyBox inherits Rectangle {
             ink: Theme.ink-2;
             text: root.ag.note-strong != "" ? root.ag.note-strong + " " + root.ag.note : root.ag.note;
         }
-        // one row when the box is wide enough, otherwise the desktop's second row holds the cooldown
+        // one row when the box is wide enough, otherwise the desktop's second row holds the cooldown.
+        // The two segmented controls may shrink (min-width 0), but the toggle and stepper keep their
+        // natural width: their labels clip hard, while the segmented cells elide. Without this the box's
+        // natural row exceeded the box at F/T widths just over the gates, which stretched the whole
+        // section card past the page edge and clipped the head's captions (card grew to 710 px on a
+        // 669 px page).
         if root.one-row: HorizontalLayout {
             spacing: 22px;
             alignment: start;
-            AgToggle { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
-            AgStep { ag: root.ag; busy: root.busy; shown: root.shown; step(d) => { root.step(d); } }
-            AgPool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
-            AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            AgToggle { min-width: self.preferred-width; ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            AgStep { min-width: self.preferred-width; ag: root.ag; busy: root.busy; shown: root.shown; step(d) => { root.step(d); } }
+            AgPool { min-width: 0px; ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+            AgCool { min-width: 0px; ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
         }
         if !root.one-row && Breakpoints.tier-d: VerticalLayout {
             spacing: 12px;
@@ -855,16 +863,18 @@ component AgPolicyBox inherits Rectangle {
                 AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
             }
         }
-        // the 2 x 2 grid (520 to 859 below D): Auto-switch | Switch at, then Watch pool | Cooldown
+        // the 2 x 2 grid (520 to 859 below D): Auto-switch | Switch at, then Watch pool | Cooldown.
+        // Shrinkable segmented cells (min-width 0), so the controls compress instead of stretching the
+        // section card past the page edge at F widths just over the 520 gate.
         if !root.one-row && !Breakpoints.tier-d && root.grid: GridLayout {
             spacing: 12px;
             Row {
-                AgToggle { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
-                AgStep { ag: root.ag; busy: root.busy; shown: root.shown; step(d) => { root.step(d); } }
+                AgToggle { min-width: self.preferred-width; ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+                AgStep { min-width: self.preferred-width; ag: root.ag; busy: root.busy; shown: root.shown; step(d) => { root.step(d); } }
             }
             Row {
-                AgPool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
-                AgCool { ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+                AgPool { min-width: 0px; ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
+                AgCool { min-width: 0px; ag: root.ag; busy: root.busy; act(k, v) => { root.act(k, v); } }
             }
         }
         // the full-width list (under 520 below D)
@@ -942,7 +952,8 @@ component SectionFootMob inherits Rectangle {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
         padding-top: 12px;
-        padding-bottom: 12px;
+        // 16 to the card's bottom edge below every action (DESIGN-MOBILE.md 4.3.4, ISSUES-9 C3)
+        padding-bottom: 16px;
         spacing: 0px;
         IconNote {
             icon: root.provider.needs ? "alert" : "info";
@@ -951,7 +962,7 @@ component SectionFootMob inherits Rectangle {
             size: Type.small;
             text: root.provider.how;
         }
-        Rectangle { height: 8px; }
+        Rectangle { height: 12px; }
         // a dimmed (coming) button keeps its natural width and gains the caption; F/T right-align the row
         if root.any-coming: HorizontalLayout {
             spacing: 8px;
@@ -971,8 +982,11 @@ component SectionFootMob inherits Rectangle {
             }
             VerticalLayout { alignment: center; ComingWord { } }
         }
-        // one live button: full width, 48 tall
+        // one live button: full width, 48 tall. The slot keeps an explicit height: a plain Rectangle
+        // reserves none in a layout (its 48 px child does not grow it), so the card sized its bottom
+        // without the button and the button rendered over the card's rounded edge (ISSUES-9 C2).
         if !root.any-coming && Breakpoints.tier-p && root.provider.foot.length == 1: Rectangle {
+            height: 48px;
             for f[i] in root.provider.foot: ActionControl {
                 stretch: true;
                 tall: true;
@@ -1043,6 +1057,9 @@ export component ProviderSection inherits Plate {
     property <length> sec-w: Breakpoints.tier-width - 2 * Breakpoints.gutter;
     property <int> row-mode: Breakpoints.tier-d ? 2 : root.sec-w >= 920px ? 2 : root.sec-w >= 520px ? 1 : 0;
     property <length> pad-x: Breakpoints.tier-p ? 16px : Breakpoints.below-d ? 20px : 18px;
+    // task 9 accounts: the slot for the fixed "coming" caption beside the tray toggle. A hidden measurer
+    // Text reads preferred-width 0 in Slint 1.18, so the slot is a constant; the caption elides inside it.
+    property <length> coming-w: 48px;
 
     // Selected row: ONE tinted, outlined highlight per switchable section that glides between rows (translate
     // and height, ease-out, never past its target), inset 4 px top and bottom and 8 px from the sides.
@@ -1195,6 +1212,11 @@ export component ProviderSection inherits Plate {
                 alignment: center;
                 horizontal-stretch: 0;
                 spacing: 2px;
+                // below D the column keeps its widest row's width: layouts shrink stretch-0 children too
+                // when space is short, which squeezed this column and pushed the tray row's "coming"
+                // caption past the card edge at 669 px. D keeps its natural sizing.
+                min-width: Breakpoints.below-d ? max(h-show.preferred-width, h-tray.preferred-width)
+                    + (root.provider.tray-coming ? 6px + root.coming-w : 0px) : 0px;
                 TipArea {
                     owner: "show:" + root.provider.id;
                     tip: root.provider.toggle-tip;
@@ -1210,10 +1232,17 @@ export component ProviderSection inherits Plate {
                         toggled(on) => { root.act("accounts-show", root.provider.id + ":" + (on ? "show" : "hide")); }
                     }
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    alignment: start;
+                // The tray row is a fixed-width Rectangle: a HorizontalLayout's preferred width skips the
+                // conditional caption, so the column was reserved too narrow below D and the caption drew
+                // past the card's edge at 669 px. D keeps the old geometry (the caption rides in the padding).
+                Rectangle {
+                    height: 22px;
+                    width: Breakpoints.below-d ? max(h-show.preferred-width, h-tray.preferred-width)
+                        + (root.provider.tray-coming ? 6px + root.coming-w : 0px)
+                        : max(h-show.preferred-width, h-tray.preferred-width);
                     TipArea {
+                        x: 0px;
+                        y: 0px;
                         owner: "tray:" + root.provider.id;
                         tip: root.provider.tray-tip;
                         height: 22px;
@@ -1228,7 +1257,14 @@ export component ProviderSection inherits Plate {
                             toggled(on) => { root.act("accounts-tray", root.provider.id + ":" + (on ? "show" : "hide")); }
                         }
                     }
-                    if root.provider.tray-coming: ComingWord { }
+                    if root.provider.tray-coming: ComingWord {
+                        x: max(h-show.preferred-width, h-tray.preferred-width) + 6px;
+                        y: 0px;
+                        width: root.coming-w;
+                        height: 22px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
                 }
                 if root.provider.hidden-note != "": Text {
                     text: root.provider.hidden-note;

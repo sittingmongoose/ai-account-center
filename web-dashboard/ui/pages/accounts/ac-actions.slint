@@ -274,6 +274,10 @@ export component StretchSegmented inherits Rectangle {
             seg-row := HorizontalLayout {
                 alignment: center;
                 spacing: 6px;
+                // the desktop Segmented gives every segment 13 px side padding; without it two long
+                // elided labels ("Gemini models", "Claude and GPT models") read as one string
+                padding-left: 10px;
+                padding-right: 10px;
                 if item.icon != "": VerticalLayout {
                     alignment: center;
                     Icon { name: item.icon; tint: cell.fg; width: 15px; height: 15px; }
