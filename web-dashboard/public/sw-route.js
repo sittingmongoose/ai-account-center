@@ -25,6 +25,12 @@
   var NAVIGATION_TIMEOUT_MS = 3000;
   /** The offline fallback answers navigations only when neither network nor cache has the shell. */
   var OFFLINE_STATUS = 503;
+  /** The installed app launches here, so every stored page shell is mirrored to it. */
+  var START_URL_PATHNAME = '/';
+  /** Offline fallback lookups, in order: same URL, start URL, any shell. */
+  var SAME_URL_IGNORE_SEARCH = 'same-url-ignore-search';
+  var START_URL = 'start-url';
+  var ANY_NAVIGATION_SHELL = 'any-navigation-shell';
 
   /** The one cache name for a build; every deploy installs a new worker and drops the old caches. */
   function cacheName(buildId) {
@@ -81,14 +87,66 @@
     return true;
   }
 
+  /**
+   * Ordered cache lookups for an offline navigation whose own entry missed:
+   * the same URL ignoring the query (so /?e2e finds / and /accounts?x=1 finds
+   * /accounts), the cached start-URL shell, then any cached navigation shell.
+   * Only network-first paths get a shell fallback: /api, /v0, /ws and
+   * anything else route() passes through (or serves cache-first) returns no
+   * lookups. `request` is { method, sameOrigin, pathname }, as route() takes.
+   */
+  function navigationFallbackLookups(request) {
+    if (route(request) !== 'network-first') return [];
+    return [
+      { lookup: SAME_URL_IGNORE_SEARCH },
+      { lookup: START_URL, pathname: START_URL_PATHNAME },
+      { lookup: ANY_NAVIGATION_SHELL },
+    ];
+  }
+
+  /**
+   * Whether a stored navigation is also stored under the start URL, so the
+   * installed app's first offline launch finds a shell. Only HTML page-route
+   * navigations qualify: /api, /v0, /ws and anything else route() passes
+   * through never mirrors, and neither do subresources (never HTML), the
+   * start URL itself or non-navigation requests. `request` is
+   * { method, sameOrigin, pathname, isNavigation }; `response` is the fetched
+   * response (only its content type is read).
+   */
+  function shouldMirrorStartUrl(request, response) {
+    if (!request || request.isNavigation !== true) return false;
+    if (!isHtmlDocument(response)) return false;
+    if (route(request) !== 'network-first') return false;
+    return String(request.pathname || '/') !== START_URL_PATHNAME;
+  }
+
+  /**
+   * Whether a response is a navigation shell: an HTML document, which is what
+   * every page route serves. Subresources (scripts, fonts, icons, the wasm
+   * runtime) never qualify, so the any-shell scan cannot answer a document
+   * with one of them.
+   */
+  function isHtmlDocument(response) {
+    try {
+      var type = response && response.headers ? response.headers.get('content-type') : null;
+      return typeof type === 'string' && type.toLowerCase().indexOf('text/html') !== -1;
+    } catch {
+      return false;
+    }
+  }
+
   return {
     BUILD_ID_PATTERN: BUILD_ID_PATTERN,
     NAVIGATION_TIMEOUT_MS: NAVIGATION_TIMEOUT_MS,
     OFFLINE_STATUS: OFFLINE_STATUS,
+    START_URL_PATHNAME: START_URL_PATHNAME,
     cacheName: cacheName,
     isNeverCached: isNeverCached,
     route: route,
     navigationTimeoutMs: navigationTimeoutMs,
     cacheable: cacheable,
+    navigationFallbackLookups: navigationFallbackLookups,
+    shouldMirrorStartUrl: shouldMirrorStartUrl,
+    isHtmlDocument: isHtmlDocument,
   };
 });

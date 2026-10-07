@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 // smaller models" and, by cost, its models with no arc open into their models, and the trend readout names each
 // provider's tokens. Models stay the only division of the charts.
 process.env.TZ = 'UTC';
-const { usageView, providersView, providerChoices, activityData, pageRange, tokC } = await import('../public/analytics-usage.mjs');
+const { usageView, providersView, providerChoices, activityData, pageRange, tokC, provItemWidth, provItemGap, provNoteWidth } = await import('../public/analytics-usage.mjs');
 const { analyticsSlintModel } = await import('../public/analytics-data.mjs');
 
 const now = Date.parse('2026-10-01T12:00:00Z');
@@ -98,6 +98,22 @@ test('Tokens by provider packs into lines that fit the page, Other always last',
   const keys = usageView(withOther, state(), { now }).providers.items.map(i => i.key);
   assert.equal(keys.at(-1), 'other');
   assert.equal(usageView(withOther, state(), { now }).providers.items.at(-1).mark, '');
+});
+
+test('Tokens by provider: phone widths leave room for the trailing note on the last line', () => {
+  const A = activityData(payload(), now);
+  const rows = A.hours;
+  // Below-D content widths: 320/360 P, 669 F, 1024 T (window minus gutters). The Slint lines use
+  // the full width minus 2 px side padding, and the note ends the last line after its gap.
+  for (const cw of [296, 336, 629, 976]) {
+    const v = providersView(A, rows, state(), cw);
+    assert.ok(v.lines.length > 0);
+    for (const [i, l] of v.lines.entries()) {
+      const width = l.items.reduce((sum, it, k) => sum + (k ? provItemGap : 0) + provItemWidth(it), 0);
+      const tail = l.last ? provItemGap + provNoteWidth : 0;
+      assert.ok(width + tail <= cw - 4, `content ${cw}: line ${i} needs ${width + tail}`);
+    }
+  }
 });
 
 test('the provider picker lists every provider with usage in the range, in the dashboard\'s order', () => {
