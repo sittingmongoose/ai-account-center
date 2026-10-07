@@ -215,6 +215,12 @@ internal sealed class PairingFixture : IDisposable
                     if (device is { State: "active" } && tokens.FirstOrDefault(pair => pair.Value.State == "previous:" + bearer) is { Key: { } previous }) tokens[previous] = (tokens[previous].Id, "rotated-away");
                 }
                 else if (!cookie) { status = 401; payload = new { error = "Authentication required", code = "auth_required" }; }
+                else
+                {
+                    // A cookie session's read can be scripted down too (DashboardMode above).
+                    var rejected = path == "/api/accounts/dashboard" ? Scripted(DashboardMode) : null;
+                    if (rejected is { } no) { status = no.Item1; payload = no.Item2; }
+                }
                 if (status == 200) payload = path switch
                 {
                     "/api/accounts/settings" => new { refreshIntervalSeconds = 60 },

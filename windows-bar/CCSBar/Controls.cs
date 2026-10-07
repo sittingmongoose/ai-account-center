@@ -130,18 +130,22 @@ public static class Ui
     }
 
     /// <summary>The section column grid: mark | identity | meters | action slot | tail. The first meter starts on the
-    /// same x in every section (14 px after the identity, as in the concept); sections with three or four meters use
-    /// 12 px between meters (two use 14) so values and resets fit, and the tail takes up the difference, so every action
-    /// slot ends on the same line. The identity is the width all sections share, so the columns stay on one x with
-    /// Antigravity's four meters (its emails and sublines trim).</summary>
+    /// same x in every section (14 px after the identity, as in the concept), the tracks stay uniform, and the two- and
+    /// four-meter sections share their trailing shape, so the action slot starts on one line. With four meters
+    /// (Antigravity) the gap before the last column widens so the widest caption ("Claude/GPT 5-hour") fits above it.</summary>
     public static Grid SectionGrid(int meters, double acts, double identity = 162, double mark = 22)
     {
         var grid = new Grid();
         void Add(GridLength length) => grid.ColumnDefinitions.Add(new ColumnDefinition { Width = length });
         var gap = meters >= 3 ? 12 : 14;
         Add(new GridLength(mark)); Add(new GridLength(14)); Add(new GridLength(identity));
-        for (int i = 0; i < meters; i++) { Add(new GridLength(i == 0 ? 14 : gap)); Add(new GridLength(1, GridUnitType.Star)); }
-        Add(new GridLength(gap)); Add(new GridLength(acts)); Add(new GridLength(gap)); Add(new GridLength(28 - gap));
+        for (int i = 0; i < meters; i++)
+        {
+            Add(new GridLength(i == 0 ? 14 : meters == 4 && i == 3 ? 31 : gap));
+            Add(new GridLength(1, GridUnitType.Star));
+        }
+        Add(new GridLength(meters is 2 or 4 ? 14 : gap)); Add(new GridLength(acts));
+        Add(new GridLength(meters is 2 or 4 ? 14 : gap)); Add(new GridLength(meters is 2 or 4 ? 14 : 28 - gap));
         return grid;
     }
     public static int MeterColumn(int index) => 4 + 2 * index;

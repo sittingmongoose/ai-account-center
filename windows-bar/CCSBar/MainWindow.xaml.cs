@@ -732,7 +732,9 @@ public partial class MainWindow : Window
             var last = i == columns.Count - 1;
             var caption = Ui.Text(columns[i].Caption, 11, "Ink3", FontWeights.Medium, trim: !last);
             caption.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(caption, Ui.MeterColumn(i)); if (last) Grid.SetColumnSpan(caption, 3);
+            // A caption may run through its trailing gap: the next caption starts exactly two columns later.
+            Grid.SetColumn(caption, Ui.MeterColumn(i));
+            Grid.SetColumnSpan(caption, last ? 3 : 2);
             grid.Children.Add(caption);
         }
         return grid;
@@ -746,7 +748,8 @@ public partial class MainWindow : Window
         {
             var last = i == columns.Count - 1;
             var caption = Ui.Text(columns[i].Caption, 11, "Ink3", FontWeights.Medium, trim: !last);
-            Grid.SetColumn(caption, Ui.MeterColumn(i)); if (last) Grid.SetColumnSpan(caption, 3);
+            Grid.SetColumn(caption, Ui.MeterColumn(i));
+            Grid.SetColumnSpan(caption, last ? 3 : 2);
             grid.Children.Add(caption);
         }
         return grid;
@@ -795,11 +798,24 @@ public partial class MainWindow : Window
             quiet.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
         }
+        else if (provider == "antigravity" && account.AntigravityPlan is { QuotaPolicy: "none" } && !Meters(account).Any())
+        {
+            // A plan without a bundled Antigravity quota: one honest line instead of meters (ANTIGRAVITY-SPEC).
+            var quiet = Ui.Text("No Antigravity quota on this plan", 12, "Ink3", trim: true);
+            quiet.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
+        }
         else for (int i = 0; i < columns.Count; i++)
         {
             var cell = Cell(provider, account, columns[i]);
             if (cell is null) continue;
-            Grid.SetColumn(cell, Ui.MeterColumn(i)); grid.Children.Add(cell);
+            Grid.SetColumn(cell, Ui.MeterColumn(i));
+            // Meters are reused by key across samples, so every placement states its span: the pool marker covers
+            // both Claude/GPT columns when the whole pool is off the plan.
+            var poolMarker = provider == "antigravity" && columns[i].Key == "3p-5h"
+                && account.AntigravityPlan?.ThirdPartyModels == false && columns[i].Pick(account) is null;
+            Grid.SetColumnSpan(cell, poolMarker ? 3 : 1);
+            grid.Children.Add(cell);
         }
         var slot = ActionSlot(provider, account, accounts);
         if (slot is not null) { var surface = SlotSurface(slot); Grid.SetColumn(surface, Ui.ActsColumn(columns.Count)); grid.Children.Add(surface); }
@@ -838,8 +854,17 @@ public partial class MainWindow : Window
         {
             // A window a plan does not have gets an honest muted cell, never a fake 0% (ANTIGRAVITY-SPEC); the plan
             // summary is the tooltip. Accounts without antigravityPlan render as before: no reported window, no cell.
-            if (provider == "antigravity" && account.AntigravityPlan is { } plan && MutedCell(plan, column.Key) is { } muted)
-                return ShowMeter(key, MeterKind.Compact, new MeterSpec(null, plan.Summary, NaText: muted));
+            if (provider == "antigravity" && account.AntigravityPlan is { } plan)
+            {
+                if (column.Key.StartsWith("3p", StringComparison.Ordinal) && plan.ThirdPartyModels == false)
+                {
+                    // The whole Claude/GPT pool is off the plan: one marker across both of its columns.
+                    if (column.Key == "3p-5h") return MutedMeter(key, plan.Summary, "Not on plan");
+                    return null; // the marker from the 5-hour column spans this one
+                }
+                if (plan.QuotaPolicy == "weekly" && IsFiveHourKey(column.Key))
+                    return MutedMeter(key, plan.Summary, "Weekly only");
+            }
             return null; // no reported window, no cell
         }
         double? notch = null; double notchOpacity = 1;
@@ -853,14 +878,22 @@ public partial class MainWindow : Window
             notch = ag.ThresholdUsedPercent;
             notchOpacity = !ag.Enabled ? 0.18 : account.IsActive ? 1 : 0.4;
         }
-        return ShowMeter(key, MeterKind.Compact, CompactSpec(account, window, notch, notchOpacity));
+        var meter = ShowMeter(key, MeterKind.Compact, CompactSpec(account, window, notch, notchOpacity));
+        meter.Margin = new Thickness(0, 0, 8, 0); // the 8 px overage gutter (a muted cell keeps none, set in MutedMeter)
+        return meter;
     }
 
-    /// <summary>The muted text for a window a plan does not have: the 5-hour cells read "Weekly only" on a
-    /// weekly-only plan, the Claude/GPT cells read "Not on plan" without third-party models; null otherwise.</summary>
-    private static string? MutedCell(AntigravityPlan plan, string key) => key.StartsWith("gemini", StringComparison.Ordinal)
-        ? plan.QuotaPolicy == "weekly" ? "Weekly only" : null
-        : plan.ThirdPartyModels == false ? "Not on plan" : null;
+    /// <summary>The compact cells name a 5-hour window by its key ("gemini-5h", "3p-5h", or a label form).</summary>
+    private static bool IsFiveHourKey(string key) => key.EndsWith("-5h", StringComparison.Ordinal) || key.EndsWith("5-hour", StringComparison.Ordinal);
+
+    /// <summary>A muted plan cell draws no track, so it skips the meter's 8 px overage gutter and its text keeps the
+    /// whole column. The margin is stated on every placement (meters are reused by key across samples).</summary>
+    private Meter MutedMeter(string key, string tooltip, string text)
+    {
+        var meter = ShowMeter(key, MeterKind.Compact, new MeterSpec(null, tooltip, NaText: text));
+        meter.Margin = new Thickness(0);
+        return meter;
+    }
 
     private static MeterSpec CompactSpec(DashboardAccount account, QuotaWindow window, double? notch, double notchOpacity)
     {
@@ -985,7 +1018,8 @@ public partial class MainWindow : Window
     private static FrameworkElement NotReportedLabel()
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(new System.Windows.Shapes.Ellipse { Width = 18, Height = 18, Stroke = Theme.Brush("Ink4"), StrokeThickness = 1.5, StrokeDashArray = new DoubleCollection { 2, 1.6 } });
+        var ring = new System.Windows.Shapes.Ellipse { Width = 18, Height = 18, Stroke = Theme.Brush("Ink4"), StrokeThickness = 1.5, StrokeDashArray = new DoubleCollection { 2, 1.6 } };
+        ring.Uid = "slot-ring"; row.Children.Add(ring);
         var words = new StackPanel { Margin = new Thickness(6, 0, 0, 0) };
         var title = Ui.Text("Not reported", 12.5, "Ink2", FontWeights.Medium); title.LineHeight = 14; title.LineStackingStrategy = LineStackingStrategy.BlockLineHeight; words.Children.Add(title);
         var sub = Ui.Text("as active", 11, "Ink3"); sub.LineHeight = 14; sub.LineStackingStrategy = LineStackingStrategy.BlockLineHeight; words.Children.Add(sub);
@@ -1412,7 +1446,7 @@ public partial class MainWindow : Window
                 var value = Ui.Text(AmountValue(window), 12.5, "Ink", FontWeights.SemiBold); Grid.SetColumn(value, 3); row.Children.Add(value);
                 var subParts = new List<string>();
                 if (credits) subParts.Add(agPlan!.CreditsOverage == false ? "Not usable for Antigravity on this plan." : "Used only after the plan quota runs out, when AI Credit Overages is on.");
-                if (window.ExpiresAt is not null || window.Kind is "balance") subParts.Add(Formatting.Expiration(window.ExpiresAt));
+                else if (window.ExpiresAt is not null || window.Kind is "balance") subParts.Add(Formatting.Expiration(window.ExpiresAt));
                 if (window.Status == "cached") subParts.Add("Cached · " + Formatting.WindowSample(window.SampledAt));
                 if (subParts.Count > 0) { var sub = Ui.Text(string.Join(" · ", subParts), 11.5, "Ink3", trim: true); Grid.SetRow(sub, 1); Grid.SetColumn(sub, 2); Grid.SetColumnSpan(sub, 2); row.Children.Add(sub); }
                 var line = new Border { Child = row, Padding = new Thickness(0, 6, 0, 6), BorderBrush = Theme.Brush("Rule"), BorderThickness = new Thickness(0, i == 0 ? 0 : 1, 0, 0) };
