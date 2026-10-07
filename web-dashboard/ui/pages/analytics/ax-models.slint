@@ -552,12 +552,13 @@ export component AxDonutCard inherits AxCard {
     // below D the card spans the full content width: a window function, never the card's own width
     property <length> wrap-w: Breakpoints.tier-d ? root.width - 2 * root.pad-x
         : Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
-    // P: 180 centred above the list; F/T: 200 beside the list from a 480 inner width (DESIGN-MOBILE 4.2.5)
+    // P: centred above the list; F/T: beside the list from a 480 inner width (DESIGN-MOBILE 4.2.5)
     property <bool> side: Breakpoints.below-d && !Breakpoints.tier-p && root.wrap-w >= 480px;
-    // below D the donut fills the room it has (task 9 A5b): on P nearly the card's content width (a
-    // 220-260 px ring at 402), beside the list 200 to 240 growing with the card. D is unchanged.
+    // below D the donut fills the room it has (task 9 A5b/X35): on P nearly the card's content
+    // width, beside the list 200 to 280 growing with the card (the 280 cap binds from a 640 inner
+    // width, so Duo inner's 229 and its 344 legend are unchanged). D is unchanged.
     property <length> size: Breakpoints.tier-d ? clamp(round(root.wrap-w * 0.68 / 1px) * 1px, 260px, 380px)
-        : Breakpoints.tier-p ? min(root.wrap-w - 24px, 322px) : root.side ? clamp(root.wrap-w - 360px, 200px, 240px) : 180px;
+        : Breakpoints.tier-p ? min(root.wrap-w - 24px, 322px) : root.side ? clamp(root.wrap-w - 360px, 200px, 280px) : 180px;
     property <float> r1: root.size / 1px / 2 - 42;
     property <float> r0: root.r1 - max(22, round(root.size / 1px * 0.11));
     // first view: the arcs sweep in (ease-in-out, never past their share); then toggles morph
