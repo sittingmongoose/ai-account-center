@@ -536,19 +536,31 @@ export component AxHeader inherits Rectangle {
         property <length> date-w: min(336px, self.cw);
         property <length> pick-w: min(320px, self.cw);
         Text { text: "Analytics"; font-size: Type.page-title; font-weight: 620; color: Theme.ink; }
-        StyledText {
-            text: @markdown("<font color='\{Theme.ink-3}'>\{AxData.head.scope}</font><font color='\{Theme.ink-2}'>**\{AxData.head.read}**</font>");
-            default-color: Theme.ink-3;
-            default-font-size: Type.small;
-        }
-        HorizontalLayout {
+        subrow := HorizontalLayout {
             spacing: 6px;
+            // Capped at the subline's natural single-line width (same size, measured in the
+            // spacer below), so the info icon sits right after the read time and only wraps with
+            // the text when the line truly runs out (DESIGN-MOBILE 4.2.1).
+            sub := StyledText {
+                width: min(m-sub.preferred-width + 6px, max(48px, mlay.cw - 50px - (AxData.head.updating ? m-upd.preferred-width + 6px : 0px)));
+                text: @markdown("<font color='\{Theme.ink-3}'>\{AxData.head.scope}</font><font color='\{Theme.ink-2}'>**\{AxData.head.read}**</font>");
+                default-color: Theme.ink-3;
+                default-font-size: Type.small;
+                vertical-alignment: center;
+            }
             VerticalLayout {
                 alignment: center;
                 AxInfo { open: mlay.read-tip; tip: AxData.head.read-tip; clicked => { mlay.read-tip = !mlay.read-tip; } }
             }
             if AxData.head.updating: Text { text: AxData.head.update-note == "" ? "Updating…" : AxData.head.update-note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; }
+            // The slack goes here, never between the text and the icon. The zero-size measurers
+            // hide in the spacer so the rows above and below keep their 6 px rhythm.
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                m-sub := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: AxData.head.scope + AxData.head.read; font-size: Type.small; }
+                m-upd := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: AxData.head.update-note == "" ? "Updating…" : AxData.head.update-note; font-size: Type.small; }
+            }
         }
         if mlay.read-tip: VerticalLayout {
             padding-top: 2px;
@@ -820,7 +832,6 @@ export component AxProvLines inherits VerticalLayout {
         spacing: 8px;
         padding-left: 2px;
         Caps { text: AxData.prov-summary.label; min-height: 22px; }
-        Text { text: AxData.prov-summary.note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
     }
     for line in AxData.prov-lines: HorizontalLayout {
         spacing: 10px;
@@ -834,7 +845,8 @@ export component AxProvLines inherits VerticalLayout {
             if i > 0: Text { text: "·"; font-size: Breakpoints.tier-d ? 13px : Type.small; color: Theme.ink-4; vertical-alignment: center; horizontal-stretch: 0; }
             ProvItem { t: t; }
         }
-        if line.last && Breakpoints.width >= 1180px: Text { text: AxData.prov-summary.note; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
+        if line.last && Breakpoints.tier-d: Text { text: AxData.prov-summary.note; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
+        if line.last && Breakpoints.below-d: Text { text: AxData.prov-summary.note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
         Rectangle { horizontal-stretch: 1; }
     }
 }
