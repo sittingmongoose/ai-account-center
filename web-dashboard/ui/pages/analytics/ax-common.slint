@@ -340,6 +340,10 @@ export component AxLegendEntry inherits HorizontalLayout {
     in property <string> label;
     in property <string> note;
     spacing: 7px;
+    // Label and note sit inline: with the default stretch alignment a full-width entry shares
+    // its spare room equally between swatch, label and note, pushing the note to the card edge
+    // (task 9 O4). Desktop entries are content-sized, so this changes nothing there.
+    alignment: start;
     horizontal-stretch: 0;
     VerticalLayout { alignment: center; AxSwatch { c: root.c; c2: root.c2; shape: root.shape; } }
     Text { text: root.label; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-2; vertical-alignment: center; min-height: 18px; }
@@ -410,7 +414,16 @@ export component AxCardHead inherits HorizontalLayout {
         horizontal-stretch: 1;
         alignment: start;
         Text { text: root.title; font-size: Breakpoints.tier-d ? 16px : Breakpoints.tier-p ? 17px : 18px; font-weight: 640; color: Theme.ink; letter-spacing: -0.16px; min-height: 21px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":title"; } }
-        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
+        if root.sub != "" && Breakpoints.tier-d: Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
+        // Below D the sub is measured at its exact laid-out width: the column reports the
+        // wrapped height from the header's own width, so a sub that wraps grows the head
+        // instead of centring two lines in a one-line cell, up into the title (task 9 A4).
+        // Same note pattern as below: the Rectangle's width is cross-forced by the column,
+        // so the Text's width binding never loops back into the layout.
+        if root.sub != "" && Breakpoints.below-d: Rectangle {
+            min-height: sub-t.preferred-height;
+            sub-t := Text { width: parent.width; text: root.sub; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
+        }
         // the wrapped note sits directly in the column so its height is measured at the column's width
         if root.note != "": VerticalLayout {
             padding-top: 3px;
@@ -641,15 +654,27 @@ export component AxRoTime inherits Text {
 // lines) and a Close clears it. The layout never jumps.
 export component AxRoBar inherits Rectangle {
     in property <bool> has-sel;
+    // names the bar for the end-to-end harness (components/probe.slint); "" reports nothing
+    in property <string> probe: "";
     callback close();
     height: 36px;
+    // The hint sits at the bar's left (the card's content inset): an unpositioned child would
+    // centre itself in the bar, and the hidden body below would shrink the bar to its own
+    // max (an invisible layout still feeds the min-of-maxes combination), sliding the centred
+    // hint to the card edge (task 9 A6). Explicit geometry keeps both out of that combination.
     if !root.has-sel: Text {
+        x: 0px;
         text: Device.coarse ? "Tap the chart for a reading" : "Point at the chart for a reading";
         font-size: Type.small;
         color: Theme.ink-3;
         vertical-alignment: center;
+        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":hint"; }
     }
     body := HorizontalLayout {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
         visible: root.has-sel;
         spacing: 8px;
         VerticalLayout {
@@ -664,6 +689,7 @@ export component AxRoBar inherits Rectangle {
             AxPress { mouse-cursor: pointer; tapped => { root.close(); } }
         }
     }
+    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":bar"; }
 }
 
 // One swatch-and-value pair of a readout row: the value at 600 in the tabular face.
