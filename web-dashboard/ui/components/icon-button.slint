@@ -16,7 +16,7 @@ export component IconButton inherits Rectangle {
     in property <bool> pressed-look: false;
     in property <bool> enabled: true;
     in property <string> hint;
-    in property <color> tint: (ta.has-hover || root.pressed-look) && root.enabled ? Theme.ink : Theme.ink-2;
+    in property <color> tint: ((ta.has-hover && Device.hover) || root.pressed-look) && root.enabled ? Theme.ink : Theme.ink-2;
     // While true the icon spins (one-property loop); on release it eases out to the next rest point.
     in property <bool> spinning: false;
     // drawn dimmed but still clickable (a refusal opens its reason); names the button for the e2e harness
@@ -42,7 +42,7 @@ export component IconButton inherits Rectangle {
         }
     }
 
-    property <bool> hovered: ta.has-hover && root.enabled;
+    property <bool> hovered: ta.has-hover && Device.hover && root.enabled;
     // Below D every icon button is 40 visible with a 44 hit area (DESIGN-MOBILE.md 2.3).
     property <length> side: Breakpoints.tier-d ? (root.small ? 28px : 34px) : 40px;
     property <length> glyph: Breakpoints.tier-d ? (root.small ? 16px : 18px) : root.small ? 18px : 20px;

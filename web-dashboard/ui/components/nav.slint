@@ -3,7 +3,7 @@
 // Desktop keeps today's 34 px tabs in a 44 px track; the touch tiers use 40 px tabs in a 44 px track
 // (DESIGN-MOBILE.md 3.2-3.3) and the short header's compact NavBar is a 40 px track with 36 px tabs
 // whose hit areas fill the row (3.4).
-import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { Icon } from "icon.slint";
 
 component NavItem inherits Rectangle {
@@ -17,7 +17,7 @@ component NavItem inherits Rectangle {
     min-width: row.min-width;
     preferred-width: row.preferred-width;
     border-radius: 8px;
-    property <color> fg: root.selected ? Theme.nav-active-fg : ta.has-hover ? Theme.ink : Theme.ink-2;
+    property <color> fg: root.selected ? Theme.nav-active-fg : (ta.has-hover && Device.hover) ? Theme.ink : Theme.ink-2;
     transform-scale: ta.pressed ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     property <bool> show-icon: Breakpoints.tier-d ? !Breakpoints.compact : !(root.compact && Breakpoints.tier-p);

@@ -1,5 +1,5 @@
 // Text and password fields for the sign-in layer and settings forms.
-import { Theme, Motion, Type, Breakpoints } from "../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { Icon } from "icon.slint";
 
 export component Field inherits VerticalLayout {
@@ -65,7 +65,7 @@ export component Field inherits VerticalLayout {
         height: root.box-height;
         border-radius: 10px;
         border-width: 1px;
-        border-color: root.bad ? Theme.crit : root.focused ? Theme.accent : root.ok ? Theme.calm.mix(Theme.rule-strong, 0.7) : hover.has-hover || root.ext-hover ? Theme.ink-3.mix(Theme.rule-strong, 0.4) : Theme.rule-strong;
+        border-color: root.bad ? Theme.crit : root.focused ? Theme.accent : root.ok ? Theme.calm.mix(Theme.rule-strong, 0.7) : (hover.has-hover && Device.hover) || root.ext-hover ? Theme.ink-3.mix(Theme.rule-strong, 0.4) : Theme.rule-strong;
         background: root.enabled ? Theme.paper : Theme.paper-2;
         opacity: root.enabled ? 1 : 0.72;
         animate opacity { duration: Motion.tint(Motion.med); }
@@ -150,8 +150,8 @@ export component Field inherits VerticalLayout {
                     width: self.eye-size;
                     height: self.eye-size;
                     border-radius: Breakpoints.below-d ? 10px : 7px;
-                    background: eye.has-hover ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
-                    Icon { name: root.revealed ? "eye-off" : "eye"; tint: eye.has-hover ? Theme.ink : Theme.ink-3; width: 17px; height: 17px; x: (parent.width - 17px) / 2; y: (parent.height - 17px) / 2; }
+                    background: (eye.has-hover && Device.hover) ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
+                    Icon { name: root.revealed ? "eye-off" : "eye"; tint: (eye.has-hover && Device.hover) ? Theme.ink : Theme.ink-3; width: 17px; height: 17px; x: (parent.width - 17px) / 2; y: (parent.height - 17px) / 2; }
                     eye := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.revealed = !root.revealed; }
