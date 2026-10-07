@@ -1,10 +1,12 @@
 // Session stats, recent sessions, and the combined tokens-and-cache box.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
+import { Icon } from "../../components/icon.slint";
+import { Hover } from "../../components/hover-card.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
 import { ProbeMark } from "../../components/probe.slint";
 import { AxData, AxSessRecent } from "ax-data.slint";
-import { AxColor, AxCard, AxCardHead, AxNum, AxTip, AxSwatch, AxLegendEntry } from "ax-common.slint";
+import { AxColor, AxCard, AxCardHead, AxNum, AxTip, AxPress, AxSwatch, AxLegendEntry } from "ax-common.slint";
 
 // ---------------------------------------------------------------- the session table
 // One continued table across two boxes: Session stats shows the summary numbers, the per-provider rows
@@ -28,17 +30,79 @@ global SessCols {
     out property <length> when: 92px;
 }
 
-component SessRow inherits HorizontalLayout {
+component SessRow inherits Rectangle {
     in property <AxSessRecent> r;
     // "" reports nothing; the first row of each box names its cells for the e2e harness (see SessList)
     in property <string> probe: "";
-    min-height: 31px;
-    spacing: SessCols.gap;
-    VerticalLayout { alignment: center; width: SessCols.prov; horizontal-stretch: 0; HorizontalLayout { alignment: start; ProviderMark { provider: root.r.tool; size: 16px; } } }
-    Text { text: root.r.models; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 0px; AxTip { tip: root.r.tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":models"; } }
-    Text { text: root.r.tokens; width: SessCols.tok; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":tokens"; } }
-    Text { text: root.r.cost; width: SessCols.cost; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":cost"; } }
-    Text { text: root.r.when; width: SessCols.when; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: 12px; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":when"; } }
+    // stacked under a 560 inner width; below D a tap expands the row inline to list its models (4.2.6)
+    in property <bool> stacked: false;
+    property <bool> open: false;
+    min-height: Breakpoints.tier-d ? 31px : 52px;
+    border-radius: 7px;
+    background: Breakpoints.tier-d ? Theme.row-hover.with-alpha(0)
+        : ta.pressed ? Theme.pressed : (Device.hover && ta.has-hover) ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    animate background { duration: Motion.tint(Motion.fast); }
+    col := VerticalLayout {
+        spacing: 0px;
+        ta := AxPress {
+            mouse-cursor: Breakpoints.tier-d ? default : pointer;
+            tapped => {
+                if Breakpoints.below-d {
+                    root.open = !root.open;
+                }
+            }
+            if !root.stacked: HorizontalLayout {
+                padding-top: Breakpoints.tier-d ? 0px : 4px;
+                padding-bottom: Breakpoints.tier-d ? 0px : 4px;
+                spacing: SessCols.gap;
+                VerticalLayout { alignment: center; width: SessCols.prov; horizontal-stretch: 0; HorizontalLayout { alignment: start; ProviderMark { provider: root.r.tool; size: 16px; } } }
+                Text { text: root.r.models; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 0px; AxPress { tip: root.r.tip; long-tip: root.r.tip; tapped => { if Breakpoints.below-d { root.open = !root.open; } } } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":models"; } }
+                Text { text: root.r.tokens; width: SessCols.tok; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":tokens"; } }
+                Text { text: root.r.cost; width: SessCols.cost; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":cost"; } }
+                Text { text: root.r.when; width: SessCols.when; horizontal-stretch: 0; overflow: elide; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":when"; } }
+            }
+            if root.stacked: VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                padding-left: 4px;
+                padding-right: 4px;
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 9px;
+                    min-height: 24px;
+                    VerticalLayout { alignment: center; ProviderMark { provider: root.r.tool; size: 16px; } }
+                    Text { text: root.r.models; font-size: Type.small; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    Text { text: root.r.when; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; }
+                    VerticalLayout {
+                        alignment: center;
+                        Icon {
+                            name: "chev-down";
+                            width: 16px;
+                            height: 16px;
+                            tint: Theme.ink-3;
+                            transform-rotation: root.open ? 180deg : 0deg;
+                            animate transform-rotation { duration: Motion.med; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    min-height: 20px;
+                    Text { text: root.r.tokens; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                    Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
+                    Text { text: root.r.cost; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+        }
+        // the expanded models, from the row's own tip text (this replaces the session-models tip)
+        if Breakpoints.below-d && root.open: HorizontalLayout {
+            padding-left: 4px;
+            padding-right: 4px;
+            padding-bottom: 8px;
+            Text { text: root.r.tip; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+        }
+    }
 }
 
 component SessList inherits VerticalLayout {
@@ -47,8 +111,9 @@ component SessList inherits VerticalLayout {
     // names this box's header and first-row cells for the e2e harness (components/probe.slint); "" reports
     // nothing. Both boxes share the grid, so a harness can check one list by comparing their rectangles.
     in property <string> probe: "";
+    in property <bool> stacked: false;
     spacing: 0px;
-    HorizontalLayout {
+    if !root.stacked: HorizontalLayout {
         padding-bottom: 6px;
         spacing: SessCols.gap;
         Caps { text: "PROVIDER"; width: SessCols.prov; horizontal-stretch: 0; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + "-h:prov"; } }
@@ -60,11 +125,11 @@ component SessList inherits VerticalLayout {
     for r[i] in root.rows: VerticalLayout {
         spacing: 0px;
         Rectangle { height: 1px; background: Theme.rule-2; }
-        SessRow { r: r; probe: root.probe == "" || i > 0 ? "" : root.probe + "-c"; }
+        SessRow { r: r; probe: root.probe == "" || i > 0 ? "" : root.probe + "-c"; stacked: root.stacked; }
     }
     if root.rows.length == 0: Text {
         text: root.empty-text;
-        font-size: 12.5px;
+        font-size: Breakpoints.tier-d ? 12.5px : Type.small;
         color: Theme.ink-3;
         wrap: word-wrap;
         min-height: 32px;
@@ -90,7 +155,12 @@ component SessCell inherits Text {
 export component AxSessionsCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
-    property <bool> pad16: Breakpoints.width < 1180px;
+    // the card's allotted width, from the page arrangement (never the card's own width: binding loop)
+    in property <length> cell-w: 100000px;
+    property <bool> pad16: Breakpoints.tier-d ? Breakpoints.width < 1180px : Breakpoints.tier-p;
+    property <length> pad: root.pad16 ? 16px : 20px;
+    property <bool> prov-stacked: Breakpoints.below-d && root.cell-w - 2 * root.pad < 390px;
+    property <bool> list-stacked: Breakpoints.below-d && root.cell-w - 2 * root.pad < 560px;
     // ONE shared grid for the provider header and every provider row: the provider column takes the
     // remainder and the three numeric columns are fixed and right-aligned, identical in the header and
     // every row, so each value sits exactly under its header whatever the labels measure. They are the
@@ -104,15 +174,16 @@ export component AxSessionsCard inherits AxCard {
     VerticalLayout {
         // a card stretched by a taller neighbour (an open donut legend) keeps its content at the top
         alignment: start;
-        padding-left: root.pad16 ? 16px : 20px;
-        padding-right: self.padding-left;
+        padding-left: root.pad;
+        padding-right: root.pad;
         padding-top: 2px;
         padding-bottom: 16px;
         spacing: 14px;
         vertical-stretch: 1;
         // the stats spread across the card at the top under the subtitle, as the concept draws them; the
-        // table below keeps its own shared grid
-        HorizontalLayout {
+        // table below keeps its own shared grid. Below D the three columns are exactly equal (zero
+        // preferred widths), so the figures never overlap in a narrow card.
+        if Breakpoints.tier-d: HorizontalLayout {
             spacing: 12px;
             vertical-stretch: 0;
             for s[i] in AxData.sess-stats: VerticalLayout {
@@ -135,10 +206,33 @@ export component AxSessionsCard inherits AxCard {
                 Text { text: s.label; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
             }
         }
+        if Breakpoints.below-d: HorizontalLayout {
+            spacing: 12px;
+            vertical-stretch: 0;
+            for s[i] in AxData.sess-stats: VerticalLayout {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                preferred-width: 0px;
+                spacing: 3px;
+                AxNum {
+                    num: s.num;
+                    has: s.has;
+                    fmt: s.fmt;
+                    text: s.text;
+                    played: root.played;
+                    delay: root.delay + i * 60ms;
+                    size: 22px;
+                    weight: 640;
+                    na-size: 15px;
+                    height: 26px;
+                }
+                Text { text: s.label; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+            }
+        }
         VerticalLayout {
             spacing: 0px;
             vertical-stretch: 0;
-            HorizontalLayout {
+            if !root.prov-stacked: HorizontalLayout {
                 padding-bottom: 6px;
                 spacing: SessCols.gap;
                 Caps { text: "PROVIDER"; vertical-alignment: bottom; horizontal-stretch: 1; min-width: 0px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-h:label"; } }
@@ -160,7 +254,7 @@ export component AxSessionsCard inherits AxCard {
             }
             for r in AxData.sess-rows: VerticalLayout {
                 Rectangle { height: 1px; background: Theme.rule-2; }
-                HorizontalLayout {
+                if !root.prov-stacked: HorizontalLayout {
                     min-height: 32px;
                     spacing: SessCols.gap;
                     HorizontalLayout {
@@ -172,7 +266,26 @@ export component AxSessionsCard inherits AxCard {
                     }
                     SessCell { text: r.sessions; horizontal-stretch: 0; width: SessCols.tok; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":sessions"; } }
                     SessCell { text: r.per; horizontal-stretch: 0; width: SessCols.cost; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":per"; } }
-                    SessCell { text: r.events; horizontal-stretch: 0; width: SessCols.when; AxTip { tip: r.events-tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":events"; } }
+                    SessCell { text: r.events; horizontal-stretch: 0; width: SessCols.when; AxPress { tip: r.events-tip; long-tip: r.events-tip; } ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "sess-c:" + r.provider + ":events"; } }
+                }
+                // stacked: mark + name, then the three figures in a caption-value grid (4.2.6);
+                // the two-line heads match the table header, so nothing clips in a trio cell
+                if root.prov-stacked: VerticalLayout {
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        min-height: 22px;
+                        VerticalLayout { alignment: center; ProviderMark { provider: r.provider; size: 16px; } }
+                        Text { text: r.label; font-size: Type.small; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout { horizontal-stretch: 1; spacing: 2px; Caps { text: "SESSIONS"; } Caps { text: " "; } SessCell { text: r.sessions; horizontal-alignment: left; } }
+                        VerticalLayout { horizontal-stretch: 1; spacing: 2px; Caps { text: "COST PER"; } Caps { text: "SESSION"; } SessCell { text: r.per; horizontal-alignment: left; } }
+                        VerticalLayout { horizontal-stretch: 1; spacing: 2px; Caps { text: "EVENTS PER"; } Caps { text: "SESSION"; } SessCell { text: r.events; horizontal-alignment: left; AxPress { tip: r.events-tip; long-tip: r.events-tip; } } }
+                    }
                 }
             }
         }
@@ -180,9 +293,9 @@ export component AxSessionsCard inherits AxCard {
             spacing: 0px;
             vertical-stretch: 0;
             Rectangle { height: 1px; background: Theme.rule-2; }
-            Text { text: "Most recent sessions"; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
+            Text { text: "Most recent sessions"; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
             Rectangle { height: 9px; }
-            SessList { rows: AxData.sess-recent; empty-text: "No sessions in this range."; probe: "sess"; }
+            SessList { rows: AxData.sess-recent; empty-text: "No sessions in this range."; probe: "sess"; stacked: root.list-stacked; }
         }
         // any spare height goes below the table, never above the stats
         Rectangle { vertical-stretch: 1; min-height: 0px; }
@@ -194,12 +307,15 @@ export component AxSessionsCard inherits AxCard {
 export component AxRecentCard inherits AxCard {
     in property <bool> played;
     in property <duration> delay;
-    property <bool> narrow: Breakpoints.width < 1180px;
+    in property <length> cell-w: 100000px;
+    property <bool> narrow: Breakpoints.tier-d ? Breakpoints.width < 1180px : Breakpoints.tier-p;
+    property <length> pad: root.narrow ? 16px : 20px;
+    property <bool> list-stacked: Breakpoints.below-d && root.cell-w - 2 * root.pad < 560px;
     AxCardHead { title: "Recent sessions"; sub: AxData.sess-more-sub; probe: "more-head"; }
     VerticalLayout {
         alignment: start;
-        padding-left: root.narrow ? 16px : 20px;
-        padding-right: self.padding-left;
+        padding-left: root.pad;
+        padding-right: root.pad;
         padding-top: 2px;
         padding-bottom: 14px;
         spacing: 10px;
@@ -209,8 +325,9 @@ export component AxRecentCard inherits AxCard {
             empty-text: AxData.sess-recent.length == 0 ? "No sessions in this range." : "No more sessions in this range.";
             vertical-stretch: 0;
             probe: "more";
+            stacked: root.list-stacked;
         }
-        if AxData.sessions.foot != "": Text { text: AxData.sessions.foot; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+        if AxData.sessions.foot != "": Text { text: AxData.sessions.foot; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
 }
 
@@ -304,54 +421,47 @@ component RwRow inherits HorizontalLayout {
     in property <string> share;
     in property <string> cost;
     in property <bool> narrow;
-    spacing: root.narrow ? 10px : 12px;
+    // below D the columns are 64/64/72 (each at least 64, DESIGN-MOBILE 4.2.6); absurd
+    // magnitudes elide inside the fixed column instead of shifting the grid
+    property <length> tok-w: Breakpoints.tier-d ? (root.narrow ? 64px : 76px) : 64px;
+    property <length> share-w: Breakpoints.tier-d ? (root.narrow ? 60px : 70px) : 64px;
+    property <length> cost-w: Breakpoints.tier-d ? (root.narrow ? 86px : 96px) : 72px;
+    spacing: Breakpoints.tier-d ? (root.narrow ? 10px : 12px) : 8px;
     min-height: 23px;
     HorizontalLayout {
         horizontal-stretch: 1;
         spacing: 8px;
         VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(root.kind); } }
-        Text { text: root.name; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; vertical-alignment: center; }
-        if root.note != "": Text { text: root.note; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; }
+        Text { text: root.name; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; vertical-alignment: center; overflow: elide; }
+        if root.note != "": Text { text: root.note; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
     }
-    Text { text: root.tok; width: root.narrow ? 64px : 76px; font-family: Type.tab; font-size: 12.5px; font-weight: 620; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxTip { tip: root.tip; } }
-    HorizontalLayout { width: root.narrow ? 60px : 70px; alignment: end; if root.share != "Unavailable": VerticalLayout { alignment: center; ValueUnit { value: root.share; size: 12.5px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
-    Text { text: root.cost; width: root.narrow ? 86px : 96px; font-family: Type.tab; font-size: 12.5px; font-weight: 620; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+    Text { text: root.tok; width: root.tok-w; font-family: Type.tab; font-size: 12.5px; font-weight: 620; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; overflow: elide; AxPress { tip: root.tip; long-tip: root.tip; } }
+    HorizontalLayout { width: root.share-w; alignment: end; if root.share != "Unavailable": VerticalLayout { alignment: center; ValueUnit { value: root.share; size: 12.5px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
+    Text { text: root.cost; width: root.cost-w; font-family: Type.tab; font-size: 12.5px; font-weight: 620; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
 }
 
 // ---------------------------------------------------------------- tokens and cache
 // One box for both: the token breakdown rows on top, the cache efficiency gauge and reads-vs-writes
 // below. Nothing is dropped; the two sections share one head because they cover the same range.
-export component AxTokensCacheCard inherits AxCard {
+// On F the sections sit side by side from a 700 content width (DESIGN-MOBILE 4.2.6).
+component TokSection inherits VerticalLayout {
     in property <bool> played;
     in property <duration> delay;
-    property <bool> narrow: Breakpoints.width < 1180px;
-    property <length> gw: root.narrow ? 140px : 160px;
-    AxCardHead {
-        title: "Tokens and cache";
-        sub: AxData.tokens-sub;
-        HorizontalLayout {
-            spacing: 14px;
-            alignment: end;
-            horizontal-stretch: 0;
-            VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { shape: "bar-t"; label: "Share of tokens"; } }
-            VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { shape: "bar-c"; label: "Share of cost"; } }
-        }
-    }
-    VerticalLayout {
-        padding-left: root.narrow ? 16px : 20px;
-        padding-right: self.padding-left;
-        padding-top: 4px;
-        padding-bottom: 18px;
-        spacing: 12px;
-        alignment: start;
-        for t[i] in AxData.tokens: HorizontalLayout {
-            spacing: root.narrow ? 10px : 14px;
+    in property <bool> narrow;
+    in property <length> inner-w: 100000px;
+    // P always stacks; elsewhere the rows stack under a 380 section inner width (1.5: trio cells)
+    property <bool> tok-stacked: Breakpoints.tier-p || (!Breakpoints.tier-d && root.inner-w < 380px);
+    spacing: 12px;
+    for t[i] in AxData.tokens: VerticalLayout {
+        spacing: 0px;
+        if !root.tok-stacked: HorizontalLayout {
+            spacing: Breakpoints.tier-d ? (root.narrow ? 10px : 14px) : 14px;
             HorizontalLayout {
-                width: root.narrow ? 92px : 104px;
+                width: Breakpoints.tier-d ? (root.narrow ? 92px : 104px) : Breakpoints.tier-f ? 100px : 112px;
                 spacing: 8px;
                 VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(t.key); } }
-                Text { text: t.label; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; }
+                Text { text: t.label; font-size: Breakpoints.tier-d ? 13px : Type.body; font-weight: 560; color: Theme.ink; vertical-alignment: center; }
             }
             VerticalLayout {
                 alignment: center;
@@ -362,158 +472,328 @@ export component AxTokensCacheCard inherits AxCard {
                 TokBar { w: t.wc; c: AxColor.of(t.key); played: root.played; delay: root.delay + i * 90ms + 40ms; }
             }
             VerticalLayout {
-                width: root.narrow ? 138px : 150px;
+                width: Breakpoints.tier-d ? (root.narrow ? 138px : 150px) : 150px;
                 spacing: 0px;
                 HorizontalLayout {
                     spacing: 6px;
-                    Text { text: t.tok; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; horizontal-stretch: 1; min-height: 17px; AxTip { tip: t.tok-tip; } }
+                    Text { text: t.tok; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink; horizontal-alignment: right; horizontal-stretch: 1; min-height: 17px; AxPress { tip: t.tok-tip; long-tip: t.tok-tip; } }
                     HorizontalLayout { width: 50px; alignment: end; ValueUnit { value: t.tok-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 17px; } }
                 }
                 HorizontalLayout {
                     spacing: 6px;
-                    Text { text: t.cost; font-family: Type.tab; font-size: 12.5px; font-weight: 600; color: Theme.ink; horizontal-alignment: right; horizontal-stretch: 1; min-height: 17px; }
+                    Text { text: t.cost; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink; horizontal-alignment: right; horizontal-stretch: 1; min-height: 17px; }
                     HorizontalLayout { width: 50px; alignment: end; if t.cost-share != "": ValueUnit { value: t.cost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 17px; } }
                 }
             }
         }
-        Rectangle { height: 6px; }
-        Rectangle { height: 1px; background: Theme.rule-2; }
-        Text { text: "Cache efficiency"; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
-        Rectangle { height: 4px; }
-        HorizontalLayout {
-            padding-right: self.padding-left;
-            spacing: root.narrow ? 20px : 28px;
-            vertical-stretch: 1;
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: root.gw;
-                    height: root.gw * 132 / 160;
-                    Gauge { width: parent.width; height: parent.height; frac: AxData.cache.has-hit ? AxData.cache.hit / 100 : 0; played: root.played; delay: root.delay; }
-                    VerticalLayout {
-                        y: root.narrow ? 42px : 50px;
-                        width: parent.width;
-                        height: self.preferred-height;
-                        spacing: 3px;
-                        HorizontalLayout {
-                            alignment: center;
-                            AxNum {
-                                num: AxData.cache.hit;
-                                has: AxData.cache.has-hit;
-                                fmt: "pct2";
-                                text: AxData.cache.hit-text;
-                                pct: true;
-                                played: root.played;
-                                delay: root.delay;
-                                size: root.narrow ? 23px : 26px;
-                                weight: 640;
-                                na-size: 14px;
-                            }
-                        }
-                        Text { text: "hit rate"; font-size: 12px; color: Theme.ink-3; horizontal-alignment: center; }
-                    }
-                }
+        // stacked: the values move under the bars (DESIGN-MOBILE 4.2.6)
+        if root.tok-stacked: VerticalLayout {
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 8px;
+                min-height: 22px;
+                VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(t.key); } }
+                Text { text: t.label; font-size: Type.body; font-weight: 560; color: Theme.ink; vertical-alignment: center; }
             }
             VerticalLayout {
-                alignment: center;
-                horizontal-stretch: 1;
-                spacing: 0px;
-                Text { text: "Estimated savings"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
-                Rectangle { height: 3px; }
-                HorizontalLayout {
-                    AxNum {
-                        num: AxData.cache.save;
-                        has: AxData.cache.has-save;
-                        fmt: "money";
-                        text: AxData.cache.save-text;
-                        played: root.played;
-                        delay: root.delay;
-                        size: root.narrow ? 23px : 26px;
-                        weight: 640;
-                        ink: Theme.good-text;
-                        na-size: 15px;
+                spacing: 4px;
+                TokBar { w: t.wt; c: AxColor.of(t.key).with-alpha(0.42); played: root.played; delay: root.delay + i * 90ms; }
+                TokBar { w: t.wc; c: AxColor.of(t.key); played: root.played; delay: root.delay + i * 90ms + 40ms; }
+            }
+            HorizontalLayout {
+                spacing: 5px;
+                min-height: 19px;
+                Text { text: t.tok; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; AxPress { tip: t.tok-tip; long-tip: t.tok-tip; } }
+                Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
+                Text { text: t.tok-share; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+                Text { text: "and"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+                Text { text: t.cost; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                if t.cost-share != "": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
+                if t.cost-share != "": Text { text: t.cost-share; font-family: Type.tab; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
+            }
+        }
+    }
+}
+
+component CacheSection inherits VerticalLayout {
+    in property <bool> played;
+    in property <duration> delay;
+    in property <bool> narrow;
+    // this section's inner width: the gauge sits left of its text from 300, else above it
+    in property <length> inner-w: 100000px;
+    property <length> gw: Breakpoints.tier-d ? (root.narrow ? 140px : 160px) : Breakpoints.tier-p ? 120px : 140px;
+    property <bool> gauge-side: Breakpoints.tier-d || root.inner-w >= 300px;
+    spacing: 12px;
+    Text { text: "Cache efficiency"; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink-2; min-height: 30px; vertical-alignment: bottom; }
+    Rectangle { height: 4px; }
+    if root.gauge-side: HorizontalLayout {
+        padding-right: self.padding-left;
+        spacing: Breakpoints.tier-d ? (root.narrow ? 20px : 28px) : 20px;
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: root.gw;
+                height: root.gw * 132 / 160;
+                Gauge { width: parent.width; height: parent.height; frac: AxData.cache.has-hit ? AxData.cache.hit / 100 : 0; played: root.played; delay: root.delay; }
+                VerticalLayout {
+                    y: Breakpoints.tier-d ? (root.narrow ? 42px : 50px) : root.gw * 0.3;
+                    width: parent.width;
+                    height: self.preferred-height;
+                    spacing: 3px;
+                    HorizontalLayout {
+                        alignment: center;
+                        AxNum {
+                            num: AxData.cache.hit;
+                            has: AxData.cache.has-hit;
+                            fmt: "pct2";
+                            text: AxData.cache.hit-text;
+                            pct: true;
+                            played: root.played;
+                            delay: root.delay;
+                            size: Breakpoints.tier-d ? (root.narrow ? 23px : 26px) : Breakpoints.tier-p ? 21px : 23px;
+                            weight: 640;
+                            na-size: 14px;
+                        }
                     }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-                Rectangle { height: 3px; }
-                Text { text: "Cache reads priced at each model's cache-read rate instead of its input rate"; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
-                Rectangle { height: 14px; }
-                Rectangle { height: 1px; background: Theme.rule-2; }
-                Rectangle { height: 14px; }
-                Text { text: "Estimated cache cost"; font-size: 12.5px; font-weight: 560; color: Theme.ink-2; }
-                Rectangle { height: 3px; }
-                HorizontalLayout {
-                    AxNum {
-                        num: AxData.cache.ccost;
-                        has: AxData.cache.has-ccost;
-                        fmt: "money";
-                        text: AxData.cache.ccost-text;
-                        played: root.played;
-                        delay: root.delay;
-                        size: 21px;
-                        weight: 640;
-                        na-size: 15px;
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-                Rectangle { height: 3px; }
-                if AxData.cache.ccost-share != "": HorizontalLayout {
-                    spacing: 0px;
-                    alignment: start;
-                    ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
-                    Text { text: " of the estimated cost for this range"; font-size: 12px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+                    Text { text: "hit rate"; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; horizontal-alignment: center; }
                 }
             }
         }
         VerticalLayout {
-            padding-right: self.padding-left;
+            alignment: center;
+            horizontal-stretch: 1;
             spacing: 0px;
-            Rectangle { height: 1px; background: Theme.rule-2; }
-            Text { text: "Cache reads vs writes"; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; min-height: 32px; vertical-alignment: bottom; }
-            Rectangle { height: 9px; }
-            rw := Rectangle {
-                height: 10px;
-                border-radius: 5px;
-                background: Theme.track;
-                clip: true;
-                property <float> total: AxData.cache.reads + AxData.cache.writes;
-                property <length> ww: self.total > 0 && AxData.cache.writes > 0 ? max(3px, (self.width - 2px) * AxData.cache.writes / self.total) : 0px;
-                property <length> rw-w: self.total > 0 && AxData.cache.reads > 0 ? self.width - self.ww - (self.ww > 0 ? 2px : 0px) : 0px;
-                animate ww, rw-w { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-                Rectangle {
-                    x: 0px;
-                    width: rw.rw-w;
-                    background: @linear-gradient(90deg, AxColor.of("cr").mix(Theme.paper, 0.55) 0%, AxColor.of("cr") 100%);
-                    AxTip { tip: "Cache reads: " + AxData.cache.r-tip; }
-                }
-                Rectangle {
-                    x: rw.width - rw.ww;
-                    width: rw.ww;
-                    background: AxColor.of("cw");
-                    AxTip { tip: "Cache writes: " + AxData.cache.w-tip; }
-                }
-            }
-            Rectangle { height: 10px; }
+            Text { text: "Estimated savings"; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 560; color: Theme.ink-2; }
+            Rectangle { height: 3px; }
             HorizontalLayout {
-                spacing: root.narrow ? 10px : 12px;
-                padding-bottom: 2px;
+                AxNum {
+                    num: AxData.cache.save;
+                    has: AxData.cache.has-save;
+                    fmt: "money";
+                    text: AxData.cache.save-text;
+                    played: root.played;
+                    delay: root.delay;
+                    size: Breakpoints.tier-d ? (root.narrow ? 23px : 26px) : Breakpoints.tier-p ? 21px : 23px;
+                    weight: 640;
+                    ink: Theme.good-text;
+                    na-size: 15px;
+                }
                 Rectangle { horizontal-stretch: 1; }
-                Caps { text: "TOKENS"; width: root.narrow ? 64px : 76px; horizontal-alignment: right; }
-                Caps { text: "SHARE"; width: root.narrow ? 60px : 70px; horizontal-alignment: right; }
-                Caps { text: "EST. COST"; width: root.narrow ? 86px : 96px; horizontal-alignment: right; }
             }
-            RwRow { kind: "cr"; name: "Reads"; tok: AxData.cache.r-tok; tip: AxData.cache.r-tip; share: AxData.cache.r-share; cost: AxData.cache.r-cost; narrow: root.narrow; }
-            RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }
+            Rectangle { height: 3px; }
+            Text { text: "Cache reads priced at each model's cache-read rate instead of its input rate"; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; wrap: word-wrap; }
+            Rectangle { height: 14px; }
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Rectangle { height: 14px; }
+            Text { text: "Estimated cache cost"; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 560; color: Theme.ink-2; }
+            Rectangle { height: 3px; }
+            HorizontalLayout {
+                AxNum {
+                    num: AxData.cache.ccost;
+                    has: AxData.cache.has-ccost;
+                    fmt: "money";
+                    text: AxData.cache.ccost-text;
+                    played: root.played;
+                    delay: root.delay;
+                    size: 21px;
+                    weight: 640;
+                    na-size: 15px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { height: 3px; }
+            if AxData.cache.ccost-share != "": HorizontalLayout {
+                spacing: 0px;
+                alignment: start;
+                ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
+                Text { text: " of the estimated cost for this range"; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            }
         }
+    }
+    if !root.gauge-side: VerticalLayout {
+        spacing: 10px;
+        alignment: start;
         HorizontalLayout {
-            padding-right: self.padding-left;
-            Text {
-                text: "Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.";
-                font-size: 12px;
-                color: Theme.ink-3;
-                wrap: word-wrap;
+            alignment: center;
+            Rectangle {
+                width: root.gw;
+                height: root.gw * 132 / 160;
+                Gauge { width: parent.width; height: parent.height; frac: AxData.cache.has-hit ? AxData.cache.hit / 100 : 0; played: root.played; delay: root.delay; }
+                VerticalLayout {
+                    y: root.gw * 0.3;
+                    width: parent.width;
+                    height: self.preferred-height;
+                    spacing: 3px;
+                    HorizontalLayout {
+                        alignment: center;
+                        AxNum {
+                            num: AxData.cache.hit;
+                            has: AxData.cache.has-hit;
+                            fmt: "pct2";
+                            text: AxData.cache.hit-text;
+                            pct: true;
+                            played: root.played;
+                            delay: root.delay;
+                            size: Breakpoints.tier-p ? 21px : 23px;
+                            weight: 640;
+                            na-size: 14px;
+                        }
+                    }
+                    Text { text: "hit rate"; font-size: Type.small; color: Theme.ink-3; horizontal-alignment: center; }
+                }
             }
         }
+        VerticalLayout {
+            spacing: 0px;
+            Text { text: "Estimated savings"; font-size: Type.small; font-weight: 560; color: Theme.ink-2; }
+            Rectangle { height: 3px; }
+            HorizontalLayout {
+                AxNum {
+                    num: AxData.cache.save;
+                    has: AxData.cache.has-save;
+                    fmt: "money";
+                    text: AxData.cache.save-text;
+                    played: root.played;
+                    delay: root.delay;
+                    size: Breakpoints.tier-p ? 21px : 23px;
+                    weight: 640;
+                    ink: Theme.good-text;
+                    na-size: 15px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { height: 3px; }
+            Text { text: "Cache reads priced at each model's cache-read rate instead of its input rate"; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+            Rectangle { height: 14px; }
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Rectangle { height: 14px; }
+            Text { text: "Estimated cache cost"; font-size: Type.small; font-weight: 560; color: Theme.ink-2; }
+            Rectangle { height: 3px; }
+            HorizontalLayout {
+                AxNum {
+                    num: AxData.cache.ccost;
+                    has: AxData.cache.has-ccost;
+                    fmt: "money";
+                    text: AxData.cache.ccost-text;
+                    played: root.played;
+                    delay: root.delay;
+                    size: 21px;
+                    weight: 640;
+                    na-size: 15px;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { height: 3px; }
+            if AxData.cache.ccost-share != "": HorizontalLayout {
+                spacing: 0px;
+                alignment: start;
+                ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
+                Text { text: " of the estimated cost for this range"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            }
+        }
+    }
+    VerticalLayout {
+        padding-right: self.padding-left;
+        spacing: 0px;
+        Rectangle { height: 1px; background: Theme.rule-2; }
+        Text { text: "Cache reads vs writes"; font-size: Breakpoints.tier-d ? 12.5px : Type.small; font-weight: 600; color: Theme.ink-2; min-height: 32px; vertical-alignment: bottom; }
+        Rectangle { height: 9px; }
+        rw := Rectangle {
+            height: 10px;
+            border-radius: 5px;
+            background: Theme.track;
+            clip: true;
+            property <float> total: AxData.cache.reads + AxData.cache.writes;
+            property <length> ww: self.total > 0 && AxData.cache.writes > 0 ? max(3px, (self.width - 2px) * AxData.cache.writes / self.total) : 0px;
+            property <length> rw-w: self.total > 0 && AxData.cache.reads > 0 ? self.width - self.ww - (self.ww > 0 ? 2px : 0px) : 0px;
+            animate ww, rw-w { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+            Rectangle {
+                x: 0px;
+                width: rw.rw-w;
+                background: @linear-gradient(90deg, AxColor.of("cr").mix(Theme.paper, 0.55) 0%, AxColor.of("cr") 100%);
+                AxPress { tip: "Cache reads: " + AxData.cache.r-tip; long-tip: "Cache reads: " + AxData.cache.r-tip; }
+            }
+            Rectangle {
+                x: rw.width - rw.ww;
+                width: rw.ww;
+                background: AxColor.of("cw");
+                AxPress { tip: "Cache writes: " + AxData.cache.w-tip; long-tip: "Cache writes: " + AxData.cache.w-tip; }
+            }
+        }
+        Rectangle { height: 10px; }
+        HorizontalLayout {
+            spacing: Breakpoints.tier-d ? (root.narrow ? 10px : 12px) : 8px;
+            padding-bottom: 2px;
+            Rectangle { horizontal-stretch: 1; }
+            Caps { text: "TOKENS"; width: Breakpoints.tier-d ? (root.narrow ? 64px : 76px) : 64px; horizontal-alignment: right; }
+            Caps { text: "SHARE"; width: Breakpoints.tier-d ? (root.narrow ? 60px : 70px) : 64px; horizontal-alignment: right; }
+            Caps { text: "EST. COST"; width: Breakpoints.tier-d ? (root.narrow ? 86px : 96px) : 72px; horizontal-alignment: right; }
+        }
+        RwRow { kind: "cr"; name: "Reads"; tok: AxData.cache.r-tok; tip: AxData.cache.r-tip; share: AxData.cache.r-share; cost: AxData.cache.r-cost; narrow: root.narrow; }
+        RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }
+    }
+    HorizontalLayout {
+        padding-right: self.padding-left;
+        Text {
+            text: "Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.";
+            font-size: Breakpoints.tier-d ? 12px : Type.small;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component AxTokensCacheCard inherits AxCard {
+    in property <bool> played;
+    in property <duration> delay;
+    in property <length> cell-w: 100000px;
+    property <bool> narrow: Breakpoints.tier-d ? Breakpoints.width < 1180px : Breakpoints.tier-p;
+    property <length> pad: root.narrow ? 16px : 20px;
+    property <bool> side: Breakpoints.tier-f && root.cell-w >= 700px;
+    property <length> section-w: root.side ? (root.cell-w - 2 * root.pad - 24px) / 2 : root.cell-w - 2 * root.pad;
+    if Breakpoints.tier-d: AxCardHead {
+        title: "Tokens and cache";
+        sub: AxData.tokens-sub;
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: end;
+            horizontal-stretch: 0;
+            VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { shape: "bar-t"; label: "Share of tokens"; } }
+            VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { shape: "bar-c"; label: "Share of cost"; } }
+        }
+    }
+    if Breakpoints.below-d: AxCardHead { title: "Tokens and cache"; sub: AxData.tokens-sub; }
+    if Breakpoints.below-d: HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-bottom: 4px;
+        spacing: 14px;
+        alignment: start;
+        AxLegendEntry { shape: "bar-t"; label: "Share of tokens"; }
+        AxLegendEntry { shape: "bar-c"; label: "Share of cost"; }
+    }
+    if !root.side: VerticalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-top: 4px;
+        padding-bottom: 18px;
+        spacing: 12px;
+        alignment: start;
+        TokSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; }
+        Rectangle { height: 6px; }
+        Rectangle { height: 1px; background: Theme.rule-2; }
+        CacheSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; }
+    }
+    if root.side: HorizontalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-top: 4px;
+        padding-bottom: 18px;
+        spacing: 24px;
+        alignment: start;
+        TokSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
+        CacheSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
     }
 }
 

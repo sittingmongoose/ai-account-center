@@ -27,7 +27,10 @@ export component AnalyticsPage inherits Rectangle {
     // the loading screen's per-host rows; a quiet default until the first answer pushes real progress
     property <[AxLoadHost]> load-hosts: AxData.load-hosts.length > 0 ? AxData.load-hosts : [{ name: "Ubuntu", detail: "queued" }, { name: "Mac", detail: "queued" }, { name: "Windows", detail: "queued" }];
     property <bool> wide3: Breakpoints.width >= 1600px;
-    property <length> gap: Breakpoints.width < 1180px ? 14px : 18px;
+    // section gap: 18 on D, 20/16/12 on T/F/P (DESIGN-MOBILE 2.2)
+    property <length> gap: Breakpoints.tier-d ? 18px : Breakpoints.tier-t ? 20px : Breakpoints.tier-f ? 16px : 12px;
+    // content width below D (every card below D spans it except the T trio/pair)
+    property <length> cw: Breakpoints.tier-width - 2 * Breakpoints.gutter;
     // first-view memory for the chart grid (it is laid out again when it changes column count)
     property <bool> s-cbm;
     property <bool> s-donut;
@@ -92,7 +95,7 @@ export component AnalyticsPage inherits Rectangle {
             AxTrendCard { played: trend.seen; delay: trend.play-delay; win-h: root.win-h; }
         }
         Rectangle { height: 18px; }
-        if root.wide3: VerticalLayout {
+        if Breakpoints.tier-d && root.wide3: VerticalLayout {
             spacing: root.gap;
             HorizontalLayout {
                 spacing: root.gap;
@@ -146,7 +149,7 @@ export component AnalyticsPage inherits Rectangle {
                 }
             }
         }
-        if !root.wide3: VerticalLayout {
+        if Breakpoints.tier-d && !root.wide3: VerticalLayout {
             spacing: root.gap;
             cbm2 := AxReveal {
                     armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 160ms; already: root.s-cbm;
@@ -194,7 +197,113 @@ export component AnalyticsPage inherits Rectangle {
                     AxDailyCard { played: daily2.seen; delay: daily2.play-delay; win-h: root.win-h; spans: true; }
                 }
         }
-        Rectangle { height: 18px; }
+        // P/F: everything stacked (DESIGN-MOBILE 4.2.6)
+        if Breakpoints.tier-p || Breakpoints.tier-f: VerticalLayout {
+            spacing: root.gap;
+            cbm-p := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 160ms; already: root.s-cbm;
+                    changed seen => { if self.seen { root.s-cbm = true; } }
+                    AxCbmCard { played: cbm-p.seen; delay: cbm-p.play-delay; }
+                }
+            donut-p := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 192ms; already: root.s-donut;
+                    changed seen => { if self.seen { root.s-donut = true; } }
+                    AxDonutCard { played: donut-p.seen; delay: donut-p.play-delay; }
+                }
+            sess-p := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 224ms; already: root.s-sess;
+                    changed seen => { if self.seen { root.s-sess = true; } }
+                    AxSessionsCard { played: sess-p.seen; delay: sess-p.play-delay; cell-w: root.cw; }
+                }
+            recent-p := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-recent;
+                    changed seen => { if self.seen { root.s-recent = true; } }
+                    AxRecentCard { played: recent-p.seen; delay: recent-p.play-delay; cell-w: root.cw; }
+                }
+            tokcache-p := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-tokcache;
+                    changed seen => { if self.seen { root.s-tokcache = true; } }
+                    AxTokensCacheCard { played: tokcache-p.seen; delay: tokcache-p.play-delay; cell-w: root.cw; }
+                }
+            heat-p := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 320ms; already: root.s-heat;
+                    changed seen => { if self.seen { root.s-heat = true; } }
+                    AxHeatCard { played: heat-p.seen; delay: heat-p.play-delay; win-h: root.win-h; }
+                }
+            daily-p := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 352ms; already: root.s-daily;
+                    changed seen => { if self.seen { root.s-daily = true; } }
+                    AxDailyCard { played: daily-p.seen; delay: daily-p.play-delay; win-h: root.win-h; spans: true; }
+                }
+        }
+        // T: the desktop arrangement with the trio rule (three in a row from a 960 content width,
+        // otherwise sessions + recent side by side over a full-width tokens card)
+        if Breakpoints.tier-t: VerticalLayout {
+            spacing: root.gap;
+            property <bool> trio: root.cw >= 960px;
+            cbm-t := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 160ms; already: root.s-cbm;
+                    changed seen => { if self.seen { root.s-cbm = true; } }
+                    AxCbmCard { played: cbm-t.seen; delay: cbm-t.play-delay; }
+                }
+            donut-t := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 192ms; already: root.s-donut;
+                    changed seen => { if self.seen { root.s-donut = true; } }
+                    AxDonutCard { played: donut-t.seen; delay: donut-t.play-delay; }
+                }
+            if self.trio: HorizontalLayout {
+                spacing: root.gap;
+                sess-t := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 224ms; already: root.s-sess;
+                    changed seen => { if self.seen { root.s-sess = true; } }
+                    AxSessionsCard { played: sess-t.seen; delay: sess-t.play-delay; vertical-stretch: 1; cell-w: (root.cw - 2 * root.gap) / 3; }
+                }
+                recent-t := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-recent;
+                    changed seen => { if self.seen { root.s-recent = true; } }
+                    AxRecentCard { played: recent-t.seen; delay: recent-t.play-delay; vertical-stretch: 1; cell-w: (root.cw - 2 * root.gap) / 3; }
+                }
+                tokcache-t := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-tokcache;
+                    changed seen => { if self.seen { root.s-tokcache = true; } }
+                    AxTokensCacheCard { played: tokcache-t.seen; delay: tokcache-t.play-delay; vertical-stretch: 1; cell-w: (root.cw - 2 * root.gap) / 3; }
+                }
+            }
+            if !self.trio: HorizontalLayout {
+                spacing: root.gap;
+                sess-t2 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 224ms; already: root.s-sess;
+                    changed seen => { if self.seen { root.s-sess = true; } }
+                    AxSessionsCard { played: sess-t2.seen; delay: sess-t2.play-delay; vertical-stretch: 1; cell-w: (root.cw - root.gap) / 2; }
+                }
+                recent-t2 := AxReveal {
+                    horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 256ms; already: root.s-recent;
+                    changed seen => { if self.seen { root.s-recent = true; } }
+                    AxRecentCard { played: recent-t2.seen; delay: recent-t2.play-delay; vertical-stretch: 1; cell-w: (root.cw - root.gap) / 2; }
+                }
+            }
+            if !self.trio: tokcache-t2 := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-tokcache;
+                    changed seen => { if self.seen { root.s-tokcache = true; } }
+                    AxTokensCacheCard { played: tokcache-t2.seen; delay: tokcache-t2.play-delay; cell-w: root.cw; }
+                }
+            heat-t := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 320ms; already: root.s-heat;
+                    changed seen => { if self.seen { root.s-heat = true; } }
+                    AxHeatCard { played: heat-t.seen; delay: heat-t.play-delay; win-h: root.win-h; }
+                }
+            daily-t := AxReveal {
+                    armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 352ms; already: root.s-daily;
+                    changed seen => { if self.seen { root.s-daily = true; } }
+                    AxDailyCard { played: daily-t.seen; delay: daily-t.play-delay; win-h: root.win-h; spans: true; }
+                }
+        }
+        Rectangle { height: Breakpoints.tier-d ? 18px : root.gap; }
         quota := AxReveal {
             armed: root.armed;
             scroll: root.scroll;
@@ -202,7 +311,7 @@ export component AnalyticsPage inherits Rectangle {
             delay: 384ms;
             AxQuotaCard { played: quota.seen; delay: quota.play-delay; }
         }
-        Rectangle { height: 18px; }
+        Rectangle { height: Breakpoints.tier-d ? 18px : root.gap; }
         agenda := AxReveal {
             armed: root.armed;
             scroll: root.scroll;
