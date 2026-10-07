@@ -112,8 +112,18 @@ export interface DashboardAuthConfig {
  * a listener or trusts a proxy until it is set in config.yaml.
  */
 export interface DashboardTlsConfig {
-  /** A local TLS proxy on loopback whose `X-Forwarded-Proto: https` is trusted */
-  trusted_proxy?: 'tailscale-serve' | 'loopback-https-proxy';
+  /**
+   * A TLS proxy whose `X-Forwarded-Proto: https` is trusted: a local one on
+   * loopback, or `lan-https-proxy` on another LAN computer (then
+   * `trusted_proxy_addresses` names it). Set the LAN kind with
+   * `ai-account-center dashboard proxy set`.
+   */
+  trusted_proxy?: 'tailscale-serve' | 'loopback-https-proxy' | 'lan-https-proxy';
+  /**
+   * The `lan-https-proxy`'s exact addresses: 1 to 8 private LAN addresses, not
+   * loopback and not this computer. Anything else turns the kind off.
+   */
+  trusted_proxy_addresses?: string[];
   /** Optional in-process HTTPS listener */
   https_listener?: {
     enabled?: boolean;

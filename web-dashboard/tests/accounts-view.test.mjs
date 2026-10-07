@@ -1677,6 +1677,30 @@ test('the trusted local network line: this computer, trusted, not trusted, and T
   );
 });
 
+test('a browser behind the LAN HTTPS proxy reads its client address and the proxy hop', () => {
+  // GET /api/auth/check through the proxy: the real client, marked as proxied, never LAN-trusted.
+  const check = { connection: { peer: '203.0.113.7', trusted: false, proxied: true } };
+  assert.equal(transportOf('https:', 'aac.example.test'), 'https');
+  assert.match(transportNote('https', check), /uses HTTPS.*encrypted/);
+  assert.doesNotMatch(transportNote('https', check), /unencrypted/);
+  assert.equal(
+    networkView({ trustLocalNetwork: true, connection: check.connection, canTurnOn: false }, null, 'https').line,
+    'This connection: 203.0.113.7, encrypted through the HTTPS proxy'
+  );
+  // An anonymous check through the proxy omits the owner's switch; the line still reads.
+  assert.equal(networkView(null, check, 'https').line, 'This connection: 203.0.113.7, encrypted through the HTTPS proxy');
+  // Without the proxy hop the same address reads as plain encrypted HTTPS.
+  assert.equal(
+    networkView({ trustLocalNetwork: true, connection: { peer: '203.0.113.7', trusted: false }, canTurnOn: false }, null, 'https').line,
+    'This connection: 203.0.113.7, encrypted'
+  );
+  // A proxied request the browser reached over plain http is not called encrypted.
+  assert.equal(
+    networkView({ trustLocalNetwork: true, connection: check.connection, canTurnOn: false }, null, 'http').line,
+    'This connection: 203.0.113.7, not trusted'
+  );
+});
+
 test('flows: a Codex device-code sign-in from naming to signed in, with the code, the wait and the failures', () => {
   const name = flowView(
     'codex',

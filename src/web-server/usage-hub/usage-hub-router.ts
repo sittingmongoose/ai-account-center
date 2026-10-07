@@ -11,6 +11,11 @@
  *   upstream shape. It never proxies: no upstream request is ever made, no
  *   header T3 sends is used, and every other URL, method or body is refused.
  *
+ * A request that came through the LAN HTTPS proxy (`dashboard_tls.trusted_proxy:
+ * lan-https-proxy`, decided by the socket peer alone) is answered 404 before
+ * any of this, so the hub never faces the internet; the proxy should also block
+ * the path.
+ *
  * Guard, in order (every answer is JSON and `no-store`):
  * 1. 120 requests per minute per client address (429 `rate_limited`);
  * 2. 10 refused keys per 15 minutes per client address (429 `rate_limited`);
@@ -32,7 +37,8 @@
 import type { NextFunction, Request, Response, Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { createLogger } from '../../services/logging';
-import { isSecureTransport } from '../middleware/secure-transport';
+import { rateLimitClientKey } from '../middleware/rate-limit-keys';
+import { isLanProxyPeer, isSecureTransport } from '../middleware/secure-transport';
 import { getDashboardTlsSettings } from '../services/dashboard-tls-config';
 import { createApiRouter } from '../routes/api-router';
 import {
@@ -66,6 +72,8 @@ export interface UsageHubRouterDeps {
   accounts?: UsageHubAccountSource;
   readKeyState?: () => Promise<UsageHubKeyState>;
   isSecure?: (req: Request) => boolean;
+  /** True when the request came through the LAN HTTPS proxy (then 404). Tests only. */
+  isProxied?: (req: Request) => boolean;
   requestsPerMinute?: number;
   failuresPerWindow?: number;
 }
@@ -133,15 +141,25 @@ export function createUsageHubRouter(deps: UsageHubRouterDeps = {}): Router {
   const accounts = deps.accounts ?? createUsageHubAccountSource();
   const readKeyState = deps.readKeyState ?? readUsageHubKeyState;
   const isSecure = deps.isSecure ?? ((req: Request) => isSecureTransport(req));
+  const isProxied = deps.isProxied ?? ((req: Request) => isLanProxyPeer(req));
 
   router.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     next();
   });
+  router.use((req: Request, res: Response, next: NextFunction) => {
+    if (!isProxied(req)) {
+      next();
+      return;
+    }
+    audit('warn', 'usage_hub.refused', 'A usage hub request was refused', 'lan_proxy');
+    refuse(res, 404, 'not_found', 'The usage hub does not answer through a reverse proxy.');
+  });
   router.use(
     rateLimit({
       windowMs: ONE_MINUTE,
       limit: deps.requestsPerMinute ?? USAGE_HUB_REQUESTS_PER_MINUTE,
+      keyGenerator: rateLimitClientKey,
       standardHeaders: true,
       legacyHeaders: false,
       handler: limited('Too many usage hub requests. Try again later.'),
@@ -153,6 +171,7 @@ export function createUsageHubRouter(deps: UsageHubRouterDeps = {}): Router {
       limit: deps.failuresPerWindow ?? USAGE_HUB_FAILURES_PER_WINDOW,
       standardHeaders: false,
       legacyHeaders: false,
+      keyGenerator: rateLimitClientKey,
       skipSuccessfulRequests: true,
       requestWasSuccessful: (_req, res) => res.statusCode !== 401,
       handler: limited('Too many wrong usage hub keys. Try again later.'),

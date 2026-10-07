@@ -154,6 +154,59 @@ describe('server-wide sign-in budget behind a trusted local TLS proxy', () => {
   });
 });
 
+describe('nobody on the LAN can lock out the person at the VM, LAN HTTPS proxy included', () => {
+  const PROXY = '192.168.1.20';
+  const LAN_COMPUTER = '192.168.1.21';
+
+  function viaProxy(current: Harness, client: string): void {
+    current.peer.address = PROXY;
+    current.peer.host = 'aac.example.test';
+    current.peer.headers = { 'x-forwarded-for': client, 'x-forwarded-proto': 'https' };
+  }
+
+  function direct(current: Harness, address: string): void {
+    current.peer.address = address;
+    current.peer.host = address === '127.0.0.1' ? null : '192.168.1.10:3000';
+    current.peer.headers = {};
+  }
+
+  it('keeps loopback and LAN sign-in after the proxy spends its own and the server-wide budgets', async () => {
+    harness = await startAuthHarness({
+      dashboardTls: {
+        trusted_proxy: 'lan-https-proxy',
+        trusted_proxy_addresses: [PROXY],
+        public_origin: 'https://aac.example.test',
+      },
+    });
+    // Anything on the proxy's computer names the VM's own address and a LAN computer.
+    for (const spoofed of ['127.0.0.1', LAN_COMPUTER]) {
+      viaProxy(harness, spoofed);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect((await new Client(harness).login('wrong-password')).status).toBe(401);
+      }
+      expect((await new Client(harness).login(PASSWORD)).status).toBe(429);
+    }
+    // Then varied forwarded clients use up the server-wide budget for proxied sign-ins.
+    for (let index = 0; index < 20; index += 1) {
+      viaProxy(harness, `198.51.100.${index + 1}`);
+      expect((await new Client(harness).login('wrong-password')).status).toBe(401);
+    }
+    viaProxy(harness, '198.51.100.200');
+    const limited = await new Client(harness).login(PASSWORD);
+    expect([limited.status, limited.body.code]).toEqual([429, 'rate_limited']);
+
+    // The browser on the VM and a LAN computer keep their full budgets.
+    direct(harness, '127.0.0.1');
+    const vm = await new Client(harness).login('wrong-password');
+    expect([vm.status, vm.body.triesLeft]).toEqual([401, 4]);
+    expect((await new Client(harness).login(PASSWORD)).status).toBe(200);
+    direct(harness, LAN_COMPUTER);
+    const lan = await new Client(harness).login('wrong-password');
+    expect([lan.status, lan.body.triesLeft]).toEqual([401, 4]);
+    expect((await new Client(harness).login(PASSWORD)).status).toBe(200);
+  });
+});
+
 describe('pairing answers after a correct password', () => {
   it('spend no login budget when the device cap is reached', async () => {
     harness = await startAuthHarness();

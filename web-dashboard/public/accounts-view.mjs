@@ -879,17 +879,22 @@ export function transportNote(transport, check = null) {
 /** True when a GET /api/auth/network answer says whether the trust is on. */
 const networkKnown = net => !!net && typeof net === 'object' && typeof net.trustLocalNetwork === 'boolean';
 
-/** "This connection: 192.168.50.20, trusted local network" (GET /api/auth/network or /check). */
+/**
+ * "This connection: 192.168.1.20, trusted local network" (GET /api/auth/network or /check). Behind the
+ * LAN HTTPS proxy (`connection.proxied`) the peer is the client the proxy saw, never LAN-trusted.
+ */
 export function networkView(net, check, transport, busyAct = '') {
   const source = net || (check ? { trustLocalNetwork: check.trustedLocalNetwork === true, connection: check.connection, canTurnOn: transport === 'loopback' } : null);
   if (!source) return { known: false, on: false, line: 'Not reported', note: '', act: '', actLabel: '', actEnabled: false, tip: '', busy: false };
   const on = source.trustLocalNetwork === true;
   const peer = text(source.connection?.peer) || 'unknown';
   const here = source.canTurnOn === true || transport === 'loopback';
+  const proxied = source.connection?.proxied === true;
   const line = source.connection?.trusted === true ? `This connection: ${peer}, trusted local network`
     : here ? 'This connection: this computer'
-      : transport === 'https' ? `This connection: ${peer}, encrypted`
-        : `This connection: ${peer}, not trusted`;
+      : proxied && transport === 'https' ? `This connection: ${peer}, encrypted through the HTTPS proxy`
+        : transport === 'https' ? `This connection: ${peer}, encrypted`
+          : `This connection: ${peer}, not trusted`;
   const note = on ? TRUSTED_NOTE
     : 'Local network trust is off. Password changes, keys, sign-in codes and tray pairing work only on the dashboard computer itself.';
   if (on) return { known: true, on, line, note, act: 'network-off', actLabel: 'Turn off', actEnabled: true, tip: 'Stop trusting the local network; it can be turned on again only from the dashboard computer.', busy: busyAct === 'network' };
