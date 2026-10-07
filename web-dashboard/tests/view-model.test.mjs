@@ -1182,7 +1182,7 @@ test('antigravity columns carry single-line short labels for the stacked 2x2 gri
   const columns = section(vm, 'antigravity').columns;
   assert.deepEqual(
     columns.map((col) => col.shortLabel),
-    ['Gemini 5hr', 'Gemini wk', 'Claude+GPT 5hr', 'Claude+GPT wk']
+    ['Gemini 5hr', 'Gemini wk', 'Claude GPT 5hr', 'Claude GPT wk']
   );
   // the full labels stay for the table heads and Details
   assert.deepEqual(

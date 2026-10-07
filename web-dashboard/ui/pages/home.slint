@@ -1252,8 +1252,8 @@ export component AccountSection inherits Plate {
             padding-right: root.pad-x;
             padding-top: 14px;
             padding-bottom: Breakpoints.tier-d ? 13px : root.section.switchable && !root.table ? 8px : 14px;
-            // O3: the P gap token below D; D keeps 16
-            spacing: root.touch ? 12px : 16px;
+            // O3: 8 below D (the bare ? keeps 19 px of visible gap); D keeps 16
+            spacing: root.touch ? 8px : 16px;
             min-height: 70px;
             HorizontalLayout {
                 spacing: root.touch ? 10px : 12px;
@@ -1598,13 +1598,15 @@ export component AccountSection inherits Plate {
                     spacing: root.col-gap;
                     if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
                     for col in root.section.columns: Caps {
-                        min-height: 15px;
+                        // crowded table heads grow to two lines (shorts break cleanly);
+                        // one line everywhere else, D exactly as before
+                        height: min(self.preferred-height, root.table && root.touch ? 30px : 15px);
                         min-width: root.table ? (root.touch ? 0px : 108px) : 0px;
                         preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
                         horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
                         text: (root.short-heads && col.short-label != "" ? col.short-label : col.label).to-uppercase();
                         wrap: word-wrap;
-                        overflow: clip;
+                        overflow: elide;
                         vertical-alignment: bottom;
                     }
                     if root.table: Rectangle { width: root.slot-w; }

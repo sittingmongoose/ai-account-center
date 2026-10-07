@@ -238,7 +238,8 @@ export function windowLabel(provider, w) {
  */
 export function shortWindowLabel(provider, w) {
   if (provider !== 'antigravity') return windowLabel(provider, w);
-  const family = /^gemini/i.test(text(w?.key)) ? 'Gemini' : 'Claude+GPT';
+  // space, not +: crowded table heads wrap between the words, never mid-word
+  const family = /^gemini/i.test(text(w?.key)) ? 'Gemini' : 'Claude GPT';
   const p = period(w);
   if (p === '5h') return `${family} 5hr`;
   if (p === 'week') return `${family} wk`;
