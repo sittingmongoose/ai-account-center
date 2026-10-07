@@ -39,6 +39,13 @@ const CONFIG_SUBCOMMAND_ROUTES: readonly NamedCommandRoute[] = [
       process.exitCode = await handleUsageHubCommand(args);
     },
   },
+  {
+    name: 'proxy',
+    handle: async (args) => {
+      const { handleProxyCommand } = await import('./dashboard-proxy-command');
+      process.exitCode = await handleProxyCommand(args);
+    },
+  },
 ];
 
 interface ConfigCommandDependencies {
