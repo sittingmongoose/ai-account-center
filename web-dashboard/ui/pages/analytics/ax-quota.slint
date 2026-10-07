@@ -653,13 +653,13 @@ component QuotaGroup inherits Rectangle {
     animate rows-h { duration: Motion.on ? Motion.slow : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
     property <bool> shown: !Motion.on;
     show := Timer { interval: max(1ms, root.delay + root.n0 * 22ms); running: root.played && !root.shown; triggered => { self.running = false; root.shown = true; } }
-    property <length> head-h: Breakpoints.tier-d ? 40px : 48px;
+    property <length> head-h: Breakpoints.tier-d ? 40px : gh.height;
     min-height: 1px + root.head-h + root.rows-h;
     preferred-height: self.min-height;
     Rectangle { y: 0px; height: 1px; background: Theme.rule-2; }
     gh := Rectangle {
         y: 1px;
-        height: root.head-h;
+        height: Breakpoints.tier-d ? 40px : headcol.preferred-height + 8px;
         opacity: root.shown ? 1 : 0;
         animate opacity { duration: Motion.on ? 420ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
         background: Breakpoints.tier-d ? (gta.has-hover ? Theme.row-hover : Theme.row-hover.with-alpha(0))
@@ -668,38 +668,71 @@ component QuotaGroup inherits Rectangle {
         gta := TouchArea {
             mouse-cursor: pointer;
             clicked => { AxData.action("analytics-group", root.g.provider); }
-            HorizontalLayout {
+            if Breakpoints.tier-d: HorizontalLayout {
                 y: root.shown ? 0px : 8px;
                 animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-                padding-left: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
-                padding-right: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
-                padding-top: Breakpoints.tier-d ? 0px : 4px;
-                padding-bottom: Breakpoints.tier-d ? 0px : 4px;
+                padding-left: 20px;
+                padding-right: 20px;
                 spacing: 10px;
                 VerticalLayout {
                     alignment: center;
                     HorizontalLayout {
                         alignment: center;
-                        min-width: Breakpoints.tier-d ? 15px : 44px;
+                        min-width: 15px;
                         Icon {
                             name: "chev-down";
-                            width: Breakpoints.tier-d ? 15px : 16px;
-                            height: Breakpoints.tier-d ? 15px : 16px;
+                            width: 15px;
+                            height: 15px;
                             tint: Theme.ink-3;
                             transform-rotation: root.g.collapsed ? -90deg : 0deg;
                             animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
                         }
                     }
                 }
-                VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: Breakpoints.tier-d ? 20px : 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qgroup:" + root.g.provider; } } }
-                // Below D the label shares a squeeze with the meta: otherwise the meta (the
-                // only stretch) takes it all and wraps to three lines in the fixed 48 px head
-                // while the label keeps its full width (task 9 O7). Sharing halves the worst
-                // case to two lines; medium names lose a character or two to the split. The
-                // 75 px floor sits below every fair share but the shortest names', so short
-                // names stay whole while the meta takes their small overflow alone.
-                Text { text: root.g.label; font-size: Breakpoints.tier-d ? 13.5px : Type.body; font-weight: Breakpoints.tier-d ? 640 : 600; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: Breakpoints.tier-d ? 0 : 1; min-width: Breakpoints.tier-d ? 0px : 75px; }
-                Text { text: root.g.meta; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; wrap: Breakpoints.tier-d ? no-wrap : word-wrap; overflow: Breakpoints.tier-d ? elide : clip; }
+                VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: 20px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qgroup:" + root.g.provider; } } }
+                Text { text: root.g.label; font-size: 13.5px; font-weight: 640; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+                Text { text: root.g.meta; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; wrap: no-wrap; overflow: elide; }
+            }
+            // Below D the meta sits on its own full-width line under the name and the
+            // head grows to fit, so neither elides (task 9 O10). Unconditional with zero
+            // size on D (the KpiCard measurer pattern): gh.height reads its
+            // preferred-height, which a below-D-only id could not provide. Hidden on D:
+            // zero size alone still paints the children over the D head. The meta
+            // wrapper is cross-forced by the column (the A4 note pattern), so the Text
+            // width binding measures the wrapped height at the true width.
+            headcol := VerticalLayout {
+                visible: !Breakpoints.tier-d;
+                x: 0px;
+                y: Breakpoints.tier-d ? 0px : root.shown ? 4px : 12px;
+                animate y { duration: Motion.on ? 480ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+                width: Breakpoints.tier-d ? 0px : parent.width;
+                height: Breakpoints.tier-d ? 0px : self.preferred-height;
+                padding-left: Breakpoints.tier-p ? 16px : 20px;
+                padding-right: Breakpoints.tier-p ? 16px : 20px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        HorizontalLayout {
+                            alignment: center;
+                            min-width: 44px;
+                            Icon {
+                                name: "chev-down";
+                                width: 16px;
+                                height: 16px;
+                                tint: Theme.ink-3;
+                                transform-rotation: root.g.collapsed ? -90deg : 0deg;
+                                animate transform-rotation { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+                            }
+                        }
+                    }
+                    VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: Breakpoints.tier-d ? "" : "qgroup:" + root.g.provider; } } }
+                    Text { text: root.g.label; font-size: Type.body; font-weight: 600; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                }
+                Rectangle {
+                    height: meta-t.preferred-height;
+                    meta-t := Text { width: parent.width; text: root.g.meta; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; vertical-alignment: center; }
+                }
             }
         }
     }
