@@ -849,23 +849,27 @@ describe('Codex Quota Fetcher', () => {
 
     it('uses the registry token file for duplicate-email Codex accounts', async () => {
       createValidCodexAccount(
-        'kaidu.kd@gmail.com',
+        'shared.user@example.com',
         'workspace-team',
-        'codex-04a0f049-kaidu.kd@gmail.com-team.json',
+        'codex-04a0f049-shared.user@example.com-team.json',
         'team-token'
       );
       createValidCodexAccount(
-        'kaidu.kd@gmail.com',
+        'shared.user@example.com',
         'workspace-free',
-        'codex-kaidu.kd@gmail.com-free.json',
+        'codex-shared.user@example.com-free.json',
         'free-token'
       );
 
-      registerAccount('codex', 'codex-04a0f049-kaidu.kd@gmail.com-team.json', 'kaidu.kd@gmail.com');
+      registerAccount(
+        'codex',
+        'codex-04a0f049-shared.user@example.com-team.json',
+        'shared.user@example.com'
+      );
       const freeAccount = registerAccount(
         'codex',
-        'codex-kaidu.kd@gmail.com-free.json',
-        'kaidu.kd@gmail.com'
+        'codex-shared.user@example.com-free.json',
+        'shared.user@example.com'
       );
 
       const fetchSpy = mock((input: RequestInfo | URL, init?: RequestInit) =>
@@ -896,8 +900,16 @@ describe('Codex Quota Fetcher', () => {
     });
 
     it('does not guess a duplicate-email Codex auth file when the registry entry is missing', async () => {
-      createValidCodexAccount('kaidu.kd@gmail.com', 'workspace-team', 'codex-legacy-slot-a.json');
-      createValidCodexAccount('kaidu.kd@gmail.com', 'workspace-free', 'codex-legacy-slot-b.json');
+      createValidCodexAccount(
+        'shared.user@example.com',
+        'workspace-team',
+        'codex-legacy-slot-a.json'
+      );
+      createValidCodexAccount(
+        'shared.user@example.com',
+        'workspace-free',
+        'codex-legacy-slot-b.json'
+      );
 
       const fetchSpy = mock(() =>
         Promise.resolve(
@@ -917,7 +929,7 @@ describe('Codex Quota Fetcher', () => {
       ) as typeof fetch;
       global.fetch = fetchSpy;
 
-      const result = await fetchCodexQuota('kaidu.kd@gmail.com#04a0f049-team');
+      const result = await fetchCodexQuota('shared.user@example.com#04a0f049-team');
 
       expect(result.success).toBe(false);
       expect(result.errorCode).toBe('auth_file_missing');

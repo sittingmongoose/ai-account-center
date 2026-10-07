@@ -12,6 +12,7 @@ import {
   UPDATE_APP_LABELS,
   type UpdatePlatform,
 } from '../../../src/web-server/services/app-update-service';
+import { APP_UPDATE_SSH_HOSTS } from '../../../src/web-server/services/app-update-hosts';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -98,10 +99,10 @@ describe('fixed app update service', () => {
     expect(local.args.slice(1, 4)).toEqual(['--apply', '--platform', 'ubuntu']);
     const mac = appUpdateInvocation('mac');
     expect(mac.binary).toBe('ssh');
-    expect(mac.args.slice(-2, -1)).toEqual(['jared-mac']);
+    expect(mac.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.mac]);
     expect(mac.args.at(-1)).toContain('$HOME/.ccs/app-updates/app_updates.py');
     const windows = appUpdateInvocation('windows');
-    expect(windows.args.slice(-2, -1)).toEqual(['jared-windows']);
+    expect(windows.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.windows]);
     const encoded = windows.args.at(-1)!.split(' ').at(-1)!;
     const script = Buffer.from(encoded, 'base64').toString('utf16le');
     expect(script).toContain('--apply --platform windows');

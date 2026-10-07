@@ -151,7 +151,7 @@ describe('sign-in staging', () => {
         HOME: '/elsewhere',
         PATH: '/attacker/bin:/usr/bin',
         TERM: 'xterm-kitty',
-        SSH_CONNECTION: '192.168.50.20 50000 192.168.50.179 22',
+        SSH_CONNECTION: '192.168.10.20 50000 192.168.10.179 22',
         SSH_TTY: '/dev/pts/3',
         GEMINI_API_KEY: 'secret-key',
         GOOGLE_API_KEY: 'secret-key',
@@ -168,7 +168,7 @@ describe('sign-in staging', () => {
       PATH: `${staging.stubs}:/usr/bin:/bin`,
       BROWSER: path.join(staging.stubs, 'xdg-open'),
       TERM: 'xterm-kitty',
-      SSH_CONNECTION: '192.168.50.20 50000 192.168.50.179 22',
+      SSH_CONNECTION: '192.168.10.20 50000 192.168.10.179 22',
       SSH_TTY: '/dev/pts/3',
       LC_ALL: 'C.UTF-8',
     });

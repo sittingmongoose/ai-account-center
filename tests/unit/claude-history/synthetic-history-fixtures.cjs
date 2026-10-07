@@ -4,7 +4,11 @@
 // environment, installed app, provider, credential store or remote computer.
 const crypto = require('node:crypto');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
-const ROLES = Object.freeze(['platyr', 'gmail', 'me', 'party']);
+// The profile whose history copies from the Mac to Windows, read from the
+// product's fixed directions so the fixtures never spell it out.
+const {DIRECTIONS} = require('../../../scripts/claude-history/history-index-sync.cjs');
+const MAC_PROFILE = Object.keys(DIRECTIONS).find(id => DIRECTIONS[id][0] === 'mac');
+const ROLES = Object.freeze([MAC_PROFILE, 'gmail', 'me', 'party']);
 const PRIVATE_TITLE = 'SYNTHETIC_PRIVATE_HISTORY_TITLE';
 const PRIVATE_ERROR = 'SYNTHETIC_PRIVATE_ADAPTER_ERROR';
 const uuid = n => '00000000-0000-4000-8000-' + n.toString(16).padStart(12, '0');
@@ -63,5 +67,5 @@ function immutableBinding(value) {
   };
 }
 
-module.exports = {ROLES, PRIVATE_TITLE, PRIVATE_ERROR, digest, uuid,
+module.exports = {ROLES, MAC_PROFILE, PRIVATE_TITLE, PRIVATE_ERROR, digest, uuid,
   bindings, record, envelope, immutableBinding};

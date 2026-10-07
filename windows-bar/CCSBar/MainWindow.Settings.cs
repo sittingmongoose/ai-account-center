@@ -252,7 +252,7 @@ public partial class MainWindow
         return card;
     }
 
-    /// <summary>"This connection: 192.168.50.31, trusted local network" (or "not trusted"), as the dashboard sees this
+    /// <summary>"This connection: 192.168.10.31, trusted local network" (or "not trusted"), as the dashboard sees this
     /// computer right now, so the owner can confirm once that the home VPN counts.</summary>
     private async void FillConnectionLine(TextBlock line, Uri origin)
     {

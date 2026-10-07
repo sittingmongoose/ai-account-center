@@ -200,13 +200,13 @@ test('running Opens reported by the profile list show on rows; finished ones fro
     { id: 'gmail', openOperation: op('failed', { id: 'old' }) },
     { id: 'party', openOperation: op('copying', { platform: 'windows', confirmedCount: 2, totalCount: 5 }) },
     { id: 'me', openOperation: op('failed', { message: 'Claude desktop request failed.' }) },
-    { id: 'platyr', openOperation: null },
+    { id: 'plum', openOperation: null },
   ];
   const views = openProgress(ours, profiles);
   assert.equal(views.get('gmail').text, 'Opening on Mac');
   assert.equal(views.get('party').text, 'Copying history 2 of 5');
   assert.equal(views.has('me'), false);
-  assert.equal(views.has('platyr'), false);
+  assert.equal(views.has('plum'), false);
   assert.equal(openProgress(null, null).size, 0);
 });
 

@@ -52,7 +52,7 @@ function example(): Record<string, unknown> {
         id: 'qwen:usage',
         provider: 'qwen',
         platform: 'windows',
-        sshHost: 'jared-windows',
+        sshHost: 'windows-host',
         label: null,
         credential: { kind: 'browser-capsule', capsuleId: 'default' },
         createdAt: '2026-10-02T07:00:00Z',
@@ -86,7 +86,7 @@ describe('account registry v2 schema', () => {
       'zai:acct:9f2c41d0',
       'qwen:usage',
     ]);
-    expect(registry?.accounts[2].sshHost).toBe('jared-windows');
+    expect(registry?.accounts[2].sshHost).toBe('windows-host');
     const minimal = parseAccountRegistry({ version: 2, accounts: [keyAccount('zai', '0a1b2c3d')] });
     expect(minimal?.accounts[0]).toEqual({
       id: 'zai:acct:0a1b2c3d',
@@ -166,7 +166,7 @@ describe('account registry v2 schema', () => {
       id,
       provider: 'qwen',
       platform: 'windows',
-      sshHost: 'jared-windows',
+      sshHost: 'windows-host',
       credential,
     });
     const discover = qwen('qwen:usage', { kind: 'discover' });

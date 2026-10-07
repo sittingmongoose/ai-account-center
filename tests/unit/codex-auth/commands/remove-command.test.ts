@@ -440,7 +440,7 @@ describe('handleRemoveCodex — confirmation', () => {
   });
 });
 
-function syntheticAuth(name: 'gmail' | 'platyr'): Buffer {
+function syntheticAuth(name: 'gmail' | 'plum'): Buffer {
   return fs.readFileSync(path.join(__dirname, '../fixtures/activation', `${name}.auth.json`));
 }
 
@@ -514,7 +514,7 @@ describe('handleRemoveCodex — native shared-login protection', () => {
     );
     const ctx = await makeCtx('primary', 'inactive');
     fs.writeFileSync(savedAuth('primary'), syntheticAuth('gmail'));
-    fs.writeFileSync(savedAuth('inactive'), syntheticAuth('platyr'));
+    fs.writeFileSync(savedAuth('inactive'), syntheticAuth('plum'));
     fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('gmail'));
     fs.writeFileSync(path.join(codexHome, 'config.toml'), 'keep config');
     fs.mkdirSync(path.join(codexHome, 'sessions'));
@@ -534,11 +534,11 @@ describe('handleRemoveCodex — native shared-login protection', () => {
     );
     const { InteractivePrompt } = await import('../../../../src/utils/prompt');
     const ctx = await makeCtx('primary', 'target');
-    fs.writeFileSync(savedAuth('target'), syntheticAuth('platyr'));
+    fs.writeFileSync(savedAuth('target'), syntheticAuth('plum'));
     fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('gmail'));
     spyOn(InteractivePrompt, 'confirm').mockImplementation(async () => {
       expect(fs.existsSync(path.join(codexHome, '.ccs-activation.lock'))).toBe(false);
-      fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('platyr'));
+      fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('plum'));
       return true;
     });
     await removalFailure(() => handleRemoveCodex(ctx, ['target'], { codexHome }));
@@ -552,7 +552,7 @@ describe('handleRemoveCodex — native shared-login protection', () => {
         '../../../../src/codex-auth/commands/remove-command'
       );
       const ctx = await makeCtx('target');
-      fs.writeFileSync(savedAuth('target'), syntheticAuth('platyr'));
+      fs.writeFileSync(savedAuth('target'), syntheticAuth('plum'));
       fs.writeFileSync(path.join(codexHome, 'auth.json'), invalid);
       const message = await removalFailure(() =>
         handleRemoveCodex(ctx, ['target', '--yes', '--force'], { codexHome })
@@ -626,16 +626,16 @@ describe('handleRemoveCodex — native shared-login protection', () => {
       '../../../../src/codex-auth/commands/remove-command'
     );
     const ctx = await makeCtx('target');
-    fs.writeFileSync(savedAuth('target'), syntheticAuth('platyr'));
+    fs.writeFileSync(savedAuth('target'), syntheticAuth('plum'));
     fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('gmail'));
     const realCp = fs.promises.cp;
     spyOn(fs.promises, 'cp').mockImplementation(async (src, dest, options) => {
       await realCp(src, dest, options);
-      fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('platyr'));
+      fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('plum'));
     });
     await removalFailure(() => handleRemoveCodex(ctx, ['target', '--yes'], { codexHome }));
     expect(ctx.registry.hasProfile('target')).toBe(true);
-    expect(fs.readFileSync(savedAuth('target'))).toEqual(syntheticAuth('platyr'));
+    expect(fs.readFileSync(savedAuth('target'))).toEqual(syntheticAuth('plum'));
   });
 
   it('holds the common activation lock through asynchronous delete and restoration', async () => {
@@ -643,7 +643,7 @@ describe('handleRemoveCodex — native shared-login protection', () => {
       '../../../../src/codex-auth/commands/remove-command'
     );
     const ctx = await makeCtx('target');
-    fs.writeFileSync(savedAuth('target'), syntheticAuth('platyr'));
+    fs.writeFileSync(savedAuth('target'), syntheticAuth('plum'));
     const realCp = fs.promises.cp;
     const realRm = fs.promises.rm;
     spyOn(fs.promises, 'cp').mockImplementation(async (src, dest, options) => {
@@ -661,7 +661,7 @@ describe('handleRemoveCodex — native shared-login protection', () => {
     });
     await removalFailure(() => handleRemoveCodex(ctx, ['target', '--yes'], { codexHome }));
     expect(ctx.registry.hasProfile('target')).toBe(true);
-    expect(fs.readFileSync(savedAuth('target'))).toEqual(syntheticAuth('platyr'));
+    expect(fs.readFileSync(savedAuth('target'))).toEqual(syntheticAuth('plum'));
   });
 });
 
@@ -786,7 +786,7 @@ describe('handleRemoveCodex — lock wait and real exit', () => {
         '../../../../src/codex-auth/codex-activation-lock'
       );
       const ctx = await makeCtx('primary', 'target');
-      fs.writeFileSync(savedAuth('target'), syntheticAuth('platyr'));
+      fs.writeFileSync(savedAuth('target'), syntheticAuth('plum'));
       fs.writeFileSync(path.join(codexHome, 'auth.json'), syntheticAuth('gmail'));
       const release = await acquireCodexActivationLock(codexHome);
       let preflightRead!: () => void;

@@ -31,6 +31,7 @@ import { getRecentLogEntries } from '../../../src/services/logging';
 import { getCcsDir } from '../../../src/utils/config-manager';
 
 const fx = require('../claude-history/synthetic-history-fixtures.cjs');
+const { MAC_PROFILE } = fx;
 const core = require('../../../scripts/claude-history/history-index-sync.cjs');
 const seed = fx.bindings('Q');
 const UNCONFIRMED =
@@ -64,11 +65,11 @@ let readGates: Gate[] = [];
 function snapshot(platform: string) {
   const records = platform === 'mac' ? [fx.envelope(fx.record(seed))] : [];
   return {
-    profileId: 'platyr',
+    profileId: MAC_PROFILE,
     platform,
     identity: {
-      accountSha256: seed.profiles.platyr.accountSha256,
-      orgSha256: seed.profiles.platyr.orgSha256,
+      accountSha256: seed.profiles[MAC_PROFILE].accountSha256,
+      orgSha256: seed.profiles[MAC_PROFILE].orgSha256,
     },
     records: records.map((row: { name: string; sha256: string; bytes: Buffer }) => ({
       name: row.name,
@@ -94,8 +95,8 @@ const policy = {
   enabled: true,
   sourcePlatform: 'mac',
   identity: {
-    accountUuid: seed.profiles.platyr.accountUuid,
-    organizationUuid: seed.profiles.platyr.organizationUuid,
+    accountUuid: seed.profiles[MAC_PROFILE].accountUuid,
+    organizationUuid: seed.profiles[MAC_PROFILE].organizationUuid,
   },
   project: { cwd: seed.project, originCwd: seed.project, transcriptRoot: seed.transcriptRoot },
   ssh: Object.fromEntries(
@@ -108,7 +109,7 @@ const policy = {
 
 function writeManifest(withPolicy = true, withWindowsLauncher = true): void {
   const row: Record<string, unknown> = {
-    id: 'platyr',
+    id: MAC_PROFILE,
     email: 'synthetic@example.com',
     mac: {
       launcherName: 'Synthetic.app',
@@ -158,9 +159,9 @@ async function request(
 
 const ASYNC = { Prefer: 'respond-async' };
 /** The redesigned clients' Open: asks for the 202 progress form. */
-const open = () => request('POST', '/platyr/open', ASYNC);
+const open = () => request('POST', `/${MAC_PROFILE}/open`, ASYNC);
 /** The shipped clients' Open: no Prefer header, so it waits for the outcome. */
-const openAndWait = () => request('POST', '/platyr/open');
+const openAndWait = () => request('POST', `/${MAC_PROFILE}/open`);
 
 async function currentOperation(): Promise<ClaudeOpenOperation | null> {
   const { body } = await request('GET');
@@ -255,7 +256,7 @@ describe('Claude Open with a managed history copy', () => {
     const started = await open();
     expect(started.status).toBe(202);
     expect(started.body).toEqual({
-      id: 'platyr',
+      id: MAC_PROFILE,
       platform: 'windows',
       state: 'checking',
       operationId: expect.stringMatching(/^op_[a-f0-9]{24}$/),
@@ -325,7 +326,7 @@ describe('Claude Open with a managed history copy', () => {
     const response = await open();
     expect(response).toEqual({
       status: 200,
-      body: { opened: true, id: 'platyr', platform: 'windows' },
+      body: { opened: true, id: MAC_PROFILE, platform: 'windows' },
     });
     expect(opened).toBe(1);
     expect(appendCalls).toBe(0);
@@ -343,7 +344,7 @@ describe('Claude Open with a managed history copy', () => {
   it('answers 409 for a policy profile whose launcher is not configured, with or without Prefer', async () => {
     writeManifest(true, false);
     for (const headers of [ASYNC, {}]) {
-      expect(await request('POST', '/platyr/open', headers)).toEqual({
+      expect(await request('POST', `/${MAC_PROFILE}/open`, headers)).toEqual({
         status: 409,
         body: { error: 'Claude desktop launcher is not configured for this platform.' },
       });
@@ -367,7 +368,7 @@ describe('Claude Open with a managed history copy', () => {
 
   it('marks the 202 with Preference-Applied', async () => {
     const response = await fetch(
-      `http://127.0.0.1:${port}/api/claude/desktop-profiles/platyr/open`,
+      `http://127.0.0.1:${port}/api/claude/desktop-profiles/${MAC_PROFILE}/open`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Prefer: 'wait=5, Respond-Async' },
@@ -389,8 +390,8 @@ describe('Claude Open with a managed history copy', () => {
     for (const value of [started.body, copying, finished]) {
       const text = JSON.stringify(value);
       for (const secret of [
-        seed.profiles.platyr.accountUuid,
-        seed.profiles.platyr.organizationUuid,
+        seed.profiles[MAC_PROFILE].accountUuid,
+        seed.profiles[MAC_PROFILE].organizationUuid,
         seed.aliases.mac,
         seed.aliases.windows,
         seed.plainEndpoint.hostname,
@@ -424,7 +425,7 @@ describe('Claude Open without Prefer: respond-async (the shipped clients)', () =
     appendGate.release();
     expect(await pending).toEqual({
       status: 200,
-      body: { opened: true, id: 'platyr', platform: 'windows' },
+      body: { opened: true, id: MAC_PROFILE, platform: 'windows' },
     });
     expect(await currentOperation()).toMatchObject({ state: 'opened', confirmedCount: 1 });
     expect(appendCalls).toBe(1);
@@ -470,7 +471,7 @@ describe('Claude Open without Prefer: respond-async (the shipped clients)', () =
     appendGate.release();
     expect(await joined).toEqual({
       status: 200,
-      body: { opened: true, id: 'platyr', platform: 'windows' },
+      body: { opened: true, id: MAC_PROFILE, platform: 'windows' },
     });
     expect((await currentOperation())?.id).toBe(started.body.operationId as string);
     expect(appendCalls).toBe(1);
@@ -490,7 +491,7 @@ describe('Claude Open without Prefer: respond-async (the shipped clients)', () =
       kind: 'transport_timeout',
       platform: 'windows',
     });
-    expect(JSON.stringify(last)).not.toMatch(/platyr|synthetic|Synthetic/);
+    expect(JSON.stringify(last)).not.toMatch(new RegExp(`${MAC_PROFILE}|synthetic|Synthetic`));
   });
 });
 
@@ -552,7 +553,7 @@ describe('Claude Open that waits while another click starts the Open', () => {
       expect(first).toEqual({
         status: 202,
         body: {
-          id: 'platyr',
+          id: MAC_PROFILE,
           platform: 'windows',
           state: 'checking',
           operationId: expect.stringMatching(/^op_[a-f0-9]{24}$/),
@@ -565,7 +566,7 @@ describe('Claude Open that waits while another click starts the Open', () => {
       expect(await second).toEqual({
         status: 202,
         body: {
-          id: 'platyr',
+          id: MAC_PROFILE,
           platform: 'windows',
           state: 'copying',
           operationId: first.body.operationId,
@@ -601,7 +602,7 @@ describe('Claude Open that waits while another click starts the Open', () => {
       // B waits for the Open it joined; it never answers before that Open ends.
       expect(secondDone).toBe(false);
       appendGate.release();
-      const ok = { status: 200, body: { opened: true, id: 'platyr', platform: 'windows' } };
+      const ok = { status: 200, body: { opened: true, id: MAC_PROFILE, platform: 'windows' } };
       expect(await first).toEqual(ok);
       expect(await second).toEqual(ok);
       expect(await currentOperation()).toMatchObject({ id: operation.id, state: 'opened' });
@@ -659,7 +660,7 @@ describe('Claude Open that waits while another click starts the Open', () => {
       expect(await second).toEqual({
         status: 202,
         body: {
-          id: 'platyr',
+          id: MAC_PROFILE,
           platform: 'windows',
           state: 'checking',
           operationId: first.body.operationId,
@@ -675,20 +676,20 @@ describe('Claude Open that waits while another click starts the Open', () => {
 
   it('keeps 409 for a durable hold when no Open runs for this scope, profile and platform', async () => {
     // A marker left by an earlier unconfirmed copy; nothing is running for it.
-    core.armPendingMarker(directory, 'platyr', 'windows').release();
+    core.armPendingMarker(directory, MAC_PROFILE, 'windows').release();
     // Running Opens that are not this one: another scope, and this profile on the Mac.
     const elsewhere = gate();
     const operations = getClaudeOpenOperations();
-    operations.start(`${directory}-other-scope`, 'platyr', 'windows', () => elsewhere.promise);
-    operations.start(getCcsDir(), 'platyr', 'mac', () => elsewhere.promise);
+    operations.start(`${directory}-other-scope`, MAC_PROFILE, 'windows', () => elsewhere.promise);
+    operations.start(getCcsDir(), MAC_PROFILE, 'mac', () => elsewhere.promise);
     try {
       for (const headers of [ASYNC, {}]) {
-        expect(await request('POST', '/platyr/open', headers)).toEqual({
+        expect(await request('POST', `/${MAC_PROFILE}/open`, headers)).toEqual({
           status: 409,
           body: { error: UNCONFIRMED, code: 'history_unconfirmed' },
         });
       }
-      expect(operations.running(getCcsDir(), 'platyr', 'windows')).toBeNull();
+      expect(operations.running(getCcsDir(), MAC_PROFILE, 'windows')).toBeNull();
       expect(appendCalls).toBe(0);
       expect(opened).toBe(0);
     } finally {
@@ -719,13 +720,13 @@ describe('ClaudeOpenOperations store', () => {
       runs++;
       return new Promise<void>(() => {});
     };
-    const running = first.start('/scope', 'platyr', 'mac', never);
-    expect(first.start('/scope', 'platyr', 'mac', never).id).toBe(running.id);
+    const running = first.start('/scope', MAC_PROFILE, 'mac', never);
+    expect(first.start('/scope', MAC_PROFILE, 'mac', never).id).toBe(running.id);
     expect(runs).toBe(1);
-    expect(first.forProfile('/scope', 'platyr')?.state).toBe('checking');
-    expect(first.forProfile('/other-scope', 'platyr')).toBeNull();
+    expect(first.forProfile('/scope', MAC_PROFILE)?.state).toBe('checking');
+    expect(first.forProfile('/other-scope', MAC_PROFILE)).toBeNull();
     // A restarted server has a new store: nothing resumes.
-    expect(new ClaudeOpenOperations().forProfile('/scope', 'platyr')).toBeNull();
+    expect(new ClaudeOpenOperations().forProfile('/scope', MAC_PROFILE)).toBeNull();
   });
 
   it('maps failures to fixed states and forgets finished operations after the retention', async () => {
@@ -761,10 +762,15 @@ describe('ClaudeOpenOperations store', () => {
 
   it('prefers a running operation over a finished one for the same profile', async () => {
     const store = new ClaudeOpenOperations();
-    store.start('/scope', 'platyr', 'mac', () => Promise.resolve());
+    store.start('/scope', MAC_PROFILE, 'mac', () => Promise.resolve());
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const running = store.start('/scope', 'platyr', 'windows', () => new Promise<void>(() => {}));
-    expect(store.forProfile('/scope', 'platyr')).toMatchObject({
+    const running = store.start(
+      '/scope',
+      MAC_PROFILE,
+      'windows',
+      () => new Promise<void>(() => {})
+    );
+    expect(store.forProfile('/scope', MAC_PROFILE)).toMatchObject({
       id: running.id,
       platform: 'windows',
       state: 'checking',

@@ -3,7 +3,7 @@
 Official provider artwork from the AI Account Center marks set (`redesign-concepts-20261001/shared/marks-v2`, generated 2026-10-01T20:31:31.632Z).
 Rules: Official artwork only. No recolouring, redrawing or geometry changes. SVG edits are limited to dropping the XML prolog and editor comments, setting the root viewBox/width/height (the crop), and, for lockups, dropping wordmark elements that lie wholly outside the crop (each verified pixel-identical). Optical scale is metadata only.
 
-The PNGs here are the marks set's 256 px exports (`out/png/<id>@256.png`); `<id>-light.png` is the official light-surface artwork, used in the Light theme. Kimi Code uses the official Kimi Code app icon with its own black plate (Jared's choice). Optical scale is metadata only: the tray draws each mark in its box at box x scale.
+The PNGs here are the marks set's 256 px exports (`out/png/<id>@256.png`); `<id>-light.png` is the official light-surface artwork, used in the Light theme. Kimi Code uses the official Kimi Code app icon with its own black plate (the owner's choice). Optical scale is metadata only: the tray draws each mark in its box at box x scale.
 
 ## claude
 

@@ -899,7 +899,7 @@ describe('saved native Codex dashboard quota', () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-native-codex-quota-'));
     const originalFetch = global.fetch;
     const requests: Array<{ token: string | null; workspace: string | null }> = [];
-    const profiles = ['gmail', 'party', 'lexxmariah'];
+    const profiles = ['gmail', 'party', 'lime'];
     try {
       for (const profile of profiles) {
         const dir = path.join(tempHome, '.ccs', 'codex-instances', profile);
@@ -931,7 +931,7 @@ describe('saved native Codex dashboard quota', () => {
         const rows = await getCodexProfileQuotaRows(profiles, {
           defaultCodexProfile: () => 'gmail',
         });
-        expect(rows.map((row) => row.profile)).toEqual(['gmail', 'lexxmariah', 'party']);
+        expect(rows.map((row) => row.profile)).toEqual(['gmail', 'lime', 'party']);
         expect(rows.every((row) => row.quotaStatus === 'ok')).toBe(true);
         expect(rows.every((row) => row.quotaWindows?.length === 2)).toBe(true);
         expect(rows[0].quotaWindows?.map((window) => window.usedPercent)).toEqual([25, 55]);
@@ -960,7 +960,7 @@ describe('saved native Codex dashboard quota', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const pending = getCodexProfileQuotaRows(['gmail', 'party', 'lexxmariah'], {
+    const pending = getCodexProfileQuotaRows(['gmail', 'party', 'lime'], {
       defaultCodexProfile: () => 'gmail',
       readCodexNativeAuth: (profile) => ({ accessToken: `fake-${profile}`, accountId: profile }),
       fetchCodexQuotaWithToken: async (_token, accountId) => {
@@ -980,7 +980,7 @@ describe('saved native Codex dashboard quota', () => {
     expect(maxActive).toBe(2);
     expect(called).toHaveLength(3);
     expect(rows).toHaveLength(3);
-    expect(getCachedCodexProfileQuotaRows(['gmail', 'party', 'lexxmariah'])).toHaveLength(3);
+    expect(getCachedCodexProfileQuotaRows(['gmail', 'party', 'lime'])).toHaveLength(3);
   });
 
   it('allows a requested profile refresh to bypass TTL while coalescing the forced fetch', async () => {

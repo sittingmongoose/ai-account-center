@@ -3,8 +3,8 @@
 The dashboard's authenticated `POST /api/app-updates/start` accepts exactly `{}`.
 It starts one asynchronous, persisted job and returns immediately. Authenticated
 `GET /api/app-updates/status` reads state only. Duplicate active jobs are rejected.
-The server invokes only Ubuntu locally and the fixed `jared-mac`/`jared-windows`
-SSH hosts; callers cannot supply hosts, commands, app IDs, paths or download URLs.
+The server invokes only Ubuntu locally and the fixed Mac and Windows
+SSH aliases (`APP_UPDATE_SSH_HOSTS`); callers cannot supply hosts, commands, app IDs, paths or download URLs.
 
 ## Every computer at once, and never stuck
 

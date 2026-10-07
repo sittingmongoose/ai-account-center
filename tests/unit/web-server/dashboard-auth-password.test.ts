@@ -277,22 +277,22 @@ describe('POST /api/auth/setup', () => {
     expect(check.body).toMatchObject({ configured: false, setupCodeRequired: false });
     const browser = new Client(harness);
     const response = await browser.send('POST', '/api/auth/setup', {
-      username: 'jared-admin',
+      username: 'owner-admin',
       password: NEW_PASSWORD,
     });
     expect(response.status).toBe(201);
     expect(response.body).toMatchObject({
       ok: true,
-      username: 'jared-admin',
+      username: 'owner-admin',
       session: { expiresAt: expect.any(String) },
     });
     const stored = storedAuth();
-    expect(stored).toMatchObject({ enabled: true, username: 'jared-admin' });
+    expect(stored).toMatchObject({ enabled: true, username: 'owner-admin' });
     expect(stored?.session_timeout_hours).toBe(12);
     expect(typeof stored?.password_changed_at).toBe('string');
     expect((await browser.send('GET', '/api/auth/session')).status).toBe(200);
     const again = await new Client(harness).send('POST', '/api/auth/setup', {
-      username: 'jared-admin',
+      username: 'owner-admin',
       password: 'third-fixture-password',
     });
     expect(again.status).toBe(409);
@@ -311,7 +311,7 @@ describe('POST /api/auth/setup', () => {
 
     harness.peer.address = LAN_PEER;
     harness.peer.host = LAN_HOST;
-    const body = { username: 'jared-admin', password: NEW_PASSWORD };
+    const body = { username: 'owner-admin', password: NEW_PASSWORD };
     const plain = await new Client(harness).send('POST', '/api/auth/setup', {
       ...body,
       setupCode: code,
@@ -352,7 +352,7 @@ describe('POST /api/auth/setup', () => {
     harness.peer.address = LAN_PEER;
     harness.peer.host = LAN_HOST;
     harness.peer.encrypted = true;
-    const body = { username: 'jared-admin', password: NEW_PASSWORD, setupCode: 'WXYZ-WXYZ' };
+    const body = { username: 'owner-admin', password: NEW_PASSWORD, setupCode: 'WXYZ-WXYZ' };
     for (let attempt = 0; attempt < 5; attempt += 1) {
       expect((await new Client(harness).send('POST', '/api/auth/setup', body)).status).toBe(403);
     }
@@ -410,7 +410,7 @@ describe('secure transport', () => {
     harness.peer.address = LAN_PEER;
     harness.peer.host = LAN_HOST;
     const response = await new Client(harness).send('POST', '/api/auth/setup', {
-      username: 'jared-admin',
+      username: 'owner-admin',
       password: NEW_PASSWORD,
     });
     expect([response.status, response.body.code]).toEqual([403, 'secure_transport_required']);
@@ -475,7 +475,7 @@ describe('environment-managed credentials', () => {
     });
     expect([change.status, change.body.code]).toEqual([409, 'managed_by_env']);
     const setup = await new Client(harness).send('POST', '/api/auth/setup', {
-      username: 'jared-admin',
+      username: 'owner-admin',
       password: NEW_PASSWORD,
     });
     expect([setup.status, setup.body.code]).toEqual([409, 'managed_by_env']);

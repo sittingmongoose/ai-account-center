@@ -4,9 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const sync = require('../../../scripts/claude-history/history-index-sync.cjs');
 const fx = require('./synthetic-history-fixtures.cjs');
+const {MAC_PROFILE} = fx;
 const otherPlatform = value => value === 'mac' ? 'windows' : 'mac';
 
-function privatePolicy(seed, role = 'platyr', targetPlatform = 'windows') {
+function privatePolicy(seed, role = MAC_PROFILE, targetPlatform = 'windows') {
   const identity = seed.profiles[role];
   return {
     version: 1, enabled: true, sourcePlatform: otherPlatform(targetPlatform),
@@ -31,7 +32,7 @@ function snapshot(seed, role, platform, records = [], changes = {}) {
   };
 }
 
-function setup({role = 'platyr', targetPlatform = 'windows', tag = 'A', adapters: overrides = {}} = {}) {
+function setup({role = MAC_PROFILE, targetPlatform = 'windows', tag = 'A', adapters: overrides = {}} = {}) {
   const seed = fx.bindings(tag), sourcePlatform = otherPlatform(targetPlatform);
   const source = snapshot(seed, role, sourcePlatform, [fx.envelope(fx.record(seed, sourcePlatform))]);
   const target = snapshot(seed, role, targetPlatform);
@@ -59,7 +60,7 @@ function replaceRows(snapshotValue, rows) {
   snapshotValue.revision = sync.snapshotRevision(snapshotValue.records);
 }
 
-for(const {role, targetPlatform} of [{role: 'platyr', targetPlatform: 'windows'}, {role: 'gmail', targetPlatform: 'mac'}]) {
+for(const {role, targetPlatform} of [{role: MAC_PROFILE, targetPlatform: 'windows'}, {role: 'gmail', targetPlatform: 'mac'}]) {
   for(const tag of ['A', 'B']) test(`injected private policy ${tag}: ${role} -> ${targetPlatform}`, async () => {
     const f = setup({role, targetPlatform, tag}), out = await f.run();
     assert.equal(out.status, 'synchronized');
@@ -75,7 +76,7 @@ for(const {role, targetPlatform} of [{role: 'platyr', targetPlatform: 'windows'}
 }
 
 for(const role of fx.ROLES) for(const targetPlatform of ['mac', 'windows']) {
-  const allowed = role === 'platyr' && targetPlatform === 'windows' || role === 'gmail' && targetPlatform === 'mac';
+  const allowed = role === MAC_PROFILE && targetPlatform === 'windows' || role === 'gmail' && targetPlatform === 'mac';
   if(allowed) continue;
   test(`recognized ${role}/${targetPlatform} preserves disabled direction before reads`, async () => {
     const f = setup({role, targetPlatform});
@@ -89,7 +90,7 @@ for(const role of fx.ROLES) for(const targetPlatform of ['mac', 'windows']) {
 }
 
 test('unsupported profile and platform stay distinct from the four recognized profiles', async () => {
-  for(const args of [{profileId: 'unknown', targetPlatform: 'windows'}, {profileId: 'platyr', targetPlatform: 'linux'}, {profileId: null, targetPlatform: 'mac'}]) {
+  for(const args of [{profileId: 'unknown', targetPlatform: 'windows'}, {profileId: MAC_PROFILE, targetPlatform: 'linux'}, {profileId: null, targetPlatform: 'mac'}]) {
     const f = setup(), out = await f.run(args);
     assert.equal(out.status, 'skipped'); assert.equal(out.reason, 'unsupported_profile_or_platform');
     assert.deepEqual(f.events, []);
@@ -239,14 +240,14 @@ test('transcript prefix and basename must bind to policy root and original CLI I
 
 test('source changed between reads skips without retry or append', async () => {
   const f = setup(); let reads = 0;
-  f.adapters.readSource = async () => ++reads === 1 ? f.source : snapshot(f.seed, 'platyr', 'mac', [fx.envelope(fx.record(f.seed, 'mac', {lastActivityAt: 3}))]);
+  f.adapters.readSource = async () => ++reads === 1 ? f.source : snapshot(f.seed, MAC_PROFILE, 'mac', [fx.envelope(fx.record(f.seed, 'mac', {lastActivityAt: 3}))]);
   assert.equal((await f.run()).reason, 'source_changed'); assert.equal(reads, 2); assert.equal(f.received(), undefined);
 });
 test('changed source bytes cannot reuse the first declared snapshot revision', async () => {
   const f = setup(); let reads = 0;
   f.adapters.readSource = async () => {
     if(++reads === 1) return f.source;
-    return snapshot(f.seed, 'platyr', 'mac', [fx.envelope(fx.record(f.seed, 'mac', {lastActivityAt: 3}))], {revision: f.source.revision});
+    return snapshot(f.seed, MAC_PROFILE, 'mac', [fx.envelope(fx.record(f.seed, 'mac', {lastActivityAt: 3}))], {revision: f.source.revision});
   };
   assert.equal((await f.run()).reason, 'snapshot_changed');
   assert.equal(reads, 2); assert.equal(f.received(), undefined);

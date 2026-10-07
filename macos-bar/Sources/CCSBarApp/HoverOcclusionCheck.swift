@@ -41,7 +41,7 @@ enum HoverOcclusionCheck {
       var failures: [String] = []
       func fail(_ message: String) { if failures.count < 400 { failures.append(message) } }
 
-      // The fixture must have Jared's real shape: three Codex accounts with full emails, the first in list
+      // The fixture must have the real account shape: three Codex accounts with full emails, the first in list
       // order NOT active and the active one after it, with Claude above and other providers below.
       let codex = dashboard.visibleAccounts.filter { $0.provider == "codex" }
       let activeIndex = codex.firstIndex(where: \.isActive) ?? -1
@@ -526,7 +526,7 @@ enum HoverOcclusionCheck {
           "presenter": held.tag.presenter.text, "visible": texts, "passed": ok])
         release(held)
       }
-      // MARK: 9. A panel shorter than its list (Jared's list is longer than his panel), scrolled
+      // MARK: 9. A panel shorter than its list (the owner's list is longer than the panel), scrolled
       // Rows scroll under the floating footer and up under the header. Over a footer button only that button's tag
       // presents and no row under it highlights; the gear over Settings' Value the same; no row scrolled out of
       // view presents; content scrolling under a still pointer, and a layer opening under one, re-check it.

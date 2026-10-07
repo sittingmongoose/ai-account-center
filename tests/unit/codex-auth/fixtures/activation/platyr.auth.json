@@ -1,8 +1,0 @@
-{
-  "tokens": {
-    "id_token": "eyJhbGciOiAibm9uZSIsICJ0eXAiOiAiSldUIn0.eyJlbWFpbCI6ICJwbGF0eXJAZXhhbXBsZS50ZXN0IiwgImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6IHsiY2hhdGdwdF9wbGFuX3R5cGUiOiAicHJvIiwgImNoYXRncHRfYWNjb3VudF9pZCI6ICJmaXh0dXJlLXBsYXR5ciJ9fQ.fakesig",
-    "access_token": "fake-access-platyr",
-    "refresh_token": "fake-refresh-platyr"
-  },
-  "last_refresh": "2026-09-30T00:00:00Z"
-}
