@@ -309,7 +309,7 @@ export component AnalyticsPage inherits Rectangle {
             scroll: root.scroll;
             view-bottom: root.view-bottom;
             delay: 384ms;
-            AxQuotaCard { played: quota.seen; delay: quota.play-delay; }
+            AxQuotaCard { played: quota.seen; delay: quota.play-delay; cell-w: root.cw; }
         }
         Rectangle { height: Breakpoints.tier-d ? 18px : root.gap; }
         agenda := AxReveal {
@@ -317,7 +317,7 @@ export component AnalyticsPage inherits Rectangle {
             scroll: root.scroll;
             view-bottom: root.view-bottom;
             delay: 416ms;
-            AxAgendaCard { played: agenda.seen; delay: agenda.play-delay; }
+            AxAgendaCard { played: agenda.seen; delay: agenda.play-delay; cell-w: root.cw; }
         }
     }
 }
