@@ -180,6 +180,31 @@ public enum TrayColumns {
     return window.label.isEmpty ? "Usage" : window.label
   }
 
+  /// Details meter order: the Antigravity pools in the row's order (Gemini 5-hour, Gemini weekly,
+  /// Claude/GPT 5-hour, Claude/GPT weekly), unknown extra windows after in reported order. Every other
+  /// provider keeps the reported order.
+  public static func detailsMeterOrder(provider: String, _ windows: [AccountQuotaWindow]) -> [AccountQuotaWindow] {
+    guard provider == "antigravity" else { return windows }
+    return windows.enumerated()
+      .sorted { left, right in
+        let leftRank = antigravityKeys.firstIndex(of: left.element.key) ?? antigravityKeys.count
+        let rightRank = antigravityKeys.firstIndex(of: right.element.key) ?? antigravityKeys.count
+        return leftRank == rightRank ? left.offset < right.offset : leftRank < rightRank
+      }
+      .map(\.element)
+  }
+
+  /// A Details title split at a pool label's " · " ("Claude and GPT models · 5-hour"): the full pool
+  /// name stays whole as the title and the period becomes the subtitle, so a long pool name is never
+  /// truncated. Nil for labels without the separator.
+  public static func labelParts(_ label: String) -> (title: String, subtitle: String)? {
+    guard let separator = label.range(of: " · ") else { return nil }
+    let title = String(label[..<separator.lowerBound]).trimmingCharacters(in: .whitespaces)
+    let subtitle = String(label[separator.upperBound...]).trimmingCharacters(in: .whitespaces)
+    guard !title.isEmpty, !subtitle.isEmpty else { return nil }
+    return (title, subtitle)
+  }
+
   /// Short meter captions, as in the concept.
   public static func shortLabel(provider: String, _ window: AccountQuotaWindow) -> String {
     if window.isFable { return "Fable" }
@@ -434,6 +459,16 @@ public enum TrayFormat {
     if remaining <= 0 { return "due" }
     if remaining < 86_400 { return date.formatted(date: .omitted, time: .shortened) }
     return duration(remaining)
+  }
+
+  /// Narrowest row form: the countdown's largest unit only ("6d", "5h", "47m"), for cells too tight
+  /// even for the row form. A reset under a day away reads as its clock time when that fits; this is
+  /// its countdown fallback.
+  public static func shortestReset(_ iso: String?, now: Date = TrayFormat.now) -> String? {
+    guard let date = AccountFormatting.date(iso) else { return nil }
+    let remaining = date.timeIntervalSince(now)
+    if remaining <= 0 { return "due" }
+    return duration(remaining).split(separator: " ").first.map(String.init)
   }
 
   /// Details form: the date, time and countdown.

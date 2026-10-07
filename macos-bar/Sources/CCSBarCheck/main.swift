@@ -1579,6 +1579,12 @@ private func checkTrayPresentation() throws {
   try expect(TrayFormat.shortReset(iso.string(from: now.addingTimeInterval(-60)), now: now) == "due"
     && TrayFormat.shortReset(iso.string(from: now.addingTimeInterval(6 * 86_400 + 14 * 3600 + 30)), now: now) == "6d 14h"
     && TrayFormat.shortReset(nil, now: now) == nil, "Row resets show a countdown, due, or nothing when unreported")
+  try expect(TrayFormat.shortestReset(iso.string(from: now.addingTimeInterval(-60)), now: now) == "due"
+    && TrayFormat.shortestReset(iso.string(from: now.addingTimeInterval(6 * 86_400 + 14 * 3600 + 30)), now: now) == "6d"
+    && TrayFormat.shortestReset(iso.string(from: now.addingTimeInterval(3 * 3600 + 47 * 60)), now: now) == "3h"
+    && TrayFormat.shortestReset(iso.string(from: now.addingTimeInterval(47 * 60)), now: now) == "47m"
+    && TrayFormat.shortestReset(nil, now: now) == nil,
+    "A tight cell's reset falls back to the countdown's largest unit, never truncated")
   try expect(TrayFormat.longReset(nil, now: now) == "No reset reported", "Details never invent a reset")
 
   // Value motion never overshoots: the ease-out curve stays within 0...1 and only rises.
@@ -1684,6 +1690,25 @@ private func checkAntigravityPlanDisplay() throws {
   let extra = try account("agy-extra", windows: [window("gemini-flash-8h", "Flash 8h", ["usedPercent": 1, "windowMinutes": 480])])
   try expect(TrayColumns.antigravity([extra]).map(\.key) == ["gemini-flash-8h"],
     "An account reporting none of the four pools keeps its own meters, nothing guessed")
+
+  // Details: the meters read in the row's order, however the account lists them, and a pool label
+  // splits into the full pool name (title) and the period (subtitle) so the name never truncates.
+  // Every provider but Antigravity keeps its reported order.
+  try expect(TrayColumns.detailsMeterOrder(provider: "antigravity", scrambled.visibleWindows).map(\.key)
+    == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"],
+    "Antigravity details list the pools in the row's order")
+  try expect(TrayColumns.detailsMeterOrder(provider: "antigravity", extra.visibleWindows).map(\.key) == ["gemini-flash-8h"]
+    && TrayColumns.detailsMeterOrder(provider: "claude", scrambled.visibleWindows).map(\.key)
+      == scrambled.visibleWindows.map(\.key),
+    "Unknown extra windows and other providers keep the reported order")
+  let split3p = TrayColumns.labelParts("Claude and GPT models · 5-hour")
+  let splitGemini = TrayColumns.labelParts("Gemini Models · Weekly")
+  try expect(split3p?.title == "Claude and GPT models" && split3p?.subtitle == "5-hour"
+    && splitGemini?.title == "Gemini Models" && splitGemini?.subtitle == "Weekly",
+    "A pool label splits into the full pool name and the period for Details")
+  try expect(TrayColumns.labelParts("Weekly") == nil && TrayColumns.labelParts("A · ") == nil
+    && TrayColumns.labelParts(" · B") == nil,
+    "Labels without a whole pool · period pair stay one line")
 
   // Missing cells: an honest muted reason from the plan facts, never a fake 0%.
   let weekly = try account("agy-weekly", plan: plan("free", "weekly", thirdParty: true))

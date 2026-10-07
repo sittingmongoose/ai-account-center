@@ -34,7 +34,7 @@ struct AccountDetailsBody: View {
 
   var body: some View {
     withPalette { palette in
-      let meters = account.visibleWindows.filter(\.isMeter)
+      let meters = TrayColumns.detailsMeterOrder(provider: account.provider, account.visibleWindows.filter(\.isMeter))
       let amounts = account.visibleWindows.filter { !$0.isMeter }
       VStack(alignment: .leading, spacing: 12) {
         HStack(spacing: 10) {
@@ -77,9 +77,13 @@ struct AccountDetailsBody: View {
             alignment: .leading, spacing: 12) {
             ForEach(meters) { window in
               VStack(alignment: .leading, spacing: 3) {
+                // Antigravity's pool labels split into title + subtitle so the full pool name is
+                // never truncated; every other provider keeps its one-line label.
+                let label = TrayColumns.fullLabel(provider: account.provider, window)
+                let parts = account.provider == "antigravity" ? TrayColumns.labelParts(label) : nil
                 MeterView(key: "\(account.id)|\(window.key)", window: window, sampledAt: account.sampledAt,
                   pendingReset: account.pendingReset(window),
-                  labelText: TrayColumns.fullLabel(provider: account.provider, window),
+                  labelText: parts?.title ?? label, labelSubtitle: parts?.subtitle,
                   motion: MeterMotion(animate: false), detail: true)
                 if account.pendingReset(window) == nil, let used = window.used, let limit = window.limit {
                   Text("\(TrayFormat.number(used)) of \(TrayFormat.number(limit))\(window.unit.map { " \($0)" } ?? "")")

@@ -39,7 +39,9 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   "Not on plan" for that pool, and a plan with no Antigravity entitlement and no readings shows one line,
   "No Antigravity quota on this plan", instead of meters. Details adds the plan's summary sentence, a
   "Models:" line, the family-sharing note on paid Pro and Ultra plans, and labels the credits row
-  "AI credits (overage)" with the hint for the plan's overage setting. Without the object the section renders
+  "AI credits (overage)" with the hint for the plan's overage setting. Details lists the four windows
+  in the row's order, each titled by its full pool name with the period as a subtitle, so a long pool
+  name never truncates. Without the object the section renders
   as before (plus the fourth column).
 - **Antigravity switching** uses the dashboard routes `POST /api/antigravity/profiles/:id/activate`,
   `POST /api/antigravity/profiles/:id/confirm` and `PUT /api/antigravity/auto-switch`. Activate is offered only when the
@@ -55,7 +57,9 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   dashboard lists both.
 - **Meters** are 6 pt tracks with quarter ticks, a severity fill (calm, warning from 80 %, critical from 95 %, and an
   overage cap above 100 %) and the auto-switch notch. Widths and numbers ease out and never pass the reading.
-  Reported usage above 100 % stays in the text; only the bar is capped.
+  Reported usage above 100 % stays in the text; only the bar is capped. A reset label never truncates: when value
+  and reset share a tight cell the clock glyph drops first, then the countdown's largest unit ("6d", "5h", "47m")
+  stands alone; the tooltip keeps the full reset.
 - **Motion.** The first open of a session staggers the blocks in and sweeps every meter from zero while the numbers
   count up; later opens animate only readings that changed since the panel last closed. The menu-bar percentage rolls
   to its new value, Refresh spins while it works, the gear turns as Settings slides in, and the active check draws in
