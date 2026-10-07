@@ -1658,14 +1658,22 @@ export component AccountSection inherits Plate {
                 min-height: 13px + 18px + 12px;
                 property <bool> fits-inline: Breakpoints.tier-d
                     || runs-fit.preferred-width + 16px + 8px + when-probe.preferred-width <= Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
+                // Measurers (never drawn, never hit-tested): `visible: false` only clips in Slint 1.18
+                // and would still stretch the footer by two text lines, squeezing the rows above it. On D
+                // they are zero-sized; below D they keep natural size (approved P/F/T layouts).
+                // preferred-width still reports the natural widths below D.
                 when-probe := Text {
                     visible: false;
+                    width: Breakpoints.tier-d ? 0px : self.preferred-width;
+                    height: Breakpoints.tier-d ? 0px : self.preferred-height;
                     text: root.section.foot.when;
                     font-family: Type.tab;
                     font-size: root.touch ? Type.small : 12.5px;
                 }
                 runs-fit := Runs {
                     visible: false;
+                    width: Breakpoints.tier-d ? 0px : self.preferred-width;
+                    height: Breakpoints.tier-d ? 0px : self.preferred-height;
                     runs: root.section.foot.runs;
                     size: root.touch ? Type.small : 12.5px;
                     strong-weight: 640;
