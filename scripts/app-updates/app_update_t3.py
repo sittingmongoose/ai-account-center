@@ -1,6 +1,8 @@
 """T3 nightly desktop/bundled server and standalone runtime updates."""
 
+import argparse
 import base64
+import collections
 import contextlib
 import dataclasses
 import hashlib
@@ -9,7 +11,6 @@ import os
 import pathlib
 import platform
 import plistlib
-import posixpath
 import re
 import shutil
 import stat
@@ -17,11 +18,12 @@ import struct
 import sys
 import time
 import urllib.request
+import unicodedata
 import uuid
 import zipfile
 
 from app_update_common import (
-    Install, UpdateFailure, cli_probe, command, download, powershell, private_temporary,
+    Install, UpdateFailure, cli_probe, command, download, execution_lock, powershell, private_temporary,
     ps_quote, result, write_private_json,
 )
 from app_update_processes import main_contexts, restart_desktops, scan, terminate_desktops
@@ -53,7 +55,8 @@ def version_key(value):
 
 
 def state_root():
-    return pathlib.Path(os.environ.get("CCS_HOME", str(pathlib.Path.home() / ".ccs"))) / "app-updates"
+    # AAC resolves --config-dir / CCS_DIR / CCS_HOME; do not reinterpret them.
+    return pathlib.Path(os.environ.get("AAC_UPDATE_STATE_DIR", str(pathlib.Path.home() / ".ccs/app-updates")))
 
 
 def runtime_install():
@@ -203,7 +206,11 @@ def budget(deadline, maximum):
 def update_runtime(install, version, deadline):
     # No --yes: the native updater only rewrites the service definition with
     # non-TTY stdin. It must never restart the server that hosts these agents.
-    command([install.runtime, "update", version, "--channel", "nightly"], timeout=budget(deadline, 300))
+    timeout = budget(deadline, 300)
+    if install.platform == "ubuntu":
+        # Retain intent even if installation completes but its probe times out.
+        write_private_json(state_root() / "t3-code-pending-restart.json", {"version": version})
+    command([install.runtime, "update", version, "--channel", "nightly"], timeout=timeout)
     replacement = pathlib.Path.home() / ".t3/runtime/versions" / version / "t3"
     actual, _probe = cli_probe(replacement)
     if actual != version:
@@ -244,21 +251,54 @@ def health_check(host):
 
 
 def check_mac_archive(package):
+    def key(name):
+        # Default macOS volumes compare case and Unicode-normalized aliases.
+        return pathlib.PurePosixPath(unicodedata.normalize("NFD", str(name)).casefold())
+
     with zipfile.ZipFile(package) as archive:
         entries = archive.infolist()
         if len(entries) > 100000 or sum(item.file_size for item in entries) > 2 * 1024 * 1024 * 1024:
             raise UpdateFailure("signature_failed")
+        paths, links = set(), {}
         for item in entries:
             name = pathlib.PurePosixPath(item.filename)
-            if name.is_absolute() or ".." in name.parts or "\\" in item.filename:
+            if not name.parts or name.is_absolute() or ".." in name.parts or "\\" in item.filename or "\0" in item.filename or key(name) in paths:
                 raise UpdateFailure("signature_failed")
+            paths.add(key(name))
             if stat.S_ISLNK(item.external_attr >> 16):
                 if item.file_size > 4096:
                     raise UpdateFailure("signature_failed")
-                target = archive.read(item).decode("utf-8")
-                destination = posixpath.normpath(posixpath.join(str(name.parent), target))
-                if target.startswith("/") or "\\" in target or destination == ".." or destination.startswith("../"):
+                try:
+                    target = archive.read(item).decode("utf-8")
+                except UnicodeError:
+                    raise UpdateFailure("signature_failed") from None
+                if not target or target.startswith("/") or "\\" in target or "\0" in target:
                     raise UpdateFailure("signature_failed")
+                links[key(name)] = target
+        # An extractor must never write through an alias, regardless of order.
+        # Electron's framework aliases have no archive entries beneath them.
+        if any(parent in links for name in paths for parent in name.parents):
+            raise UpdateFailure("signature_failed")
+        for name, target in links.items():
+            remaining = collections.deque([*name.parent.parts, *target.split("/")])
+            resolved, hops = [], 0
+            while remaining:
+                part = remaining.popleft()
+                if part in ("", "."):
+                    continue
+                if part == "..":
+                    if not resolved:
+                        raise UpdateFailure("signature_failed")
+                    resolved.pop()
+                    continue
+                resolved.append(part)
+                link = key(pathlib.PurePosixPath(*resolved))
+                if link in links:
+                    hops += 1
+                    if hops > 40:
+                        raise UpdateFailure("signature_failed")
+                    resolved.pop()
+                    remaining.extendleft(reversed(links[link].split("/")))
 
 
 def update_mac(install, version, temporary, deadline, phase):
@@ -355,12 +395,13 @@ def schedule_restart(version):
     write_private_json(marker, {"version": version})
     unit = "aac-t3-restart-" + uuid.uuid4().hex[:12]
     command(["/usr/bin/systemd-run", "--user", "--collect", "--unit=" + unit,
-             "--property=RuntimeMaxSec=1200", "--setenv=CCS_HOME=" + str(root.parent),
-             "/usr/bin/python3", pathlib.Path(__file__).resolve(), "--restart-service", str(os.getpid())], timeout=15)
+             "--property=RuntimeMaxSec=1200", "/usr/bin/python3", pathlib.Path(__file__).resolve(),
+             "--restart-service", str(os.getpid()), "--state-dir", str(root),
+             *(["--dashboard-job"] if os.environ.get("AAC_UPDATE_DASHBOARD_JOB") == "1" else [])], timeout=15)
     return {"kind": "systemd", "service": "t3code.service", "delaySeconds": 30}
 
 
-def job_finished(root):
+def job_finished(root, dashboard=False):
     try:
         raw = (root / "dashboard-job.json").read_bytes()
         if len(raw) > 1024 * 1024:
@@ -373,18 +414,18 @@ def job_finished(root):
             isinstance(hosts.get(host), dict) and hosts[host].get("state") == "done"
             for host in ("ubuntu", "mac", "windows")))
     except FileNotFoundError:
-        return True  # An explicit standalone --apply has no dashboard job.
+        return not dashboard  # Only standalone --apply may have no job file.
     except (OSError, ValueError, AttributeError):
         return False
 
 
-def deferred_restart(parent_pid):
+def deferred_restart(parent_pid, root=None, dashboard=False):
     """Detached worker: never restart in a helper or dashboard job's lifetime.
 
-    Reuses AAC's exclusive dashboard lock across the final check and restart,
-    so a new click cannot race the 30 s grace period. No AAC service is touched.
+    Holds the helper execution lock and AAC's exclusive dashboard lock across
+    the final check and restart. No AAC service is touched.
     """
-    root = state_root()
+    root = root or state_root()
     lock = root / "dashboard-update.lock"
     marker = root / "t3-code-pending-restart.json"
     deadline = time.monotonic() + 18 * 60
@@ -397,29 +438,52 @@ def deferred_restart(parent_pid):
             parent_alive = True
         except ProcessLookupError:
             parent_alive = False
-        if parent_alive or lock.exists() or not job_finished(root):
-            quiet_since = None
-        elif quiet_since is None:
-            quiet_since = time.monotonic()
-        elif time.monotonic() - quiet_since >= 30:
-            try:
-                descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                quiet_since = None
-                continue
-            try:
-                with os.fdopen(descriptor, "w") as output:
-                    json.dump({"pid": os.getpid()}, output)
-                if marker.exists() and job_finished(root):
-                    command(["/usr/bin/systemctl", "--user", "restart", "t3code.service"], timeout=60)
-                    health_check("ubuntu")
-                    marker.unlink(missing_ok=True)
-                    return
-            finally:
-                lock.unlink(missing_ok=True)
+        try:
+            # Same per-user lock as standalone --apply, even when the dashboard
+            # stores its job in a custom directory. File existence is not a lock.
+            with execution_lock():
+                if parent_alive or lock.exists() or not job_finished(root, dashboard):
+                    quiet_since = None
+                elif quiet_since is None:
+                    quiet_since = time.monotonic()
+                elif time.monotonic() - quiet_since >= 30:
+                    try:
+                        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    except FileExistsError:
+                        quiet_since = None
+                        continue
+                    try:
+                        with os.fdopen(descriptor, "w") as output:
+                            json.dump({"pid": os.getpid()}, output)
+                        if marker.exists() and job_finished(root, dashboard):
+                            command(["/usr/bin/systemctl", "--user", "restart", "t3code.service"], timeout=60)
+                            health_check("ubuntu")
+                            marker.unlink(missing_ok=True)
+                            return
+                    finally:
+                        lock.unlink(missing_ok=True)
+                    quiet_since = None
+        except UpdateFailure as error:
+            if error.code != "busy":
+                raise
             quiet_since = None
         time.sleep(1)
     raise UpdateFailure("restart_failed")
+
+
+def running_runtime_version():
+    """Read the service's installed executable identity without restarting it."""
+    try:
+        pid = command(["/usr/bin/systemctl", "--user", "show", "--property=MainPID", "--value", "t3code.service"], timeout=10, capture=True).strip()
+        if not pid.isdigit() or int(pid) <= 1:
+            return None
+        executable = pathlib.Path(os.readlink("/proc/" + pid + "/exe").removesuffix(" (deleted)"))
+        versions = pathlib.Path.home() / ".t3/runtime/versions"
+        if executable.name == "t3" and executable.parent.parent == versions:
+            return exact_version(executable.parent.name)
+    except (UpdateFailure, OSError):
+        pass
+    return None
 
 
 def update_t3(install, deadline, phase=None):
@@ -434,6 +498,11 @@ def update_t3(install, deadline, phase=None):
         pending = state_root() / "t3-code-pending-restart.json"
         if not desktop_needed and not runtime_needed:
             if install.platform == "ubuntu" and pending.exists():
+                # A failed probe leaves intent behind. If an external restart
+                # already activated this exact version, no restart is needed.
+                if running_runtime_version() == install.runtime_version:
+                    pending.unlink()
+                    return result("t3-code", "ubuntu", "current", before, before, install.manager)
                 value = result("t3-code", "ubuntu", "updated", before, before, install.manager, "t3_restart_scheduled")
                 value["restartTargets"] = [schedule_restart(before)]
                 return value
@@ -467,8 +536,16 @@ def update_t3(install, deadline, phase=None):
         return result("t3-code", install.platform, "failed", before, after, install.manager, "update_failed", attempted)
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Fixed detached T3 restart worker")
+    parser.add_argument("--restart-service", type=int, required=True)
+    parser.add_argument("--state-dir", type=pathlib.Path, default=state_root())
+    parser.add_argument("--dashboard-job", action="store_true")
+    args = parser.parse_args()
+    if not sys.platform.startswith("linux") or args.restart_service <= 1 or not args.state_dir.is_absolute():
+        parser.error("Only the fixed detached T3 restart worker is supported.")
+    deferred_restart(args.restart_service, args.state_dir, args.dashboard_job)
+
+
 if __name__ == "__main__":
-    if sys.platform.startswith("linux") and len(sys.argv) == 3 and sys.argv[1] == "--restart-service" and sys.argv[2].isdigit() and int(sys.argv[2]) > 1:
-        deferred_restart(int(sys.argv[2]))
-    else:
-        raise SystemExit("Only the fixed detached T3 restart worker is supported.")
+    main()
