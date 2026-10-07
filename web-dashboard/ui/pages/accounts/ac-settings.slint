@@ -2,7 +2,7 @@
 // block of app-auth.js): Sign-in & connection, Settings (appearance, usage refresh, auto-switch policies), Update
 // apps results and About with Slint's AboutSlint attribution.
 import { AboutSlint } from "std-widgets.slint";
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { RunView, FactView } from "../../models.slint";
 import { Icon } from "../../components/icon.slint";
 import { ProviderMark, PlatformGlyph } from "../../components/mark.slint";
@@ -39,7 +39,8 @@ component SetGroup inherits Plate {
             spacing: 10px;
             Text { text: root.title; font-size: Breakpoints.below-d ? Type.title : 16px; font-weight: 640; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
             Rectangle { horizontal-stretch: 1; }
-            if root.note != "": Text { text: root.note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
+            // the note (the Update apps "Runs from ..." copy) wraps under instead of eliding on narrow cards
+            if root.note != "": Text { text: root.note; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; vertical-alignment: center; min-width: 0px; wrap: word-wrap; }
             if root.coming: ComingWord { }
         }
         @children
@@ -62,7 +63,8 @@ component SetItem inherits VerticalLayout {
     if root.label != "": HorizontalLayout {
         spacing: 10px;
         Text { text: root.label; font-size: 13.5px; font-weight: 600; color: Theme.ink; horizontal-stretch: 0; vertical-alignment: center; }
-        if root.info-id != "": VerticalLayout { alignment: center; InfoIcon { tip-id: root.info-id; } }
+        // `if`, not `visible`: a hidden icon must take no space, so D measures exactly as before
+        if root.info-id != "" && (Device.coarse || Breakpoints.below-d): VerticalLayout { alignment: center; InfoIcon { tip-id: root.info-id; } }
         Rectangle { horizontal-stretch: 1; }
         if root.aside != "": Text {
             text: root.aside;
@@ -464,7 +466,7 @@ component CheckLine inherits Rectangle {
         opacity: root.enabled ? 1 : 0.5;
         VerticalLayout {
             alignment: start;
-            padding-top: root.sub == "" ? (44px - root.box) / 2 : (40px - root.box) / 2;
+            padding-top: Breakpoints.tier-d ? (root.sub == "" ? 3px : 1px) : root.sub == "" ? (44px - root.box) / 2 : (40px - root.box) / 2;
             Rectangle {
                 width: root.box;
                 height: root.box;
@@ -676,8 +678,9 @@ component SigninGroup inherits SetGroup {
             }
         }
         // the concept's .aa-row wraps (flex-wrap): beside the providers the button sits under the status,
-        // since the three do not fit the settings column on one line
-        if Breakpoints.compact: HorizontalLayout {
+        // since the three do not fit the settings column on one line. On a narrow column (small P) the
+        // value would elide to nothing, so there the button moves under the fact instead.
+        if Breakpoints.compact && root.col-w >= 380px: HorizontalLayout {
             spacing: 12px;
             Text { width: root.fact-w; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
             HorizontalLayout {
@@ -702,12 +705,12 @@ component SigninGroup inherits SetGroup {
                 }
             }
         }
-        if !Breakpoints.compact: VerticalLayout {
+        if !Breakpoints.compact || root.col-w < 380px: VerticalLayout {
             spacing: 8px;
             HorizontalLayout {
                 spacing: 12px;
                 Text { width: root.fact-w; text: "Other browsers"; font-size: 12.5px; color: Theme.ink-3; vertical-alignment: center; }
-                Text { text: AcData.signin.others-text; font-family: Type.tab; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; overflow: elide; }
+                Text { text: AcData.signin.others-text; font-family: Type.tab; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; wrap: word-wrap; }
             }
             HorizontalLayout {
                 spacing: 12px;
@@ -734,16 +737,30 @@ component SigninGroup inherits SetGroup {
         label: "Session lifetime";
         aside: AcData.signin.lifetime-busy ? "Saving" : "";
         info-id: "lifetime-tip";
-        InlineTip { tip-id: "lifetime-tip"; text: AcData.signin.lifetime-tip; }
-        TipArea {
+        // `if`, not just closed: a zero-height child still takes the item's 9 px spacing on D
+        if Device.coarse || Breakpoints.below-d: InlineTip { tip-id: "lifetime-tip"; text: AcData.signin.lifetime-tip; }
+        // below D the five segments wrap 3 + 2 when narrow (4.3.7); D keeps the desktop Segmented untouched
+        if Breakpoints.below-d: TipArea {
             owner: "lifetime";
             tip: AcData.signin.lifetime-tip;
-            min-height: lifetime-seg.preferred-height;
-            lifetime-seg := WrapSegmented {
+            min-height: lifetime-seg-w.preferred-height;
+            lifetime-seg-w := WrapSegmented {
                 avail: root.col-w - 36px;
                 items: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }, { value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
                 row-1: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }];
                 row-2: [{ value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
+                value: AcData.signin.lifetime-value;
+                enabled: AcData.signin.lifetime-enabled && !root.busy;
+                changed-value(v) => { root.act("session-lifetime", v); }
+            }
+        }
+        if !Breakpoints.below-d: TipArea {
+            owner: "lifetime";
+            tip: AcData.signin.lifetime-tip;
+            min-height: lifetime-seg-d.preferred-height;
+            lifetime-seg-d := Segmented {
+                pad: 7px;
+                items: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }, { value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
                 value: AcData.signin.lifetime-value;
                 enabled: AcData.signin.lifetime-enabled && !root.busy;
                 changed-value(v) => { root.act("session-lifetime", v); }
@@ -757,6 +774,9 @@ component SigninGroup inherits SetGroup {
         HorizontalLayout {
             spacing: 8px;
             Text { text: "Local network"; font-size: 13.5px; font-weight: 600; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; }
+            // the inline-tip icon (5.4 #16), touch tiers only: D shows the note statically below (`if`, so D
+            // measures exactly as before)
+            if Breakpoints.below-d: VerticalLayout { alignment: center; InfoIcon { tip-id: "network-tip"; } }
             Rectangle { horizontal-stretch: 1; }
             if AcData.signin.network.act != "": TipArea {
                 owner: "network";
@@ -1034,14 +1054,15 @@ component SettingsGroup inherits SetGroup {
         first: true;
         label: "Appearance";
         aside: "Auto follows the system";
-        HorizontalLayout {
+        // the segmented fills the item's width on P/F/T (4.3.7)
+        if Breakpoints.below-d: StretchSegmented {
+            items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
+            value: root.theme-value;
+            changed-value(v) => { root.theme-picked(v); }
+        }
+        if !Breakpoints.below-d: HorizontalLayout {
             alignment: start;
-            if Breakpoints.below-d: StretchSegmented {
-                items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
-                value: root.theme-value;
-                changed-value(v) => { root.theme-picked(v); }
-            }
-            if !Breakpoints.below-d: Segmented {
+            Segmented {
                 items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
                 value: root.theme-value;
                 changed-value(v) => { root.theme-picked(v); }
@@ -1079,7 +1100,8 @@ component SettingsGroup inherits SetGroup {
             Text { text: ", then choose Add to Home Screen."; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; horizontal-stretch: 1; min-width: 0px; }
         }
     }
-    Hairline { }
+    // only with the install row above: otherwise the two hairlines stack into one 2 px line
+    if AcData.install == "chromium" || AcData.install == "ios": Hairline { }
     SetItem {
         label: "Usage refresh";
         aside: AcData.refresh-known ? "Every " + AcFormat.interval(slider.shown) : "Not reported";
@@ -1436,9 +1458,11 @@ export component SettingsColumn inherits VerticalLayout {
     spacing: 16px;
     alignment: start;
     // one settings column's inner width, for the controls that must decide their layout ahead of it
-    property <length> col-inner: root.two-col ? (Breakpoints.tier-width - 2 * Breakpoints.gutter - 32px - 16px) / 2
+    // (the group cards inset their content by 16 px on P and 20 px on F/T)
+    property <length> col-half: (Breakpoints.tier-width - 2 * Breakpoints.gutter - 16px) / 2;
+    property <length> col-inner: root.two-col ? root.col-half - 80px
         : Breakpoints.at-least-regular ? (Breakpoints.wide ? 420px : Breakpoints.ultra ? 440px : 380px)
-        : Breakpoints.tier-width - 2 * Breakpoints.gutter - 32px;
+        : Breakpoints.tier-width - 2 * Breakpoints.gutter - (Breakpoints.tier-p ? 32px : 40px);
     if !root.two-col: VerticalLayout {
         spacing: 16px;
         alignment: start;
@@ -1466,10 +1490,10 @@ export component SettingsColumn inherits VerticalLayout {
         spacing: 16px;
         alignment: stretch;
         VerticalLayout {
+            // equal halves of the content width (4.3.7), whatever each column's content prefers
+            width: root.col-half;
             spacing: 16px;
             alignment: start;
-            horizontal-stretch: 1;
-            min-width: 0px;
             SigninGroup { busy: root.busy; col-w: root.col-inner; act(k, v) => { root.act(k, v); } }
             UpdateGroup {
                 act(k, v) => { root.act(k, v); }
@@ -1477,10 +1501,9 @@ export component SettingsColumn inherits VerticalLayout {
             AboutGroup { }
         }
         VerticalLayout {
+            width: root.col-half;
             spacing: 16px;
             alignment: start;
-            horizontal-stretch: 1;
-            min-width: 0px;
             SettingsGroup {
                 theme-value: root.theme-value;
                 busy: root.busy;

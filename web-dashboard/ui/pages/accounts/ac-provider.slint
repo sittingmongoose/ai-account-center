@@ -361,43 +361,47 @@ export component AcRowItem inherits Rectangle {
                             spacing-vertical: 8px;
                             alignment: start;
                             for a[i] in root.item.actions: Rectangle {
-                                if i != root.item.actions.length - 1 || !root.has-trash: VerticalLayout {
-                                    alignment: start;
-                                    if a.kind == "switch": Rectangle {
-                                        width: ssw.natural;
-                                        height: ssw.preferred-height;
-                                        ssw := SwitchSlot {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        account: {
-                                            id: root.item.id,
-                                            active: root.item.active,
-                                            active-label: root.item.active-label,
-                                            can-activate: a.enabled,
-                                            activate-hint: root.item.activate-hint,
-                                            platform: "Ubuntu",
-                                        };
-                                        can-switch: root.provider.can-switch;
-                                        busy: root.busy;
-                                        activate => {
-                                            if root.item.confirm {
-                                                root.ask-confirm(root.item.id);
-                                            } else {
-                                                root.act(a.act, a.value);
+                                // the Flexbox sizes each item by its content's natural width
+                                preferred-width: fl.preferred-width;
+                                fl := VerticalLayout {
+                                    if i != root.item.actions.length - 1 || !root.has-trash: VerticalLayout {
+                                        alignment: start;
+                                        if a.kind == "switch": Rectangle {
+                                            width: ssw.natural;
+                                            height: ssw.preferred-height;
+                                            ssw := SwitchSlot {
+                                                width: parent.width;
+                                                height: parent.height;
+                                                account: {
+                                                    id: root.item.id,
+                                                    active: root.item.active,
+                                                    active-label: root.item.active-label,
+                                                    can-activate: a.enabled,
+                                                    activate-hint: root.item.activate-hint,
+                                                    platform: "Ubuntu",
+                                                };
+                                                can-switch: root.provider.can-switch;
+                                                busy: root.busy;
+                                                activate => {
+                                                    if root.item.confirm {
+                                                        root.ask-confirm(root.item.id);
+                                                    } else {
+                                                        root.act(a.act, a.value);
+                                                    }
+                                                }
                                             }
+                                            if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: a.probe; }
                                         }
-                                    }
-                                    if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: a.probe; }
-                                    }
-                                    if a.kind != "switch" && a.kind != "empty": sctl := ActionControl {
-                                        height: 44px;
-                                        width: self.natural;
-                                        align-end: false;
-                                        data: a;
-                                        owner: "acc:" + root.item.id + ":" + i;
-                                        busy: root.busy;
-                                        act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
-                                        reason(r) => { root.tap-reason = r; }
+                                        if a.kind != "switch" && a.kind != "empty": sctl := ActionControl {
+                                            height: 44px;
+                                            width: self.natural;
+                                            align-end: false;
+                                            data: a;
+                                            owner: "acc:" + root.item.id + ":" + i;
+                                            busy: root.busy;
+                                            act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
+                                            reason(r) => { root.tap-reason = r; }
+                                        }
                                     }
                                 }
                             }
@@ -481,43 +485,47 @@ export component AcRowItem inherits Rectangle {
                                 spacing-vertical: 8px;
                                 alignment: start;
                                 for a[i] in root.item.actions: Rectangle {
-                                    if i != root.item.actions.length - 1 || !root.has-trash: VerticalLayout {
-                                        alignment: start;
-                                        if a.kind == "switch": Rectangle {
-                                            width: wsw.natural;
-                                            height: wsw.preferred-height;
-                                            wsw := SwitchSlot {
-                                            width: parent.width;
-                                            height: parent.height;
-                                            account: {
-                                                id: root.item.id,
-                                                active: root.item.active,
-                                                active-label: root.item.active-label,
-                                                can-activate: a.enabled,
-                                                activate-hint: root.item.activate-hint,
-                                                platform: "Ubuntu",
-                                            };
-                                            can-switch: root.provider.can-switch;
-                                            busy: root.busy;
-                                            activate => {
-                                                if root.item.confirm {
-                                                    root.ask-confirm(root.item.id);
-                                                } else {
-                                                    root.act(a.act, a.value);
+                                    // the Flexbox sizes each item by its content's natural width
+                                    preferred-width: fw.preferred-width;
+                                    fw := VerticalLayout {
+                                        if i != root.item.actions.length - 1 || !root.has-trash: VerticalLayout {
+                                            alignment: start;
+                                            if a.kind == "switch": Rectangle {
+                                                width: wsw.natural;
+                                                height: wsw.preferred-height;
+                                                wsw := SwitchSlot {
+                                                    width: parent.width;
+                                                    height: parent.height;
+                                                    account: {
+                                                        id: root.item.id,
+                                                        active: root.item.active,
+                                                        active-label: root.item.active-label,
+                                                        can-activate: a.enabled,
+                                                        activate-hint: root.item.activate-hint,
+                                                        platform: "Ubuntu",
+                                                    };
+                                                    can-switch: root.provider.can-switch;
+                                                    busy: root.busy;
+                                                    activate => {
+                                                        if root.item.confirm {
+                                                            root.ask-confirm(root.item.id);
+                                                        } else {
+                                                            root.act(a.act, a.value);
+                                                        }
+                                                    }
                                                 }
+                                                if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: a.probe; }
                                             }
-                                        }
-                                        if a.kind == "switch" && a.probe != "": ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: a.probe; }
-                                        }
-                                        if a.kind != "switch" && a.kind != "empty": wctl := ActionControl {
-                                            height: 44px;
-                                            width: self.natural;
-                                            align-end: false;
-                                            data: a;
-                                            owner: "acc:" + root.item.id + ":" + i;
-                                            busy: root.busy;
-                                            act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
-                                            reason(r) => { root.tap-reason = r; }
+                                            if a.kind != "switch" && a.kind != "empty": wctl := ActionControl {
+                                                height: 44px;
+                                                width: self.natural;
+                                                align-end: false;
+                                                data: a;
+                                                owner: "acc:" + root.item.id + ":" + i;
+                                                busy: root.busy;
+                                                act(kind, value) => { root.tap-reason = ""; root.act(kind, value); }
+                                                reason(r) => { root.tap-reason = r; }
+                                            }
                                         }
                                     }
                                 }
@@ -944,10 +952,10 @@ component SectionFootMob inherits Rectangle {
             text: root.provider.how;
         }
         Rectangle { height: 8px; }
-        // a dimmed (coming) button keeps its natural width and gains the caption
+        // a dimmed (coming) button keeps its natural width and gains the caption; F/T right-align the row
         if root.any-coming: HorizontalLayout {
             spacing: 8px;
-            alignment: start;
+            alignment: Breakpoints.tier-p ? start : end;
             min-height: 44px;
             for f[i] in root.provider.foot: VerticalLayout {
                 alignment: center;

@@ -74,6 +74,8 @@ export component ActionControl inherits Rectangle {
     out property <length> natural: root.data.kind == "button" ? btn.preferred-width
         : root.data.kind == "icon" ? (Breakpoints.below-d ? 40px : 28px)
         : root.data.kind == "quiet" ? quiet.preferred-width : 0px;
+    // layouts (the wrapped action slots, the foot rows) size the control by its natural width
+    preferred-width: root.natural;
     property <bool> shown: root.data.kind == "button" || root.data.kind == "icon" || root.data.kind == "quiet";
     // the touch hit area: 44 (48 for the tall footer buttons) below D, the desktop 28 otherwise
     property <length> hit-h: Breakpoints.below-d ? (root.tall ? 48px : 44px) : 28px;
