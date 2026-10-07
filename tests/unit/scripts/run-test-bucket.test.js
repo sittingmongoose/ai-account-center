@@ -2,6 +2,7 @@ const { describe, expect, test } = require('bun:test');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 const bucket = require('../../../scripts/run-test-bucket.js');
 
 // Disposable source fixtures test runner detection independently of retired product suites.
@@ -143,5 +144,76 @@ describe('run-test-bucket', () => {
 
   test('still forces dist-dependent tests into the slow bucket', () => {
     expect(bucket.shouldForceSlow('tests/unit/config-dir-override.test.js')).toBe(true);
+  });
+
+  // GitHub Actions gives the runner pipes, not a terminal. Node writes to a pipe
+  // asynchronously on Linux, and the runner used to end with process.exit(), which
+  // threw away everything past the first 64 KB of Bun's output: the failing test,
+  // Bun's summary and the reason for the exit code were never printed.
+  test('prints all Bun output through pipes before it exits, failure last', () => {
+    const runnerPath = path.resolve(__dirname, '../../../scripts/run-test-bucket.js');
+    const child = `
+      const bucket = require(${JSON.stringify(runnerPath)});
+      const block = (letter) => (letter.repeat(99) + '\\n').repeat(10000);
+      bucket.cli(['fast'], {
+        selectBucket: () => ['tests/unit/flag-parsing-simple.test.js'],
+        spawnSync: () => ({
+          status: 1,
+          signal: null,
+          stdout: block('o') + 'stdout end marker\\n',
+          stderr: block('e') + '(fail) hidden suite > the failure past 64 KB [1.00ms]\\n',
+        }),
+      });
+    `;
+    // The scripts run the bucket runner with Node (package.json), whose pipe writes are
+    // the ones that can be cut short, so the check runs it with Node too, not Bun.
+    const result = spawnSync('node', ['-e', child], {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout.length).toBeGreaterThan(1_000_000);
+    expect(result.stdout).toContain('stdout end marker');
+    expect(result.stderr.length).toBeGreaterThan(1_000_000);
+    expect(result.stderr).toContain('(fail) hidden suite > the failure past 64 KB');
+    const lastLines = result.stderr.trimEnd().split('\n').slice(-3);
+    expect(lastLines).toEqual([
+      "[X] Bucket 'fast' failed:",
+      "    [X] Bun run 'tests/unit/flag-parsing-simple.test.js' failed with exit code 1.",
+      '      (fail) hidden suite > the failure past 64 KB [1.00ms]',
+    ]);
+  });
+
+  test('says when a signal stopped Bun instead of a bare exit code', () => {
+    const run = { label: 'shared', selected: ['a.test.ts', 'b.test.ts'] };
+
+    expect(bucket.describeRunFailure(run, { status: null, signal: 'SIGKILL' }, 1)).toBe(
+      "[X] Bun run 'shared (2 files)' was stopped by signal SIGKILL before it finished."
+    );
+    expect(bucket.describeRunFailure(run, { status: 3, signal: null }, 3)).toBe(
+      "[X] Bun run 'shared (2 files)' failed with exit code 3."
+    );
+    expect(
+      bucket.describeRunFailure(run, { status: null, error: new Error('spawnSync bun ENOBUFS') }, 1)
+    ).toBe("[X] Bun run 'shared (2 files)' could not run: spawnSync bun ENOBUFS");
+  });
+
+  test('lists failed tests from Bun output once each, colors removed', () => {
+    // Bun repeats every failure in its closing recap.
+    const output = [
+      '(pass) one [1.00ms]',
+      '\u001b[31m(fail)\u001b[0m two > breaks [2.00ms]',
+      '(fail) three',
+      '2 tests failed:',
+      '(fail) two > breaks [2.00ms]',
+      '(fail) three',
+    ].join('\n');
+
+    expect(bucket.listFailedTests(output)).toEqual([
+      '(fail) two > breaks [2.00ms]',
+      '(fail) three',
+    ]);
   });
 });
