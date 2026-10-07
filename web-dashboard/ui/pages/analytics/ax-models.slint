@@ -382,11 +382,19 @@ export component AxCbmCard inherits AxCard {
             vertical-alignment: center;
         }
     }
-    if AxData.cbm.foot != "": HorizontalLayout {
+    if AxData.cbm.foot != "" && Breakpoints.tier-d: HorizontalLayout {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
         padding-bottom: 14px;
         Text { text: AxData.cbm.foot; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; wrap: word-wrap; }
+    }
+    // below D the note sits directly in a column, so the card measures its wrapped height (task 9 A2):
+    // a wrapping Text in a HorizontalLayout is measured single-line and overflows the card
+    if AxData.cbm.foot != "" && Breakpoints.below-d: VerticalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 14px;
+        Text { text: AxData.cbm.foot; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
     // A taller neighbour (the Model usage box beside it) stretches this card to the row's height.
     // Nothing else in the card body stretches, and when no child of a Slint layout has a stretch
