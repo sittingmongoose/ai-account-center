@@ -949,7 +949,11 @@ function heatView(A, R, state, width, height) {
   const max = Math.max(0, ...cells.flat().filter(c => c.v !== null).map(c => c.v));
   const valTxt = v => byCost ? money(v) : `${tokC(v)} tokens`;
   const hourLab = h => hourTxt(new Date(2026, 0, 1, h).getTime());
-  const wide = (width || DEFAULT_SIZES.heat.w) > 760;
+  const gridW = width || DEFAULT_SIZES.heat.w;
+  const wide = gridW > 760;
+  // below-D grids use a 32 px day column with 2 px gaps (ax-time.slint mirrors this switch);
+  // desktop grids keep the 38 px column with 3 px gaps. The dash scales to its cell either way.
+  const cellW = (gridW - (wide ? 38 + 72 : 32 + 46)) / 24;
   const out = [];
   cells.forEach((row, i) => row.forEach((c, h) => {
     const name = `${WD[i]} ${hourLab(h)}`;
@@ -963,7 +967,7 @@ function heatView(A, R, state, width, height) {
     cells: out, days: WD,
     hours: Array.from({ length: 24 }, (_, h) => h % (wide ? 3 : 6) === 0 ? hourLab(h) : ''),
     busiest: max ? valTxt(max) : 'none',
-    dash: heatDash(Math.max(4, ((width || DEFAULT_SIZES.heat.w) - 38 - 72) / 24), height || 24),
+    dash: heatDash(Math.max(4, cellW), height || 24),
   };
 }
 
@@ -1165,8 +1169,9 @@ export function providersView(A, rows, state, width) {
       tip: `${label}: ${tokX(tok)}, ${share1(all ? tok / all * 100 : 0)}% of the tokens in this range · ${tokC(o.in)} in, ${tokC(o.out)} out, ${tokC(o.cache)} cache · ${cost}.${from}${what}` };
   });
   if (!items.length) return none;
-  // pack into lines: the first after the caption, the rest under it; the note ends the last line
-  const room = Math.max(320, (width || DEFAULT_SIZES.trend.w) - LINE.label - 8);
+  // pack into lines: the first after the caption, the rest under it; the note ends the last line.
+  // Phone widths pack honestly too: the floor is one short item, never a desktop line width.
+  const room = Math.max(120, (width || DEFAULT_SIZES.trend.w) - LINE.label - 8);
   const lines = [];
   let line = [], used = 0;
   for (const it of items) {
