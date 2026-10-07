@@ -52,17 +52,20 @@ const PASSWORD = 'first-password-123';
 const NEW_PASSWORD = 'second-password-456';
 // This computer's own home-network address (the trusted-network cases need a
 // 192.168.0.0/16 peer). Read from the interfaces, never written down; on a
-// computer without one the LAN cases find it unreachable and skip.
-const LAN_ADDRESS =
-  Object.values(os.networkInterfaces())
-    .flat()
-    .find(
-      (entry) =>
-        entry !== undefined &&
-        entry.family === 'IPv4' &&
-        !entry.internal &&
-        entry.address.startsWith('192.168.')
-    )?.address ?? '192.0.2.10';
+// computer without one (a CI runner) the LAN cases skip at once instead of
+// waiting on an address nothing answers.
+const OWN_LAN_ADDRESS = Object.values(os.networkInterfaces())
+  .flat()
+  .find(
+    (entry) =>
+      entry !== undefined &&
+      entry.family === 'IPv4' &&
+      !entry.internal &&
+      entry.address.startsWith('192.168.')
+  )?.address;
+const LAN_ADDRESS = OWN_LAN_ADDRESS ?? '192.0.2.10';
+/** A LAN probe gives up quickly, well inside the per-test timeout. */
+const LAN_PROBE_TIMEOUT_MS = 1_500;
 
 const ENVIRONMENT = [
   'HOME',
@@ -396,8 +399,11 @@ async function loginFresh(
 
 /** True when this VM can reach its own LAN address (the trusted-network cases need it). */
 async function lanReachable(lanBase: string): Promise<boolean> {
+  if (!OWN_LAN_ADDRESS) return false;
   try {
-    const probe = await fetch(`${lanBase}/api/auth/check`);
+    const probe = await fetch(`${lanBase}/api/auth/check`, {
+      signal: AbortSignal.timeout(LAN_PROBE_TIMEOUT_MS),
+    });
     await probe.text().catch(() => undefined);
     return probe.status === 200;
   } catch {
@@ -921,12 +927,16 @@ describe('dashboard auth lifecycle e2e (real HTTP)', () => {
 
     const lanBase = ctx.lanBase as string;
     let lanReachable = false;
-    try {
-      const probe = await fetch(`${lanBase}/api/auth/check`);
-      lanReachable = probe.status === 200;
-      await probe.text().catch(() => undefined);
-    } catch {
-      lanReachable = false;
+    if (OWN_LAN_ADDRESS) {
+      try {
+        const probe = await fetch(`${lanBase}/api/auth/check`, {
+          signal: AbortSignal.timeout(LAN_PROBE_TIMEOUT_MS),
+        });
+        lanReachable = probe.status === 200;
+        await probe.text().catch(() => undefined);
+      } catch {
+        lanReachable = false;
+      }
     }
     if (!lanReachable) {
       console.log(`[e2e] LAN ${LAN_ADDRESS} unreachable; skipping non-loopback assertions`);
