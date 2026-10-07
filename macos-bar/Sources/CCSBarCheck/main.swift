@@ -1594,6 +1594,149 @@ private func checkTrayPresentation() throws {
     && TrayMotion.fillFraction(42) == 0.42, "Meter fills are capped at the track; text keeps the real value")
 }
 
+// MARK: Antigravity plan display
+
+/// The normalized `antigravityPlan` object and the spec's display rules (ANTIGRAVITY-SPEC 2026-10-07):
+/// lenient decoding, the four pool columns in panel order, the honest muted cells, the no-quota row line
+/// and the credits hint. The Windows tray uses the same strings.
+private func checkAntigravityPlanDisplay() throws {
+  func window(_ key: String, _ label: String, _ values: [String: Any] = [:]) -> [String: Any] {
+    var result: [String: Any] = [
+      "key": key, "label": label, "usedPercent": NSNull(), "remainingPercent": NSNull(), "resetAt": NSNull(),
+      "windowMinutes": NSNull(), "used": NSNull(), "limit": NSNull(), "unit": NSNull(),
+    ]
+    for (name, value) in values { result[name] = value }
+    return result
+  }
+  let original = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  let prototype = (original["accounts"] as! [[String: Any]])[0]
+  func account(_ id: String, _ provider: String = "antigravity", windows: [[String: Any]] = [],
+    plan: Any? = nil) throws -> DashboardAccount {
+    var value = prototype
+    value["id"] = id
+    value["provider"] = provider
+    value["windows"] = windows
+    value["antigravityPlan"] = plan ?? NSNull()
+    return try JSONDecoder().decode(DashboardAccount.self, from: JSONSerialization.data(withJSONObject: value))
+  }
+  func plan(_ planClass: String, _ policy: String, thirdParty: Bool? = nil, overage: Bool? = nil,
+    summary: String = "summary", models: [String] = ["Gemini 3.8 Flash"]) -> [String: Any] {
+    var value: [String: Any] = ["class": planClass, "quotaPolicy": policy, "summary": summary, "models": models]
+    value["thirdPartyModels"] = thirdParty.map { $0 as Any } ?? NSNull()
+    value["creditsOverage"] = overage.map { $0 as Any } ?? NSNull()
+    return value
+  }
+
+  // Decoding: a full object reads every field; the family-sharing note keys off the paid Pro/Ultra classes.
+  let pro = try account("agy-pro", plan: plan("pro", "five-hour-weekly", thirdParty: true, overage: true))
+  try expect(pro.antigravityPlan?.planClass == "pro" && pro.antigravityPlan?.quotaPolicy == "five-hour-weekly"
+    && pro.antigravityPlan?.summary == "summary" && pro.antigravityPlan?.models == ["Gemini 3.8 Flash"]
+    && pro.antigravityPlan?.thirdPartyModels == true && pro.antigravityPlan?.creditsOverage == true,
+    "A full antigravityPlan must decode every field")
+  try expect(pro.antigravityPlan?.sharesFamilyPool == true && pro.antigravityPlan?.weeklyOnly == false
+    && pro.antigravityPlan?.noQuota == false, "Pro shares the family-pool note and is not weekly-only or no-quota")
+  for name in ["ultra", "ultra-5x", "ultra-20x"] {
+    let ultra = try account("agy-\(name)", plan: plan(name, "five-hour-weekly"))
+    try expect(ultra.antigravityPlan?.sharesFamilyPool == true,
+      "\(name) is a paid Ultra class and shares the family-pool note")
+  }
+  let free = try account("agy-free", plan: plan("free", "weekly"))
+  let ws = try account("agy-ws", plan: plan("workspace", "none"))
+  try expect(free.antigravityPlan?.sharesFamilyPool == false && ws.antigravityPlan?.sharesFamilyPool == false,
+    "Free and Workspace never show the family-pool note")
+  let plus = try account("agy-plus", plan: plan("plus", "weekly"))
+  try expect(plus.antigravityPlan?.weeklyOnly == true && ws.antigravityPlan?.noQuota == true,
+    "quotaPolicy maps to the weekly-only and no-quota rules")
+  // Unknown classes pass through unread; the display rules key off the known ones only.
+  let future = try account("agy-future", plan: plan("pro-max-2030", "five-hour-weekly"))
+  try expect(future.antigravityPlan?.planClass == "pro-max-2030" && future.antigravityPlan?.sharesFamilyPool == false,
+    "An unknown plan class must pass through without claiming a known class's rules")
+  // Lenient: a malformed object never fails the account; a non-object reads as absent.
+  let malformed = try account("agy-bad", plan: ["class": 42, "quotaPolicy": ["weekly"], "models": "nope",
+    "thirdPartyModels": "yes", "creditsOverage": 1, "summary": 7])
+  try expect(malformed.antigravityPlan != nil && malformed.antigravityPlan?.planClass == nil
+    && malformed.antigravityPlan?.models.isEmpty == true && malformed.antigravityPlan?.thirdPartyModels == nil,
+    "Malformed plan fields must read as absent, never fail the account")
+  let nonObject = try account("agy-worse", plan: 7)
+  let missing = try account("agy-none")
+  try expect(nonObject.antigravityPlan == nil && missing.antigravityPlan == nil,
+    "A non-object or missing antigravityPlan reads as an unknown plan")
+
+  // Column order: the four pool windows in panel order, however the account lists them, with the spec's
+  // exact tray captions; unknown extra windows fall back to the generic path.
+  let scrambled = try account("agy-full", windows: [
+    window("3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 1]),
+    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 2]),
+    window("3p-5h", "Claude and GPT models · 5-hour", ["usedPercent": 3]),
+    window("gemini-5h", "Gemini Models · 5-hour", ["usedPercent": 4]),
+  ])
+  let columns = TrayColumns.antigravity([scrambled])
+  try expect(columns.map(\.key) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"],
+    "Antigravity columns must be Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly, in that order")
+  try expect(columns.map(\.label) == ["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"],
+    "Tray captions use the spec's exact short forms")
+  let windowsByKey = Dictionary(uniqueKeysWithValues: scrambled.windows.map { ($0.key, $0) })
+  for (key, caption) in [("gemini-5h", "Gemini 5-hour"), ("gemini-weekly", "Gemini weekly"),
+    ("3p-5h", "Claude/GPT 5-hour"), ("3p-weekly", "Claude/GPT weekly")] {
+    try expect(TrayColumns.shortLabel(provider: "antigravity", windowsByKey[key]!) == caption,
+      "The \(key) cell caption must be \(caption)")
+  }
+  let extra = try account("agy-extra", windows: [window("gemini-flash-8h", "Flash 8h", ["usedPercent": 1, "windowMinutes": 480])])
+  try expect(TrayColumns.antigravity([extra]).map(\.key) == ["gemini-flash-8h"],
+    "An account reporting none of the four pools keeps its own meters, nothing guessed")
+
+  // Missing cells: an honest muted reason from the plan facts, never a fake 0%.
+  let weekly = try account("agy-weekly", plan: plan("free", "weekly", thirdParty: true))
+  try expect(weekly.antigravityMissingCell("gemini-5h") == .weeklyOnly && weekly.antigravityMissingCell("3p-5h") == .weeklyOnly
+    && weekly.antigravityMissingCell("gemini-weekly") == .unavailable,
+    "A weekly-only plan's 5-hour cells read Weekly only")
+  let geminiOnly = try account("agy-gemini", plan: plan("enterprise-standard", "pooled-7d", thirdParty: false))
+  try expect(geminiOnly.antigravityMissingCell("3p-5h") == .notOnPlan
+    && geminiOnly.antigravityMissingCell("3p-weekly") == .notOnPlan
+    && geminiOnly.antigravityMissingCell("gemini-5h") == .unavailable,
+    "A plan with no Claude/GPT models reads Not on plan for both of that pool's cells")
+  let weeklyGeminiOnly = try account("agy-both", plan: plan("free", "weekly", thirdParty: false))
+  try expect(weeklyGeminiOnly.antigravityMissingCell("3p-5h") == .notOnPlan,
+    "Not on plan beats Weekly only: a weekly Claude/GPT window does not exist either")
+  let noPlanAccount = try account("agy-noplan")
+  try expect(noPlanAccount.antigravityMissingCell("gemini-5h") == .unavailable
+    && pro.antigravityMissingCell("3p-weekly") == .unavailable,
+    "Without a plan fact that explains the gap, the cell keeps the unavailable treatment")
+  try expect(AntigravityMissingCell.weeklyOnly.text == "Weekly only" && AntigravityMissingCell.notOnPlan.text == "Not on plan"
+    && AntigravityMissingCell.unavailable.text == "Unavailable",
+    "The muted cell texts are the spec's exact strings")
+
+  // The no-quota row line: quotaPolicy none with nothing reported, and only then.
+  let workspace = try account("agy-ws3", windows: [], plan: plan("workspace", "none"))
+  try expect(workspace.antigravityNoQuota, "A no-quota plan with no windows shows the one-line row")
+  let workspaceReporting = try account("agy-ws4", windows: [window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 3])],
+    plan: plan("workspace", "none"))
+  let claudeNoQuota = try account("claude-x", "claude", windows: [], plan: plan("workspace", "none"))
+  try expect(!workspaceReporting.antigravityNoQuota && !pro.antigravityNoQuota && !claudeNoQuota.antigravityNoQuota,
+    "Reported windows, a quota plan or another provider never show the no-quota line")
+
+  // The credits row: the spec's label and the plan-driven hint.
+  let credits = window("google-ai-credits", "Google AI credits", ["used": 0, "limit": 250, "remaining": 250, "unit": "credits", "kind": "balance"])
+  let withCredits = try account("agy-credits", windows: [credits], plan: plan("pro", "five-hour-weekly", overage: true))
+  let creditWindow = withCredits.windows[0]
+  try expect(withCredits.antigravityCreditsHint(creditWindow)
+    == "Used only after the plan quota runs out, when AI Credit Overages is on.",
+    "An overage plan's credits row says when the credits are used")
+  let noOverage = try account("agy-nooverage", windows: [credits], plan: plan("free", "weekly", overage: false))
+  try expect(noOverage.antigravityCreditsHint(noOverage.windows[0]) == "Not usable for Antigravity on this plan.",
+    "A plan without overage says the credits are not usable for Antigravity")
+  let oldDashboard = try account("agy-old", windows: [credits])
+  try expect(oldDashboard.antigravityCreditsHint(creditWindow) == nil,
+    "Without the plan object the credits row reads as it always has")
+  try expect(TrayColumns.amountLabel(provider: "antigravity", creditWindow) == "AI credits (overage)"
+    && TrayColumns.amountLabel(provider: "claude", creditWindow) == "Google AI credits",
+    "Only the Antigravity credits window takes the overage label")
+  let meterWindow = scrambled.windows[0]
+  try expect(TrayColumns.amountLabel(provider: "antigravity", meterWindow) == meterWindow.label
+    && withCredits.antigravityCreditsHint(meterWindow) == nil,
+    "Pool windows keep their reported labels and carry no credits hint")
+}
+
 // MARK: Sign-in and Change verify before they save
 
 /// What the fixture dashboard saw, across every client the session builds.
@@ -3391,6 +3534,8 @@ do {
   print("PASS Antigravity policy and capabilities, activation guards, tray order, and tray-hidden providers and accounts")
   try checkTrayPresentation()
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
+  try checkAntigravityPlanDisplay()
+  print("PASS Antigravity plan decoding, four-column order, muted missing cells, no-quota line, and credits hint")
   try checkMenuBarSelection()
   print("PASS menu-bar provider, account, window and value selection with pending hiding the number")
   try await checkConnectionChange()

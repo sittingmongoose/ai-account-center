@@ -14,9 +14,11 @@ enum TrayMetrics {
   static let sectionHeaderTop: CGFloat = 6
   static let markColumn: CGFloat = 22
   static let identityColumn: CGFloat = 168
-  static let antigravityIdentityColumn: CGFloat = 180
+  /// Antigravity's identity column and gap give its four quota columns room at the panel's 760 pt:
+  /// the "Claude/GPT 5-hour" caption fits a cell at the captions' 0.85 minimum scale.
+  static let antigravityIdentityColumn: CGFloat = 164
   static let columnGap: CGFloat = 13
-  static let antigravityColumnGap: CGFloat = 11
+  static let antigravityColumnGap: CGFloat = 10
   /// Codex and Antigravity share one fixed action slot, trailing-anchored: the Activate capsule
   /// (97.5 pt) plus a little room, so every slot ends on the same line in every section.
   static let switchSlot: CGFloat = 100
@@ -30,6 +32,10 @@ enum TrayMetrics {
   static var activateInset: CGFloat { check + checkGap }
   static let rowLeading: CGFloat = 8
   static let rowTrailing: CGFloat = 6
+  /// The disclosure chevron's reserved trailing column inside every account and provider row, so the
+  /// chevron sits inside the row's hover highlight (and the active row's platter) instead of
+  /// overhanging the row's edge, and the meters never move when it appears.
+  static let chevronColumn: CGFloat = 14
   static let footerControl: CGFloat = 34
 }
 
@@ -333,6 +339,16 @@ extension EnvironmentValues {
   var trayStaticRender: Bool {
     get { self[StaticRenderKey.self] }
     set { self[StaticRenderKey.self] = newValue }
+  }
+}
+
+/// Offline renders only (`--hover=`): the account or provider id whose row renders hovered, so the
+/// hover highlight and the disclosure chevron are visible in a still render. Nil in the app.
+private struct PreviewHoverKey: EnvironmentKey { static let defaultValue: String? = nil }
+extension EnvironmentValues {
+  var trayPreviewHover: String? {
+    get { self[PreviewHoverKey.self] }
+    set { self[PreviewHoverKey.self] = newValue }
   }
 }
 

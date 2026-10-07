@@ -43,6 +43,8 @@ final class PanelState: ObservableObject {
   /// Offline renders only: simulate Reduce Transparency and Increase Contrast without touching the Mac's settings.
   var previewReduceTransparency = false
   var previewIncreaseContrast = false
+  /// Offline renders only: the account or provider id whose row renders hovered.
+  var previewHover: String?
   var reduceMotion: Bool { staticRender || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
   func setSettings(_ open: Bool) {
@@ -94,6 +96,7 @@ struct PanelRootView: View {
     // hover tags suppressed while Settings is open (hover fix).
     .trayHoverLayer(state.panelHover)
     .environment(\.trayStaticRender, state.staticRender)
+    .environment(\.trayPreviewHover, state.previewHover)
     .environment(\.trayPopoverDismissal, state.popoverDismissal)
     .modifier(PreviewActiveControls(enabled: state.staticRender))
     .modifier(PreviewAccessibility(reduceTransparency: state.previewReduceTransparency,

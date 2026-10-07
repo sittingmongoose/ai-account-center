@@ -147,16 +147,29 @@ extension DashboardAccount {
 }
 
 public enum TrayColumns {
-  /// The concept's three Antigravity columns when the dashboard reports those buckets; otherwise the
+  /// The Antigravity pool windows, in panel order (ANTIGRAVITY-SPEC display rules): the Gemini pool's
+  /// 5-hour and weekly windows, then the Claude/GPT pool's. Keys stay exactly as the provider reports them.
+  public static let antigravityKeys = ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"]
+
+  /// The concept's four Antigravity columns when the dashboard reports those buckets; otherwise the
   /// first account's own meters, so nothing is guessed from labels.
   public static func antigravity(_ accounts: [DashboardAccount]) -> [(key: String, label: String)] {
-    let preferred: [(String, String)] = [
-      ("gemini-5h", "Gemini 5-hour"), ("gemini-weekly", "Gemini weekly"), ("3p-weekly", "Claude and GPT weekly"),
-    ]
-    let present = preferred.filter { key, _ in accounts.contains { $0.visibleWindows.contains { $0.key == key } } }
-    if !present.isEmpty { return present.map { (key: $0.0, label: $0.1) } }
+    let present = antigravityKeys.filter { key in accounts.contains { $0.visibleWindows.contains { $0.key == key } } }
+    if !present.isEmpty { return present.map { (key: $0, label: antigravityLabel($0)) } }
     guard let first = accounts.first(where: { !$0.glanceMeters.isEmpty }) else { return [] }
     return first.glanceMeters.map { (key: $0.key, label: shortLabel(provider: "antigravity", $0)) }
+  }
+
+  /// The exact tray caption for a reported Antigravity pool window (the spec's short forms; tooltips and
+  /// Details keep the provider's full pool names).
+  public static func antigravityLabel(_ key: String) -> String {
+    switch key {
+    case "gemini-5h": return "Gemini 5-hour"
+    case "gemini-weekly": return "Gemini weekly"
+    case "3p-5h": return "Claude/GPT 5-hour"
+    case "3p-weekly": return "Claude/GPT weekly"
+    default: return key
+    }
   }
 
   /// Full window names for Details: the provider's label, with the terse Codex and Claude ones spelled out.
@@ -173,8 +186,10 @@ public enum TrayColumns {
     let periodLabel: String? = [.fiveHour: "5-hour", .week: "Weekly", .month: "Monthly"][window.period]
     switch provider {
     case "antigravity":
-      let family = window.key.lowercased().hasPrefix("gemini") ? "Gemini" : "Claude and GPT"
-      return "\(family) \(window.period == .fiveHour ? "5-hour" : "weekly")"
+      // The four reported pool windows get the spec's exact tray captions; unknown extra windows fall
+      // back to the generic path rather than claiming a pool from a key prefix.
+      if antigravityKeys.contains(window.key) { return antigravityLabel(window.key) }
+      return periodLabel ?? window.label
     case "cursor":
       return ["plan-reported": "Included", "autoPercentUsed": "Cursor models", "apiPercentUsed": "Other models"][window.key] ?? window.label
     case "zai":
@@ -184,6 +199,74 @@ public enum TrayColumns {
     default:
       return periodLabel ?? window.label
     }
+  }
+
+  /// Amount rows in Details: the Antigravity credits window reads "AI credits (overage)" (the backend
+  /// sends this label; samples cached before the change still carry "Google AI credits", so the known
+  /// key maps to the spec's label here too). Every other amount keeps its reported label.
+  public static func amountLabel(provider: String, _ window: AccountQuotaWindow) -> String {
+    if provider == "antigravity" && window.key == "google-ai-credits" { return "AI credits (overage)" }
+    return window.label
+  }
+}
+
+/// What a missing Antigravity column cell says (ANTIGRAVITY-SPEC display rules): an honest muted reason
+/// from the plan facts, never a fake 0%.
+public enum AntigravityMissingCell: Sendable, Equatable {
+  /// A weekly-only plan has no 5-hour refresh: "Weekly only".
+  case weeklyOnly
+  /// The plan has no Claude/GPT models at the sample time: "Not on plan".
+  case notOnPlan
+  /// The plan facts do not explain the gap: the existing unavailable treatment.
+  case unavailable
+
+  /// The muted cell's text.
+  public var text: String {
+    switch self {
+    case .weeklyOnly: return "Weekly only"
+    case .notOnPlan: return "Not on plan"
+    case .unavailable: return "Unavailable"
+    }
+  }
+
+  /// The cell's tooltip: why there is no meter here.
+  public var help: String {
+    switch self {
+    case .weeklyOnly:
+      return "This plan has a weekly quota only; there is no 5-hour window to report."
+    case .notOnPlan:
+      return "This plan has no Claude or GPT models, so this pool is not reported."
+    case .unavailable:
+      return "Unavailable: no reading was reported, which is not the same as zero."
+    }
+  }
+}
+
+extension DashboardAccount {
+  /// Why one of the four Antigravity columns has no window on this account. The Claude/GPT rule comes
+  /// first: on a plan with no third-party models at all, "Not on plan" is the honest reason for both of
+  /// that pool's cells, where "Weekly only" would imply a weekly window exists.
+  public func antigravityMissingCell(_ columnKey: String) -> AntigravityMissingCell {
+    guard let plan = antigravityPlan else { return .unavailable }
+    if ["3p-5h", "3p-weekly"].contains(columnKey), plan.thirdPartyModels == false { return .notOnPlan }
+    if ["gemini-5h", "3p-5h"].contains(columnKey), plan.weeklyOnly { return .weeklyOnly }
+    return .unavailable
+  }
+
+  /// The no-quota row line (ANTIGRAVITY-SPEC): `quotaPolicy == "none"` and nothing reported, shown as one
+  /// line instead of meters, like the needs-sign-in line.
+  public var antigravityNoQuota: Bool {
+    provider == "antigravity" && antigravityPlan?.noQuota == true && visibleWindows.isEmpty
+  }
+
+  /// The hint under the Antigravity credits row in Details, from the plan's overage fact. Nil without the
+  /// plan object: an older dashboard's credits row reads as it always has.
+  public func antigravityCreditsHint(_ window: AccountQuotaWindow) -> String? {
+    guard provider == "antigravity", window.key == "google-ai-credits",
+      let overage = antigravityPlan?.creditsOverage else { return nil }
+    return overage
+      ? "Used only after the plan quota runs out, when AI Credit Overages is on."
+      : "Not usable for Antigravity on this plan."
   }
 }
 

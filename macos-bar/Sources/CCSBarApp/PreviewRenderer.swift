@@ -20,6 +20,9 @@ enum PreviewRenderer {
     /// Accessibility display settings, simulated in the render only (the Mac's own settings are untouched).
     var reduceTransparency = false
     var increaseContrast = false
+    /// The account or provider id whose row renders hovered (`--hover=antigravity:example-2`), so the
+    /// highlight and the disclosure chevron show in a still render.
+    var hover: String?
 
     init(_ arguments: [String]) {
       for argument in arguments {
@@ -33,6 +36,7 @@ enum PreviewRenderer {
         if argument.hasPrefix("--signin=") { signIn = String(argument.dropFirst(9)) }
         if argument == "--reduce-transparency" { reduceTransparency = true }
         if argument == "--increase-contrast" { increaseContrast = true }
+        if argument.hasPrefix("--hover=") { hover = String(argument.dropFirst(8)) }
       }
     }
   }
@@ -62,6 +66,7 @@ enum PreviewRenderer {
     state.staticRender = !live
     state.previewReduceTransparency = options.reduceTransparency
     state.previewIncreaseContrast = options.increaseContrast
+    state.previewHover = options.hover
     state.panelWidth = options.width
     state.maxHeight = 4000
     var context = OpenContext()
@@ -252,7 +257,7 @@ enum PreviewRenderer {
       guard let png = pixels.representation(using: .png, properties: [:]) else { throw BarClientError.decoding }
       try png.write(to: URL(fileURLWithPath: output), options: .atomic)
       let flags = [options.settings ? "settings" : nil, options.signIn.map { "sign-in \($0)" }, options.reduceTransparency ? "reduce transparency" : nil,
-        options.increaseContrast ? "increase contrast" : nil].compactMap { $0 }
+        options.increaseContrast ? "increase contrast" : nil, options.hover.map { "hover \($0)" }].compactMap { $0 }
       print("Rendered isolated accounts preview (\(([options.appearance] + flags).joined(separator: ", ")), \(Int(size.width))x\(Int(size.height)) pt).")
       exit(0)
     } catch {
@@ -353,12 +358,15 @@ enum PreviewRenderer {
       }
       // Selected-row alignment: in every switchable section, the check's left edge must sit on the Activate
       // capsule's left edge and "Active" on the "Activate" label's x, within 0.5 pt, at the slot's
-      // trailing-anchored position: list padding 8, platter inset 4, row trailing 6, then the slot.
-      let expectedIconX = host.bounds.width - 8 - TrayMetrics.groupInset - TrayMetrics.rowTrailing - TrayMetrics.switchSlot
-      let expectedLabelX = expectedIconX + TrayMetrics.activateInset
+      // trailing-anchored position: list padding 8, platter inset 4, row trailing 6, the reserved
+      // chevron column and its column gap, then the slot.
       var alignment: [[String: Any]] = []
       var alignmentPassed = true
       for provider in ["codex", "antigravity"] {
+        let gap = provider == "antigravity" ? TrayMetrics.antigravityColumnGap : TrayMetrics.columnGap
+        let expectedIconX = host.bounds.width - 8 - TrayMetrics.groupInset - TrayMetrics.rowTrailing
+          - TrayMetrics.chevronColumn - gap - TrayMetrics.switchSlot
+        let expectedLabelX = expectedIconX + TrayMetrics.activateInset
         let ids = visible.filter { $0.provider == provider }.map(\.id)
         func edges(_ part: String) -> [CGFloat] {
           ids.compactMap { id in
@@ -384,9 +392,31 @@ enum PreviewRenderer {
           "iconWidths": slotWidths.map { Double($0) }, "expectedIconX": Double(expectedIconX),
           "expectedLabelX": Double(expectedLabelX), "passed": ok])
       }
-      let passed = missingHelp.isEmpty && labelled && rowCountsPassed && geometryPassed && fullRowPassed && nestedPassed && alignmentPassed
+      // The disclosure chevron reserves a trailing column inside every account and provider row, so it
+      // must lie fully inside the row's own frame — the frame the hover highlight and the active
+      // platter cover. (It used to overhang the row's trailing edge by 6 pt, floating outside the
+      // highlight.)
+      var chevrons: [[String: Any]] = []
+      var chevronPassed = true
+      func chevronInside(_ probeID: String, _ rowID: String, _ name: String) {
+        guard let chevron = AlignmentProbe.frames[probeID], let row = AlignmentProbe.frames[rowID] else {
+          chevronPassed = false
+          chevrons.append(["row": name, "inside": false, "problem": "missing probe"])
+          return
+        }
+        let inside = chevron.minX >= row.minX - 0.5 && chevron.maxX <= row.maxX + 0.5
+          && chevron.minY >= row.minY - 0.5 && chevron.maxY <= row.maxY + 0.5
+        chevronPassed = chevronPassed && inside
+        chevrons.append(["row": name, "chevronMaxX": Double(chevron.maxX), "rowMaxX": Double(row.maxX),
+          "chevronMinX": Double(chevron.minX), "rowMinX": Double(row.minX), "inside": inside])
+      }
+      for account in sectionAccounts { chevronInside("chevron|\(account.id)", "row|\(account.id)", account.id) }
+      for group in otherGroups { chevronInside("chevron|provider|\(group.id)", "row|provider|\(group.id)", group.id) }
+      let passed = missingHelp.isEmpty && labelled && rowCountsPassed && geometryPassed && fullRowPassed && nestedPassed && alignmentPassed && chevronPassed
       let result: [String: Any] = [
-        "passed": passed, "activeAlignment": alignment, "activeAlignmentPassed": alignmentPassed, "helpTags": help.map { ["id": $0.identifier?.rawValue ?? "", "text": $0.presenter.text] },
+        "passed": passed, "activeAlignment": alignment, "activeAlignmentPassed": alignmentPassed,
+        "chevronContainment": chevrons, "chevronContainmentPassed": chevronPassed,
+        "helpTags": help.map { ["id": $0.identifier?.rawValue ?? "", "text": $0.presenter.text] },
         "missingHelpTags": missingHelp, "helpTagsLabelled": labelled,
         "accountRows": accountRows.count, "expectedAccountRows": sectionAccounts.count,
         "providerRows": providerRows.count, "expectedProviderRows": otherGroups.count,
@@ -470,8 +500,12 @@ enum PreviewRenderer {
         let fill = AlignmentProbe.frames["meter|\(key)|fill"]
         let notchFrame = AlignmentProbe.frames["meter|\(key)|notch"]
         guard let window = account.visibleWindows.first(where: { $0.key == parts[1] }) else {
-          // Only the "Not reported yet" Fable cell renders a meter with no window behind it.
-          if parts[1] == "seven_day_fable" && account.provider == "claude" && fill == nil && notchFrame == nil { continue }
+          // Cells with no window behind them render a dashed track with no fill and no notch, never a
+          // fake reading: the "Not reported yet" Fable cell, and an Antigravity column the account
+          // does not report (the muted Weekly only / Not on plan / Unavailable cell).
+          let windowless = (parts[1] == "seven_day_fable" && account.provider == "claude")
+            || (account.provider == "antigravity" && TrayColumns.antigravityKeys.contains(parts[1]))
+          if windowless && fill == nil && notchFrame == nil { continue }
           failures.append("\(key): no such window on \(account.id)"); continue
         }
         let target: Double? = account.pendingReset(window) == nil ? window.meterUsedPercent : nil
