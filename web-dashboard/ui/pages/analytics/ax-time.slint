@@ -70,6 +70,7 @@ export component AxHeatCard inherits AxCard {
     if Breakpoints.tier-d: AxCardHead {
         title: "When you use the CLIs";
         sub: AxData.heat.sub;
+        probe: "heat-head";
         VerticalLayout {
             alignment: start;
             horizontal-stretch: 0;
@@ -84,6 +85,7 @@ export component AxHeatCard inherits AxCard {
     if Breakpoints.below-d && !Breakpoints.tier-p: AxCardHead {
         title: "When you use the CLIs";
         sub: AxData.heat.sub;
+        probe: "heat-head";
         VerticalLayout {
             alignment: start;
             horizontal-stretch: 0;
@@ -95,7 +97,7 @@ export component AxHeatCard inherits AxCard {
             }
         }
     }
-    if Breakpoints.tier-p: AxCardHead { title: "When you use the CLIs"; sub: AxData.heat.sub; }
+    if Breakpoints.tier-p: AxCardHead { title: "When you use the CLIs"; sub: AxData.heat.sub; probe: "heat-head"; }
     if Breakpoints.tier-p: HorizontalLayout {
         padding-left: root.pad;
         padding-right: root.pad;
@@ -484,6 +486,7 @@ export component AxDailyCard inherits AxCard {
     if Breakpoints.tier-d: AxCardHead {
         title: AxData.daily.title;
         sub: AxData.daily.sub;
+        probe: "daily-head";
         HorizontalLayout {
             spacing: 14px;
             alignment: end;
@@ -493,7 +496,7 @@ export component AxDailyCard inherits AxCard {
             if AxData.daily.show-other: VerticalLayout { alignment: start; padding-top: 1px; AxLegendEntry { c: AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model; label: AxData.daily.other-label; } }
         }
     }
-    if Breakpoints.below-d: AxCardHead { title: AxData.daily.title; sub: AxData.daily.sub; }
+    if Breakpoints.below-d: AxCardHead { title: AxData.daily.title; sub: AxData.daily.sub; probe: "daily-head"; }
     if Breakpoints.tier-p: VerticalLayout {
         padding-left: root.pad-x;
         padding-right: root.pad-x;

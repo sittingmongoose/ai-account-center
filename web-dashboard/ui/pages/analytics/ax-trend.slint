@@ -470,6 +470,7 @@ export component AxTrendCard inherits AxCard {
     if Breakpoints.tier-d: AxCardHead {
         title: "Usage trends";
         sub: AxData.trend.sub;
+        probe: "trend-head";
         HorizontalLayout {
             spacing: 6px;
             alignment: end;
@@ -492,7 +493,7 @@ export component AxTrendCard inherits AxCard {
         }
     }
     // below D the toggles sit under the legend on P and at the right of the title on F/T (4.2.3)
-    if Breakpoints.tier-p: AxCardHead { title: "Usage trends"; sub: AxData.trend.sub; }
+    if Breakpoints.tier-p: AxCardHead { title: "Usage trends"; sub: AxData.trend.sub; probe: "trend-head"; }
     if Breakpoints.tier-p: VerticalLayout {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
@@ -528,6 +529,7 @@ export component AxTrendCard inherits AxCard {
     if Breakpoints.tier-f || Breakpoints.tier-t: AxCardHead {
         title: "Usage trends";
         sub: AxData.trend.sub;
+        probe: "trend-head";
         HorizontalLayout {
             spacing: 6px;
             alignment: end;

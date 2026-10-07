@@ -713,7 +713,7 @@ export component AxQuotaCard inherits AxCard {
     in property <length> cell-w: 100000px;
     property <length> pad: Breakpoints.tier-p ? 16px : 20px;
     property <bool> stacked: Breakpoints.below-d && root.cell-w - 2 * root.pad < 640px;
-    AxCardHead { title: "Quota history"; sub: AxData.quota-sub; }
+    AxCardHead { title: "Quota history"; sub: AxData.quota-sub; probe: "quota-head"; }
     if !root.stacked: axis := HorizontalLayout {
         padding-left: 48px;
         padding-right: 20px;

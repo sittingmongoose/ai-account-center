@@ -414,7 +414,16 @@ export component AxCardHead inherits HorizontalLayout {
         horizontal-stretch: 1;
         alignment: start;
         Text { text: root.title; font-size: Breakpoints.tier-d ? 16px : Breakpoints.tier-p ? 17px : 18px; font-weight: 640; color: Theme.ink; letter-spacing: -0.16px; min-height: 21px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":title"; } }
-        if root.sub != "": Text { text: root.sub; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
+        if root.sub != "" && Breakpoints.tier-d: Text { text: root.sub; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; wrap: word-wrap; min-height: 17.5px; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
+        // Below D the sub is measured at its exact laid-out width: the column reports the
+        // wrapped height from the header's own width, so a sub that wraps grows the head
+        // instead of centring two lines in a one-line cell, up into the title (task 9 A4).
+        // Same note pattern as below: the Rectangle's width is cross-forced by the column,
+        // so the Text's width binding never loops back into the layout.
+        if root.sub != "" && Breakpoints.below-d: Rectangle {
+            min-height: sub-t.preferred-height;
+            sub-t := Text { width: parent.width; text: root.sub; font-family: Type.tab; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; vertical-alignment: center; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: root.probe == "" ? "" : root.probe + ":sub"; } }
+        }
         // the wrapped note sits directly in the column so its height is measured at the column's width
         if root.note != "": VerticalLayout {
             padding-top: 3px;
