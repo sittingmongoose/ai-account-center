@@ -1,6 +1,6 @@
 // Analytics header (title, scope line and its disclosure, range presets, the custom range picker, the provider
 // filter, refresh) and the KPI row.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { RunView } from "../../models.slint";
 import { Icon } from "../../components/icon.slint";
 import { ProviderMark } from "../../components/mark.slint";
@@ -11,7 +11,7 @@ import { Caps } from "../../components/text.slint";
 import { HoverShadow } from "../../components/card.slint";
 import { ProbeMark } from "../../components/probe.slint";
 import { AxData, AxKpi, AxDay, AxSrcCell, AxProvItem, AxPickItem } from "ax-data.slint";
-import { AxColor, AxNum, AxTip, AxSwatch, AxSeg, AxSegItem, AxInfo } from "ax-common.slint";
+import { AxColor, AxNum, AxTip, AxPress, AxSwatch, AxSeg, AxSegItem, AxInfo } from "ax-common.slint";
 
 // A popover body that rises 4 px and fades in when it opens.
 export component AxPopBody inherits Rectangle {
@@ -72,18 +72,21 @@ component SrcCell inherits Text {
 }
 component IncludedLines inherits VerticalLayout {
     in property <length> body-w;
+    // On P the grid becomes a list grouped by tool (DESIGN-MOBILE 4.2.1).
+    in property <bool> narrow: false;
     spacing: 0px;
     Text { text: "Included usage"; font-size: 14px; font-weight: 640; color: Theme.ink; min-height: 20px; }
     Rectangle { height: 6px; }
     Text { text: AxData.included.line; width: root.body-w; font-size: 13px; color: Theme.ink-2; wrap: word-wrap; }
     Rectangle { height: 12px; }
-    HorizontalLayout {
+    if !root.narrow: HorizontalLayout {
         spacing: 10px;
         min-height: 22px;
         Rectangle { width: 96px; }
         for h in AxData.included-hosts: Caps { text: h; horizontal-stretch: 1; min-width: 0px; }
     }
     for r in AxData.included-rows: VerticalLayout {
+        visible: !root.narrow;
         Rectangle { height: 1px; background: Theme.rule-2; }
         HorizontalLayout {
             spacing: 10px;
@@ -92,16 +95,28 @@ component IncludedLines inherits VerticalLayout {
             for c in r.cells: SrcCell { c: c; }
         }
     }
+    for r in AxData.included-rows: VerticalLayout {
+        visible: root.narrow;
+        Rectangle { height: 1px; background: Theme.rule-2; }
+        Text { text: r.tool; font-size: Type.body; font-weight: 600; color: Theme.ink; min-height: 32px; vertical-alignment: bottom; }
+        for c[i] in r.cells: HorizontalLayout {
+            spacing: 10px;
+            min-height: 44px;
+            Text { text: AxData.included-hosts.length > i ? AxData.included-hosts[i] : c.id; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            Text { text: c.text; font-family: Type.tab; font-size: Type.small; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxPress { tip: c.tip; long-tip: c.tip; } }
+        }
+    }
     Rectangle { height: 1px; background: Theme.rule-2; }
     Rectangle { height: 10px; }
     Text { text: AxData.included.foot; width: root.body-w; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
 }
 
 // The quiet text button that opens it, collapsed by default like the scope disclosure beside it.
+// Below D it is a 44 tall text button (DESIGN-MOBILE 4.2.1).
 component IncludedButton inherits Rectangle {
     in property <bool> open;
     callback clicked();
-    height: 24px;
+    height: Breakpoints.tier-d ? 24px : 44px;
     min-width: row.preferred-width;
     preferred-width: row.preferred-width;
     border-radius: 7px;
@@ -111,7 +126,7 @@ component IncludedButton inherits Rectangle {
         padding-left: 7px;
         padding-right: 5px;
         spacing: 4px;
-        Text { text: AxData.included.label; font-size: 13px; color: ta.has-hover || root.open ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
+        Text { text: AxData.included.label; font-size: Breakpoints.tier-d ? 13px : Type.control; color: ta.has-hover || root.open ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
         VerticalLayout {
             alignment: center;
             Icon {
@@ -124,7 +139,7 @@ component IncludedButton inherits Rectangle {
             }
         }
     }
-    ta := TouchArea { mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
+    ta := AxPress { tip: Breakpoints.tier-d ? "" : AxData.included.line; long-tip: AxData.included.line; mouse-cursor: pointer; tapped => { Hover.clear(); root.clicked(); } }
     ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: "included-usage"; }
 }
 
@@ -136,7 +151,7 @@ component DayCell inherits Rectangle {
     in property <bool> hi;
     callback picked(int);
     callback hovered(int);
-    height: 38px;
+    height: Breakpoints.tier-d ? 38px : 44px;
     property <bool> end: root.lo || root.hi;
     background: root.end ? Theme.accent : root.inside ? Theme.accent-soft : ta.has-hover && !root.day.off ? Theme.paper-3 : Theme.paper.with-alpha(0);
     border-top-left-radius: root.lo || (!root.inside && !root.end) ? 8px : 0px;
@@ -204,7 +219,8 @@ component DatesBody inherits VerticalLayout {
     grid := Rectangle {
         property <length> cw: self.width / 7;
         property <int> weeks: ceil(AxData.days.length / 7);
-        height: 22px + self.weeks * 40px;
+        property <length> pitch: Breakpoints.tier-d ? 40px : 46px;
+        height: 22px + self.weeks * self.pitch;
         for w[i] in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]: Caps {
             x: i * grid.cw;
             y: 0px;
@@ -215,7 +231,7 @@ component DatesBody inherits VerticalLayout {
         }
         for d[i] in AxData.days: DayCell {
             x: mod(i, 7) * grid.cw;
-            y: 22px + floor(i / 7) * 40px;
+            y: 22px + floor(i / 7) * grid.pitch;
             width: grid.cw;
             day: d;
             inside: !d.off && root.lo >= 0 && i >= root.a && i <= root.b;
@@ -232,7 +248,7 @@ component DatesBody inherits VerticalLayout {
     }
     Rectangle { height: 12px; }
     Rectangle { height: 1px; background: Theme.rule-2; }
-    HorizontalLayout {
+    if Breakpoints.tier-d: HorizontalLayout {
         padding-top: 10px;
         spacing: 6px;
         Text {
@@ -249,6 +265,25 @@ component DatesBody inherits VerticalLayout {
         Button { text: "Cancel"; small: true; kind: "ghost"; clicked => { root.cancel(); } }
         Button { text: "Apply"; small: true; kind: "primary"; enabled: root.lo >= 0; clicked => { root.apply(root.lo, root.hi >= 0 ? root.hi : root.lo); } }
     }
+    // below D the range sentence sits above two equal buttons (DESIGN-MOBILE 3.5: pinned halves, 48 tall)
+    if Breakpoints.below-d: VerticalLayout {
+        padding-top: 10px;
+        spacing: 10px;
+        Text {
+            text: root.lo < 0 ? "Pick a first day"
+                : root.hi < 0 ? root.lo-long + " · pick a last day, or apply one day"
+                : root.lo-long + " to " + root.hi-long + " · \{root.hi - root.lo + 1} day" + (root.hi == root.lo ? "" : "s");
+            font-family: Type.tab;
+            font-size: Type.small;
+            color: Theme.ink-2;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Button { text: "Cancel"; kind: "ghost"; tall: true; horizontal-stretch: 1; clicked => { root.cancel(); } }
+            Button { text: "Apply"; kind: "primary"; tall: true; horizontal-stretch: 1; enabled: root.lo >= 0; clicked => { root.apply(root.lo, root.hi >= 0 ? root.hi : root.lo); } }
+        }
+    }
 }
 
 component DateButton inherits Rectangle {
@@ -256,13 +291,13 @@ component DateButton inherits Rectangle {
     in property <bool> on;
     in property <bool> open;
     callback clicked();
-    height: 36px;
+    height: Breakpoints.tier-d ? 36px : 44px;
     min-width: row.preferred-width;
     preferred-width: row.preferred-width;
     border-radius: 10px;
     border-width: 1px;
     border-color: root.open || ta.has-hover ? Theme.rule-strong : root.on ? Theme.ink-3 : Theme.rule;
-    background: ta.has-hover || root.open ? Theme.paper-2 : Theme.paper;
+    background: ta.pressed && Breakpoints.below-d ? Theme.pressed : ta.has-hover || root.open ? Theme.paper-2 : Theme.paper;
     animate background, border-color { duration: Motion.tint(Motion.fast); }
     transform-scale: ta.pressed ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -270,8 +305,8 @@ component DateButton inherits Rectangle {
         padding-left: 11px;
         padding-right: 10px;
         spacing: 8px;
-        VerticalLayout { alignment: center; Icon { name: "calendar"; width: 15px; height: 15px; tint: root.on ? Theme.accent-text : Theme.ink-3; } }
-        Text { text: root.label; font-family: Type.tab; font-size: 13px; font-weight: 560; color: root.on || ta.has-hover ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
+        VerticalLayout { alignment: center; Icon { name: "calendar"; width: Breakpoints.tier-d ? 15px : 16px; height: Breakpoints.tier-d ? 15px : 16px; tint: root.on ? Theme.accent-text : Theme.ink-3; } }
+        Text { text: root.label; font-family: Type.tab; font-size: Breakpoints.tier-d ? 13px : Type.control; font-weight: 560; color: root.on || ta.has-hover ? Theme.ink : Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
         VerticalLayout {
             alignment: center;
             Icon {
@@ -284,7 +319,7 @@ component DateButton inherits Rectangle {
             }
         }
     }
-    ta := AxTip { tip: root.open ? "" : "Pick days within the logs that were read"; mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
+    ta := AxPress { tip: root.open ? "" : "Pick days within the logs that were read"; long-tip: "Pick days within the logs that were read"; mouse-cursor: pointer; tapped => { Hover.clear(); root.clicked(); } }
 }
 
 // The provider picker: a quiet button with the picked provider (its mark) that opens the list of providers with
@@ -293,9 +328,9 @@ component PickerRow inherits Rectangle {
     in property <AxPickItem> item;
     in property <bool> selected;
     callback picked(string);
-    height: 32px;
+    height: Breakpoints.tier-d ? 32px : 52px;
     border-radius: 7px;
-    background: ta.has-hover || root.selected ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    background: ta.pressed && Breakpoints.below-d ? Theme.pressed : ta.has-hover || root.selected ? Theme.row-hover : Theme.row-hover.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); }
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -304,18 +339,18 @@ component PickerRow inherits Rectangle {
             padding-left: 8px;
             padding-right: 8px;
             spacing: 9px;
-            HorizontalLayout { width: 16px; if root.item.mark != "": VerticalLayout { alignment: center; ProviderMark { provider: root.item.mark; size: 16px; } } }
+            HorizontalLayout { width: Breakpoints.tier-d ? 16px : 20px; if root.item.mark != "": VerticalLayout { alignment: center; ProviderMark { provider: root.item.mark; size: Breakpoints.tier-d ? 16px : 20px; } } }
             Text {
                 text: root.item.label;
-                font-size: 13px;
+                font-size: Breakpoints.tier-d ? 13px : Type.body;
                 font-weight: root.selected ? 620 : 500;
                 color: root.item.off ? Theme.ink-3 : Theme.ink;
                 vertical-alignment: center;
                 overflow: elide;
                 horizontal-stretch: 1;
             }
-            Text { text: root.item.tokens; font-family: Type.tab; font-size: 12.5px; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; }
-            HorizontalLayout { width: 14px; if root.selected: VerticalLayout { alignment: center; Icon { name: "check"; width: 14px; height: 14px; tint: Theme.accent-text; } } }
+            Text { text: root.item.tokens; font-family: Type.tab; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; horizontal-alignment: right; vertical-alignment: center; }
+            HorizontalLayout { width: Breakpoints.tier-d ? 14px : 20px; if root.selected: VerticalLayout { alignment: center; Icon { name: "check"; width: Breakpoints.tier-d ? 14px : 20px; height: Breakpoints.tier-d ? 14px : 20px; tint: Theme.accent-text; } } }
         }
     }
 }
@@ -335,13 +370,13 @@ component PickerBody inherits VerticalLayout {
 component PickerButton inherits Rectangle {
     in property <bool> open;
     callback clicked();
-    height: 36px;
+    height: Breakpoints.tier-d ? 36px : 44px;
     min-width: row.preferred-width;
     preferred-width: row.preferred-width;
     border-radius: 10px;
     border-width: 1px;
     border-color: root.open || ta.has-hover ? Theme.rule-strong : Theme.rule;
-    background: ta.has-hover || root.open ? Theme.paper-2 : Theme.paper;
+    background: ta.pressed && Breakpoints.below-d ? Theme.pressed : ta.has-hover || root.open ? Theme.paper-2 : Theme.paper;
     animate background, border-color { duration: Motion.tint(Motion.fast); }
     transform-scale: ta.pressed ? 0.97 : 1;
     animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -350,7 +385,7 @@ component PickerButton inherits Rectangle {
         padding-right: 10px;
         spacing: 8px;
         if AxData.picker-mark != "": VerticalLayout { alignment: center; ProviderMark { provider: AxData.picker-mark; size: 16px; } }
-        Text { text: AxData.picker-label; font-size: 13px; font-weight: 560; color: Theme.ink; vertical-alignment: center; }
+        Text { text: AxData.picker-label; font-size: Breakpoints.tier-d ? 13px : Type.control; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; }
         VerticalLayout {
             alignment: center;
             Icon {
@@ -363,18 +398,24 @@ component PickerButton inherits Rectangle {
             }
         }
     }
-    ta := AxTip { tip: root.open ? "" : "Show one provider's usage, by model"; mouse-cursor: pointer; clicked => { Hover.clear(); root.clicked(); } }
+    ta := AxPress { tip: root.open ? "" : "Show one provider's usage, by model"; long-tip: "Show one provider's usage, by model"; mouse-cursor: pointer; tapped => { Hover.clear(); root.clicked(); } }
     ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: "analytics-provider"; }
 }
 
 export component AxHeader inherits Rectangle {
     property <bool> wide: Breakpoints.width >= 1360px;
     property <[AxSegItem]> ranges: [{ value: "24h", label: "24H" }, { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "month", label: "Month" }, { value: "all", label: "All" }];
-    min-height: lay.min-height;
-    preferred-height: lay.preferred-height;
+    // the 3 + 2 wrap of the range control when a segment would be under 64 px (DESIGN-MOBILE 1.5)
+    property <[AxSegItem]> ranges-a: [root.ranges[0], root.ranges[1], root.ranges[2]];
+    property <[AxSegItem]> ranges-b: [root.ranges[3], root.ranges[4]];
+    min-height: body.min-height;
+    preferred-height: body.preferred-height;
 
-    lay := VerticalLayout {
-        spacing: 16px;
+    // exactly one branch exists; the body always does, so the root can measure it
+    body := VerticalLayout {
+        spacing: 0px;
+        if Breakpoints.tier-d: lay := VerticalLayout {
+            spacing: 16px;
         HorizontalLayout {
             spacing: 28px;
             title := VerticalLayout {
@@ -482,6 +523,157 @@ export component AxHeader inherits Rectangle {
         }
         if AxData.head.error != "": Text { text: AxData.head.error; font-size: 12.5px; color: Theme.crit-text; wrap: word-wrap; }
     }
+
+    // Below D: title, a wrapping scope line with the read-time info toggle, the Included usage
+    // button and the tools in one or two rows (DESIGN-MOBILE 4.2.1).
+    if Breakpoints.below-d: mlay := VerticalLayout {
+        spacing: 6px;
+        property <length> cw: Breakpoints.tier-width - 2 * Breakpoints.gutter;
+        property <bool> two-row: Breakpoints.tier-p || (Breakpoints.tier-f && Breakpoints.tier-width < 760px);
+        property <bool> seg-wrap: self.cw / 5 < 64px;
+        property <bool> read-tip: false;
+        property <length> inc-w: min(500px, self.cw);
+        property <length> date-w: min(336px, self.cw);
+        property <length> pick-w: min(320px, self.cw);
+        Text { text: "Analytics"; font-size: Type.page-title; font-weight: 620; color: Theme.ink; }
+        StyledText {
+            text: @markdown("<font color='\{Theme.ink-3}'>\{AxData.head.scope}</font><font color='\{Theme.ink-2}'>**\{AxData.head.read}**</font>");
+            default-color: Theme.ink-3;
+            default-font-size: Type.small;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                AxInfo { open: mlay.read-tip; tip: AxData.head.read-tip; clicked => { mlay.read-tip = !mlay.read-tip; } }
+            }
+            if AxData.head.updating: Text { text: AxData.head.update-note == "" ? "Updating…" : AxData.head.update-note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if mlay.read-tip: VerticalLayout {
+            padding-top: 2px;
+            padding-bottom: 8px;
+            Text { text: AxData.head.read-tip; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+        }
+        if AxData.included.shown: VerticalLayout {
+            inc-m := IncludedButton {
+                open: inc-m-pop.is-open;
+                clicked => { inc-m-pop.show(); }
+                inc-m-pop := PopupWindow {
+                    x: 0px;
+                    y: inc-m.height + 8px;
+                    width: mlay.inc-w;
+                    height: inc-m-body.preferred-height;
+                    close-policy: close-on-click-outside;
+                    inc-m-body := AxPopBody {
+                        width: mlay.inc-w;
+                        height: self.preferred-height;
+                        inc-scroll := Flickable {
+                            height: min(inc-lines.preferred-height, Breakpoints.height - 160px);
+                            content-height: inc-lines.preferred-height;
+                            inc-lines := IncludedLines { width: mlay.inc-w - 32px; body-w: mlay.inc-w - 32px; narrow: Breakpoints.tier-p; }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle { height: 6px; }
+        if mlay.two-row: VerticalLayout {
+            spacing: 8px;
+            if !mlay.seg-wrap: AxSeg { mono: true; fill: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } }
+            if mlay.seg-wrap: VerticalLayout {
+                spacing: 8px;
+                AxSeg { mono: true; fill: true; items: root.ranges-a; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } }
+                AxSeg { mono: true; fill: true; items: root.ranges-b; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } }
+            }
+            tools2 := HorizontalLayout {
+                spacing: 8px;
+                date-m := DateButton {
+                    horizontal-stretch: 1;
+                    label: AxData.head.date;
+                    on: AxData.head.custom;
+                    open: dates-m.is-open;
+                    clicked => { dates-m.show(); }
+                    dates-m := PopupWindow {
+                        x: 0px;
+                        y: date-m.height + 8px;
+                        width: mlay.date-w;
+                        height: dates-m-body.preferred-height;
+                        close-policy: close-on-click-outside;
+                        dates-m-body := AxPopBody { width: mlay.date-w; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-m.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-m.close(); } } }
+                    }
+                }
+                pick-m := PickerButton {
+                    max-width: (mlay.cw - 56px) * 0.45;
+                    open: picks-m.is-open;
+                    clicked => { picks-m.show(); }
+                    picks-m := PopupWindow {
+                        x: min(0px, tools2.absolute-position.x + tools2.width - pick-m.absolute-position.x - mlay.pick-w);
+                        y: pick-m.height + 8px;
+                        width: mlay.pick-w;
+                        height: picks-m-body.preferred-height;
+                        close-policy: close-on-click-outside;
+                        picks-m-body := AxPopBody {
+                            width: mlay.pick-w;
+                            height: self.preferred-height;
+                            pad-x: 8px;
+                            pad-y: 10px;
+                            pick-scroll := Flickable {
+                                height: min(pick-list.preferred-height, Breakpoints.height - 160px);
+                                content-height: pick-list.preferred-height;
+                                pick-list := PickerBody { width: mlay.pick-w - 16px; picked(v) => { picks-m.close(); AxData.action("analytics-provider", v); } }
+                            }
+                        }
+                    }
+                }
+                IconButton { icon: "refresh"; hint: "Refresh now"; spinning: AxData.head.loading; clicked => { AxData.action("analytics-refresh", ""); } }
+            }
+        }
+        if !mlay.two-row: tools1 := HorizontalLayout {
+            spacing: 8px;
+            AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } }
+            date-t := DateButton {
+                label: AxData.head.date;
+                on: AxData.head.custom;
+                open: dates-t.is-open;
+                clicked => { dates-t.show(); }
+                dates-t := PopupWindow {
+                    x: 0px;
+                    y: date-t.height + 8px;
+                    width: mlay.date-w;
+                    height: dates-t-body.preferred-height;
+                    close-policy: close-on-click-outside;
+                    dates-t-body := AxPopBody { width: mlay.date-w; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-t.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-t.close(); } } }
+                }
+            }
+            pick-t := PickerButton {
+                open: picks-t.is-open;
+                clicked => { picks-t.show(); }
+                picks-t := PopupWindow {
+                    x: min(0px, tools1.absolute-position.x + tools1.width - pick-t.absolute-position.x - mlay.pick-w);
+                    y: pick-t.height + 8px;
+                    width: mlay.pick-w;
+                    height: picks-t-body.preferred-height;
+                    close-policy: close-on-click-outside;
+                    picks-t-body := AxPopBody {
+                        width: mlay.pick-w;
+                        height: self.preferred-height;
+                        pad-x: 8px;
+                        pad-y: 10px;
+                        pick-scroll-t := Flickable {
+                            height: min(pick-list-t.preferred-height, Breakpoints.height - 160px);
+                            content-height: pick-list-t.preferred-height;
+                            pick-list-t := PickerBody { width: mlay.pick-w - 16px; picked(v) => { picks-t.close(); AxData.action("analytics-provider", v); } }
+                        }
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            IconButton { icon: "refresh"; hint: "Refresh now"; spinning: AxData.head.loading; clicked => { AxData.action("analytics-refresh", ""); } }
+        }
+        if AxData.head.error != "": Text { text: AxData.head.error; font-size: Type.small; color: Theme.crit-text; wrap: word-wrap; }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- KPI row
@@ -490,7 +682,14 @@ component KpiCard inherits Rectangle {
     in property <bool> played;
     in property <duration> delay;
     in property <bool> loading;
-    property <bool> hovered: ta.has-hover;
+    // hover lift only with a real hover pointer (DESIGN-MOBILE 5.1); touch shows no lift
+    property <bool> hovered: Device.hover && ta.has-hover;
+    // a value wider than the card drops to 18 px (DESIGN-MOBILE 4.2.2)
+    property <length> inner-w: root.width - (Breakpoints.tier-d ? 36px : 28px);
+    property <length> val-size: Breakpoints.tier-d ? (Breakpoints.width < 1600px ? 27px : 30px)
+        : Breakpoints.tier-p ? 22px : Breakpoints.tier-f ? 24px : 26px;
+    measure := Text { visible: false; text: root.kpi.text; font-family: Type.tab; font-size: root.val-size; font-weight: 620; }
+    property <bool> tight: measure.preferred-width > root.inner-w;
     min-height: col.min-height;
     preferred-height: col.preferred-height;
     min-width: 0px;
@@ -522,8 +721,8 @@ component KpiCard inherits Rectangle {
             cache-rendering-hint: true;
             mouse-cursor: default;
             col := VerticalLayout {
-                padding-left: 18px;
-                padding-right: 18px;
+                padding-left: Breakpoints.tier-d ? 18px : 14px;
+                padding-right: Breakpoints.tier-d ? 18px : 14px;
                 padding-top: 15px;
                 padding-bottom: 16px;
                 spacing: 0px;
@@ -533,8 +732,9 @@ component KpiCard inherits Rectangle {
                     if root.kpi.swatch == "cost": VerticalLayout { alignment: center; AxSwatch { shape: "line"; c: AxColor.of("cost"); } }
                     if root.kpi.swatch == "cache": VerticalLayout { alignment: center; AxSwatch { shape: "half"; c: AxColor.of("cw"); c2: AxColor.of("cr"); } }
                     if root.kpi.swatch == "in" || root.kpi.swatch == "out": VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(root.kpi.swatch); } }
-                    Text { text: root.kpi.label; font-size: 13px; font-weight: 560; color: Theme.ink-2; vertical-alignment: center; overflow: elide; }
-                    if root.kpi.apport: VerticalLayout { alignment: center; AxInfo { side: 18px; glyph: 14px; tip: AxData.apport-tip; } }
+                    Text { text: root.kpi.label; font-size: Breakpoints.tier-d ? 13px : Type.small; font-weight: Breakpoints.tier-d ? 560 : 600; color: Theme.ink-2; vertical-alignment: center; overflow: elide; }
+                    if Breakpoints.tier-d && root.kpi.apport: VerticalLayout { alignment: center; AxInfo { side: 18px; glyph: 14px; tip: AxData.apport-tip; } }
+                    if Breakpoints.below-d && root.kpi.apport: Rectangle { width: 36px; }
                     Rectangle { horizontal-stretch: 1; }
                 }
                 Rectangle { height: 8px; }
@@ -547,7 +747,7 @@ component KpiCard inherits Rectangle {
                         text: root.kpi.text;
                         played: root.played;
                         delay: root.delay;
-                        size: Breakpoints.width < 1600px ? 27px : 30px;
+                        size: root.tight && Breakpoints.below-d ? 18px : root.val-size;
                         weight: 620;
                         na-size: 20px;
                         height: 33px;
@@ -556,19 +756,29 @@ component KpiCard inherits Rectangle {
                     Rectangle { horizontal-stretch: 1; }
                 }
                 Rectangle { height: 6px; }
-                StyledText {
-                    text: root.kpi.sub.length == 0 ? @markdown("")
-                        : root.kpi.sub.length == 1 ? @markdown("\{root.kpi.sub[0].text}")
-                        : root.kpi.sub.length == 2 && root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}")
-                        : root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}")
-                        : @markdown("\{root.kpi.sub[0].text}\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}");
-                    default-color: Theme.ink-3;
-                    default-font-size: 12.5px;
-                    default-font-family: Type.tab;
+                // below D the sub-line wraps to at most two lines (DESIGN-MOBILE 4.2.2)
+                Rectangle {
+                    height: Breakpoints.tier-d ? sub.preferred-height : min(sub.preferred-height, 36px);
+                    clip: true;
+                    sub := StyledText {
+                        width: parent.width;
+                        height: self.preferred-height;
+                        text: root.kpi.sub.length == 0 ? @markdown("")
+                            : root.kpi.sub.length == 1 ? @markdown("\{root.kpi.sub[0].text}")
+                            : root.kpi.sub.length == 2 && root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}")
+                            : root.kpi.sub[0].strong ? @markdown("<font color='\{Theme.ink-2}'>**\{root.kpi.sub[0].text}**</font>\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}")
+                            : @markdown("\{root.kpi.sub[0].text}\{root.kpi.sub[1].text}\{root.kpi.sub[2].text}");
+                        default-color: Theme.ink-3;
+                        default-font-size: Breakpoints.tier-d ? 12.5px : Type.small;
+                        default-font-family: Type.tab;
+                    }
                 }
             }
         }
     }
+    // below D the apportioning note sits over the label row's corner, out of the flow,
+    // so the 44 px info target never staggers the values across the row
+    if Breakpoints.below-d && root.kpi.apport: AxInfo { x: root.width - 44px; y: 3px; tip: AxData.apport-tip; }
 }
 
 // "Tokens by provider": how many tokens each provider served in the range, under the KPI cards. The view model
@@ -587,11 +797,11 @@ component ProvItem inherits Rectangle {
         row := HorizontalLayout {
             spacing: 5px;
             if root.t.mark != "": VerticalLayout { alignment: center; ProviderMark { provider: root.t.mark; size: 16px; } }
-            Text { text: root.t.label; font-size: 13px; color: Theme.ink-2; vertical-alignment: center; }
+            Text { text: root.t.label; font-size: Breakpoints.tier-d ? 13px : Type.small; color: Theme.ink-2; vertical-alignment: center; }
             Text {
                 text: root.t.value;
                 font-family: Type.tab;
-                font-size: 13px;
+                font-size: Breakpoints.tier-d ? 13px : Type.small;
                 font-weight: root.t.quiet ? 500 : 620;
                 color: root.t.quiet ? Theme.ink-3 : Theme.ink;
                 vertical-alignment: center;
@@ -601,16 +811,23 @@ component ProvItem inherits Rectangle {
 }
 export component AxProvLines inherits VerticalLayout {
     spacing: 2px;
+    // below D the caption sits above the lines, which use the full width (DESIGN-MOBILE 4.2.2)
+    if Breakpoints.below-d: HorizontalLayout {
+        spacing: 8px;
+        padding-left: 2px;
+        Caps { text: AxData.prov-summary.label; min-height: 22px; }
+        Text { text: AxData.prov-summary.note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+    }
     for line in AxData.prov-lines: HorizontalLayout {
         spacing: 10px;
         padding-left: 2px;
         // the caption opens the first line; the lines after it start under the first item
-        if line.first: Caps { text: AxData.prov-summary.label; width: 150px; min-height: 22px; }
-        if !line.first: Rectangle { width: 150px; }
+        if Breakpoints.tier-d && line.first: Caps { text: AxData.prov-summary.label; width: 150px; min-height: 22px; }
+        if Breakpoints.tier-d && !line.first: Rectangle { width: 150px; }
         for t[i] in line.items: HorizontalLayout {
             horizontal-stretch: 0;
             spacing: 10px;
-            if i > 0: Text { text: "·"; font-size: 13px; color: Theme.ink-4; vertical-alignment: center; horizontal-stretch: 0; }
+            if i > 0: Text { text: "·"; font-size: Breakpoints.tier-d ? 13px : Type.small; color: Theme.ink-4; vertical-alignment: center; horizontal-stretch: 0; }
             ProvItem { t: t; }
         }
         if line.last && Breakpoints.width >= 1180px: Text { text: AxData.prov-summary.note; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 0; }
@@ -628,11 +845,13 @@ export component AxKpiRow inherits Rectangle {
     property <AxKpi> k2: AxData.kpis.length > 2 ? AxData.kpis[2] : { label: "Cache tokens" };
     property <AxKpi> k3: AxData.kpis.length > 3 ? AxData.kpis[3] : { label: "Input cost" };
     property <AxKpi> k4: AxData.kpis.length > 4 ? AxData.kpis[4] : { label: "Output cost" };
+    // P: 2 columns with the 5th spanning; F: 3 + 2; T: one row from 1000 px, else 3 + 2 (4.2.2)
+    property <length> cw: Breakpoints.tier-width - 2 * Breakpoints.gutter;
     min-height: lay.min-height;
     preferred-height: lay.preferred-height;
     lay := VerticalLayout {
         spacing: 12px;
-        if !root.narrow: HorizontalLayout {
+        if Breakpoints.tier-d && !root.narrow: HorizontalLayout {
             spacing: 16px;
             KpiCard { kpi: root.k0; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
             KpiCard { kpi: root.k1; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
@@ -640,13 +859,46 @@ export component AxKpiRow inherits Rectangle {
             KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
             KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
         }
-        if root.narrow: HorizontalLayout {
+        if Breakpoints.tier-d && root.narrow: HorizontalLayout {
             spacing: 12px;
             KpiCard { kpi: root.k0; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
             KpiCard { kpi: root.k1; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
         }
-        if root.narrow: HorizontalLayout {
+        if Breakpoints.tier-d && root.narrow: HorizontalLayout {
             spacing: 12px;
+            KpiCard { kpi: root.k2; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if Breakpoints.tier-p: HorizontalLayout {
+            spacing: 12px;
+            KpiCard { kpi: root.k0; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k1; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if Breakpoints.tier-p: HorizontalLayout {
+            spacing: 12px;
+            KpiCard { kpi: root.k2; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if Breakpoints.tier-p: HorizontalLayout {
+            spacing: 12px;
+            KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if Breakpoints.tier-f || (Breakpoints.tier-t && root.cw < 1000px): HorizontalLayout {
+            spacing: 16px;
+            KpiCard { kpi: root.k0; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k1; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k2; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if Breakpoints.tier-f || (Breakpoints.tier-t && root.cw < 1000px): HorizontalLayout {
+            spacing: 16px;
+            KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+        }
+        if Breakpoints.tier-t && root.cw >= 1000px: HorizontalLayout {
+            spacing: 16px;
+            KpiCard { kpi: root.k0; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
+            KpiCard { kpi: root.k1; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
             KpiCard { kpi: root.k2; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
             KpiCard { kpi: root.k3; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
             KpiCard { kpi: root.k4; played: root.played; delay: root.delay + 120ms; loading: root.loading; horizontal-stretch: 1; }
