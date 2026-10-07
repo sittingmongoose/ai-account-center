@@ -766,12 +766,125 @@
       "limit": null,
       "unit": null,
       "kind": "rate_limit"
+     },
+     {
+      "key": "google-ai-credits",
+      "label": "Google AI credits",
+      "usedPercent": null,
+      "remainingPercent": null,
+      "resetAt": null,
+      "windowMinutes": null,
+      "used": null,
+      "limit": null,
+      "unit": "credits",
+      "kind": "balance",
+      "remaining": 500
      }
     ],
     "capabilities": {
      "codexProfile": null,
      "claudeProfileId": null,
-     "claudePlatforms": []
+     "claudePlatforms": [],
+     "antigravityProfileId": "example-1",
+     "antigravityHostIds": ["ubuntu"],
+     "antigravityCanActivate": true
+    },
+    "antigravityPlan": {
+     "class": "pro",
+     "quotaPolicy": "five-hour-weekly",
+     "summary": "Refreshes every 5 hours up to a weekly limit.",
+     "models": ["Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.1 Pro", "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude Sonnet 4.6", "Claude Opus 4.6", "GPT-OSS-120B"],
+     "thirdPartyModels": true,
+     "creditsOverage": true
+    }
+   },
+   {
+    "id": "antigravity:example-3",
+    "provider": "antigravity",
+    "providerLabel": "Antigravity",
+    "label": "Antigravity account 3",
+    "email": "antigravity-3@example.com",
+    "plan": "Free",
+    "platform": "ubuntu",
+    "source": "Sanitized fixture reading",
+    "status": "cached",
+    "message": null,
+    "fetchedAt": "2026-10-01T15:15:19.000Z",
+    "sampledAt": "2026-10-01T15:15:19.000Z",
+    "isActive": false,
+    "windows": [
+     {
+      "key": "gemini-weekly",
+      "label": "Gemini Models · Weekly",
+      "usedPercent": 22.5,
+      "remainingPercent": 77.5,
+      "resetAt": "2026-10-02T21:11:24.000Z",
+      "windowMinutes": 10080,
+      "used": null,
+      "limit": null,
+      "unit": null,
+      "kind": "rate_limit"
+     },
+     {
+      "key": "3p-weekly",
+      "label": "Claude and GPT models · Weekly",
+      "usedPercent": 8,
+      "remainingPercent": 92,
+      "resetAt": "2026-10-08T15:15:19.000Z",
+      "windowMinutes": 10080,
+      "used": null,
+      "limit": null,
+      "unit": null,
+      "kind": "rate_limit"
+     }
+    ],
+    "capabilities": {
+     "codexProfile": null,
+     "claudeProfileId": null,
+     "claudePlatforms": [],
+     "antigravityProfileId": "example-3",
+     "antigravityHostIds": ["ubuntu"],
+     "antigravityCanActivate": true
+    },
+    "antigravityPlan": {
+     "class": "free",
+     "quotaPolicy": "weekly",
+     "summary": "Weekly quota only; no 5-hour refresh.",
+     "models": ["Gemini 3.8 Flash", "Gemini 3.7 Flash", "Gemini 3.6 Flash", "Gemini 3.1 Pro", "Claude Sonnet 4.6", "Claude Opus 4.6", "GPT-OSS-120B"],
+     "thirdPartyModels": true,
+     "creditsOverage": false
+    }
+   },
+   {
+    "id": "antigravity:example-4",
+    "provider": "antigravity",
+    "providerLabel": "Antigravity",
+    "label": "Antigravity account 4",
+    "email": "antigravity-4@example.com",
+    "plan": "Google Workspace",
+    "platform": "ubuntu",
+    "source": "Sanitized fixture reading",
+    "status": "ok",
+    "message": null,
+    "fetchedAt": "2026-10-01T15:15:19.000Z",
+    "sampledAt": "2026-10-01T15:15:19.000Z",
+    "isActive": false,
+    "windows": [],
+    "capabilities": {
+     "codexProfile": null,
+     "claudeProfileId": null,
+     "claudePlatforms": [],
+     "antigravityProfileId": "example-4",
+     "antigravityHostIds": ["ubuntu"],
+     "antigravityCanActivate": false
+    },
+    "antigravityPlan": {
+     "class": "workspace",
+     "quotaPolicy": "none",
+     "summary": "This plan does not include Antigravity coding quota.",
+     "models": [],
+     "thirdPartyModels": false,
+     "creditsOverage": false
     }
    },
    {

@@ -10,6 +10,8 @@ import {
   type AccountDashboardDeps,
 } from '../../../src/web-server/services/account-dashboard-service';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
+import { antigravityPlanDisplay } from '../../../src/antigravity/plan';
+import type { AntigravityDashboardAccount } from '../../../src/antigravity/usage-contract';
 import {
   listClaudeDesktopProfiles,
   type ClaudeDesktopProfile,
@@ -207,6 +209,93 @@ function deps(overrides: AccountDashboardDeps = {}): AccountDashboardDeps {
     ...overrides,
   };
 }
+
+describe('Antigravity coding plan dashboard JSON', () => {
+  it('carries the optional sample-time plan contract to registered accounts and cached tray responses', async () => {
+    const observed = '2026-11-02T00:00:00Z';
+    const account: AntigravityDashboardAccount = {
+      ...additional('antigravity'),
+      id: 'antigravity:profile:fixture',
+      email: 'fixture@example.com',
+      platform: 'ubuntu',
+      ...antigravityPlanDisplay('Google AI Pro (trial)', observed),
+      fetchedAt: observed,
+      sampledAt: observed,
+      capabilities: {
+        codexProfile: null,
+        claudeProfileId: null,
+        claudePlatforms: [],
+        antigravityProfileId: 'fixture',
+        antigravityHostIds: ['ubuntu'],
+        antigravityCanActivate: false,
+      },
+      windows: [
+        {
+          ...additional().windows[0],
+          key: 'google-ai-credits',
+          label: 'Google AI credits',
+          kind: 'balance',
+          remaining: 12,
+          unit: 'credits',
+          usedPercent: null,
+          remainingPercent: null,
+          used: null,
+          limit: null,
+        },
+      ],
+    };
+    Object.assign(account.antigravityPlan!, { private: 'private-plan-sentinel' });
+    const service = new AccountDashboardService(
+      deps({
+        hasAntigravityProfiles: () => true,
+        getAntigravityAccounts: async () => [account],
+        getCachedAntigravityAccounts: () => [account],
+        readSelectedAntigravityProfileId: async () => null,
+        now: () => Date.parse(observed),
+      })
+    );
+    const result = await service.get();
+    const ag = result.accounts.find((row) => row.provider === 'antigravity');
+    expect(ag?.antigravityPlan).toMatchObject({
+      class: 'pro-trial',
+      quotaPolicy: 'five-hour-weekly',
+      thirdPartyModels: false,
+      creditsOverage: false,
+    });
+    expect(ag?.antigravityPlan?.models).not.toContain('GPT-OSS-120B');
+    expect(ag?.windows[0]).toMatchObject({
+      key: 'google-ai-credits',
+      label: 'AI credits (overage)',
+      remaining: 12,
+      limit: null,
+    });
+    expect(JSON.stringify(ag)).not.toContain('private-plan-sentinel');
+    expect(
+      (await service.get()).accounts.find((row) => row.id === account.id)?.antigravityPlan
+    ).toEqual(ag?.antigravityPlan);
+  });
+
+  it('normalizes legacy collector rows while unknown tiers remain optional and unchanged', async () => {
+    const known = {
+      ...additional('antigravity'),
+      plan: 'free-tier',
+      sampledAt: '2026-11-01T23:59:59Z',
+    };
+    const unknown = { ...known, id: 'antigravity:unknown', plan: 'standard-tier' };
+    const result = await new AccountDashboardService(
+      deps({
+        hasAntigravityProfiles: () => false,
+        getAdditionalAccounts: async () => [known, unknown],
+      })
+    ).get();
+    expect(result.accounts.find((row) => row.id === known.id)).toMatchObject({
+      plan: 'Free',
+      antigravityPlan: { class: 'free', thirdPartyModels: true },
+    });
+    expect(result.accounts.find((row) => row.id === unknown.id)?.plan).toBe('standard-tier');
+    expect(result.accounts.find((row) => row.id === unknown.id)?.antigravityPlan).toBeUndefined();
+  });
+});
 
 describe('consolidated account dashboard', () => {
   it('keeps all seven primary usage rows responsive while an optional wallet is slow', async () => {

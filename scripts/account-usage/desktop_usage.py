@@ -289,6 +289,24 @@ def normalize_antigravity(payload):
     return windows
 
 
+def antigravity_reported_plan(load):
+    """Retain only plan/tier display fields, for the single TypeScript plan table."""
+    reported = {}
+    info = load.get("planInfo")
+    plan_type = safe_text(info.get("planType"), 80) if isinstance(info, dict) else None
+    if plan_type:
+        reported["planType"] = plan_type
+    for key in ("paidTier", "currentTier"):
+        tier = load.get(key)
+        if isinstance(tier, dict):
+            display = {field: value for field in ("id", "name")
+                       if (value := safe_text(tier.get(field), 80)) is not None}
+            if display:
+                reported[key] = display
+    tier = reported.get("paidTier") or reported.get("currentTier") or {}
+    return plan_type or tier.get("name") or tier.get("id"), reported
+
+
 def normalize_antigravity_credits(load):
     """Google's loadCodeAssist reports an optional shared AI credit balance.
 
@@ -307,7 +325,7 @@ def normalize_antigravity_credits(load):
     remaining = nonnegative(sum(amounts))
     if remaining is None:
         return []
-    return [quota_window("google-ai-credits", "Google AI credits", kind="balance", remaining=remaining, unit="credits")]
+    return [quota_window("google-ai-credits", "AI credits (overage)", kind="balance", remaining=remaining, unit="credits")]
 
 
 def windows_private_metadata(path):
@@ -434,10 +452,9 @@ def fetch_antigravity_quota(credential, result):
     project = safe_text(project) or credential.project
     if project is None:
         raise UsageError("unavailable", "The signed-in account did not return an Antigravity quota project.")
-    tier = load.get("paidTier") or load.get("currentTier")
-    info = load.get("planInfo")
-    result["plan"] = (safe_text(info.get("planType")) if isinstance(info, dict) else None) or (
-        safe_text(tier.get("name")) or safe_text(tier.get("id")) if isinstance(tier, dict) else None)
+    result["plan"], reported = antigravity_reported_plan(load)
+    if reported:
+        result["reportedPlan"] = reported
     payload = request_json(AGY_BASE + "retrieveUserQuotaSummary", headers, {"project": project})
     result["windows"] = normalize_antigravity(payload) + normalize_antigravity_credits(load)
 

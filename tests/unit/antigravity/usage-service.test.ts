@@ -86,6 +86,57 @@ function fixture(initial = [profile('gmail', true), profile('party')]) {
 }
 
 describe('Antigravity account-specific usage cache', () => {
+  it('normalizes old cached plan strings at their observation time and clones optional metadata', async () => {
+    const f = fixture([profile('gmail')]);
+    f.handle(async (row) => ({ ...sample(row), plan: 'free-tier', status: 'cached' }));
+    const result = (await f.service.getAccounts())[0];
+    expect(result.plan).toBe('Free');
+    expect(result.antigravityPlan).toMatchObject({
+      class: 'free',
+      quotaPolicy: 'weekly',
+      thirdPartyModels: true,
+      creditsOverage: false,
+    });
+    result.antigravityPlan?.models?.push('mutated');
+    expect((await f.service.getAccounts())[0].antigravityPlan?.models).not.toContain('mutated');
+  });
+
+  it('allows an explicitly known no-quota plan with no windows and keeps empty unknown samples unavailable', async () => {
+    const f = fixture([profile('gmail')]);
+    f.handle(async (row) => ({
+      ...sample(row),
+      plan: 'Google Workspace Business Plus',
+      windows: [],
+    }));
+    expect((await f.service.getAccounts())[0]).toMatchObject({
+      status: 'ok',
+      plan: 'Google Workspace',
+      antigravityPlan: { quotaPolicy: 'none' },
+      windows: [],
+    });
+    f.service.invalidate();
+    f.handle(async (row) => ({ ...sample(row), plan: 'Unknown plan', windows: [] }));
+    const unknown = (await f.service.getAccounts())[0];
+    expect(unknown.status).toBe('error');
+    expect(unknown.antigravityPlan).toBeUndefined();
+  });
+
+  it('uses retained loadCodeAssist tier metadata without leaking it or inferring from an email domain', async () => {
+    const f = fixture([profile('gmail')]);
+    f.handle(async (row) => ({
+      ...sample(row),
+      plan: 'Standard',
+      reportedPlan: { paidTier: { id: 'standard-tier', name: 'Google AI Ultra 5x' } },
+    }));
+    const result = (await f.service.getAccounts())[0];
+    expect(result.plan).toBe('Google AI Ultra 5x');
+    expect(result.antigravityPlan?.summary).toContain('5x Google AI Pro capacity');
+    expect(result).not.toHaveProperty('reportedPlan');
+    f.service.invalidate();
+    f.handle(async (row) => ({ ...sample(row), email: row.email, plan: 'Future tier' }));
+    expect((await f.service.getAccounts())[0].antigravityPlan).toBeUndefined();
+  });
+
   it('maps the native collector fresh status to an available display reading', async () => {
     const f = fixture([profile('gmail')]);
     f.handle(async (row) => ({ ...sample(row), status: 'fresh' }));
@@ -324,7 +375,11 @@ describe('Antigravity account-specific usage cache', () => {
     const f = fixture([profile('gmail')]);
     await f.service.getAccounts();
     f.setProfiles([
-      { ...profile('gmail'), identityKey: 'identity-someone-else', credentialRevision: 'new-revision' },
+      {
+        ...profile('gmail'),
+        identityKey: 'identity-someone-else',
+        credentialRevision: 'new-revision',
+      },
     ]);
     f.handle(async () => {
       throw new Error('offline');
@@ -407,6 +462,7 @@ describe('Antigravity account-specific usage cache', () => {
     const windows = (await f.service.getAccounts())[0].windows;
     expect(windows[0].usedPercent).toBe(0);
     expect(windows[1]).toMatchObject({
+      label: 'AI credits (overage)',
       remaining: 0,
       used: null,
       limit: null,

@@ -1,4 +1,5 @@
 import type { AntigravityAutoSwitchStatus } from '../../antigravity/auto-switch/types';
+import type { AntigravityPlan } from '../../antigravity/plan';
 /** Public account-only contract shared by the dashboard and native clients. */
 export type DashboardProvider =
   | 'codex'
@@ -73,6 +74,8 @@ export interface DashboardAccount {
   label: string;
   email: string | null;
   plan: string | null;
+  /** Antigravity coding entitlement at the sample time; absent for unknown plans. */
+  antigravityPlan?: AntigravityPlan;
   platform: DashboardPlatform;
   source: string;
   status: DashboardAccountStatus;

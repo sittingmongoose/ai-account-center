@@ -76,6 +76,80 @@ afterEach(async () => {
 });
 
 describe('additional account usage service', () => {
+  it('retains Antigravity tier metadata through the legacy desktop collector and cache without leaking it', async () => {
+    const { service } = fixture({
+      runSource: async (source) =>
+        payload(
+          source.provider === 'antigravity'
+            ? {
+                plan: 'Standard',
+                reportedPlan: {
+                  planType: 'ultra',
+                  paidTier: {
+                    id: 'GOOGLE_AI_ULTRA_20X',
+                    name: 'Google AI Ultra 20x',
+                    private: 'hidden',
+                  },
+                },
+                windows: [
+                  {
+                    key: 'google-ai-credits',
+                    label: 'Google AI credits',
+                    kind: 'balance',
+                    remaining: 12,
+                    unit: 'credits',
+                  },
+                ],
+              }
+            : {}
+        ),
+    });
+    const result = (await service.get()).find((row) => row.provider === 'antigravity');
+    expect(result).toMatchObject({
+      plan: 'Google AI Ultra 20x',
+      antigravityPlan: { class: 'ultra-20x', creditsOverage: true },
+    });
+    expect(result?.windows[0]).toMatchObject({
+      key: 'google-ai-credits',
+      label: 'AI credits (overage)',
+      remaining: 12,
+      limit: null,
+    });
+    expect(JSON.stringify(result)).not.toContain('reportedPlan');
+    expect(JSON.stringify(result)).not.toContain('hidden');
+    result?.antigravityPlan?.models?.push('mutated');
+    expect(
+      (await service.get()).find((row) => row.provider === 'antigravity')?.antigravityPlan?.models
+    ).not.toContain('mutated');
+  });
+
+  it('preserves long enterprise labels and trial parentheses, and permits known no-quota samples with no windows', async () => {
+    for (const plan of [
+      'Gemini Enterprise Standard Emerging Market',
+      'Google AI Pro (trial)',
+      'Future plan (preview)',
+    ]) {
+      const { service } = fixture({
+        runSource: async (source) => payload(source.provider === 'antigravity' ? { plan } : {}),
+      });
+      expect((await service.get()).find((row) => row.provider === 'antigravity')?.plan).toBe(plan);
+    }
+    const { service } = fixture({
+      runSource: async (source) =>
+        payload(
+          source.provider === 'antigravity'
+            ? { plan: 'Google Workspace Enterprise Plus', windows: [] }
+            : {}
+        ),
+    });
+    expect((await service.get()).find((row) => row.provider === 'antigravity')).toMatchObject({
+      status: 'ok',
+      plan: 'Google Workspace',
+      antigravityPlan: { quotaPolicy: 'none', models: [] },
+      windows: [],
+    });
+  });
+
   it('preserves actual overage with reset dates while clamping only derived remaining', async () => {
     const { service } = fixture({
       runSource: async () =>
@@ -320,7 +394,7 @@ describe('additional account usage service', () => {
     expect(unavailable.windows).toEqual(initial.windows);
     expect(unavailable.fetchedAt).toBe(initial.fetchedAt);
     expect(unavailable.sampledAt).toBe(initial.sampledAt);
-    expect(unavailable.message).toContain('last successful Muse usage reading');
+    expect(unavailable.message).toBeNull();
     expect(museCalls).toBe(3);
     setTime(39_999);
     await service.get({ refresh: true });
@@ -456,6 +530,31 @@ describe('additional account usage service', () => {
     expect(account.status).toBe('cached');
     expect(account.message).toBe('Showing the last saved Muse usage sample.');
     expect(JSON.stringify(account)).not.toContain('PRIVATE_PASSWORD');
+  });
+
+  it('drops the plain cached-reading sentence an older Muse helper still sends', async () => {
+    const { service } = fixture({
+      runSource: async () =>
+        payload({
+          status: 'cached',
+          message: 'Showing the last successful Muse usage reading. Usage refreshes automatically.',
+        }),
+    });
+    const account = (await service.get()).find((row) => row.provider === 'muse')!;
+    expect(account.status).toBe('cached');
+    expect(account.message).toBeNull();
+    expect(account.sampledAt).toBe('2026-10-01T02:00:00.000Z');
+  });
+
+  it('serves a message-less Muse cached reading without inventing an explanation', async () => {
+    const { service } = fixture({
+      runSource: async () => payload({ status: 'cached', message: null }),
+    });
+    const account = (await service.get()).find((row) => row.provider === 'muse')!;
+    expect(account.status).toBe('cached');
+    expect(account.message).toBeNull();
+    expect(account.sampledAt).toBe('2026-10-01T02:00:00.000Z');
+    expect(account.windows[0]?.usedPercent).toBe(23.5);
   });
 
   it('projects only safe fields and refuses all helper-selected capabilities and identifiers', async () => {

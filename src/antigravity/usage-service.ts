@@ -1,4 +1,5 @@
 import { AntigravityError } from './errors';
+import { antigravityPlanDisplay, cloneAntigravityPlan } from './plan';
 import type {
   AntigravityDashboardAccount,
   AntigravityPoolWindow,
@@ -42,6 +43,11 @@ const MAX_PROFILES = 16;
 function clone(account: AntigravityDashboardAccount): AntigravityDashboardAccount {
   return {
     ...account,
+    ...(account.antigravityPlan
+      ? {
+          antigravityPlan: cloneAntigravityPlan(account.antigravityPlan),
+        }
+      : {}),
     windows: account.windows.map((window) => ({
       ...window,
       ...(window.modelIds ? { modelIds: [...window.modelIds] } : {}),
@@ -62,7 +68,7 @@ function fallback(profile: AntigravityUsageProfile): AntigravityDashboardAccount
     providerLabel: 'Antigravity',
     label: publicRow.email,
     email: publicRow.email,
-    plan: publicRow.plan,
+    ...antigravityPlanDisplay(publicRow.plan, publicRow.verifiedAt),
     platform: 'ubuntu',
     source: 'Antigravity saved login on Ubuntu',
     status: publicRow.available ? 'unavailable' : 'needs_sign_in',
@@ -178,6 +184,14 @@ export class AntigravityUsageService {
               : 'error';
         result.fetchedAt = timestamp(sample.fetchedAt);
         result.sampledAt = timestamp(sample.sampledAt);
+        const display = antigravityPlanDisplay(
+          result.plan,
+          result.sampledAt ?? result.fetchedAt ?? now,
+          sample.reportedPlan
+        );
+        result.plan = display.plan;
+        delete result.antigravityPlan;
+        if (display.antigravityPlan) result.antigravityPlan = display.antigravityPlan;
         if (
           (result.status === 'ok' || result.status === 'cached') &&
           result.sampledAt &&
@@ -187,7 +201,8 @@ export class AntigravityUsageService {
             .slice(0, 256)
             .map(poolWindow)
             .filter((window): window is AntigravityPoolWindow => window !== null);
-          if (!result.windows.length) result.status = 'error';
+          if (!result.windows.length && result.antigravityPlan?.quotaPolicy !== 'none')
+            result.status = 'error';
         } else if (result.status === 'ok' || result.status === 'cached') result.status = 'error';
         if (result.status === 'needs_sign_in') invalidateLastGood = true;
         result.message =

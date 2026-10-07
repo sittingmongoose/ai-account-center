@@ -250,6 +250,7 @@ export class AppUpdateService {
     });
     deadline.catch(() => {});
     const control: HostRunControl = {
+      stateDirectory: this.directory,
       onEvent: (event) => this.hostEvent(job, platform, event),
       setCancel: (handler) => {
         this.cancelHandlers.set(platform, handler);

@@ -34,7 +34,7 @@ struct AccountDetailsBody: View {
 
   var body: some View {
     withPalette { palette in
-      let meters = account.visibleWindows.filter(\.isMeter)
+      let meters = TrayColumns.detailsMeterOrder(provider: account.provider, account.visibleWindows.filter(\.isMeter))
       let amounts = account.visibleWindows.filter { !$0.isMeter }
       VStack(alignment: .leading, spacing: 12) {
         HStack(spacing: 10) {
@@ -48,6 +48,27 @@ struct AccountDetailsBody: View {
         if let message = account.message {
           Text(message).font(.system(size: 12)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
         }
+        if let plan = account.antigravityPlan {
+          // The normalized Antigravity plan facts (ANTIGRAVITY-SPEC): the summary sentence, the models
+          // at the sample time, and the family-sharing note on the paid Pro and Ultra classes.
+          VStack(alignment: .leading, spacing: 4) {
+            if let summary = plan.summary, !summary.isEmpty {
+              Text(summary).font(.system(size: 12)).foregroundStyle(palette.label2)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            if !plan.models.isEmpty {
+              Text("Models: \(plan.models.joined(separator: ", "))")
+                .font(.system(size: 11.5)).foregroundStyle(palette.label2)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            if plan.sharesFamilyPool {
+              Text("Family members sharing this plan may share one quota pool.")
+                .font(.system(size: 11.5)).foregroundStyle(palette.label3)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          .accessibilityElement(children: .combine)
+        }
         if meters.isEmpty && amounts.isEmpty {
           Text("Usage unavailable").font(.system(size: 12)).foregroundStyle(palette.label3)
         }
@@ -56,9 +77,13 @@ struct AccountDetailsBody: View {
             alignment: .leading, spacing: 12) {
             ForEach(meters) { window in
               VStack(alignment: .leading, spacing: 3) {
+                // Antigravity's pool labels split into title + subtitle so the full pool name is
+                // never truncated; every other provider keeps its one-line label.
+                let label = TrayColumns.fullLabel(provider: account.provider, window)
+                let parts = account.provider == "antigravity" ? TrayColumns.labelParts(label) : nil
                 MeterView(key: "\(account.id)|\(window.key)", window: window, sampledAt: account.sampledAt,
                   pendingReset: account.pendingReset(window),
-                  labelText: TrayColumns.fullLabel(provider: account.provider, window),
+                  labelText: parts?.title ?? label, labelSubtitle: parts?.subtitle,
                   motion: MeterMotion(animate: false), detail: true)
                 if account.pendingReset(window) == nil, let used = window.used, let limit = window.limit {
                   Text("\(TrayFormat.number(used)) of \(TrayFormat.number(limit))\(window.unit.map { " \($0)" } ?? "")")
@@ -73,7 +98,9 @@ struct AccountDetailsBody: View {
         }
         if !amounts.isEmpty {
           VStack(alignment: .leading, spacing: 0) {
-            ForEach(amounts) { window in AmountRow(window: window) }
+            ForEach(amounts) { window in
+              AmountRow(window: window, provider: account.provider, hint: account.antigravityCreditsHint(window))
+            }
           }
         }
         HStack(spacing: 14) {
@@ -122,17 +149,21 @@ struct AccountDetailsBody: View {
 }
 
 /// A balance, extra-usage or spend line: what is left or spent and when it expires, exactly as reported.
+/// The Antigravity credits row carries the spec's overage label and its plan-driven hint.
 struct AmountRow: View {
   let window: AccountQuotaWindow
+  var provider: String = ""
+  var hint: String? = nil
   var body: some View {
     withPalette { palette in
       VStack(alignment: .leading, spacing: 2) {
         HStack(alignment: .firstTextBaseline) {
-          Text(window.label).font(.system(size: 12.5)).foregroundStyle(palette.label)
+          Text(TrayColumns.amountLabel(provider: provider, window)).font(.system(size: 12.5)).foregroundStyle(palette.label)
           Spacer(minLength: 8)
           Text(value).font(.system(size: 12.5, weight: .medium)).monospacedDigit().foregroundStyle(palette.label)
         }
         if let sub { Text(sub).font(.system(size: 11)).foregroundStyle(palette.label2) }
+        if let hint { Text(hint).font(.system(size: 11)).foregroundStyle(palette.label3) }
       }
       .padding(.vertical, 6)
       .overlay(alignment: .top) { Rectangle().fill(palette.separator).frame(height: 0.5) }
@@ -175,6 +206,10 @@ struct ProviderRow: View {
   var maxDetailHeight: CGFloat = 520
   @State private var hovered = false
   @State private var showDetails = false
+  @Environment(\.trayPreviewHover) private var previewHover
+
+  /// Hover from the pointer, or the row a still render is asked to show hovered.
+  private var rowHovered: Bool { hovered || previewHover == group.id }
 
   var body: some View {
     withPalette { palette in
@@ -207,12 +242,13 @@ struct ProviderRow: View {
           }
         }
         Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(palette.label3)
-          .opacity(hovered || showDetails ? 1 : 0).offset(x: hovered || showDetails ? 0 : -3)
-          .frame(width: 14)
+          .opacity(rowHovered || showDetails ? 1 : 0).offset(x: rowHovered || showDetails ? 0 : -3)
+          .frame(width: TrayMetrics.chevronColumn)
+          .alignmentProbe("chevron|provider|\(group.id)")
       }
       .padding(.leading, TrayMetrics.rowLeading).padding(.trailing, TrayMetrics.rowTrailing).padding(.vertical, 6)
       .frame(minHeight: 50)
-      .background { ConcentricRectangle().fill(hovered ? palette.rowHover : .clear) }
+      .background { ConcentricRectangle().fill(rowHovered ? palette.rowHover : .clear) }
       .contentShape(Rectangle())
       .overlay {
         DetailsRowTarget(tooltip: "\(group.label) usage details: windows, balances and reset times",
@@ -224,6 +260,7 @@ struct ProviderRow: View {
           AccountDetailsPopover(model: model, accounts: group.accounts, maxHeight: maxDetailHeight)
         }
       }
+      .alignmentProbe("row|provider|\(group.id)")
     }
   }
 
@@ -239,7 +276,7 @@ struct ProviderRow: View {
   private func meter(_ window: AccountQuotaWindow, label: String, amount: Bool) -> some View {
     let key = "\(group.representative.id)|\(window.key)"
     return MeterView(key: key, window: window, sampledAt: group.representative.sampledAt,
-      pendingReset: group.representative.pendingReset(window), labelText: label, showAmount: amount, hovered: hovered,
+      pendingReset: group.representative.pendingReset(window), labelText: label, showAmount: amount, hovered: rowHovered,
       motion: open.motion(key, block: block))
   }
 }

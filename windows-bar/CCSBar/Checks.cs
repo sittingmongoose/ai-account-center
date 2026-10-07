@@ -107,6 +107,7 @@ public static partial class Checks
         CodexAutoStatusChecks(report);
         await SignInChangeChecks(report);
         await ClaudeOpenChecks(report);
+        await RefreshMutationChecks(report);
         await PairingChecks(report);
         await EnergyChecks(report);
         await OpenFrameChecks(report);
@@ -955,6 +956,133 @@ public static partial class Checks
         var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
         return $"http://127.0.0.1:{port}";
     }
+
+    private static IEnumerable<System.Windows.FrameworkElement> Walk(System.Windows.DependencyObject parent)
+    {
+        foreach (var child in System.Windows.LogicalTreeHelper.GetChildren(parent).OfType<System.Windows.FrameworkElement>())
+        {
+            yield return child;
+            foreach (var nested in Walk(child)) yield return nested;
+        }
+    }
+
+    private static object MutationPayload() => new
+    {
+        schemaVersion = 1,
+        updatedAt = "2026-10-02T12:00:00.000Z",
+        accounts = new object[]
+        {
+            new
+            {
+                id = "claude:mutation-check", provider = "claude", providerLabel = "Claude", label = "Claude account", email = "claude-mc@example.com",
+                plan = "pro", platform = "windows", status = "ok",
+                capabilities = new { claudeProfileId = "mutation-check", claudePlatforms = new[] { "mac", "windows" } },
+                windows = new object[]
+                {
+                    new { key = "five_hour", label = "5-hour", usedPercent = 12.5, remainingPercent = 87.5, resetAt = "2026-10-02T17:00:00.000Z", windowMinutes = 300.0, kind = "rate_limit" },
+                    new { key = "seven_day", label = "Weekly", usedPercent = 34, remainingPercent = 66, resetAt = "2026-10-09T12:00:00.000Z", windowMinutes = 10080.0, kind = "rate_limit" },
+                },
+            },
+            new
+            {
+                id = "codex:mutation-check", provider = "codex", providerLabel = "Codex", label = "Codex account", email = "codex-mc@example.com",
+                platform = "ubuntu", status = "ok",
+                capabilities = new { codexProfile = "mutation-check" },
+                windows = new object[] { new { key = "seven_day", label = "Weekly", usedPercent = 40, remainingPercent = 60, resetAt = "2026-10-09T12:00:00.000Z", windowMinutes = 10080.0, kind = "rate_limit" } },
+            },
+        },
+        codexAutoSwitch = new { enabled = true, thresholdPercent = 5, pollIntervalSeconds = 60, activationInProgress = false },
+    };
+
+    /// <summary>
+    /// The visible refresh's rest (the reported gray Open icons): the N6 single pass renders while still busy, so the tree
+    /// was born disabled, and the closing walk must wake it without a second rebuild — while a failed refresh keeps
+    /// everything resting until a fresh read. Then the action slot rule: a press on the slot (a resting icon, or the
+    /// gaps around it) never expands the row, and an enabled icon's click reaches the Open flow (one POST against a
+    /// loopback fixture, the connection in an isolated store; no real account is touched).
+    /// </summary>
+    private static async Task RefreshMutationChecks(CheckReport report)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "aac-mutation-check-" + Guid.NewGuid().ToString("N"));
+        var store = Path.Combine(folder, "connection.dpapi");
+        var real = Path.GetFullPath(SecureStore.StateDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        report.Checks["mutation_checks_use_an_isolated_store"] = !Path.GetFullPath(folder).StartsWith(real, StringComparison.OrdinalIgnoreCase);
+        if (!report.Checks["mutation_checks_use_an_isolated_store"]) return;
+        MainWindow? window = null;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            using var fixture = new PairingFixture { DashboardPayload = MutationPayload() };
+            SecureStore.Save(new ConnectionSettings { BaseURL = fixture.Origin, Username = "fixture", Password = "fixture-new" }, store);
+            window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            window.UseConnectionStoreForCheck(store);
+            window.ShowPanel();
+            window.ResetRenderPassesForCheck();
+            await window.Refresh(true);
+
+            System.Windows.Controls.Button[] Buttons(string uid) => Walk(window!.ContentPanel).OfType<System.Windows.Controls.Button>().Where(button => button.Uid == uid).ToArray();
+            ToggleSwitch[] Switches() => Walk(window!.ContentPanel).OfType<ToggleSwitch>().ToArray();
+            var openIcons = Buttons("mutation");
+            var activate = Buttons("mutation:activate").FirstOrDefault();
+            var toggle = Switches().FirstOrDefault();
+            report.Checks["visible_refresh_reenables_the_mutation_controls"] = window.Dashboard is not null && !window.IsStale
+                && openIcons.Length == 2 && openIcons.All(button => button.IsEnabled)
+                && activate is { IsEnabled: true } && toggle is not null && toggle.EnabledForCheck;
+            report.Checks["visible_refresh_stays_one_visual_pass"] = window.RenderPassesForCheck == 1;
+
+            fixture.DashboardMode = "500:down";
+            await window.Refresh(true);
+            report.Checks["failed_refresh_keeps_the_controls_resting"] = window.IsStale && FixtureRender.FindUid(window.ContentPanel, "stale") is not null
+                && Buttons("mutation").All(button => !button.IsEnabled) && Buttons("mutation:activate").All(button => !button.IsEnabled)
+                && Switches().All(sw => !sw.EnabledForCheck);
+            fixture.DashboardMode = "200";
+            await window.Refresh(true);
+            report.Checks["fresh_read_wakes_the_controls_again"] = !window.IsStale && Buttons("mutation").All(button => button.IsEnabled)
+                && Switches().All(sw => sw.EnabledForCheck);
+
+            // The action slot, on its own window against the Open fixture.
+            using var openFixture = new ClaudeOpenFixture();
+            openFixture.OpenReplies.Add((200, "{\"opened\":true,\"id\":\"mutation-check\",\"platform\":\"mac\"}"));
+            var openStore = Path.Combine(folder, "open", "connection.dpapi");
+            SecureStore.Save(new ConnectionSettings { BaseURL = openFixture.Origin, Username = "fixture", Password = "fixture-only" }, openStore);
+            var openWindow = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+            openWindow.UseConnectionStoreForCheck(openStore);
+            await openWindow.ClientForCheck!.Verify(TimeSpan.FromSeconds(10), CancellationToken.None);
+            openWindow.ApplyDashboardSample(JsonSerializer.Deserialize<AccountDashboard>(JsonSerializer.Serialize(MutationPayload(), Formatting.Json), Formatting.Json)!);
+            var row = FixtureRender.FindUid(openWindow.ContentPanel, "row:claude:mutation-check");
+            var slot = row is null ? null : FixtureRender.FindUid(row, "slot");
+            var icons = slot is null ? Array.Empty<System.Windows.Controls.Button>() : Walk(slot).OfType<System.Windows.Controls.Button>().Where(button => button.Uid == "mutation").ToArray();
+            static System.Windows.Input.MouseButtonEventArgs Press() => new(System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.UIElement.MouseLeftButtonDownEvent };
+            static System.Windows.Input.MouseButtonEventArgs Release() => new(System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.UIElement.MouseLeftButtonUpEvent };
+            bool DetailsOpen() => FixtureRender.FindUid(openWindow.ContentPanel, "details") is not null;
+            report.Checks["slot_holds_the_two_open_icons"] = row is not null && slot is not null && icons.Length == 2 && icons[0].IsEnabled && icons[1].IsEnabled;
+            slot!.RaiseEvent(Press()); slot.RaiseEvent(Release());
+            report.Checks["slot_press_never_expands_the_row"] = !DetailsOpen();
+            icons[0].IsEnabled = false; // an Open in progress rests the pair
+            slot.RaiseEvent(Press()); slot.RaiseEvent(Release());
+            report.Checks["resting_icon_press_never_expands_the_row"] = !DetailsOpen() && !icons[0].IsEnabled;
+            icons[0].IsEnabled = true;
+            row!.RaiseEvent(Press()); row.RaiseEvent(Release());
+            report.Checks["row_click_still_expands_the_row"] = DetailsOpen();
+            row.RaiseEvent(Press()); row.RaiseEvent(Release());
+            var opens = openFixture.Opens;
+            typeof(System.Windows.Controls.Primitives.ButtonBase).GetMethod("OnClick", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(icons[0], null);
+            await Task.Delay(800);
+            report.Checks["enabled_icon_click_reaches_the_open_flow"] = openFixture.Opens == opens + 1 && openFixture.Unexpected == 0
+                && (openWindow.StatusFlashForCheck ?? "").StartsWith("Opening ", StringComparison.Ordinal);
+        }
+        catch (Exception error)
+        {
+            report.Checks["mutation_checks_completed"] = false;
+            report.Notes["mutation_checks"] = error.GetType().Name + ": " + error.Message;
+        }
+        finally
+        {
+            if (window is not null) { window.AllowClose = true; window.Close(); }
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
 
     /// <summary>A loopback stand-in for the dashboard's sign-in: POST /api/auth/login accepts only fixture/fixture-new
     /// and sets an HttpOnly session cookie; GET /api/accounts/settings needs that cookie. "fixture-slow" logins are

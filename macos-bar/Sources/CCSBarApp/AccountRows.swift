@@ -50,8 +50,11 @@ struct AccountRow: View {
   var maxDetailHeight: CGFloat = 520
   @State private var hovered = false
   @State private var showDetails = false
+  @Environment(\.trayPreviewHover) private var previewHover
 
   private var isActive: Bool { layout.switchable && account.isActive }
+  /// Hover from the pointer, or the row a still render is asked to show hovered.
+  private var rowHovered: Bool { hovered || previewHover == account.id }
 
   var body: some View {
     withPalette { palette in
@@ -62,25 +65,30 @@ struct AccountRow: View {
           Text("No readings until the supervised CLI login finishes")
             .font(.system(size: 12)).foregroundStyle(palette.label3)
             .frame(maxWidth: .infinity, alignment: .leading)
+        } else if account.antigravityNoQuota {
+          // A plan with no Antigravity entitlement (quotaPolicy "none") and nothing reported reads as
+          // one honest line instead of meters, like the needs-sign-in line.
+          Text("No Antigravity quota on this plan")
+            .font(.system(size: 12)).foregroundStyle(palette.label3)
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
           ForEach(layout.columns, id: \.key) { column in
             cell(column.key).frame(maxWidth: .infinity, alignment: .leading)
           }
         }
         actions(palette).frame(width: layout.slot, alignment: layout.provider == "claude" ? .trailing : .leading)
+        // The disclosure chevron reserves a trailing column inside the row (the pattern the provider
+        // rows already used), so it sits inside the hover highlight and the active row's platter
+        // instead of overhanging the row's trailing edge, and the meters never move when it appears.
+        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(palette.label3)
+          .frame(width: TrayMetrics.chevronColumn)
+          .opacity(rowHovered || showDetails ? 1 : 0).offset(x: rowHovered || showDetails ? 0 : -3)
+          .alignmentProbe("chevron|\(account.id)")
       }
       .padding(.leading, TrayMetrics.rowLeading).padding(.trailing, TrayMetrics.rowTrailing).padding(.vertical, 6)
-      // The disclosure chevron floats over the row's trailing padding instead of reserving a column:
-      // it overhangs the row by 6 pt into the platter and list padding, so its glyph stays inside the
-      // platter while the slot content ends 8.5 pt before the row's edge.
-      .overlay(alignment: .trailing) {
-        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(palette.label3)
-          .frame(width: 14)
-          .opacity(hovered || showDetails ? 1 : 0).offset(x: (hovered || showDetails ? 0 : -3) + 6)
-      }
       .frame(minHeight: 45)
       .background {
-        ConcentricRectangle().fill(hovered && !isActive ? palette.rowHover : .clear)
+        ConcentricRectangle().fill(rowHovered && !isActive ? palette.rowHover : .clear)
       }
       .contentShape(Rectangle())
       .overlay {
@@ -138,7 +146,7 @@ struct AccountRow: View {
         case .notReported:
           MeterView(key: "\(account.id)|seven_day_fable", window: nil, unavailableText: "Not reported yet",
             unavailableHelp: "Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.",
-            hovered: hovered)
+            hovered: rowHovered)
         case .window(let window):
           meter(window)
         }
@@ -163,9 +171,19 @@ struct AccountRow: View {
           meter(window)
         }
       } else {
-        Color.clear.frame(height: 1)
+        missingCell(column)
       }
     }
+  }
+
+  /// An Antigravity column this account does not report: an honest muted cell from the plan facts
+  /// ("Weekly only" on a weekly-only plan's 5-hour cell, "Not on plan" when the plan has no Claude/GPT
+  /// models), or the existing unavailable treatment when the plan does not explain the gap. Never a
+  /// fake 0%.
+  private func missingCell(_ column: String) -> some View {
+    let missing = account.antigravityMissingCell(column)
+    return MeterView(key: "\(account.id)|\(column)", window: nil, unavailableText: missing.text,
+      unavailableHelp: missing.help, hovered: rowHovered)
   }
 
   private func notchOpacity(enabled: Bool) -> Double {
@@ -175,7 +193,7 @@ struct AccountRow: View {
 
   private func meter(_ window: AccountQuotaWindow, notch: Double? = nil, notchOpacity: Double = 1) -> some View {
     let key = "\(account.id)|\(window.key)"
-    return MeterView(key: key, window: window, sampledAt: account.sampledAt, pendingReset: account.pendingReset(window), notch: notch, notchOpacity: notchOpacity, hovered: hovered,
+    return MeterView(key: key, window: window, sampledAt: account.sampledAt, pendingReset: account.pendingReset(window), notch: notch, notchOpacity: notchOpacity, hovered: rowHovered,
       motion: open.motion(key, block: block))
   }
 
@@ -332,7 +350,9 @@ struct SectionHeader: View {
       Text(column.label).font(.system(size: 11, weight: .medium)).foregroundStyle(palette.label2)
         .lineLimit(1).minimumScaleFactor(0.85).frame(maxWidth: .infinity, alignment: .leading)
     }
+    // The slot, then the rows' reserved chevron column, so the captions stay exactly over their meters.
     Color.clear.frame(width: layout.slot, height: 1)
+    Color.clear.frame(width: TrayMetrics.chevronColumn, height: 1)
   }
 
   private func title(_ palette: TrayPalette) -> some View {
