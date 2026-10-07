@@ -14,11 +14,12 @@ enum TrayMetrics {
   static let sectionHeaderTop: CGFloat = 6
   static let markColumn: CGFloat = 22
   static let identityColumn: CGFloat = 168
-  /// Antigravity's identity column and gap give its four quota columns room at the panel's 760 pt:
-  /// the "Claude/GPT 5-hour" caption fits a cell at the captions' 0.85 minimum scale.
-  static let antigravityIdentityColumn: CGFloat = 164
+  /// Antigravity's identity column and gap give its four quota columns 93 pt cells at the panel's
+  /// 760 pt: the "Claude/GPT weekly" caption (103.9 pt at 11 pt) fits a cell at the captions' 0.85
+  /// minimum scale, so no caption truncates.
+  static let antigravityIdentityColumn: CGFloat = 158
   static let columnGap: CGFloat = 13
-  static let antigravityColumnGap: CGFloat = 10
+  static let antigravityColumnGap: CGFloat = 8
   /// Codex and Antigravity share one fixed action slot, trailing-anchored: the Activate capsule
   /// (97.5 pt) plus a little room, so every slot ends on the same line in every section.
   static let switchSlot: CGFloat = 100
