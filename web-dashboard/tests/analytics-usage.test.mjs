@@ -416,3 +416,8 @@ test('phone daily cost (360x200): bars fit their slots and labels thin to the wi
   assert.ok(d.bars.every(b => b.h >= 0));
   assert.ok(d.yTicks.length >= 3 && d.yTicks[0].base);
 });
+
+test('cache footnote (task 9 A3): the view carries the hit-rate note', () => {
+  const cache = usageView(payload(), state(), { now }).cache;
+  assert.equal(cache.note, 'Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.');
+});

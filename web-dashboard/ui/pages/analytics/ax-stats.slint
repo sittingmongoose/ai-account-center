@@ -733,10 +733,10 @@ component CacheSection inherits VerticalLayout {
         RwRow { kind: "cr"; name: "Reads"; tok: AxData.cache.r-tok; tip: AxData.cache.r-tip; share: AxData.cache.r-share; cost: AxData.cache.r-cost; narrow: root.narrow; }
         RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }
     }
-    HorizontalLayout {
+    if Breakpoints.tier-d: HorizontalLayout {
         padding-right: self.padding-left;
         Text {
-            text: "Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.";
+            text: AxData.cache.note;
             font-size: Breakpoints.tier-d ? 12px : Type.small;
             color: Theme.ink-3;
             wrap: word-wrap;
@@ -777,7 +777,7 @@ export component AxTokensCacheCard inherits AxCard {
         padding-left: root.pad;
         padding-right: root.pad;
         padding-top: 4px;
-        padding-bottom: 18px;
+        padding-bottom: Breakpoints.tier-d ? 18px : 0px;
         spacing: 12px;
         alignment: start;
         TokSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; }
@@ -789,11 +789,32 @@ export component AxTokensCacheCard inherits AxCard {
         padding-left: root.pad;
         padding-right: root.pad;
         padding-top: 4px;
-        padding-bottom: 18px;
+        // the note below carries the card's bottom inset (task 9 A3; side is below-D-only)
+        padding-bottom: 0px;
         spacing: 24px;
         alignment: start;
         TokSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
         CacheSection { played: root.played; delay: root.delay; narrow: root.narrow; inner-w: root.section-w; horizontal-stretch: 1; }
+    }
+    // below D the cache note (task 9 A3): unconditional, empty and zero-padded on D. Data-bound
+    // text re-measures when the response arrives.
+    VerticalLayout {
+        padding-left: Breakpoints.tier-d ? 0px : root.pad;
+        padding-right: Breakpoints.tier-d ? 0px : root.pad;
+        padding-top: Breakpoints.tier-d ? 0px : 12px;
+        padding-bottom: Breakpoints.tier-d ? 0px : 18px;
+        Text {
+            text: Breakpoints.tier-d ? "" : AxData.cache.note;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            wrap: word-wrap;
+        }
+    }
+    // trailing conditional (task 9 A3): load-bearing Slint 1.18 quirk — the note above only measures
+    // its full wrapped height when a conditional layout with text follows it (verified by capture).
+    // A single blank: zero-width cost, paints nothing.
+    if AxData.cache.note != "" && Breakpoints.below-d: VerticalLayout {
+        Text { text: " "; font-size: Type.small; wrap: word-wrap; }
     }
 }
 

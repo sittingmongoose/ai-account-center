@@ -290,6 +290,8 @@ fn cache(v: &Value) -> AxCache {
         read_frac: f(v, "readFrac"),
         reads: f(r, "w"),
         writes: f(w, "w"),
+        // task 9 A3 (analytics1): the cache card footnote
+        note: s(v, "note"),
     }
 }
 fn shape(v: &Value) -> AxShape {
