@@ -1,14 +1,14 @@
 // Cost by model (4-segment cost bars that grow in sequence, a model detail popover with the I/O ratio) and the
 // model usage donut (tokens or cost, an animated sweep, labels above 5%, a hover readout and the centre total):
 // the donut large at the top of its box, the model list full-width below it, so full model names fit.
-import { Theme, Motion, Type, Breakpoints } from "../../theme.slint";
+import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { Icon } from "../../components/icon.slint";
 import { Hover } from "../../components/hover-card.slint";
 import { IconButton } from "../../components/icon-button.slint";
 import { ProviderMark } from "../../components/mark.slint";
 import { Caps, ValueUnit } from "../../components/text.slint";
 import { AxData, AxModelRow, AxDonutSeg } from "ax-data.slint";
-import { AxColor, AxCard, AxCardHead, AxSeg, AxSegItem, AxTip, AxSwatch, AxLegendEntry } from "ax-common.slint";
+import { AxColor, AxCard, AxCardHead, AxSeg, AxSegItem, AxTip, AxPress, AxScrub, AxSwatch, AxLegendEntry } from "ax-common.slint";
 import { AxPopBody } from "ax-head.slint";
 
 // ---------------------------------------------------------------- the model detail popover
@@ -33,12 +33,14 @@ component StatBox inherits Rectangle {
             if !root.pct: Text { text: root.value; font-family: Type.tab; font-size: 17px; font-weight: 650; color: Theme.ink; min-height: 23px; vertical-alignment: center; AxTip { tip: root.tip; } }
             Rectangle { horizontal-stretch: 1; }
         }
-        Text { text: root.label; font-size: 11.5px; color: Theme.ink-3; }
+        Text { text: root.label; font-size: 11.5px; color: Theme.ink-3; wrap: word-wrap; }
     }
 }
 
 export component ModelDetail inherits VerticalLayout {
     in property <AxModelRow> m;
+    // narrow popovers (phones) shrink the token-type columns so the rows fit
+    in property <bool> narrow: false;
     callback close();
     property <bool> grown: !Motion.on;
     grow := Timer { interval: 32ms; running: !root.grown; triggered => { self.running = false; root.grown = true; } }
@@ -65,14 +67,14 @@ export component ModelDetail inherits VerticalLayout {
     Caps { text: "TOKEN TYPES"; min-height: 32px; vertical-alignment: bottom; }
     Rectangle { height: 6px; }
     for t[i] in root.m.types: HorizontalLayout {
-        spacing: 9px;
+        spacing: root.narrow ? 8px : 9px;
         min-height: 22px;
         VerticalLayout { alignment: center; AxSwatch { c: AxColor.of(t.key); } }
-        Text { text: t.label; width: 112px; font-size: 12.5px; color: t.none ? Theme.ink-3 : Theme.ink; vertical-alignment: center; }
+        Text { text: t.label; width: root.narrow ? 84px : 112px; font-size: 12.5px; color: t.none ? Theme.ink-3 : Theme.ink; vertical-alignment: center; overflow: elide; }
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
-            min-width: 40px;
+            min-width: root.narrow ? 24px : 40px;
             Rectangle {
                 height: 6px;
                 border-radius: 3px;
@@ -90,16 +92,17 @@ export component ModelDetail inherits VerticalLayout {
         }
         Text {
             text: t.tok;
-            width: 54px;
+            width: root.narrow ? 48px : 54px;
             font-family: Type.tab;
             font-size: 12.5px;
             font-weight: t.none ? 500 : 600;
             color: t.none ? Theme.ink-3 : Theme.ink;
             horizontal-alignment: right;
             vertical-alignment: center;
-            AxTip { tip: t.tip; }
+            overflow: elide;
+            AxPress { tip: t.tip; long-tip: t.tip; }
         }
-        Text { text: t.cost; width: 84px; font-family: Type.tab; font-size: 12.5px; font-weight: t.none ? 500 : 600; color: t.none ? Theme.ink-3 : Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+        Text { text: t.cost; width: root.narrow ? 72px : 84px; font-family: Type.tab; font-size: 12.5px; font-weight: t.none ? 500 : 600; color: t.none ? Theme.ink-3 : Theme.ink; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
     }
     Caps { text: "INPUT TO OUTPUT RATIO"; min-height: 32px; vertical-alignment: bottom; }
     Rectangle { height: 6px; }
@@ -133,9 +136,11 @@ component CbmRow inherits Rectangle {
     in property <length> tok-w;
     in property <length> cost-w;
     in property <length> share-w;
+    // stacked below a 520 px card inner width (DESIGN-MOBILE 1.5, 4.2.4)
+    in property <bool> stacked: false;
     min-height: 40px;
     border-radius: 9px;
-    background: ta.has-hover || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    background: ta.pressed && Breakpoints.below-d ? Theme.pressed : (Device.hover && ta.has-hover) || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     // the fill grows from zero on first view and to the new width when the data changes
     property <bool> mounted: !Motion.on;
@@ -144,10 +149,11 @@ component CbmRow inherits Rectangle {
     land := Timer { interval: root.delay + root.m.idx * 70ms + 820ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
     property <float> fill: root.played && root.mounted ? root.m.w : 0;
     animate fill { duration: Motion.on ? 760ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.m.idx * 70ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <length> pop-w: Breakpoints.tier-d ? 440px : min(440px, Breakpoints.tier-width - 2 * Breakpoints.gutter);
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { pop.show(); }
-        HorizontalLayout {
+        if !root.stacked: HorizontalLayout {
             padding-left: 12px;
             padding-right: 12px;
             padding-top: 7px;
@@ -177,15 +183,15 @@ component CbmRow inherits Rectangle {
                         HorizontalLayout {
                             width: track.width * root.m.w / 100;
                             spacing: 1px;
-                            if root.m.fin > 0: Rectangle { horizontal-stretch: root.m.fin; min-width: 0px; background: AxColor.of("in"); AxTip { tip: root.m.tip-in; clicked => { pop.show(); } } }
-                            if root.m.fout > 0: Rectangle { horizontal-stretch: root.m.fout; min-width: 0px; background: AxColor.of("out"); AxTip { tip: root.m.tip-out; clicked => { pop.show(); } } }
-                            if root.m.fcw > 0: Rectangle { horizontal-stretch: root.m.fcw; min-width: 0px; background: AxColor.of("cw"); AxTip { tip: root.m.tip-cw; clicked => { pop.show(); } } }
-                            if root.m.fcr > 0: Rectangle { horizontal-stretch: root.m.fcr; min-width: 0px; background: AxColor.of("cr"); AxTip { tip: root.m.tip-cr; clicked => { pop.show(); } } }
+                            if root.m.fin > 0: Rectangle { horizontal-stretch: root.m.fin; min-width: 0px; background: AxColor.of("in"); AxPress { tip: root.m.tip-in; long-tip: root.m.tip-in; tapped => { pop.show(); } } }
+                            if root.m.fout > 0: Rectangle { horizontal-stretch: root.m.fout; min-width: 0px; background: AxColor.of("out"); AxPress { tip: root.m.tip-out; long-tip: root.m.tip-out; tapped => { pop.show(); } } }
+                            if root.m.fcw > 0: Rectangle { horizontal-stretch: root.m.fcw; min-width: 0px; background: AxColor.of("cw"); AxPress { tip: root.m.tip-cw; long-tip: root.m.tip-cw; tapped => { pop.show(); } } }
+                            if root.m.fcr > 0: Rectangle { horizontal-stretch: root.m.fcr; min-width: 0px; background: AxColor.of("cr"); AxPress { tip: root.m.tip-cr; long-tip: root.m.tip-cr; tapped => { pop.show(); } } }
                         }
                     }
                 }
             }
-            if root.tok-w > 0: Text { text: root.m.tok; width: root.tok-w; font-family: Type.tab; font-size: 13px; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; AxTip { tip: root.m.tok-tip; clicked => { pop.show(); } } }
+            if root.tok-w > 0: Text { text: root.m.tok; width: root.tok-w; font-family: Type.tab; font-size: 13px; color: Theme.ink-2; horizontal-alignment: right; vertical-alignment: center; AxPress { tip: root.m.tok-tip; long-tip: root.m.tok-tip; tapped => { pop.show(); } } }
             VerticalLayout {
                 width: root.cost-w;
                 alignment: center;
@@ -200,14 +206,57 @@ component CbmRow inherits Rectangle {
                 if root.m.share != "Unavailable" && root.m.share != "": VerticalLayout { alignment: center; ValueUnit { value: root.m.share; size: 13px; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; height: 18px; } }
             }
         }
+        // stacked: mark + name + cost, the 8 px bar, then tokens and share (DESIGN-MOBILE 4.2.4)
+        if root.stacked: VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 9px;
+                min-height: 22px;
+                VerticalLayout { alignment: center; ProviderMark { provider: root.m.provider; size: 16px; } }
+                Text { text: root.m.name; font-size: Type.body; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                Text { text: root.m.cost; font-family: Type.tab; font-size: Type.body; font-weight: root.m.cost-na ? 500 : 620; color: root.m.cost-na ? Theme.ink-3 : Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+            }
+            strack := Rectangle {
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.paper-3;
+                clip: true;
+                Rectangle {
+                    x: 0px;
+                    width: strack.width * root.fill / 100;
+                    height: 8px;
+                    border-radius: 4px;
+                    clip: true;
+                    HorizontalLayout {
+                        width: strack.width * root.m.w / 100;
+                        spacing: 1px;
+                        if root.m.fin > 0: Rectangle { horizontal-stretch: root.m.fin; min-width: 0px; background: AxColor.of("in"); }
+                        if root.m.fout > 0: Rectangle { horizontal-stretch: root.m.fout; min-width: 0px; background: AxColor.of("out"); }
+                        if root.m.fcw > 0: Rectangle { horizontal-stretch: root.m.fcw; min-width: 0px; background: AxColor.of("cw"); }
+                        if root.m.fcr > 0: Rectangle { horizontal-stretch: root.m.fcr; min-width: 0px; background: AxColor.of("cr"); }
+                    }
+                }
+            }
+            Text {
+                text: root.m.tok + (root.m.share != "" && root.m.share != "Unavailable" ? " · " + root.m.share : "") + (root.m.partial ? " · partial" : "");
+                font-family: Type.tab;
+                font-size: Type.small;
+                color: Theme.ink-2;
+                vertical-alignment: center;
+            }
+        }
     }
     pop := PopupWindow {
-        x: max(-root.absolute-position.x + 10px, (root.width - 440px) / 2);
+        x: Breakpoints.tier-d ? max(-root.absolute-position.x + 10px, (root.width - 440px) / 2) : max(-8px, root.width - root.pop-w);
         y: root.height + 8px;
-        width: 440px;
+        width: root.pop-w;
         height: cbm-body.preferred-height;
         close-policy: close-on-click-outside;
-        cbm-body := AxPopBody { width: 440px; height: self.preferred-height; pad-y: 14px; ModelDetail { m: root.m; close => { pop.close(); } } }
+        cbm-body := AxPopBody { width: root.pop-w; height: self.preferred-height; pad-y: 14px; ModelDetail { m: root.m; narrow: root.pop-w < 380px; close => { pop.close(); } } }
     }
 }
 
@@ -221,7 +270,12 @@ export component AxCbmCard inherits AxCard {
     property <length> tok-w: root.tight ? 60px : 64px;
     property <length> cost-w: root.tight ? 88px : 92px;
     property <length> share-w: root.tight ? 52px : 56px;
-    AxCardHead {
+    property <length> pad-x: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
+    // the card spans the full content width below D, so the inner width is a window function
+    // (a card's own width must never drive its layout: binding loop)
+    property <bool> stacked: Breakpoints.below-d
+        && Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x < 520px;
+    if Breakpoints.tier-d: AxCardHead {
         title: "Cost by model";
         sub: AxData.cbm.sub;
         note: AxData.cbm.note;
@@ -251,7 +305,43 @@ export component AxCbmCard inherits AxCard {
             }
         }
     }
-    HorizontalLayout {
+    // below D the legend stacks on P/F and the sort pair sits at its right (DESIGN-MOBILE 4.2.4)
+    if Breakpoints.below-d: AxCardHead { title: "Cost by model"; sub: AxData.cbm.sub; note: AxData.cbm.note; }
+    if Breakpoints.below-d: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 4px;
+        spacing: 12px;
+        if Breakpoints.tier-t: HorizontalLayout {
+            spacing: 14px;
+            horizontal-stretch: 1;
+            alignment: start;
+            for k in ["in", "out", "cw", "cr"]: VerticalLayout {
+                alignment: center;
+                AxLegendEntry { c: AxColor.of(k); label: k == "in" ? "Input" : k == "out" ? "Output" : k == "cw" ? "Cache write" : "Cache read"; }
+            }
+        }
+        if !Breakpoints.tier-t: VerticalLayout {
+            spacing: 2px;
+            horizontal-stretch: 1;
+            alignment: start;
+            for k in ["in", "out", "cw", "cr"]: AxLegendEntry { c: AxColor.of(k); label: k == "in" ? "Input" : k == "out" ? "Output" : k == "cw" ? "Cache write" : "Cache read"; }
+        }
+        VerticalLayout {
+            alignment: start;
+            HorizontalLayout {
+                spacing: 8px;
+                Caps { text: "SORT"; }
+                AxSeg {
+                    small: true;
+                    items: [{ value: "cost", label: "Cost" }, { value: "tokens", label: "Tokens" }];
+                    value: AxData.cbm-sort;
+                    picked(v) => { AxData.action("analytics-cbm-sort", v); }
+                }
+            }
+        }
+    }
+    if !root.stacked: HorizontalLayout {
         padding-left: 20px;
         padding-right: 20px;
         padding-top: 2px;
@@ -276,6 +366,7 @@ export component AxCbmCard inherits AxCard {
             tok-w: root.tok-w;
             cost-w: root.cost-w;
             share-w: root.share-w;
+            stacked: root.stacked;
         }
         if AxData.models.length == 0: Text {
             text: AxData.ready ? AxData.cbm.empty : AxData.head.error != "" ? "Model activity unavailable" : "Loading model activity";
@@ -287,10 +378,10 @@ export component AxCbmCard inherits AxCard {
         }
     }
     if AxData.cbm.foot != "": HorizontalLayout {
-        padding-left: 20px;
-        padding-right: 20px;
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
         padding-bottom: 14px;
-        Text { text: AxData.cbm.foot; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
+        Text { text: AxData.cbm.foot; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
     // A taller neighbour (the Model usage box beside it) stretches this card to the row's height.
     // Nothing else in the card body stretches, and when no child of a Slint layout has a stretch
@@ -309,6 +400,7 @@ component DonutArc inherits Rectangle {
     in property <float> r0;
     in property <float> r1;
     in property <bool> dim;
+    in property <bool> pin-dim: false;
     in property <bool> morph;
     property <float> c: root.size / 1px / 2;
     property <bool> mounted: !Motion.on;
@@ -329,7 +421,7 @@ component DonutArc inherits Rectangle {
     property <float> y3: root.c - root.r0 * cos(root.g0 * 1rad);
     width: root.size;
     height: root.size;
-    opacity: root.dim ? 0.3 : 1;
+    opacity: root.pin-dim ? 0.35 : root.dim ? 0.3 : 1;
     animate opacity { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     Path {
         width: root.size;
@@ -351,17 +443,32 @@ component DonutLegendRow inherits Rectangle {
     in property <string> kind: "seg";
     in property <bool> open;
     in property <bool> hot;
+    // below D a tap highlights the arc instead of opening the detail (DESIGN-MOBILE 4.2.5, 5.3)
+    in property <bool> pinned: false;
     out property <bool> hovered: ta.has-hover;
     callback clicked();
     callback toggle();
-    height: 29px;
+    callback pick();
+    height: Breakpoints.tier-d ? 29px : 44px;
     border-radius: 7px;
-    background: root.hot || ta.has-hover || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
+    background: root.pinned ? Theme.paper-2 : ta.pressed && Breakpoints.below-d ? Theme.pressed : root.hot || (Device.hover && ta.has-hover) || pop.is-open ? Theme.row-hover : Theme.row-hover.with-alpha(0);
     animate background { duration: Motion.tint(Motion.fast); }
-    ta := AxTip {
+    ta := AxPress {
         tip: root.kind == "group" && root.open ? "" : root.seg.tip;
+        long-tip: root.kind == "group" && root.open ? "" : root.seg.tip;
         mouse-cursor: root.kind == "group" || root.seg.model != "" ? pointer : default;
-        clicked => { if root.kind == "group" { Hover.clear(); root.toggle(); } else if root.seg.model != "" { pop.show(); } }
+        tapped => {
+            if root.kind == "group" {
+                Hover.clear();
+                root.toggle();
+            } else if Breakpoints.tier-d {
+                if root.seg.model != "" {
+                    pop.show();
+                }
+            } else {
+                root.pick();
+            }
+        }
         HorizontalLayout {
             padding-left: root.kind == "child" ? 27px : 8px;
             padding-right: 8px;
@@ -370,7 +477,7 @@ component DonutLegendRow inherits Rectangle {
             HorizontalLayout {
                 horizontal-stretch: 1;
                 spacing: 4px;
-                Text { text: root.seg.name; font-size: 12.5px; color: root.kind == "child" ? Theme.ink-2 : Theme.ink; overflow: elide; vertical-alignment: center; horizontal-stretch: 0; }
+                Text { text: root.seg.name; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: root.kind == "child" ? Theme.ink-2 : Theme.ink; overflow: elide; vertical-alignment: center; horizontal-stretch: 0; }
                 if root.kind == "group": VerticalLayout {
                     alignment: center;
                     Icon {
@@ -387,14 +494,29 @@ component DonutLegendRow inherits Rectangle {
             Text {
                 text: root.seg.value;
                 font-family: Type.tab;
-                font-size: 12.5px;
+                font-size: Breakpoints.tier-d ? 12.5px : Type.small;
                 font-weight: root.seg.value == "Not logged" ? 500 : 600;
                 color: root.seg.value == "Not logged" ? Theme.ink-3 : root.kind == "child" ? Theme.ink-2 : Theme.ink;
                 horizontal-alignment: right;
                 vertical-alignment: center;
-                AxTip { tip: root.seg.value-tip; clicked => { if root.kind == "group" { Hover.clear(); root.toggle(); } else if root.seg.model != "" { pop.show(); } } }
+                AxPress {
+                    tip: root.seg.value-tip;
+                    long-tip: root.seg.value-tip;
+                    tapped => {
+                        if root.kind == "group" {
+                            Hover.clear();
+                            root.toggle();
+                        } else if Breakpoints.tier-d {
+                            if root.seg.model != "" {
+                                pop.show();
+                            }
+                        } else {
+                            root.pick();
+                        }
+                    }
+                }
             }
-            HorizontalLayout { width: 52px; alignment: end; if root.seg.share != "": VerticalLayout { alignment: center; ValueUnit { value: root.seg.share; size: 12.5px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
+            HorizontalLayout { width: 52px; alignment: end; if root.seg.share != "": VerticalLayout { alignment: center; ValueUnit { value: root.seg.share; size: Breakpoints.tier-d ? 12.5px : Type.small; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; height: 18px; } } }
         }
     }
     pop := PopupWindow {
@@ -413,9 +535,14 @@ export component AxDonutCard inherits AxCard {
     in property <duration> delay;
     // FW3 T4: the donut on top of the box and larger, the model list full-width below it. pad-x follows the
     // card head's padding so the list lines up with the title.
-    property <length> pad-x: Breakpoints.width < 1180px ? 16px : 20px;
-    property <length> wrap-w: root.width - 2 * root.pad-x;
-    property <length> size: clamp(round(root.wrap-w * 0.68 / 1px) * 1px, 260px, 380px);
+    property <length> pad-x: Breakpoints.tier-d ? (Breakpoints.width < 1180px ? 16px : 20px) : Breakpoints.tier-p ? 16px : 20px;
+    // below D the card spans the full content width: a window function, never the card's own width
+    property <length> wrap-w: Breakpoints.tier-d ? root.width - 2 * root.pad-x
+        : Breakpoints.tier-width - 2 * Breakpoints.gutter - 2 * root.pad-x;
+    // P: 180 centred above the list; F/T: 200 beside the list from a 480 inner width (DESIGN-MOBILE 4.2.5)
+    property <bool> side: Breakpoints.below-d && !Breakpoints.tier-p && root.wrap-w >= 480px;
+    property <length> size: Breakpoints.tier-d ? clamp(round(root.wrap-w * 0.68 / 1px) * 1px, 260px, 380px)
+        : Breakpoints.tier-p ? 180px : root.side ? 200px : 180px;
     property <float> r1: root.size / 1px / 2 - 42;
     property <float> r0: root.r1 - max(22, round(root.size / 1px * 0.11));
     // first view: the arcs sweep in (ease-in-out, never past their share); then toggles morph
@@ -426,14 +553,24 @@ export component AxDonutCard inherits AxCard {
     property <int> hot: -1;
     property <int> hot-row: -1;
     property <int> pop-idx: 0;
+    // below D a tap pins an arc (a second tap clears it); the centre shows the pinned arc (5.3)
+    property <int> pin: -1;
+    property <int> show: Breakpoints.tier-d ? root.hot : root.pin >= 0 ? root.pin : root.hot;
+    property <string> range: AxData.range;
+    property <string> prov: AxData.prov;
+    property <string> donut-mode: AxData.donut-mode;
+    changed range => { root.pin = -1; }
+    changed prov => { root.pin = -1; }
+    changed donut-mode => { root.pin = -1; }
     property <bool> labels-on: root.swept && root.calm;
     property <bool> calm: true;
     property <string> mode: AxData.donut.mode;
     changed mode => { root.calm = false; calm-timer.running = true; }
     calm-timer := Timer { interval: Motion.slow + 40ms; running: false; triggered => { self.running = false; root.calm = true; } }
     property <AxDonutSeg> hot-seg: root.hot >= 0 && root.hot < AxData.donut-segs.length ? AxData.donut-segs[root.hot] : { };
+    property <AxDonutSeg> show-seg: root.show >= 0 && root.show < AxData.donut-segs.length ? AxData.donut-segs[root.show] : { };
 
-    AxCardHead {
+    if Breakpoints.tier-d: AxCardHead {
         title: "Model usage";
         sub: AxData.donut.sub;
         note: AxData.donut.note;
@@ -448,14 +585,43 @@ export component AxDonutCard inherits AxCard {
             }
         }
     }
+    if Breakpoints.below-d && !Breakpoints.tier-p: AxCardHead {
+        title: "Model usage";
+        sub: AxData.donut.sub;
+        note: AxData.donut.note;
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            AxSeg {
+                small: true;
+                items: [{ value: "tokens", label: "Tokens" }, { value: "cost", label: "Cost" }];
+                value: AxData.donut-mode;
+                picked(v) => { AxData.action("analytics-donut", v); }
+            }
+        }
+    }
+    if Breakpoints.tier-p: AxCardHead { title: "Model usage"; sub: AxData.donut.sub; note: AxData.donut.note; }
+    if Breakpoints.tier-p: HorizontalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 4px;
+        alignment: start;
+        AxSeg {
+            small: true;
+            items: [{ value: "tokens", label: "Tokens" }, { value: "cost", label: "Cost" }];
+            value: AxData.donut-mode;
+            picked(v) => { AxData.action("analytics-donut", v); }
+        }
+    }
     body := Rectangle {
-        // donut, a 12px gap, then the list; the whole stack centres when the row is taller than the content
-        property <length> stack-h: root.size + 12px + legend.preferred-height;
+        // donut, a 12px gap, then the list; the whole stack centres when the row is taller than the content.
+        // side: the donut sits left of the list instead.
+        property <length> stack-h: root.side ? max(root.size, legend.preferred-height) : root.size + 12px + legend.preferred-height;
         property <length> content-y: max(4px, (self.height - self.stack-h - 16px) / 2);
         min-height: self.stack-h + 20px;
         vertical-stretch: 1;
         donut := Rectangle {
-            x: (parent.width - root.size) / 2;
+            x: root.side ? root.pad-x : (parent.width - root.size) / 2;
             y: parent.content-y;
             width: root.size;
             height: root.size;
@@ -476,7 +642,8 @@ export component AxDonutCard inherits AxCard {
                 r0: root.r0;
                 r1: root.r1;
                 morph: root.swept;
-                dim: root.hot >= 0 && root.hot != i;
+                dim: root.hot >= 0 && root.hot != i && (Breakpoints.tier-d || root.pin < 0);
+                pin-dim: Breakpoints.below-d && root.pin >= 0 && root.pin != i;
             }
             for s in AxData.donut-segs: Text {
                 property <float> m: (s.a0 + s.a1) / 2;
@@ -496,34 +663,87 @@ export component AxDonutCard inherits AxCard {
             }
             centre := VerticalLayout {
                 // the readout stays inside the hole also when a big donut's ring is thick
-                width: min(root.size - 156px, (root.r0 * 2 - 12) * 1px);
+                width: Breakpoints.tier-d ? min(root.size - 156px, (root.r0 * 2 - 12) * 1px) : root.r0 * 2 * 1px;
                 x: (root.size - self.width) / 2;
                 alignment: center;
                 spacing: 3px;
-                if root.hot < 0: Text { text: AxData.donut.centre; font-family: Type.tab; font-size: 22px; font-weight: 640; color: Theme.ink; horizontal-alignment: center; }
-                if root.hot >= 0: HorizontalLayout { alignment: center; ValueUnit { value: root.hot-seg.share; size: 22px; weight: 640; unit-scale: 0.96; } }
-                Text {
-                    text: root.hot < 0 ? AxData.donut.centre-label : root.hot-seg.name + " · " + root.hot-seg.value + AxData.donut.unit;
+                if root.show < 0: Text { text: AxData.donut.centre; font-family: Type.tab; font-size: Breakpoints.tier-d ? 22px : 18px; font-weight: 640; color: Theme.ink; horizontal-alignment: center; overflow: elide; }
+                if root.show >= 0 && Breakpoints.tier-d: HorizontalLayout { alignment: center; ValueUnit { value: root.show-seg.share; size: 22px; weight: 640; unit-scale: 0.96; } }
+                // below D the pinned arc shows its share and its value (the legend row names it)
+                if root.show >= 0 && Breakpoints.below-d: HorizontalLayout { alignment: center; ValueUnit { value: root.show-seg.share; size: 20px; weight: 640; unit-scale: 0.96; } }
+                if Breakpoints.tier-d: Text {
+                    text: root.show < 0 ? AxData.donut.centre-label : root.show-seg.name + " · " + root.show-seg.value + AxData.donut.unit;
                     font-size: 12px;
                     color: Theme.ink-3;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                 }
-            }
-            hit := TouchArea {
-                property <float> dx: (self.mouse-x - root.size / 2) / 1px;
-                property <float> dy: (self.mouse-y - root.size / 2) / 1px;
-                mouse-cursor: root.hot >= 0 && root.hot-seg.model != "" ? pointer : default;
-                function track() {
-                    let rr = sqrt(self.dx * self.dx + self.dy * self.dy);
-                    if rr < root.r0 - 2 || rr > root.r1 + 2 || AxData.donut-lut.length == 0 { root.hot = -1; return; }
-                    let deg = mod(atan2(self.dx, -self.dy) / 1deg + 360, 360);
-                    root.hot = AxData.donut-lut[clamp(floor(deg), 0, AxData.donut-lut.length - 1)];
+                if Breakpoints.below-d: Text {
+                    text: root.show < 0 ? AxData.donut.centre-label : root.show-seg.value + AxData.donut.unit;
+                    font-family: Type.tab;
+                    font-size: 11px;
+                    color: Theme.ink-3;
+                    horizontal-alignment: center;
+                    overflow: elide;
                 }
-                changed mouse-x => { if self.has-hover { self.track(); } }
-                changed mouse-y => { if self.has-hover { self.track(); } }
+            }
+            hit := AxScrub {
+                mouse-cursor: root.hot >= 0 && root.hot-seg.model != "" ? pointer : default;
+                function track-at(mx: length, my: length) -> int {
+                    let dx = (mx - root.size / 2) / 1px;
+                    let dy = (my - root.size / 2) / 1px;
+                    let rr = sqrt(dx * dx + dy * dy);
+                    if rr < root.r0 - 2 || rr > root.r1 + 2 || AxData.donut-lut.length == 0 {
+                        return -1;
+                    }
+                    let deg = mod(atan2(dx, -dy) / 1deg + 360, 360);
+                    return AxData.donut-lut[clamp(floor(deg), 0, AxData.donut-lut.length - 1)];
+                }
+                tap => {
+                    if Breakpoints.tier-d {
+                        return;
+                    }
+                    let i = self.track-at(self.mouse-x, self.mouse-y);
+                    if i < 0 || root.pin == i {
+                        root.pin = -1;
+                    } else {
+                        root.pin = i;
+                    }
+                }
+                scrub(mx, my) => {
+                    if Breakpoints.tier-d {
+                        return;
+                    }
+                    let i = self.track-at(mx, my);
+                    if i >= 0 {
+                        root.pin = i;
+                    }
+                }
+                changed mouse-x => {
+                    if Breakpoints.tier-d {
+                        if self.has-hover {
+                            root.hot = self.track-at(self.mouse-x, self.mouse-y);
+                        }
+                    } else if self.has-hover && !self.pressed && root.pin < 0 {
+                        root.hot = self.track-at(self.mouse-x, self.mouse-y);
+                    }
+                }
+                changed mouse-y => {
+                    if Breakpoints.tier-d {
+                        if self.has-hover {
+                            root.hot = self.track-at(self.mouse-x, self.mouse-y);
+                        }
+                    } else if self.has-hover && !self.pressed && root.pin < 0 {
+                        root.hot = self.track-at(self.mouse-x, self.mouse-y);
+                    }
+                }
                 changed has-hover => { if !self.has-hover { root.hot = -1; } }
-                clicked => { if root.hot >= 0 && root.hot-seg.model != "" { root.pop-idx = root.hot-seg.idx; seg-pop.show(); } }
+                clicked => {
+                    if Breakpoints.tier-d && root.hot >= 0 && root.hot-seg.model != "" {
+                        root.pop-idx = root.hot-seg.idx;
+                        seg-pop.show();
+                    }
+                }
             }
             seg-pop := PopupWindow {
                 x: (root.size - 440px) / 2;
@@ -535,9 +755,9 @@ export component AxDonutCard inherits AxCard {
             }
         }
         legend := VerticalLayout {
-            x: root.pad-x;
-            y: parent.content-y + root.size + 12px;
-            width: parent.width - 2 * root.pad-x;
+            x: root.side ? root.pad-x + root.size + 16px : root.pad-x;
+            y: root.side ? parent.content-y : parent.content-y + root.size + 12px;
+            width: root.side ? parent.width - 2 * root.pad-x - root.size - 16px : parent.width - 2 * root.pad-x;
             spacing: 2px;
             if AxData.donut-segs.length == 0: Text { text: AxData.ready ? AxData.donut.empty-text : ""; font-size: 13px; color: Theme.ink-3; wrap: word-wrap; }
             // one row per arc; a group opens into its models, so no model is only inside a group
@@ -547,12 +767,22 @@ export component AxDonutCard inherits AxCard {
                 open: l.open;
                 seg-idx: l.seg.idx;
                 hot: l.kind != "child" && l.arc >= 0 && root.hot == l.arc;
+                pinned: Breakpoints.below-d && l.arc >= 0 && root.pin == l.arc;
                 // the hovered row lights its arc; rows of one group share an arc, so only the row that set it clears it
                 changed hovered => {
-                    if self.hovered { root.hot-row = j; root.hot = l.arc; }
+                    if self.hovered && (Breakpoints.tier-d || root.pin < 0) { root.hot-row = j; root.hot = l.arc; }
                     else if root.hot-row == j { root.hot-row = -1; root.hot = -1; }
                 }
                 toggle => { AxData.action("analytics-donut-open", l.seg.key); }
+                pick => {
+                    if l.arc >= 0 {
+                        if root.pin == l.arc {
+                            root.pin = -1;
+                        } else {
+                            root.pin = l.arc;
+                        }
+                    }
+                }
             }
         }
     }
