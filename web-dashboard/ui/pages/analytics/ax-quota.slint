@@ -692,10 +692,6 @@ component QuotaGroup inherits Rectangle {
                     }
                 }
                 VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: Breakpoints.tier-d ? 20px : 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qgroup:" + root.g.provider; } } }
-                // Below D the label is capped: otherwise the meta (the only stretch) takes the
-                // whole squeeze and wraps to three lines while the label keeps its full width
-                // (task 9 O7). Short names stay whole and only long names elide; the meta then
-                // fits one line, two for the longest. Desktop keeps no cap.
                 // Below D the label shares a squeeze with the meta: otherwise the meta (the
                 // only stretch) takes it all and wraps to three lines in the fixed 48 px head
                 // while the label keeps its full width (task 9 O7). Sharing halves the worst
