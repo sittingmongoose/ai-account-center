@@ -766,6 +766,12 @@ component CacheSection inherits VerticalLayout {
         RwRow { kind: "cw"; name: "Writes"; note: AxData.cache.w-note; tok: AxData.cache.w-tok; tip: AxData.cache.w-tip; share: AxData.cache.w-share; cost: AxData.cache.w-cost; narrow: root.narrow; }
     }
     HorizontalLayout {
+        // Desktop: cap at the card's content width. A VerticalLayout never shrinks below its
+        // preferred width, so without this the unwrapped footnote (~640px) sets the section
+        // wide, the text stays one line, and the card comes out ~30px short of main (whose
+        // footnote is a direct stretched child and wraps to two lines). Below D the width
+        // stays unconstrained, exactly as before.
+        max-width: Breakpoints.tier-d ? root.inner-w : 100000px;
         padding-right: self.padding-left;
         Text {
             text: "Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.";

@@ -130,7 +130,7 @@ export component AnalyticsPage inherits Rectangle {
                     horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
                     armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-tokcache;
                     changed seen => { if self.seen { root.s-tokcache = true; } }
-                    AxTokensCacheCard { played: tokcache3.seen; delay: tokcache3.play-delay; vertical-stretch: 1; }
+                    AxTokensCacheCard { played: tokcache3.seen; delay: tokcache3.play-delay; vertical-stretch: 1; cell-w: (root.cw - 2 * root.gap) / 3; }
                 }
             }
             HorizontalLayout {
@@ -183,7 +183,7 @@ export component AnalyticsPage inherits Rectangle {
                     horizontal-stretch: 1; preferred-width: 0px; min-width: 0px;
                     armed: root.armed; scroll: root.scroll; view-bottom: root.view-bottom; delay: 288ms; already: root.s-tokcache;
                     changed seen => { if self.seen { root.s-tokcache = true; } }
-                    AxTokensCacheCard { played: tokcache2.seen; delay: tokcache2.play-delay; vertical-stretch: 1; }
+                    AxTokensCacheCard { played: tokcache2.seen; delay: tokcache2.play-delay; vertical-stretch: 1; cell-w: (root.cw - root.gap) / 2; }
                 }
             }
             heat2 := AxReveal {
