@@ -131,19 +131,21 @@ export component Sheet inherits Rectangle {
             width: 36px;
             height: 5px;
             border-radius: Theme.r-grabber;
-            background: Theme.grabber;
+            background: Theme.ink-3.with-alpha(0.35);
         }
         if root.title != "": HorizontalLayout {
             y: 24px;
             width: parent.width;
             height: 56px;
             padding-left: 16px;
-            padding-right: 8px;
+            padding-right: 16px;
             spacing: 8px;
             VerticalLayout {
+                min-width: 0px;
                 horizontal-stretch: 1;
                 alignment: center;
                 Text {
+                    min-width: 0px;
                     text: root.title;
                     font-size: 17px;
                     font-weight: 640;
@@ -152,6 +154,7 @@ export component Sheet inherits Rectangle {
                     overflow: elide;
                 }
                 if root.sub != "": Text {
+                    min-width: 0px;
                     text: root.sub;
                     font-size: Type.small;
                     color: Theme.ink-3;
@@ -181,13 +184,12 @@ export component Sheet inherits Rectangle {
                 @children
             }
         }
-        // The drag handle: the grabber strip plus the title row when the sheet has one. Without a
-        // title the band is the 24 px grabber zone only, so content (a Details head, for example)
-        // is never covered by the drag surface.
+        // The drag handle: the grabber strip plus the header area. Leaves room on the right
+        // for the Close button (56px) so taps to Close are not blocked.
         drag := TouchArea {
             y: 0px;
-            width: parent.width;
-            height: root.title != "" ? 80px : 24px;
+            width: parent.width - 56px;
+            height: root.title != "" ? 80px : 88px;
             moved => { root.raw = max(0px, self.mouse-y - self.pressed-y); }
         }
         ProbeMark { id: root.probe; }

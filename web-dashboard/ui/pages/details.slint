@@ -24,7 +24,7 @@ component Stagger inherits Rectangle {
     Rectangle {
         x: (root.run || !Motion.on) ? 0px : 18px;
         width: root.width;
-        height: root.height;
+        height: parent.height;
         opacity: (root.run || !Motion.on) ? 1.0 : 0.0;
         animate x {
             duration: Motion.on ? 460ms : 0ms;
@@ -36,7 +36,10 @@ component Stagger inherits Rectangle {
             delay: Motion.on && root.run ? (160 + root.index * 45) * 1ms : 0ms;
             easing: cubic-bezier(0.65, 0, 0.35, 1);
         }
-        inner := VerticalLayout { @children }
+        inner := VerticalLayout {
+            width: parent.width;
+            @children
+        }
     }
 }
 
@@ -218,11 +221,12 @@ export component DetailsPanel inherits Rectangle {
                 ProviderMark { provider: root.data.provider; size: 32px; }
             }
             VerticalLayout {
+                min-width: 0px;
                 alignment: root.touch ? center : stretch;
                 horizontal-stretch: 1;
                 spacing: 3px;
                 // the concept's .so-head lines: 18 px and 12.5 px at line-height 1.45
-                Text { min-height: 26px; vertical-alignment: center; text: root.data.title; font-size: root.touch ? Type.title : 18px; font-weight: 640; letter-spacing: -0.18px; color: Theme.ink; overflow: elide; }
+                Text { min-width: 0px; min-height: 26px; vertical-alignment: center; text: root.data.title; font-size: root.touch ? Type.title : 18px; font-weight: 640; letter-spacing: -0.18px; color: Theme.ink; overflow: elide; }
                 // "Codex · Pro · Active on Ubuntu", the active state with the same check-circle the rows use.
                 // Below D the action slot at the top of the content carries the state (4.4).
                 if !root.touch: HorizontalLayout {
@@ -258,6 +262,7 @@ export component DetailsPanel inherits Rectangle {
                     }
                 }
                 if root.touch: Text {
+                    min-width: 0px;
                     min-height: 18px;
                     text: root.data.sub-lead;
                     font-size: Type.small;
@@ -403,8 +408,17 @@ export component DetailsPanel inherits Rectangle {
                     VerticalLayout {
                         spacing: 8px;
                         for f in root.data.facts: HorizontalLayout {
-                            spacing: 12px;
-                            Text { text: f.label; width: root.touch && Breakpoints.tier-p ? 104px : 110px; min-height: 19px; font-size: root.touch ? Type.small : 13px; color: Theme.ink-3; }
+                            spacing: root.touch && Breakpoints.tier-p ? 8px : 12px;
+                            alignment: start;
+                            Text {
+                                text: f.label;
+                                width: root.touch && Breakpoints.tier-p ? 80px : 110px;
+                                min-height: 19px;
+                                font-size: root.touch ? Type.small : 13px;
+                                color: Theme.ink-3;
+                                vertical-alignment: top;
+                                overflow: elide;
+                            }
                             Text {
                                 min-height: 19px;
                                 text: f.value;
@@ -413,6 +427,7 @@ export component DetailsPanel inherits Rectangle {
                                 color: Theme.ink;
                                 wrap: word-wrap;
                                 horizontal-stretch: 1;
+                                vertical-alignment: top;
                             }
                         }
                     }
