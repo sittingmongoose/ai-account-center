@@ -18,24 +18,32 @@ test('index.html: the login fields are real, visible, focusable inputs in a form
   const form = tag(html, 'aac-login');
   const user = tag(html, 'aac-login-user');
   const pass = tag(html, 'aac-login-pass');
+  const confirm = tag(html, 'aac-login-pass2');
+  const code = tag(html, 'aac-login-code');
   const remember = tag(html, 'aac-login-remember');
   const submit = tag(html, 'aac-login-submit');
   assert.match(user, /autocomplete="username"/);
   assert.match(user, /type="text"/);
+  assert.match(user, /enterkeyhint="next"/);
   assert.match(pass, /autocomplete="current-password"/);
   assert.match(pass, /type="password"/);
+  assert.match(pass, /enterkeyhint="go"/);
+  // the first-run form is covered the same way: managers generate and save on first run
+  assert.match(confirm, /autocomplete="new-password"/);
+  assert.match(confirm, /type="password"/);
+  assert.match(code, /autocomplete="one-time-code"/);
   assert.match(submit, /type="submit"/);
-  for (const element of [form, user, pass, remember, submit]) {
+  for (const element of [form, user, pass, confirm, code, remember, submit]) {
     assert.doesNotMatch(element, /aria-hidden/, `${element} is not hidden from assistive tech or managers`);
     assert.doesNotMatch(element, /tabindex="-1"/, `${element} takes keyboard focus`);
   }
   // the form sits inside the page above the canvas, never transparent; its box lets the mouse through to the Slint
-  // card, and the two fields take it back
+  // card, and the fields take it back
   const css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
   const formRule = /#aac-login\{([^}]*)\}/.exec(css)[1];
   assert.match(formRule, /z-index:1/);
   assert.doesNotMatch(formRule, /opacity/);
-  const fieldRule = /#aac-login>#aac-login-user,#aac-login>#aac-login-pass\{([^}]*)\}/.exec(css)[1];
+  const fieldRule = /#aac-login>#aac-login-user,#aac-login>#aac-login-pass,#aac-login>#aac-login-pass2,#aac-login>#aac-login-code\{([^}]*)\}/.exec(css)[1];
   assert.doesNotMatch(fieldRule, /opacity|visibility/);
   assert.match(fieldRule, /pointer-events:auto/);
   assert.match(fieldRule, /"AAC Field"/, 'the inputs use the Slint field font');
@@ -55,18 +63,28 @@ test('index.html: the login fields are real, visible, focusable inputs in a form
 test('signin.slint: the inputs show only while the login form is on screen and still', async () => {
   const slint = await read('../ui/shell/signin.slint');
   const rule = /property <bool> overlay-on:([^;]*);/.exec(slint)?.[1] ?? '';
-  // asked for and fully faded in, the card's load-in finished
-  for (const part of ['root.visible', 'root.shown', 'root.opacity > 0.999', 'card-reveal.level > 0.999']) assert.ok(rule.includes(part), part);
-  // never while loading, setting up (the first-run form keeps its Slint fields) or signed in (success and the fade out)
-  for (const part of ['root.form', '!root.setup', '!root.signed-in', '!root.loading']) assert.ok(rule.includes(part), part);
-  // the report: off (no geometry) unless on, and every change goes out
-  assert.match(slint, /property <LoginOverlay> overlay: root\.overlay-on \? root\.overlay-live : root\.overlay-off;/);
+  // asked for and fully faded in, the card's load-in finished (whichever tier's card it is)
+  for (const part of ['root.visible', 'root.shown', 'root.opacity > 0.999', 'SigninScroll.ready']) assert.ok(rule.includes(part), part);
+  // never while loading, signed in (success and the fade out) or offline; the first-run form is covered too
+  for (const part of ['root.form', '!root.signed-in', '!root.loading', '!root.offline']) assert.ok(rule.includes(part), part);
+  assert.ok(!rule.includes('!root.setup'), 'the setup form keeps its HTML inputs');
+  // the report: off (no geometry) unless on, and every change goes out; the scrolled tiers report through TouchCard
+  assert.match(slint, /property <LoginOverlay> overlay: !root\.scrollable && root\.overlay-on \? root\.overlay-live : root\.overlay-off;/);
   assert.match(slint, /changed overlay => \{ root\.login-overlay\(self\.overlay\); \}/);
-  // the two login fields stop drawing their text while covered, and never take typing themselves
+  assert.equal((slint.match(/login-overlay-report\(report\) => \{ SigninScroll\.report = report; root\.login-overlay\(report\); \}/g) ?? []).length, 2);
+  // the desktop page never scrolls: its fields always report visible (Slint bools default to false, so this must
+  // be said out loud, or the desktop inputs would hide)
+  for (const flag of ['user-visible: true', 'pass-visible: true', 'confirm-visible: true', 'code-visible: true']) assert.ok(slint.includes(flag), flag);
+  // the login fields stop drawing their text while covered, and never take typing themselves: two on the desktop
+  // page (mirrored except on the setup form, which keeps Slint fields there) and four in the TouchCard
   const covered = slint.match(/covered: root\.overlay-on;/g) ?? [];
-  const mirror = slint.match(/mirror: !root\.setup;/g) ?? [];
-  assert.equal(covered.length, 2);
-  assert.equal(mirror.length, 2);
+  const mirrorDesktop = slint.match(/mirror: !root\.setup;/g) ?? [];
+  const mirrorTouch = slint.match(/mirror: true;/g) ?? [];
+  assert.equal(covered.length, 6);
+  assert.equal(mirrorDesktop.length, 2);
+  assert.equal(mirrorTouch.length, 4);
+  // a field scrolled under the safe-top strip reports its input hidden (visibility, not removal)
+  for (const flag of ['user-visible: self.box-in-band(root.user-box)', 'pass-visible: self.box-in-band(root.pass-box)', 'confirm-visible: self.box-in-band(root.confirm-box)', 'code-visible: self.box-in-band(root.code-box)']) assert.ok(slint.includes(flag), flag);
   // the geometry follows every layout change of the conditional form (copied out on init and on each change)
   for (const name of ['user-at', 'user-text-at', 'pass-at', 'pass-text-at']) assert.match(slint, new RegExp(`changed ${name} => \\{ self\\.publish\\(\\); \\}`));
   assert.match(slint, /changed where => \{ root\.check-box = self\.where; \}/);
@@ -122,13 +140,13 @@ test('index.html: every field a manager fills has an offsetParent, so 1Password 
   assert.match(form, /pointer-events:none/, 'the form box lets the mouse through to the Slint card');
   // the fields stay one form: the inputs and the submit button are children of #aac-login
   const body = /<form id="aac-login"[^>]*>([\s\S]*?)<\/form>/.exec(html)[1];
-  for (const id of ['aac-login-user', 'aac-login-pass', 'aac-login-remember', 'aac-login-submit']) assert.match(body, new RegExp(`id="${id}"`));
+  for (const id of ['aac-login-user', 'aac-login-pass', 'aac-login-pass2', 'aac-login-code', 'aac-login-remember', 'aac-login-submit']) assert.match(body, new RegExp(`id="${id}"`));
 });
 
 test('index.html: the inputs paint nothing but their text, whatever autofill or a manager adds', async () => {
   const html = await read('../public/index.html');
   const css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
-  const selector = '#aac-login>#aac-login-user,#aac-login>#aac-login-pass';
+  const selector = '#aac-login>#aac-login-user,#aac-login>#aac-login-pass,#aac-login>#aac-login-pass2,#aac-login>#aac-login-code';
   const guard = allRules(css, selector);
   // no background (1Password's filled highlight, Chrome's autofill blue), no border, outline or shadow: the Slint box
   // under the input, with its own focus halo, is all that shows
@@ -148,11 +166,12 @@ test('index.html: the inputs paint nothing but their text, whatever autofill or 
     assert.match(rule, /caret-color:var\(--aac-login-ink\)!important/);
     assert.match(rule, /transition:background-color 100000s 0s/);
   }
-  // the inputs take the Slint box's rounded corners (field.slint), the password's right side ends inside the box
+  // the inputs take the Slint box's rounded corners (field.slint); the password's and the confirmation's right
+  // sides end inside the box, so the Slint eye button beside them stays clickable
   const field = await read('../ui/components/field.slint');
   const radius = /box := Rectangle \{[^}]*?border-radius: (\d+)px;/.exec(field)[1];
   assert.match(guard, new RegExp(`border-radius:${radius}px`));
-  assert.match(ruleOf(css, '#aac-login>#aac-login-pass'), new RegExp(`border-radius:${radius}px 0 0 ${radius}px`));
+  assert.match(ruleOf(css, '#aac-login>#aac-login-pass,#aac-login>#aac-login-pass2'), new RegExp(`border-radius:${radius}px 0 0 ${radius}px`));
   // and they never keep a browser focus ring: the Slint halo is the only focus cue
-  assert.doesNotMatch(css, /#aac-login>#aac-login-(user|pass):focus/);
+  assert.doesNotMatch(css, /#aac-login>#aac-login-(user|pass|pass2|code):focus/);
 });

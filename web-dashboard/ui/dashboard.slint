@@ -49,6 +49,8 @@ export {
 } from "pages/accounts/ac-data.slint";
 // End-to-end probes (only with ?e2e): Rust forwards Probe.rect to bridge.js.
 export { Probe } from "components/probe.slint";
+// Phase 5: the first-run form's covered confirmation and setup code (lib.rs set_login_setup writes them).
+export { LoginExtra } from "shell/signin.slint";
 // The device environment (safe areas, keyboard, input profile): Rust fills it from bridge.js.
 export { Device } from "theme.slint";
 export { SegItem } from "components/segmented.slint";

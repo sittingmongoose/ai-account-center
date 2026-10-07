@@ -1,7 +1,7 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
-import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue } from './auth-view.mjs';
+import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView } from './auth-view.mjs';
 import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
 import { copyText, signOutFailureText } from './account-actions.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
@@ -95,8 +95,32 @@ function toast(kind, title, body = '', ms = 4800) {
 }
 function failure(message, title = 'That did not work') { toast('err', title, message, 6400); }
 let authState = 'loading';
+// The offline screen (DESIGN-MOBILE.md 4.6): at launch, when /api cannot be reached, the sign-in page
+// shows the offline card and retries every 15 s while it is visible, on the `online` event and when the
+// app comes back to the foreground. No readings are cached on the device, so nothing else is shown.
+const OFFLINE_RETRY_MS = 15_000;
+let offlineTimer = 0;
+let sessionChecking = false;
+function goOffline() {
+  const words = offlineView(host, Date.now());
+  auth(false, 'offline', {
+    // the desktop look keeps today's sentence in the sign-in card's message slot
+    message: 'Unable to connect to AI Account Center. Try refreshing this page.',
+    offlineTitle: words.title, offlineStrong: words.strong, offlineBody: words.body, offlineMeta: words.meta,
+  });
+}
+function stopOfflineRetry() {
+  if (offlineTimer) { clearInterval(offlineTimer); offlineTimer = 0; }
+}
+function retryOffline() {
+  if (authenticated || busy || authState !== 'offline' || sessionChecking) return;
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  void checkSession();
+}
 function auth(signedIn, state, extra = {}) {
   authenticated = signedIn;
+  if (state !== 'offline') stopOfflineRetry();
+  else if (!offlineTimer) offlineTimer = setInterval(retryOffline, OFFLINE_RETRY_MS);
   authState = state;
   const view = {
     state, host, username, transportNote: transportNote(transport, authCheck), sessionHours, nonce: authNonce,
@@ -235,7 +259,12 @@ function renderAccounts() {
   } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
 }
 function renderChrome(isRefreshing = false) {
-  if (data || isRefreshing) pushModel('chrome', JSON.stringify(chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host })), set_chrome);
+  if (data || isRefreshing) {
+    const chrome = chromeView(data, { refreshing: isRefreshing, intervalSeconds: refreshIntervalSeconds, username, host });
+    // 4.6: the connection dropped; the readings stay on screen and the status line says so
+    if (!onlineState && !isRefreshing && chrome.statusLead === 'Updated') chrome.statusLead = 'Offline';
+    pushModel('chrome', JSON.stringify(chrome), set_chrome);
+  }
 }
 function renderDetails(id) {
   const view = data ? detailsViewModel(data, id, context({ refreshing: false })) : null;
@@ -594,6 +623,8 @@ function navigate(page, { replace = false } = {}) {
   if (!PAGES.includes(page)) page = 'home';
   currentPage = page;
   set_current_page(page);
+  // phase 5 (4.5.4 Success): the last page id, so a fresh sign-in in the installed app can reopen it
+  try { globalThis.localStorage?.setItem('aac-last-page', page); } catch {}
   const url = pagePath(page);
   try { globalThis.history?.[replace ? 'replaceState' : 'pushState']?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) enterAnalytics();
@@ -677,6 +708,8 @@ async function afterSignIn({ recheck = true } = {}) {
   if (currentPage === 'accounts') await accounts.loadAll();
 }
 async function checkSession(early = null) {
+  if (sessionChecking) return;
+  sessionChecking = true;
   try {
     if (early) await early.setup; else await loadAuthSetup();
     const status = early ? await early.check : await request('/api/auth/check');
@@ -695,7 +728,10 @@ async function checkSession(early = null) {
       const reason = endedReason(signedInAt(globalThis.localStorage), sessionHours);
       if (reason) sessionEnded(reason); else auth(false, 'default');
     }
-  } catch { auth(false, 'default', { message: 'Unable to connect to AI Account Center. Try refreshing this page.' }); }
+  } catch (error) {
+    if (error?.network) goOffline();
+    else auth(false, 'default', { message: 'Unable to connect to AI Account Center. Try refreshing this page.' });
+  } finally { sessionChecking = false; }
 }
 async function signedIn(name) {
   username = name;
@@ -706,6 +742,10 @@ async function signedIn(name) {
   await new Promise(resolve => setTimeout(resolve, motionReduced ? 120 : 650));
   auth(true, 'default');
   await enterDashboard();
+  // 4.5.4: the last page opens (a page id in localStorage, no data). A URL that names a page wins.
+  let last = '';
+  try { last = globalThis.localStorage?.getItem('aac-last-page') || ''; } catch {}
+  if (last && last !== currentPage && PAGES.includes(last) && pageFromLocation() === 'home') navigate(last);
 }
 let loginBridge = null;
 /** The Slint sign-in value ("user\npassword\n1|0", auth-view.mjs parseLoginValue) for what the HTML form holds. */
@@ -908,6 +948,8 @@ function setOnline(value) {
   if (next === onlineState) return;
   onlineState = next;
   try { set_online(next); } catch {}
+  // 4.6: everything returns to normal on the next successful API call - the status line first
+  if (next && authenticated && data) renderChrome(false);
 }
 function pushSafeArea() {
   const insets = readSafeArea(safeProbe, (element) => getComputedStyle(element));
@@ -969,8 +1011,12 @@ function setupDevice() {
     document.addEventListener('focusout', () => { keyboardFocus = false; pushKeyboard(); });
   } catch {}
   try {
-    addEventListener('online', () => setOnline(true));
+    addEventListener('online', () => { setOnline(true); retryOffline(); });
     addEventListener('offline', () => setOnline(false));
+  } catch {}
+  try {
+    // 4.6: the offline card retries when the app comes back to the foreground
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') retryOffline(); });
   } catch {}
 }
 
@@ -1027,8 +1073,20 @@ try {
     loginBridge = installLoginBridge({
       document,
       canvas: document.querySelector('#canvas'),
-      onFilled: filled => { if (!authenticated && !busy) set_login_fields(filled.username, filled.password, filled.remember); },
-      onSubmit: filled => { if (!authenticated && !busy) void signIn(loginValue(filled)); },
+      onFilled: filled => {
+        if (authenticated || busy) return;
+        set_login_fields(filled.username, filled.password, filled.remember);
+        // the first-run form is covered too: its confirmation and code mirror into Slint (set_login_setup)
+        if (authState === 'setup' && setupInfo.form) {
+          try { set_login_setup(filled.confirm ?? '', filled.code ?? ''); } catch {}
+          set_signin_strength(JSON.stringify({ ...strength(filled.password), matches: !!filled.confirm && filled.confirm === filled.password }));
+        }
+      },
+      onSubmit: filled => {
+        if (authenticated || busy) return;
+        if (authState === 'setup' && setupInfo.form) void createSignIn(`${filled.username}\n${filled.password}\n${filled.confirm ?? ''}\n${filled.code ?? ''}`);
+        else void signIn(loginValue(filled));
+      },
       onPointer: ({ focus, hover }) => { try { set_login_pointer(focus, hover); } catch {} },
     });
   } catch {}

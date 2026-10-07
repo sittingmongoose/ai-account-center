@@ -445,6 +445,11 @@ struct AuthDto {
     transport_note: String,
     session_hours: i32,
     nonce: i32,
+    // phase 5, the offline card's words (DESIGN-MOBILE.md 4.6, auth-view.mjs offlineView)
+    offline_title: String,
+    offline_strong: String,
+    offline_body: String,
+    offline_meta: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -800,6 +805,10 @@ pub fn set_auth(authenticated: bool, json: &str) -> Result<(), JsValue> {
             transport_note: v.transport_note.into(),
             session_hours: v.session_hours.max(0),
             nonce: v.nonce,
+            offline_title: v.offline_title.into(),
+            offline_strong: v.offline_strong.into(),
+            offline_body: v.offline_body.into(),
+            offline_meta: v.offline_meta.into(),
         });
         if authenticated {
             ui.set_password(SharedString::default());
@@ -866,8 +875,24 @@ fn login_field(name: &str) -> &'static str {
     match name {
         "user" => "user",
         "pass" => "pass",
+        "confirm" => "confirm",
+        "code" => "code",
         _ => "",
     }
+}
+
+/// The first-run form's confirmation and setup code (phase 5), typed or manager-filled in the HTML
+/// inputs (login-bridge.mjs): copied into the LoginExtra global the Slint fields mirror, so they show
+/// the same text whenever the inputs are hidden.
+#[wasm_bindgen]
+pub fn set_login_setup(confirm: &str, code: &str) {
+    let confirm = confirm.to_string();
+    let code = code.to_string();
+    with_ui(move |ui| {
+        let extra = ui.global::<LoginExtra>();
+        extra.set_confirm(confirm.into());
+        extra.set_code(code.into());
+    });
 }
 
 /// Window pixels to two decimals; bridge.js snaps the inputs to whole pixels.
@@ -903,10 +928,19 @@ fn login_overlay_json(o: &LoginOverlay) -> String {
     if o.on {
         let extra = serde_json::json!({
             "enabled": o.enabled,
+            "mode": if o.mode.is_empty() { "login" } else { o.mode.as_str() },
+            "userVisible": o.user_visible,
+            "passVisible": o.pass_visible,
+            "confirmVisible": o.confirm_visible,
+            "codeVisible": o.code_visible,
             "user": login_box(&o.user),
             "userText": login_box(&o.user_text),
             "pass": login_box(&o.pass),
             "passText": login_box(&o.pass_text),
+            "confirm": login_box(&o.confirm),
+            "confirmText": login_box(&o.confirm_text),
+            "code": login_box(&o.code),
+            "codeText": login_box(&o.code_text),
             "check": login_box(&o.check),
             "submit": login_box(&o.submit),
             "fontSize": px(o.font_size),
