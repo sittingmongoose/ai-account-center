@@ -549,7 +549,9 @@ component QuotaRow inherits Rectangle {
                     VerticalLayout { alignment: center; ProviderMark { provider: root.qr.provider; size: 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qmark:" + root.qr.provider; } } }
                     Text { text: root.qr.label; font-size: Type.body; font-weight: 600; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 40px; }
                     if root.qr.active: Text { text: "Active"; font-size: Type.small; font-weight: 640; color: Theme.good-text; vertical-alignment: center; }
-                    if root.qr.plan != "": Text { text: root.qr.plan; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; }
+                    // The plan lives on the next-reset line below: inline it keeps its full
+                    // width while the account name (the only stretch) takes the whole squeeze
+                    // (task 9 O7). The name keeps priority here.
                     if root.qr.has-value: VerticalLayout { alignment: center; ValueUnit { value: root.qr.value-text; size: Type.body; weight: 600; ink: Theme.sev-text(root.qr.sev); unit-scale: 0.96; height: 20px; } }
                     if !root.qr.has-value: Text { text: "Unavailable"; font-size: Type.small; font-weight: 500; color: Theme.ink-3; vertical-alignment: center; }
                     VerticalLayout {
@@ -608,13 +610,18 @@ component QuotaRow inherits Rectangle {
                         }
                     }
                 }
-                Text {
-                    text: root.qr.next == "" ? "No reset reported" : root.qr.next == "reset due" ? "Reset due" : "Next reset " + root.qr.next;
-                    font-size: Type.small;
-                    color: Theme.ink-3;
-                    vertical-alignment: center;
-                    min-height: 18px;
-                    AxPress { tip: root.qr.next-tip; long-tip: root.qr.next-tip; tapped => { AxData.action("analytics-focus", root.qr.id); } }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.qr.next == "" ? "No reset reported" : root.qr.next == "reset due" ? "Reset due" : "Next reset " + root.qr.next;
+                        font-size: Type.small;
+                        color: Theme.ink-3;
+                        vertical-alignment: center;
+                        min-height: 18px;
+                        AxPress { tip: root.qr.next-tip; long-tip: root.qr.next-tip; tapped => { AxData.action("analytics-focus", root.qr.id); } }
+                    }
+                    if root.qr.plan != "": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; min-height: 18px; }
+                    if root.qr.plan != "": Text { text: root.qr.plan; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-height: 18px; }
                 }
             }
         }
@@ -685,7 +692,17 @@ component QuotaGroup inherits Rectangle {
                     }
                 }
                 VerticalLayout { alignment: center; ProviderMark { provider: root.g.provider; size: Breakpoints.tier-d ? 20px : 16px; ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "qgroup:" + root.g.provider; } } }
-                Text { text: root.g.label; font-size: Breakpoints.tier-d ? 13.5px : Type.body; font-weight: Breakpoints.tier-d ? 640 : 600; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+                // Below D the label is capped: otherwise the meta (the only stretch) takes the
+                // whole squeeze and wraps to three lines while the label keeps its full width
+                // (task 9 O7). Short names stay whole and only long names elide; the meta then
+                // fits one line, two for the longest. Desktop keeps no cap.
+                // Below D the label shares a squeeze with the meta: otherwise the meta (the
+                // only stretch) takes it all and wraps to three lines in the fixed 48 px head
+                // while the label keeps its full width (task 9 O7). Sharing halves the worst
+                // case to two lines; medium names lose a character or two to the split. The
+                // 75 px floor sits below every fair share but the shortest names', so short
+                // names stay whole while the meta takes their small overflow alone.
+                Text { text: root.g.label; font-size: Breakpoints.tier-d ? 13.5px : Type.body; font-weight: Breakpoints.tier-d ? 640 : 600; color: Theme.ink; vertical-alignment: center; overflow: elide; horizontal-stretch: Breakpoints.tier-d ? 0 : 1; min-width: Breakpoints.tier-d ? 0px : 75px; }
                 Text { text: root.g.meta; font-size: Breakpoints.tier-d ? 12.5px : Type.small; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; wrap: Breakpoints.tier-d ? no-wrap : word-wrap; overflow: Breakpoints.tier-d ? elide : clip; }
             }
         }
