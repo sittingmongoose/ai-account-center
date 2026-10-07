@@ -1243,7 +1243,8 @@ export component AccountSection inherits Plate {
             padding-right: root.pad-x;
             padding-top: 14px;
             padding-bottom: Breakpoints.tier-d ? 13px : root.section.switchable && !root.table ? 8px : 14px;
-            spacing: 16px;
+            // O3: the P gap token below D; D keeps 16
+            spacing: root.touch ? 12px : 16px;
             min-height: 70px;
             HorizontalLayout {
                 spacing: root.touch ? 10px : 12px;
@@ -1253,9 +1254,11 @@ export component AccountSection inherits Plate {
                     horizontal-stretch: 0;
                     ProviderMark { provider: root.section.id; size: 28px; }
                 }
+                // O3: fills the title group below D, so no dead space wraps the meta early
                 VerticalLayout {
                     alignment: center;
                     spacing: 1px;
+                    horizontal-stretch: root.touch ? 1 : 0;
                     Text {
                         min-height: 26px;
                         vertical-alignment: center;
@@ -1292,7 +1295,8 @@ export component AccountSection inherits Plate {
             if !root.touch: Rectangle { horizontal-stretch: 1; }
             // Claude: the meter legend and History
             if root.section.kind == "claude": HorizontalLayout {
-                spacing: 8px;
+                // O3: 4 below D (the bare ? keeps 15 px of visible gap); D keeps 8
+                spacing: root.touch ? 4px : 8px;
                 horizontal-stretch: 0;
                 legend-anchor := Rectangle {
                     width: Breakpoints.tier-d ? 28px : 40px;
