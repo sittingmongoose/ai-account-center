@@ -78,7 +78,10 @@ or `nightly.yml` SHA512 entry. Desktop downloads allow at most 800 MiB and ten
 minutes, bounded by the host's remaining budget. Mac additionally requires
 `com.t3tools.t3code`, signing team `ARK85ZXQ4Z`, strict/deep codesign verification
 and `spctl` assessment; it stages beside the installed app before an atomic
-rename and retains the old bundle for rollback. Windows requires a valid
+rename and retains the old bundle for rollback. Before extraction it rejects
+entries beneath symlink ancestors and resolves symlink chains to reject escapes
+and cycles; Electron's internal `Versions/Current -> A` framework links remain
+supported. Windows requires a valid
 Authenticode signature from `T3 Tools Inc`, uses `/S`, and restores a private
 copy of the previous installation if installation or relaunch verification fails.
 Both desktops close only the captured T3 process family, reopen in the user's
@@ -92,8 +95,13 @@ and **without `--yes`**. Its native updater verifies the runtime and rewrites th
 service definition while leaving the running server on its old version. T3 is
 the last app on each host, and Ubuntu schedules a separate transient user service
 that waits for the update helper to exit, every dashboard host to finish and the
-dashboard job lock to be released, then waits 30 seconds. It takes that same
-dashboard lock for the final check before restarting **only `t3code.service`**;
+dashboard job lock to be released, then waits 30 seconds. AAC passes its resolved
+`app-updates` state directory explicitly, including custom `--config-dir`,
+`CCS_DIR` and legacy `CCS_HOME` configuration. Without that argument the helper
+uses `~/.ccs/app-updates`. A dashboard worker treats a missing job file as active.
+It holds both the per-user `helper-update.lock` and that dashboard lock through
+the final check, restart and health verification before releasing them. It
+restarts **only `t3code.service`**;
 `ccs-dashboard.service` is never stopped or restarted. A new update job delays
 the restart again. The detached worker has an 18-minute wait limit and verifies
 HTTP health after restarting.
@@ -103,6 +111,10 @@ synchronously restarted processes and a fixed `systemd` restart target; it
 does not claim the new server is already running. Restarting T3 disconnects its
 active agent threads and clients. A version-only pending marker remains if
 scheduling, restart or health verification fails; a later explicit click retries.
+Restart intent is written before runtime installation, so a post-install version
+probe timeout cannot lose it. On a later explicit run, a read-only service PID
+and executable-path check clears intent if the running service already uses the
+installed version; otherwise the delayed restart is scheduled again.
 Inspect `journalctl --user -u 'aac-t3-restart-*'` for the detached outcome.
 No status read schedules or retries anything. Separate Muse ACP and ZCode ACP
 adapters remain under their existing auto-updaters and are outside this job.

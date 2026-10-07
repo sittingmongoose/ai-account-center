@@ -700,6 +700,8 @@ def main():
     mode.add_argument("--apply", action="store_true")
     parser.add_argument("--platform", choices=("ubuntu", "mac", "windows"), required=True)
     parser.add_argument("--task-child", action="store_true")
+    parser.add_argument("--state-dir", type=pathlib.Path)
+    parser.add_argument("--dashboard-job", action="store_true")
     # The dashboard passes the Antigravity CLI's reviewed versions (from its
     # packaged release file); without it a packaged release file next to this
     # helper is read, and without either the Antigravity update is held.
@@ -708,6 +710,14 @@ def main():
     native = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"
     if args.platform != native:
         parser.error("The selected platform must match this computer.")
+    if args.state_dir is not None:
+        if not args.state_dir.is_absolute():
+            parser.error("The update state directory must be absolute.")
+        os.environ["AAC_UPDATE_STATE_DIR"] = str(args.state_dir)
+    if args.dashboard_job:
+        if args.state_dir is None or args.platform != "ubuntu":
+            parser.error("A dashboard job requires Ubuntu and an explicit state directory.")
+        os.environ["AAC_UPDATE_DASHBOARD_JOB"] = "1"
     task_nonce = None
     agy_reviewed = parse_reviewed_versions(args.agy_reviewed) if args.agy_reviewed is not None else read_release_versions()
     if args.task_child and args.apply and args.platform == "windows":
