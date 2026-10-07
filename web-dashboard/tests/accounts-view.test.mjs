@@ -16,6 +16,7 @@ import {
   devicesView,
   claudeDefaultProfile,
   TRUSTED_NOTE,
+  installView,
 } from '../public/accounts-view.mjs';
 
 const now = Date.parse('2026-10-01T15:16:00Z');
@@ -2271,4 +2272,26 @@ test('Claude rows say "Sign-in needed on Windows" before Open, and Open stays al
   assert.doesNotMatch(plain.actions[1].tip, /Sign-in needed/);
   // Junk is ignored.
   assert.equal(view({ signInNeeded: ['ubuntu', 7] }).status, '');
+});
+
+test('installView: the Home screen app row per install mode (DESIGN-MOBILE 6.6)', () => {
+  // Chromium with a captured install prompt: the copy and the Install button.
+  const chromium = installView('chromium');
+  assert.equal(chromium.mode, 'chromium');
+  assert.equal(chromium.text, 'Install AI Account Center as an app on this device.');
+  assert.equal(chromium.button, 'Install app');
+  // iPhone / iPad Safari, not standalone: the Share-menu words, no button.
+  const ios = installView('ios');
+  assert.equal(ios.mode, 'ios');
+  assert.equal(ios.text, 'In Safari, open the Share menu, then choose Add to Home Screen.');
+  assert.equal(ios.button, '');
+  // Standalone, or no install path, or an unknown value: no row.
+  for (const mode of ['hidden', 'standalone', '', null, undefined]) {
+    assert.deepEqual(installView(mode), { mode: 'hidden', button: '', text: '' });
+  }
+});
+
+test('accountsViewModel: the install field ships hidden until the PWA wiring feeds it', () => {
+  const vm = accountsViewModel(data([account()]), { now });
+  assert.equal(vm.install, 'hidden');
 });

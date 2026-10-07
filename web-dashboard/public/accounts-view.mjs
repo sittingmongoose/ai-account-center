@@ -1131,6 +1131,9 @@ export function accountsViewModel(data, ctx = {}) {
     colB: providers.filter(p => p.column === 'b'),
     ag,
     policies: policies(data, home, ag),
+    // The Settings "Home screen app" row (DESIGN-MOBILE.md 6.6): "chromium" | "ios" | "hidden". The
+    // default is "hidden"; the phase-6 PWA wiring feeds this from device.mjs installRow().
+    install: 'hidden',
     refresh: { seconds: Number.isInteger(c.refreshSeconds) ? c.refreshSeconds : 60, known: c.refreshKnown === true },
     timezone: timezoneView(c.prefs),
     cleanup: cleanupView(c.prefs),
@@ -1240,6 +1243,24 @@ export function cleanupView(prefs) {
     note: typeof prefs?.cleanupNote === 'string' ? prefs.cleanupNote : '',
     tip: 'After each history copy, the newest 3 snapshot folders per profile stay and older ones the dashboard created are deleted.',
   };
+}
+
+// ---------------------------------------------------------------- the Home screen app row (DESIGN-MOBILE.md 6.6)
+/**
+ * The Settings > "Home screen app" row's state. `mode` is the Accounts view's `install` field
+ * ("chromium" | "ios" | "hidden"), fed by public/device.mjs `installRow()` (phase 6): "chromium" once this
+ * browser captured a beforeinstallprompt, "ios" on iPhone / iPad Safari that is not already standalone,
+ * "hidden" everywhere else (including standalone). `installView` holds the row's exact words and whether it
+ * carries the Install button; "hidden" (the default, also on an older view) renders no row.
+ */
+export function installView(mode) {
+  if (mode === 'chromium') {
+    return { mode, button: 'Install app', text: 'Install AI Account Center as an app on this device.' };
+  }
+  if (mode === 'ios') {
+    return { mode, button: '', text: 'In Safari, open the Share menu, then choose Add to Home Screen.' };
+  }
+  return { mode: 'hidden', button: '', text: '' };
 }
 
 // ---------------------------------------------------------------- the refresh slider (log scale, 30 s to 60 min)
